@@ -612,16 +612,86 @@ fn is_safe_metadata_token(value: &str) -> bool {
 fn is_safe_path_identity(value: &str) -> bool {
     !value.is_empty()
         && value.chars().count() <= MAX_PATH_IDENTITY_CHARS
-        && !value.contains(['/', '\\', '@'])
-        && !value.chars().any(char::is_whitespace)
+        && value.split(':').all(is_safe_path_segment)
 }
 
 fn is_safe_relative_path(value: &str) -> bool {
-    value.starts_with("evidence/")
-        && value.chars().count() <= MAX_PATH_IDENTITY_CHARS
-        && !value.contains('\\')
-        && !value.contains(':')
+    if value.chars().count() > MAX_PATH_IDENTITY_CHARS {
+        return false;
+    }
+
+    let segments = value.split('/').collect::<Vec<_>>();
+    let body = if segments.starts_with(&["evidence", "sccm", "client"]) {
+        &segments[3..]
+    } else if segments.starts_with(&["evidence"]) {
+        &segments[1..]
+    } else {
+        return false;
+    };
+
+    match body {
+        [group, basename] => is_safe_client_bundle_group(group) && is_safe_path_segment(basename),
+        [group, rotation, basename] => {
+            is_safe_client_bundle_group(group)
+                && is_safe_rotation_path_segment(rotation)
+                && is_safe_path_segment(basename)
+        }
+        [group, root, rotation, basename] => {
+            is_safe_client_bundle_group(group)
+                && is_safe_root_path_segment(root)
+                && is_safe_rotation_path_segment(rotation)
+                && is_safe_path_segment(basename)
+        }
+        _ => false,
+    }
+}
+
+fn is_safe_path_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value.chars().count() <= MAX_BASENAME_CHARS
         && value
-            .split('/')
-            .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-._".contains(character))
+}
+
+fn is_safe_client_bundle_group(value: &str) -> bool {
+    value == "unknown"
+        || value
+            .strip_prefix("client-")
+            .is_some_and(is_safe_path_segment)
+}
+
+fn is_safe_root_path_segment(value: &str) -> bool {
+    value.strip_prefix("root-").is_some_and(|root| {
+        !root.is_empty()
+            && root
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    })
+}
+
+fn is_safe_rotation_path_segment(value: &str) -> bool {
+    value == "current"
+        || value == "lo"
+        || value.strip_prefix("numbered-").is_some_and(|number| {
+            number
+                .parse::<u32>()
+                .is_ok_and(|parsed| parsed > 0 && parsed.to_string() == number)
+        })
+        || value
+            .strip_prefix("timestamped-")
+            .is_some_and(is_safe_timestamp_path_segment)
+}
+
+fn is_safe_timestamp_path_segment(value: &str) -> bool {
+    value.len() == 15
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if index == 8 {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
 }
