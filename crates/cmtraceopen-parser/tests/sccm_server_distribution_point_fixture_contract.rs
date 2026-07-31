@@ -1481,6 +1481,7 @@ fn validate_expected(
         let mut observed_after_terminal_failure = false;
         let mut cites_capped_evidence = false;
         let mut previous_utc = i64::MIN;
+        let mut previous_physical_order: Option<(String, u32)> = None;
         let mut previous_phase = 0usize;
         for observation in observations {
             let observation_id =
@@ -1613,7 +1614,30 @@ fn validate_expected(
                         "{transaction_id} evidence is not ordered by normalized UTC provenance"
                     ));
                 }
+                let current_physical_order = record
+                    .reference
+                    .line_start
+                    .zip(record.reference.line_end)
+                    .map(|(line_start, line_end)| {
+                        (record.reference.artifact_id.as_str(), line_start, line_end)
+                    });
+                if utc == previous_utc
+                    && previous_physical_order.as_ref().is_some_and(
+                        |(previous_artifact_id, previous_line_end)| {
+                            current_physical_order.is_none_or(|(artifact_id, line_start, _)| {
+                                artifact_id != previous_artifact_id
+                                    || line_start <= *previous_line_end
+                            })
+                        },
+                    )
+                {
+                    failures.push(format!(
+                        "{transaction_id} equal-UTC evidence lacks immutable same-artifact line order"
+                    ));
+                }
                 previous_utc = utc;
+                previous_physical_order = current_physical_order
+                    .map(|(artifact_id, _, line_end)| (artifact_id.to_owned(), line_end));
             }
             if terminal_failure {
                 observed_after_terminal_failure = true;
@@ -3464,6 +3488,30 @@ fn equal_utc_same_artifact_recovery_cannot_be_reordered_before_terminal_failure(
     assert!(
         !mutation_at_root_was_accepted("validation-failure", &temporary.root, &manifest, &expected,),
         "an observation ID reordered a later equal-UTC physical recovery before stale high failure"
+    );
+}
+
+#[test]
+fn equal_utc_same_artifact_forward_line_order_remains_usable() {
+    let temporary = temporary_scenario("healthy-package");
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+
+    replace_fixture_text(
+        &temporary.root,
+        &relative_path,
+        r#"<time="12:00:04.000+000""#,
+        r#"<time="12:00:03.000+000""#,
+    );
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+
+    assert!(
+        mutation_at_root_was_accepted("healthy-package", &temporary.root, &manifest, &expected),
+        "equal UTC lost deterministic forward same-artifact line ordering"
     );
 }
 
