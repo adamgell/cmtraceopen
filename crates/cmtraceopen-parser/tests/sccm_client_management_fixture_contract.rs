@@ -396,6 +396,13 @@ fn public_observation_claim_is_safe(value: &str) -> bool {
     })
 }
 
+fn evidence_refs_cite_unique_records(references: &[(String, u64, u64)]) -> bool {
+    let mut cited_records = BTreeSet::new();
+    references.iter().all(|(artifact_id, start_line, end_line)| {
+        (*start_line..=*end_line).all(|line| cited_records.insert((artifact_id.clone(), line)))
+    })
+}
+
 fn string_array(value: &Value, context: &str) -> Result<Vec<String>, String> {
     value
         .as_array()
@@ -1295,6 +1302,9 @@ fn validate_contract(
     {
         return Err("ownership evidence is duplicated or not deterministically sorted".to_owned());
     }
+    if !evidence_refs_cite_unique_records(&ownership_ref_order) {
+        return Err("ownership evidence ranges overlap and double-count a logical record".to_owned());
+    }
     if ownership_class != "UnknownOwnership" {
         let workload = required_string(ownership, "workload", "ownership")?;
         if ownership_records.is_empty()
@@ -1520,6 +1530,11 @@ fn validate_contract(
         {
             return Err(format!(
                 "{transaction_id} evidence references are duplicated or not sorted"
+            ));
+        }
+        if !evidence_refs_cite_unique_records(&transaction_ref_order) {
+            return Err(format!(
+                "{transaction_id} evidence ranges overlap and double-count a logical record"
             ));
         }
         let records = evidence_records(scenario_root, &artifacts_by_id, &transaction["evidence"])?;
