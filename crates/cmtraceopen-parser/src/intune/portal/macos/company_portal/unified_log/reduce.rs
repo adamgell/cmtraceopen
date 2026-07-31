@@ -54,7 +54,7 @@ pub fn reduce_capture_set(capture_set: PortalUnifiedLogCaptureSet) -> PortalUnif
     let mut next_coverage = coverage.len();
     let mut evidence = Vec::new();
 
-    for (record, selection) in records.iter().zip(verdicts.into_iter()) {
+    for (record, selection) in records.iter().zip(verdicts) {
         if !selection.selected {
             coverage.push(PortalCoverageEntry {
                 coverage_id: format!("coverage-{next_coverage:04}"),

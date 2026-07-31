@@ -1172,14 +1172,101 @@ fn network_redaction_does_not_swallow_versions() {
 /// would be parsed as if it were the supported schema.
 #[test]
 fn out_of_range_schema_version_is_unsupported_not_wrapped() {
-    let header = r#"{"schemaId":"cmtraceopen.intune.portal.macos.company-portal.unified-log","schemaVersion":4294967297}"#;
+    // Build the header from the real constant. Hand-typing the schema id makes
+    // the capture fail on the *id* branch before the version check ever runs,
+    // so the test would still pass with the wrapping cast restored.
+    let header = format!(
+        r#"{{"schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":4294967297}}"#
+    );
     let capture = parse_capture_ndjson(&format!("{header}\n"));
+
     assert!(
         !capture.supported,
         "an out-of-range schema version must not be accepted as v1"
     );
-    // The guard does not over-reject: a genuine v1 capture is still supported,
-    // which `supported_records_parse_identically_from_ndjson_and_json` asserts
-    // against the real fixture rather than a header with no records.
+
+    // It must be refused for the right reason: the version, not the id.
+    let statuses: Vec<PortalCoverageStatus> = capture
+        .coverage
+        .iter()
+        .map(|entry| entry.status.clone())
+        .collect();
+    assert!(
+        statuses.contains(&PortalCoverageStatus::UnsupportedSchemaVersion),
+        "expected UnsupportedSchemaVersion, got {statuses:?}"
+    );
+    assert!(
+        !statuses.contains(&PortalCoverageStatus::UnknownSchema),
+        "the schema id is valid, so this must not be an unknown-schema refusal"
+    );
+
+    // The guard does not over-reject: the declared version is still readable.
+    let supported_header = format!(
+        r#"{{"schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+    let ok = parse_capture_ndjson(&format!("{supported_header}\n"));
+    assert_eq!(ok.schema_version, Some(PORTAL_UNIFIED_LOG_SCHEMA_VERSION));
     assert!(parse_capture_ndjson(SUPPORTED_NDJSON).supported);
+}
+
+/// macOS paths contain spaces. Stopping at the first space redacted only the
+/// head of the path and left the tail in the exported text.
+#[test]
+fn user_paths_containing_spaces_are_fully_redacted() {
+    let redacted = redact_text(
+        "wrote report to /Users/alice/Applications/Company Portal.app/Contents/log.txt and exited",
+    );
+    assert!(!redacted.contains("alice"), "leaked: {redacted}");
+    assert!(!redacted.contains("Portal.app"), "leaked tail: {redacted}");
+    assert!(!redacted.contains("log.txt"), "leaked tail: {redacted}");
+    // Prose after the path is evidence and must survive.
+    assert!(redacted.contains("and exited"), "over-captured: {redacted}");
+    assert!(redacted.contains("wrote report to"));
+}
+
+/// A plain path with no spaces still redacts, and prose after it survives.
+#[test]
+fn user_path_redaction_stops_at_the_end_of_the_path() {
+    let redacted = redact_text("opened /Users/bob/Library/Logs/x.log then continued");
+    assert!(!redacted.contains("bob"));
+    assert!(!redacted.contains("x.log"));
+    assert!(redacted.contains("then continued"), "over-captured: {redacted}");
+}
+
+/// Rule 2 links a record to a selected one through an *explicit* identifier, not
+/// a coincidence. Flattening every identifier field into one untyped set let a
+/// candidate's `traceId` match an anchor's `activityIdentifier` and be selected
+/// as activity-linked although they share no relationship in any one namespace.
+/// The committed fixtures already reuse the `0x...` shape across both fields.
+#[test]
+fn cross_namespace_identifier_collisions_do_not_link_records() {
+    let header = format!(
+        r#"{{"captureId":"c","collectedAtUtc":"2026-07-15T12:05:10Z","schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+    // Anchor: verified subsystem, so selected on its own merits, activity 0x1a2b.
+    let anchor_record = r#"{"activityIdentifier":"0x1a2b","category":"Enrollment","eventMessage":"anchor","messageType":"Default","process":"CompanyPortal","sourceSequence":0,"subsystem":"com.microsoft.CompanyPortalMac","timestamp":"2026-07-15 07:02:00.000000-0500"}"#;
+    // Candidate: capture process only, unverified subsystem, and its *trace* id
+    // happens to equal the anchor's *activity* id.
+    let collide = r#"{"traceId":"0x1a2b","category":"Misc","eventMessage":"unrelated","messageType":"Default","process":"CompanyPortal","sourceSequence":1,"subsystem":"com.example.unrelated","timestamp":"2026-07-15 07:02:01.000000-0500"}"#;
+    // Control: same namespace, so this one legitimately links.
+    let same_kind = r#"{"activityIdentifier":"0x1a2b","category":"Misc","eventMessage":"linked","messageType":"Default","process":"CompanyPortal","sourceSequence":2,"subsystem":"com.example.unrelated","timestamp":"2026-07-15 07:02:02.000000-0500"}"#;
+
+    let reduction = reduce_capture_text(&format!(
+        "{header}\n{anchor_record}\n{collide}\n{same_kind}\n"
+    ));
+    let selected: Vec<&str> = reduction
+        .evidence
+        .iter()
+        .map(|e| e.summary.value.as_str())
+        .collect();
+
+    assert!(selected.contains(&"anchor"));
+    assert!(
+        selected.contains(&"linked"),
+        "a shared activity id in the same namespace must still link: {selected:?}"
+    );
+    assert!(
+        !selected.contains(&"unrelated"),
+        "a traceId must not match an anchor's activityIdentifier: {selected:?}"
+    );
 }

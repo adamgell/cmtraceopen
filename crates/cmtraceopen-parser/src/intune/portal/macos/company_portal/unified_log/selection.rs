@@ -125,19 +125,46 @@ fn mentions_company_portal(message: &str) -> bool {
         || lowered.contains("intune")
 }
 
-/// Explicit identifiers a record contributes to the activity graph.
-fn explicit_ids(record: &PortalUnifiedLogRecord) -> Vec<&str> {
+/// Namespace an identifier belongs to.
+///
+/// Identifiers only relate when they are the same kind. Flattening every field
+/// into one untyped set let a candidate's `trace_id` match an anchor's
+/// `activity_id` and be selected as activity-linked although the two share no
+/// relationship in any single namespace. That is exactly the coincidence rule 2
+/// says it does not accept, and it is not theoretical: the committed fixtures
+/// already use the same `0x1a2b` shape for both activity and signpost ids.
+/// `correlation.rs` pairs same-kind fields only, and this now matches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum PortalIdentifierKind {
+    /// `activity_id` and `parent_activity_id` share one namespace on purpose: a
+    /// child record carrying its parent's activity id is a real structural link.
+    Activity,
+    Signpost,
+    Trace,
+    Request,
+    Correlation,
+}
+
+/// Explicit identifiers a record contributes to the activity graph, each tagged
+/// with the namespace it came from.
+fn explicit_ids(record: &PortalUnifiedLogRecord) -> Vec<(PortalIdentifierKind, &str)> {
     let activity = &record.activity;
     [
-        activity.activity_id.as_deref(),
-        activity.parent_activity_id.as_deref(),
-        activity.signpost_id.as_deref(),
-        activity.trace_id.as_deref(),
-        activity.request_id.as_deref(),
-        activity.correlation_id.as_deref(),
+        (PortalIdentifierKind::Activity, activity.activity_id.as_deref()),
+        (
+            PortalIdentifierKind::Activity,
+            activity.parent_activity_id.as_deref(),
+        ),
+        (PortalIdentifierKind::Signpost, activity.signpost_id.as_deref()),
+        (PortalIdentifierKind::Trace, activity.trace_id.as_deref()),
+        (PortalIdentifierKind::Request, activity.request_id.as_deref()),
+        (
+            PortalIdentifierKind::Correlation,
+            activity.correlation_id.as_deref(),
+        ),
     ]
     .into_iter()
-    .flatten()
+    .filter_map(|(kind, id)| id.map(|id| (kind, id)))
     .collect()
 }
 
@@ -148,7 +175,7 @@ pub fn classify_records(records: &[PortalUnifiedLogRecord]) -> Vec<PortalSelecti
     let mut verdicts: Vec<PortalSelection> = records.iter().map(classify_record).collect();
 
     // Identifiers reachable from records selected on their own merits.
-    let mut anchor_ids: BTreeSet<&str> = BTreeSet::new();
+    let mut anchor_ids: BTreeSet<(PortalIdentifierKind, &str)> = BTreeSet::new();
     for (record, verdict) in records.iter().zip(verdicts.iter()) {
         if verdict.reason == PortalSelectionReason::VerifiedProcessAndSubsystem {
             anchor_ids.extend(explicit_ids(record));

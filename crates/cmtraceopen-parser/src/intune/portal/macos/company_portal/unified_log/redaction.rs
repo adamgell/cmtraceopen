@@ -161,7 +161,16 @@ fn url_pattern() -> &'static Regex {
 
 fn user_path_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    compiled(&CELL, r#"(?i)/Users/[^\s"'<>,;)]*"#)
+    // Real macOS paths contain spaces: `/Users/alice/Applications/Company
+    // Portal.app/...`. Stopping at the first space redacted only the head and
+    // left the tail in the export. Absorb a space only when the run that
+    // follows it still contains a `/`, so a path keeps going but ordinary prose
+    // after a path does not get swallowed. Written without look-ahead, which
+    // this regex engine does not support.
+    compiled(
+        &CELL,
+        r#"(?i)/Users/[^\s"'<>,;)]*(?:\x20[^\s"'<>,;)]*/[^\s"'<>,;)]*)*"#,
+    )
 }
 
 fn certificate_subject_pattern() -> &'static Regex {
@@ -330,10 +339,24 @@ fn redact_record(record: &PortalUnifiedLogRecord) -> PortalUnifiedLogRecord {
     let mut redaction = record.redaction.clone();
     redaction.applied = true;
     redaction.policy_id = Some(PORTAL_UNIFIED_LOG_REDACTION_POLICY_ID.to_string());
-    for field in ["eventMessage", "processImagePath", "senderImagePath"] {
-        if !redaction.redacted_fields.iter().any(|f| f == field) {
+    // Only claim a field was redacted when it actually carried a sensitive
+    // value. `build_record` classifies these three as `Sensitive`, but public
+    // construction and deserialization can hand us `Public` values, which
+    // redaction deliberately leaves alone. Listing them unconditionally told a
+    // consumer that a value had been scrubbed when it had been passed through.
+    let mut claim = |field: &str, sensitivity: &PortalSensitivity| {
+        if *sensitivity == PortalSensitivity::Sensitive
+            && !redaction.redacted_fields.iter().any(|f| f == field)
+        {
             redaction.redacted_fields.push(field.to_string());
         }
+    };
+    claim("eventMessage", &record.event_message.sensitivity);
+    if let Some(path) = &record.process_image_path {
+        claim("processImagePath", &path.sensitivity);
+    }
+    if let Some(path) = &record.sender_image_path {
+        claim("senderImagePath", &path.sensitivity);
     }
     redaction.redacted_fields.sort();
 

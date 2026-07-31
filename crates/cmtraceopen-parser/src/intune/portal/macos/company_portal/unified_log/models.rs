@@ -313,7 +313,15 @@ pub enum PortalCoverageStatus {
     MalformedRecord,
     /// Schema id recognised, version outside the supported range.
     UnsupportedSchemaVersion,
-    /// Schema id absent or unrecognised.
+    /// Capture metadata this build does not recognise.
+    ///
+    /// Raised when the header declares no `schemaId` or an unrecognised one, and
+    /// also when a capture declares its own coverage entry with a status this
+    /// build has no variant for (see `absorb_declared_coverage`). Both mean the
+    /// same thing to a consumer: something in the capture's own description was
+    /// not understood, so the detail string carries the specifics. A version
+    /// that is recognised but out of range is
+    /// [`Self::UnsupportedSchemaVersion`] instead.
     UnknownSchema,
     /// Record parsed fine but is not Company Portal evidence.
     NotSelected,
