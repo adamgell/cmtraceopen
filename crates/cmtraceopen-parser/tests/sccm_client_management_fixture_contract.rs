@@ -387,7 +387,7 @@ fn public_free_text_is_safe(value: &str) -> bool {
         let token = token.trim_matches(|character: char| {
             matches!(
                 character,
-                ',' | ';' | ':' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\''
+                '.' | ',' | ';' | ':' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\''
             )
         });
         let mut labels = token.split('.');
