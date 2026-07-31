@@ -1551,11 +1551,11 @@ fn compare_observations(
 }
 
 fn normalize_analysis(
-    transactions: &mut Vec<SccmManagementPointTransaction>,
-    observations: &mut Vec<SccmManagementPointSourceLocalObservation>,
-    findings: &mut Vec<SccmManagementPointFinding>,
+    transactions: &mut [SccmManagementPointTransaction],
+    observations: &mut [SccmManagementPointSourceLocalObservation],
+    findings: &mut [SccmManagementPointFinding],
     coverage_gaps: &mut Vec<SccmManagementPointCoverageGap>,
-    counterpart_facts: &mut Vec<SccmManagementPointCounterpartReadyFact>,
+    counterpart_facts: &mut [SccmManagementPointCounterpartReadyFact],
 ) {
     transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
     observations.sort_by(|left, right| left.observation_id.cmp(&right.observation_id));

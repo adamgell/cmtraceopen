@@ -719,10 +719,9 @@ fn management_point_evidence_references_must_fit_the_captured_physical_source() 
     let analysis = analysis_value(&bundle);
     assert_no_high_success(&analysis, "out-of-bounds physical citation");
     assert!(
-        serde_json::to_string(&analysis)
+        !serde_json::to_string(&analysis)
             .expect("analysis JSON")
-            .find("\"lineEnd\":999")
-            .is_none(),
+            .contains("\"lineEnd\":999"),
         "an out-of-bounds citation reached public output"
     );
 }
