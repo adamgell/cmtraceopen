@@ -412,12 +412,18 @@ fn smsts_log_paths(contents: &str) -> BTreeSet<String> {
 }
 
 fn complete_field_tokens(record_text: &str) -> BTreeSet<&str> {
-    record_text
-        .split(|character: char| {
-            character.is_whitespace() || matches!(character, '[' | ']' | '<' | '>')
+    // Only whitespace and the record body edges bound a token: inside a CCM
+    // body a bare bracket is a legal value character, and only the full
+    // ]LOG]!> sequence terminates the body.
+    let body = record_text
+        .strip_prefix("<![LOG[")
+        .and_then(|after_prefix| {
+            after_prefix
+                .find("]LOG]!>")
+                .map(|terminator| &after_prefix[..terminator])
         })
-        .filter(|token| !token.is_empty())
-        .collect()
+        .unwrap_or(record_text);
+    body.split_whitespace().collect()
 }
 
 fn path_class_for_sanitized_path(path: &str) -> Option<&'static str> {
@@ -1181,7 +1187,8 @@ fn validate_contract(
     let declared_scope = expected["correlationBoundary"]["scope"]
         .as_str()
         .ok_or_else(|| format!("{scenario}: correlation scope is not a string"))?;
-    let declared_join_fields = string_array(&expected["correlationBoundary"]["joinFields"])?;
+    let mut declared_join_fields = string_array(&expected["correlationBoundary"]["joinFields"])?;
+    declared_join_fields.sort();
     let mut declared_forbidden_fields =
         string_array(&expected["correlationBoundary"]["forbiddenJoinFields"])?;
     declared_forbidden_fields.sort();
@@ -1215,7 +1222,9 @@ fn validate_contract(
                 "{scenario}: correlation scope is not an enforced client-side scope"
             ));
         }
-        if declared_join_fields != EXACT_KEY_JOIN_FIELDS.map(str::to_owned) {
+        let mut enforced_join_fields = EXACT_KEY_JOIN_FIELDS.map(str::to_owned);
+        enforced_join_fields.sort();
+        if declared_join_fields != enforced_join_fields {
             return Err(format!(
                 "{scenario}: declared join fields do not match the enforced exact key fields"
             ));
@@ -1665,6 +1674,22 @@ fn validate_contract(
             .ok_or_else(|| format!("{observation_id}: artifactId is missing"))?;
         if observation["evidence"]["artifactId"] != artifact_id {
             return Err(format!("{observation_id}: citation changed artifact"));
+        }
+        let cites_keyed_transaction_evidence = transactions.iter().any(|transaction| {
+            transaction["evidence"]
+                .as_array()
+                .is_some_and(|transaction_evidence| {
+                    transaction_evidence
+                        .iter()
+                        .any(|transaction_ref| transaction_ref == &observation["evidence"])
+                })
+                || transaction["orderingEvidence"] == observation["evidence"]
+                || transaction["terminalEvidence"] == observation["evidence"]
+        });
+        if cites_keyed_transaction_evidence {
+            return Err(format!(
+                "{observation_id}: keyed transaction evidence cannot double as a source-local observation"
+            ));
         }
         evidence_text(scenario_root, &artifacts_by_id, &observation["evidence"])?;
     }
