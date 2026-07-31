@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use serde::de::Error as _;
 use serde::ser::Error as _;
@@ -192,23 +193,25 @@ impl Serialize for SccmFinding {
     where
         S: Serializer,
     {
-        self.validate().map_err(|error| {
+        let mut normalized = self.clone();
+        normalize_finding(&mut normalized);
+        normalized.validate().map_err(|error| {
             S::Error::custom(format!("invalid SCCM finding contract: {error:?}"))
         })?;
         SccmFindingSerializeWire {
-            finding_id: &self.finding_id,
-            class: &self.class,
-            phase: &self.phase,
-            role: &self.role,
-            severity: &self.severity,
-            confidence: &self.confidence,
-            title: &self.title,
-            summary: &self.summary,
-            evidence: &self.evidence,
-            terminal_evidence: &self.terminal_evidence,
-            coverage_gaps: &self.coverage_gaps,
-            correlation_keys: &self.correlation_keys,
-            next_artifacts: &self.next_artifacts,
+            finding_id: &normalized.finding_id,
+            class: &normalized.class,
+            phase: &normalized.phase,
+            role: &normalized.role,
+            severity: &normalized.severity,
+            confidence: &normalized.confidence,
+            title: &normalized.title,
+            summary: &normalized.summary,
+            evidence: &normalized.evidence,
+            terminal_evidence: &normalized.terminal_evidence,
+            coverage_gaps: &normalized.coverage_gaps,
+            correlation_keys: &normalized.correlation_keys,
+            next_artifacts: &normalized.next_artifacts,
         }
         .serialize(serializer)
     }
@@ -367,6 +370,7 @@ impl<'de> Deserialize<'de> for SccmFinding {
 impl SccmFinding {
     pub fn validate(&self) -> Result<(), SccmFindingValidationError> {
         validate_required_text(self)?;
+        validate_roles(self)?;
         validate_all_evidence_references(self)?;
         validate_coverage_gaps(&self.coverage_gaps)?;
         validate_artifact_requests(&self.next_artifacts)?;
@@ -413,7 +417,9 @@ impl SccmFinding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SccmFindingValidationError {
     MissingRequiredField,
+    InvalidRole,
     InvalidEvidenceReference,
+    ConflictingEvidenceReference,
     MissingEvidenceOrCoverageGap,
     MissingTerminalEvidence,
     InvalidTerminalEvidence,
@@ -585,9 +591,26 @@ fn validate_required_text(finding: &SccmFinding) -> Result<(), SccmFindingValida
     Ok(())
 }
 
+fn validate_roles(finding: &SccmFinding) -> Result<(), SccmFindingValidationError> {
+    if !finding.role.has_canonical_serialized_form()
+        || finding
+            .coverage_gaps
+            .iter()
+            .any(|gap| !gap.role.has_canonical_serialized_form())
+        || finding
+            .next_artifacts
+            .iter()
+            .any(|request| !request.role.has_canonical_serialized_form())
+    {
+        return Err(SccmFindingValidationError::InvalidRole);
+    }
+    Ok(())
+}
+
 fn validate_all_evidence_references(
     finding: &SccmFinding,
 ) -> Result<(), SccmFindingValidationError> {
+    let mut ranges_by_identity = BTreeMap::new();
     for reference in finding
         .evidence
         .iter()
@@ -605,6 +628,14 @@ fn validate_all_evidence_references(
         )
     {
         validate_evidence_reference(reference)?;
+        let identity = (reference.artifact_id.trim(), reference.entry_id.trim());
+        let range = (reference.line_start, reference.line_end);
+        if ranges_by_identity
+            .insert(identity, range)
+            .is_some_and(|existing| existing != range)
+        {
+            return Err(SccmFindingValidationError::ConflictingEvidenceReference);
+        }
     }
     Ok(())
 }
@@ -676,19 +707,82 @@ fn is_bounded_request_reason(reason: &str) -> bool {
         return false;
     }
 
-    let lowercase = trimmed.to_ascii_lowercase();
-    ![
-        "entire drive",
-        "whole drive",
-        "drive root",
-        "root drive",
-        "entire disk",
-        "whole disk",
-        "all files",
-        "recursive",
-    ]
-    .iter()
-    .any(|unbounded| lowercase.contains(unbounded))
+    !has_unbounded_request_scope(&trimmed.to_ascii_lowercase())
+}
+
+fn has_unbounded_request_scope(reason: &str) -> bool {
+    let tokens = reason
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    let has_token = |candidates: &[&str]| tokens.iter().any(|token| candidates.contains(token));
+    let is_wide_scope_token = |token: &str| {
+        matches!(
+            token,
+            "drivewide" | "diskwide" | "volumewide" | "filesystemwide" | "sitewide" | "systemwide"
+        )
+    };
+    let is_scope_token = |token: &str| {
+        matches!(
+            token,
+            "drive" | "disk" | "volume" | "filesystem" | "site" | "system"
+        )
+    };
+    let has_wide_scope = tokens.iter().any(|token| is_wide_scope_token(token))
+        || tokens
+            .windows(2)
+            .any(|pair| is_scope_token(pair[0]) && pair[1] == "wide");
+
+    if has_wide_scope
+        || tokens.iter().any(|token| token.starts_with("recurs"))
+        || has_token(&["glob", "globs", "globbing"])
+    {
+        return true;
+    }
+
+    let has_broad_quantifier = has_token(&["all", "every", "entire", "whole", "full", "complete"]);
+    let has_filesystem_target = has_token(&[
+        "file",
+        "files",
+        "directory",
+        "directories",
+        "folder",
+        "folders",
+        "drive",
+        "drives",
+        "disk",
+        "disks",
+        "volume",
+        "volumes",
+        "filesystem",
+        "filesystems",
+    ]);
+    if has_broad_quantifier && has_filesystem_target {
+        return true;
+    }
+
+    let has_root_target = has_token(&["root"])
+        && has_token(&[
+            "directory",
+            "directories",
+            "folder",
+            "folders",
+            "drive",
+            "drives",
+            "disk",
+            "disks",
+            "volume",
+            "volumes",
+            "filesystem",
+            "filesystems",
+            "path",
+            "paths",
+        ]);
+    if has_root_target {
+        return true;
+    }
+
+    false
 }
 
 fn validate_terminal_evidence(
@@ -783,6 +877,20 @@ fn normalize_finding(finding: &mut SccmFinding) {
     finding.finding_id = finding.finding_id.trim().to_owned();
     finding.title = finding.title.trim().to_owned();
     finding.summary = finding.summary.trim().to_owned();
+    if let SccmPhase::Unknown(value) = &mut finding.phase {
+        *value = value.trim().to_owned();
+    }
+    for reference in &mut finding.evidence {
+        normalize_evidence_reference(reference);
+    }
+    for terminal in &mut finding.terminal_evidence {
+        normalize_evidence_reference(&mut terminal.reference);
+    }
+    for key in &mut finding.correlation_keys {
+        if let Some(reference) = &mut key.evidence {
+            normalize_evidence_reference(reference);
+        }
+    }
     for gap in &mut finding.coverage_gaps {
         gap.artifact_id = gap.artifact_id.trim().to_owned();
     }
@@ -805,6 +913,11 @@ fn normalize_finding(finding: &mut SccmFinding) {
 
     finding.next_artifacts.sort_by(compare_artifact_requests);
     finding.next_artifacts.dedup();
+}
+
+fn normalize_evidence_reference(reference: &mut SccmEvidenceRef) {
+    reference.artifact_id = reference.artifact_id.trim().to_owned();
+    reference.entry_id = reference.entry_id.trim().to_owned();
 }
 
 fn compare_evidence_refs(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> Ordering {
