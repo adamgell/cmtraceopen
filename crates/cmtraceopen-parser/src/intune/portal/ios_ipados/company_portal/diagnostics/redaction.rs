@@ -24,6 +24,16 @@ pub const REDACTED_TENANT_ID: &str = "[redacted:tenant-id]";
 pub const REDACTED_DEVICE_ID: &str = "[redacted:device-id]";
 pub const REDACTED_GUID: &str = "[redacted:guid]";
 pub const REDACTED_APP_ID: &str = "[redacted:app-id]";
+pub const REDACTED_ADDRESS: &str = "[redacted:address]";
+
+/// The separator between a label and its value: `=` or `:`, with the closing quote of a
+/// JSON member name tolerated in front of it.
+///
+/// Console payloads routinely carry a serialized JSON body verbatim, so the label arrives as
+/// `"password":"hunter2"` rather than `password=hunter2`. Requiring only whitespace between
+/// the label and the separator made every label-scoped rule fail on exactly the shape that
+/// needs it most, and no other rule caught a bare secret behind it.
+const LABEL_SEPARATOR: &str = r#"["']?\s*[=:]\s*"#;
 
 /// The one reverse-DNS namespace kept in the clear: it is Microsoft's Company Portal itself,
 /// and it is the structural signature the capture is filtered on.
@@ -61,9 +71,10 @@ pub fn redacted_export_projection(capture: &PortalConsoleCapture) -> PortalConso
 /// Apply every redaction rule in a fixed order.
 ///
 /// Order matters and is part of the contract: URLs are removed before bare reverse-DNS
-/// identifiers so a hostname inside a URL is not relabelled as an app identifier, and
+/// identifiers so a hostname inside a URL is not relabelled as an app identifier,
 /// key-anchored tenant/device identifiers are removed before the generic GUID rule so they
-/// keep their specific token.
+/// keep their specific token, and network addresses are removed after URLs so a host inside a
+/// URL is already gone by the time the address matchers run.
 pub(super) fn redact_text(value: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -75,7 +86,8 @@ pub(super) fn redact_text(value: &str) -> String {
     let value = url_pattern().replace_all(&value, REDACTED_URL);
     let value = bearer_token_pattern().replace_all(&value, format!("Bearer {REDACTED_TOKEN}"));
     let value = jwt_pattern().replace_all(&value, REDACTED_TOKEN);
-    let value = keyed_token_pattern().replace_all(&value, format!("${{key}}={REDACTED_TOKEN}"));
+    let value =
+        keyed_secret_pattern().replace_all(&value, format!("${{key}}${{assign}}{REDACTED_TOKEN}"));
     let value = tenant_id_pattern().replace_all(
         &value,
         format!("${{key}}${{assign}}${{open}}{REDACTED_TENANT_ID}"),
@@ -85,6 +97,12 @@ pub(super) fn redact_text(value: &str) -> String {
         format!("${{key}}${{assign}}${{open}}{REDACTED_DEVICE_ID}"),
     );
     let value = guid_pattern().replace_all(&value, REDACTED_GUID);
+    // Network addresses run last, after URLs have already taken any embedded host, and in
+    // IPv4 -> MAC -> IPv6 order so an IPv4-mapped IPv6 address cannot leak its dotted tail
+    // and a MAC is not consumed as a compressed IPv6 run.
+    let value = ipv4_address_pattern().replace_all(&value, REDACTED_ADDRESS);
+    let value = mac_address_pattern().replace_all(&value, REDACTED_ADDRESS);
+    let value = ipv6_address_pattern().replace_all(&value, REDACTED_ADDRESS);
 
     redact_app_identifiers(&value)
 }
@@ -116,8 +134,11 @@ fn redact_app_identifiers(value: &str) -> String {
 fn email_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b")
-            .expect("email pattern must compile")
+        // Unicode-aware: `\w` covers non-ASCII letters in this engine. An ASCII-only class
+        // does not merely truncate a non-ASCII identity, it misses it outright, because with
+        // an accented leading character there is no word boundary for a leading `\b` to
+        // anchor on and the whole address survives export.
+        Regex::new(r"(?i)[\w.%+\-]+@[\w.\-]+\.\w{2,}").expect("email pattern must compile")
     })
 }
 
@@ -143,25 +164,34 @@ fn jwt_pattern() -> &'static Regex {
     })
 }
 
-fn keyed_token_pattern() -> &'static Regex {
+fn keyed_secret_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        // `[` is excluded from the value class so an already-substituted
-        // `token=[redacted:token]` cannot match again. The regex crate has no lookaround,
-        // so the character class is what makes this projection idempotent.
-        Regex::new(
-            r"(?i)(?P<key>\b(?:access_token|refresh_token|id_token|token|secret|password)\b)\s*=\s*[^\s,;\[\]\)]+",
-        )
-        .expect("keyed token pattern must compile")
+        // Deliberately over-broad: the value runs to the end of the line instead of stopping
+        // at the first delimiter. `password=my secret pass phrase` is a real shape, and a
+        // whitespace-bounded value class redacted `my` and exported the rest of the
+        // passphrase. Losing the tail of one line to over-redaction is strictly better than
+        // leaking a credential; the narrow, GUID-bounded value class is kept below for the
+        // low-signal tenant/device labels, where over-capture would destroy evidence.
+        //
+        // The compound labels are spelled out because `_` is a word character, so a `\b`
+        // before `secret` never matches inside `client_secret`.
+        //
+        // Substituting to the end of the line keeps the projection idempotent: re-running it
+        // on `password=[redacted:token]` reproduces the same line byte for byte.
+        Regex::new(&format!(
+            r"(?i)(?P<key>\b(?:access[_-]?token|refresh[_-]?token|id[_-]?token|bearer[_-]?token|auth[_-]?token|client[_-]?secret|api[_-]?key|apikey|token|secret|password|passwd|pwd))(?P<assign>{LABEL_SEPARATOR})[^\r\n]*"
+        ))
+        .expect("keyed secret pattern must compile")
     })
 }
 
 fn tenant_id_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(
-            r#"(?i)(?P<key>\btenant(?:_?id)?\b)(?P<assign>\s*[=:]\s*)(?P<open>[{'"]?)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"#,
-        )
+        Regex::new(&format!(
+            r#"(?i)(?P<key>\btenant(?:[_-]?id)?\b)(?P<assign>{LABEL_SEPARATOR})(?P<open>[{{'"]?)[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}"#
+        ))
         .expect("tenant id pattern must compile")
     })
 }
@@ -169,9 +199,9 @@ fn tenant_id_pattern() -> &'static Regex {
 fn device_id_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(
-            r#"(?i)(?P<key>\b(?:device|aad_device|entra_device)_?id\b)(?P<assign>\s*[=:]\s*)(?P<open>[{'"]?)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"#,
-        )
+        Regex::new(&format!(
+            r#"(?i)(?P<key>\b(?:device|aad[_-]?device|entra[_-]?device|managed[_-]?device)[_-]?id\b)(?P<assign>{LABEL_SEPARATOR})(?P<open>[{{'"]?)[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}"#
+        ))
         .expect("device id pattern must compile")
     })
 }
@@ -195,8 +225,46 @@ fn certificate_block_pattern() -> &'static Regex {
 fn certificate_thumbprint_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:thumbprint|fingerprint)\s*[=:]\s*[0-9a-f]{2}(?::?[0-9a-f]{2}){15,}")
-            .expect("certificate thumbprint pattern must compile")
+        Regex::new(&format!(
+            r#"(?i)\b(?:thumbprint|fingerprint|cert[_-]?hash){LABEL_SEPARATOR}["']?[0-9a-f]{{2}}(?::?[0-9a-f]{{2}}){{15,}}"#
+        ))
+        .expect("certificate thumbprint pattern must compile")
+    })
+}
+
+/// Dotted-quad IPv4, each octet bounded to 0-255 so a dotted version string such as
+/// `5.2504.0.1234` is not read as an address.
+fn ipv4_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b",
+        )
+        .expect("IPv4 pattern must compile")
+    })
+}
+
+/// Six colon- or dash-separated hex pairs. Runs before the IPv6 matcher, which needs eight
+/// groups or a `::` run and so cannot claim a MAC.
+fn mac_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
+            .expect("MAC address pattern must compile")
+    })
+}
+
+/// Fully expanded eight-group IPv6 or any `::`-compressed form.
+///
+/// The quantifiers are greedy so `replace_all` consumes the whole address and never leaves a
+/// trailing fragment in the clear.
+fn ipv6_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)\b",
+        )
+        .expect("IPv6 pattern must compile")
     })
 }
 

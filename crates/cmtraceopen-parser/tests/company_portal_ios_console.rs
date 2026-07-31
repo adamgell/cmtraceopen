@@ -94,6 +94,46 @@ fn record_at(capture: &PortalConsoleCapture, index: usize) -> &PortalConsoleReco
         .unwrap_or_else(|| panic!("record {index} must exist"))
 }
 
+const CONSOLE_HEADER: &str =
+    "Timestamp                       Thread     Type        Activity             PID    TTL";
+const CONSOLE_RECORD_PREFIX: &str = "0x1a2b3    Default     0x0                  312    0    \
+     CompanyPortal: (Diagnostics) [com.microsoft.CompanyPortal:Diagnostics] ";
+
+/// Build a supported Console export carrying one Company Portal record per entry of
+/// `messages`, then return the concatenated *redacted* message and raw text.
+///
+/// One message per record matters for the secret rules, whose value deliberately runs to the
+/// end of its line: putting two labels on one line would let the first swallow the second and
+/// hide whether the second rule works at all.
+fn redacted_console_text(messages: &[&str]) -> String {
+    let mut export = String::from(CONSOLE_HEADER);
+    export.push('\n');
+    for (index, message) in messages.iter().enumerate() {
+        export.push_str(&format!(
+            "2024-03-15 10:00:{index:02}.000001-0700 {CONSOLE_RECORD_PREFIX}{message}\n"
+        ));
+    }
+
+    let capture = parse_console_export(&export);
+    assert_eq!(
+        capture.detection.outcome,
+        PortalConsoleDetectionOutcome::Supported,
+        "helper fixture must parse as a supported export"
+    );
+    assert_eq!(
+        capture.totals.company_portal_records,
+        messages.len(),
+        "helper fixture must yield one Company Portal record per message"
+    );
+
+    let redacted = redacted_export_projection(&capture);
+    redacted
+        .records
+        .iter()
+        .map(|record| format!("{}\n{}\n", record.message.value, record.raw_text))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Item 1 - supported Console plain-text export
 // ---------------------------------------------------------------------------
@@ -780,6 +820,48 @@ fn item11_unregistered_header_fails_conservatively_without_guessing_columns() {
 }
 
 #[test]
+fn item11_unregistered_header_row_survives_in_its_coverage_entry() {
+    // With no registered layout, `detection.layout` and `capture.layout` are both `None`, so
+    // the `UnsupportedLayout` coverage entry is the only place the header row can survive.
+    // Coverage is meant to be a visible, non-silent account of input; an empty `raw_text`
+    // discards the one line that explains why the layout is unsupported.
+    for (name, content) in [
+        ("unregistered-header", UNREGISTERED_HEADER),
+        ("unregistered-sequence", UNREGISTERED_SEQUENCE),
+    ] {
+        let capture = parse_console_export(content);
+        assert_eq!(capture.layout, None, "{name}: layout must stay unresolved");
+
+        let header = content
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .expect("fixture has a header row");
+        let entry = capture
+            .coverage
+            .iter()
+            .find(|entry| entry.kind == PortalConsoleCoverageKind::UnsupportedLayout)
+            .unwrap_or_else(|| panic!("{name}: expected an UnsupportedLayout coverage entry"));
+
+        assert_eq!(
+            entry.raw_text, header,
+            "{name}: the unregistered header row was discarded"
+        );
+
+        // And it is redacted on export like any other raw text.
+        let redacted = redacted_export_projection(&capture);
+        let redacted_entry = redacted
+            .coverage
+            .iter()
+            .find(|entry| entry.kind == PortalConsoleCoverageKind::UnsupportedLayout)
+            .expect("coverage entry survives the redacted projection");
+        assert!(
+            !redacted_entry.raw_text.is_empty(),
+            "{name}: redaction must not empty the preserved header"
+        );
+    }
+}
+
+#[test]
 fn item11_known_titles_in_an_unregistered_order_are_also_refused() {
     let capture = parse_console_export(UNREGISTERED_SEQUENCE);
 
@@ -897,6 +979,150 @@ fn item12_structural_attribution_survives_redaction() {
 }
 
 #[test]
+fn item12_json_shaped_labels_are_redacted() {
+    // A Console payload routinely carries a serialized JSON body verbatim, so the label
+    // arrives as `"password":"hunter2"`. A rule that allows only whitespace between the label
+    // and the separator stops at the closing quote and nothing else catches the bare secret.
+    let text = redacted_console_text(&[
+        r#"Auth state {"password":"hunter2"}"#,
+        r#"Auth state {"access_token":"plainSecretValue123"}"#,
+        "Auth state client_secret=abcDEF123",
+        r#"Enrolled {"tenantId":"8f3c2a10-4b5d-4e6f-9a70-1c2d3e4f5a6b"}"#,
+        r#"Enrolled {"deviceId":"1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9"}"#,
+    ]);
+
+    for leaked in [
+        "hunter2",
+        "plainSecretValue123",
+        "abcDEF123",
+        "8f3c2a10-4b5d-4e6f-9a70-1c2d3e4f5a6b",
+        "1a2b3c4d-5e6f-4071-8293-a4b5c6d7e8f9",
+    ] {
+        assert!(
+            !text.contains(leaked),
+            "JSON-shaped secret {leaked} survived redaction:\n{text}"
+        );
+    }
+
+    assert!(
+        text.contains(REDACTED_TOKEN),
+        "no token placeholder:\n{text}"
+    );
+    assert!(
+        text.contains(REDACTED_TENANT_ID),
+        "no tenant placeholder:\n{text}"
+    );
+    assert!(
+        text.contains(REDACTED_DEVICE_ID),
+        "no device placeholder:\n{text}"
+    );
+}
+
+#[test]
+fn item12_keyed_secret_values_run_to_the_end_of_the_line() {
+    // A whitespace-bounded value class redacts `my` and exports the rest of the passphrase.
+    // For high-signal secret labels the value deliberately runs to end of line.
+    let text = redacted_console_text(&[
+        "Recovered password=my secret pass phrase from the keychain",
+        "Recovered api_key=first second third",
+    ]);
+
+    for leaked in [
+        "my secret pass phrase",
+        "pass phrase",
+        "from the keychain",
+        "second third",
+    ] {
+        assert!(
+            !text.contains(leaked),
+            "keyed secret tail {leaked:?} survived redaction:\n{text}"
+        );
+    }
+    assert!(
+        text.contains(REDACTED_TOKEN),
+        "no token placeholder:\n{text}"
+    );
+}
+
+#[test]
+fn item12_non_ascii_identities_are_redacted() {
+    // An ASCII-only class does not truncate a non-ASCII identity, it misses it entirely:
+    // with an accented leading character there is no word boundary for a leading `\b` to
+    // anchor on, and `Zoe`-with-diaeresis leaks the given name ahead of the matched tail.
+    let text = redacted_console_text(&[
+        "Signing in as m\u{fc}ller@contoso.example",
+        "Signing in as Zo\u{eb}.Chen@contoso.example",
+    ]);
+
+    for leaked in [
+        "m\u{fc}ller",
+        "Zo\u{eb}",
+        ".Chen",
+        "@contoso.example",
+        "contoso.example",
+    ] {
+        assert!(
+            !text.contains(leaked),
+            "non-ASCII identity fragment {leaked:?} survived redaction:\n{text}"
+        );
+    }
+    assert!(
+        text.contains(REDACTED_EMAIL),
+        "no email placeholder:\n{text}"
+    );
+}
+
+#[test]
+fn item12_network_addresses_are_redacted() {
+    let text = redacted_console_text(&[
+        "Reached service at 10.20.30.40 after retry",
+        "Interface hardware address AA:BB:CC:DD:EE:FF is up",
+        "Reached service at 2001:0db8:85a3:0000:0000:8a2e:0370:7334 after retry",
+        "Reached service at fe80::1c2d:3e4f:5a6b after retry",
+    ]);
+
+    for leaked in [
+        "10.20.30.40",
+        "AA:BB:CC:DD:EE:FF",
+        "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+        "0370:7334",
+        "fe80::1c2d:3e4f:5a6b",
+        "1c2d:3e4f:5a6b",
+    ] {
+        assert!(
+            !text.contains(leaked),
+            "network address {leaked} survived redaction:\n{text}"
+        );
+    }
+    assert!(
+        text.contains(REDACTED_ADDRESS),
+        "no address placeholder:\n{text}"
+    );
+}
+
+#[test]
+fn item12_dotted_version_strings_are_not_mistaken_for_addresses() {
+    // Console payloads are full of dotted version numbers. Bounding each IPv4 octet to 0-255
+    // is what keeps a four-part build number out of the address matcher; an unbounded
+    // dotted-quad would redact the very evidence the capture exists to carry.
+    let text = redacted_console_text(&[
+        "Company Portal 5.2504.0.1234 starting on iOS 17.4 build 21E236",
+        "Library versions 1.900.3.7 and 2.1000.0.0 loaded",
+    ]);
+
+    for preserved in ["5.2504.0.1234", "17.4", "21E236", "1.900.3.7", "2.1000.0.0"] {
+        assert!(
+            text.contains(preserved),
+            "version string {preserved} was swallowed by an address matcher:\n{text}"
+        );
+    }
+    assert!(
+        !text.contains(REDACTED_ADDRESS),
+        "a version string was reported as an address:\n{text}"
+    );
+}
+
+#[test]
 fn item12_redaction_is_idempotent() {
     let capture = parse_console_export(PRIVACY_PAYLOAD);
     let once = redacted_export_projection(&capture);
@@ -978,6 +1204,29 @@ fn item13_no_input_line_is_ever_silently_dropped() {
             continue;
         }
 
+        // The header row is not a record, but it is input, so it has to be *found* somewhere
+        // rather than excused: verbatim in the resolved layout when the layout is registered,
+        // and verbatim in the `UnsupportedLayout` coverage entry when it is not. Coverage of
+        // any other kind is deliberately excluded because it restates a record's own text.
+        let header_text: String = match &capture.layout {
+            Some(layout) => layout.header_raw.clone(),
+            None => capture
+                .coverage
+                .iter()
+                .filter(|entry| entry.kind == PortalConsoleCoverageKind::UnsupportedLayout)
+                .map(|entry| entry.raw_text.as_str())
+                .collect(),
+        };
+
+        if let Some(header) = content.lines().find(|line| !line.trim().is_empty()) {
+            if capture.layout.is_none() {
+                assert_eq!(
+                    header_text, header,
+                    "{name}: the unregistered header row was discarded instead of preserved"
+                );
+            }
+        }
+
         let accounted: usize = capture
             .records
             .iter()
@@ -988,21 +1237,13 @@ fn item13_no_input_line_is_ever_silently_dropped() {
                 .iter()
                 .filter(|entry| entry.kind == PortalConsoleCoverageKind::TruncatedLeading)
                 .map(|entry| entry.raw_text.lines().count())
-                .sum::<usize>();
+                .sum::<usize>()
+            + header_text.lines().count();
 
         let non_empty_body = content
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .count()
-            - usize::from(
-                capture
-                    .layout
-                    .as_ref()
-                    .is_some_and(|layout| !layout.header_raw.is_empty())
-                    || capture.detection.outcome
-                        == PortalConsoleDetectionOutcome::UnsupportedLayout
-                        && capture.layout.is_none(),
-            );
+            .count();
 
         assert_eq!(
             accounted, non_empty_body,

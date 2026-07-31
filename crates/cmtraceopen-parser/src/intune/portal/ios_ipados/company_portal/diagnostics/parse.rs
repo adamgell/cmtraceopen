@@ -314,7 +314,13 @@ pub fn parse_console_export_with_artifact_id(
             first_line_number: 1,
             last_line_number: source_lines.max(1),
             detail: detection.reason.clone(),
-            raw_text: String::new(),
+            // An unregistered header leaves `detection.layout` and `capture.layout` both
+            // `None`, so this entry is the only place the header row can survive. Discarding
+            // it would drop the one input line that explains why the layout is unsupported,
+            // which is exactly what coverage exists to prevent.
+            raw_text: header_index
+                .map(|index| lines[index].to_string())
+                .unwrap_or_default(),
         });
     }
 
