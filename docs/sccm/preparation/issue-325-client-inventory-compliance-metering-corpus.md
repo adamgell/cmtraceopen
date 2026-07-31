@@ -77,6 +77,13 @@ does not invent path, fingerprint, or version identity. Duplicate basenames from
 different roots remain separate when their sanitized paths, fingerprints, and
 relative paths are distinct.
 
+The proposed #319 preparation schema keeps
+`rotation: {"kind": "current", "fragmentComplete": false}` on noncapture rows.
+Here `false` is a compatibility marker meaning that no complete fragment was
+captured; it does not assert that a partial physical fragment exists. This
+corpus keeps that shape until #318/#319 publish the final additive manifest
+contract instead of inventing a workflow-local variant.
+
 The expected contract keeps output deterministic and preparation-only:
 
 - every coverage row is an exact artifact-level projection of the manifest;

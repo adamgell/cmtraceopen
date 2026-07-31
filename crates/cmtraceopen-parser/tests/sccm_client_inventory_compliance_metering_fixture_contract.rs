@@ -211,6 +211,64 @@ fn expected_profile(family: &str) -> Result<&'static str, String> {
     }
 }
 
+fn required_scenario_semantics(
+    family: &str,
+    scenario: &str,
+) -> Result<&'static [&'static str], String> {
+    match (family, scenario) {
+        ("inventory", "success") => Ok(&["Report|succeeded|success"]),
+        ("inventory", "terminal-failures") => Ok(&[
+            "Collect|failed|confirmedFailure",
+            "Provider|failed|confirmedFailure",
+            "Serialize|failed|confirmedFailure",
+            "Queue|failed|confirmedFailure",
+            "Report|failed|confirmedFailure",
+        ]),
+        ("inventory", "recovery-contradictory") => {
+            Ok(&["Report|recovered|recovery", "Report|contradictory|symptom"])
+        }
+        ("inventory", "same-minute-collision") => {
+            Ok(&["Report|succeeded|success", "Report|succeeded|success"])
+        }
+        ("inventory", "coverage-states" | "rotation-boundary") => Ok(&[]),
+        ("compliance", "success") => Ok(&["Report|succeeded|success"]),
+        ("compliance", "noncompliant-result") => {
+            Ok(&["Evaluate|evaluatedNonCompliant|evaluationResult"])
+        }
+        ("compliance", "remediation-success") => Ok(&["Report|remediated|success"]),
+        ("compliance", "terminal-failures") => Ok(&[
+            "Evaluate|failed|confirmedFailure",
+            "Remediate|failed|confirmedFailure",
+            "Report|failed|confirmedFailure",
+        ]),
+        ("compliance", "recovery-contradictory") => Ok(&[
+            "Report|recovered|recovery",
+            "Evaluate|contradictory|symptom",
+        ]),
+        ("compliance", "same-minute-collision") => Ok(&[
+            "Evaluate|evaluatedNonCompliant|evaluationResult",
+            "Evaluate|evaluatedCompliant|evaluationResult",
+        ]),
+        ("compliance", "coverage-states" | "malformed-unknown-profile-invalid-offset") => Ok(&[]),
+        ("metering", "success") => Ok(&["Report|succeeded|success"]),
+        ("metering", "terminal-failures") => Ok(&[
+            "Collect|failed|confirmedFailure",
+            "Aggregate|failed|confirmedFailure",
+            "Report|failed|confirmedFailure",
+        ]),
+        ("metering", "recovery-contradictory") => {
+            Ok(&["Report|recovered|recovery", "Report|contradictory|symptom"])
+        }
+        ("metering", "same-minute-collision") => {
+            Ok(&["Report|succeeded|success", "Report|succeeded|success"])
+        }
+        ("metering", "coverage-states" | "rotation-boundary") => Ok(&[]),
+        _ => Err(format!(
+            "required scenario semantics are undefined for {family}/{scenario}"
+        )),
+    }
+}
+
 fn required_string<'a>(value: &'a Value, field: &str, context: &str) -> Result<&'a str, String> {
     value[field]
         .as_str()
@@ -346,7 +404,7 @@ fn evidence_record_texts(
     scenario_root: &Path,
     artifacts_by_id: &BTreeMap<String, &Value>,
     evidence_refs: &[Value],
-) -> Result<Vec<(String, i32, String)>, String> {
+) -> Result<Vec<(String, i32, String, i64)>, String> {
     let mut records = Vec::new();
     for evidence_ref in evidence_refs {
         let artifact_id = required_string(evidence_ref, "artifactId", "evidence reference")?;
@@ -392,30 +450,45 @@ fn evidence_record_texts(
             let offset_minutes = entries[0]
                 .timezone_offset
                 .ok_or_else(|| format!("{artifact_id}:{} has no source offset", start + offset))?;
+            let timestamp = entries[0].timestamp.ok_or_else(|| {
+                format!(
+                    "{artifact_id}:{} has no usable source timestamp",
+                    start + offset
+                )
+            })?;
             let source_version = required_string(artifact, "sourceVersion", artifact_id)?;
             records.push((
                 (*line).to_owned(),
                 offset_minutes,
                 source_version.to_owned(),
+                timestamp,
             ));
         }
     }
     Ok(records)
 }
 
-fn record_contains_exact_key_pair(record: &str, field: &str, value: &str) -> bool {
+fn record_exact_token_values<'a>(record: &'a str, field: &str) -> Vec<&'a str> {
     const MESSAGE_PREFIX: &str = "<![LOG[";
     const MESSAGE_SUFFIX: &str = "]LOG]!>";
     let Some(message_start) = record.find(MESSAGE_PREFIX) else {
-        return false;
+        return Vec::new();
     };
     let payload_start = message_start + MESSAGE_PREFIX.len();
     let Some(message_end) = record[payload_start..].find(MESSAGE_SUFFIX) else {
-        return false;
+        return Vec::new();
     };
     record[payload_start..payload_start + message_end]
         .split_ascii_whitespace()
-        .any(|token| token.split_once('=') == Some((field, value)))
+        .filter_map(|token| {
+            let (name, value) = token.split_once('=')?;
+            (name == field).then_some(value)
+        })
+        .collect()
+}
+
+fn record_contains_exact_key_pair(record: &str, field: &str, value: &str) -> bool {
+    record_exact_token_values(record, field).contains(&value)
 }
 
 fn validate_contract(
@@ -474,6 +547,18 @@ fn validate_contract(
         }
         if artifact["role"] != "client" || artifact["kind"] != "ccmLog" {
             return Err(format!("{artifact_id} is not a client CCM artifact"));
+        }
+        let captured_utc = required_string(artifact, "capturedUtc", artifact_id)?;
+        let parsed_captured_utc = chrono::DateTime::parse_from_rfc3339(captured_utc)
+            .map_err(|error| format!("{artifact_id} capturedUtc is invalid: {error}"))?;
+        let canonical_captured_utc =
+            parsed_captured_utc.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        if parsed_captured_utc.offset().local_minus_utc() != 0
+            || canonical_captured_utc != captured_utc
+        {
+            return Err(format!(
+                "{artifact_id} capturedUtc is not canonical UTC provenance"
+            ));
         }
         if artifact["designOnlyCatalog"]["entryId"] != logical_artifact
             || artifact["designOnlyCatalog"]["groupMemberships"] != json!([logical_artifact])
@@ -543,14 +628,19 @@ fn validate_contract(
             if artifact["encoding"] != "utf-8" || std::str::from_utf8(&bytes).is_err() {
                 return Err(format!("{artifact_id} is not declared and encoded UTF-8"));
             }
-            if capture_state == "capped"
-                && (artifact["collectionLimit"]["limitApplied"] != true
+            if capture_state == "capped" {
+                let byte_limit = artifact["collectionLimit"]["byteLimit"]
+                    .as_u64()
+                    .ok_or_else(|| format!("{artifact_id} capped byteLimit is not an integer"))?;
+                if artifact["collectionLimit"]["limitApplied"] != true
                     || artifact["truncated"] != true
-                    || artifact["rotation"]["fragmentComplete"] != false)
-            {
-                return Err(format!(
-                    "{artifact_id} capped state lacks cap/partial provenance"
-                ));
+                    || artifact["rotation"]["fragmentComplete"] != false
+                    || byte_limit != declared_bytes
+                {
+                    return Err(format!(
+                        "{artifact_id} capped state is not an inclusive exact prefix"
+                    ));
+                }
             }
             if capture_state == "parseFailed" && artifact["rotation"]["fragmentComplete"] != false {
                 return Err(format!(
@@ -734,7 +824,26 @@ fn validate_contract(
         }
         let claim = required_string(observation, "claim", observation_id)?;
         let lower_claim = claim.to_ascii_lowercase();
-        if lower_claim.contains("server-side cause") || lower_claim.contains("proves") {
+        let causal_word = lower_claim
+            .split(|character: char| !character.is_ascii_alphanumeric())
+            .any(|word| {
+                matches!(
+                    word,
+                    "cause"
+                        | "caused"
+                        | "causes"
+                        | "causing"
+                        | "causal"
+                        | "because"
+                        | "proves"
+                        | "proof"
+                )
+            });
+        if causal_word
+            || ["root cause", "resulted in", "led to", "responsible for"]
+                .iter()
+                .any(|phrase| lower_claim.contains(phrase))
+        {
             return Err(format!("{observation_id} makes a causal/proof claim"));
         }
         let artifact_ids = observation["artifactIds"]
@@ -785,6 +894,7 @@ fn validate_contract(
         .as_array()
         .ok_or_else(|| "transactions are not an array".to_owned())?;
     let mut transaction_ids = BTreeSet::new();
+    let mut scenario_semantics = Vec::new();
     for transaction in transactions {
         let transaction_id = required_string(transaction, "transactionId", "transaction")?;
         if !transaction_ids.insert(transaction_id.to_owned()) {
@@ -850,7 +960,7 @@ fn validate_contract(
             return Err(format!("{transaction_id} has no cited evidence"));
         }
         let records = evidence_record_texts(scenario_root, &artifacts_by_id, evidence_refs)?;
-        for (record, _, _) in &records {
+        for (record, _, _, _) in &records {
             for field in required_fields {
                 let value = key[*field].as_str().expect("validated key string");
                 if !record_contains_exact_key_pair(record, field, value) {
@@ -862,7 +972,7 @@ fn validate_contract(
         }
         if !records
             .iter()
-            .any(|(record, _, _)| record.contains(&format!("Phase={phase}")))
+            .any(|(record, _, _, _)| record_contains_exact_key_pair(record, "Phase", phase))
         {
             return Err(format!(
                 "{transaction_id} phase {phase} is not bound to cited evidence"
@@ -870,10 +980,9 @@ fn validate_contract(
         }
 
         let confidence = required_string(transaction, "confidence", transaction_id)?;
-        if records
-            .iter()
-            .any(|(_, offset, version)| offset.abs() > 1_439 || !version.starts_with("5.00.TEST."))
-        {
+        if records.iter().any(|(_, offset, version, _)| {
+            offset.abs() > 1_439 || !version.starts_with("5.00.TEST.")
+        }) {
             return Err(format!(
                 "{transaction_id} exact-key transaction lacks usable offset/profile provenance"
             ));
@@ -881,12 +990,34 @@ fn validate_contract(
         let state = required_string(transaction, "state", transaction_id)?;
         let classification = required_string(transaction, "classification", transaction_id)?;
         let has_phase_record = |disposition: &str, terminal: bool| {
-            records.iter().any(|(record, _, _)| {
-                record.contains(&format!("Phase={phase}"))
-                    && record.contains(&format!("Disposition={disposition}"))
-                    && record.contains(&format!("Terminal={terminal}"))
+            records.iter().any(|(record, _, _, _)| {
+                record_contains_exact_key_pair(record, "Phase", phase)
+                    && record_contains_exact_key_pair(record, "Disposition", disposition)
+                    && record_contains_exact_key_pair(
+                        record,
+                        "Terminal",
+                        if terminal { "true" } else { "false" },
+                    )
             })
         };
+        let terminal_dispositions = records
+            .iter()
+            .filter(|(record, _, _, _)| {
+                record_contains_exact_key_pair(record, "Phase", phase)
+                    && record_contains_exact_key_pair(record, "Terminal", "true")
+            })
+            .flat_map(|(record, _, _, _)| {
+                record_exact_token_values(record, "Disposition")
+                    .into_iter()
+                    .map(str::to_owned)
+            })
+            .collect::<BTreeSet<_>>();
+        if confidence == "high" && terminal_dispositions.len() > 1 {
+            return Err(format!(
+                "{transaction_id} high confidence cites opposing terminal evidence"
+            ));
+        }
+        scenario_semantics.push(format!("{phase}|{state}|{classification}"));
         match classification {
             "confirmedFailure" => {
                 if state != "failed" || confidence != "high" || !has_phase_record("Failed", true) {
@@ -920,9 +1051,9 @@ fn validate_contract(
                     || phase != "Evaluate"
                     || confidence != "high"
                     || !has_phase_record(disposition, true)
-                    || !records
-                        .iter()
-                        .any(|(record, _, _)| record.contains("ResultType=Evaluation"))
+                    || !records.iter().any(|(record, _, _, _)| {
+                        record_contains_exact_key_pair(record, "ResultType", "Evaluation")
+                    })
                 {
                     return Err(format!(
                         "{transaction_id} compliance evaluation result contract is invalid"
@@ -937,6 +1068,31 @@ fn validate_contract(
                 {
                     return Err(format!(
                         "{transaction_id} recovery lacks both terminal failure and success"
+                    ));
+                }
+                let latest_failure = records
+                    .iter()
+                    .filter(|(record, _, _, _)| {
+                        record_contains_exact_key_pair(record, "Phase", phase)
+                            && record_contains_exact_key_pair(record, "Disposition", "Failed")
+                            && record_contains_exact_key_pair(record, "Terminal", "true")
+                    })
+                    .map(|(_, _, _, timestamp)| *timestamp)
+                    .max()
+                    .expect("terminal failure checked above");
+                let earliest_success = records
+                    .iter()
+                    .filter(|(record, _, _, _)| {
+                        record_contains_exact_key_pair(record, "Phase", phase)
+                            && record_contains_exact_key_pair(record, "Disposition", "Succeeded")
+                            && record_contains_exact_key_pair(record, "Terminal", "true")
+                    })
+                    .map(|(_, _, _, timestamp)| *timestamp)
+                    .min()
+                    .expect("terminal success checked above");
+                if earliest_success <= latest_failure {
+                    return Err(format!(
+                        "{transaction_id} recovery is not strictly ordered after every cited failure"
                     ));
                 }
             }
@@ -980,6 +1136,11 @@ fn validate_contract(
         }
         validate_next_artifact(family, transaction_id, &transaction["nextArtifact"])?;
     }
+    if scenario_semantics != required_scenario_semantics(family, scenario)? {
+        return Err(format!(
+            "{family}/{scenario} required scenario semantics changed: {scenario_semantics:?}"
+        ));
+    }
 
     Ok(())
 }
@@ -995,6 +1156,25 @@ fn assert_rejected(
     assert!(
         validate_contract(family, scenario, scenario_root, manifest, expected).is_err(),
         "dynamic adversarial mutation `{label}` was accepted"
+    );
+}
+
+fn assert_rejected_with(
+    label: &str,
+    family: &str,
+    scenario: &str,
+    scenario_root: &Path,
+    manifest: &Value,
+    expected: &Value,
+    required_error: &str,
+) {
+    let error = match validate_contract(family, scenario, scenario_root, manifest, expected) {
+        Err(error) => error,
+        Ok(()) => panic!("dynamic adversarial mutation `{label}` was accepted"),
+    };
+    assert!(
+        error.contains(required_error),
+        "`{label}` was rejected for the wrong reason: {error}"
     );
 }
 
@@ -1037,6 +1217,55 @@ fn corpus_inventory_is_deterministic_and_documented() {
         },
         "fixture inventory changed; review provenance and update the documented digest"
     );
+}
+
+#[test]
+fn review_blocker_applied_caps_are_inclusive_exact_prefixes() {
+    for family in ["inventory", "compliance", "metering"] {
+        let (scenario_root, manifest, _) = load_contract(family, "coverage-states");
+        let capped = manifest["artifacts"]
+            .as_array()
+            .expect("manifest artifacts are an array")
+            .iter()
+            .filter(|artifact| artifact["captureState"] == "capped")
+            .collect::<Vec<_>>();
+        assert_eq!(capped.len(), 1, "{family} has exactly one capped fixture");
+
+        let artifact = capped[0];
+        let artifact_id = artifact["artifactId"]
+            .as_str()
+            .expect("capped artifactId is a string");
+        let relative_path = artifact["relativePath"]
+            .as_str()
+            .expect("capped artifact has retained evidence");
+        let file_size = std::fs::metadata(scenario_root.join(relative_path))
+            .expect("capped evidence metadata is readable")
+            .len();
+        let bytes_copied = artifact["bytesCopied"]
+            .as_u64()
+            .expect("capped bytesCopied is an integer");
+        let byte_limit = artifact["collectionLimit"]["byteLimit"]
+            .as_u64()
+            .expect("capped byteLimit is an integer");
+
+        assert_eq!(
+            (
+                artifact["collectionLimit"]["limitApplied"].as_bool(),
+                artifact["truncated"].as_bool()
+            ),
+            (Some(true), Some(true)),
+            "{artifact_id} records an applied truncating cap"
+        );
+        assert_eq!(
+            artifact["rotation"]["fragmentComplete"], false,
+            "{artifact_id} cannot claim a complete retained fragment"
+        );
+        assert_eq!(
+            (bytes_copied, file_size, byte_limit),
+            (byte_limit, byte_limit, byte_limit),
+            "{artifact_id} must retain the exact inclusive prefix through byteLimit"
+        );
+    }
 }
 
 #[test]
@@ -1215,6 +1444,21 @@ fn dynamic_manifest_mutations_cannot_escape_source_and_identity_boundaries() {
 }
 
 #[test]
+fn review_blocker_missing_capture_timestamp_is_rejected() {
+    let (scenario_root, mut manifest, expected) = load_contract("inventory", "success");
+    manifest["artifacts"][0]["capturedUtc"] = Value::Null;
+    assert_rejected_with(
+        "missing capturedUtc",
+        "inventory",
+        "success",
+        &scenario_root,
+        &manifest,
+        &expected,
+        "capturedUtc",
+    );
+}
+
+#[test]
 fn dynamic_evidence_mutations_cannot_fabricate_exact_or_high_confidence_facts() {
     let (scenario_root, manifest, expected) = load_contract("inventory", "success");
 
@@ -1278,23 +1522,59 @@ fn dynamic_evidence_mutations_cannot_fabricate_exact_or_high_confidence_facts() 
 }
 
 #[test]
-fn exact_key_tokens_reject_lookalike_field_names_and_values() {
-    let value = "INV-REPORT-001";
-    assert!(record_contains_exact_key_pair(
-        "<![LOG[ReportId=INV-REPORT-001]LOG]!>",
-        "ReportId",
-        value
-    ));
-    for lookalike in [
-        "<![LOG[OtherReportId=INV-REPORT-001]LOG]!>",
-        "<![LOG[PrefixReportId=INV-REPORT-001]LOG]!>",
-        "<![LOG[ReportId=INV-REPORT-001-suffix]LOG]!>",
-        "<![LOG[X=ReportId=INV-REPORT-001]LOG]!>",
+fn exact_message_tokens_reject_key_and_semantic_lookalikes() {
+    for (field, value) in [
+        ("ReportId", "INV-REPORT-001"),
+        ("Phase", "Report"),
+        ("Disposition", "Succeeded"),
+        ("Terminal", "true"),
+        ("ResultType", "Evaluation"),
     ] {
-        assert!(
-            !record_contains_exact_key_pair(lookalike, "ReportId", value),
-            "look-alike key token was accepted: {lookalike}"
-        );
+        let exact = format!("<![LOG[{field}={value}]LOG]!>");
+        assert!(record_contains_exact_key_pair(&exact, field, value));
+
+        for lookalike in [
+            format!("<![LOG[Other{field}={value}]LOG]!>"),
+            format!("<![LOG[Prefix{field}={value}]LOG]!>"),
+            format!("<![LOG[{field}={value}-suffix]LOG]!>"),
+            format!("<![LOG[X={field}={value}]LOG]!>"),
+        ] {
+            assert!(
+                !record_contains_exact_key_pair(&lookalike, field, value),
+                "look-alike {field} token was accepted: {lookalike}"
+            );
+        }
+    }
+}
+
+#[test]
+fn noncapture_fragment_marker_matches_issue_319_preparation_schema() {
+    for family in ["inventory", "compliance", "metering"] {
+        let (_, manifest, _) = load_contract(family, "coverage-states");
+        for artifact in manifest["artifacts"]
+            .as_array()
+            .expect("manifest artifacts are an array")
+            .iter()
+            .filter(|artifact| {
+                matches!(
+                    artifact["captureState"].as_str(),
+                    Some("absent" | "accessDenied" | "skipped" | "unsupported")
+                )
+            })
+        {
+            let artifact_id = artifact["artifactId"]
+                .as_str()
+                .expect("noncapture artifactId is a string");
+            assert_eq!(artifact["bytesCopied"], 0, "{artifact_id}");
+            assert!(artifact["relativePath"].is_null(), "{artifact_id}");
+            assert!(artifact.get("encoding").is_none(), "{artifact_id}");
+            assert!(artifact.get("collectionLimit").is_none(), "{artifact_id}");
+            assert_eq!(
+                artifact["rotation"],
+                json!({"kind": "current", "fragmentComplete": false}),
+                "{artifact_id} must mirror #319's proposed noncapture marker"
+            );
+        }
     }
 }
 
@@ -1373,6 +1653,56 @@ fn dynamic_recovery_mutations_require_selected_profile_and_usable_offset() {
 }
 
 #[test]
+fn review_blocker_same_timestamp_opposites_cannot_be_recovery() {
+    let (scenario_root, manifest, mut expected) =
+        load_contract("inventory", "recovery-contradictory");
+    expected["transactions"][0]["key"] = expected["transactions"][1]["key"].clone();
+    expected["transactions"][0]["evidence"] = expected["transactions"][1]["evidence"].clone();
+    assert_rejected_with(
+        "same-timestamp opposites relabeled recovery",
+        "inventory",
+        "recovery-contradictory",
+        &scenario_root,
+        &manifest,
+        &expected,
+        "strictly ordered",
+    );
+}
+
+#[test]
+fn review_blocker_opposing_terminal_records_cannot_be_promoted_high() {
+    let (scenario_root, manifest, expected) = load_contract("inventory", "recovery-contradictory");
+
+    let mut promoted_failure = expected.clone();
+    promoted_failure["transactions"][0]["state"] = json!("failed");
+    promoted_failure["transactions"][0]["classification"] = json!("confirmedFailure");
+    promoted_failure["transactions"][0]["confidence"] = json!("high");
+    assert_rejected_with(
+        "opposing terminals promoted to confirmed failure",
+        "inventory",
+        "recovery-contradictory",
+        &scenario_root,
+        &manifest,
+        &promoted_failure,
+        "opposing terminal evidence",
+    );
+
+    let mut promoted_success = expected.clone();
+    promoted_success["transactions"][0]["state"] = json!("succeeded");
+    promoted_success["transactions"][0]["classification"] = json!("success");
+    promoted_success["transactions"][0]["confidence"] = json!("high");
+    assert_rejected_with(
+        "opposing terminals promoted to success",
+        "inventory",
+        "recovery-contradictory",
+        &scenario_root,
+        &manifest,
+        &promoted_success,
+        "opposing terminal evidence",
+    );
+}
+
+#[test]
 fn dynamic_coverage_and_collision_mutations_remain_noncausal() {
     let (coverage_root, coverage_manifest, mut coverage_expected) =
         load_contract("metering", "coverage-states");
@@ -1424,6 +1754,44 @@ fn dynamic_coverage_and_collision_mutations_remain_noncausal() {
         &collision_manifest,
         &collision_expected,
     );
+}
+
+#[test]
+fn review_blocker_source_local_observations_reject_causal_language() {
+    let (scenario_root, manifest, mut expected) = load_contract("inventory", "coverage-states");
+    expected["sourceLocalObservations"][0]["claim"] =
+        json!("The client root cause caused the failure.");
+    assert_rejected_with(
+        "source-local causal claim",
+        "inventory",
+        "coverage-states",
+        &scenario_root,
+        &manifest,
+        &expected,
+        "causal",
+    );
+}
+
+#[test]
+fn review_blocker_required_scenario_semantics_cannot_be_erased() {
+    for (family, scenario) in [
+        ("inventory", "success"),
+        ("inventory", "terminal-failures"),
+        ("compliance", "noncompliant-result"),
+        ("metering", "success"),
+    ] {
+        let (scenario_root, manifest, mut expected) = load_contract(family, scenario);
+        expected["transactions"] = json!([]);
+        assert_rejected_with(
+            "required scenario transactions erased",
+            family,
+            scenario,
+            &scenario_root,
+            &manifest,
+            &expected,
+            "required scenario semantics",
+        );
+    }
 }
 
 #[test]

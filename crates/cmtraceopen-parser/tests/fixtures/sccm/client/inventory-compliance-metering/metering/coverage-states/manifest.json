@@ -84,7 +84,7 @@
       "relativePath": "evidence/client-metering/root-c/current/SWMTRReportGen.log",
       "encoding": "utf-8",
       "collectionLimit": {
-        "byteLimit": 56,
+        "byteLimit": 57,
         "limitApplied": true
       },
       "truncated": true

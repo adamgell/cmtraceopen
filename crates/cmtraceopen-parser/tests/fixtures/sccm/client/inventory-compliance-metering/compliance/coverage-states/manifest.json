@@ -84,7 +84,7 @@
       "relativePath": "evidence/client-compliance/root-a/current/DCMAgent.log",
       "encoding": "utf-8",
       "collectionLimit": {
-        "byteLimit": 58,
+        "byteLimit": 59,
         "limitApplied": true
       },
       "truncated": true

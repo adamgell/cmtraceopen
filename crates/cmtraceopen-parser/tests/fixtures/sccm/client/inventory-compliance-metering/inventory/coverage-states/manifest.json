@@ -84,7 +84,7 @@
       "relativePath": "evidence/client-inventory/root-c/current/InventoryAgentProvider.log",
       "encoding": "utf-8",
       "collectionLimit": {
-        "byteLimit": 57,
+        "byteLimit": 58,
         "limitApplied": true
       },
       "truncated": true
