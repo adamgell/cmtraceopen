@@ -3816,7 +3816,8 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
         "arrayField": "not-an-array",
         "mixedArray": ["ok", 323]
     });
-    let helper_probes: Vec<(&str, Box<dyn Fn() + '_>)> = vec![
+    type HelperProbe<'probe> = (&'probe str, Box<dyn Fn() + 'probe>);
+    let helper_probes: Vec<HelperProbe<'_>> = vec![
         (
             "json_string on non-string field",
             Box::new(|| {
