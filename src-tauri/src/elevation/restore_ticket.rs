@@ -189,7 +189,8 @@ pub fn consume_ticket(
     if ticket.ticket_id != id {
         return Err(TicketError::InvalidContents);
     }
-    if now_ms.saturating_sub(ticket.created_at_ms) > TICKET_TTL_MS || now_ms < ticket.created_at_ms {
+    if now_ms.saturating_sub(ticket.created_at_ms) > TICKET_TTL_MS || now_ms < ticket.created_at_ms
+    {
         return Err(TicketError::Expired);
     }
 
@@ -294,7 +295,10 @@ mod tests {
     fn generated_identifiers_validate() {
         for _ in 0..32 {
             let id = new_ticket_id();
-            assert!(validate_ticket_id(&id).is_ok(), "generated id {id} rejected");
+            assert!(
+                validate_ticket_id(&id).is_ok(),
+                "generated id {id} rejected"
+            );
         }
     }
 
@@ -463,7 +467,10 @@ mod tests {
             consume_ticket(directory.path(), &id, NOW).unwrap_err(),
             TicketError::TooLarge
         );
-        assert!(!path.exists(), "an oversized ticket must not be left behind");
+        assert!(
+            !path.exists(),
+            "an oversized ticket must not be left behind"
+        );
     }
 
     #[test]
@@ -500,8 +507,7 @@ mod tests {
     #[test]
     fn a_serialized_ticket_carries_only_approved_fields() {
         let ticket = sample(NOW);
-        let value: serde_json::Value =
-            serde_json::to_value(&ticket).expect("serialize");
+        let value: serde_json::Value = serde_json::to_value(&ticket).expect("serialize");
         let object = value.as_object().expect("object");
 
         let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
