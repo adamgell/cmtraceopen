@@ -584,6 +584,16 @@ fn validate_card_with_inventory(card: &SourceCard, inventory: &BTreeSet<String>)
             .issues
             .push("supersessionSuccessorMissing".to_owned());
     }
+    if card
+        .supersession
+        .supersedes
+        .iter()
+        .any(|predecessor| !is_card_id(predecessor) || !inventory.contains(predecessor))
+    {
+        validation
+            .issues
+            .push("supersededPredecessorMissing".to_owned());
+    }
     validation.issues.sort();
     validation.issues.dedup();
     validation.valid = validation.issues.is_empty();
@@ -778,6 +788,28 @@ fn deprecation_requires_an_explicit_successor_and_never_panics() {
     assert!(
         !valid.admitted_to_semantic_catalog,
         "deprecation metadata cannot admit even a RuleValidated source"
+    );
+
+    card.supersession.supersedes = vec!["advanced-role-predecessor".to_owned()];
+    let dangling_predecessor = validate_card_with_inventory(&card, &inventory);
+    assert_eq!(
+        dangling_predecessor.issues,
+        ["supersededPredecessorMissing"],
+        "a supersedes entry must resolve against the catalog inventory"
+    );
+    assert!(!dangling_predecessor.admitted_to_semantic_catalog);
+
+    let inventory = [
+        card.card_id.clone(),
+        "advanced-role-predecessor".to_owned(),
+        "advanced-role-successor".to_owned(),
+    ]
+    .into_iter()
+    .collect();
+    let resolved = validate_card_with_inventory(&card, &inventory);
+    assert!(
+        resolved.valid,
+        "a supersedes entry present in the catalog keeps the card valid"
     );
 }
 
