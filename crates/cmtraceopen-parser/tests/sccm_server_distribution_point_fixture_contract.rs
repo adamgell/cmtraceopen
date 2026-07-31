@@ -712,6 +712,11 @@ fn validate_manifest(
                 "{artifact_id} has an uncatalogued source/producer/basename combination"
             ));
         }
+        if role != "client" && !roles.contains(&role) {
+            failures.push(format!(
+                "{artifact_id} producer role {role} is absent from rolesObserved"
+            ));
+        }
         let workflow_subject_handle = artifact["workflowSubjectHandle"].as_str();
         let workflow_subject_basis = artifact["workflowSubjectBasis"].as_str();
         if artifact["workflowSubjectRole"] != "distributionPoint"
@@ -1285,6 +1290,17 @@ fn validate_expected(
     {
         failures.push("expected output infers role state from source coverage".to_owned());
     }
+    let distribution_point_observed = match required_bool(
+        &expected["roleAssessment"],
+        "distributionPointObserved",
+        "roleAssessment",
+    ) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            failures.push(error);
+            None
+        }
+    };
 
     let expected_coverage = parsed
         .artifacts
@@ -1994,6 +2010,17 @@ fn validate_expected(
         }
     }
 
+    let unconsumed_normalized_evidence = parsed
+        .evidence
+        .keys()
+        .filter(|key| !consumed_evidence.contains(*key))
+        .collect::<Vec<_>>();
+    if !unconsumed_normalized_evidence.is_empty() {
+        failures.push(format!(
+            "normalized logical records lack an explicit transaction or source-local classification: {unconsumed_normalized_evidence:?}"
+        ));
+    }
+
     let requests = match required_array(expected, "artifactRequests", "expected") {
         Ok(value) => value,
         Err(error) => {
@@ -2089,8 +2116,7 @@ fn validate_expected(
     }
 
     if scenario == "absent-dp"
-        && (expected["roleAssessment"]["distributionPointObserved"] != true
-            || !transactions.is_empty())
+        && (distribution_point_observed != Some(true) || !transactions.is_empty())
     {
         failures.push("absent-dp must retain the observed role without a diagnosis".to_owned());
     }
@@ -2133,13 +2159,10 @@ fn validate_expected(
         }
     }
 
-    if manifest["topology"]["rolesObserved"]
+    let topology_distribution_point_observed = manifest["topology"]["rolesObserved"]
         .as_array()
-        .is_some_and(|roles| roles.iter().any(|role| role == "distributionPoint"))
-        != expected["roleAssessment"]["distributionPointObserved"]
-            .as_bool()
-            .unwrap_or(false)
-    {
+        .is_some_and(|roles| roles.iter().any(|role| role == "distributionPoint"));
+    if distribution_point_observed != Some(topology_distribution_point_observed) {
         failures.push("role assessment is not an exact topology projection".to_owned());
     }
 
