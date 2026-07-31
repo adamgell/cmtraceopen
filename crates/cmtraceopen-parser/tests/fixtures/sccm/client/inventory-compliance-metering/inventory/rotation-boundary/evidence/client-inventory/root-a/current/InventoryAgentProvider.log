@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE Family=inventory InventoryCycleId=INV-CYCLE-025 ResourceHandle=safe:resource:inventory-025 ReportId=INV-REPORT-025 Phase=Report Disposition=Succeeded Terminal=true]LOG]!><time="01:25:01.000+000" date="7-30-2026" component="InventoryAgentProvider" context="" type="1" thread="325" file="">

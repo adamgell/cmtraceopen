@@ -1,0 +1,74 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "success",
+  "workflowFamily": "compliance",
+  "bundle": {
+    "bundleId": "sccm-325-compliance-success",
+    "role": "client",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "compliance-success-agent-current",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "CIAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/CIAgent.log",
+      "pathFingerprint": "synthetic-compliance-success-agent-current-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 325,
+      "relativePath": "evidence/client-compliance/root-a/current/CIAgent.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "compliance-success-report-current",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "DCMReporting.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DCMReporting.log",
+      "pathFingerprint": "synthetic-compliance-success-report-current-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 305,
+      "relativePath": "evidence/client-compliance/root-a/current/DCMReporting.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    }
+  ]
+}

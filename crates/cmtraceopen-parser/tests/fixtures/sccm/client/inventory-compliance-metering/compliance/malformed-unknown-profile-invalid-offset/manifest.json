@@ -1,0 +1,102 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "malformed-unknown-profile-invalid-offset",
+  "workflowFamily": "compliance",
+  "bundle": {
+    "bundleId": "sccm-325-compliance-malformed-unknown-profile-invalid-offset",
+    "role": "client",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-malformed",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "parseFailed",
+      "originalBasename": "CIAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/CIAgent.log",
+      "pathFingerprint": "synthetic-compliance-malformed-unknown-profile-invalid-offset-malformed-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 42,
+      "relativePath": "evidence/client-compliance/root-a/current/CIAgent.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-unknown-version",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "CITaskMgr.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/CITaskMgr.log",
+      "pathFingerprint": "synthetic-compliance-malformed-unknown-profile-invalid-offset-unknown-version-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "9.99.UNKNOWN",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 329,
+      "relativePath": "evidence/client-compliance/root-a/current/CITaskMgr.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-invalid-offset",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "DCMReporting.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DCMReporting.log",
+      "pathFingerprint": "synthetic-compliance-malformed-unknown-profile-invalid-offset-invalid-offset-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 306,
+      "relativePath": "evidence/client-compliance/root-a/current/DCMReporting.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    }
+  ]
+}

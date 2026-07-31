@@ -1,0 +1,195 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "coverage-states",
+  "workflowFamily": "compliance",
+  "bundle": {
+    "bundleId": "sccm-325-compliance-coverage-states",
+    "role": "client",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "compliance-coverage-states-absent",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "absent",
+      "originalBasename": "CIAgent.log",
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "compliance-coverage-states-access-denied",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "accessDenied",
+      "originalBasename": "CITaskMgr.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/CITaskMgr.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-access-denied-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "compliance-coverage-states-capped",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "capped",
+      "originalBasename": "DCMAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DCMAgent.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-capped-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 59,
+      "relativePath": "evidence/client-compliance/root-a/current/DCMAgent.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 58,
+        "limitApplied": true
+      },
+      "truncated": true
+    },
+    {
+      "artifactId": "compliance-coverage-states-skipped",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "skipped",
+      "originalBasename": "DCMReporting.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DCMReporting.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-skipped-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "compliance-coverage-states-unsupported",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "unsupported",
+      "originalBasename": "StateMessage.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/StateMessage.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-unsupported-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "compliance-coverage-states-malformed",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "parseFailed",
+      "originalBasename": "CIAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/CIAgent.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-malformed-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 42,
+      "relativePath": "evidence/client-compliance/root-a/current/CIAgent.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "compliance-coverage-states-partial",
+      "designOnlyCatalog": {
+        "entryId": "client-compliance",
+        "groupMemberships": [
+          "client-compliance"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "CITaskMgr.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/CITaskMgr.log",
+      "pathFingerprint": "synthetic-compliance-coverage-states-partial-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T01:00:00Z",
+      "bytesCopied": 60,
+      "relativePath": "evidence/client-compliance/root-a/current/CITaskMgr.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    }
+  ]
+}
