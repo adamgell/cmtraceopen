@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -9,6 +10,8 @@ use crate::sccm::{
 };
 
 const MAX_ARTIFACT_ID_CHARS: usize = 160;
+const MAX_BASENAME_CHARS: usize = 160;
+const MAX_METADATA_TOKEN_CHARS: usize = 128;
 const MAX_PATH_IDENTITY_CHARS: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -91,6 +94,12 @@ pub struct SccmClientUnsupportedArtifact {
     pub declared_coverage: SccmCoverageState,
     pub classification: SccmCoverageState,
     pub rotation: SccmRotation,
+    pub path_fingerprint: Option<String>,
+    pub relative_path: Option<String>,
+    pub fragment_complete: Option<bool>,
+    pub configmgr_version: Option<String>,
+    pub collected_at_utc: Option<String>,
+    pub encoding: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -115,6 +124,16 @@ impl SccmClientIntakeAssessment {
 pub enum SccmClientIntakeError {
     #[error("client intake artifact identity is empty, unsafe, or too long")]
     InvalidArtifactId,
+    #[error("client intake artifact basename is empty, unsafe, or too long")]
+    InvalidBasename,
+    #[error("client intake artifact rotation is malformed or unsafe")]
+    InvalidRotation,
+    #[error("client intake artifact collection timestamp is not RFC 3339")]
+    InvalidCollectedAt,
+    #[error("client intake artifact ConfigMgr version is unsafe or too long")]
+    InvalidConfigMgrVersion,
+    #[error("client intake artifact encoding is unsafe or too long")]
+    InvalidEncoding,
     #[error("client intake accepts only artifacts explicitly classified as the client role")]
     RoleMismatch,
     #[error("client intake contains a duplicate artifact identity")]
@@ -123,10 +142,14 @@ pub enum SccmClientIntakeError {
     InvalidPathFingerprint,
     #[error("client intake contains an invalid bundle-relative evidence path")]
     InvalidRelativePath,
-    #[error("client intake contains a colliding physical path identity")]
+    #[error("client intake contains a colliding path identity")]
     CollidingPhysicalIdentity,
     #[error("a physical capture state is missing its collision-safe path provenance")]
     MissingPhysicalProvenance,
+    #[error("client intake fragment completeness must be explicitly declared")]
+    MissingFragmentCompleteness,
+    #[error("a nonphysical coverage state cannot declare a complete fragment")]
+    InvalidFragmentCompleteness,
 }
 
 #[derive(Clone, Copy)]
@@ -273,6 +296,12 @@ pub fn assess_client_intake(
                 declared_coverage: source.artifact.coverage.clone(),
                 classification: SccmCoverageState::Unsupported,
                 rotation: source.artifact.rotation.clone(),
+                path_fingerprint: source.path_fingerprint.clone(),
+                relative_path: source.relative_path.clone(),
+                fragment_complete: source.fragment_complete,
+                configmgr_version: source.artifact.configmgr_version.clone(),
+                collected_at_utc: source.artifact.collected_at_utc.clone(),
+                encoding: source.artifact.encoding.clone(),
             });
             continue;
         }
@@ -338,6 +367,38 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
         if !is_safe_artifact_id(&source.artifact.artifact_id) {
             return Err(SccmClientIntakeError::InvalidArtifactId);
         }
+        if !is_safe_basename(&source.artifact.display_name) {
+            return Err(SccmClientIntakeError::InvalidBasename);
+        }
+        if serde_json::to_value(&source.artifact.rotation).is_err()
+            || !is_safe_unknown_rotation(&source.artifact.rotation)
+        {
+            return Err(SccmClientIntakeError::InvalidRotation);
+        }
+        if source
+            .artifact
+            .collected_at_utc
+            .as_deref()
+            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_err())
+        {
+            return Err(SccmClientIntakeError::InvalidCollectedAt);
+        }
+        if source
+            .artifact
+            .configmgr_version
+            .as_deref()
+            .is_some_and(|value| !is_safe_metadata_token(value))
+        {
+            return Err(SccmClientIntakeError::InvalidConfigMgrVersion);
+        }
+        if source
+            .artifact
+            .encoding
+            .as_deref()
+            .is_some_and(|value| !is_safe_metadata_token(value))
+        {
+            return Err(SccmClientIntakeError::InvalidEncoding);
+        }
         if !artifact_ids.insert(source.artifact.artifact_id.to_ascii_lowercase()) {
             return Err(SccmClientIntakeError::DuplicateArtifactId);
         }
@@ -346,29 +407,38 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             if !is_safe_path_identity(fingerprint) {
                 return Err(SccmClientIntakeError::InvalidPathFingerprint);
             }
+            if !path_fingerprints.insert(fingerprint.to_ascii_lowercase()) {
+                return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+            }
         }
         if let Some(relative_path) = source.relative_path.as_deref() {
             if !is_safe_relative_path(relative_path) {
                 return Err(SccmClientIntakeError::InvalidRelativePath);
             }
+            if !relative_paths.insert(relative_path.to_ascii_lowercase()) {
+                return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+            }
         }
 
+        let fragment_complete = source
+            .fragment_complete
+            .ok_or(SccmClientIntakeError::MissingFragmentCompleteness)?;
         if is_physical_state(&source.artifact.coverage) {
-            let fingerprint = source
+            source
                 .path_fingerprint
                 .as_deref()
                 .ok_or(SccmClientIntakeError::MissingPhysicalProvenance)?;
-            let relative_path = source
+            source
                 .relative_path
                 .as_deref()
                 .ok_or(SccmClientIntakeError::MissingPhysicalProvenance)?;
-            if !path_fingerprints.insert(fingerprint.to_ascii_lowercase())
-                || !relative_paths.insert(relative_path.to_ascii_lowercase())
-            {
-                return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+        } else {
+            if source.relative_path.is_some() {
+                return Err(SccmClientIntakeError::InvalidRelativePath);
             }
-        } else if source.relative_path.is_some() {
-            return Err(SccmClientIntakeError::InvalidRelativePath);
+            if fragment_complete {
+                return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
+            }
         }
     }
 
@@ -505,6 +575,38 @@ fn is_safe_artifact_id(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "-._:".contains(character))
+}
+
+fn is_safe_basename(value: &str) -> bool {
+    !value.is_empty()
+        && value == value.trim()
+        && value.chars().count() <= MAX_BASENAME_CHARS
+        && value.is_ascii()
+        && !value.contains(['/', '\\', ':', '@'])
+        && !value.chars().any(char::is_control)
+}
+
+fn is_safe_unknown_rotation(rotation: &SccmRotation) -> bool {
+    let SccmRotation::Unknown(unknown) = rotation else {
+        return true;
+    };
+
+    is_safe_metadata_token(&unknown.kind)
+        && unknown.value.as_ref().is_none_or(|value| match value {
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                true
+            }
+            serde_json::Value::String(value) => is_safe_metadata_token(value),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => false,
+        })
+}
+
+fn is_safe_metadata_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= MAX_METADATA_TOKEN_CHARS
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-._".contains(character))
 }
 
 fn is_safe_path_identity(value: &str) -> bool {
