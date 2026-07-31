@@ -1580,8 +1580,12 @@ fn validate_contract(
             observed_states.push(effective_state(artifact)?);
             observed_rotations.insert(required_string(&artifact["rotation"], "kind", artifact_id)?);
             observed_artifact_ids.insert(artifact_id.to_owned());
-            if kind == "unknownProfile" {
-                unknown_profile_observations.insert(artifact_id.to_owned());
+            if kind == "unknownProfile"
+                && !unknown_profile_observations.insert(artifact_id.to_owned())
+            {
+                return Err(format!(
+                    "{observation_id} is a duplicate unknown-profile observation for {artifact_id}"
+                ));
             }
             if kind == "invalidOffset" {
                 invalid_offset_observations.insert(artifact_id.to_owned());
@@ -3845,6 +3849,45 @@ fn review_blocker_unknown_versions_are_profile_gaps_for_every_coverage_state() {
     );
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_unknown_profile_observation_is_unique_per_artifact() {
+    let (scenario_root, mut manifest, mut expected) = load_contract("inventory", "coverage-states");
+    let artifact_id = "inventory-coverage-states-access-denied";
+    let artifact = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == artifact_id)
+        .expect("accessDenied artifact exists");
+    artifact["sourceVersion"] = json!("9.99.UNKNOWN");
+    expected["extractionProfile"]["selectionState"] = json!("mixedKnownAndUnknown");
+    for suffix in ["a", "b"] {
+        expected["sourceLocalObservations"]
+            .as_array_mut()
+            .expect("sourceLocalObservations are an array")
+            .push(json!({
+                "observationId": format!(
+                    "inventory-coverage-unknown-profile-{suffix}"
+                ),
+                "kind": "unknownProfile",
+                "artifactIds": [artifact_id],
+                "confidenceCeiling": "low",
+                "correlationEligible": false,
+                "claim": "Unknown source version has no selected extraction profile."
+            }));
+    }
+
+    assert_rejected_with(
+        "two canonical unknownProfile observations cite one artifact",
+        "inventory",
+        "coverage-states",
+        &scenario_root,
+        &manifest,
+        &expected,
+        "duplicate unknown-profile observation",
+    );
 }
 
 #[test]
