@@ -781,19 +781,19 @@ fn is_safe_path_identity(value: &str) -> bool {
 
     match value.split_once(':') {
         Some(("synthetic", payload)) => is_safe_synthetic_fingerprint(payload),
-        Some(("sha256", digest)) => is_lowercase_hex_handle(digest),
+        Some(("sha256", digest)) => digest.len() == 64 && is_lowercase_hex_handle(digest),
         _ => false,
     }
 }
 
 fn is_safe_synthetic_fingerprint(payload: &str) -> bool {
     let tokens = payload.split([':', '-']).collect::<Vec<_>>();
-    !tokens.is_empty()
-        && tokens.len() <= MAX_SYNTHETIC_FINGERPRINT_TOKENS
+    tokens.len() <= MAX_SYNTHETIC_FINGERPRINT_TOKENS
         && tokens.iter().enumerate().all(|(index, token)| {
             !token.is_empty()
                 && (SYNTHETIC_FINGERPRINT_TOKENS.contains(token)
-                    || (*token == "2"
+                    || (token.len() <= 2
+                        && token.bytes().all(|byte| byte.is_ascii_digit())
                         && index > 0
                         && index + 1 == tokens.len()
                         && tokens[index - 1] == "numbered"))
