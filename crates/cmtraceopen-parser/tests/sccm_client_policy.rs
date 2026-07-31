@@ -69,6 +69,7 @@ fn load_json(path: &Path) -> Value {
 fn coverage_state(value: &str) -> SccmCoverageState {
     match value {
         "captured" => SccmCoverageState::Captured,
+        "partial" => SccmCoverageState::Partial,
         "absent" => SccmCoverageState::Absent,
         "accessDenied" => SccmCoverageState::AccessDenied,
         "capped" => SccmCoverageState::Capped,
@@ -321,5 +322,198 @@ fn policy_analysis_is_deterministic_under_bundle_reordering() {
         let actual =
             serde_json::to_string(&analyze_client_policy(&reordered)).expect("analysis JSON");
         assert_eq!(actual, expected, "{scenario}");
+    }
+}
+
+fn combine_bundles(mut left: SccmNormalizedBundle, mut right: SccmNormalizedBundle) -> SccmNormalizedBundle {
+    left.artifacts.append(&mut right.artifacts);
+    left.evidence.append(&mut right.evidence);
+    left.artifacts
+        .sort_by(|a, b| a.artifact_id.cmp(&b.artifact_id));
+    left.evidence
+        .sort_by(|a, b| a.evidence_id.cmp(&b.evidence_id));
+    left
+}
+
+#[test]
+fn policy_failure_requires_a_nonzero_terminal_result() {
+    let mut bundle = load_bundle("request-auth-failure");
+    let failed = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("failed terminal"))
+        .expect("request failure evidence");
+    failed.message = failed
+        .message
+        .replace("Result=0x80070005", "Status=0");
+
+    let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+    assert!(
+        analysis["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "a successful status token cannot substantiate a terminal failure"
+    );
+    assert_eq!(analysis["sourceLocalObservations"][0]["correlationEligible"], false);
+}
+
+#[test]
+fn policy_cross_artifact_phase_time_inversion_is_contradictory() {
+    let mut bundle = load_bundle("complete");
+    let request_utc = bundle
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("Request succeeded"))
+        .and_then(|evidence| evidence.timestamp.utc_millis)
+        .expect("request UTC");
+    let report = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Report succeeded"))
+        .expect("report evidence");
+    report.timestamp.utc_millis = Some(request_utc - 1);
+
+    let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+    let transaction = &analysis["transactions"][0];
+    assert_eq!(transaction["state"], "contradictory");
+    assert_eq!(transaction["classification"], "contradictoryEvidence");
+    assert_eq!(transaction["confidence"], "low");
+}
+
+#[test]
+fn policy_missing_or_unknown_profile_never_emits_an_exact_transaction() {
+    for version in [None, Some("5.00.CALLER.0000")] {
+        let mut bundle = load_bundle("complete");
+        for artifact in &mut bundle.artifacts {
+            artifact.configmgr_version = version.map(str::to_owned);
+        }
+
+        let analysis =
+            serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+        assert!(
+            analysis["transactions"]
+                .as_array()
+                .expect("transactions")
+                .is_empty(),
+            "{version:?} must not emit an exact transaction"
+        );
+        assert!(
+            analysis["sourceLocalObservations"]
+                .as_array()
+                .expect("source-local observations")
+                .iter()
+                .all(|observation| observation["correlationEligible"] == false)
+        );
+    }
+}
+
+#[test]
+fn policy_unsafe_client_handle_is_rejected_and_not_exported() {
+    let mut bundle = load_bundle("complete");
+    let request = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Request succeeded"))
+        .expect("request evidence");
+    request.message = request
+        .message
+        .replace("safe:client:policy-11", "Adam.Gell");
+    for artifact in &mut bundle.artifacts {
+        artifact.original_path = Some(r"C:\Users\Adam.Gell\PolicyAgent.log".to_owned());
+    }
+
+    let serialized =
+        serde_json::to_string(&analyze_client_policy(&bundle)).expect("analysis JSON");
+    assert!(!serialized.contains("Adam.Gell"));
+    let analysis: Value = serde_json::from_str(&serialized).expect("analysis value");
+    assert!(
+        analysis["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty()
+    );
+}
+
+#[test]
+fn policy_partial_required_source_never_proves_success() {
+    let mut bundle = load_bundle("complete");
+    let state_artifact = bundle
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.display_name == "StateMessage.log")
+        .expect("state-message artifact");
+    state_artifact.coverage = SccmCoverageState::Partial;
+
+    let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+    let transaction = &analysis["transactions"][0];
+    assert_ne!(transaction["state"], "succeeded");
+    assert_ne!(transaction["confidence"], "high");
+    assert!(
+        analysis["coverageGaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .iter()
+            .any(|gap| gap["coverage"] == "partial")
+    );
+}
+
+#[test]
+fn policy_unrelated_assignment_failure_does_not_change_the_target() {
+    let bundle = combine_bundles(load_bundle("complete"), load_bundle("download-failure"));
+    let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+    let transactions = analysis["transactions"]
+        .as_array()
+        .expect("transactions");
+    assert_eq!(transactions.len(), 2);
+
+    let complete = transactions
+        .iter()
+        .find(|transaction| {
+            transaction["transactionId"]
+                == "policy:assignment:11111111-1111-1111-1111-111111111111"
+        })
+        .expect("complete transaction");
+    assert_eq!(complete["state"], "succeeded");
+    assert_eq!(complete["confidence"], "high");
+}
+
+#[test]
+fn policy_same_timestamp_different_keys_stay_separate() {
+    let mut bundle = combine_bundles(load_bundle("complete"), load_bundle("download-failure"));
+    for evidence in &mut bundle.evidence {
+        evidence.timestamp.utc_millis = Some(1_785_379_200_000);
+    }
+
+    let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+    let transaction_ids = analysis["transactions"]
+        .as_array()
+        .expect("transactions")
+        .iter()
+        .map(|transaction| {
+            transaction["transactionId"]
+                .as_str()
+                .expect("transaction ID")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(transaction_ids.len(), 2);
+}
+
+#[test]
+fn policy_output_contains_no_raw_messages_paths_or_execution_context() {
+    let bundle = load_bundle("complete");
+    let serialized =
+        serde_json::to_string(&analyze_client_policy(&bundle)).expect("analysis JSON");
+    for prohibited in [
+        "SYNTHETIC FIXTURE",
+        "synthetic.cc",
+        "SYNTHETIC://",
+        "executionContext",
+        "Request succeeded",
+    ] {
+        assert!(
+            !serialized.contains(prohibited),
+            "public analysis leaked {prohibited}"
+        );
     }
 }
