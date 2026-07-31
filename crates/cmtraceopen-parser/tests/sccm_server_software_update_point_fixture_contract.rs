@@ -142,6 +142,17 @@ fn expected_observation_signature(
     }
 }
 
+fn expected_source_local_signature(scenario: &str) -> &'static [(&'static str, &'static str)] {
+    match scenario {
+        "rotation-boundary" => &[
+            ("rotation-01-split", "rotationSplit"),
+            ("rotation-02-malformed", "malformedEvidence"),
+        ],
+        "unrelated-update-key" => &[("unrelated-client-01", "ignoredClientEvidence")],
+        _ => &[],
+    }
+}
+
 fn corpus_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sccm/server/software_update_point")
@@ -1498,9 +1509,33 @@ fn validate_expected(
     if source_local_order != sorted_source_local_order {
         failures.push("source-local observations are not sorted".to_owned());
     }
+    let actual_source_local_signature = source_local
+        .iter()
+        .map(|observation| {
+            (
+                observation["observationId"].as_str(),
+                observation["classification"].as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let expected_source_local_signature = expected_source_local_signature(scenario)
+        .iter()
+        .map(|(observation_id, classification)| (Some(*observation_id), Some(*classification)))
+        .collect::<Vec<_>>();
+    if actual_source_local_signature != expected_source_local_signature {
+        failures.push(format!(
+            "{scenario} does not retain its exact source-local observation identities"
+        ));
+    }
+    let mut seen_source_local_ids = BTreeSet::new();
     for observation in source_local {
         let observation_id =
             required_string(observation, "observationId", "sourceLocal").unwrap_or("invalid");
+        if !seen_source_local_ids.insert(observation_id) {
+            failures.push(format!(
+                "duplicate source-local observationId {observation_id}"
+            ));
+        }
         reject_unknown_fields(
             observation,
             &[
@@ -1540,15 +1575,26 @@ fn validate_expected(
                 "{observation_id} artifact IDs are not exact sorted strings"
             ));
         }
+        for artifact_id in &artifact_ids {
+            if !parsed.artifacts.contains_key(*artifact_id) {
+                failures.push(format!(
+                    "{observation_id} cites unknown artifact ID {artifact_id}"
+                ));
+            }
+        }
         let artifacts = artifact_ids
             .iter()
             .filter_map(|artifact_id| parsed.artifacts.get(*artifact_id))
             .collect::<Vec<_>>();
-        let references = observation["evidence"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        let references = match required_array(observation, "evidence", observation_id) {
+            Ok(value) => value,
+            Err(error) => {
+                failures.push(error);
+                &[]
+            }
+        };
         let mut cited_ids = BTreeSet::new();
+        let mut seen_source_local_evidence = BTreeSet::new();
         for reference in references {
             reject_unknown_fields(
                 reference,
@@ -1558,6 +1604,16 @@ fn validate_expected(
             );
             if let Ok(artifact_id) = required_string(reference, "artifactId", observation_id) {
                 cited_ids.insert(artifact_id);
+                let identity = (
+                    artifact_id,
+                    reference["startLine"].as_u64(),
+                    reference["endLine"].as_u64(),
+                );
+                if !seen_source_local_evidence.insert(identity) {
+                    failures.push(format!(
+                        "{observation_id} cites one physical logical record more than once"
+                    ));
+                }
                 if !artifact_ids.contains(&artifact_id) {
                     failures.push(format!("{observation_id} evidence escapes artifactIds"));
                 }
@@ -1616,21 +1672,6 @@ fn validate_expected(
             ));
         }
     }
-    let source_local_classes = source_local
-        .iter()
-        .filter_map(|observation| observation["classification"].as_str())
-        .collect::<Vec<_>>();
-    let expected_source_local_classes: &[&str] = match scenario {
-        "rotation-boundary" => &["rotationSplit", "malformedEvidence"],
-        "unrelated-update-key" => &["ignoredClientEvidence"],
-        _ => &[],
-    };
-    if source_local_classes != expected_source_local_classes {
-        failures.push(format!(
-            "{scenario} does not retain its exact source-local coverage observations"
-        ));
-    }
-
     let requests = match required_array(expected, "artifactRequests", "expected") {
         Ok(value) => value,
         Err(error) => {
@@ -2255,6 +2296,80 @@ fn required_phase_identity_and_manifest_strings_fail_closed() {
     assert!(
         accepted.is_empty(),
         "required-phase/schema/path mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn source_local_schema_identity_and_provenance_fail_closed() {
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let unrelated_manifest =
+        read_json("unrelated-update-key", "manifest.json").expect("manifest loads");
+    let unrelated_expected =
+        read_json("unrelated-update-key", "expected.json").expect("expected loads");
+    let rotation_split = source_local_index(&rotation_expected, "rotation-01-split");
+    let malformed = source_local_index(&rotation_expected, "rotation-02-malformed");
+    let ignored_client = source_local_index(&unrelated_expected, "unrelated-client-01");
+    let mut accepted = Vec::new();
+
+    let mut renamed_observation = rotation_expected.clone();
+    renamed_observation["sourceLocalObservations"][rotation_split]["observationId"] =
+        json!("rotation-01-arbitrary");
+    if mutation_was_accepted(
+        "rotation-boundary",
+        &rotation_manifest,
+        &renamed_observation,
+    ) {
+        accepted.push("source-local observation identity was renamed");
+    }
+
+    let mut duplicate_observation_id = rotation_expected.clone();
+    duplicate_observation_id["sourceLocalObservations"][rotation_split]["observationId"] =
+        duplicate_observation_id["sourceLocalObservations"][malformed]["observationId"].clone();
+    if mutation_was_accepted(
+        "rotation-boundary",
+        &rotation_manifest,
+        &duplicate_observation_id,
+    ) {
+        accepted.push("source-local observation identity was duplicated");
+    }
+
+    let mut unknown_artifact = rotation_expected.clone();
+    unknown_artifact["sourceLocalObservations"][rotation_split]["artifactIds"]
+        .as_array_mut()
+        .expect("source-local artifact IDs are mutable")
+        .insert(0, json!("aaa-unknown-artifact"));
+    if mutation_was_accepted("rotation-boundary", &rotation_manifest, &unknown_artifact) {
+        accepted.push("source-local observation cited an unknown artifact ID");
+    }
+
+    let mut non_array_evidence = rotation_expected.clone();
+    non_array_evidence["sourceLocalObservations"][rotation_split]["evidence"] =
+        json!("not-an-array");
+    if mutation_was_accepted("rotation-boundary", &rotation_manifest, &non_array_evidence) {
+        accepted.push("source-local evidence accepted a non-array value");
+    }
+
+    let mut duplicate_evidence = unrelated_expected.clone();
+    let duplicate_reference =
+        duplicate_evidence["sourceLocalObservations"][ignored_client]["evidence"][0].clone();
+    duplicate_evidence["sourceLocalObservations"][ignored_client]["evidence"]
+        .as_array_mut()
+        .expect("source-local evidence is mutable")
+        .push(duplicate_reference);
+    if mutation_was_accepted(
+        "unrelated-update-key",
+        &unrelated_manifest,
+        &duplicate_evidence,
+    ) {
+        accepted.push("source-local observation cited one logical record twice");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "source-local schema/identity/provenance mutations were accepted: {accepted:?}"
     );
 }
 
