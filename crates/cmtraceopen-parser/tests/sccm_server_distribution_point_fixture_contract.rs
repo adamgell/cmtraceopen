@@ -3387,6 +3387,225 @@ fn later_same_key_success_invalidates_stale_deferred_outcome() {
 }
 
 #[test]
+fn equal_utc_same_artifact_retry_cannot_be_reordered_before_terminal_success() {
+    let temporary = temporary_scenario("healthy-package");
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+
+    append_fixture_record(
+        &temporary.root,
+        &relative_path,
+        r#"<![LOG[SYNTHETIC FIXTURE; Phase=serveOrReport; Disposition=retrying; Terminal=false; PackageId=LAB00001; ContentId=content-alpha; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time="12:00:05.000+000" date="07-30-2026" component="SMSDPProv" context="" type="2" thread="103" file="smsdpprov.cpp:304">"#,
+    );
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+    expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .insert(
+            5,
+            json!({
+                "observationId": "05-report-retry",
+                "phase": "serveOrReport",
+                "disposition": "retrying",
+                "terminal": false,
+                "evidence": [{
+                    "artifactId": "dp-healthy-03-provider",
+                    "startLine": 4,
+                    "endLine": 4
+                }]
+            }),
+        );
+
+    assert!(
+        !mutation_at_root_was_accepted("healthy-package", &temporary.root, &manifest, &expected),
+        "an observation ID reordered a later equal-UTC physical retry before stale high success"
+    );
+}
+
+#[test]
+fn equal_utc_same_artifact_recovery_cannot_be_reordered_before_terminal_failure() {
+    let temporary = temporary_scenario("validation-failure");
+    let mut manifest = read_json("validation-failure", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("validation-failure", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+
+    append_fixture_record(
+        &temporary.root,
+        &relative_path,
+        r#"<![LOG[SYNTHETIC FIXTURE; Phase=validate; Disposition=succeeded; Terminal=false; PackageId=LAB00004; ContentId=content-delta; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time="12:04:03.000+000" date="07-30-2026" component="SMSDPProv" context="" type="1" thread="403" file="smsdpprov.cpp:405">"#,
+    );
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+    expected["transactions"][0]["lastSuccessfulPhase"] = json!("validate");
+    expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .insert(
+            3,
+            json!({
+                "observationId": "03-validate-recovered",
+                "phase": "validate",
+                "disposition": "succeeded",
+                "terminal": false,
+                "evidence": [{
+                    "artifactId": "dp-validation-failure-03-provider",
+                    "startLine": 2,
+                    "endLine": 2
+                }]
+            }),
+        );
+
+    assert!(
+        !mutation_at_root_was_accepted("validation-failure", &temporary.root, &manifest, &expected,),
+        "an observation ID reordered a later equal-UTC physical recovery before stale high failure"
+    );
+}
+
+#[test]
+fn equal_utc_cross_artifact_outcomes_fail_closed_as_ambiguous() {
+    let temporary = temporary_scenario("serve-observed");
+    let mut manifest = read_json("serve-observed", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("serve-observed", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+
+    append_fixture_record(
+        &temporary.root,
+        &relative_path,
+        r#"<![LOG[SYNTHETIC FIXTURE; Phase=serveOrReport; Disposition=retrying; Terminal=false; PackageId=LAB00006; ContentId=content-zeta; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time="12:06:05.000+000" date="07-30-2026" component="SMSDPProv" context="" type="2" thread="603" file="smsdpprov.cpp:606">"#,
+    );
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+    expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .insert(
+            5,
+            json!({
+                "observationId": "05-serve-retry",
+                "phase": "serveOrReport",
+                "disposition": "retrying",
+                "terminal": false,
+                "evidence": [{
+                    "artifactId": "dp-serve-03-provider",
+                    "startLine": 3,
+                    "endLine": 3
+                }]
+            }),
+        );
+
+    assert!(
+        !mutation_at_root_was_accepted("serve-observed", &temporary.root, &manifest, &expected),
+        "different artifacts at equal UTC used observation IDs to retain stale high success"
+    );
+}
+
+#[test]
+fn equal_utc_cross_rotation_outcomes_fail_closed_as_ambiguous() {
+    let temporary = temporary_scenario("healthy-package");
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let current_relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+    let rollback_relative_path = "evidence/server-dp-distribution/dp/lo_/SMSDPProv.log".to_owned();
+    let rollback_fixture_path = temporary.root.join(&rollback_relative_path);
+    std::fs::create_dir_all(
+        rollback_fixture_path
+            .parent()
+            .expect("rollback fixture has a parent"),
+    )
+    .expect("rollback fixture parent is created");
+    std::fs::copy(
+        temporary.root.join(&current_relative_path),
+        &rollback_fixture_path,
+    )
+    .expect("current provider evidence is copied to the rollback artifact");
+    manifest["artifacts"][2]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://dp-root/Logs/SMSDPProv.lo_");
+    manifest["artifacts"][2]["rotation"]["kind"] = json!("lo_");
+    manifest["artifacts"][2]["relativePath"] = json!(rollback_relative_path);
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+
+    let current_record = r#"<![LOG[SYNTHETIC FIXTURE; Phase=serveOrReport; Disposition=retrying; Terminal=false; PackageId=LAB00001; ContentId=content-alpha; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time="12:00:05.000+000" date="07-30-2026" component="SMSDPProv" context="" type="2" thread="103" file="smsdpprov.cpp:304">"#;
+    std::fs::write(
+        temporary.root.join(&current_relative_path),
+        format!("{current_record}\n"),
+    )
+    .expect("current rotation retry fixture is written");
+    let current_bytes = std::fs::metadata(temporary.root.join(&current_relative_path))
+        .expect("current rotation retry fixture is readable")
+        .len();
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .push(json!({
+            "artifactId": "dp-healthy-04-provider-current",
+            "sourceId": "server-dp-distribution",
+            "producerRole": "distributionPoint",
+            "producerHostHandle": "safe:dp:lab-dp-01",
+            "workflowSubjectRole": "distributionPoint",
+            "workflowSubjectHandle": "safe:dp:lab-dp-01",
+            "sourceKind": "ccmLog",
+            "originalBasename": "SMSDPProv.log",
+            "sanitizedSourcePath": "SYNTHETIC://dp-root/Logs/SMSDPProv.log",
+            "pathFingerprint": "synthetic:serve-provider",
+            "rotation": {
+                "kind": "current",
+                "lineageId": "healthy-provider",
+                "fragmentComplete": true
+            },
+            "captureState": "captured",
+            "sourceVersion": "5.00.TEST.0001",
+            "collectedUtc": "2026-07-30T12:10:00Z",
+            "encoding": "utf-8",
+            "collectionLimit": {
+                "byteLimit": 4096,
+                "limitApplied": false
+            },
+            "bytesCopied": current_bytes,
+            "relativePath": current_relative_path
+        }));
+    expected["coverage"]
+        .as_array_mut()
+        .expect("coverage is an array")
+        .push(json!({
+            "artifactId": "dp-healthy-04-provider-current",
+            "state": "captured"
+        }));
+    expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .insert(
+            5,
+            json!({
+                "observationId": "05-report-retry",
+                "phase": "serveOrReport",
+                "disposition": "retrying",
+                "terminal": false,
+                "evidence": [{
+                    "artifactId": "dp-healthy-04-provider-current",
+                    "startLine": 1,
+                    "endLine": 1
+                }]
+            }),
+        );
+
+    assert!(
+        !mutation_at_root_was_accepted("healthy-package", &temporary.root, &manifest, &expected),
+        "equal-UTC current/rollback outcomes used observation IDs to retain stale high success"
+    );
+}
+
+#[test]
 fn correlation_eligible_incomplete_output_requires_evidence_gaps_and_requests() {
     let manifest = read_json("incomplete", "manifest.json").expect("manifest loads");
     let expected = read_json("incomplete", "expected.json").expect("expected loads");
