@@ -775,6 +775,7 @@ fn build_counterpart_fact(
     let fact = decisive_facts
         .iter()
         .copied()
+        .filter(|fact| fact.policy_id.as_deref() == key.policy_id.as_deref())
         .filter(|fact| fact.phase == transaction.phase)
         .filter(|fact| {
             matches!(
