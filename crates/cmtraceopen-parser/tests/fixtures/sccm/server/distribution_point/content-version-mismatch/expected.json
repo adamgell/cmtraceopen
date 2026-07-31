@@ -10,9 +10,7 @@
     {"artifactId": "dp-version-01-distmgr", "state": "captured"},
     {"artifactId": "dp-version-02-pkgxfer", "state": "captured"},
     {"artifactId": "dp-version-03-provider", "state": "captured"},
-    {"artifactId": "dp-version-04-distmgr-dp02", "state": "captured"},
-    {"artifactId": "dp-version-05-pkgxfer-dp02", "state": "captured"},
-    {"artifactId": "dp-version-06-provider-dp02", "state": "captured"}
+    {"artifactId": "dp-version-04-provider-dp02", "state": "captured"}
   ],
   "transactions": [
     {
@@ -49,12 +47,12 @@
       "nextSourceId": null,
       "coverageGapArtifactIds": [],
       "observations": [
-        {"observationId": "01-dp02-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-04-distmgr-dp02", "startLine": 1, "endLine": 1}]},
-        {"observationId": "02-dp02-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-04-distmgr-dp02", "startLine": 2, "endLine": 2}]},
-        {"observationId": "03-dp02-transfer", "phase": "transfer", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-05-pkgxfer-dp02", "startLine": 1, "endLine": 1}]},
-        {"observationId": "04-dp02-validate", "phase": "validate", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-06-provider-dp02", "startLine": 1, "endLine": 1}]},
-        {"observationId": "05-dp02-available", "phase": "makeAvailable", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-06-provider-dp02", "startLine": 2, "endLine": 2}]},
-        {"observationId": "06-dp02-report", "phase": "serveOrReport", "disposition": "succeeded", "terminal": true, "evidence": [{"artifactId": "dp-version-06-provider-dp02", "startLine": 3, "endLine": 3}]}
+        {"observationId": "01-dp02-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 3, "endLine": 3}]},
+        {"observationId": "02-dp02-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 4, "endLine": 4}]},
+        {"observationId": "03-dp02-transfer", "phase": "transfer", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 2, "endLine": 2}]},
+        {"observationId": "04-dp02-validate", "phase": "validate", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 1, "endLine": 1}]},
+        {"observationId": "05-dp02-available", "phase": "makeAvailable", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 2, "endLine": 2}]},
+        {"observationId": "06-dp02-report", "phase": "serveOrReport", "disposition": "succeeded", "terminal": true, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 3, "endLine": 3}]}
       ]
     },
     {
@@ -70,9 +68,9 @@
       "nextSourceId": null,
       "coverageGapArtifactIds": [],
       "observations": [
-        {"observationId": "01-v2-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 3, "endLine": 3}]},
-        {"observationId": "02-v2-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 4, "endLine": 4}]},
-        {"observationId": "03-v2-transfer-retry", "phase": "transfer", "disposition": "retrying", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 2, "endLine": 2}]}
+        {"observationId": "01-v2-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 5, "endLine": 5}]},
+        {"observationId": "02-v2-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 6, "endLine": 6}]},
+        {"observationId": "03-v2-transfer-retry", "phase": "transfer", "disposition": "retrying", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 3, "endLine": 3}]}
       ]
     }
   ],

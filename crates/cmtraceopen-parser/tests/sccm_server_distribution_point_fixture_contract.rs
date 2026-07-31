@@ -172,6 +172,9 @@ struct ParsedArtifact {
     source_id: String,
     role: String,
     basename: String,
+    workflow_subject_handle: Option<String>,
+    rotation_kind: String,
+    rotation_lineage: String,
     fragment_complete: Option<bool>,
 }
 
@@ -365,7 +368,7 @@ fn validate_manifest(
     let mut parsed_artifacts = BTreeMap::new();
     let mut evidence_by_reference = BTreeMap::new();
     let mut relative_paths = BTreeSet::new();
-    let mut path_fingerprints = BTreeSet::new();
+    let mut physical_source_identities = BTreeSet::new();
     for artifact in artifacts {
         let artifact_id = match required_string(artifact, "artifactId", "artifact") {
             Ok(value) => value,
@@ -412,6 +415,7 @@ fn validate_manifest(
                 "producerHostHandle",
                 "workflowSubjectRole",
                 "workflowSubjectHandle",
+                "workflowSubjectBasis",
                 "sourceKind",
                 "originalBasename",
                 "sanitizedSourcePath",
@@ -447,10 +451,16 @@ fn validate_manifest(
                 "{artifact_id} has an uncatalogued source/producer/basename combination"
             ));
         }
+        let workflow_subject_handle = artifact["workflowSubjectHandle"].as_str();
+        let workflow_subject_basis = artifact["workflowSubjectBasis"].as_str();
         if artifact["workflowSubjectRole"] != "distributionPoint"
-            || !artifact["workflowSubjectHandle"]
-                .as_str()
-                .is_some_and(|handle| distribution_point_handles.contains(handle))
+            || match (workflow_subject_handle, workflow_subject_basis) {
+                (Some(handle), None) => !distribution_point_handles.contains(handle),
+                (None, Some("manifestTopology")) => {
+                    role != "siteServer" || distribution_point_handles.len() < 2
+                }
+                _ => true,
+            }
         {
             failures.push(format!(
                 "{artifact_id} loses the distribution-point workflow subject"
@@ -463,28 +473,47 @@ fn validate_manifest(
             failures.push(format!("{artifact_id} lacks an opaque producer handle"));
         }
         if role == "distributionPoint"
-            && artifact["producerHostHandle"] != artifact["workflowSubjectHandle"]
+            && (workflow_subject_handle.is_none()
+                || artifact["producerHostHandle"] != artifact["workflowSubjectHandle"])
         {
             failures.push(format!(
                 "{artifact_id} DP producer does not match its exact workflow subject"
             ));
         }
-        if !artifact["pathFingerprint"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("synthetic:"))
-            || !artifact["sanitizedSourcePath"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("SYNTHETIC://"))
+        let path_fingerprint = artifact["pathFingerprint"].as_str();
+        let sanitized_source_path = artifact["sanitizedSourcePath"].as_str();
+        if !path_fingerprint.is_some_and(|value| value.starts_with("synthetic:"))
+            || !sanitized_source_path.is_some_and(|value| value.starts_with("SYNTHETIC://"))
         {
             failures.push(format!("{artifact_id} leaks or omits path provenance"));
         }
-        if artifact["pathFingerprint"]
+        let rotation_kind = artifact["rotation"]["kind"].as_str();
+        let rotation_value = artifact["rotation"]["value"]
             .as_str()
-            .is_some_and(|value| !path_fingerprints.insert(value.to_owned()))
-        {
-            failures.push(format!(
-                "{artifact_id} collapses a path fingerprint collision"
-            ));
+            .map(str::to_owned)
+            .or_else(|| {
+                artifact["rotation"]["value"]
+                    .as_u64()
+                    .map(|value| value.to_string())
+            })
+            .unwrap_or_default();
+        if let (Some(producer), Some(source_path), Some(rotation_kind)) = (
+            artifact["producerHostHandle"].as_str(),
+            sanitized_source_path,
+            rotation_kind,
+        ) {
+            let physical_identity = (
+                producer.to_owned(),
+                source_path.to_owned(),
+                basename.to_owned(),
+                rotation_kind.to_owned(),
+                rotation_value,
+            );
+            if !physical_source_identities.insert(physical_identity) {
+                failures.push(format!(
+                    "{artifact_id} duplicates one physical source for another workflow subject"
+                ));
+            }
         }
         if artifact["sourceKind"] != "ccmLog"
             || !artifact["sourceVersion"]
@@ -640,8 +669,22 @@ fn validate_manifest(
                             "{artifact_id} loses distinct CCM code-origin provenance"
                         ));
                     }
-                    if let Err(error) = parse_fixture_fields(&record.message) {
-                        failures.push(format!("{artifact_id}: {error}"));
+                    match parse_fixture_fields(&record.message) {
+                        Ok(fields) => {
+                            let record_dp_handle = fields.get("DpHandle").map(String::as_str);
+                            if workflow_subject_handle
+                                .is_some_and(|handle| record_dp_handle != Some(handle))
+                                || workflow_subject_basis == Some("manifestTopology")
+                                    && record_dp_handle.is_none_or(|handle| {
+                                        !distribution_point_handles.contains(handle)
+                                    })
+                            {
+                                failures.push(format!(
+                                    "{artifact_id} record escapes its declared workflow-subject scope"
+                                ));
+                            }
+                        }
+                        Err(error) => failures.push(format!("{artifact_id}: {error}")),
                     }
                     let Some(line_start) = record.reference.line_start else {
                         failures.push(format!("{artifact_id} evidence lacks lineStart"));
@@ -675,6 +718,15 @@ fn validate_manifest(
                     source_id: source_id.to_owned(),
                     role: role.to_owned(),
                     basename: basename.to_owned(),
+                    workflow_subject_handle: workflow_subject_handle.map(str::to_owned),
+                    rotation_kind: artifact["rotation"]["kind"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    rotation_lineage: artifact["rotation"]["lineageId"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
                     fragment_complete: artifact["rotation"]["fragmentComplete"].as_bool(),
                 },
             )
@@ -1055,7 +1107,11 @@ fn validate_expected(
                 match parsed.artifacts.get(cited_artifact_id) {
                     Some(artifact)
                         if artifact.role != "client"
-                            && phase_allowed_for_artifact(artifact, phase) => {}
+                            && phase_allowed_for_artifact(artifact, phase)
+                            && artifact
+                                .workflow_subject_handle
+                                .as_deref()
+                                .is_none_or(|handle| handle == key_fields["DpHandle"]) => {}
                     _ => failures.push(format!(
                         "{observation_id} cites an artifact that cannot own phase {phase}"
                     )),
@@ -1224,8 +1280,9 @@ fn validate_expected(
             observation_id,
             &mut failures,
         );
+        let classification = observation["classification"].as_str();
         if !matches!(
-            observation["classification"].as_str(),
+            classification,
             Some("ignoredClientEvidence" | "rotationSplit" | "malformedEvidence")
         ) || observation.get("key").is_some()
             || observation["correlationEligible"] != false
@@ -1242,32 +1299,102 @@ fn validate_expected(
             .unwrap_or_default();
         let mut sorted_artifact_ids = artifact_ids.clone();
         sorted_artifact_ids.sort_unstable();
-        if artifact_ids.is_empty() || artifact_ids != sorted_artifact_ids {
+        let unique_artifact_ids = artifact_ids.iter().copied().collect::<BTreeSet<_>>();
+        if artifact_ids.is_empty()
+            || artifact_ids != sorted_artifact_ids
+            || unique_artifact_ids.len() != artifact_ids.len()
+        {
             failures.push(format!(
                 "{observation_id} lacks sorted physical artifact provenance"
             ));
         }
-        for artifact_id in artifact_ids {
-            if !parsed.artifacts.contains_key(artifact_id) {
+        for artifact_id in &artifact_ids {
+            if !parsed.artifacts.contains_key(*artifact_id) {
                 failures.push(format!(
                     "{observation_id} cites unknown physical artifact {artifact_id}"
                 ));
             }
         }
-        for reference in observation["evidence"]
+        let references = observation["evidence"]
             .as_array()
             .map(Vec::as_slice)
-            .unwrap_or_default()
-        {
+            .unwrap_or_default();
+        let mut cited_artifact_ids = BTreeSet::new();
+        for reference in references {
             reject_unknown_fields(
                 reference,
                 &["artifactId", "startLine", "endLine"],
                 &format!("{observation_id}.evidence"),
                 &mut failures,
             );
+            if let Ok(artifact_id) = required_string(
+                reference,
+                "artifactId",
+                &format!("{observation_id}.evidence"),
+            ) {
+                cited_artifact_ids.insert(artifact_id);
+                if !unique_artifact_ids.contains(artifact_id) {
+                    failures.push(format!(
+                        "{observation_id} cites evidence outside its physical artifact set"
+                    ));
+                }
+            }
             if let Err(error) = evidence_for(parsed, reference, observation_id) {
                 failures.push(error);
             }
+        }
+        let artifacts = artifact_ids
+            .iter()
+            .filter_map(|artifact_id| parsed.artifacts.get(*artifact_id))
+            .collect::<Vec<_>>();
+        let semantic_match = match classification {
+            Some("ignoredClientEvidence") => {
+                !references.is_empty()
+                    && cited_artifact_ids == unique_artifact_ids
+                    && artifacts.iter().all(|artifact| {
+                        artifact.role == "client"
+                            && artifact.source_id == "client-content-control"
+                            && matches!(artifact.state.as_str(), "captured" | "capped")
+                    })
+            }
+            Some("rotationSplit") => {
+                let source_ids = artifacts
+                    .iter()
+                    .map(|artifact| artifact.source_id.as_str())
+                    .collect::<BTreeSet<_>>();
+                let lineages = artifacts
+                    .iter()
+                    .map(|artifact| artifact.rotation_lineage.as_str())
+                    .collect::<BTreeSet<_>>();
+                let rotation_kinds = artifacts
+                    .iter()
+                    .map(|artifact| artifact.rotation_kind.as_str())
+                    .collect::<BTreeSet<_>>();
+                references.is_empty()
+                    && artifacts.len() >= 2
+                    && source_ids.len() == 1
+                    && lineages.len() == 1
+                    && lineages.first().is_some_and(|lineage| !lineage.is_empty())
+                    && rotation_kinds.len() >= 2
+                    && artifacts.iter().all(|artifact| {
+                        artifact.role != "client"
+                            && matches!(artifact.state.as_str(), "captured" | "capped")
+                            && artifact.fragment_complete == Some(false)
+                    })
+            }
+            Some("malformedEvidence") => {
+                references.is_empty()
+                    && !artifacts.is_empty()
+                    && artifacts.iter().all(|artifact| {
+                        artifact.role != "client" && artifact.state == "parseFailed"
+                    })
+            }
+            _ => false,
+        };
+        if !semantic_match {
+            failures.push(format!(
+                "{observation_id} classification is detached from exact physical coverage semantics"
+            ));
         }
     }
 
@@ -1641,5 +1768,95 @@ fn unknown_semantics_collisions_and_output_reordering_fail_closed() {
     assert!(
         accepted.is_empty(),
         "closed-schema/collision/order mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn one_physical_site_log_is_not_duplicated_per_distribution_point_subject() {
+    let manifest = read_json("content-version-mismatch", "manifest.json").expect("manifest loads");
+    let mut physical_sources = BTreeSet::new();
+    let mut duplicates = Vec::new();
+
+    for artifact in manifest["artifacts"]
+        .as_array()
+        .expect("artifacts are an array")
+    {
+        let identity = (
+            artifact["producerHostHandle"]
+                .as_str()
+                .expect("producer handle"),
+            artifact["sanitizedSourcePath"]
+                .as_str()
+                .expect("sanitized source path"),
+            artifact["originalBasename"].as_str().expect("basename"),
+            artifact["rotation"]["kind"]
+                .as_str()
+                .expect("rotation kind"),
+        );
+        if !physical_sources.insert(identity) {
+            duplicates.push(identity);
+        }
+    }
+
+    assert!(
+        duplicates.is_empty(),
+        "one physical capture was duplicated to attach multiple workflow subjects: {duplicates:?}"
+    );
+
+    let mut falsely_narrowed = manifest.clone();
+    falsely_narrowed["artifacts"][0]
+        .as_object_mut()
+        .expect("artifact is an object")
+        .remove("workflowSubjectBasis");
+    falsely_narrowed["artifacts"][0]["workflowSubjectHandle"] = json!(EXACT_DP);
+    assert!(
+        validate_manifest(
+            &corpus_root().join("content-version-mismatch"),
+            &falsely_narrowed
+        )
+        .is_err(),
+        "a shared physical site log was falsely narrowed to one DP despite containing another"
+    );
+}
+
+#[test]
+fn source_local_classifications_are_bound_to_physical_coverage_semantics() {
+    let client_manifest =
+        read_json("client-only-looking-request", "manifest.json").expect("manifest loads");
+    let client_expected =
+        read_json("client-only-looking-request", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut client_as_malformed = client_expected.clone();
+    client_as_malformed["sourceLocalObservations"][0]["classification"] =
+        json!("malformedEvidence");
+    if mutation_was_accepted(
+        "client-only-looking-request",
+        &client_manifest,
+        &client_as_malformed,
+    ) {
+        accepted.push("captured client evidence relabeled as malformed server evidence");
+    }
+
+    let mut split_as_client = rotation_expected.clone();
+    split_as_client["sourceLocalObservations"][0]["classification"] =
+        json!("ignoredClientEvidence");
+    if mutation_was_accepted("rotation-boundary", &rotation_manifest, &split_as_client) {
+        accepted.push("split server rotation relabeled as ignored client evidence");
+    }
+
+    let mut malformed_as_split = rotation_expected.clone();
+    malformed_as_split["sourceLocalObservations"][1]["classification"] = json!("rotationSplit");
+    if mutation_was_accepted("rotation-boundary", &rotation_manifest, &malformed_as_split) {
+        accepted.push("parse-failed source relabeled as a rotation split");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "source-local classifications were detached from physical coverage: {accepted:?}"
     );
 }

@@ -30,8 +30,8 @@ A physical producer is not inferred from the workflow it describes.
 
 | Source ID | Basename | Allowed producer role | Workflow subject | Use |
 | --- | --- | --- | --- | --- |
-| `server-dp-distribution` | `distmgr.log` | `siteServer` | exact DP handle | Receive and distribute |
-| `server-dp-distribution` | `PkgXferMgr.log` | `siteServer` | exact DP handle | Transfer and retry |
+| `server-dp-distribution` | `distmgr.log` | `siteServer` | DP role scope; exact handle on each record | Receive and distribute |
+| `server-dp-distribution` | `PkgXferMgr.log` | `siteServer` | DP role scope; exact handle on each record | Transfer and retry |
 | `server-dp-distribution` | `SMSDPProv.log` | `distributionPoint` | same exact DP handle | Validate and make available |
 | `server-dp-distribution` | `PullDP.log` | `distributionPoint` | same exact pull-DP handle | Pull transfer when a reviewed fixture proves it |
 | `server-dp-serve` | `SMSdpmon.log` | `distributionPoint` | same exact DP handle | Optional, explicitly catalogued serving/status evidence |
@@ -46,7 +46,8 @@ Each manifest preserves:
 
 - a synthetic site code and one or more approved opaque DP handles;
 - producer role and producer handle separately from workflow-subject role and
-  handle;
+  either an exact handle or the bounded `manifestTopology` basis used by one
+  site-server file that contains records for multiple declared DPs;
 - source ID, exact basename, source grammar, synthetic version, path
   fingerprint, and `SYNTHETIC://` provenance;
 - rotation kind, lineage, and fragment completeness;
@@ -54,8 +55,12 @@ Each manifest preserves:
   byte count, and bounded relative evidence path; and
 - deterministic artifact identity and ordering.
 
-The two DPs in `content-version-mismatch` are separate subjects even though
-the site-server basenames and package/content identifiers overlap.
+The two DPs in `content-version-mismatch` remain separate transaction subjects
+even though one physical `distmgr.log` and one physical `PkgXferMgr.log`
+contain records for both. A physical site-server source is captured once;
+changing its path fingerprint or destination cannot duplicate it merely to
+attach another workflow-subject handle. Each admitted logical record must
+carry an exact DP handle from the bounded manifest topology.
 
 ## State and exact-key contract
 
@@ -96,7 +101,8 @@ The outcome rules are conservative:
 - incomplete coverage remains `insufficientEvidence` with exact physical gap
   IDs and a bounded source ID;
 - rotation fragments and malformed evidence remain noncorrelatable
-  source-local observations; and
+  source-local observations whose classification is bound to exact physical
+  role, capture state, lineage, rotation kind, and fragment completeness; and
 - a client-only download record cannot become a DP transaction or DP failure.
 
 ## Coverage and request contract

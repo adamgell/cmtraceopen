@@ -2,6 +2,10 @@
 
 This directory is test-only input for Issue `#329`.
 
+Site-server logs are physical captures, not per-DP projections. The multi-DP
+scenario therefore stores `distmgr.log` and `PkgXferMgr.log` once and binds
+exact DP/content/version identity from each normalized logical CCM record.
+
 - Every evidence file is authored synthetic CCM text and contains the literal
   `SYNTHETIC FIXTURE` marker.
 - `manifest.json` records physical producer, workflow subject, coverage,
