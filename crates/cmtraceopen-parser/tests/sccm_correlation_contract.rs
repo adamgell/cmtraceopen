@@ -857,6 +857,93 @@ fn adversarial_fixture_ref_and_ownership_mutations_fail_closed() {
 }
 
 #[test]
+fn reordered_scenarios_encode_opposite_order_input_evidence() {
+    for (fixture, prefix) in [
+        (POLICY_MATRIX_FIXTURE, "policy"),
+        (CONTENT_MATRIX_FIXTURE, "content"),
+    ] {
+        let mut matrix = read_json(&corpus_root().join(fixture));
+        let first = scenario_slot(&mut matrix, &format!("{prefix}-reordered-input-a")).clone();
+        let second = scenario_slot(&mut matrix, &format!("{prefix}-reordered-input-b")).clone();
+
+        let manifest = |scenario: &Value, label: &str| -> Vec<String> {
+            scenario["orderedInputEvidence"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{fixture}: scenario {label} encodes ordered inputs"))
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{fixture}: {label} evidence entry is a string"))
+                        .to_owned()
+                })
+                .collect()
+        };
+        let evidence_a = manifest(&first, "a");
+        let evidence_b = manifest(&second, "b");
+
+        assert!(
+            evidence_a.len() >= 2,
+            "{fixture}: too little ordered evidence"
+        );
+        assert_ne!(
+            evidence_a, evidence_b,
+            "{fixture}: A and B are not reordered"
+        );
+        let reversed_a = evidence_a.iter().rev().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            evidence_b, reversed_a,
+            "{fixture}: B must replay A's evidence in opposite order"
+        );
+        let mut multiset_a = evidence_a.clone();
+        let mut multiset_b = evidence_b.clone();
+        multiset_a.sort();
+        multiset_b.sort();
+        assert_eq!(
+            multiset_a, multiset_b,
+            "{fixture}: A and B must carry the same evidence multiset"
+        );
+        for side in ["client:", "server:"] {
+            assert!(
+                evidence_a.iter().any(|entry| entry.starts_with(side)),
+                "{fixture}: ordered evidence must include the {side} side"
+            );
+        }
+
+        for field in [
+            "clientFixtureRef",
+            "serverFixtureRef",
+            "profileState",
+            "keyRelation",
+            "topology",
+            "timestampProvenance",
+            "coverage",
+            "rotation",
+            "terminalRelation",
+        ] {
+            assert_eq!(
+                first[field], second[field],
+                "{fixture}: {field} must be identical between A and B"
+            );
+        }
+        for section in ["expected", "expectedPublicProjection"] {
+            let serialized_a = serde_json::to_string(&first[section])
+                .expect("reordered contract section serializes");
+            let serialized_b = serde_json::to_string(&second[section])
+                .expect("reordered contract section serializes");
+            assert_eq!(
+                serialized_a, serialized_b,
+                "{fixture}: {section} must serialize deterministically across A and B"
+            );
+        }
+        assert_eq!(
+            first["expected"]["deterministicResultId"], second["expected"]["deterministicResultId"],
+            "{fixture}: A and B must share one deterministic result id"
+        );
+    }
+}
+
+#[test]
 fn adversarial_neutralized_guard_state_mutations_fail_closed() {
     let neutralizations: [(&str, &[(&str, &str)]); 9] = [
         ("policy-same-time-no-key", &[("keyRelation", "exact")]),
