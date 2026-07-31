@@ -2845,3 +2845,80 @@ fn version_and_physical_identity_provenance_mutations_fail_closed() {
         "version or physical provenance mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn profile_citation_and_public_observation_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let (mixed_root, mut mixed_manifest, mut mixed_expected) = load_contract("mixed-unrelated");
+    let formerly_unknown = mixed_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "mixed-owner-unknown")
+        .expect("mixed corpus has the unknown-profile artifact");
+    formerly_unknown["sourceVersion"] = Value::String("5.00.TEST.3260".to_owned());
+    mixed_expected["sourceLocalObservations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .retain(|observation| observation["kind"] != "unknownProfile");
+    if mutation_was_accepted(
+        "mixed-unrelated",
+        &mixed_root,
+        &mixed_manifest,
+        &mixed_expected,
+    ) {
+        accepted.push("stale mixed profile state after the unknown version was removed");
+    }
+
+    let (script_root, script_manifest, script_expected) = load_contract("script-success");
+    let mut duplicate_ownership = script_expected.clone();
+    let ownership_reference = duplicate_ownership["ownership"]["evidence"][0].clone();
+    duplicate_ownership["ownership"]["evidence"]
+        .as_array_mut()
+        .expect("ownership evidence is an array")
+        .push(ownership_reference);
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &script_manifest,
+        &duplicate_ownership,
+    ) {
+        accepted.push("duplicate ownership evidence citation");
+    }
+
+    let mut duplicate_transaction = script_expected;
+    let transaction_reference = duplicate_transaction["transactions"][0]["evidence"][0].clone();
+    duplicate_transaction["transactions"][0]["evidence"]
+        .as_array_mut()
+        .expect("transaction evidence is an array")
+        .push(transaction_reference);
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &script_manifest,
+        &duplicate_transaction,
+    ) {
+        accepted.push("duplicate transaction evidence citation");
+    }
+
+    let (software_center_root, software_center_manifest, mut software_center_expected) =
+        load_contract("software-center-observed");
+    software_center_expected["sourceLocalObservations"][0]["claim"] = Value::String(
+        r"Observed C:\Users\RealUser and real.user@customer.example remain source local."
+            .to_owned(),
+    );
+    if mutation_was_accepted(
+        "software-center-observed",
+        &software_center_root,
+        &software_center_manifest,
+        &software_center_expected,
+    ) {
+        accepted.push("identity-bearing public observation claim");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "profile, citation, or public observation mutations were accepted: {accepted:?}"
+    );
+}
