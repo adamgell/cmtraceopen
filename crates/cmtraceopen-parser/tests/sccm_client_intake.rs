@@ -172,6 +172,21 @@ fn serialized_privacy_probe_detects_json_escaped_windows_user_path() {
 }
 
 #[test]
+fn serialized_privacy_probe_detects_forward_slash_normalized_windows_user_path() {
+    let leaked_json = serde_json::to_string(&serde_json::json!({
+        "relativePath": "C:/Users/RealUser/PolicyAgent.log"
+    }))
+    .expect("leak probe serializes")
+    .to_ascii_lowercase();
+
+    assert!(
+        serialized_json_contains_windows_user_root(&leaked_json),
+        "privacy probe must detect a forward-slash normalized Windows user path \
+         even without the RealUser sentinel: {leaked_json}"
+    );
+}
+
+#[test]
 fn complete_client_intake_covers_every_declared_group_without_a_diagnosis() {
     let declared = declared_client_source_groups();
     let intake = assessment("complete");
