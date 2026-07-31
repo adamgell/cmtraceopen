@@ -271,6 +271,32 @@ pub struct PackageRow {
     pub raw: Option<serde_json::Value>,
 }
 
+// An unreported value is an empty Unknown rather than a guessed variant. These
+// impls give callers a non-panicking fallback when a value cannot be decoded.
+impl Default for PackageArchitecture {
+    fn default() -> Self {
+        Self::Unknown(String::new())
+    }
+}
+
+impl Default for PackageSignatureKind {
+    fn default() -> Self {
+        Self::Unknown(String::new())
+    }
+}
+
+impl Default for PackageStatus {
+    fn default() -> Self {
+        Self::Unknown(String::new())
+    }
+}
+
+impl Default for PackageInstallState {
+    fn default() -> Self {
+        Self::Unknown(String::new())
+    }
+}
+
 impl Default for PackageRow {
     fn default() -> Self {
         Self {
@@ -278,11 +304,11 @@ impl Default for PackageRow {
             family_name: String::new(),
             full_name: String::new(),
             version: String::new(),
-            architecture: PackageArchitecture::Unknown(String::new()),
+            architecture: PackageArchitecture::default(),
             publisher: None,
-            signature_kind: PackageSignatureKind::Unknown(String::new()),
-            status: PackageStatus::Unknown(String::new()),
-            install_state: PackageInstallState::Unknown(String::new()),
+            signature_kind: PackageSignatureKind::default(),
+            status: PackageStatus::default(),
+            install_state: PackageInstallState::default(),
             scopes: Vec::new(),
             user_registration_count: None,
             user_identifier: None,
@@ -377,4 +403,34 @@ pub enum PackageStateError {
     MissingSchemaVersion,
     #[error("package state capture body does not match schema version {version}: {detail}")]
     InvalidBody { version: u32, detail: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn known_package_row_fields_match_the_struct() {
+        // KNOWN_PACKAGE_ROW_FIELDS duplicates the PackageRow field names by
+        // hand, and it decides what gets folded into `raw`. A field added to
+        // the struct but forgotten here would parse into its typed field AND be
+        // copied into `raw`, so the same value would appear twice in one
+        // capture. Compare against the serialized shape so the list cannot
+        // drift.
+        let serialized =
+            serde_json::to_value(PackageRow::default()).expect("a package row must serialize");
+        let actual: BTreeSet<&str> = serialized
+            .as_object()
+            .expect("a package row serializes to an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let declared: BTreeSet<&str> = KNOWN_PACKAGE_ROW_FIELDS.iter().copied().collect();
+
+        assert_eq!(
+            actual, declared,
+            "KNOWN_PACKAGE_ROW_FIELDS has drifted from PackageRow"
+        );
+    }
 }

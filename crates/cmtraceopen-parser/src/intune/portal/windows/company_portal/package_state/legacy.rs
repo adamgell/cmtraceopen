@@ -384,14 +384,19 @@ fn derive_from_full_name(full_name: &str) -> (Option<String>, Option<PackageArch
 }
 
 /// PowerShell renders these enums in PascalCase; the wire form is camelCase.
-fn camel_case_enum<T: for<'de> Deserialize<'de>>(value: &str) -> T {
+/// Decode a display-cased Format-List token into a wire enum.
+///
+/// The raw-preserving enums this is called with accept any string, so decoding
+/// cannot fail today. The bound is only `Deserialize`, though, so a future call
+/// with a strict enum would otherwise panic inside a pure parser on untrusted
+/// text. Fall back to the type's default instead of panicking.
+fn camel_case_enum<T: for<'de> Deserialize<'de> + Default>(value: &str) -> T {
     let mut chars = value.chars();
     let camel = match chars.next() {
         Some(first) => first.to_lowercase().collect::<String>() + chars.as_str(),
         None => String::new(),
     };
-    serde_json::from_value(Value::String(camel))
-        .expect("raw-preserving enums accept any string value")
+    serde_json::from_value(Value::String(camel)).unwrap_or_default()
 }
 
 fn classify_app(name: &str) -> PortalApp {

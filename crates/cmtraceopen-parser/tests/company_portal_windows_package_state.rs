@@ -610,7 +610,14 @@ fn package_state_finding_order_is_stable_across_input_permutations() {
     let ranks: Vec<_> = first.iter().map(|finding| finding.kind).collect();
     let mut sorted = ranks.clone();
     sorted.sort();
-    assert_eq!(ranks, sorted, "findings must be emitted most-severe first");
+    // sort_findings orders by PackageStateFindingKind::rank() and then by id,
+    // not by severity. Severity happens to order Info < Warning < Error, so
+    // saying "most-severe first" here would describe a different contract than
+    // the one actually implemented.
+    assert_eq!(
+        ranks, sorted,
+        "findings must be emitted in stable kind order"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -894,6 +901,18 @@ fn package_state_findings_never_carry_adapter_supplied_free_text() {
             .collect::<Vec<_>>()
             .join("\n");
 
+        // Precondition. Every leak assertion below is conditional, so a fixture
+        // that stopped carrying sensitive text would make this test pass while
+        // proving nothing.
+        assert!(
+            capture.capture.error.is_some(),
+            "fixture must supply an adapter error message for this test to mean anything"
+        );
+        assert!(
+            !messages.is_empty(),
+            "fixture must produce findings for this test to mean anything"
+        );
+
         if let Some(error) = capture.capture.error.as_ref() {
             assert!(
                 !messages.contains(error.message.as_str()),
@@ -908,11 +927,27 @@ fn package_state_findings_never_carry_adapter_supplied_free_text() {
                 );
             }
         }
-        assert!(
-            !messages.contains("jrivera") && !messages.contains(r"C:\Users"),
-            "finding messages leak identity or a profile path: {messages}"
-        );
     }
+
+    // The access-denied fixture is the sharp case: its error message names a
+    // real-looking profile path. Assert the fixture still carries it, then
+    // assert no finding repeats it.
+    let access_denied = parse(ACCESS_DENIED);
+    let raw = serde_json::to_string(&access_denied).expect("capture must serialize");
+    assert!(
+        raw.contains("jrivera") && raw.contains(r"C:\\Users"),
+        "the access-denied fixture must still carry identity and a profile path"
+    );
+
+    let messages = derive_package_state_findings(&access_denied, &[])
+        .iter()
+        .map(|finding| finding.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !messages.contains("jrivera") && !messages.contains(r"C:\Users"),
+        "finding messages leak identity or a profile path: {messages}"
+    );
 }
 
 #[test]

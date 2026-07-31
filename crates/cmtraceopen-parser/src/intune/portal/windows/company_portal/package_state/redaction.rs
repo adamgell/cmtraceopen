@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde_json::Value;
 
-use super::models::{PackageStateCapture, PackageStateClassifiedString};
+use super::models::{PackageStateCapture, PackageStateClassifiedString, PackageStateSensitivity};
 
 const REDACTED: &str = "[redacted]";
 
@@ -37,6 +37,7 @@ pub fn redacted_package_state_export(capture: &PackageStateCapture) -> PackageSt
         .packages
         .iter()
         .filter_map(|row| row.user_identifier.as_ref())
+        .filter(|identifier| carries_identity(identifier))
         .map(|identifier| identifier.value.clone())
         .filter(|value| !is_redaction_marker(value))
         .collect();
@@ -53,7 +54,7 @@ pub fn redacted_package_state_export(capture: &PackageStateCapture) -> PackageSt
     for row in &mut safe.packages {
         mask(&mut row.install_location);
         if let Some(identifier) = row.user_identifier.as_mut() {
-            if !is_redaction_marker(&identifier.value) {
+            if carries_identity(identifier) && !is_redaction_marker(&identifier.value) {
                 identifier.value = pseudonyms
                     .get(&identifier.value)
                     .cloned()
@@ -74,8 +75,20 @@ pub fn redacted_package_state_export(capture: &PackageStateCapture) -> PackageSt
 
 fn mask(value: &mut Option<PackageStateClassifiedString>) {
     if let Some(classified) = value.as_mut() {
-        classified.value = REDACTED.to_string();
+        if carries_identity(classified) {
+            classified.value = REDACTED.to_string();
+        }
     }
+}
+
+/// Does this classified value need masking?
+///
+/// The classification exists to be acted on. Masking purely on presence would
+/// discard a value a producer had explicitly marked public, which is the
+/// over-redaction this module exists to avoid: it destroys the diagnostic value
+/// the export is for.
+fn carries_identity(value: &PackageStateClassifiedString) -> bool {
+    value.sensitivity != PackageStateSensitivity::Public
 }
 
 /// Walk a preserved raw blob and mask the two things it can plausibly leak:
