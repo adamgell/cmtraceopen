@@ -1,0 +1,40 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "softwareUpdatePoint",
+  "scenario": "supplemental-wsus-skipped",
+  "stateChain": ["configure","synchronize","importOrProcessMetadata","validateWsus","publishAvailability","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"sup-server-5.00.test-v1","validatedRole":"softwareUpdatePoint"},
+  "roleAssessment": {"softwareUpdatePointObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId":"supplemental-01-wcm","state":"captured"},
+    {"artifactId":"supplemental-02-wsync","state":"captured"},
+    {"artifactId":"supplemental-03-wsus","state":"captured"},
+    {"artifactId":"supplemental-04-wsus-health","state":"skipped"}
+  ],
+  "transactions": [{
+    "transactionId": "sup:sync-07:LAB:safe:sup:lab-sup-01",
+    "key": {"syncRunId":"sync-07","siteCode":"LAB","supHandle":"safe:sup:lab-sup-01","updateId":null,"kbId":null,"confidence":"exact","extractionProfileId":"sup-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "correlationEligible": true,
+    "state": "succeeded",
+    "classification": "success",
+    "confidence": "medium",
+    "confidenceCeiling": "medium",
+    "lastSuccessfulPhase": "healthyOrTerminal",
+    "nextSourceId": null,
+    "coverageGapArtifactIds": ["supplemental-04-wsus-health"],
+    "observations": [
+      {"observationId":"sync-07-01-configure","phase":"configure","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"supplemental-01-wcm","startLine":1,"endLine":1}]},
+      {"observationId":"sync-07-02-synchronize","phase":"synchronize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"supplemental-02-wsync","startLine":1,"endLine":1}]},
+      {"observationId":"sync-07-03-import","phase":"importOrProcessMetadata","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"supplemental-02-wsync","startLine":2,"endLine":2}]},
+      {"observationId":"sync-07-04-validate","phase":"validateWsus","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"supplemental-03-wsus","startLine":1,"endLine":1}]},
+      {"observationId":"sync-07-05-publish","phase":"publishAvailability","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"supplemental-02-wsync","startLine":3,"endLine":3}]},
+      {"observationId":"sync-07-06-terminal","phase":"healthyOrTerminal","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"supplemental-03-wsus","startLine":2,"endLine":2}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

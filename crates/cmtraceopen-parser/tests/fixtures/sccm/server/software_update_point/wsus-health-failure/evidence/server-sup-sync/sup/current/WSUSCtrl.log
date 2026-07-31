@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE; Phase=validateWsus; Disposition=failed; Terminal=true; SyncRunId=sync-03; SiteCode=LAB; SupHandle=safe:sup:lab-sup-01; ProfileId=sup-server-5.00.test-v1]LOG]!><time="14:23:00.000+000" date="7-30-2026" component="SMS_WSUS_CONTROL_MANAGER" context="" type="3" thread="123" file="wsusctrl.cpp:504">
