@@ -2229,3 +2229,17 @@ fn required_phase_identity_and_manifest_strings_fail_closed() {
         "required-phase/schema/path mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn bounded_request_documentation_includes_nonphysical_manifest_coverage() {
+    let contract =
+        include_str!("../../../docs/sccm/preparation/issue-330-software-update-point-corpus.md");
+    assert!(
+        contract.contains("backed by matching noncomplete manifest coverage"),
+        "bounded request prose must include absent/access-denied manifest states"
+    );
+    assert!(
+        !contract.contains("backed by matching noncomplete physical coverage"),
+        "bounded request prose must not require physical evidence for nonphysical states"
+    );
+}

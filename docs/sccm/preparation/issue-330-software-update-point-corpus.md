@@ -112,7 +112,7 @@ Requests use only a catalogued source ID and one of:
 - `coverageMalformed`
 - `coverageRotationSplit`
 
-A reason code must be backed by matching noncomplete physical coverage. There
+A reason code must be backed by matching noncomplete manifest coverage. There
 is no free-form collection request in the preparation labels.
 
 ## Scenario matrix
