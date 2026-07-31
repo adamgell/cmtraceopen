@@ -1,0 +1,38 @@
+# winget defaultLocale metadata that komac does not manage.
+#
+# `komac update` copies PackageUrl, ShortDescription, Description, Moniker, and
+# Tags forward from the previously published manifest and exposes no CLI flags
+# for any of them, so a stale value stays stale for every future release.
+# Set-WingetLocaleMetadata.ps1 splices the keys below into the generated
+# defaultLocale manifest before `komac submit`, making this file the source of
+# truth. Edit here; the next release carries it to winget-pkgs.
+#
+# Schema: https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+# Limits: ShortDescription <= 256 chars, Description <= 10000 chars, Tags <= 16
+# entries of <= 40 chars each. Tags are what `winget search <term>` matches, and
+# Moniker is what lets `winget install cmtrace` work without the full
+# AdamGell.CMTraceOpen identifier. Keep Tags alphabetically sorted by convention.
+PackageUrl: https://cmtraceopen.com
+ShortDescription: Free, open-source CMTrace replacement for Windows log files, with Intune and Autopilot ESP diagnostics.
+Description: |-
+  CMTrace Open is a free, open-source log viewer and Windows troubleshooting tool, built as a modern replacement for Microsoft's CMTrace.exe. It auto-detects and parses ConfigMgr/SCCM (CCM), CBS, DISM, Panther, MSI, PSADT, and plain-text log formats, with severity color coding, real-time tailing, find and filter, and lookup for 700+ embedded Windows, ConfigMgr, and Intune error codes.
+  Beyond the log viewer it adds dedicated troubleshooting workspaces: Intune Management Extension (IME) diagnostics with an event timeline and download statistics, Autopilot Enrollment Status Page (ESP) and Device Preparation triage, DSRegCmd analysis for Entra join, hybrid join, PRT, MDM, and Windows Hello for Business, software deployment log scanning, Windows Event Log (.evtx) and Sysmon analysis, Secure Boot certificate checks, and diagnostic evidence collection.
+  Ships as a single-file executable with no runtime prerequisites; Windows builds are code-signed. CMTrace Open is an independent open-source project and is not affiliated with Microsoft Corporation.
+Moniker: cmtrace
+Tags:
+- autopilot
+- cmtrace
+- configmgr
+- dsregcmd
+- endpoint-management
+- entra-id
+- esp
+- event-log
+- evtx
+- intune
+- log-viewer
+- mdm
+- mecm
+- sccm
+- sysadmin
+- troubleshooting

@@ -1,0 +1,119 @@
+name: "CMTrace Open: Publish to Scoop bucket"
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v1.5.0)"
+        required: true
+
+permissions: {}
+
+jobs:
+  scoop:
+    name: Update Scoop bucket
+    # windows-latest so the bumped manifests are validated by real Scoop before
+    # they are committed. A bad hash then fails the release job instead of every
+    # user's 'scoop install'.
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      # The release event checks out the tag, which cannot be pushed to, and the
+      # commit belongs on the default branch either way. Credentials are
+      # persisted here (unlike the winget job) because this job pushes.
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Derive version
+        id: release
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          $version = $env:TAG_NAME -replace '^v', ''
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      # The script derives every URL from the manifests' own autoupdate
+      # templates, so this repo's bucket and Scoop's Excavator bot cannot drift
+      # apart on where the assets live. It throws on any problem, and
+      # $ErrorActionPreference is 'stop' in pwsh steps, so there is no exit code
+      # to test here (unlike the native komac calls in the winget job).
+      - name: Update manifests
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          ./.github/scripts/Update-ScoopManifest.ps1 -Version $env:VERSION
+          git --no-pager diff -- bucket
+          exit 0
+
+      - name: Install Scoop
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://get.scoop.sh -OutFile install-scoop.ps1
+          # GitHub runners execute as a local administrator, which the installer
+          # refuses without this switch.
+          ./install-scoop.ps1 -RunAsAdmin
+          Remove-Item install-scoop.ps1 -Force
+
+          $shims = "$env:USERPROFILE\scoop\shims"
+          if (-not (Test-Path -LiteralPath $shims)) { throw "Scoop install created no shim directory at $shims" }
+          # The installer only updates the PATH of future sessions.
+          $shims | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          exit 0
+
+      # Verifies the hashes, the download URLs and the shim/shortcut wiring on
+      # the x64 runner. arm64 URLs are only checked for existence, by the
+      # manifest updater.
+      - name: Validate manifests with Scoop
+        shell: pwsh
+        run: |
+          # Asserted on observable state rather than on $LASTEXITCODE: 'scoop' is
+          # a shim, so which of scoop.cmd/scoop.ps1 gets resolved decides whether
+          # an exit code is set at all. A missing shim is the unambiguous signal
+          # that the install did not complete.
+          foreach ($manifest in Get-ChildItem ./bucket -Filter '*.json' -File) {
+            $app = $manifest.BaseName
+            $shim = "$env:USERPROFILE\scoop\shims\$app.exe"
+
+            Write-Host "::group::scoop install $app"
+            scoop install $manifest.FullName
+            Write-Host "::endgroup::"
+            if (-not (Test-Path -LiteralPath $shim)) {
+              throw "scoop install $app produced no shim at $shim (hash mismatch or bad manifest)"
+            }
+
+            Write-Host "::group::scoop uninstall $app"
+            scoop uninstall $app
+            Write-Host "::endgroup::"
+            if (Test-Path -LiteralPath $shim) { throw "scoop uninstall $app left a shim at $shim" }
+          }
+          exit 0
+
+      - name: Commit and push
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bucket
+
+          # Exit code 1 means there is something staged, which is the normal path.
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "bucket/ is already at $env:VERSION; nothing to commit"
+            exit 0
+          }
+
+          git commit -m "chore(scoop): bump bucket to $env:VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE" }
+
+          git push
+          if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
