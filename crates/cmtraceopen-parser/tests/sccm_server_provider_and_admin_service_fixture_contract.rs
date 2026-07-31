@@ -9,15 +9,17 @@ use cmtraceopen_parser::sccm::{
 };
 use serde_json::Value;
 
-const SCENARIOS: [&str; 11] = [
+const SCENARIOS: [&str; 13] = [
     "admin-service-auth-failure",
     "admin-service-backend-failure",
     "admin-service-success",
+    "contradictory-evidence",
     "iis-supplemental",
     "incomplete",
     "privacy-redaction",
     "provider-authz-denied",
     "provider-query-failure",
+    "provider-retry",
     "provider-success",
     "provider-timeout",
     "rotation-boundary",
@@ -105,6 +107,16 @@ fn safe_synthetic_lineage(value: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+fn safe_endpoint_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 fn expected_sanitized_source_path(
     source_id: Option<&str>,
     rotation: &Value,
@@ -122,6 +134,29 @@ fn expected_sanitized_source_path(
         (Some("server-admin-service-iis"), Some("current")) => {
             Some("SYNTHETIC://scoped-export/LAB/IIS/u_ex_synthetic.log")
         }
+        _ => None,
+    }
+}
+
+fn expected_relative_path(
+    source_id: Option<&str>,
+    endpoint_id: Option<&str>,
+    rotation: &Value,
+) -> Option<String> {
+    let endpoint_id = endpoint_id.filter(|value| safe_endpoint_id(value))?;
+    match (source_id, rotation["kind"].as_str()) {
+        (Some("server-provider"), Some("current")) => Some(format!(
+            "evidence/server-provider/{endpoint_id}/current/Smsprov.log"
+        )),
+        (Some("server-provider"), Some("lo_")) => Some(format!(
+            "evidence/server-provider/{endpoint_id}/lo_/Smsprov.lo_"
+        )),
+        (Some("server-admin-service"), Some("current")) => Some(format!(
+            "evidence/server-admin-service/{endpoint_id}/current/AdminService.log"
+        )),
+        (Some("server-admin-service-iis"), Some("current")) => Some(format!(
+            "evidence/server-admin-service-iis/{endpoint_id}/current/u_ex_synthetic.log"
+        )),
         _ => None,
     }
 }
@@ -314,6 +349,9 @@ fn expected_transaction_ids(scenario: &str) -> &'static [&'static str] {
         "admin-service-success" => &[
             "adminService:55555555-5555-5555-5555-555555555555:safe-operation-admin-read:admin-service-lab",
         ],
+        "contradictory-evidence" => &[
+            "provider:dddddddd-dddd-dddd-dddd-dddddddddddd:safe-operation-contradictory:provider-local",
+        ],
         "iis-supplemental" => &[
             "adminService:88888888-8888-8888-8888-888888888888:safe-operation-admin-iis:admin-service-lab",
         ],
@@ -329,6 +367,9 @@ fn expected_transaction_ids(scenario: &str) -> &'static [&'static str] {
         ],
         "provider-query-failure" => &[
             "provider:33333333-3333-3333-3333-333333333333:safe-operation-query-device:provider-local",
+        ],
+        "provider-retry" => &[
+            "provider:cccccccc-cccc-cccc-cccc-cccccccccccc:safe-operation-provider-retry:provider-local",
         ],
         "provider-success" => &[
             "provider:11111111-1111-1111-1111-111111111111:safe-operation-read-device:provider-local",
@@ -351,6 +392,8 @@ fn expected_outcomes(
         "admin-service-success" | "iis-supplemental" | "provider-success" => {
             &[("succeeded", "success", "high", "high")]
         }
+        "provider-retry" => &[("succeeded", "success", "high", "high")],
+        "contradictory-evidence" => &[("incomplete", "insufficientEvidence", "low", "low")],
         "privacy-redaction" => &[
             ("succeeded", "success", "high", "high"),
             ("succeeded", "success", "high", "high"),
@@ -375,6 +418,9 @@ fn expected_public_summaries(scenario: &str) -> &'static [&'static str] {
         "admin-service-success" => {
             &["Admin Service request completed with explicit terminal evidence."]
         }
+        "contradictory-evidence" => &[
+            "Provider evidence contains contradictory terminal outcomes for one exact request key.",
+        ],
         "iis-supplemental" => &["Admin Service evidence independently records a terminal success."],
         "incomplete" => {
             &["Admin Service evidence stops before an explicit response or terminal outcome."]
@@ -385,6 +431,7 @@ fn expected_public_summaries(scenario: &str) -> &'static [&'static str] {
         ],
         "provider-authz-denied" => &["Provider authorization was explicitly denied."],
         "provider-query-failure" => &["Provider operation recorded an explicit terminal failure."],
+        "provider-retry" => &["Provider retry completed with explicit terminal recovery evidence."],
         "provider-success" => &["Provider operation completed with explicit terminal evidence."],
         "provider-timeout" => &["Provider evidence stops before an explicit terminal outcome."],
         "rotation-boundary" => &[],
@@ -397,11 +444,13 @@ fn expected_artifact_ids(scenario: &str) -> &'static [&'static str] {
         "admin-service-auth-failure" => &["admin-auth-current"],
         "admin-service-backend-failure" => &["admin-backend-current"],
         "admin-service-success" => &["admin-success-current"],
+        "contradictory-evidence" => &["contradictory-provider-current"],
         "iis-supplemental" => &["admin-iis-current", "iis-supplemental-current"],
         "incomplete" => &["incomplete-admin-current"],
         "privacy-redaction" => &["privacy-admin-current", "privacy-provider-current"],
         "provider-authz-denied" => &["provider-authz-current"],
         "provider-query-failure" => &["provider-query-current"],
+        "provider-retry" => &["provider-retry-current"],
         "provider-success" => &["provider-success-current"],
         "provider-timeout" => &["provider-timeout-current"],
         "rotation-boundary" => &["rotation-01-current", "rotation-02-lo"],
@@ -431,6 +480,14 @@ fn expected_observation_ids(scenario: &str) -> &'static [&'static str] {
             "admin-success-05-respond",
             "admin-success-06-outcome",
         ],
+        "contradictory-evidence" => &[
+            "contradictory-01-receive",
+            "contradictory-02-authorize",
+            "contradictory-03-execute",
+            "contradictory-04-respond",
+            "contradictory-05-success",
+            "contradictory-06-failure",
+        ],
         "iis-supplemental" => &[
             "admin-iis-01-receive",
             "admin-iis-02-route",
@@ -454,6 +511,14 @@ fn expected_observation_ids(scenario: &str) -> &'static [&'static str] {
             "provider-query-02-authorize",
             "provider-query-03-execute",
             "provider-query-04-outcome",
+        ],
+        "provider-retry" => &[
+            "provider-retry-01-receive",
+            "provider-retry-02-authorize",
+            "provider-retry-03-retryable",
+            "provider-retry-04-recovered",
+            "provider-retry-05-respond",
+            "provider-retry-06-outcome",
         ],
         "provider-success" => &[
             "provider-success-01-receive",
@@ -507,6 +572,10 @@ fn expected_artifact_requests(scenario: &str) -> &'static [(&'static str, &'stat
             "server-provider",
             "Capture the bounded Provider source lineage for the exact request key and terminal outcome.",
         )],
+        "contradictory-evidence" => &[(
+            "server-provider",
+            "Capture the bounded Provider source lineage for the exact request key and reconcile contradictory terminal outcomes.",
+        )],
         "rotation-boundary" => &[(
             "server-provider",
             "Capture one bounded complete Provider rotation with known version provenance.",
@@ -524,7 +593,9 @@ fn expected_profile_layers(scenario: &str) -> &'static [&'static str] {
         | "incomplete" => &["adminService"],
         "privacy-redaction" => &["adminService", "provider"],
         "provider-authz-denied"
+        | "contradictory-evidence"
         | "provider-query-failure"
+        | "provider-retry"
         | "provider-success"
         | "provider-timeout"
         | "rotation-boundary" => &["provider"],
@@ -539,11 +610,23 @@ fn known_test_version(value: &str) -> bool {
 }
 
 fn safe_version(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.')
+    if value.is_empty() || value.len() > 64 {
+        return false;
+    }
+    let segments = value.split('.').collect::<Vec<_>>();
+    let digits =
+        |segment: &str| !segment.is_empty() && segment.bytes().all(|byte| byte.is_ascii_digit());
+    match segments.as_slice() {
+        ["IIS", "TEST", suffix] => suffix.len() == 4 && digits(suffix),
+        [major, minor, "UNKNOWN"] => digits(major) && digits(minor),
+        [major, minor, "TEST", suffix] => {
+            digits(major) && digits(minor) && suffix.len() == 4 && digits(suffix)
+        }
+        [major, minor, build, revision] => {
+            digits(major) && digits(minor) && digits(build) && digits(revision)
+        }
+        _ => false,
+    }
 }
 
 fn state_chain(layer: &str) -> Option<&'static [&'static str]> {
@@ -629,7 +712,8 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             continue;
         };
         let host_handle = endpoint["hostHandle"].as_str();
-        if !matches!(layer, "provider" | "adminService")
+        if !safe_endpoint_id(endpoint_id)
+            || !matches!(layer, "provider" | "adminService")
             || endpoint["producerRole"] != "provider"
             || host_handle.is_none_or(|value| !safe_opaque_token(value, "safe:server:", 64))
             || endpoint_layers
@@ -776,16 +860,33 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         match state {
             Some("captured" | "capped" | "parseFailed") => {
                 let relative_path = artifact["relativePath"].as_str();
+                let byte_limit = artifact["collectionLimit"]["byteLimit"].as_u64();
+                let limit_applied = artifact["collectionLimit"]["limitApplied"].as_bool();
+                let bytes_copied = artifact["bytesCopied"].as_u64();
+                let limit_matches_state = match state {
+                    Some("captured") => limit_applied == Some(false),
+                    Some("capped") => {
+                        limit_applied == Some(true)
+                            && bytes_copied.is_some()
+                            && bytes_copied == byte_limit
+                    }
+                    Some("parseFailed") => limit_applied == Some(false),
+                    _ => false,
+                };
                 if relative_path.is_none_or(|value| !safe_segmented_path(value, "evidence/"))
+                    || relative_path
+                        != expected_relative_path(source_id, endpoint_id, &artifact["rotation"])
+                            .as_deref()
                     || relative_path
                         .map(str::to_ascii_lowercase)
                         .is_none_or(|value| !destinations.insert(value))
-                    || artifact["bytesCopied"].as_u64().is_none()
+                    || bytes_copied.is_none()
                     || artifact["encoding"] != "utf-8"
-                    || artifact["collectionLimit"]["byteLimit"].as_u64().is_none()
-                    || artifact["collectionLimit"]["limitApplied"]
-                        .as_bool()
-                        .is_none()
+                    || byte_limit.is_none_or(|limit| limit == 0)
+                    || bytes_copied
+                        .zip(byte_limit)
+                        .is_none_or(|(copied, limit)| copied > limit)
+                    || !limit_matches_state
                     || artifact["rotation"]["fragmentComplete"].as_bool().is_none()
                     || artifact["sourceVersion"]
                         .as_str()
@@ -1125,6 +1226,8 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         let mut observation_ids = Vec::new();
         let mut prior_phase = 0usize;
         let mut cited_terminal = false;
+        let mut terminal_dispositions = BTreeSet::new();
+        let mut phase_dispositions = Vec::new();
         let mut cited_references = BTreeSet::new();
         for observation in observations.into_iter().flatten() {
             if !object_has_only(
@@ -1156,7 +1259,22 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             if let Some(index) = phase_index {
                 prior_phase = index;
             }
-            cited_terminal |= observation["terminal"].as_bool().unwrap_or(false);
+            let terminal = observation["terminal"].as_bool().unwrap_or(false);
+            if terminal && phase != Some("recordOutcome") {
+                failures.push(
+                    "terminal evidence is not bound to the source-specific outcome phase"
+                        .to_owned(),
+                );
+            }
+            if terminal && phase == Some("recordOutcome") {
+                cited_terminal = true;
+                if let Some(disposition) = observation["disposition"].as_str() {
+                    terminal_dispositions.insert(disposition);
+                }
+            }
+            if let (Some(phase), Some(disposition)) = (phase, observation["disposition"].as_str()) {
+                phase_dispositions.push((phase, disposition));
+            }
             if let Some(observation_id) = observation_id {
                 observation_ids.push(observation_id);
                 all_observation_ids.push(observation_id);
@@ -1224,6 +1342,45 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         }
         if transaction["terminalEvidence"].as_bool() != Some(cited_terminal) {
             failures.push("transaction terminality is not citation-derived".to_owned());
+        }
+        let terminal_outcome_matches = match transaction["state"].as_str() {
+            Some("succeeded") => {
+                terminal_dispositions == BTreeSet::from(["succeeded"])
+                    && transaction["classification"] == "success"
+            }
+            Some("failed") => {
+                terminal_dispositions == BTreeSet::from(["failed"])
+                    && transaction["classification"] == "confirmedFailure"
+            }
+            Some("incomplete") if cited_terminal => {
+                terminal_dispositions.len() > 1
+                    && transaction["classification"] == "insufficientEvidence"
+            }
+            Some("incomplete") => {
+                terminal_dispositions.is_empty()
+                    && transaction["classification"] == "insufficientEvidence"
+            }
+            _ => false,
+        };
+        if !terminal_outcome_matches {
+            failures.push(
+                "terminal outcome disposition does not agree with conservative state/classification"
+                    .to_owned(),
+            );
+        }
+        if scenario == "provider-retry" {
+            let retry_sequence = phase_dispositions
+                .iter()
+                .filter_map(|(phase, disposition)| {
+                    (*phase == "executeProviderOperation").then_some(*disposition)
+                })
+                .collect::<Vec<_>>();
+            if retry_sequence != ["retryableFailure", "succeeded"] {
+                failures.push(
+                    "provider retry lacks one explicit retryable failure followed by recovery"
+                        .to_owned(),
+                );
+            }
         }
     }
     let mut sorted_transaction_ids = transaction_ids.clone();
@@ -1388,8 +1545,58 @@ fn schema_failures_with_records(
     expected: &Value,
     records: &BTreeMap<(String, u32, u32), SccmEvidence>,
 ) -> Vec<String> {
-    let _ = records;
-    schema_failures(scenario, manifest, expected)
+    let mut failures = schema_failures(scenario, manifest, expected);
+    failures.extend(uncited_transaction_record_failures(expected, records));
+    failures
+}
+
+fn uncited_transaction_record_failures(
+    expected: &Value,
+    records: &BTreeMap<(String, u32, u32), SccmEvidence>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for transaction in expected["transactions"].as_array().into_iter().flatten() {
+        let layer = transaction["layer"].as_str();
+        let key = &transaction["key"];
+        let cited = transaction["observations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|observation| observation["evidence"].as_array().into_iter().flatten())
+            .filter_map(|reference| {
+                Some((
+                    reference["artifactId"].as_str()?.to_owned(),
+                    u32::try_from(reference["startLine"].as_u64()?).ok()?,
+                    u32::try_from(reference["endLine"].as_u64()?).ok()?,
+                ))
+            })
+            .collect::<BTreeSet<_>>();
+
+        for (record_key, record) in records {
+            let Ok(fields) = parse_fixture_fields(&record.message) else {
+                continue;
+            };
+            let matches_exact_key = [
+                ("RequestId", key["requestId"].as_str()),
+                ("OperationHandle", key["operationHandle"].as_str()),
+                ("EndpointId", key["endpointId"].as_str()),
+                ("Layer", layer),
+                ("ProfileId", key["extractionProfileId"].as_str()),
+            ]
+            .iter()
+            .all(|(field, value)| fields.get(*field).map(String::as_str) == *value);
+            if matches_exact_key && !cited.contains(record_key) {
+                failures.push(format!(
+                    "{}: admitted exact-key logical record {}:{}-{} is uncited",
+                    transaction["transactionId"].as_str().unwrap_or("<invalid>"),
+                    record_key.0,
+                    record_key.1,
+                    record_key.2
+                ));
+            }
+        }
+    }
+    failures
 }
 
 #[test]
@@ -1664,6 +1871,10 @@ fn request_transactions_are_exact_cited_ordered_and_layer_local() {
                     "{scenario}/{transaction_id}: terminality is not citation-derived"
                 ));
             }
+        }
+
+        for failure in uncited_transaction_record_failures(&expected, &records) {
+            failures.push(format!("{scenario}: {failure}"));
         }
 
         if scenario == "rotation-boundary" && !records.is_empty() {
@@ -2214,16 +2425,19 @@ fn relative_path_must_match_declared_source_rotation_and_basename() {
 
 #[test]
 fn unknown_source_version_requires_canonical_public_grammar() {
-    let mut manifest = read_json("rotation-boundary", "manifest.json").unwrap();
+    let manifest = read_json("rotation-boundary", "manifest.json").unwrap();
     let expected = read_json("rotation-boundary", "expected.json").unwrap();
-    for artifact in manifest["artifacts"].as_array_mut().unwrap() {
-        artifact["sourceVersion"] = Value::String("SyntheticCaller".to_owned());
-    }
 
-    assert!(
-        !schema_failures("rotation-boundary", &manifest, &expected).is_empty(),
-        "caller-shaped alphabetic text was exported as unknown source-version provenance"
-    );
+    for unsafe_version in ["SyntheticCaller", "1.2.SYNTHETICCALLER"] {
+        let mut mutated = manifest.clone();
+        for artifact in mutated["artifacts"].as_array_mut().unwrap() {
+            artifact["sourceVersion"] = Value::String(unsafe_version.to_owned());
+        }
+        assert!(
+            !schema_failures("rotation-boundary", &mutated, &expected).is_empty(),
+            "caller-shaped text {unsafe_version} was exported as unknown source-version provenance"
+        );
+    }
 }
 
 #[test]
@@ -2238,6 +2452,19 @@ fn exact_rotation_topology_rejects_an_empty_endpoint() {
     assert!(
         !schema_failures("rotation-boundary", &manifest, &expected).is_empty(),
         "an empty endpoint retained exact topology when no transaction was emitted"
+    );
+}
+
+#[test]
+fn provider_retry_requires_an_explicit_retryable_failure_then_recovery() {
+    let manifest = read_json("provider-retry", "manifest.json").unwrap();
+    let mut expected = read_json("provider-retry", "expected.json").unwrap();
+    expected["transactions"][0]["observations"][2]["disposition"] =
+        Value::String("succeeded".to_owned());
+
+    assert!(
+        !schema_failures("provider-retry", &manifest, &expected).is_empty(),
+        "a nominal success sequence replaced the explicit retryable failure"
     );
 }
 

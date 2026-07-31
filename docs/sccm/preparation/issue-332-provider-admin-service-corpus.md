@@ -2,10 +2,11 @@
 
 ## Status
 
-This slice prepares the source and reducer contracts only. Production
-extraction/reduction waits for reviewed, stable #318 and #335 interfaces. No
-Windows collection, network call, SQL/WMI query, database access, Tauri
-command, or live SCCM acceptance is included.
+This slice prepares the source and reducer contracts only. The reviewed #318
+and #335 prerequisites are now available, but this correction does not expand
+the preparation PR into production extraction/reduction. No Windows
+collection, network call, SQL/WMI query, database access, Tauri command, or
+live SCCM acceptance is included.
 
 ## Source contract
 
@@ -94,6 +95,14 @@ control-bearing versions, blank rewritten artifact identity, arbitrary
 transaction/source-local observation IDs, high confidence over an incomplete
 fragment, arbitrary outcomes, and omitted required bounded requests. The
 closed contract now rejects all seven.
+
+A second pair of independent mutation rounds added nineteen permanent
+regressions. The latest six bind admitted exact-key records to citations,
+terminality to `recordOutcome`, collection-limit application to coverage,
+relative paths to source/endpoint/rotation identity, unknown versions to a
+closed public grammar, and exact topology to a nonempty endpoint. The corpus
+also now contains an explicit same-key retry/recovery scenario and a
+contradictory-terminal scenario that remains incomplete and low-confidence.
 
 ## Explicit limits
 

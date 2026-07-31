@@ -28,7 +28,9 @@ cannot invent a role, endpoint, or installed component.
 | `provider-success` | Provider terminal success | all five Provider phases are line-cited |
 | `provider-authz-denied` | Provider terminal failure | explicit authorization evidence; no caller identity in public output |
 | `provider-query-failure` | Provider terminal failure | operation failure is source-specific; query text is not a key |
+| `provider-retry` | Provider retry then terminal success | one cited retryable operation failure must recover on the same exact key before terminal success |
 | `provider-timeout` | Provider incomplete | invalid offset and no terminal outcome keep confidence low |
+| `contradictory-evidence` | Provider contradictory terminal outcomes | every admitted same-key record is cited; conflicting terminal results stay incomplete and low-confidence |
 | `admin-service-success` | Admin Service terminal success | six-stage Admin Service grammar is independent |
 | `admin-service-auth-failure` | Admin Service terminal failure | explicit authentication failure only |
 | `admin-service-backend-failure` | Admin Service terminal failure | backend evidence does not claim client or console impact |
@@ -45,6 +47,14 @@ cannot invent a role, endpoint, or installed component.
   authorization values, and same-minute timestamps are not key material.
 - High confidence requires a complete captured artifact, usable timestamp
   provenance, explicit terminal evidence, exact topology, and no coverage gap.
+- Terminal evidence is admitted only at the source-specific `recordOutcome`
+  phase. A later exact-key record cannot be omitted from the transaction.
+- `captured` artifacts cannot report an applied collection limit; capped
+  artifacts must report the applied byte limit and cannot support high
+  confidence.
+- Physical relative paths are bound to source ID, endpoint, basename, and
+  rotation kind. Unknown source versions use a closed public version grammar,
+  and exact topology never accepts an empty endpoint.
 - Missing, invalid-offset, unknown-version, partial-rotation, unsupported, and
   supplemental evidence remain coverage or source-local states.
 - Every public transaction observation cites one normalized logical CCM
