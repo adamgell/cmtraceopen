@@ -3483,7 +3483,7 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
     ));
 
     type ShapeMutation = (&'static str, fn(&mut Value), &'static str);
-    let shape_mutations: [ShapeMutation; 12] = [
+    let shape_mutations: [ShapeMutation; 13] = [
         (
             "stateChain object",
             |expected: &mut Value| expected["stateChain"] = serde_json::json!({}),
@@ -3520,6 +3520,14 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
             "counterpartReadyFacts object",
             |expected: &mut Value| {
                 expected["correlationHandoff"]["counterpartReadyFacts"] = serde_json::json!({})
+            },
+            "counterpartReadyFacts must be an array",
+        ),
+        (
+            "counterpartReadyFacts scalar",
+            |expected: &mut Value| {
+                expected["correlationHandoff"]["counterpartReadyFacts"] =
+                    serde_json::json!("no-facts")
             },
             "counterpartReadyFacts must be an array",
         ),
