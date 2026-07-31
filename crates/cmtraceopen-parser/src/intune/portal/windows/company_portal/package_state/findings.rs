@@ -404,8 +404,10 @@ fn push_version_mismatch_findings(
     }
 }
 
-/// Absence is claimed only for apps the caller asked about, and only against a
-/// scope the adapter proved it enumerated completely.
+/// Absence is claimed for Company Portal, which is the subject of this
+/// contract, plus any app the caller supplied a fact for. It is claimed only
+/// against a scope the adapter proved it enumerated completely, and only when
+/// the app has no registration attributed to that scope.
 fn push_absence_findings(
     capture: &PackageStateCapture,
     expected: &[ExpectedPackageFact],
@@ -429,10 +431,24 @@ fn push_absence_findings(
     }
 
     for app in apps {
-        if !capture.rows_for_app(&app).is_empty() {
+        let rows = capture.rows_for_app(&app);
+
+        // A row carrying no scope attribution cannot be placed. Claiming it
+        // absent from a scope it might belong to would over-claim, so this app
+        // stays silent until the adapter attributes every row it returned.
+        if rows.iter().any(|(_, row)| row.scopes.is_empty()) {
             continue;
         }
+
         for scope in &complete_scopes {
+            // Absence is decided per scope, not per app. A registration in one
+            // completely enumerated scope proves nothing about another: an app
+            // present only in currentUser really is absent from allUsers, and
+            // that is a deployment signal worth reporting rather than a reason
+            // to stay quiet.
+            if rows.iter().any(|(_, row)| row.scopes.contains(scope)) {
+                continue;
+            }
             findings.push(PackageStateFinding {
                 id: format!(
                     "package-state/absent/{}/{}",

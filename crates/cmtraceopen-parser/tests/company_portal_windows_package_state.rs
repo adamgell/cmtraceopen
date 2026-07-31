@@ -253,6 +253,102 @@ fn package_state_absence_is_not_claimed_from_a_scope_that_was_never_queried() {
     assert!(absences[0].id.contains("authenticator"));
 }
 
+#[test]
+fn package_state_absence_is_decided_per_scope_not_per_app() {
+    // Company Portal is registered for the current user only, and BOTH scopes
+    // were enumerated completely. It is genuinely absent from allUsers, which
+    // is a real deployment signal. Deciding absence per app rather than per
+    // scope would see one row, conclude "present", and stay silent.
+    let capture = parse(
+        r#"{
+            "schemaVersion": 1,
+            "capture": {
+                "capturedAtUtc": "2026-07-14T09:41:07.1000000Z",
+                "adapterVersion": "cmtraceopen-collector-appx/1",
+                "commandStatus": "completed",
+                "source": "json",
+                "scopeCoverage": [
+                    { "scope": "currentUser", "status": "complete", "detail": null },
+                    { "scope": "allUsers", "status": "complete", "detail": null }
+                ]
+            },
+            "packages": [
+                {
+                    "name": "Microsoft.CompanyPortal",
+                    "familyName": "Microsoft.CompanyPortal_8wekyb3d8bbwe",
+                    "fullName": "Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe",
+                    "version": "11.2.401.0",
+                    "architecture": "x64",
+                    "signatureKind": "store",
+                    "status": "ok",
+                    "installState": "installed",
+                    "scopes": ["currentUser"],
+                    "app": "companyPortal"
+                }
+            ]
+        }"#,
+    );
+
+    let findings = derive_package_state_findings(&capture, &[]);
+    let absences = of_kind(
+        &findings,
+        PackageStateFindingKind::PackageAbsentFromCapturedScope,
+    );
+
+    assert_eq!(
+        absences.len(),
+        1,
+        "the completely enumerated allUsers scope must carry an absence claim"
+    );
+    assert_eq!(absences[0].evidence[0].scope, Some(PackageScope::AllUsers));
+    assert!(absences[0].id.contains("companyPortal"));
+}
+
+#[test]
+fn package_state_absence_stays_silent_when_a_row_carries_no_scope_attribution() {
+    // The adapter returned a row it could not attribute to a scope. Claiming
+    // the app absent from allUsers would over-claim, because the unattributed
+    // row might be exactly that registration.
+    let capture = parse(
+        r#"{
+            "schemaVersion": 1,
+            "capture": {
+                "capturedAtUtc": "2026-07-14T09:41:07.1000000Z",
+                "adapterVersion": "cmtraceopen-collector-appx/1",
+                "commandStatus": "completed",
+                "source": "json",
+                "scopeCoverage": [
+                    { "scope": "allUsers", "status": "complete", "detail": null }
+                ]
+            },
+            "packages": [
+                {
+                    "name": "Microsoft.CompanyPortal",
+                    "familyName": "Microsoft.CompanyPortal_8wekyb3d8bbwe",
+                    "fullName": "Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe",
+                    "version": "11.2.401.0",
+                    "architecture": "x64",
+                    "signatureKind": "store",
+                    "status": "ok",
+                    "installState": "installed",
+                    "scopes": [],
+                    "app": "companyPortal"
+                }
+            ]
+        }"#,
+    );
+
+    let findings = derive_package_state_findings(&capture, &[]);
+    assert!(
+        of_kind(
+            &findings,
+            PackageStateFindingKind::PackageAbsentFromCapturedScope,
+        )
+        .is_empty(),
+        "an unattributed row must not produce an absence claim"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fixture 4: per-user registration without a raw username
 // ---------------------------------------------------------------------------
