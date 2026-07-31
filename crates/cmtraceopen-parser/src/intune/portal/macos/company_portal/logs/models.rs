@@ -250,9 +250,11 @@ pub struct PortalCoverageNote {
 /// physical line is then either inside a record or counted as blank. For any
 /// other detected kind the artifact is rejected before framing, so
 /// `covered_lines` is `0` while `total_lines` still reports the real physical
-/// line count, and the file is represented by a single `UnsupportedSourceKind`
-/// note rather than per-line accounting. Framing text this module does not own
-/// would be a worse answer than declining it.
+/// line count, and the file is represented by an `UnsupportedSourceKind` note
+/// rather than per-line accounting. Framing text this module does not own would
+/// be a worse answer than declining it. A rejected artifact may carry further
+/// notes recorded before detection ran, such as `EmptyInput` or
+/// `EncodingFallback`, so consumers should not assume a single note.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortalCoverage {

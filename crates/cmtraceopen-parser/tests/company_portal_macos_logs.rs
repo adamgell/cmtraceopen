@@ -717,6 +717,16 @@ fn empty_and_blank_input_is_reported_not_guessed() {
     assert!(empty.records.is_empty());
     assert!(has_note(&empty, PortalCoverageKind::EmptyInput));
     assert_eq!(empty.detection.source_kind, PortalSourceKind::Unrecognized);
+
+    // A rejected artifact accumulates coverage notes rather than replacing them:
+    // the empty-input note recorded before detection survives alongside the
+    // rejection note. Consumers must not assume exactly one note.
+    assert!(has_note(&empty, PortalCoverageKind::UnsupportedSourceKind));
+    assert!(
+        empty.coverage.notes.len() >= 2,
+        "expected both EmptyInput and UnsupportedSourceKind, got {:?}",
+        empty.coverage.notes
+    );
 }
 
 #[test]

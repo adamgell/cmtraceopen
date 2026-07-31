@@ -46,8 +46,10 @@ struct PendingRecord {
 ///
 /// Records are produced only when detection confirms the artifact is a direct
 /// Company Portal app log. For any other source kind the result carries the
-/// detection verdict and a single `UnsupportedSourceKind` coverage note, and no
-/// records are invented.
+/// detection verdict and an `UnsupportedSourceKind` coverage note, and no
+/// records are invented. That note is added to whatever coverage was already
+/// recorded, so a rejected artifact can also carry `EmptyInput` or, via
+/// [`parse_company_portal_macos_log_bytes`], `EncodingFallback`.
 pub fn parse_company_portal_macos_log(text: &str, source: &PortalLogSource) -> PortalLogParse {
     parse_with_notes(text, source, Vec::new())
 }
