@@ -246,7 +246,12 @@ impl CaptureSetBuilder {
         };
 
         let schema_id = str_field(&header, "schemaId");
-        let schema_version = u64_field(&header, "schemaVersion").map(|v| v as u32);
+        // `as u32` truncates: a declared `schemaVersion` of 4294967297 wraps to
+        // 1, passes the supported-version check, and an unknown schema is then
+        // parsed as if it were v1. A value that does not fit is not version 1,
+        // it is a version this build does not support, so it must stay `None`
+        // and fall through to the unsupported path.
+        let schema_version = u64_field(&header, "schemaVersion").and_then(|v| u32::try_from(v).ok());
 
         match schema_id.as_deref() {
             Some(id) if id == PORTAL_UNIFIED_LOG_SCHEMA_ID => {}
@@ -458,7 +463,10 @@ fn build_capture(header: &Map<String, Value>, version: u32) -> PortalUnifiedLogC
                 predicate_id: str_field(p, "predicateId"),
                 matches_known_preset: is_known_capture_predicate(&text),
                 predicate_text: text,
-                predicate_version: u64_field(p, "predicateVersion").map(|v| v as u32),
+                // Not `as u32`: silently wrapping an out-of-range version would
+                // report a predicate version the capture never declared.
+                predicate_version: u64_field(p, "predicateVersion")
+                    .and_then(|v| u32::try_from(v).ok()),
             }
         }
         _ => PortalCapturePredicate {
@@ -614,9 +622,10 @@ fn build_record(obj: &Map<String, Value>, stream_index: u64) -> PortalUnifiedLog
         event_message: PortalClassifiedString::sensitive(
             str_field(obj, "eventMessage").unwrap_or_default(),
         ),
+        // Not `as u32`: a wrapped pid would silently name a different process.
         process_id: u64_field(obj, "processID")
             .or_else(|| u64_field(obj, "processId"))
-            .map(|v| v as u32),
+            .and_then(|v| u32::try_from(v).ok()),
         thread_id: u64_field(obj, "threadID").or_else(|| u64_field(obj, "threadId")),
         activity: PortalActivityIds {
             activity_id: str_field(obj, "activityIdentifier"),

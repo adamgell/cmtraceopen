@@ -52,7 +52,13 @@ const PATH: &str = "[redacted:path]";
 const HOST: &str = "[redacted:host]";
 
 /// A value separator: `=`, `:`, or whitespace after a label.
-const LABEL_SEPARATOR: &str = r"(\s*[:=]\s*|\s+)";
+///
+/// The optional closing quote matters. A malformed NDJSON line is kept verbatim
+/// as a coverage excerpt and redacted by these patterns alone, and in JSON the
+/// label arrives as `"serialNumber":"C02..."`. Without tolerating the quote
+/// between the label and the separator, every label-scoped rule failed to match
+/// exactly the input that needs them most.
+const LABEL_SEPARATOR: &str = r#"(["']?\s*[:=]\s*|\s+)"#;
 /// A quoted or bare value, stopping at the usual delimiters.
 const LABEL_VALUE: &str = r#"(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;"']+)"#;
 
@@ -75,6 +81,46 @@ fn labeled_secret_pattern() -> &'static Regex {
         &format!(
             r#"(?i)\b(access[_-]?token|refresh[_-]?token|id[_-]?token|bearer[_-]?token|auth[_-]?token|client[_-]?secret|api[_-]?key|apikey|authorization|password|passwd|pwd|secret|token){LABEL_SEPARATOR}{LABEL_VALUE}"#
         ),
+    )
+}
+
+/// `Authorization: Bearer <opaque>` and friends.
+///
+/// `labeled_secret_pattern` alone stops its value at the first whitespace, so on
+/// `Authorization: Bearer abc123...` it redacts the scheme word `Bearer` and
+/// leaves the credential in plaintext. A JWT is already caught by shape, but an
+/// opaque bearer or a Basic blob is not. This runs first and takes the
+/// credential that follows the scheme.
+fn auth_scheme_credential_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    compiled(
+        &CELL,
+        r"(?i)\b(Bearer|Basic|Digest|Negotiate|NTLM)\s+([A-Za-z0-9._~+/=-]{8,})",
+    )
+}
+
+/// Dotted-quad IPv4, each octet bounded to 0-255 so version strings do not match.
+fn ipv4_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    compiled(
+        &CELL,
+        r"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b",
+    )
+}
+
+/// Six colon- or dash-separated hex pairs. Runs before the IPv6 matcher, which
+/// needs eight groups or a `::` run and so cannot claim a MAC.
+fn mac_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    compiled(&CELL, r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
+}
+
+/// Fully expanded eight-group IPv6 or any `::`-compressed form.
+fn ipv6_address_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    compiled(
+        &CELL,
+        r"(?i)\b(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)\b",
     )
 }
 
@@ -125,7 +171,10 @@ fn certificate_subject_pattern() -> &'static Regex {
 
 fn email_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    compiled(&CELL, r"(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b")
+    // Unicode-aware. An ASCII-only class does not truncate a non-ASCII identity,
+    // it misses it entirely: with an accented leading character there is no word
+    // boundary for the leading `\b` to anchor on, so the whole address survives.
+    compiled(&CELL, r"(?i)[\w.%+\-]+@[\w.\-]+\.\w{2,}")
 }
 
 fn guid_pattern() -> &'static Regex {
@@ -143,16 +192,27 @@ fn guid_pattern() -> &'static Regex {
 /// by a broader pattern first.
 pub fn redact_text(input: &str) -> String {
     let step1 = jwt_pattern().replace_all(input, TOKEN);
-    let step2 = labeled_secret_pattern().replace_all(&step1, format!("${{1}}${{2}}{TOKEN}"));
-    let step3 =
-        labeled_certificate_pattern().replace_all(&step2, format!("${{1}}${{2}}{CERTIFICATE}"));
-    let step4 = labeled_serial_pattern().replace_all(&step3, format!("${{1}}${{2}}{SERIAL}"));
-    let step5 = labeled_identifier_pattern().replace_all(&step4, format!("${{1}}${{2}}{GUID}"));
-    let step6 = url_pattern().replace_all(&step5, URL);
-    let step7 = user_path_pattern().replace_all(&step6, PATH);
-    let step8 = certificate_subject_pattern().replace_all(&step7, CERTIFICATE);
-    let step9 = email_pattern().replace_all(&step8, IDENTITY);
-    guid_pattern().replace_all(&step9, GUID).into_owned()
+    // Before the generic labelled rule, whose value stops at the first space and
+    // would otherwise redact only the scheme word.
+    let step2 = auth_scheme_credential_pattern().replace_all(&step1, format!("${{1}} {TOKEN}"));
+    let step3 = labeled_secret_pattern().replace_all(&step2, format!("${{1}}${{2}}{TOKEN}"));
+    let step4 =
+        labeled_certificate_pattern().replace_all(&step3, format!("${{1}}${{2}}{CERTIFICATE}"));
+    let step5 = labeled_serial_pattern().replace_all(&step4, format!("${{1}}${{2}}{SERIAL}"));
+    let step6 = labeled_identifier_pattern().replace_all(&step5, format!("${{1}}${{2}}{GUID}"));
+    let step7 = url_pattern().replace_all(&step6, URL);
+    let step8 = user_path_pattern().replace_all(&step7, PATH);
+    let step9 = certificate_subject_pattern().replace_all(&step8, CERTIFICATE);
+    let step10 = email_pattern().replace_all(&step9, IDENTITY);
+    let step11 = guid_pattern().replace_all(&step10, GUID);
+    // Network addresses last, after URLs have already taken any embedded host.
+    // IPv4 before IPv6 so an IPv4-mapped IPv6 cannot leak its dotted tail, and
+    // MAC between the two so it is not mistaken for a compressed IPv6 run.
+    let step12 = ipv4_address_pattern().replace_all(&step11, HOST);
+    let step13 = mac_address_pattern().replace_all(&step12, HOST);
+    ipv6_address_pattern()
+        .replace_all(&step13, HOST)
+        .into_owned()
 }
 
 fn redact_classified(value: &PortalClassifiedString) -> PortalClassifiedString {

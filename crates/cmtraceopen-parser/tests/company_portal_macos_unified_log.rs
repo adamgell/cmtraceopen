@@ -1085,3 +1085,101 @@ fn selection_and_category_tables_are_conservative() {
         ["CompanyPortal", "IntuneMdmAgent", "IntuneMdmDaemon"]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Redaction and ingest hardening (PR #390 review)
+// ---------------------------------------------------------------------------
+
+/// An ASCII-only email class does not truncate a non-ASCII identity, it misses
+/// it entirely: with an accented leading character the leading word boundary
+/// never anchors, so the whole address survives into the export.
+#[test]
+fn non_ascii_identities_are_redacted() {
+    let redacted = redact_text("signed in as jos\u{e9}.garc\u{ed}a@contoso.example");
+    assert!(!redacted.contains("garc"), "non-ASCII identity leaked: {redacted}");
+    assert!(!redacted.contains("contoso.example"));
+}
+
+/// A malformed NDJSON line is kept verbatim as a coverage excerpt and redacted
+/// by the label-scoped patterns alone. In JSON the label arrives quoted, so a
+/// separator that did not tolerate the quote never matched the input that most
+/// needs it.
+#[test]
+fn json_shaped_labels_are_redacted() {
+    let json = r#"{"process":"CompanyPortal","serialNumber":"C02XG2QQMD6M","access_token":"opaqueSessionValue123","tenantId":"4b2f9d61-1c53-4c58-8f1a-b0d3e1b5aa77"}"#;
+    let redacted = redact_text(json);
+
+    assert!(!redacted.contains("C02XG2QQMD6M"), "serial leaked: {redacted}");
+    assert!(
+        !redacted.contains("opaqueSessionValue123"),
+        "token leaked: {redacted}"
+    );
+    assert!(
+        !redacted.contains("4b2f9d61-1c53-4c58-8f1a-b0d3e1b5aa77"),
+        "tenant id leaked: {redacted}"
+    );
+    // The structural key names are evidence and must survive.
+    assert!(redacted.contains("serialNumber"));
+    assert!(redacted.contains("CompanyPortal"));
+}
+
+/// The generic labelled rule stops its value at the first space, so on
+/// `Authorization: Bearer <opaque>` it redacted the scheme word and left the
+/// credential. A JWT is caught by shape; an opaque bearer or Basic blob is not.
+#[test]
+fn opaque_authorization_credentials_are_redacted() {
+    for header in [
+        "Authorization: Bearer abcOpaqueSessionToken1234567890",
+        "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+        "authorization: Negotiate YIIZgAYGKwYBBQUCoIIZ",
+    ] {
+        let redacted = redact_text(header);
+        assert!(
+            !redacted.contains("abcOpaqueSessionToken1234567890")
+                && !redacted.contains("dXNlcjpwYXNzd29yZA==")
+                && !redacted.contains("YIIZgAYGKwYBBQUCoIIZ"),
+            "credential leaked from {header:?}: {redacted}"
+        );
+    }
+}
+
+/// Unified-log evidence carries a `NetworkRequest` kind, so bare addresses are
+/// plausible in `eventMessage`. The ESP redactor already enforces this.
+#[test]
+fn network_addresses_are_redacted() {
+    let redacted = redact_text(
+        "endpoint 203.0.113.47 via proxy 198.51.100.9:8080, nic 3c:22:fb:a1:9d:4e, v6 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+    );
+    for secret in [
+        "203.0.113.47",
+        "198.51.100.9",
+        "3c:22:fb:a1:9d:4e",
+        "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+    ] {
+        assert!(!redacted.contains(secret), "{secret} leaked: {redacted}");
+    }
+}
+
+/// Address matchers must not eat evidence that merely looks address-shaped.
+#[test]
+fn network_redaction_does_not_swallow_versions() {
+    let redacted = redact_text("Company Portal 5.2504.0 on macOS 15.4.1 build 2504.12");
+    assert!(redacted.contains("5.2504.0"));
+    assert!(redacted.contains("15.4.1"));
+}
+
+/// `as u32` wraps: a declared `schemaVersion` of 4294967297 truncates to 1 and
+/// would be parsed as if it were the supported schema.
+#[test]
+fn out_of_range_schema_version_is_unsupported_not_wrapped() {
+    let header = r#"{"schemaId":"cmtraceopen.intune.portal.macos.company-portal.unified-log","schemaVersion":4294967297}"#;
+    let capture = parse_capture_ndjson(&format!("{header}\n"));
+    assert!(
+        !capture.supported,
+        "an out-of-range schema version must not be accepted as v1"
+    );
+    // The guard does not over-reject: a genuine v1 capture is still supported,
+    // which `supported_records_parse_identically_from_ndjson_and_json` asserts
+    // against the real fixture rather than a header with no records.
+    assert!(parse_capture_ndjson(SUPPORTED_NDJSON).supported);
+}
