@@ -144,4 +144,64 @@ mod tests {
             item.source_pattern
         );
     }
+
+    #[test]
+    fn embedded_profile_appx_item_emits_versioned_json_capture() {
+        // Contract guard for issue #367: the Company Portal / Authenticator AppX
+        // adapter must emit the versioned JSON capture schema consumed by
+        // intune::portal::windows::company_portal::package_state. Format-List is a
+        // display rendering whose labels, order, and wrapping vary by locale and
+        // host version, so it must never be the canonical capture format.
+        let profile = CollectionProfile::embedded();
+        let item = profile
+            .commands
+            .iter()
+            .find(|i| i.id == "appx-info")
+            .expect("profile must contain the AppX package-state adapter");
+
+        assert_eq!(item.file_name, "appx-intune-packages.json");
+
+        let command = item.arguments.join(" ");
+        assert!(
+            command.contains("ConvertTo-Json"),
+            "adapter must serialize with ConvertTo-Json: {command}"
+        );
+        assert!(
+            !command.contains("Format-List"),
+            "adapter must not emit display-formatted text: {command}"
+        );
+        for required in [
+            "schemaVersion",
+            "capturedAtUtc",
+            "commandStatus",
+            "scopeCoverage",
+            "accessDenied",
+            "-Compress",
+            // Pin the depth, not just the flag. A lower value would silently
+            // truncate capture.scopeCoverage[] and packages[].installLocation.
+            "-Depth 6",
+        ] {
+            assert!(
+                command.contains(required),
+                "adapter command is missing {required}: {command}"
+            );
+        }
+        assert!(
+            command.contains("try {") && command.contains("catch {"),
+            "adapter must wrap the query so a denied -AllUsers scope is reported \
+             rather than returning an empty success: {command}"
+        );
+        assert!(
+            command.is_ascii(),
+            "adapter command must be ASCII; PowerShell 5.1 mis-parses non-ASCII literals"
+        );
+        // Every other JSON-emitting command in this profile carries a "json"
+        // hint, and the evidence-bundle dialog searches on it. Omitting it here
+        // would leave this artifact undiscoverable by that search.
+        assert!(
+            item.parse_hints.iter().any(|hint| hint == "json"),
+            "JSON-emitting adapters must declare a json parse hint: {:?}",
+            item.parse_hints
+        );
+    }
 }

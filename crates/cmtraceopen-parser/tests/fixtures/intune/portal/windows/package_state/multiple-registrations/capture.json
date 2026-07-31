@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "capture": {
+    "capturedAtUtc": "2026-07-14T09:31:15.4400000Z",
+    "adapterVersion": "cmtraceopen-collector-appx/1",
+    "commandStatus": "completed",
+    "windowsBuild": "10.0.26100.0",
+    "powerShellVersion": "5.1.26100.2161",
+    "locale": "en-US",
+    "source": "json",
+    "scopeCoverage": [
+      { "scope": "allUsers", "status": "complete", "detail": null }
+    ],
+    "error": null
+  },
+  "packages": [
+    {
+      "name": "Microsoft.CompanyPortal",
+      "familyName": "Microsoft.CompanyPortal_8wekyb3d8bbwe",
+      "fullName": "Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe",
+      "version": "11.2.401.0",
+      "architecture": "x64",
+      "publisher": "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+      "signatureKind": "store",
+      "status": "ok",
+      "installState": "installed",
+      "scopes": ["allUsers"],
+      "userRegistrationCount": 1,
+      "installLocation": {
+        "value": "C:\\Program Files\\WindowsApps\\Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe",
+        "sensitivity": "sensitive"
+      },
+      "app": "companyPortal"
+    },
+    {
+      "name": "Microsoft.CompanyPortal",
+      "familyName": "Microsoft.CompanyPortal_8wekyb3d8bbwe",
+      "fullName": "Microsoft.CompanyPortal_11.1.317.0_x64__8wekyb3d8bbwe",
+      "version": "11.1.317.0",
+      "architecture": "x64",
+      "publisher": "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+      "signatureKind": "store",
+      "status": "ok",
+      "installState": "staged",
+      "scopes": ["provisioned"],
+      "userRegistrationCount": 0,
+      "installLocation": {
+        "value": "C:\\Program Files\\WindowsApps\\Microsoft.CompanyPortal_11.1.317.0_x64__8wekyb3d8bbwe",
+        "sensitivity": "sensitive"
+      },
+      "app": "companyPortal"
+    }
+  ]
+}

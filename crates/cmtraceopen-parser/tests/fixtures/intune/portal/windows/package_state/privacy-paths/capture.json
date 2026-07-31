@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "capture": {
+    "capturedAtUtc": "2026-07-14T09:41:07.1000000Z",
+    "adapterVersion": "cmtraceopen-collector-appx/1",
+    "commandStatus": "completed",
+    "windowsBuild": "10.0.26100.0",
+    "powerShellVersion": "5.1.26100.2161",
+    "locale": "en-US",
+    "source": "json",
+    "scopeCoverage": [
+      { "scope": "allUsers", "status": "complete", "detail": null }
+    ],
+    "error": {
+      "code": "AppxPackagingFailure",
+      "message": "Failed reading manifest under C:\\Users\\jrivera\\AppData\\Local\\Packages for CONTOSO\\jrivera."
+    }
+  },
+  "packages": [
+    {
+      "name": "Microsoft.CompanyPortal",
+      "familyName": "Microsoft.CompanyPortal_8wekyb3d8bbwe",
+      "fullName": "Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe",
+      "version": "11.2.401.0",
+      "architecture": "x64",
+      "publisher": "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+      "signatureKind": "store",
+      "status": "ok",
+      "installState": "installed",
+      "scopes": ["currentUser"],
+      "userRegistrationCount": 1,
+      "userIdentifier": {
+        "value": "CONTOSO\\jrivera",
+        "sensitivity": "restricted"
+      },
+      "installLocation": {
+        "value": "C:\\Users\\jrivera\\AppData\\Local\\Packages\\Microsoft.CompanyPortal_8wekyb3d8bbwe",
+        "sensitivity": "sensitive"
+      },
+      "app": "companyPortal",
+      "profileRoot": "C:\\Users\\jrivera",
+      "packageRoot": "C:\\Program Files\\WindowsApps"
+    },
+    {
+      "name": "Microsoft.AAD.BrokerPlugin.Authenticator",
+      "familyName": "Microsoft.AAD.BrokerPlugin.Authenticator_8wekyb3d8bbwe",
+      "fullName": "Microsoft.AAD.BrokerPlugin.Authenticator_6.2408.1_neutral__8wekyb3d8bbwe",
+      "version": "6.2408.1",
+      "architecture": "neutral",
+      "publisher": "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+      "signatureKind": "system",
+      "status": "ok",
+      "installState": "installed",
+      "scopes": ["currentUser"],
+      "userRegistrationCount": 1,
+      "userIdentifier": {
+        "value": "CONTOSO\\amorel",
+        "sensitivity": "restricted"
+      },
+      "installLocation": {
+        "value": "C:\\Users\\amorel\\AppData\\Local\\Packages\\Microsoft.AAD.BrokerPlugin.Authenticator_8wekyb3d8bbwe",
+        "sensitivity": "sensitive"
+      },
+      "app": "authenticator"
+    }
+  ]
+}
