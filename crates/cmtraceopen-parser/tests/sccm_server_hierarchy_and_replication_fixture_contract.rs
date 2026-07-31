@@ -2633,3 +2633,184 @@ fn hierarchy_review_4826191775_mutations_fail_closed() {
         "review 4826191775 mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn hierarchy_review_4826454819_mutations_fail_closed() {
+    let healthy_manifest =
+        read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let healthy_expected =
+        read_json("healthy-link", "expected.json").expect("healthy expected loads");
+    let incomplete_manifest =
+        read_json("incomplete", "manifest.json").expect("incomplete manifest loads");
+    let incomplete_expected =
+        read_json("incomplete", "expected.json").expect("incomplete expected loads");
+    let absent_manifest =
+        read_json("absent-remote-source", "manifest.json").expect("absent manifest loads");
+    let absent_expected =
+        read_json("absent-remote-source", "expected.json").expect("absent expected loads");
+
+    let mut accepted = Vec::new();
+    let mut audit = |label: &'static str, scenario: &str, manifest: &Value, expected: &Value| {
+        if identity_and_schema_failures(scenario, manifest, expected).is_empty() {
+            accepted.push(label);
+        }
+    };
+    let mut candidate_acceptances = Vec::new();
+
+    let mut capped_terminal_manifest = healthy_manifest.clone();
+    capped_terminal_manifest["artifacts"][3]["captureState"] = serde_json::json!("capped");
+    let mut capped_terminal_expected = healthy_expected.clone();
+    capped_terminal_expected["coverage"][3]["state"] = serde_json::json!("capped");
+    audit(
+        "high transaction cited capped terminal evidence without a gap",
+        "healthy-link",
+        &capped_terminal_manifest,
+        &capped_terminal_expected,
+    );
+
+    let mut denied_terminal_manifest = healthy_manifest.clone();
+    denied_terminal_manifest["artifacts"][3]["captureState"] = serde_json::json!("accessDenied");
+    let denied_terminal_artifact = denied_terminal_manifest["artifacts"][3]
+        .as_object_mut()
+        .expect("terminal artifact is mutable");
+    for physical_field in ["relativePath", "bytesCopied", "encoding", "collectionLimit"] {
+        denied_terminal_artifact.remove(physical_field);
+    }
+    denied_terminal_artifact["rotation"]
+        .as_object_mut()
+        .expect("terminal rotation is mutable")
+        .remove("fragmentComplete");
+    let mut denied_terminal_expected = healthy_expected.clone();
+    denied_terminal_expected["coverage"][3]["state"] = serde_json::json!("accessDenied");
+    audit(
+        "high transaction cited access-denied terminal evidence without a gap",
+        "healthy-link",
+        &denied_terminal_manifest,
+        &denied_terminal_expected,
+    );
+
+    let mut partial_terminal_manifest = healthy_manifest.clone();
+    partial_terminal_manifest["artifacts"][3]["rotation"]["fragmentComplete"] =
+        serde_json::json!(false);
+    audit(
+        "high transaction cited an incomplete terminal fragment without a gap",
+        "healthy-link",
+        &partial_terminal_manifest,
+        &healthy_expected,
+    );
+
+    let mut relabeled_failure = healthy_expected.clone();
+    let terminal_observation = &mut relabeled_failure["transactions"][0]["observations"][6];
+    terminal_observation["disposition"] = serde_json::json!("failed");
+    terminal_observation["evidence"] = serde_json::json!([{
+        "artifactId": "healthy-02-sender",
+        "startLine": 1,
+        "endLine": 1
+    }]);
+    relabeled_failure["transactions"][0]["state"] = serde_json::json!("failed");
+    relabeled_failure["transactions"][0]["classification"] = serde_json::json!("confirmedFailure");
+    audit(
+        "successful evidence was relabeled and recited as a confirmed failure",
+        "healthy-link",
+        &healthy_manifest,
+        &relabeled_failure,
+    );
+
+    let mut sender_moved_to_target = healthy_manifest.clone();
+    sender_moved_to_target["artifacts"][1]["direction"] = serde_json::json!("target");
+    sender_moved_to_target["artifacts"][1]["producerHostHandle"] =
+        healthy_manifest["topology"]["targetHostHandle"].clone();
+    audit(
+        "origin sender evidence moved to the target direction",
+        "healthy-link",
+        &sender_moved_to_target,
+        &healthy_expected,
+    );
+
+    let mut sender_wrong_source = healthy_manifest.clone();
+    sender_wrong_source["artifacts"][1]["sourceId"] = serde_json::json!("server-hierarchy-control");
+    audit(
+        "sender evidence was relabeled as a control source",
+        "healthy-link",
+        &sender_wrong_source,
+        &healthy_expected,
+    );
+
+    let mut sender_wrong_basename = healthy_manifest.clone();
+    sender_wrong_basename["artifacts"][1]["originalBasename"] = serde_json::json!("despool.log");
+    audit(
+        "origin sender evidence was relabeled with a target-only basename",
+        "healthy-link",
+        &sender_wrong_basename,
+        &healthy_expected,
+    );
+
+    let mut out_of_profile_sender = healthy_manifest.clone();
+    out_of_profile_sender["artifacts"][1]["sourceVersion"] = serde_json::json!("5.00.TEST.9999");
+    if hierarchy_candidate_groups(
+        "healthy-link",
+        out_of_profile_sender["artifacts"]
+            .as_array()
+            .expect("artifacts are an array"),
+    )
+    .expect("candidate projection remains deterministic")
+    .iter()
+    .flat_map(|group| &group.facts)
+    .any(|fact| fact.artifact_id == "healthy-02-sender")
+    {
+        candidate_acceptances.push("out-of-profile sender entered an exact candidate");
+    }
+
+    let mut partial_sender = healthy_manifest.clone();
+    partial_sender["artifacts"][1]["rotation"]["fragmentComplete"] = serde_json::json!(false);
+    if hierarchy_candidate_groups(
+        "healthy-link",
+        partial_sender["artifacts"]
+            .as_array()
+            .expect("artifacts are an array"),
+    )
+    .expect("candidate projection remains deterministic")
+    .iter()
+    .flat_map(|group| &group.facts)
+    .any(|fact| fact.artifact_id == "healthy-02-sender")
+    {
+        candidate_acceptances.push("incomplete sender fragment entered an exact candidate");
+    }
+
+    let mut escalated_source_local = incomplete_expected.clone();
+    escalated_source_local["sourceLocalObservations"][0]["confidence"] = serde_json::json!("high");
+    escalated_source_local["sourceLocalObservations"][0]["correlationEligible"] =
+        serde_json::json!(true);
+    audit(
+        "capped source-local evidence became high and correlation eligible",
+        "incomplete",
+        &incomplete_manifest,
+        &escalated_source_local,
+    );
+
+    let mut missing_required_request = absent_expected.clone();
+    missing_required_request["artifactRequests"] = serde_json::json!([]);
+    audit(
+        "required absent-coverage request was deleted",
+        "absent-remote-source",
+        &absent_manifest,
+        &missing_required_request,
+    );
+
+    let mut production_labeled_fixture = healthy_manifest.clone();
+    production_labeled_fixture["proposalOnly"] = serde_json::json!(false);
+    production_labeled_fixture["syntheticFixture"] = serde_json::json!(false);
+    audit(
+        "synthetic proposal fixture was relabeled as production evidence",
+        "healthy-link",
+        &production_labeled_fixture,
+        &healthy_expected,
+    );
+    drop(audit);
+    accepted.extend(candidate_acceptances);
+
+    assert!(
+        accepted.is_empty(),
+        "review 4826454819 mutations were accepted: {accepted:?}"
+    );
+}
