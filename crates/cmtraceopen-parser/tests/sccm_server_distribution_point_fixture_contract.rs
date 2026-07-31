@@ -32,6 +32,8 @@ const STATE_CHAIN: &[&str] = &[
 const EXACT_PROFILE: &str = "dp-server-5.00.test-v1";
 const EXACT_SITE: &str = "LAB";
 const EXACT_DP: &str = "safe:dp:lab-dp-01";
+const EXACT_SITE_SERVER: &str = "safe:server:lab-pri-01";
+const EXACT_CLIENT: &str = "safe:client:lab-client-01";
 
 fn corpus_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -466,11 +468,19 @@ fn validate_manifest(
                 "{artifact_id} loses the distribution-point workflow subject"
             ));
         }
-        if !artifact["producerHostHandle"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("safe:"))
-        {
-            failures.push(format!("{artifact_id} lacks an opaque producer handle"));
+        let producer_host_handle = artifact["producerHostHandle"].as_str();
+        let producer_matches_role = match role {
+            "siteServer" => producer_host_handle == Some(EXACT_SITE_SERVER),
+            "client" => producer_host_handle == Some(EXACT_CLIENT),
+            "distributionPoint" => {
+                producer_host_handle.is_some_and(|value| distribution_point_handles.contains(value))
+            }
+            _ => false,
+        };
+        if !producer_matches_role {
+            failures.push(format!(
+                "{artifact_id} producer handle is not in the exact role-specific namespace"
+            ));
         }
         if role == "distributionPoint"
             && (workflow_subject_handle.is_none()
@@ -703,6 +713,7 @@ fn validate_manifest(
         } else if artifact.get("relativePath").is_some()
             || artifact.get("bytesCopied").is_some()
             || artifact.get("encoding").is_some()
+            || artifact.get("collectionLimit").is_some()
             || artifact["rotation"].get("fragmentComplete").is_some()
         {
             failures.push(format!(
@@ -1636,6 +1647,19 @@ fn coverage_role_and_rotation_states_fail_closed() {
     role_alias_manifest["artifacts"][0]["producerRole"] = json!("distributionPoint");
     if mutation_was_accepted("absent-dp", &role_alias_manifest, &absent_expected) {
         accepted.push("basename reclassified the site-server producer as a DP");
+    }
+
+    let mut host_alias_manifest = absent_manifest.clone();
+    host_alias_manifest["artifacts"][0]["producerHostHandle"] = json!(EXACT_DP);
+    if mutation_was_accepted("absent-dp", &host_alias_manifest, &absent_expected) {
+        accepted.push("site-server producer host collapsed onto its DP workflow subject");
+    }
+
+    let mut nonphysical_limit_manifest = absent_manifest.clone();
+    nonphysical_limit_manifest["artifacts"][0]["collectionLimit"] =
+        json!({"byteLimit": 4096, "limitApplied": false});
+    if mutation_was_accepted("absent-dp", &nonphysical_limit_manifest, &absent_expected) {
+        accepted.push("absent artifact invented a physical collection-limit policy");
     }
 
     let rotation_manifest =
