@@ -1,6 +1,4 @@
-use cmtraceopen_parser::sccm::server::windows::{
-    assess_server_intake, SccmServerArtifactPayload,
-};
+use cmtraceopen_parser::sccm::server::windows::{assess_server_intake, SccmServerArtifactPayload};
 use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
