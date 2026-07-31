@@ -27,11 +27,25 @@ pub enum AppError {
 
     #[error("{0}")]
     Internal(String),
+
+    /// A source failure the frontend is allowed to branch on structurally.
+    ///
+    /// Unlike every other variant this crosses the IPC boundary as an object
+    /// rather than a string, so the elevation recovery prompt can key off a
+    /// stable classification instead of matching localized OS text.
+    #[error("{0}")]
+    SourceAccess(#[from] crate::source_access::SourceAccessError),
 }
 
 impl From<AppError> for tauri::ipc::InvokeError {
     fn from(err: AppError) -> Self {
-        tauri::ipc::InvokeError::from(err.to_string())
+        match err {
+            // Tauri's blanket `impl<T: Serialize> From<T> for InvokeError`
+            // turns this into structured JSON. Everything else keeps the
+            // string form every existing frontend consumer already expects.
+            AppError::SourceAccess(detail) => tauri::ipc::InvokeError::from(detail),
+            other => tauri::ipc::InvokeError::from(other.to_string()),
+        }
     }
 }
 

@@ -83,6 +83,13 @@ pub fn open_log_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<ParseResult, crate::error::AppError> {
+    // Classify a permission failure here: `parse_file` returns a String, which
+    // discards the OS error kind the elevation prompt has to key off. Anything
+    // other than a permission failure falls through to the normal error.
+    if let Some(denied) = crate::source_access::probe_file_access(&path) {
+        return Err(crate::error::AppError::SourceAccess(denied));
+    }
+
     let (result, parser_selection) = parser::parse_file(&path)?;
 
     // Store in AppState so tail parsing reuses the same backend parser selection.
@@ -420,7 +427,18 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
         )));
     }
 
-    let read_dir = fs::read_dir(&requested_path).map_err(crate::error::AppError::Io)?;
+    let read_dir = fs::read_dir(&requested_path).map_err(|error| {
+        // The io::Error is still intact here, so classify it directly rather
+        // than probing.
+        match crate::source_access::classify_io_error(
+            &error,
+            crate::source_access::SourceOperation::ListFolder,
+            Some(crate::source_access::SourceContext::path(&requested_path)),
+        ) {
+            Some(denied) => crate::error::AppError::SourceAccess(denied),
+            None => crate::error::AppError::Io(error),
+        }
+    })?;
 
     let mut entries: Vec<FolderEntry> = Vec::new();
 

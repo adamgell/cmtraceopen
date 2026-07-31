@@ -52,6 +52,37 @@ export interface RelaunchResult {
 }
 
 /**
+ * Which source operation was refused.
+ *
+ * Mirrors `SourceOperation` in `src-tauri/src/source_access.rs`.
+ */
+export type SourceOperation =
+  | "readFile"
+  | "listFolder"
+  | "openKnownSource"
+  | "workspaceAction";
+
+/** Bounded identification of the source that was refused. */
+export type SourceContext =
+  | { kind: "path"; path: string }
+  | { kind: "knownSource"; sourceId: string };
+
+/**
+ * A structurally classified source failure.
+ *
+ * This is the whole reason the backend serializes one error variant as an
+ * object: the recovery prompt must never be gated on matching localized OS
+ * text like "Access is denied" or "os error 5".
+ */
+export interface SourceAccessDenied {
+  kind: "accessDenied";
+  operation: SourceOperation;
+  context?: SourceContext;
+  /** Safe, app-authored text — never the raw OS message. */
+  message: string;
+}
+
+/**
  * The claimed restore ticket, as read back by the elevated process.
  *
  * Mirrors `RestoreTicket` in `src-tauri/src/elevation/restore_ticket.rs`. The

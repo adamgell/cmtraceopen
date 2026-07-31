@@ -13,6 +13,7 @@ import type {
   ElevationReason,
   ElevationRequest,
   RestoreTarget,
+  SourceAccessDenied,
 } from "../types/elevation";
 
 /**
@@ -73,6 +74,39 @@ function basename(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return index >= 0 ? trimmed.slice(index + 1) || trimmed : trimmed;
+}
+
+/**
+ * Rebuild the restore intent from the source that was actually refused.
+ *
+ * The Access Denied prompt must retry the exact failed source, not whatever tab
+ * happens to be selected when the user clicks. That is why the backend echoes a
+ * bounded context back with the classification.
+ */
+export function restoreTargetForDenial(
+  denial: SourceAccessDenied,
+): RestoreTarget {
+  const { context, operation } = denial;
+  if (!context) return { kind: "workspace" };
+
+  if (context.kind === "knownSource") {
+    return { kind: "knownSource", sourceId: context.sourceId };
+  }
+
+  return operation === "listFolder"
+    ? { kind: "folder", path: context.path, aggregate: true }
+    : { kind: "file", path: context.path };
+}
+
+/** The elevation request an Access Denied recovery should carry. */
+export function elevationRequestForDenial(
+  denial: SourceAccessDenied,
+): ElevationRequest {
+  return {
+    reason: "accessDenied",
+    workspace: useUiStore.getState().activeWorkspace,
+    target: restoreTargetForDenial(denial),
+  };
 }
 
 /** The confirmation shown before any UAC prompt is requested. */

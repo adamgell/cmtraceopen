@@ -4,6 +4,7 @@ import {
   getSafeErrorMessage,
   graphGetAuthStatus,
   graphRequestMissingPermissions,
+  getSourceAccessDenial,
   openLogFile,
 } from "./commands";
 
@@ -373,5 +374,69 @@ describe("getSafeErrorMessage", () => {
     expect(getSafeErrorMessage(new BackendFailure(), "safe fallback")).toBe(
       "safe fallback",
     );
+  });
+});
+
+describe("source access classification", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("survives the invoke wrapper's collapse to a plain Error", async () => {
+    // invokeCommand normalizes every rejection into a fresh Error, which would
+    // otherwise discard the one payload the elevation prompt branches on.
+    vi.mocked(invoke).mockRejectedValue({
+      kind: "accessDenied",
+      operation: "readFile",
+      context: { kind: "path", path: "C:\\Windows\\CCM\\Logs\\ccmexec.log" },
+      message: "CMTrace Open does not have permission to read this file.",
+    });
+
+    const error = await captureRejection(openLogFile("C:\\Windows\\x.log"));
+
+    expect(error).toBeInstanceOf(Error);
+    expect(getSourceAccessDenial(error)).toEqual({
+      kind: "accessDenied",
+      operation: "readFile",
+      context: { kind: "path", path: "C:\\Windows\\CCM\\Logs\\ccmexec.log" },
+      message: "CMTrace Open does not have permission to read this file.",
+    });
+    // The user-facing message is the backend's safe text, not a raw OS string.
+    expect((error as Error).message).toBe(
+      "CMTrace Open does not have permission to read this file.",
+    );
+  });
+
+  it("reports no denial for an ordinary string rejection", async () => {
+    vi.mocked(invoke).mockRejectedValue("Failed to read file: not found");
+
+    const error = await captureRejection(openLogFile("C:\\missing.log"));
+
+    expect(getSourceAccessDenial(error)).toBeNull();
+  });
+
+  it("rejects a payload whose operation is not recognized", async () => {
+    // A forged or future operation must not reach the elevation path.
+    vi.mocked(invoke).mockRejectedValue({
+      kind: "accessDenied",
+      operation: "runArbitraryCommand",
+      message: "nope",
+    });
+
+    const error = await captureRejection(openLogFile("C:\\x.log"));
+
+    expect(getSourceAccessDenial(error)).toBeNull();
+  });
+
+  it("ignores a hostile Proxy claiming to be an access denial", async () => {
+    const { rejection, getPrototypeOfReads } =
+      makeHostileErrorProxy("denial");
+    vi.mocked(invoke).mockRejectedValue(rejection);
+
+    const error = await captureRejection(openLogFile("C:\\x.log"));
+
+    expect(getSourceAccessDenial(error)).toBeNull();
+    // Still exactly one prototype probe: classification did not add a second.
+    expect(getPrototypeOfReads()).toBe(1);
   });
 });

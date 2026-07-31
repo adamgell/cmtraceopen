@@ -23,6 +23,7 @@ pub mod parser;
 pub mod process_util;
 #[cfg(feature = "secureboot")]
 pub mod secureboot;
+pub mod source_access;
 mod state;
 #[cfg(feature = "sysmon")]
 pub mod sysmon;

@@ -19,6 +19,9 @@ import type {
   ElevationRequest,
   RelaunchResult,
   RestoreTicket,
+  SourceAccessDenied,
+  SourceContext,
+  SourceOperation,
 } from "../types/elevation";
 import type { IntuneAnalysisResult } from "../workspaces/intune/types";
 import type { SysmonAnalysisResult } from "../workspaces/sysmon/types";
@@ -138,10 +141,9 @@ function humanizeErrorKind(kind: string): string {
  * Returns null for anything that is not a plain data object so the caller keeps
  * the safe fallback.
  */
-function getPlainDataErrorMessage(error: object): string | null {
-  if (!isPlainDataObject(error)) {
-    return null;
-  }
+/// Caller must have already confirmed `error` is a plain data object, so this
+/// adds no further prototype probe.
+function plainDataMessage(error: object): string | null {
   const message = readOwnStringData(error, "message");
   if (message !== null) {
     return message;
@@ -153,12 +155,20 @@ function getPlainDataErrorMessage(error: object): string | null {
   return null;
 }
 
-export function getSafeErrorMessage(
+/**
+ * Classify a rejection once, yielding both its message and any structured
+ * source-access denial.
+ *
+ * Both answers come from a SINGLE plain-data probe. Classifying twice would
+ * hand a hostile Proxy a second `getPrototypeOf` trap invocation, which
+ * `command rejection sanitization` in commands.test.ts pins to exactly one.
+ */
+function classifyCommandError(
   error: unknown,
-  fallback = "The operation failed.",
-): string {
+  fallback: string,
+): { message: string; denial: SourceAccessDenied | null } {
   if (typeof error === "string") {
-    return error.trim() || fallback;
+    return { message: error.trim() || fallback, denial: null };
   }
 
   if (
@@ -169,7 +179,7 @@ export function getSafeErrorMessage(
     // this WeakMap channel cannot invoke Proxy traps.
     const trusted = normalizedCommandErrorMessages.get(error as Error);
     if (trusted !== undefined) {
-      return trusted;
+      return { message: trusted, denial: null };
     }
 
     // Serialized Rust command errors arrive as plain data objects. Surface their
@@ -177,24 +187,114 @@ export function getSafeErrorMessage(
     // plain-prototype objects are inspected, no getter is ever invoked, and a
     // forged descriptor value is rejected. Class instances, functions, Proxies,
     // and accessor-only objects fall through to the safe fallback.
-    if (typeof error === "object") {
-      const plainMessage = getPlainDataErrorMessage(error);
-      if (plainMessage !== null) {
-        return plainMessage;
-      }
+    if (typeof error === "object" && isPlainDataObject(error)) {
+      return {
+        message: plainDataMessage(error) ?? fallback,
+        denial: parseSourceAccessDenied(error),
+      };
     }
 
-    return fallback;
+    return { message: fallback, denial: null };
   }
 
-  return fallback;
+  return { message: fallback, denial: null };
+}
+
+export function getSafeErrorMessage(
+  error: unknown,
+  fallback = "The operation failed.",
+): string {
+  return classifyCommandError(error, fallback).message;
+}
+
+/**
+ * Structured source-access classifications, keyed by the normalized Error.
+ *
+ * `invokeCommand` collapses every rejection into a plain `Error`, which would
+ * otherwise discard the one payload the elevation prompt needs to branch on.
+ * A WeakMap keyed by identity keeps that channel out of reach of a hostile
+ * Proxy, matching how normalized messages are already carried.
+ */
+const sourceAccessDenials = new WeakMap<Error, SourceAccessDenied>();
+
+const SOURCE_OPERATIONS: readonly SourceOperation[] = [
+  "readFile",
+  "listFolder",
+  "openKnownSource",
+  "workspaceAction",
+];
+
+/**
+ * Recognize the backend's `accessDenied` classification.
+ *
+ * Applies the same hostile-Proxy protection as `getPlainDataErrorMessage`: only
+ * plain-prototype objects are inspected and no getter is ever invoked. An
+ * unrecognized operation is rejected rather than passed through, so a forged or
+ * future payload cannot reach the elevation path.
+ */
+function parseSourceAccessDenied(error: object): SourceAccessDenied | null {
+  if (readOwnStringData(error, "kind") !== "accessDenied") return null;
+
+  const operation = readOwnStringData(error, "operation");
+  if (
+    operation === null ||
+    !SOURCE_OPERATIONS.includes(operation as SourceOperation)
+  ) {
+    return null;
+  }
+
+  const message = readOwnStringData(error, "message");
+  if (message === null) return null;
+
+  return {
+    kind: "accessDenied",
+    operation: operation as SourceOperation,
+    message,
+    ...(parseSourceContext(error) ?? {}),
+  };
+}
+
+function parseSourceContext(
+  error: object,
+): { context: SourceContext } | null {
+  const descriptor = Object.getOwnPropertyDescriptor(error, "context");
+  const raw = descriptor && "value" in descriptor ? descriptor.value : null;
+  if (typeof raw !== "object" || raw === null || !isPlainDataObject(raw)) {
+    return null;
+  }
+
+  const kind = readOwnStringData(raw, "kind");
+  if (kind === "path") {
+    const path = readOwnStringData(raw, "path");
+    return path === null ? null : { context: { kind: "path", path } };
+  }
+  if (kind === "knownSource") {
+    const sourceId = readOwnStringData(raw, "sourceId");
+    return sourceId === null
+      ? null
+      : { context: { kind: "knownSource", sourceId } };
+  }
+  return null;
+}
+
+/**
+ * Read the structured access-denied classification behind a command rejection.
+ *
+ * Returns null for every other failure, which is what keeps the elevation
+ * prompt from appearing for a missing file or a parse error.
+ */
+export function getSourceAccessDenial(
+  error: unknown,
+): SourceAccessDenied | null {
+  if (typeof error !== "object" || error === null) return null;
+  return sourceAccessDenials.get(error as Error) ?? null;
 }
 
 function normalizeCommandInvokeError(
   commandName: string,
   error: unknown,
 ): Error {
-  const message = getSafeErrorMessage(
+  const { message, denial } = classifyCommandError(
     error,
     `Command '${commandName}' failed.`,
   );
@@ -210,6 +310,11 @@ function normalizeCommandInvokeError(
 
   const normalizedError = new Error(normalizedMessage);
   normalizedCommandErrorMessages.set(normalizedError, normalizedMessage);
+
+  if (denial) {
+    sourceAccessDenials.set(normalizedError, denial);
+  }
+
   return normalizedError;
 }
 
