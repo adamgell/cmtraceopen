@@ -481,6 +481,35 @@ fn duplicate_nonphysical_markers_for_the_same_source_fail_closed() {
 }
 
 #[test]
+fn absent_markers_with_distinct_path_fingerprints_remain_distinct_sources() {
+    let mut root_a = synthetic_marker(
+        "missing-root-a",
+        "PolicyAgent.log",
+        SccmCoverageState::Absent,
+    );
+    root_a.path_fingerprint = Some("synthetic:policy-root-a".to_owned());
+    let mut root_b = synthetic_marker(
+        "missing-root-b",
+        "PolicyAgent.log",
+        SccmCoverageState::Absent,
+    );
+    root_b.path_fingerprint = Some("synthetic:policy-root-b".to_owned());
+
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![root_a, root_b],
+    })
+    .expect("markers distinguished by explicit path fingerprints stay representable");
+
+    let group = intake.group("client-policy-agent").expect("policy group");
+    assert_eq!(group.coverage, SccmCoverageState::Absent);
+    assert_eq!(
+        group.fragments.len(),
+        2,
+        "per-root absence claims with distinct fingerprints are distinct sources"
+    );
+}
+
+#[test]
 fn basename_collisions_preserve_distinct_artifacts_and_bundle_paths() {
     let intake = assessment("collision");
     let group = intake

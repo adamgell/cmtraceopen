@@ -147,6 +147,10 @@ pub struct SccmClientSourceGroupDefinition {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SccmClientIntakeArtifact {
     pub artifact: SccmArtifact,
+    /// Collision-safe path identity. Mandatory for physical states; a
+    /// non-physical marker may also carry one to pin which configured
+    /// location the marker refers to (for example, absent under one root
+    /// while a sibling root was captured).
     pub path_fingerprint: Option<String>,
     pub relative_path: Option<String>,
     pub fragment_complete: Option<bool>,
@@ -211,6 +215,10 @@ pub struct SccmClientUnsupportedArtifact {
 pub struct SccmClientIntakeAssessment {
     pub schema_version: u32,
     pub groups: Vec<SccmClientIntakeGroup>,
+    /// Every recognized source declaration in deterministic order. This
+    /// intentionally includes non-physical markers (absent, access denied,
+    /// skipped) so callers see the full declared surface, not only the
+    /// fragments with captured bytes.
     pub physical_artifacts: Vec<SccmClientIntakeFragment>,
     pub unsupported_artifacts: Vec<SccmClientUnsupportedArtifact>,
     pub coverage_gaps: Vec<SccmClientIntakeCoverageGap>,
@@ -252,7 +260,7 @@ pub enum SccmClientIntakeError {
     MissingPhysicalProvenance,
     #[error("client intake fragment completeness must be explicitly declared")]
     MissingFragmentCompleteness,
-    #[error("a capped or nonphysical coverage state cannot declare a complete fragment")]
+    #[error("client intake fragment completeness contradicts its declared coverage state")]
     InvalidFragmentCompleteness,
 }
 
@@ -443,6 +451,25 @@ pub fn assess_client_intake(
                 coverage: coverage.clone(),
             });
         }
+        // In a mixed group the physical capture defines the group coverage,
+        // so each sibling marker keeps its own explicit per-source gap that
+        // names the affected source instead of indicting the whole group.
+        if fragments
+            .iter()
+            .any(|fragment| is_physical_state(&fragment.coverage))
+        {
+            for fragment in &fragments {
+                if let Some(reason) = marker_coverage_reason(&fragment.coverage, &fragment.basename)
+                {
+                    coverage_gaps.push(SccmClientIntakeCoverageGap {
+                        logical_artifact_id: definition.logical_artifact_id.to_owned(),
+                        role: SccmRole::Client,
+                        coverage: fragment.coverage.clone(),
+                        reason,
+                    });
+                }
+            }
+        }
         groups.push(SccmClientIntakeGroup {
             logical_artifact_id: definition.logical_artifact_id.to_owned(),
             coverage,
@@ -463,6 +490,7 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
     let mut artifact_ids = BTreeSet::new();
     let mut path_fingerprints = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
+    let mut marker_identities = BTreeSet::new();
 
     for source in &bundle.artifacts {
         if source.artifact.role != SccmRole::Client {
@@ -535,6 +563,11 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             if source.artifact.coverage == SccmCoverageState::Capped && fragment_complete {
                 return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
             }
+            // Captured means the whole source was copied; an admitted
+            // incomplete capture must be declared as Capped instead.
+            if source.artifact.coverage == SccmCoverageState::Captured && !fragment_complete {
+                return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
+            }
             source
                 .path_fingerprint
                 .as_deref()
@@ -549,6 +582,22 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             }
             if fragment_complete {
                 return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
+            }
+            // Non-physical markers have no payload lineage, so their
+            // canonical identity is the declared source itself: basename,
+            // rotation, and the optional path fingerprint. Distinct caller
+            // labels must not double-declare the same missing source.
+            let marker_identity = (
+                source.artifact.display_name.to_ascii_lowercase(),
+                rotation_identity(&source.artifact.rotation),
+                source
+                    .path_fingerprint
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase(),
+            );
+            if !marker_identities.insert(marker_identity) {
+                return Err(SccmClientIntakeError::DuplicateArtifactId);
             }
         }
     }
@@ -599,6 +648,18 @@ fn intake_fragment(source: &SccmClientIntakeArtifact) -> SccmClientIntakeFragmen
 }
 
 fn group_coverage(fragments: &[SccmClientIntakeFragment]) -> SccmCoverageState {
+    // A captured fragment must never coexist with an all-absent claim: once
+    // any physical evidence exists, the physical states alone decide the
+    // group coverage and sibling markers surface as per-source gaps instead.
+    let physical_coverage = fragments
+        .iter()
+        .filter(|fragment| is_physical_state(&fragment.coverage))
+        .map(|fragment| fragment.coverage.clone())
+        .max_by_key(coverage_rank);
+    if let Some(coverage) = physical_coverage {
+        return coverage;
+    }
+
     fragments
         .iter()
         .map(|fragment| fragment.coverage.clone())
@@ -635,6 +696,45 @@ fn coverage_reason(coverage: &SccmCoverageState) -> &'static str {
             "The supplied client source group could not be normalized completely."
         }
         SccmCoverageState::Captured => "",
+    }
+}
+
+/// Per-source gap wording for a non-physical marker that shares a group with
+/// physical evidence. Returns `None` for physical states, which are covered
+/// by the group-level coverage instead.
+fn marker_coverage_reason(coverage: &SccmCoverageState, basename: &str) -> Option<String> {
+    match coverage {
+        SccmCoverageState::Absent => Some(format!(
+            "No artifact for client source {basename} was supplied alongside \
+             this group's physical evidence."
+        )),
+        SccmCoverageState::AccessDenied => Some(format!(
+            "Access was denied for client source {basename} alongside \
+             this group's physical evidence."
+        )),
+        SccmCoverageState::Skipped => Some(format!(
+            "Client source {basename} was intentionally skipped alongside \
+             this group's physical evidence."
+        )),
+        SccmCoverageState::Unsupported => Some(format!(
+            "Client source {basename} was declared unsupported alongside \
+             this group's physical evidence."
+        )),
+        SccmCoverageState::Captured
+        | SccmCoverageState::Capped
+        | SccmCoverageState::ParseFailed => None,
+    }
+}
+
+/// Stable rotation discriminator for the canonical identity of non-physical
+/// markers, which carry no payload fingerprint or lineage.
+fn rotation_identity(rotation: &SccmRotation) -> String {
+    match rotation {
+        SccmRotation::Current => "current".to_owned(),
+        SccmRotation::LoUnderscore => "lo".to_owned(),
+        SccmRotation::Numbered(number) => format!("numbered-{number}"),
+        SccmRotation::Timestamped(timestamp) => format!("timestamped-{timestamp}"),
+        SccmRotation::Unknown(_) => "unknown".to_owned(),
     }
 }
 
