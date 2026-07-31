@@ -2929,6 +2929,48 @@ fn software_update_fixture_rejects_install_failure_without_terminal_evidence() {
 }
 
 #[test]
+fn software_update_fixture_rejects_cbs_log_with_configmgr_source_version() {
+    let scenario = "supplemental-conflict";
+    let scenario_dir = updates_root().join(scenario);
+    let base_manifest = read_json(&scenario_dir.join("manifest.json"));
+    let expected = read_json(&scenario_dir.join("expected.json"));
+    let contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == scenario)
+        .expect("supplemental-conflict contract exists");
+
+    let mut versioned_cbs = base_manifest.clone();
+    assert_eq!(
+        versioned_cbs["artifacts"][1]["originalBasename"], "CBS.log",
+        "mutation must target the CBS.log artifact"
+    );
+    versioned_cbs["artifacts"][1]["sourceVersion"] = Value::String("5.00.TEST.0000".to_owned());
+
+    let direct = manifest_artifact_kind_failures(&versioned_cbs["artifacts"][1]);
+    assert!(
+        direct
+            .iter()
+            .any(|failure| failure.contains("cbsLog sourceVersion must be null")),
+        "cbsLog with a ConfigMgr sourceVersion was accepted by kind validation:\n{}",
+        direct.join("\n")
+    );
+
+    let failures = scenario_semantic_failures(&scenario_dir, &versioned_cbs, &expected, contract);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("cbsLog sourceVersion must be null")),
+        "cbsLog with a ConfigMgr sourceVersion validated clean:\n{}",
+        failures.join("\n")
+    );
+
+    assert!(
+        base_manifest["artifacts"][1]["sourceVersion"].is_null(),
+        "shipped CBS.log fixture must not carry a ConfigMgr sourceVersion"
+    );
+}
+
+#[test]
 fn software_update_fixture_rejects_cross_record_exact_key_chimeras() {
     let scenario_dir = updates_root().join("same-minute-separate");
     let manifest = read_json(&scenario_dir.join("manifest.json"));
