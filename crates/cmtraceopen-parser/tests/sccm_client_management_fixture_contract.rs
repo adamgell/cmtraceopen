@@ -355,6 +355,8 @@ fn source_version_matches_selected_profile(value: &str) -> bool {
 fn public_identifier_is_safe(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 96
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && !value.starts_with("s-1-5-")
         && value.split('-').all(|segment| {
             !segment.is_empty()
                 && segment
