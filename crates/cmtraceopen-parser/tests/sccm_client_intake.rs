@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::sccm::{
     assess_client_intake, declared_client_source_groups, SccmArtifact, SccmClientIntakeArtifact,
     SccmClientIntakeBundle, SccmClientIntakeError, SccmCoverageState, SccmRole, SccmRotation,
+    SccmUnknownRotation,
 };
 use serde::Deserialize;
 
@@ -384,6 +385,65 @@ fn configmgr_version_and_encoding_use_bounded_public_grammars() {
             "unsafe encoding {encoding:?} must fail closed"
         );
     }
+}
+
+#[test]
+fn unknown_rotation_public_metadata_is_versioned_and_opaque() {
+    let opaque_handle = format!("sha256:{}", "a".repeat(64));
+    for kind in [
+        "realuser".to_owned(),
+        "corp-example-test".to_owned(),
+        "realuser.example.com".to_owned(),
+        r"C:\Users\RealUser".to_owned(),
+        "cmtraceopen.rotation.opaque.v1\0".to_owned(),
+        "x".repeat(129),
+    ] {
+        let mut artifact = synthetic_artifact("invalid-rotation", "PolicyAgent.log");
+        artifact.artifact.rotation = SccmRotation::Unknown(SccmUnknownRotation {
+            kind,
+            value: Some(serde_json::json!("opaque-v1")),
+        });
+        assert_eq!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![artifact],
+            }),
+            Err(SccmClientIntakeError::InvalidRotation)
+        );
+    }
+
+    for value in [
+        serde_json::json!("realuser"),
+        serde_json::json!("corp-example-test"),
+        serde_json::json!("realuser.example.com"),
+        serde_json::json!(r"C:\Users\RealUser"),
+        serde_json::json!("opaque\0realuser"),
+        serde_json::json!("x".repeat(129)),
+        serde_json::json!(123456789),
+        serde_json::json!({"opaque": "realuser"}),
+    ] {
+        let mut artifact = synthetic_artifact("invalid-rotation", "PolicyAgent.log");
+        artifact.artifact.rotation = SccmRotation::Unknown(SccmUnknownRotation {
+            kind: "cmtraceopen.rotation.opaque.v1".to_owned(),
+            value: Some(value),
+        });
+        assert_eq!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![artifact],
+            }),
+            Err(SccmClientIntakeError::InvalidRotation)
+        );
+    }
+
+    let mut future = synthetic_artifact("custom", "PolicyAgent.log");
+    future.artifact.rotation = SccmRotation::Unknown(SccmUnknownRotation {
+        kind: "cmtraceopen.rotation.opaque.v1".to_owned(),
+        value: Some(serde_json::json!(opaque_handle)),
+    });
+    let assessed = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![future],
+    })
+    .expect("versioned opaque future rotation remains representable");
+    assert_eq!(assessed.unsupported_artifacts.len(), 1);
 }
 
 #[test]
