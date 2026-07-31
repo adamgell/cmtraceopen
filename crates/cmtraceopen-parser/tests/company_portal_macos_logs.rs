@@ -165,7 +165,7 @@ fn basic_information_warning_and_error_records_parse() {
 #[test]
 fn advanced_logging_certificate_and_network_records_are_redacted() {
     let parse = parse_scenario(ADVANCED, "advanced-logging", "CompanyPortal.log");
-    assert_eq!(parse.coverage.parsed_record_count, 9);
+    assert_eq!(parse.coverage.parsed_record_count, 11);
     assert_full_line_coverage(&parse);
 
     let categories: BTreeSet<PortalEvidenceCategory> =
@@ -188,6 +188,12 @@ fn advanced_logging_certificate_and_network_records_are_redacted() {
         "manage.contoso.example",
         "/Users/adele",
         "tenantId",
+        // Network addresses: advanced logging records network-response detail,
+        // so IPv4, IPv6, and MAC must not survive the export either.
+        "203.0.113.47",
+        "198.51.100.9",
+        "3c:22:fb:a1:9d:4e",
+        "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
     ] {
         assert!(
             !json.contains(secret),
@@ -211,9 +217,29 @@ fn advanced_logging_certificate_and_network_records_are_redacted() {
         PortalRedactionKind::Token,
         PortalRedactionKind::UserName,
         PortalRedactionKind::Path,
+        PortalRedactionKind::Ip,
+        PortalRedactionKind::Mac,
     ] {
         assert!(kinds.contains(&kind), "no placeholder issued for {kind:?}");
     }
+}
+
+/// A version banner, a timestamp, and a GUID all look address-shaped to a lazy
+/// matcher. Redacting them as network addresses would corrupt evidence the
+/// module promises to preserve losslessly.
+#[test]
+fn network_redaction_does_not_swallow_versions_timestamps_or_guids() {
+    let parse = parse_scenario(ADVANCED, "advanced-logging", "CompanyPortal.log");
+    let export = redacted_export_projection(&parse);
+    let json = serde_json::to_string(&export).expect("export must serialize");
+
+    // Dotted version strings have an octet above 255 and must survive.
+    assert!(json.contains("5.2504.0"));
+    assert!(json.contains("15.4.1"));
+    // Structural timestamps are colon-separated but only four groups.
+    assert!(json.contains("08:18:00"));
+    // The model identifier is not an address.
+    assert!(json.contains("MacBookPro18,3"));
 }
 
 // -- matrix item 3: multiline exception/payload ------------------------------

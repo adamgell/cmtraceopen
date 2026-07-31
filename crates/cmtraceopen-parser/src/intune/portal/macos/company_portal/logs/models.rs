@@ -243,7 +243,16 @@ pub struct PortalCoverageNote {
     pub detail: String,
 }
 
-/// Per-artifact coverage accounting. `covered_lines == total_lines` always.
+/// Per-artifact coverage accounting.
+///
+/// `covered_lines == total_lines` holds when
+/// `detection.source_kind == PortalSourceKind::CompanyPortalMacosAppLog`: every
+/// physical line is then either inside a record or counted as blank. For any
+/// other detected kind the artifact is rejected before framing, so
+/// `covered_lines` is `0` while `total_lines` still reports the real physical
+/// line count, and the file is represented by a single `UnsupportedSourceKind`
+/// note rather than per-line accounting. Framing text this module does not own
+/// would be a worse answer than declining it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortalCoverage {
@@ -341,6 +350,8 @@ pub enum PortalRedactionKind {
     Certificate,
     Path,
     UserName,
+    Ip,
+    Mac,
 }
 
 impl PortalRedactionKind {
@@ -354,6 +365,8 @@ impl PortalRedactionKind {
             Self::Certificate => "cert",
             Self::Path => "path",
             Self::UserName => "user",
+            Self::Ip => "ip",
+            Self::Mac => "mac",
         }
     }
 }

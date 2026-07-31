@@ -3,7 +3,8 @@
 //! Company Portal advanced logging adds certificate and network-response detail,
 //! so redaction is on by default and covers identity/UPN/email, tenant and
 //! device ids, serials, tokens and secrets, URLs (including every query value),
-//! certificate subjects and thumbprints, and user paths.
+//! certificate subjects and thumbprints, user paths, and network addresses
+//! (IPv4, IPv6, and MAC).
 //!
 //! Placeholders are stable and correlation-preserving: the same original value
 //! always maps to the same token within an export, and a given input always
@@ -72,6 +73,40 @@ fn guid_re() -> &'static Regex {
     CELL.get_or_init(|| {
         Regex::new(r"(?i)\b[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\b")
             .expect("guid pattern must compile")
+    })
+}
+
+/// Dotted-quad IPv4, each octet bounded to 0-255 so version strings such as
+/// `5.2504.0` cannot match.
+fn ipv4_address_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b",
+        )
+        .expect("ipv4 address pattern must compile")
+    })
+}
+
+/// Six colon- or dash-separated hex pairs. Runs before the IPv6 matcher, which
+/// requires either eight groups or a `::` run and so cannot claim a MAC.
+fn mac_address_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
+            .expect("mac address pattern must compile")
+    })
+}
+
+/// Fully-expanded eight-group IPv6 or any `::`-compressed form. Greedy so
+/// `replace_group` never leaves a trailing fragment behind.
+fn ipv6_address_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)\b",
+        )
+        .expect("ipv6 address pattern must compile")
     })
 }
 
@@ -167,6 +202,10 @@ impl Redactor {
     /// Certificate subjects go first and are deliberately over-broad (`CN=` to
     /// end of line) so no RDN component survives. URLs are redacted whole, which
     /// removes every query value with them.
+    ///
+    /// Network addresses run after URLs so a host embedded in a URL is already
+    /// gone, and in IPv4 then MAC then IPv6 order so an IPv4-mapped IPv6 address
+    /// cannot leak its dotted tail and a MAC cannot be mistaken for an IPv6 run.
     fn redact(&mut self, text: &str) -> String {
         let text = self.replace_group(
             text,
@@ -180,6 +219,9 @@ impl Redactor {
         let text = self.replace_group(&text, url_re(), PortalRedactionKind::Url, 0);
         let text = self.replace_group(&text, email_re(), PortalRedactionKind::Email, 0);
         let text = self.replace_group(&text, guid_re(), PortalRedactionKind::Guid, 0);
+        let text = self.replace_group(&text, ipv4_address_re(), PortalRedactionKind::Ip, 0);
+        let text = self.replace_group(&text, mac_address_re(), PortalRedactionKind::Mac, 0);
+        let text = self.replace_group(&text, ipv6_address_re(), PortalRedactionKind::Ip, 0);
         self.replace_user_paths(&text)
     }
 

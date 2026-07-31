@@ -9,7 +9,7 @@
 //!
 //! It is re-expressed here (rather than imported) because this module needs the
 //! individual captures, which the generic parser does not expose. The
-//! `grammar_matches_generic_intune_macos_parser` test in
+//! `grammar_matches_the_generic_intune_macos_parser` test in
 //! `tests/company_portal_macos_logs.rs` pins the two definitions together.
 
 use std::sync::OnceLock;
