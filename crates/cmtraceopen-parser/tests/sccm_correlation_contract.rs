@@ -89,6 +89,8 @@ struct ScenarioContract {
     server_issue: String,
     client_fixture_ref: String,
     server_fixture_ref: String,
+    #[serde(default)]
+    ordered_input_evidence: Vec<String>,
     profile_state: ProfileState,
     key_relation: KeyRelation,
     topology: TopologyState,

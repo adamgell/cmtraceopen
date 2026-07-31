@@ -195,6 +195,12 @@
       "guardIds": [
         "reordered-input"
       ],
+      "orderedInputEvidence": [
+        "client:content-location-request",
+        "client:content-download-summary",
+        "server:dp-content-availability",
+        "server:dp-transfer-ack"
+      ],
       "clientIssue": "#322",
       "serverIssue": "#329",
       "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/deployment/success",
@@ -230,6 +236,12 @@
       "scenarioId": "content-reordered-input-b",
       "guardIds": [
         "reordered-input"
+      ],
+      "orderedInputEvidence": [
+        "server:dp-transfer-ack",
+        "server:dp-content-availability",
+        "client:content-download-summary",
+        "client:content-location-request"
       ],
       "clientIssue": "#322",
       "serverIssue": "#329",

@@ -196,6 +196,12 @@
       "guardIds": [
         "reordered-input"
       ],
+      "orderedInputEvidence": [
+        "client:policy-request-assignments",
+        "client:policy-evaluation-summary",
+        "server:mp-policy-response",
+        "server:mp-endpoint-ack"
+      ],
       "clientIssue": "#321",
       "serverIssue": "#328",
       "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/complete",
@@ -231,6 +237,12 @@
       "scenarioId": "policy-reordered-input-b",
       "guardIds": [
         "reordered-input"
+      ],
+      "orderedInputEvidence": [
+        "server:mp-endpoint-ack",
+        "server:mp-policy-response",
+        "client:policy-evaluation-summary",
+        "client:policy-request-assignments"
       ],
       "clientIssue": "#321",
       "serverIssue": "#328",
