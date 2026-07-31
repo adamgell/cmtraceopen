@@ -4,4 +4,5 @@
 //! decoded, and they never touch the filesystem, registry, or network.
 
 pub mod common;
+pub mod remediations;
 pub mod scripts;
