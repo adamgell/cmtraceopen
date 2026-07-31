@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::{
     analyze_management_point, declared_source_catalog, normalize_ccm_artifact, SccmArtifact,
-    SccmArtifactFamily, SccmCoverageState, SccmManagementPointBundle,
-    SccmManagementPointSource, SccmManagementPointTopology, SccmRole, SccmRotation,
+    SccmArtifactFamily, SccmCoverageState, SccmManagementPointBundle, SccmManagementPointSource,
+    SccmManagementPointTopology, SccmRole, SccmRotation,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -161,11 +161,7 @@ fn load_bundle(scenario: &str) -> SccmManagementPointBundle {
         });
     }
 
-    sources.sort_by(|left, right| {
-        left.artifact
-            .artifact_id
-            .cmp(&right.artifact.artifact_id)
-    });
+    sources.sort_by(|left, right| left.artifact.artifact_id.cmp(&right.artifact.artifact_id));
     evidence.sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
     SccmManagementPointBundle {
         topology: SccmManagementPointTopology {
@@ -545,8 +541,7 @@ fn management_point_counterpart_handoff_requires_an_exact_policy_key() {
                 "{scenario}: policy counterpart fact needs a policy ID"
             );
             assert_eq!(
-                fact["key"]["extractionProfileId"],
-                "mp-server-5.00.test-v1",
+                fact["key"]["extractionProfileId"], "mp-server-5.00.test-v1",
                 "{scenario}"
             );
             assert!(
@@ -556,9 +551,10 @@ fn management_point_counterpart_handoff_requires_an_exact_policy_key() {
         }
     }
 
-    let unrelated =
-        serde_json::to_value(analyze_management_point(&load_bundle("unrelated-client-like-key")))
-            .unwrap();
+    let unrelated = serde_json::to_value(analyze_management_point(&load_bundle(
+        "unrelated-client-like-key",
+    )))
+    .unwrap();
     assert!(
         unrelated["counterpartReadyFacts"]
             .as_array()
@@ -588,6 +584,9 @@ fn management_point_catalog_declares_every_reducer_source() {
         ("mpcontrol.log", "mpcontrol"),
     ] {
         let expected = (expected.0.to_owned(), expected.1.to_owned());
-        assert!(sources.contains(&expected), "missing MP source {expected:?}");
+        assert!(
+            sources.contains(&expected),
+            "missing MP source {expected:?}"
+        );
     }
 }
