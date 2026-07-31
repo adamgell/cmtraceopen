@@ -1557,12 +1557,12 @@ fn validate_contract(
                 "{transaction_id} evidence references are duplicated or not sorted"
             ));
         }
+        let records = evidence_records(scenario_root, &artifacts_by_id, &transaction["evidence"])?;
         if !evidence_refs_cite_unique_records(&transaction_ref_order) {
             return Err(format!(
                 "{transaction_id} evidence ranges overlap and double-count a logical record"
             ));
         }
-        let records = evidence_records(scenario_root, &artifacts_by_id, &transaction["evidence"])?;
         if records.is_empty() {
             return Err(format!("{transaction_id} has no cited evidence"));
         }
@@ -3266,9 +3266,8 @@ fn sentence_final_hostname_privacy_mutations_fail_closed() {
 
     let (observed_root, observed_manifest, mut hostname_claim) =
         load_contract("software-center-observed");
-    hostname_claim["sourceLocalObservations"][0]["claim"] = Value::String(
-        "Observed records remain under lab-client-01.corp.local.".to_owned(),
-    );
+    hostname_claim["sourceLocalObservations"][0]["claim"] =
+        Value::String("Observed records remain under lab-client-01.corp.local.".to_owned());
     if mutation_was_accepted(
         "software-center-observed",
         &observed_root,
@@ -3280,9 +3279,8 @@ fn sentence_final_hostname_privacy_mutations_fail_closed() {
 
     let (deferred_root, deferred_manifest, mut hostname_reason) =
         load_contract("notification-deferred");
-    hostname_reason["transactions"][0]["nextArtifact"]["reason"] = Value::String(
-        "Collect the bounded continuation from lab-client-01.corp.local.".to_owned(),
-    );
+    hostname_reason["transactions"][0]["nextArtifact"]["reason"] =
+        Value::String("Collect the bounded continuation from lab-client-01.corp.local.".to_owned());
     if mutation_was_accepted(
         "notification-deferred",
         &deferred_root,
@@ -3331,5 +3329,42 @@ fn sid_shaped_public_identifier_mutations_fail_closed() {
     assert!(
         accepted.is_empty(),
         "SID-shaped public identifier mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn absurd_citation_ranges_fail_fast_before_expansion() {
+    let (script_root, script_manifest, script_expected) = load_contract("script-success");
+
+    let mut absurd_transaction_range = script_expected.clone();
+    absurd_transaction_range["transactions"][0]["evidence"] = serde_json::json!([
+        { "artifactId": "script-success-current", "startLine": 1, "endLine": u64::MAX }
+    ]);
+    let error = validate_contract(
+        "script-success",
+        &script_root,
+        &script_manifest,
+        &absurd_transaction_range,
+    )
+    .expect_err("absurd transaction endLine must be rejected");
+    assert!(
+        error.contains("evidence line range"),
+        "absurd transaction endLine must fail range validation, got: {error}"
+    );
+
+    let mut absurd_ownership_range = script_expected;
+    absurd_ownership_range["ownership"]["evidence"] = serde_json::json!([
+        { "artifactId": "script-success-owner", "startLine": 1, "endLine": u64::MAX }
+    ]);
+    let error = validate_contract(
+        "script-success",
+        &script_root,
+        &script_manifest,
+        &absurd_ownership_range,
+    )
+    .expect_err("absurd ownership endLine must be rejected");
+    assert!(
+        error.contains("evidence line range"),
+        "absurd ownership endLine must fail range validation, got: {error}"
     );
 }
