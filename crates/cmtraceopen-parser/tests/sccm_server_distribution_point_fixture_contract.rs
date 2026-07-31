@@ -1544,7 +1544,8 @@ fn validate_expected(
             let next_source = transaction["nextSourceId"].as_str();
             if next_source.is_none()
                 || !parsed.artifacts.values().any(|artifact| {
-                    Some(artifact.source_id.as_str()) == next_source && artifact.state != "captured"
+                    Some(artifact.source_id.as_str()) == next_source
+                        && artifact_has_incomplete_coverage(artifact)
                 })
             {
                 failures.push(format!(
@@ -1858,6 +1859,7 @@ fn validate_expected(
     let expected_requests = parsed
         .artifacts
         .values()
+        .filter(|artifact| artifact.role != "client")
         .filter_map(|artifact| {
             coverage_request_reason(artifact)
                 .map(|reason| (artifact.source_id.clone(), reason.to_owned()))
@@ -3283,5 +3285,73 @@ fn source_local_evidence_and_artifact_requests_are_canonical_and_unique() {
     assert!(
         accepted.is_empty(),
         "nondeterministic source-local output was accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn client_control_coverage_does_not_create_a_server_artifact_request() {
+    let mut manifest =
+        read_json("client-only-looking-request", "manifest.json").expect("manifest loads");
+    let mut expected =
+        read_json("client-only-looking-request", "expected.json").expect("expected loads");
+    let bytes_copied = manifest["artifacts"][0]["bytesCopied"].clone();
+    manifest["artifacts"][0]["captureState"] = json!("capped");
+    manifest["artifacts"][0]["collectionLimit"] =
+        json!({"byteLimit": bytes_copied, "limitApplied": true});
+    expected["coverage"][0]["state"] = json!("capped");
+
+    let validation = validate_scenario_values("client-only-looking-request", &manifest, &expected);
+    assert!(
+        validation.is_ok(),
+        "ignored capped client control invented a server artifact request: {validation:?}"
+    );
+}
+
+#[test]
+fn captured_incomplete_fragments_satisfy_the_bounded_next_source() {
+    let temporary = temporary_scenario("incomplete");
+    let mut manifest = read_json("incomplete", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("incomplete", "expected.json").expect("expected loads");
+    let fragments = [
+        (
+            1usize,
+            "evidence/server-dp-distribution/site/current/PkgXferMgr.log",
+            "SYNTHETIC FIXTURE CURRENT FRAGMENT ONLY <![LOG[Phase=transfer; PackageId=LAB00007\n",
+        ),
+        (
+            2usize,
+            "evidence/server-dp-distribution/dp/current/SMSDPProv.log",
+            "SYNTHETIC FIXTURE CURRENT FRAGMENT ONLY <![LOG[Phase=validate; PackageId=LAB00007\n",
+        ),
+    ];
+
+    for (artifact_index, relative_path, contents) in fragments {
+        let fixture_path = temporary.root.join(relative_path);
+        std::fs::create_dir_all(
+            fixture_path
+                .parent()
+                .expect("temporary fixture has a parent directory"),
+        )
+        .expect("temporary fixture parent is created");
+        std::fs::write(&fixture_path, contents).expect("temporary fragment is written");
+        manifest["artifacts"][artifact_index]["captureState"] = json!("captured");
+        manifest["artifacts"][artifact_index]["rotation"]["fragmentComplete"] = json!(false);
+        manifest["artifacts"][artifact_index]["encoding"] = json!("utf-8");
+        manifest["artifacts"][artifact_index]["collectionLimit"] =
+            json!({"byteLimit": 4096, "limitApplied": false});
+        manifest["artifacts"][artifact_index]["bytesCopied"] = json!(contents.len());
+        manifest["artifacts"][artifact_index]["relativePath"] = json!(relative_path);
+        expected["coverage"][artifact_index]["state"] = json!("captured");
+    }
+    expected["artifactRequests"] = json!([{
+        "sourceId": "server-dp-distribution",
+        "reasonCode": "coverageRotationSplit"
+    }]);
+
+    let validation = validate_manifest(&temporary.root, &manifest)
+        .and_then(|parsed| validate_expected("incomplete", &manifest, &expected, &parsed));
+    assert!(
+        validation.is_ok(),
+        "captured incomplete fragments were not usable as bounded coverage gaps: {validation:?}"
     );
 }
