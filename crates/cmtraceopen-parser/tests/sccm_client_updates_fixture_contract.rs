@@ -402,11 +402,11 @@ fn string_array(values: &Value, field: &str) -> Vec<String> {
         .collect()
 }
 
-fn subject<'a>(expected: &'a Value, contract: &ScenarioContract) -> &'a Value {
+fn subject<'a>(expected: &'a Value, contract: &ScenarioContract) -> Option<&'a Value> {
     if contract.observations > 0 {
-        &expected["sourceLocalObservations"][0]
+        expected["sourceLocalObservations"].as_array()?.first()
     } else {
-        &expected["transactions"][0]
+        expected["transactions"].as_array()?.first()
     }
 }
 
@@ -439,7 +439,16 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     if expected["workflow"] != "updates" || expected["scenario"] != scenario {
         failures.push(format!("{scenario}: workflow/scenario identity drifted"));
     }
-    let state_chain = string_array(expected, "stateChain");
+    let state_chain = match expected["stateChain"].as_array() {
+        Some(values) => values
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect::<Vec<_>>(),
+        None => {
+            failures.push(format!("{scenario}: stateChain must be an array"));
+            Vec::new()
+        }
+    };
     if state_chain != STATE_CHAIN {
         failures.push(format!("{scenario}: state chain drifted: {state_chain:?}"));
     }
@@ -459,15 +468,20 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
         ));
     }
 
-    let transactions = expected["transactions"]
-        .as_array()
-        .expect("transactions must be an array");
-    let observations = expected["sourceLocalObservations"]
-        .as_array()
-        .expect("sourceLocalObservations must be an array");
-    let findings = expected["findings"]
-        .as_array()
-        .expect("findings must be an array");
+    let Some(transactions) = expected["transactions"].as_array() else {
+        failures.push(format!("{scenario}: transactions must be an array"));
+        return failures;
+    };
+    let Some(observations) = expected["sourceLocalObservations"].as_array() else {
+        failures.push(format!(
+            "{scenario}: sourceLocalObservations must be an array"
+        ));
+        return failures;
+    };
+    let Some(findings) = expected["findings"].as_array() else {
+        failures.push(format!("{scenario}: findings must be an array"));
+        return failures;
+    };
     if transactions.len() != contract.transactions
         || observations.len() != contract.observations
         || findings.len() != contract.findings
@@ -539,28 +553,32 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     }
 
     if contract.transactions + contract.observations > 0 {
-        let subject = subject(expected, contract);
-        if optional_json_string(subject, "phase").as_deref() != contract.phase
-            || json_string(subject, "state") != contract.state
-            || json_string(subject, "classification") != contract.classification
-            || json_string(subject, "confidenceCeiling") != contract.confidence_ceiling
-            || optional_json_string(subject, "lastSuccessfulPhase").as_deref()
-                != contract.last_successful_phase
-        {
-            failures.push(format!("{scenario}: primary subject outcome drifted"));
-        }
-        let next_artifact = subject["nextArtifact"]["logicalArtifactId"].as_str();
-        if next_artifact != contract.next_artifact {
-            failures.push(format!(
-                "{scenario}: expected next artifact {:?}, got {next_artifact:?}",
-                contract.next_artifact
-            ));
+        if let Some(subject) = subject(expected, contract) {
+            if optional_json_string(subject, "phase").as_deref() != contract.phase
+                || json_string(subject, "state") != contract.state
+                || json_string(subject, "classification") != contract.classification
+                || json_string(subject, "confidenceCeiling") != contract.confidence_ceiling
+                || optional_json_string(subject, "lastSuccessfulPhase").as_deref()
+                    != contract.last_successful_phase
+            {
+                failures.push(format!("{scenario}: primary subject outcome drifted"));
+            }
+            let next_artifact = subject["nextArtifact"]["logicalArtifactId"].as_str();
+            if next_artifact != contract.next_artifact {
+                failures.push(format!(
+                    "{scenario}: expected next artifact {:?}, got {next_artifact:?}",
+                    contract.next_artifact
+                ));
+            }
+        } else {
+            failures.push(format!("{scenario}: primary subject is missing"));
         }
     }
 
-    let coverage = expected["coverage"]
-        .as_array()
-        .expect("coverage must be an array");
+    let Some(coverage) = expected["coverage"].as_array() else {
+        failures.push(format!("{scenario}: coverage must be an array"));
+        return failures;
+    };
     let coverage_pairs = coverage
         .iter()
         .map(|entry| {
@@ -992,6 +1010,42 @@ fn record_proves_phase_outcome(
         (Some("confirmedFailure"), Some("failed")) => {
             message_contains_tokens(&record.message, &[phase_token, "terminal", "failure"])
         }
+        (Some("blockedOrDeferred"), Some("blockedOrDeferred")) => match phase {
+            "maintenanceWindow" => {
+                message_contains_tokens(&record.message, &["MaintenanceWindow", "deferred"])
+            }
+            "reboot" => message_contains_tokens(&record.message, &["Reboot", "pending"]),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn record_proves_successful_phase(
+    record: &SccmEvidence,
+    artifact: &IndexedArtifact,
+    key: &Value,
+    phase: &str,
+) -> bool {
+    let Some(basename) = artifact.manifest["originalBasename"].as_str() else {
+        return false;
+    };
+    if !phase_source_is_compatible(phase, basename) || !record_matches_transaction_key(record, key)
+    {
+        return false;
+    }
+
+    match phase {
+        "scan" => message_contains_tokens(&record.message, &["Scan", "succeeded"]),
+        "evaluate" => message_contains_tokens(&record.message, &["Evaluate", "applicable"]),
+        "locateSup" => message_contains_tokens(&record.message, &["LocateSup", "selected"]),
+        "download" => message_contains_tokens(&record.message, &["Download", "succeeded"]),
+        "maintenanceWindow" => {
+            message_contains_tokens(&record.message, &["MaintenanceWindow", "open"])
+        }
+        "install" => message_contains_tokens(&record.message, &["Install", "succeeded"]),
+        "reboot" => message_contains_tokens(&record.message, &["Reboot", "complete"]),
+        "report" => message_contains_tokens(&record.message, &["Report", "succeeded"]),
         _ => false,
     }
 }
@@ -1114,15 +1168,15 @@ fn transaction_binding_failures(
             )),
         }
 
-        let requires_phase_outcome = transaction["confidence"] == "high"
-            && transaction["confidenceCeiling"] == "high"
-            && matches!(
-                (
-                    transaction["classification"].as_str(),
-                    transaction["state"].as_str()
-                ),
-                (Some("success"), Some("succeeded")) | (Some("confirmedFailure"), Some("failed"))
-            );
+        let requires_phase_outcome = matches!(
+            (
+                transaction["classification"].as_str(),
+                transaction["state"].as_str()
+            ),
+            (Some("success"), Some("succeeded"))
+                | (Some("confirmedFailure"), Some("failed"))
+                | (Some("blockedOrDeferred"), Some("blockedOrDeferred"))
+        );
         if requires_phase_outcome
             && !compatible_records.iter().any(|record| {
                 index
@@ -1133,8 +1187,23 @@ fn transaction_binding_failures(
             })
         {
             failures.push(format!(
-                "{scenario}: phase outcome evidence is missing for {transaction_id}"
+                "{scenario}: phase/state evidence is missing for {transaction_id}; phase outcome evidence is missing"
             ));
+        }
+
+        if let Some(last_successful_phase) = transaction["lastSuccessfulPhase"].as_str() {
+            let last_success_is_proven = compatible_records.iter().any(|record| {
+                index
+                    .get(&record.reference.artifact_id)
+                    .is_some_and(|artifact| {
+                        record_proves_successful_phase(record, artifact, key, last_successful_phase)
+                    })
+            });
+            if !last_success_is_proven {
+                failures.push(format!(
+                    "{scenario}: last successful phase evidence is missing for {transaction_id}: {last_successful_phase}"
+                ));
+            }
         }
 
         let actual_gaps = string_array(transaction, "coverageGapArtifactIds");
@@ -1326,6 +1395,37 @@ fn expected_rotation_kind(basename: &str) -> &'static str {
     }
 }
 
+fn privacy_safe_opaque_segment(value: &str) -> bool {
+    (1..=96).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn privacy_safe_path_fingerprint(artifact_id: &str, fingerprint: &str) -> bool {
+    privacy_safe_opaque_segment(artifact_id)
+        && fingerprint
+            .strip_prefix("synthetic:")
+            .is_some_and(|opaque| opaque == artifact_id && privacy_safe_opaque_segment(opaque))
+}
+
+fn privacy_safe_sanitized_source_path(path: &str, basename: &str) -> bool {
+    let prefix = match basename {
+        "CBS.log" => "SYNTHETIC://root-a/Windows/Logs/CBS/",
+        "ReportingEvents.log" => "SYNTHETIC://root-a/WindowsUpdate/",
+        _ => "SYNTHETIC://root-a/CCM/Logs/",
+    };
+    path.strip_prefix(prefix) == Some(basename)
+}
+
 fn manifest_artifact_identity_failures(artifact: &Value) -> Vec<String> {
     let mut failures = Vec::new();
     let artifact_id = artifact["artifactId"].as_str().unwrap_or("<missing>");
@@ -1333,7 +1433,27 @@ fn manifest_artifact_identity_failures(artifact: &Value) -> Vec<String> {
         failures.push(format!("{artifact_id}: artifact role must remain client"));
     }
 
+    match &artifact["pathFingerprint"] {
+        Value::Null => {}
+        Value::String(fingerprint) if privacy_safe_path_fingerprint(artifact_id, fingerprint) => {}
+        _ => {
+            failures.push(format!(
+                "{artifact_id}: pathFingerprint must use the privacy-safe pathFingerprint grammar and bind exactly to artifactId"
+            ));
+        }
+    }
+
     let basename = artifact["originalBasename"].as_str();
+    match (&artifact["sanitizedSourcePath"], basename) {
+        (Value::Null, _) => {}
+        (Value::String(source_path), Some(basename))
+            if privacy_safe_sanitized_source_path(source_path, basename) => {}
+        _ => {
+            failures.push(format!(
+                "{artifact_id}: sanitizedSourcePath must use a privacy-safe sanitizedSourcePath and bind exactly to originalBasename"
+            ));
+        }
+    }
     let entry_id = artifact["designOnlyCatalog"]["entryId"].as_str();
     let expected_group = basename.and_then(expected_catalog_group);
     if expected_group.is_none() || entry_id != expected_group {
@@ -1377,22 +1497,31 @@ fn manifest_artifact_kind_failures(artifact: &Value) -> Vec<String> {
     let artifact_id = artifact["artifactId"].as_str().unwrap_or("<missing>");
     let group = artifact["designOnlyCatalog"]["entryId"].as_str();
     let basename = artifact["originalBasename"].as_str();
-    let expected_kind = if basename == Some("CBS.log") {
-        "cbsLog"
-    } else {
-        "ccmLog"
+    let expected_kind = match basename {
+        Some("CBS.log") => "cbsLog",
+        Some("ReportingEvents.log") => "supplementalLog",
+        _ => "ccmLog",
     };
-    if group.is_none()
+    let mut failures = Vec::new();
+    if basename == Some("ReportingEvents.log") && artifact["kind"] != "supplementalLog" {
+        failures.push(format!(
+            "{artifact_id}: ReportingEvents.log must use supplementalLog"
+        ));
+    } else if group.is_none()
         || (group != Some("client-windows-update-supplemental") && artifact["kind"] != "ccmLog")
         || artifact["kind"] != expected_kind
     {
-        vec![format!(
+        failures.push(format!(
             "{artifact_id}: artifact kind {:?} is incompatible with group/basename",
             artifact["kind"]
-        )]
-    } else {
-        Vec::new()
+        ));
     }
+    if artifact["kind"] == "supplementalLog" && !artifact["sourceVersion"].is_null() {
+        failures.push(format!(
+            "{artifact_id}: supplementalLog sourceVersion must be null"
+        ));
+    }
+    failures
 }
 
 fn coverage_state_for_artifact(artifact: &Value) -> Option<String> {
@@ -1507,7 +1636,21 @@ fn artifact_provenance_projection(manifest: &Value) -> (Value, Vec<String>) {
 fn profile_binding_failures(manifest: &Value, expected: &Value, scenario: &str) -> Vec<String> {
     let mut failures = Vec::new();
     let profile = &expected["extractionProfile"];
-    let validated_families = string_array(profile, "validatedArtifactFamilies");
+    let Some(validated_family_values) = profile["validatedArtifactFamilies"].as_array() else {
+        return vec![format!(
+            "{scenario}: validatedArtifactFamilies must be an array"
+        )];
+    };
+    let mut validated_families = Vec::new();
+    for value in validated_family_values {
+        let Some(value) = value.as_str() else {
+            failures.push(format!(
+                "{scenario}: validatedArtifactFamilies values must be strings"
+            ));
+            continue;
+        };
+        validated_families.push(value.to_owned());
+    }
     if profile["selectionState"] == "unvalidatedVersion" {
         if !validated_families.is_empty() {
             failures.push(format!(
@@ -3148,6 +3291,8 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
     let mut reporting_with_ccm_version = success_manifest.clone();
     reporting_with_ccm_version["artifacts"][7]["kind"] =
         Value::String("supplementalLog".to_owned());
+    reporting_with_ccm_version["artifacts"][7]["sourceVersion"] =
+        Value::String("5.00.TEST.0000".to_owned());
     mutations.push((
         "ReportingEvents source version",
         success_scenario.to_owned(),
@@ -3172,6 +3317,15 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
             "privacy-safe pathFingerprint",
         ));
     }
+    let mut non_string_fingerprint = success_manifest.clone();
+    non_string_fingerprint["artifacts"][0]["pathFingerprint"] = Value::from(323);
+    mutations.push((
+        "non-string pathFingerprint",
+        success_scenario.to_owned(),
+        non_string_fingerprint,
+        success_expected.clone(),
+        "privacy-safe pathFingerprint",
+    ));
 
     for source_path in [
         "SYNTHETIC://C:/Users/RealUser/ScanAgent.log",
@@ -3189,8 +3343,18 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
             "privacy-safe sanitizedSourcePath",
         ));
     }
+    let mut non_string_source_path = success_manifest.clone();
+    non_string_source_path["artifacts"][0]["sanitizedSourcePath"] = Value::from(323);
+    mutations.push((
+        "non-string sanitizedSourcePath",
+        success_scenario.to_owned(),
+        non_string_source_path,
+        success_expected.clone(),
+        "privacy-safe sanitizedSourcePath",
+    ));
 
-    let shape_mutations: [(&str, fn(&mut Value), &str); 6] = [
+    type ShapeMutation = (&'static str, fn(&mut Value), &'static str);
+    let shape_mutations: [ShapeMutation; 6] = [
         (
             "stateChain object",
             |expected: &mut Value| expected["stateChain"] = serde_json::json!({}),

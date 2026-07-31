@@ -92,9 +92,13 @@ source-local/limited observation with a low confidence ceiling where
 appropriate. It cannot later become exact through proximity.
 
 All required transaction fields must co-occur in one cited complete CCM record;
-fields from adjacent/same-minute records cannot form a key. A High success or
-confirmed failure additionally requires a compatible source record containing
-the exact key plus the claimed phase disposition/terminal marker.
+fields from adjacent/same-minute records cannot form a key. Every declared
+success, confirmed failure, or blocked/deferred current phase requires a
+compatible cited source record containing the exact key plus the claimed phase
+disposition. Every non-null `lastSuccessfulPhase` independently requires a
+compatible cited complete record containing the exact key and that phase's
+successful disposition. An unproven prior phase is `null`, not inferred from
+phase order.
 
 Every evidence reference names a physical artifact and inclusive physical line
 range. Complete logical CCM records are one or more physical lines only when
@@ -113,7 +117,9 @@ issue #333 must evaluate topology before correlation can become eligible.
 ## Supplemental servicing boundary
 
 CBS, DISM, Windows Update, and ReportingEvents evidence remains separately
-typed with explicit provenance. The `supplemental-conflict` case proves that an
+typed with explicit provenance. `CBS.log` uses `cbsLog`, while
+`ReportingEvents.log` uses `supplementalLog`; neither carries a ConfigMgr
+`sourceVersion`. The `supplemental-conflict` case proves that an
 unkeyed CBS error at the same instant as exact client install success remains a
 low-confidence supplemental symptom. It cannot override the client phase,
 merge by time, or create an SCCM/SUP server cause.
@@ -143,7 +149,7 @@ client sources themselves prove it.
 | `access-denied` | Scan evidence plus inaccessible update-handler source remains insufficient. | Scan | `client-updates` |
 | `malformed` | Unknown-version malformed key plus parse-failed/unsupported coverage stays keyless/low. | None | `client-updates` |
 | `invalid-offset` | Same-key cross-artifact ordering is non-comparable and capped low. | Scan | Comparable `client-updates` evidence |
-| `same-minute-separate` | Two exact update keys at the same instant remain two transactions. | Per transaction | Never time-merge |
+| `same-minute-separate` | Two exact update keys at the same instant remain two transactions. | Report / None | Never time-merge |
 
 `BlockedOrDeferred`, `InsufficientEvidence`, and low-confidence symptoms are
 not terminal failures. `Absent`, `AccessDenied`, `Capped`, `Skipped`,
@@ -182,9 +188,14 @@ the manifest. Absent/skipped sources omit physical-fragment completeness, and
 validated profile families are derived only from compatible captured evidence.
 Client role, catalog entry, logical group, basename, rotation, and evidence path
 must remain coherent. Relative paths and path fingerprints cannot alias another
-artifact. Every captured or capped physical artifact must also carry a
-non-empty path fingerprint; missing, null, empty, and whitespace-only values
-are invalid provenance rather than collision-safe identity.
+artifact. A public fingerprint is bounded to `synthetic:<artifactId>` with one
+lowercase alphanumeric/hyphen opaque segment. A public sanitized source path is
+bounded to the committed `SYNTHETIC://root-a/` CCM, CBS, or Windows Update
+namespace and must end in the exact declared basename; identity, domain,
+control-character, drive, user-profile, and basename-substitution paths fail
+closed. Every captured or capped physical artifact must also carry a non-empty
+path fingerprint; missing, null, empty, and whitespace-only values are invalid
+provenance rather than collision-safe identity.
 
 The corpus contains:
 

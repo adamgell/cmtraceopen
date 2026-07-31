@@ -216,7 +216,7 @@
         ]
       },
       "role": "client",
-      "kind": "ccmLog",
+      "kind": "supplementalLog",
       "captureState": "skipped",
       "originalBasename": "ReportingEvents.log",
       "sanitizedSourcePath": "SYNTHETIC://root-a/WindowsUpdate/ReportingEvents.log",
@@ -224,7 +224,7 @@
       "rotation": {
         "kind": "current"
       },
-      "sourceVersion": "5.00.TEST.0000",
+      "sourceVersion": null,
       "capturedUtc": "2026-07-30T02:59:59Z",
       "bytesCopied": 0,
       "relativePath": null
