@@ -2905,6 +2905,51 @@ fn exact_key_admission_requires_complete_value_tokens() {
 }
 
 #[test]
+fn correlation_boundary_declaration_is_bound_to_enforcement() {
+    let scenario = "completed";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    expected["correlationBoundary"]["scope"] = Value::String("crossSideHighConfidence".to_owned());
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("a cross-side scope exceeds the enforced client-side boundary");
+    assert!(error.contains("correlation scope"), "{error}");
+
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    expected["correlationBoundary"]["joinFields"] = serde_json::json!(["timestamp"]);
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("declared join fields must be the enforced exact key fields");
+    assert!(error.contains("exact key fields"), "{error}");
+
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    expected["correlationBoundary"]["forbiddenJoinFields"] =
+        serde_json::json!(["filename", "path", "timestamp", "displayName"]);
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("a forbidden list omitting component is not the enforced list");
+    assert!(error.contains("forbidden join fields"), "{error}");
+
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    expected["correlationBoundary"]["forbiddenJoinFields"] = serde_json::json!([]);
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("an empty forbidden list is not the enforced list");
+    assert!(error.contains("forbidden join fields"), "{error}");
+}
+
+#[test]
+fn noncapture_artifacts_cannot_carry_fragment_rotation_metadata() {
+    let scenario = "incomplete";
+    let scenario_root = task_sequence_root().join(scenario);
+    let mut manifest = read_json(&scenario_root.join("manifest.json"));
+    let expected = read_json(&scenario_root.join("expected.json"));
+    manifest["artifacts"][0]["rotation"]["fragmentComplete"] = Value::Bool(false);
+
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("an absent artifact cannot claim physical fragment completeness");
+    assert!(error.contains("fragment"), "{error}");
+}
+
+#[test]
 fn finding_evidence_cannot_mix_unrelated_exact_runs() {
     let scenario = "unrelated-runs";
     let scenario_root = task_sequence_root().join(scenario);
