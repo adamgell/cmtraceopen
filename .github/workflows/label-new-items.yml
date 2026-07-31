@@ -20,7 +20,10 @@ jobs:
             if (!item) return;
             const title = item.title || '';
 
-            // Domain/topic labels, keyed by a regex matched against the title.
+            // Domain/topic labels only, keyed by a regex matched against the title.
+            // Change-type labels (feature/test/build/bug) never belong here — they
+            // come exclusively from prefixRules/fallbackChangeTypeRules below, so a
+            // title can never end up with contradictory labels like bug + feature.
             const topicRules = [
               [/^epic:/i, ['epic']],
               [/\bsccm\b/i, ['sccm', 'parser']],
@@ -30,8 +33,8 @@ jobs:
               [/autopilot|\benrollment\b/i, ['enrollment']],
               [/\bdevice inventory\b|windows device|macos device/i, ['device']],
               [/win32 app|store app|platform-script|remediation|package deployment|shell-script execution/i, ['apps']],
-              [/build\(macos\)|notarization|developer id signing/i, ['build', 'macos']],
-              [/restart as administrator|\belevation\b/i, ['windows', 'security', 'feature']],
+              [/build\(macos\)|notarization|developer id signing/i, ['macos']],
+              [/restart as administrator|\belevation\b/i, ['windows', 'security']],
             ];
 
             // Change-type label, keyed off a conventional-commit-style PR title prefix.
@@ -42,9 +45,25 @@ jobs:
               [/^fix\(/i, ['bug']],
             ];
 
+            // Change-type inference for titles with no conventional-commit prefix
+            // (issues rarely use one). Only applied when no prefixRule matched, so
+            // an explicit fix(...)/feat(...) prefix always takes precedence.
+            const fallbackChangeTypeRules = [
+              [/restart as administrator|\belevation\b/i, ['feature']],
+            ];
+
             const labels = new Set(['enhancement']);
-            for (const [re, ls] of [...topicRules, ...prefixRules]) {
+            for (const [re, ls] of topicRules) {
               if (re.test(title)) ls.forEach(l => labels.add(l));
+            }
+            const matchedPrefix = prefixRules.some(([re]) => re.test(title));
+            for (const [re, ls] of prefixRules) {
+              if (re.test(title)) ls.forEach(l => labels.add(l));
+            }
+            if (!matchedPrefix) {
+              for (const [re, ls] of fallbackChangeTypeRules) {
+                if (re.test(title)) ls.forEach(l => labels.add(l));
+              }
             }
 
             await github.rest.issues.addLabels({
