@@ -324,6 +324,69 @@ fn malformed_rotation_and_public_provenance_values_fail_closed() {
 }
 
 #[test]
+fn configmgr_version_and_encoding_use_bounded_public_grammars() {
+    for version in ["5.00.9128.1007", "5.00.TEST.0000", "5.00.UNKNOWN.0000"] {
+        let mut artifact = synthetic_artifact("valid-version", "PolicyAgent.log");
+        artifact.artifact.configmgr_version = Some(version.to_owned());
+        assert!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![artifact],
+            })
+            .is_ok(),
+            "documented ConfigMgr version {version} should remain representable"
+        );
+    }
+
+    for version in [
+        "realuser",
+        "corp-example-test",
+        "domain-example-test",
+        r"5.00.C:\Users\RealUser",
+        "5.00.TEST.\0",
+    ] {
+        let mut artifact = synthetic_artifact("invalid-version", "PolicyAgent.log");
+        artifact.artifact.configmgr_version = Some(version.to_owned());
+        assert_eq!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![artifact],
+            }),
+            Err(SccmClientIntakeError::InvalidConfigMgrVersion),
+            "unsafe ConfigMgr version {version:?} must fail closed"
+        );
+    }
+
+    for encoding in ["utf-8", "utf-16le", "utf-16be", "windows-1252"] {
+        let mut artifact = synthetic_artifact("valid-version", "PolicyAgent.log");
+        artifact.artifact.encoding = Some(encoding.to_owned());
+        assert!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![artifact],
+            })
+            .is_ok(),
+            "supported encoding {encoding} should remain representable"
+        );
+    }
+
+    for encoding in [
+        "realuser",
+        "corp-example-test",
+        "domain-example-test",
+        r"C:\Users\RealUser",
+        "utf-8\0realuser",
+    ] {
+        let mut artifact = synthetic_artifact("invalid-version", "PolicyAgent.log");
+        artifact.artifact.encoding = Some(encoding.to_owned());
+        assert_eq!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![artifact],
+            }),
+            Err(SccmClientIntakeError::InvalidEncoding),
+            "unsafe encoding {encoding:?} must fail closed"
+        );
+    }
+}
+
+#[test]
 fn fragment_completeness_and_every_path_fingerprint_are_explicit_and_unambiguous() {
     let mut missing_completeness = synthetic_artifact("missing-completeness", "PolicyAgent.log");
     missing_completeness.relative_path =
