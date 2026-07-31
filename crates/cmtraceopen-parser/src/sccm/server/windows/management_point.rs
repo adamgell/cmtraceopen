@@ -1,3 +1,14 @@
+//! Server-local Management Point analysis for issue #328.
+//!
+//! The only selected extraction profile in this slice is
+//! `mp-server-5.00.test-v1` for the synthetic `5.00.TEST.0000` corpus. A
+//! transaction requires an exact request ID, optional exact policy ID, safe
+//! client handle, canonical site code, compatible Management Point handle,
+//! source ownership, complete physical provenance, and usable ordering
+//! provenance. `counterpart_ready_facts` are the contractual #333 handoff;
+//! this module never performs client/server correlation or infers a client
+//! cause.
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -185,8 +196,11 @@ pub struct SccmManagementPointCounterpartReadyFact {
     pub key: SccmManagementPointKey,
     pub phase: SccmManagementPointPhase,
     pub state: SccmManagementPointState,
+    pub classification: SccmManagementPointClassification,
+    pub confidence: SccmManagementPointConfidence,
     pub timestamp: SccmTimestamp,
     pub evidence: SccmEvidenceRef,
+    pub terminal_evidence: Option<SccmEvidenceRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -260,11 +274,15 @@ pub fn analyze_management_point(bundle: &SccmManagementPointBundle) -> SccmManag
     let source_by_artifact = bundle
         .sources
         .iter()
-        .filter(|source| safe_opaque_id(&source.artifact.artifact_id))
+        .filter(|source| {
+            safe_opaque_id(&source.artifact.artifact_id)
+                && artifact_id_is_unique(bundle, &source.artifact.artifact_id)
+        })
         .map(|source| (source.artifact.artifact_id.as_str(), source))
         .collect::<BTreeMap<_, _>>();
 
-    let topology_is_valid = valid_site_code(&bundle.topology.site_code)
+    let topology_site_code = normalize_site_code(&bundle.topology.site_code);
+    let topology_is_valid = topology_site_code.is_some()
         && valid_safe_handle(&bundle.topology.management_point_host_handle, "safe:mp:");
     let mut facts_by_request: BTreeMap<String, Vec<ManagementPointFact>> = BTreeMap::new();
     let mut rejected_references = Vec::new();
@@ -297,7 +315,7 @@ pub fn analyze_management_point(bundle: &SccmManagementPointBundle) -> SccmManag
 
         match parse_fact(evidence, source) {
             Some(fact)
-                if fact.site_code == bundle.topology.site_code
+                if topology_site_code.as_deref() == Some(fact.site_code.as_str())
                     && fact.management_point_host_handle
                         == bundle.topology.management_point_host_handle =>
             {
@@ -808,8 +826,12 @@ fn build_counterpart_fact(
         key: key.clone(),
         phase: fact.phase,
         state: transaction.state,
+        classification: transaction.classification,
+        confidence: transaction.confidence,
         timestamp: fact.timestamp.clone(),
         evidence: fact.reference.clone(),
+        terminal_evidence: (transaction.state == SccmManagementPointState::Failed)
+            .then(|| fact.reference.clone()),
     })
 }
 
@@ -834,10 +856,9 @@ fn parse_fact(
         None => None,
     };
     let client_handle = token_value(message, "ClientHandle")?;
-    let site_code = token_value(message, "SiteCode")?;
+    let site_code = normalize_site_code(&token_value(message, "SiteCode")?)?;
     let management_point_host_handle = token_value(message, "MPHandle")?;
     if !valid_safe_handle(&client_handle, "safe:client:")
-        || !valid_site_code(&site_code)
         || !valid_safe_handle(&management_point_host_handle, "safe:mp:")
     {
         return None;
@@ -1038,8 +1059,9 @@ fn has_nonzero_result(message: &str) -> bool {
         && u32::from_str_radix(hex, 16).is_ok_and(|value| value != 0)
 }
 
-fn valid_site_code(value: &str) -> bool {
-    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+fn normalize_site_code(value: &str) -> Option<String> {
+    (value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .then(|| value.to_ascii_uppercase())
 }
 
 fn valid_safe_handle(value: &str, prefix: &str) -> bool {
@@ -1068,6 +1090,16 @@ fn safe_opaque_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+}
+
+fn artifact_id_is_unique(bundle: &SccmManagementPointBundle, artifact_id: &str) -> bool {
+    bundle
+        .sources
+        .iter()
+        .filter(|source| source.artifact.artifact_id == artifact_id)
+        .take(2)
+        .count()
+        == 1
 }
 
 fn safe_evidence_reference(reference: &SccmEvidenceRef) -> bool {
@@ -1309,6 +1341,7 @@ fn append_unconsumed_explicit_coverage(
                     && source
                         .physical_line_end
                         .is_some_and(|line_end| line_end > 0)
+                    && artifact_id_is_unique(bundle, &source.artifact.artifact_id)
                     && source_is_admitted(source)
             })
         {
@@ -1536,6 +1569,9 @@ fn coverage_for_group(bundle: &SccmManagementPointBundle, group: &str) -> SccmCo
         if states.contains(&preferred) {
             return preferred;
         }
+    }
+    if states.contains(&SccmCoverageState::Captured) {
+        return SccmCoverageState::ParseFailed;
     }
     SccmCoverageState::Absent
 }

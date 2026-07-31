@@ -950,6 +950,19 @@ fn management_point_missing_captured_phase_is_not_reported_as_an_absent_artifact
         "Respond succeeded after retry",
         "Respond candidate retained without an outcome",
     );
+    let deferred = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| {
+            evidence
+                .message
+                .contains("Respond deferred retry scheduled")
+        })
+        .expect("response deferred evidence");
+    deferred.message = deferred.message.replace(
+        "Respond deferred retry scheduled",
+        "Respond candidate retained without a disposition",
+    );
 
     let analysis = analysis_value(&bundle);
     assert_no_high_success(&analysis, "missing captured response outcome");
