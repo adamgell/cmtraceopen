@@ -1256,7 +1256,7 @@ fn validate_contract(
         if ownership_records.iter().any(|record| {
             record.ordering_state != SccmTimeOrderingState::NormalizedUtc
                 || record.timestamp.is_none()
-                || !record.source_version.starts_with("5.00.TEST.")
+                || !source_version_matches_selected_profile(record.source_version.as_str())
         }) {
             return Err(
                 "ownership classification lacks usable timestamp/profile provenance".to_owned(),
@@ -1496,7 +1496,7 @@ fn validate_contract(
         if records.iter().any(|record| {
             record.ordering_state != SccmTimeOrderingState::NormalizedUtc
                 || record.timestamp.is_none()
-                || !record.source_version.starts_with("5.00.TEST.")
+                || !source_version_matches_selected_profile(record.source_version.as_str())
         }) {
             return Err(format!(
                 "{transaction_id} lacks usable time/profile provenance"
