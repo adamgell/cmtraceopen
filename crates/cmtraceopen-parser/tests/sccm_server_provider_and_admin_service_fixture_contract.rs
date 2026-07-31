@@ -2903,6 +2903,93 @@ fn high_success_requires_every_layer_phase_in_order() {
 }
 
 #[test]
+fn phase_specific_failures_require_the_named_failed_phase() {
+    let cases = [
+        (
+            "provider-authz-denied",
+            1_usize,
+            "authenticateOrAuthorize",
+            "receive",
+            "provider authorization",
+        ),
+        (
+            "admin-service-auth-failure",
+            1_usize,
+            "authenticateOrAuthorize",
+            "receive",
+            "Admin Service authentication",
+        ),
+        (
+            "provider-query-failure",
+            2_usize,
+            "executeProviderOperation",
+            "authenticateOrAuthorize",
+            "Provider operation",
+        ),
+        (
+            "admin-service-backend-failure",
+            3_usize,
+            "executeBackendOperation",
+            "route",
+            "Admin Service backend operation",
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (scenario, observation_index, failed_phase, replacement_phase, label) in cases {
+        for (mutation, replacement_phase) in [
+            ("without its named phase", Some(replacement_phase)),
+            ("with a successful named phase", None),
+        ] {
+            let manifest = read_json(scenario, "manifest.json").unwrap();
+            let mut expected = read_json(scenario, "expected.json").unwrap();
+            let mut records = normalized_records(scenario, &manifest);
+            assert!(
+                schema_failures_with_records(scenario, &manifest, &expected, &records).is_empty(),
+                "{scenario}: baseline contract is invalid"
+            );
+
+            let observation = &mut expected["transactions"][0]["observations"][observation_index];
+            if let Some(replacement_phase) = replacement_phase {
+                observation["phase"] = Value::String(replacement_phase.to_owned());
+            }
+            observation["disposition"] = Value::String("succeeded".to_owned());
+            let artifact_id = observation["evidence"][0]["artifactId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let start_line =
+                u32::try_from(observation["evidence"][0]["startLine"].as_u64().unwrap()).unwrap();
+            let end_line =
+                u32::try_from(observation["evidence"][0]["endLine"].as_u64().unwrap()).unwrap();
+            let record = records
+                .get_mut(&(artifact_id, start_line, end_line))
+                .expect("paired logical record exists");
+            if let Some(replacement_phase) = replacement_phase {
+                record.message = record.message.replacen(
+                    &format!("Phase={failed_phase}"),
+                    &format!("Phase={replacement_phase}"),
+                    1,
+                );
+            }
+            record.message =
+                record
+                    .message
+                    .replacen("Disposition=failed", "Disposition=succeeded", 1);
+
+            if schema_failures_with_records(scenario, &manifest, &expected, &records).is_empty() {
+                accepted.push(format!("{label} {mutation}"));
+            }
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "phase-specific failure summaries survived without their named failed phase: {accepted:#?}"
+    );
+}
+
+#[test]
 fn provider_retry_recovery_is_bound_to_the_failed_phase() {
     let scenario = "provider-retry";
     let manifest = read_json(scenario, "manifest.json").unwrap();
