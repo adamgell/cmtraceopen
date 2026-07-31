@@ -3440,3 +3440,119 @@ fn hierarchy_coderabbit_d78dc49_complete_lo_owns_send_phase() {
         "the sender.lo_ basename requires the canonical loUnderscore rotation"
     );
 }
+
+#[test]
+fn hierarchy_nested_output_contract_rejects_hidden_causality_and_raw_paths() {
+    let manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let expected = read_json("healthy-link", "expected.json").expect("healthy expected loads");
+    let mutations = [
+        (
+            "analysis contract accepted a server root-cause claim",
+            "analysisContract",
+            "serverRootCause",
+            serde_json::json!("remote site failed"),
+        ),
+        (
+            "extraction profile accepted a raw configured path",
+            "extractionProfile",
+            "rawConfiguredPath",
+            serde_json::json!(r"C:\Users\alice\Logs"),
+        ),
+        (
+            "correlation handoff accepted a time-only cause",
+            "correlationHandoff",
+            "timeOnlyCause",
+            serde_json::json!("same-minute outage"),
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (label, object, field, value) in mutations {
+        let mut mutated = expected.clone();
+        mutated[object][field] = value;
+        if identity_and_schema_failures("healthy-link", &manifest, &mutated).is_empty() {
+            accepted.push(label);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "nested output schema accepted unsupported fields: {accepted:?}"
+    );
+}
+
+#[test]
+fn hierarchy_candidate_identity_and_provenance_are_safe_bounded_opaque_ids() {
+    let manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let mutations = [
+        ("empty artifact ID", "artifactId", serde_json::json!("")),
+        (
+            "oversized artifact ID",
+            "artifactId",
+            serde_json::json!("a".repeat(129)),
+        ),
+        (
+            "path-shaped fingerprint",
+            "pathFingerprint",
+            serde_json::json!(r"synthetic:C:\Users\alice\sender.log"),
+        ),
+        (
+            "oversized fingerprint",
+            "pathFingerprint",
+            serde_json::json!(format!("synthetic:{}", "a".repeat(129))),
+        ),
+        (
+            "path-shaped rotation lineage",
+            "rotation.lineageId",
+            serde_json::json!(r"C:\Users\alice\sender.log"),
+        ),
+        (
+            "oversized rotation lineage",
+            "rotation.lineageId",
+            serde_json::json!("a".repeat(129)),
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (label, field, value) in mutations {
+        let mut mutated = manifest.clone();
+        if field == "rotation.lineageId" {
+            mutated["artifacts"][1]["rotation"]["lineageId"] = value;
+        } else {
+            mutated["artifacts"][1][field] = value;
+        }
+        if artifact_is_exact_candidate(&mutated, &mutated["artifacts"][1]) {
+            accepted.push(label);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "unsafe candidate identity/provenance values were admitted: {accepted:?}"
+    );
+}
+
+#[test]
+fn hierarchy_nonterminal_transactions_cannot_advertise_high_confidence_ceiling() {
+    let manifest = read_json("backlog-retry", "manifest.json").expect("backlog manifest loads");
+    let mut expected = read_json("backlog-retry", "expected.json").expect("backlog expected loads");
+    expected["transactions"][0]["confidenceCeiling"] = serde_json::json!("high");
+
+    let failures = identity_and_schema_failures("backlog-retry", &manifest, &expected);
+    assert!(
+        !failures.is_empty(),
+        "a nonterminal retry advertised a high confidence ceiling"
+    );
+}
+
+#[test]
+fn hierarchy_readme_distinguishes_metadata_from_raw_ccm_evidence() {
+    let readme = include_str!("fixtures/sccm/server/hierarchy_and_replication/README.md");
+
+    assert!(
+        readme.contains("Only these raw CCM files are used as evidence:"),
+        "README must distinguish raw CCM evidence from manifest/expected metadata"
+    );
+    assert!(readme.contains("`manifest.json` records additive SCCM artifact coverage"));
+    assert!(readme.contains("`expected.json` records the proposed #331 evidence"));
+}
