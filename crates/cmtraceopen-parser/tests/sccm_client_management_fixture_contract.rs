@@ -3163,3 +3163,97 @@ fn duplicate_coverage_gap_ownership_mutations_fail_closed() {
         "duplicate coverage gap mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn stale_mixed_selection_state_mutations_fail_closed() {
+    let stale_selection_error = "extraction profile identity/selection is invalid".to_owned();
+    let (mixed_root, mixed_manifest, mixed_expected) = load_contract("mixed-unrelated");
+
+    let upgrade_unknown_version = |manifest: &Value| {
+        let mut upgraded = manifest.clone();
+        let artifact = upgraded["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array")
+            .iter_mut()
+            .find(|artifact| artifact["artifactId"] == "mixed-owner-unknown")
+            .expect("mixed corpus has the unknown-version artifact");
+        artifact["sourceVersion"] = Value::String("5.00.TEST.3260".to_owned());
+        upgraded
+    };
+    let drop_unknown_profile_observation = |expected: &Value| {
+        let mut dropped = expected.clone();
+        dropped["sourceLocalObservations"]
+            .as_array_mut()
+            .expect("observations are an array")
+            .retain(|observation| observation["kind"] != "unknownProfile");
+        dropped
+    };
+
+    let upgraded_manifest = upgrade_unknown_version(&mixed_manifest);
+    let stale_mixed = drop_unknown_profile_observation(&mixed_expected);
+    assert_eq!(
+        validate_contract(
+            "mixed-unrelated",
+            &mixed_root,
+            &upgraded_manifest,
+            &stale_mixed,
+        ),
+        Err(stale_selection_error.clone()),
+        "stale mixedUnknownAndInvalid must fail on the derived selection state"
+    );
+
+    let mut stale_unknown_profile = drop_unknown_profile_observation(&mixed_expected);
+    stale_unknown_profile["extractionProfile"]["selectionState"] =
+        Value::String("unknownProfile".to_owned());
+    assert_eq!(
+        validate_contract(
+            "mixed-unrelated",
+            &mixed_root,
+            &upgraded_manifest,
+            &stale_unknown_profile,
+        ),
+        Err(stale_selection_error.clone()),
+        "stale unknownProfile must also fail on the derived selection state"
+    );
+
+    let mut derived_selected = drop_unknown_profile_observation(&mixed_expected);
+    derived_selected["extractionProfile"]["selectionState"] = Value::String("selected".to_owned());
+    assert_eq!(
+        validate_contract(
+            "mixed-unrelated",
+            &mixed_root,
+            &upgraded_manifest,
+            &derived_selected,
+        ),
+        Ok(()),
+        "the selected state derived from the surviving sets must be accepted"
+    );
+
+    let temporary = copy_scenario_to_temporary_root("mixed-unrelated", "remove-unknown-artifact");
+    std::fs::remove_file(
+        temporary
+            .root
+            .join("evidence/client-co-management/current/CoManagementHandler.log"),
+    )
+    .expect("temporary unknown-version evidence is removable");
+    let mut removed_manifest = mixed_manifest.clone();
+    removed_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .retain(|artifact| artifact["artifactId"] != "mixed-owner-unknown");
+    let mut removed_expected = mixed_expected.clone();
+    removed_expected["coverage"]
+        .as_array_mut()
+        .expect("coverage is an array")
+        .retain(|row| row["artifactId"] != "mixed-owner-unknown");
+    assert_eq!(
+        validate_contract(
+            "mixed-unrelated",
+            &temporary.root,
+            &removed_manifest,
+            &removed_expected,
+        ),
+        Err(stale_selection_error),
+        "removing the only unknown-version artifact must flip the derived selection state"
+    );
+}
