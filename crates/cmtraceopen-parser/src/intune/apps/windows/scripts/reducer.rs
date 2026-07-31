@@ -18,7 +18,7 @@ use super::models::{
     ScriptTransaction, ScriptTransactionKey,
 };
 use super::rules::{classify_record, RecordClassification};
-use super::sources::{classify_artifact, ScriptSourceInput};
+use super::sources::{classify_artifact, output_artifact_identity, ScriptSourceInput};
 
 /// Render a CCM offset in minutes as `+HH:MM` / `-HH:MM`.
 fn format_offset(minutes: i32) -> String {
@@ -363,6 +363,8 @@ pub fn analyze_script_bundle(inputs: &[ScriptSourceInput]) -> ScriptAnalysis {
     let mut records: Vec<PendingRecord> = Vec::new();
     let mut unclassified_records = 0u32;
     let mut unknown_version_observed = false;
+    // (policy, run) pairs proven to have a retained output artifact.
+    let mut output_artifact_keys: BTreeSet<(String, String)> = BTreeSet::new();
 
     for (artifact_index, input) in inputs.iter().enumerate() {
         let lines = parse_ime_content(&input.content);
@@ -371,6 +373,16 @@ pub fn analyze_script_bundle(inputs: &[ScriptSourceInput]) -> ScriptAnalysis {
         let artifact = classify_artifact(input, &components);
         let source_kind = artifact.source_kind;
         artifacts.push(artifact);
+
+        // A retained output artifact is evidence by its identity alone. Its
+        // contents are raw script stdout/stderr -- unbounded and frequently
+        // sensitive -- so they are registered, never parsed.
+        if source_kind == ScriptSourceKind::ScriptOutput {
+            if let Some(identity) = output_artifact_identity(input) {
+                output_artifact_keys.insert(identity);
+            }
+            continue;
+        }
 
         for (record_index, line) in lines.iter().enumerate() {
             let classification = classify_record(source_kind, &line.message);
@@ -452,7 +464,15 @@ pub fn analyze_script_bundle(inputs: &[ScriptSourceInput]) -> ScriptAnalysis {
 
     let mut transactions: Vec<ScriptTransaction> = Vec::new();
     for (key, indices) in grouped {
-        transactions.push(reduce_transaction(key, &indices, &records));
+        let has_output_artifact = key.run_id.as_ref().is_some_and(|run| {
+            output_artifact_keys.contains(&(key.policy_id.clone(), run.clone()))
+        });
+        transactions.push(reduce_transaction(
+            key,
+            &indices,
+            &records,
+            has_output_artifact,
+        ));
     }
 
     let mut missing_expected_sources = Vec::new();
@@ -482,6 +502,7 @@ fn reduce_transaction(
     key: ScriptTransactionKey,
     indices: &[usize],
     records: &[PendingRecord],
+    has_output_artifact: bool,
 ) -> ScriptTransaction {
     let mut ordered: Vec<usize> = indices.to_vec();
     // Ordering decides which attempt a retry sequence reports, so it has to be
@@ -524,7 +545,7 @@ fn reduce_transaction(
     let mut exit_token: Option<ScriptExitToken> = None;
     let mut attempts = 0u32;
     let mut bitness = ScriptInterpreterBitness::Unknown;
-    let mut has_output_evidence = false;
+    let mut has_output_evidence = has_output_artifact;
     let mut executions = 0u32;
     let mut transaction_saw_executor = false;
     let mut transaction_unknown_version = false;
@@ -598,7 +619,6 @@ fn reduce_transaction(
 
     ScriptTransaction {
         key,
-        display_name: None,
         bitness,
         observations: ordered
             .iter()

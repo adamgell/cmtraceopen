@@ -42,18 +42,18 @@ fn split_rotation(file_name: &str) -> (String, Option<u32>) {
         .or_else(|| trimmed.strip_suffix(".LOG"))
         .unwrap_or(trimmed);
 
-    // `_Name` marks an archived copy; treat the underscore as rotation evidence
-    // without an ordinal we can trust to be sequential.
+    // `_Name` marks an archived copy. It says the file is a rotation but not
+    // which one, so the ordinal stays `None`; reporting `Some(1)` would make it
+    // indistinguishable from an explicit `-1` and mislead ordering.
     let (without_ext, underscore_archive) = match without_ext.strip_prefix('_') {
         Some(rest) => (rest, true),
         None => (without_ext, false),
     };
 
+    let live_ordinal = if underscore_archive { None } else { Some(0) };
+
     let Some((stem, suffix)) = without_ext.rsplit_once('-') else {
-        return (
-            without_ext.to_string(),
-            if underscore_archive { Some(1) } else { Some(0) },
-        );
+        return (without_ext.to_string(), live_ordinal);
     };
 
     if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
@@ -77,14 +77,54 @@ fn split_rotation(file_name: &str) -> (String, Option<u32>) {
         }
     }
 
-    (
-        without_ext.to_string(),
-        if underscore_archive { Some(1) } else { Some(0) },
-    )
+    (without_ext.to_string(), live_ordinal)
+}
+
+/// `{policyId}_{runId}.output` / `.error` -- a retained script output artifact.
+///
+/// Unlike `AgentExecutor.log`, this name is not a bare word that any file could
+/// coincidentally carry: it encodes both halves of a transaction key plus a
+/// known extension, which is structure enough to classify on. The file's
+/// *contents* are raw script stdout/stderr and are deliberately never parsed.
+fn output_artifact_key(file_name: &str) -> Option<(String, String)> {
+    let trimmed = file_name.trim();
+    let stem = trimmed
+        .strip_suffix(".output")
+        .or_else(|| trimmed.strip_suffix(".error"))
+        .or_else(|| trimmed.strip_suffix(".OUTPUT"))
+        .or_else(|| trimmed.strip_suffix(".ERROR"))?;
+
+    let (policy, run) = stem.split_once('_')?;
+    if !is_guid(policy) || !is_guid(run) {
+        return None;
+    }
+    Some((policy.to_ascii_lowercase(), run.to_ascii_lowercase()))
+}
+
+fn is_guid(value: &str) -> bool {
+    let groups = [8usize, 4, 4, 4, 12];
+    let mut parts = value.split('-');
+    for expected in groups {
+        let Some(part) = parts.next() else {
+            return false;
+        };
+        if part.len() != expected || !part.chars().all(|c| c.is_ascii_hexdigit()) {
+            return false;
+        }
+    }
+    parts.next().is_none()
+}
+
+/// The transaction key a retained output artifact belongs to, if it is one.
+pub fn output_artifact_identity(input: &ScriptSourceInput) -> Option<(String, String)> {
+    output_artifact_key(&input.file_name)
 }
 
 /// The source kind a file name suggests, before content confirms it.
 fn candidate_from_name(file_name: &str) -> ScriptSourceKind {
+    if output_artifact_key(file_name).is_some() {
+        return ScriptSourceKind::ScriptOutput;
+    }
     let (stem, _) = split_rotation(file_name);
     match stem.to_ascii_lowercase().as_str() {
         "intunemanagementextension" => ScriptSourceKind::IntuneManagementExtension,
@@ -120,7 +160,10 @@ pub fn classify_artifact(
     let candidate = candidate_from_name(&input.file_name);
     let (_, rotation_ordinal) = split_rotation(&input.file_name);
 
-    let source_kind = if components_confirm(candidate, components) {
+    let source_kind = if candidate == ScriptSourceKind::ScriptOutput {
+        // Self-identifying by name; there is no CCM component to confirm.
+        candidate
+    } else if components_confirm(candidate, components) {
         candidate
     } else {
         ScriptSourceKind::Unknown
@@ -210,10 +253,31 @@ mod tests {
     }
 
     #[test]
-    fn underscore_archive_form_is_recognised_as_a_rotation() {
+    fn underscore_archive_form_is_a_rotation_without_a_trustworthy_ordinal() {
         let (stem, ordinal) = split_rotation("_AgentExecutor.log");
         assert_eq!(stem, "AgentExecutor");
-        assert_eq!(ordinal, Some(1));
+        // Not `Some(1)`: that would be indistinguishable from `-1`.
+        assert_eq!(ordinal, None);
+    }
+
+    #[test]
+    fn retained_output_artifact_is_classified_from_its_encoded_identity() {
+        let policy = "11111111-1111-4111-8111-111111111111";
+        let run = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1";
+        let artifact = classify_artifact(&input(&format!("{policy}_{run}.output")), &[]);
+        assert_eq!(artifact.source_kind, ScriptSourceKind::ScriptOutput);
+        assert_eq!(
+            output_artifact_key(&format!("{policy}_{run}.error")),
+            Some((policy.to_string(), run.to_string()))
+        );
+    }
+
+    #[test]
+    fn an_arbitrary_output_file_is_not_a_script_output_artifact() {
+        assert_eq!(output_artifact_key("build.output"), None);
+        assert_eq!(output_artifact_key("notaguid_alsonotaguid.output"), None);
+        let artifact = classify_artifact(&input("build.output"), &[]);
+        assert_eq!(artifact.source_kind, ScriptSourceKind::Unknown);
     }
 
     #[test]

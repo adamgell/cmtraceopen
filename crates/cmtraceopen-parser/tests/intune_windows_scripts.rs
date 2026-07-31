@@ -339,6 +339,11 @@ fn a_record_without_an_offset_reports_no_normalized_utc() {
     }
 }
 
+#[test]
+fn a_retained_output_artifact_satisfies_the_output_evidence_request() {
+    assert_scenario("nonzero-exit-with-retained-artifact");
+}
+
 // -- Cross-cutting contract -------------------------------------------------
 
 #[test]
@@ -368,7 +373,6 @@ fn analysis_serialization_is_camel_case_and_stable() {
     let transaction = &value["transactions"][0];
     for key in [
         "key",
-        "displayName",
         "bitness",
         "observations",
         "lastConfirmedPhase",

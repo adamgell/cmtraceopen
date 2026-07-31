@@ -125,15 +125,9 @@ pub fn redacted_export_projection(analysis: &ScriptAnalysis) -> ScriptAnalysis {
     coverage.artifacts = coverage.artifacts.iter().map(redact_artifact).collect();
 
     ScriptAnalysis {
-        transactions: analysis
-            .transactions
-            .iter()
-            .map(|transaction| {
-                let mut redacted = transaction.clone();
-                redacted.display_name = transaction.display_name.as_ref().map(redact_classified);
-                redacted
-            })
-            .collect(),
+        // Transactions carry no free text of their own; everything sensitive
+        // lives on the observations and artifacts below.
+        transactions: analysis.transactions.clone(),
         observations: analysis
             .observations
             .iter()

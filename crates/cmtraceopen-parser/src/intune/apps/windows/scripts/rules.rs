@@ -164,7 +164,7 @@ fn report_sent_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     re(
         &CELL,
-        r"(?i)\bresult\s+(?:has\s+been\s+)?sent\s+to\s+(?:the\s+)?service\s+successfully\b|\breport(?:ed|ing)?\s+result\s+succe",
+        r"(?i)\bresult\s+(?:has\s+been\s+)?sent\s+to\s+(?:the\s+)?service\s+successfully\b|\breport(?:ed|ing)?\s+result\s+succe(?:ss|ssfully|eded)\b",
     )
 }
 

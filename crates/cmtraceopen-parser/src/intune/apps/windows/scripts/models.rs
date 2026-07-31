@@ -79,8 +79,9 @@ pub enum ScriptSourceKind {
     IntuneManagementExtension,
     AgentExecutor,
     HealthScripts,
+    /// A retained `{policyId}_{runId}.output` / `.error` artifact. Its contents
+    /// are raw script output and are never parsed; its *name* is the evidence.
     ScriptOutput,
-    PolicyMetadata,
     Unknown,
 }
 
@@ -219,7 +220,6 @@ pub struct ScriptTransactionKey {
 #[serde(rename_all = "camelCase")]
 pub struct ScriptTransaction {
     pub key: ScriptTransactionKey,
-    pub display_name: Option<ScriptClassifiedString>,
     pub bitness: ScriptInterpreterBitness,
     /// Observation ids in source order.
     pub observations: Vec<String>,

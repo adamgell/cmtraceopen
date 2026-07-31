@@ -6,7 +6,6 @@
         "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
         "context": "system"
       },
-      "displayName": null,
       "bitness": "bit64",
       "observations": [
         "ime:1",
