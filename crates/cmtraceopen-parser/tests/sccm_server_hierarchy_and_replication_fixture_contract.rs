@@ -3360,3 +3360,21 @@ fn hierarchy_coderabbit_0a6ba32_identity_matrices_reject_unknown_scenarios() {
         expected_source_local_ids("healthy-link")
     );
 }
+
+#[test]
+fn hierarchy_coderabbit_d78dc49_complete_lo_owns_send_phase() {
+    let mut manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    manifest["artifacts"][1]["originalBasename"] = serde_json::json!("sender.lo_");
+    manifest["artifacts"][1]["rotation"]["kind"] = serde_json::json!("loUnderscore");
+
+    let groups = hierarchy_candidate_groups("healthy-link", &manifest)
+        .expect("candidate projection remains deterministic");
+    assert!(
+        groups.iter().flat_map(|group| &group.facts).any(|fact| {
+            fact.artifact_id == "healthy-02-sender"
+                && fact.phase == "send"
+                && fact.rotation_kind == "loUnderscore"
+        }),
+        "a complete admitted sender.lo_ record must not be silently skipped"
+    );
+}
