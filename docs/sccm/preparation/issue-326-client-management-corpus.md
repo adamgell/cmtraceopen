@@ -74,8 +74,9 @@ All values are bound to the named synthetic extraction profile. Handles use a
 `safe:` representation. Filename, component, same-minute timing, physical
 root, signal, display text, and ingestion order cannot create or merge a key.
 A terminal record is high-confidence only when the exact key is co-located,
-the source version selects the test profile, the CCM record is complete, and
-its additive SCCM timestamp envelope has normalized UTC provenance. Signless
+the source version matches the canonical `5.00.TEST.` plus four-decimal test
+profile grammar, the CCM record is complete, and its additive SCCM timestamp
+envelope has normalized UTC provenance. Signless
 legacy offsets retain their SCCM interpretation; seven-digit fractional tails
 remain offset-missing. Unknown profiles and unusable offsets stay source-local
 and noncorrelatable. Every artifact has a canonical `capturedUtc`, and no cited
@@ -98,8 +99,11 @@ The preparation manifest is additive and does not reuse generic
 - exact client role and logical source group;
 - exact source/capability admission state;
 - canonical capture-attempt time;
-- sanitized source path bound to the client role and logical source group, plus
-  a collision-safe path fingerprint when a candidate path was observed;
+- sanitized source path bound to the exact scenario, client role, logical
+  source group, and closed fixture layout, plus a lowercase opaque
+  `safe:path:326:` fingerprint when a candidate path was observed;
+- case-normalized physical source identity uniqueness enforced independently
+  of self-declared fingerprints;
 - unique bundle-relative path for physical bytes;
 - explicit current versus `.lo_` rotation and fragment completeness;
 - collection-cap provenance for capped bytes;
@@ -153,12 +157,14 @@ The focused Rust target dynamically proves that the validator rejects:
 - client artifacts relabeled as server role;
 - case-folded or invented source aliases;
 - raw Windows paths, cross-workflow evidence roots, server-shaped sanitized
-  paths, and aliased cross-root path fingerprints;
+  paths, identity-bearing synthetic paths/fingerprints, duplicate sanitized
+  physical identities, and aliased cross-root path fingerprints;
 - borrowed exact transaction keys;
 - substring field lookalikes, conflicting duplicate fields, and nested CCM
   envelopes;
 - contradictory ownership and ownership borrowed across workflows;
-- unversioned profile aliases and unknown-version promotion;
+- unversioned profile aliases, malformed in-prefix versions, and unknown-version
+  promotion;
 - capped coverage relabeled captured;
 - invalid/signless/missing-offset evidence promoted to high confidence and
   capture times earlier than cited evidence;
@@ -210,6 +216,12 @@ closes record/JSON field sets, binds paths and ownership to workflow source
 groups, requires exact scenario transaction cardinality and unique keys, and
 preserves malformed coverage semantics. The same focused target is green at
 17/17 only after those structural corrections.
+
+A subsequent independent review exposed four more physical-provenance
+bypasses: a malformed in-prefix source version, identity-bearing material
+inside a synthetic source path or fingerprint, and duplicate sanitized source
+identities hidden behind different fingerprints. The permanent contract now
+rejects all four while retaining the bounded synthetic corpus.
 
 ## Replay and acceptance limits
 

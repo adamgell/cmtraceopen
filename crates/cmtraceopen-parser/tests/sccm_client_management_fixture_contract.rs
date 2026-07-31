@@ -300,12 +300,30 @@ fn validate_source_path(
         .strip_prefix(&required_prefix)
         .unwrap_or_default();
     let lower_suffix = suffix.to_ascii_lowercase();
+    let components = suffix.split('/').collect::<Vec<_>>();
+    let shape_is_exact = match components.as_slice() {
+        [basename] => *basename == source_name,
+        [segment, basename] if *basename == source_name => matches!(
+            (scenario, logical_artifact, *segment),
+            (
+                "mixed-unrelated",
+                "client-notification",
+                "access" | "current"
+            ) | ("mixed-unrelated", "client-scripts", "root-a" | "root-b")
+        ),
+        _ => false,
+    };
     if !sanitized_source_path.starts_with(&required_prefix)
         || !sanitized_source_path.ends_with(source_name)
         || sanitized_source_path.contains(['\\', '\n', '\r'])
-        || suffix
-            .split('/')
-            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+        || !shape_is_exact
+        || suffix.split('/').any(|component| {
+            component.is_empty()
+                || matches!(component, "." | "..")
+                || !component
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
         || lower_suffix.contains("%2e")
         || suffix.contains(['?', '#'])
     {
@@ -314,6 +332,24 @@ fn validate_source_path(
         ));
     }
     Ok(())
+}
+
+fn path_fingerprint_is_safe(value: &str) -> bool {
+    value.strip_prefix("safe:path:326:").is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix.split('-').all(|segment| {
+                !segment.is_empty()
+                    && segment
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            })
+    })
+}
+
+fn source_version_matches_selected_profile(value: &str) -> bool {
+    value
+        .strip_prefix("5.00.TEST.")
+        .is_some_and(|suffix| suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn string_array(value: &Value, context: &str) -> Result<Vec<String>, String> {
@@ -829,6 +865,7 @@ fn validate_contract(
     let mut referenced_files = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
     let mut path_fingerprints = BTreeSet::new();
+    let mut physical_source_identities = BTreeSet::new();
     let mut expected_coverage = BTreeMap::new();
     let mut unknown_version_artifacts = BTreeSet::new();
     let mut invalid_offset_artifacts = BTreeSet::new();
@@ -937,16 +974,23 @@ fn validate_contract(
                 source_name,
                 sanitized_source_path,
             )?;
+            if !physical_source_identities.insert(sanitized_source_path.to_ascii_lowercase()) {
+                return Err(format!(
+                    "{artifact_id} collides with a sanitized physical source identity"
+                ));
+            }
             let path_fingerprint = required_string(artifact, "pathFingerprint", artifact_id)?;
-            if !path_fingerprint.starts_with("safe:path:326:")
-                || !path_fingerprints.insert(path_fingerprint.to_owned())
+            if !path_fingerprint_is_safe(path_fingerprint)
+                || !path_fingerprints.insert(path_fingerprint.to_ascii_lowercase())
             {
                 return Err(format!(
                     "{artifact_id} has blank, unsafe, or colliding path provenance"
                 ));
             }
             let source_version = required_string(artifact, "sourceVersion", artifact_id)?;
-            if required_parser_eligibility && !source_version.starts_with("5.00.TEST.") {
+            if required_parser_eligibility
+                && !source_version_matches_selected_profile(source_version)
+            {
                 unknown_version_artifacts.insert(artifact_id.to_owned());
             }
             let path = scenario_root.join(relative_path);
@@ -981,10 +1025,15 @@ fn validate_contract(
                     let source_path =
                         required_string(artifact, "sanitizedSourcePath", artifact_id)?;
                     validate_source_path(scenario, logical_artifact, source_name, source_path)?;
+                    if !physical_source_identities.insert(source_path.to_ascii_lowercase()) {
+                        return Err(format!(
+                            "{artifact_id} collides with a sanitized physical source identity"
+                        ));
+                    }
                     let path_fingerprint =
                         required_string(artifact, "pathFingerprint", artifact_id)?;
-                    if !path_fingerprint.starts_with("safe:path:326:")
-                        || !path_fingerprints.insert(path_fingerprint.to_owned())
+                    if !path_fingerprint_is_safe(path_fingerprint)
+                        || !path_fingerprints.insert(path_fingerprint.to_ascii_lowercase())
                     {
                         return Err(format!(
                             "{artifact_id} attempted path fingerprint is unsafe or colliding"
@@ -2698,5 +2747,74 @@ fn source_workflow_root_and_sanitized_role_path_mutation_fails_closed() {
     assert!(
         !mutation_was_accepted("script-success", &temporary.root, &manifest, &expected),
         "cross-workflow evidence root and server-shaped sanitized path were accepted"
+    );
+}
+
+#[test]
+fn version_and_physical_identity_provenance_mutations_fail_closed() {
+    let (script_root, script_manifest, script_expected) = load_contract("script-success");
+    validate_contract(
+        "script-success",
+        &script_root,
+        &script_manifest,
+        &script_expected,
+    )
+    .expect("the bounded synthetic source contract remains valid");
+    let mut accepted = Vec::new();
+
+    let mut malformed_version = script_manifest.clone();
+    malformed_version["artifacts"][0]["sourceVersion"] =
+        Value::String("5.00.TEST.UNKNOWN".to_owned());
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &malformed_version,
+        &script_expected,
+    ) {
+        accepted.push("malformed source version retained selected profile");
+    }
+
+    let mut leaking_fingerprint = script_manifest.clone();
+    leaking_fingerprint["artifacts"][0]["pathFingerprint"] =
+        Value::String("safe:path:326:C:/Users/RealUser/Scripts.log".to_owned());
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &leaking_fingerprint,
+        &script_expected,
+    ) {
+        accepted.push("identity-bearing path fingerprint");
+    }
+
+    let mut leaking_source_path = script_manifest.clone();
+    leaking_source_path["artifacts"][0]["sanitizedSourcePath"] = Value::String(
+        "SYNTHETIC://client/management/script-success/client-scripts/C:/Users/RealUser/current/Scripts.log"
+            .to_owned(),
+    );
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &leaking_source_path,
+        &script_expected,
+    ) {
+        accepted.push("identity-bearing synthetic source path");
+    }
+
+    let (mixed_root, mixed_manifest, mixed_expected) = load_contract("mixed-unrelated");
+    let mut duplicate_source_identity = mixed_manifest;
+    duplicate_source_identity["artifacts"][4]["sanitizedSourcePath"] =
+        duplicate_source_identity["artifacts"][3]["sanitizedSourcePath"].clone();
+    if mutation_was_accepted(
+        "mixed-unrelated",
+        &mixed_root,
+        &duplicate_source_identity,
+        &mixed_expected,
+    ) {
+        accepted.push("duplicate physical source identity under distinct fingerprints");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "version or physical provenance mutations were accepted: {accepted:?}"
     );
 }
