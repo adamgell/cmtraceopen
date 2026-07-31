@@ -91,6 +91,11 @@ unknown-version, rotation-split, capped, or invalid-offset evidence retains a
 source-local/limited observation with a low confidence ceiling where
 appropriate. It cannot later become exact through proximity.
 
+All required transaction fields must co-occur in one cited complete CCM record;
+fields from adjacent/same-minute records cannot form a key. A High success or
+confirmed failure additionally requires a compatible source record containing
+the exact key plus the claimed phase disposition/terminal marker.
+
 Every evidence reference names a physical artifact and inclusive physical line
 range. Complete logical CCM records are one or more physical lines only when
 the manifest proves a complete fragment; the partial rotation/capped inputs
@@ -154,6 +159,7 @@ The handoff explicitly records:
 - #333 owns any future pairwise correlation;
 - time alone is never eligible;
 - topology compatibility is not evaluated here;
+- an explicitly incompatible topology is never correlation-eligible;
 - bundle capture host is not SUP evidence;
 - no server cause is claimed; and
 - missing/unvalidated client source evidence emits no counterpart-ready fact.
@@ -169,6 +175,9 @@ artifact/coverage/transaction arrays, and stable synthetic keys/handles.
 Expected coverage and artifact provenance are exact, one-to-one projections of
 the manifest. Absent/skipped sources omit physical-fragment completeness, and
 validated profile families are derived only from compatible captured evidence.
+Client role, catalog entry, logical group, basename, rotation, and evidence path
+must remain coherent. Relative paths and path fingerprints cannot alias another
+artifact.
 
 The corpus contains:
 

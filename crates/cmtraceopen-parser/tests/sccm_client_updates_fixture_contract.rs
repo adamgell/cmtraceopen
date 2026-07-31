@@ -902,6 +902,100 @@ fn exact_message_field<'a>(message: &'a str, field: &str) -> Option<&'a str> {
     })
 }
 
+fn record_matches_transaction_key(record: &SccmEvidence, key: &Value) -> bool {
+    [
+        ("updateId", "UpdateId"),
+        ("ciId", "CiId"),
+        ("contentId", "ContentId"),
+        ("updateJobId", "UpdateJobId"),
+        ("clientHandle", "ClientHandle"),
+        ("siteCode", "SiteCode"),
+    ]
+    .iter()
+    .all(|(json_field, message_field)| {
+        key[*json_field]
+            .as_str()
+            .is_some_and(|value| exact_message_field(&record.message, message_field) == Some(value))
+    }) && key["supHostHandle"].as_str().is_none_or(|sup_handle| {
+        exact_message_field(&record.message, "SupHostHandle") == Some(sup_handle)
+    })
+}
+
+fn message_contains_tokens(message: &str, expected: &[&str]) -> bool {
+    let tokens = message.split_ascii_whitespace().collect::<Vec<_>>();
+    tokens
+        .windows(expected.len())
+        .any(|window| window == expected)
+}
+
+fn phase_source_is_compatible(phase: &str, basename: &str) -> bool {
+    match phase {
+        "scan" => basename == "ScanAgent.log",
+        "evaluate" => matches!(basename, "ScanAgent.log" | "WUAHandler.log"),
+        "locateSup" => basename == "LocationServices.log",
+        "download" => matches!(
+            basename,
+            "DataTransferService.log" | "ContentTransferManager.log" | "UpdatesDeployment.log"
+        ),
+        "maintenanceWindow" => matches!(
+            basename,
+            "ServiceWindowManager.log" | "UpdatesHandler.log" | "UpdatesDeployment.log"
+        ),
+        "install" => matches!(basename, "UpdatesHandler.log" | "UpdatesDeployment.log"),
+        "reboot" => matches!(basename, "RebootCoordinator.log" | "UpdatesDeployment.log"),
+        "report" => matches!(basename, "StateMessage.log" | "UpdatesHandler.log"),
+        _ => false,
+    }
+}
+
+fn phase_token(phase: &str) -> Option<&'static str> {
+    match phase {
+        "scan" => Some("Scan"),
+        "evaluate" => Some("Evaluate"),
+        "locateSup" => Some("LocateSup"),
+        "download" => Some("Download"),
+        "maintenanceWindow" => Some("MaintenanceWindow"),
+        "install" => Some("Install"),
+        "reboot" => Some("Reboot"),
+        "report" => Some("Report"),
+        _ => None,
+    }
+}
+
+fn record_proves_phase_outcome(
+    record: &SccmEvidence,
+    artifact: &IndexedArtifact,
+    transaction: &Value,
+) -> bool {
+    let Some(phase) = transaction["phase"].as_str() else {
+        return false;
+    };
+    let Some(phase_token) = phase_token(phase) else {
+        return false;
+    };
+    let Some(basename) = artifact.manifest["originalBasename"].as_str() else {
+        return false;
+    };
+    if !phase_source_is_compatible(phase, basename)
+        || !record_matches_transaction_key(record, &transaction["key"])
+    {
+        return false;
+    }
+
+    match (
+        transaction["classification"].as_str(),
+        transaction["state"].as_str(),
+    ) {
+        (Some("success"), Some("succeeded")) => {
+            message_contains_tokens(&record.message, &[phase_token, "succeeded"])
+        }
+        (Some("confirmedFailure"), Some("failed")) => {
+            message_contains_tokens(&record.message, &[phase_token, "terminal", "failure"])
+        }
+        _ => false,
+    }
+}
+
 fn expected_transaction_gaps(scenario: &str) -> &'static [&'static str] {
     match scenario {
         "access-denied" => &["client-updates"],
@@ -972,6 +1066,14 @@ fn transaction_binding_failures(
                 ));
             }
         }
+        if !compatible_records
+            .iter()
+            .any(|record| record_matches_transaction_key(record, key))
+        {
+            failures.push(format!(
+                "{scenario}: complete exact key tuple for {transaction_id} does not co-occur in one cited profile-compatible CCM record"
+            ));
+        }
         if key["confidence"] != "exact"
             || key["extractionProfileId"].as_str() != profile_id
             || key["siteCode"] != "LAB"
@@ -1010,6 +1112,29 @@ fn transaction_binding_failures(
             None => failures.push(format!(
                 "{scenario}: unavailable supHostHandle must be represented as null"
             )),
+        }
+
+        let requires_phase_outcome = transaction["confidence"] == "high"
+            && transaction["confidenceCeiling"] == "high"
+            && matches!(
+                (
+                    transaction["classification"].as_str(),
+                    transaction["state"].as_str()
+                ),
+                (Some("success"), Some("succeeded")) | (Some("confirmedFailure"), Some("failed"))
+            );
+        if requires_phase_outcome
+            && !compatible_records.iter().any(|record| {
+                index
+                    .get(&record.reference.artifact_id)
+                    .is_some_and(|artifact| {
+                        record_proves_phase_outcome(record, artifact, transaction)
+                    })
+            })
+        {
+            failures.push(format!(
+                "{scenario}: phase outcome evidence is missing for {transaction_id}"
+            ));
         }
 
         let actual_gaps = string_array(transaction, "coverageGapArtifactIds");
@@ -1172,6 +1297,79 @@ fn experimental_profile_causality_failures(expected: &Value) -> Vec<String> {
             );
         }
     }
+    failures
+}
+
+fn expected_catalog_group(basename: &str) -> Option<&'static str> {
+    match basename {
+        "ScanAgent.log"
+        | "ScanAgent.lo_"
+        | "WUAHandler.log"
+        | "UpdatesDeployment.log"
+        | "UpdatesHandler.log"
+        | "UpdatesStore.log" => Some("client-updates"),
+        "LocationServices.log" => Some("client-location-services-shared"),
+        "DataTransferService.log" | "ContentTransferManager.log" => Some("client-content"),
+        "ServiceWindowManager.log" => Some("client-maintenance-window"),
+        "RebootCoordinator.log" => Some("client-reboot"),
+        "StateMessage.log" => Some("client-policy-state"),
+        "CBS.log" | "ReportingEvents.log" => Some("client-windows-update-supplemental"),
+        _ => None,
+    }
+}
+
+fn expected_rotation_kind(basename: &str) -> &'static str {
+    if basename.ends_with(".lo_") {
+        "lo"
+    } else {
+        "current"
+    }
+}
+
+fn manifest_artifact_identity_failures(artifact: &Value) -> Vec<String> {
+    let mut failures = Vec::new();
+    let artifact_id = artifact["artifactId"].as_str().unwrap_or("<missing>");
+    if artifact["role"] != "client" {
+        failures.push(format!("{artifact_id}: artifact role must remain client"));
+    }
+
+    let basename = artifact["originalBasename"].as_str();
+    let entry_id = artifact["designOnlyCatalog"]["entryId"].as_str();
+    let expected_group = basename.and_then(expected_catalog_group);
+    if expected_group.is_none() || entry_id != expected_group {
+        failures.push(format!(
+            "{artifact_id}: catalog entry/logical group is incompatible with basename {basename:?}"
+        ));
+    }
+    if expected_group.is_none_or(|group| {
+        artifact["designOnlyCatalog"]["groupMemberships"] != serde_json::json!([group])
+    }) {
+        failures.push(format!(
+            "{artifact_id}: group memberships must contain one canonical logical group"
+        ));
+    }
+
+    let rotation_kind = artifact["rotation"]["kind"].as_str();
+    if basename.is_none_or(|basename| rotation_kind != Some(expected_rotation_kind(basename))) {
+        failures.push(format!(
+            "{artifact_id}: rotation kind is incompatible with the original basename"
+        ));
+    }
+
+    if let (Some(relative_path), Some(entry_id), Some(rotation_kind), Some(basename)) = (
+        artifact["relativePath"].as_str(),
+        entry_id,
+        rotation_kind,
+        basename,
+    ) {
+        let expected_path = format!("evidence/{entry_id}/{rotation_kind}/{basename}");
+        if relative_path != expected_path {
+            failures.push(format!(
+                "{artifact_id}: relativePath is incompatible with catalog group/rotation/basename; expected {expected_path}"
+            ));
+        }
+    }
+
     failures
 }
 
@@ -1375,9 +1573,35 @@ fn manifest_expected_binding_failures(
             "{scenario}: manifest artifact IDs must be unique and sorted"
         ));
     }
+    let mut relative_path_owners = BTreeMap::new();
+    let mut path_fingerprint_owners = BTreeMap::new();
     for artifact in artifacts {
+        let artifact_id = artifact["artifactId"].as_str().unwrap_or("<missing>");
+        if let Some(relative_path) = artifact["relativePath"].as_str() {
+            if let Some(first_id) =
+                relative_path_owners.insert(relative_path.to_owned(), artifact_id.to_owned())
+            {
+                failures.push(format!(
+                    "{scenario}: duplicate physical alias relativePath {relative_path:?} for {first_id} and {artifact_id}"
+                ));
+            }
+        }
+        if let Some(path_fingerprint) = artifact["pathFingerprint"].as_str() {
+            if let Some(first_id) =
+                path_fingerprint_owners.insert(path_fingerprint.to_owned(), artifact_id.to_owned())
+            {
+                failures.push(format!(
+                    "{scenario}: duplicate physical alias pathFingerprint {path_fingerprint:?} for {first_id} and {artifact_id}"
+                ));
+            }
+        }
         failures.extend(
             manifest_artifact_failures(scenario_dir, artifact)
+                .into_iter()
+                .map(|failure| format!("{scenario}: {failure}")),
+        );
+        failures.extend(
+            manifest_artifact_identity_failures(artifact)
                 .into_iter()
                 .map(|failure| format!("{scenario}: {failure}")),
         );
@@ -1473,6 +1697,11 @@ fn counterpart_source_failures(
     ];
 
     for fact in facts {
+        if fact["topologyCompatible"] == false && fact["correlationEligible"] != false {
+            failures.push(
+                "counterpart topology mismatch cannot remain correlation eligible".to_owned(),
+            );
+        }
         if fact["keyConfidence"] != "exact"
             || fact["correlationEligible"] != true
             || fact["timeOnlyEligible"] != false
@@ -2418,6 +2647,227 @@ fn software_update_fixture_contract_rejects_review_adversarial_mutations() {
     assert_rejected(
         &failures_for("no-sup", &nonphysical_fragment, &no_sup_expected),
         "nonphysical rotation fragmentComplete",
+    );
+}
+
+#[test]
+fn software_update_fixture_rejects_report_success_without_report_evidence() {
+    let scenario = "success";
+    let scenario_dir = updates_root().join(scenario);
+    let manifest = read_json(&scenario_dir.join("manifest.json"));
+    let mut expected = read_json(&scenario_dir.join("expected.json"));
+    expected["transactions"][0]["evidence"] = serde_json::json!([
+        {
+            "artifactId": "updates-success-01-scan",
+            "startLine": 1,
+            "endLine": 2
+        },
+        {
+            "artifactId": "updates-success-02-sup",
+            "startLine": 1,
+            "endLine": 1
+        }
+    ]);
+    let contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == scenario)
+        .expect("success contract exists");
+    let failures = scenario_semantic_failures(&scenario_dir, &manifest, &expected, contract);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("phase outcome evidence")),
+        "Report/High success without Report evidence was accepted:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn software_update_fixture_rejects_install_failure_without_terminal_evidence() {
+    let scenario = "install-failure";
+    let scenario_dir = updates_root().join(scenario);
+    let manifest = read_json(&scenario_dir.join("manifest.json"));
+    let mut expected = read_json(&scenario_dir.join("expected.json"));
+    let reduced_evidence = serde_json::json!([
+        {
+            "artifactId": "updates-install-failure-01-scan",
+            "startLine": 1,
+            "endLine": 2
+        },
+        {
+            "artifactId": "updates-install-failure-02-sup",
+            "startLine": 1,
+            "endLine": 1
+        }
+    ]);
+    expected["transactions"][0]["evidence"] = reduced_evidence.clone();
+    expected["findings"][0]["evidence"] = reduced_evidence;
+    let contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == scenario)
+        .expect("install-failure contract exists");
+    let failures = scenario_semantic_failures(&scenario_dir, &manifest, &expected, contract);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("phase outcome evidence")),
+        "Install/High confirmedFailure without terminal evidence was accepted:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn software_update_fixture_rejects_cross_record_exact_key_chimeras() {
+    let scenario_dir = updates_root().join("same-minute-separate");
+    let manifest = read_json(&scenario_dir.join("manifest.json"));
+    let mut expected = read_json(&scenario_dir.join("expected.json"));
+    expected["transactions"][0]["evidence"][0]["endLine"] = Value::from(2);
+    for field in ["ciId", "contentId", "updateJobId", "clientHandle"] {
+        expected["transactions"][0]["key"][field] =
+            expected["transactions"][1]["key"][field].clone();
+    }
+    let (index, index_failures) = evidence_index(&scenario_dir, &manifest);
+    assert!(index_failures.is_empty(), "{}", index_failures.join("\n"));
+    let failures = transaction_binding_failures("same-minute-separate", &expected, &index);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("complete exact key tuple")),
+        "same-minute cross-record key chimera was accepted:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn software_update_fixture_rejects_manifest_aliases_and_identity_drift() {
+    let scenario = "success";
+    let scenario_dir = updates_root().join(scenario);
+    let base_manifest = read_json(&scenario_dir.join("manifest.json"));
+    let base_expected = read_json(&scenario_dir.join("expected.json"));
+    let contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == scenario)
+        .expect("success contract exists");
+    let mut missing_rejections = Vec::new();
+    let mut require_rejection = |label: &str, manifest: &Value, expected: &Value, marker: &str| {
+        let failures = scenario_semantic_failures(&scenario_dir, manifest, expected, contract);
+        if !failures.iter().any(|failure| failure.contains(marker)) {
+            missing_rejections.push(format!(
+                "{label} (wanted {marker:?}; got {})",
+                failures.join(" | ")
+            ));
+        }
+    };
+
+    let mut duplicate_group = base_manifest.clone();
+    duplicate_group["artifacts"][0]["designOnlyCatalog"]["groupMemberships"]
+        .as_array_mut()
+        .expect("group memberships are an array")
+        .push(Value::String("client-updates".to_owned()));
+    require_rejection(
+        "duplicate group alias",
+        &duplicate_group,
+        &base_expected,
+        "group memberships",
+    );
+
+    let mut duplicate_artifact = base_manifest.clone();
+    let mut artifact_alias = duplicate_artifact["artifacts"][0].clone();
+    artifact_alias["artifactId"] = Value::String("updates-success-09-scan-alias".to_owned());
+    duplicate_artifact["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .push(artifact_alias);
+    let mut alias_expected = base_expected.clone();
+    let mut provenance_alias = alias_expected["artifactProvenance"][0].clone();
+    provenance_alias["artifactId"] = Value::String("updates-success-09-scan-alias".to_owned());
+    alias_expected["artifactProvenance"]
+        .as_array_mut()
+        .expect("artifact provenance is an array")
+        .push(provenance_alias);
+    require_rejection(
+        "relativePath/pathFingerprint artifact alias",
+        &duplicate_artifact,
+        &alias_expected,
+        "duplicate physical alias",
+    );
+
+    let mut server_role = base_manifest.clone();
+    server_role["artifacts"][0]["role"] = Value::String("server".to_owned());
+    require_rejection(
+        "server role in client corpus",
+        &server_role,
+        &base_expected,
+        "artifact role",
+    );
+
+    let mut catalog_substitution = base_manifest.clone();
+    catalog_substitution["artifacts"][6]["designOnlyCatalog"]["entryId"] =
+        Value::String("client-content".to_owned());
+    let mut profile_substitution = base_expected.clone();
+    profile_substitution["extractionProfile"]["validatedArtifactFamilies"]
+        .as_array_mut()
+        .expect("validated families are an array")
+        .retain(|family| family != "client-policy-state");
+    require_rejection(
+        "catalog entry/profile family substitution",
+        &catalog_substitution,
+        &profile_substitution,
+        "catalog entry/logical group",
+    );
+
+    let mut wrong_rotation = base_manifest.clone();
+    wrong_rotation["artifacts"][0]["rotation"]["kind"] = Value::String("lo".to_owned());
+    require_rejection(
+        "rotation/path mismatch",
+        &wrong_rotation,
+        &base_expected,
+        "rotation kind",
+    );
+
+    let mut redirected_report = base_manifest.clone();
+    let scan = redirected_report["artifacts"][0].clone();
+    for field in [
+        "relativePath",
+        "originalBasename",
+        "sanitizedSourcePath",
+        "bytesCopied",
+        "encoding",
+        "collectionLimit",
+        "sourceVersion",
+        "rotation",
+    ] {
+        redirected_report["artifacts"][6][field] = scan[field].clone();
+    }
+    require_rejection(
+        "report artifact redirected to scan path",
+        &redirected_report,
+        &base_expected,
+        "relativePath is incompatible",
+    );
+
+    assert!(
+        missing_rejections.is_empty(),
+        "semantic validator accepted manifest drift:\n{}",
+        missing_rejections.join("\n")
+    );
+}
+
+#[test]
+fn software_update_fixture_rejects_topology_mismatch_as_correlation_eligible() {
+    let scenario = "success";
+    let scenario_dir = updates_root().join(scenario);
+    let manifest = read_json(&scenario_dir.join("manifest.json"));
+    let mut expected = read_json(&scenario_dir.join("expected.json"));
+    expected["correlationHandoff"]["counterpartReadyFacts"][0]["topologyCompatible"] =
+        Value::Bool(false);
+    let failures = counterpart_source_failures(&scenario_dir, &manifest, &expected);
+    assert!(
+        failures
+            .iter()
+            .any(|failure| failure.contains("topology mismatch")),
+        "topology-incompatible correlation fact was accepted:\n{}",
+        failures.join("\n")
     );
 }
 

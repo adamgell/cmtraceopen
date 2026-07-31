@@ -50,10 +50,16 @@ normalized cited CCM record; an unavailable SUP handle remains `null`. They
 remain client facts for future #330/#333 work. Time alone is never eligible,
 topology is not evaluated here, and no server cause is claimed.
 
+All required exact transaction fields must co-occur in one cited complete CCM
+record. High success/failure outcomes also require an exact-key,
+phase-compatible source record with the claimed disposition/terminal marker.
+An explicitly incompatible topology cannot remain correlation-eligible.
+
 Expected coverage and artifact provenance are exact, one-to-one projections of
 the manifest. Absent/skipped sources do not claim physical-fragment
 completeness, and profile families are validated only from compatible captured
-evidence.
+evidence. Client role/catalog/group/basename/rotation/path identities are
+coherent, and physical paths/fingerprints cannot alias another artifact.
 
 ## Replay
 
