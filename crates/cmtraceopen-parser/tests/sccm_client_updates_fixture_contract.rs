@@ -2978,6 +2978,95 @@ fn software_update_fixture_rejects_cbs_log_with_configmgr_source_version() {
 }
 
 #[test]
+fn software_update_fixture_rejects_duplicate_and_overlapping_citations() {
+    let success_scenario = "success";
+    let success_dir = updates_root().join(success_scenario);
+    let success_manifest = read_json(&success_dir.join("manifest.json"));
+    let success_expected = read_json(&success_dir.join("expected.json"));
+    let success_contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == success_scenario)
+        .expect("success contract exists");
+    let marker = "overlap and double-count";
+    let mut missing_rejections = Vec::new();
+
+    let mut duplicated_tuple = success_expected.clone();
+    let duplicate = duplicated_tuple["transactions"][0]["evidence"][0].clone();
+    duplicated_tuple["transactions"][0]["evidence"]
+        .as_array_mut()
+        .expect("success transaction evidence is an array")
+        .push(duplicate);
+    let failures = scenario_semantic_failures(
+        &success_dir,
+        &success_manifest,
+        &duplicated_tuple,
+        success_contract,
+    );
+    if !failures.iter().any(|failure| failure.contains(marker)) {
+        missing_rejections.push(format!(
+            "duplicate transaction citation tuple: {}",
+            failures.join(" | ")
+        ));
+    }
+
+    let mut overlapping_range = success_expected.clone();
+    overlapping_range["transactions"][0]["evidence"]
+        .as_array_mut()
+        .expect("success transaction evidence is an array")
+        .push(serde_json::json!({
+            "artifactId": "updates-success-01-scan",
+            "startLine": 1,
+            "endLine": 1
+        }));
+    let failures = scenario_semantic_failures(
+        &success_dir,
+        &success_manifest,
+        &overlapping_range,
+        success_contract,
+    );
+    if !failures.iter().any(|failure| failure.contains(marker)) {
+        missing_rejections.push(format!(
+            "overlapping transaction citation range: {}",
+            failures.join(" | ")
+        ));
+    }
+
+    let supplemental_scenario = "supplemental-conflict";
+    let supplemental_dir = updates_root().join(supplemental_scenario);
+    let supplemental_manifest = read_json(&supplemental_dir.join("manifest.json"));
+    let supplemental_contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == supplemental_scenario)
+        .expect("supplemental-conflict contract exists");
+    let mut duplicated_observation = read_json(&supplemental_dir.join("expected.json"));
+    let citation = duplicated_observation["sourceLocalObservations"][0]["evidence"][0].clone();
+    for subject_path in ["sourceLocalObservations", "findings"] {
+        duplicated_observation[subject_path][0]["evidence"]
+            .as_array_mut()
+            .expect("supplemental subject evidence is an array")
+            .push(citation.clone());
+    }
+    let failures = scenario_semantic_failures(
+        &supplemental_dir,
+        &supplemental_manifest,
+        &duplicated_observation,
+        supplemental_contract,
+    );
+    if !failures.iter().any(|failure| failure.contains(marker)) {
+        missing_rejections.push(format!(
+            "duplicate observation citation tuple: {}",
+            failures.join(" | ")
+        ));
+    }
+
+    assert!(
+        missing_rejections.is_empty(),
+        "duplicate or overlapping citations validated clean:\n{}",
+        missing_rejections.join("\n")
+    );
+}
+
+#[test]
 fn software_update_fixture_rejects_keyless_observation_phase_success_claims() {
     let scenario = "supplemental-conflict";
     let scenario_dir = updates_root().join(scenario);
