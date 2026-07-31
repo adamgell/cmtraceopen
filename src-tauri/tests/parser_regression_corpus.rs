@@ -2,28 +2,26 @@ mod common;
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use tempfile::TempDir;
 
 use common::{detect_fixture, parse_fixture, ParsedFixture, SelectionSnapshot};
 
 struct TempLogFixture {
-    dir: PathBuf,
+    /// Held so the directory outlives the fixture; `TempDir` removes it on drop.
+    _dir: TempDir,
     path: PathBuf,
 }
 
 impl TempLogFixture {
     fn new(file_name: &str, content: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("cmtrace-open-parser-regression-{unique}"));
-        fs::create_dir_all(&dir).expect("create temp fixture dir");
+        let dir = TempDir::with_prefix("cmtrace-open-parser-regression-")
+            .expect("create temp fixture dir");
 
-        let path = dir.join(file_name);
+        let path = dir.path().join(file_name);
         fs::write(&path, content).expect("write temp fixture");
 
-        Self { dir, path }
+        Self { _dir: dir, path }
     }
 
     fn detect(&self) -> SelectionSnapshot {
@@ -62,12 +60,6 @@ impl TempLogFixture {
                 })
                 .collect(),
         }
-    }
-}
-
-impl Drop for TempLogFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 
