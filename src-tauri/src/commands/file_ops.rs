@@ -74,6 +74,34 @@ pub struct FolderListingResult {
     pub bundle_metadata: Option<EvidenceBundleMetadata>,
 }
 
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+/// Recovers the OS error kind behind a failed open.
+///
+/// `parser::parse_file` flattens every failure to a `String`, which discards the
+/// `io::ErrorKind` the elevation offer depends on. Rather than reshape that
+/// signature and every caller with it, re-probe the path on the failure path
+/// only: the success path pays nothing, and the probe answers the one question
+/// that matters, which is whether the operating system refused access.
+///
+/// Anything other than a permission refusal keeps the parser's own message,
+/// which is more specific than a generic I/O error would be.
+fn classify_open_failure(path: &str, reason: String) -> crate::error::AppError {
+    let Err(error) = fs::File::open(path) else {
+        // Readable now, so this was a genuine parse failure, not a permission one.
+        return crate::error::AppError::Internal(reason);
+    };
+
+    match crate::error::AppError::from_source_io(
+        error,
+        crate::error::SourceOperation::ReadFile,
+        Some(path),
+    ) {
+        access_denied @ crate::error::AppError::AccessDenied { .. } => access_denied,
+        _ => crate::error::AppError::Internal(reason),
+    }
+}
+
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
 /// Open and parse a log file, auto-detecting its format.
@@ -83,7 +111,10 @@ pub fn open_log_file(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<ParseResult, crate::error::AppError> {
-    let (result, parser_selection) = parser::parse_file(&path)?;
+    let (result, parser_selection) = match parser::parse_file(&path) {
+        Ok(value) => value,
+        Err(reason) => return Err(classify_open_failure(&path, reason)),
+    };
 
     // Store in AppState so tail parsing reuses the same backend parser selection.
     let mut open_files = state
@@ -406,21 +437,40 @@ pub fn list_log_folder(path: String) -> Result<FolderListingResult, crate::error
 
     let requested_path = PathBuf::from(&path);
 
-    if !requested_path.exists() {
-        return Err(crate::error::AppError::InvalidInput(format!(
-            "folder does not exist: {}",
-            requested_path.display()
-        )));
-    }
+    // `Path::exists` collapses every failure to false, so a folder the user
+    // cannot read would be reported as missing and never offer elevation. Stat
+    // it directly and keep the OS error kind.
+    let metadata = match fs::metadata(&requested_path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(crate::error::AppError::InvalidInput(format!(
+                "folder does not exist: {}",
+                requested_path.display()
+            )));
+        }
+        Err(error) => {
+            return Err(crate::error::AppError::from_source_io(
+                error,
+                crate::error::SourceOperation::ListFolder,
+                Some(&path),
+            ));
+        }
+    };
 
-    if !requested_path.is_dir() {
+    if !metadata.is_dir() {
         return Err(crate::error::AppError::InvalidInput(format!(
             "path is not a folder: {}",
             requested_path.display()
         )));
     }
 
-    let read_dir = fs::read_dir(&requested_path).map_err(crate::error::AppError::Io)?;
+    let read_dir = fs::read_dir(&requested_path).map_err(|error| {
+        crate::error::AppError::from_source_io(
+            error,
+            crate::error::SourceOperation::ListFolder,
+            Some(&path),
+        )
+    })?;
 
     let mut entries: Vec<FolderEntry> = Vec::new();
 
@@ -587,6 +637,91 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Proves the wiring, not just the classifier: an unreadable folder must
+    /// reach the frontend as `AccessDenied` rather than as "folder does not
+    /// exist", which is what `Path::exists` used to turn it into.
+    #[cfg(unix)]
+    #[test]
+    fn list_log_folder_reports_an_unreadable_folder_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root ignores the permission bits, so the refusal never happens.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: running as root, permission bits are not enforced");
+            return;
+        }
+
+        let dir = create_temp_dir("file-ops-denied");
+        let locked = dir.join("locked");
+        fs::create_dir(&locked).expect("create locked dir");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+            .expect("drop permissions");
+
+        let result = list_log_folder(locked.to_string_lossy().to_string());
+
+        // Restore before asserting so a failure still leaves a removable tree.
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o755));
+
+        match result {
+            Err(crate::error::AppError::AccessDenied { operation, path }) => {
+                assert_eq!(operation, crate::error::SourceOperation::ListFolder);
+                assert_eq!(path.as_deref(), Some(locked.to_string_lossy().as_ref()));
+            }
+            other => panic!("expected AccessDenied, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_log_file_reports_an_unreadable_file_as_access_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("skipping: running as root, permission bits are not enforced");
+            return;
+        }
+
+        let dir = create_temp_dir("file-ops-denied-file");
+        let locked = dir.join("locked.log");
+        fs::write(&locked, "2026-07-31 log line").expect("write log");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+            .expect("drop permissions");
+
+        let error = super::classify_open_failure(
+            locked.to_string_lossy().as_ref(),
+            "parser said something less specific".to_string(),
+        );
+
+        let _ = fs::set_permissions(&locked, fs::Permissions::from_mode(0o644));
+
+        assert!(
+            matches!(
+                error,
+                crate::error::AppError::AccessDenied {
+                    operation: crate::error::SourceOperation::ReadFile,
+                    ..
+                }
+            ),
+            "expected AccessDenied, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn a_readable_file_that_fails_to_parse_is_not_access_denied() {
+        let dir = create_temp_dir("file-ops-parse-fail");
+        let readable = dir.join("readable.log");
+        fs::write(&readable, "content").expect("write log");
+
+        let error = super::classify_open_failure(
+            readable.to_string_lossy().as_ref(),
+            "unsupported format".to_string(),
+        );
+
+        // The file opens fine, so the parser's own message survives and no
+        // elevation offer can be produced.
+        assert!(matches!(error, crate::error::AppError::Internal(reason) if reason == "unsupported format"));
+    }
 
     #[test]
     fn list_log_folder_marks_evidence_bundle_and_exposes_primary_entry_points() {

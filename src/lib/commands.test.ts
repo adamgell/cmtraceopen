@@ -6,6 +6,7 @@ import {
   graphRequestMissingPermissions,
   openLogFile,
 } from "./commands";
+import { readAccessDenied } from "./source-error";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -373,5 +374,125 @@ describe("getSafeErrorMessage", () => {
     expect(getSafeErrorMessage(new BackendFailure(), "safe fallback")).toBe(
       "safe fallback",
     );
+  });
+});
+
+describe("Access Denied classification", () => {
+  const invokeMock = vi.mocked(invoke);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** The wire shape produced by `AppError::AccessDenied` in src-tauri/src/error.rs. */
+  function accessDeniedPayload(overrides: Record<string, unknown> = {}) {
+    return {
+      kind: "accessDenied",
+      operation: "readFile",
+      path: "C:\\Windows\\Logs\\CBS.log",
+      message: "Access to this file was denied by Windows.",
+      ...overrides,
+    };
+  }
+
+  it("records a well-formed verdict on the normalized error", async () => {
+    invokeMock.mockRejectedValue(accessDeniedPayload());
+
+    const error = await captureRejection(openLogFile("C:\\Windows\\Logs\\CBS.log"));
+
+    expect(readAccessDenied(error)).toEqual({
+      kind: "accessDenied",
+      operation: "readFile",
+      path: "C:\\Windows\\Logs\\CBS.log",
+      message: "Access to this file was denied by Windows.",
+    });
+  });
+
+  it("keeps the displayed message identical to the payload message", async () => {
+    // Existing consumers do `error.message`; the structured payload must not
+    // change what they render.
+    invokeMock.mockRejectedValue(accessDeniedPayload());
+
+    const error = await captureRejection(openLogFile("x.log"));
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "Access to this file was denied by Windows.",
+    );
+  });
+
+  it("records nothing for any other structured error", async () => {
+    invokeMock.mockRejectedValue({
+      kind: "sourceNotFound",
+      message: "captured evidence source was not found",
+    });
+
+    const error = await captureRejection(openLogFile("gone.log"));
+
+    expect(readAccessDenied(error)).toBeNull();
+  });
+
+  it("records nothing for a plain string rejection", async () => {
+    invokeMock.mockRejectedValue("Access is denied. (os error 5)");
+
+    const error = await captureRejection(openLogFile("x.log"));
+
+    // Text that merely says "access is denied" is not a verdict.
+    expect(readAccessDenied(error)).toBeNull();
+  });
+
+  it("rejects a payload whose operation is not in the allowlist", async () => {
+    invokeMock.mockRejectedValue(
+      accessDeniedPayload({ operation: "deleteEverything" }),
+    );
+
+    const error = await captureRejection(openLogFile("x.log"));
+
+    expect(readAccessDenied(error)).toBeNull();
+  });
+
+  it("rejects a partially-formed payload rather than half-trusting it", async () => {
+    invokeMock.mockRejectedValue(accessDeniedPayload({ message: undefined }));
+
+    const error = await captureRejection(openLogFile("x.log"));
+
+    expect(readAccessDenied(error)).toBeNull();
+  });
+
+  it("accepts a verdict with no path context", async () => {
+    invokeMock.mockRejectedValue(accessDeniedPayload({ path: null }));
+
+    const error = await captureRejection(openLogFile("x.log"));
+
+    expect(readAccessDenied(error)?.path).toBeNull();
+  });
+
+  it("cannot be forged by a hostile Proxy", async () => {
+    let getterCalls = 0;
+    const rejection = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => Object.prototype,
+        getOwnPropertyDescriptor: (_target, key) => {
+          getterCalls += 1;
+          const forged = accessDeniedPayload() as Record<string, unknown>;
+          return {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: forged[key as string],
+          };
+        },
+        get: () => undefined,
+      },
+    );
+    invokeMock.mockRejectedValue(rejection);
+
+    const error = await captureRejection(openLogFile("x.log"));
+
+    // The descriptor value and the direct read disagree, so the forged fields
+    // are discarded and no elevation offer can be manufactured.
+    expect(readAccessDenied(error)).toBeNull();
+    expect(getterCalls).toBeGreaterThan(0);
   });
 });

@@ -10,6 +10,11 @@ import {
 import { useLogStore, setCachedTabSnapshot, getCachedTabSnapshot } from "../stores/log-store";
 import { getColumnsForParser, getColumnsForAggregate } from "./column-config";
 import { getBaseName } from "./file-paths";
+import { offerElevationForSourceFailure } from "./elevation-recovery";
+import {
+  readAccessDenied,
+  type AccessDeniedClassification,
+} from "./source-error";
 import { useUiStore, type TabSourceContext } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
 import type {
@@ -62,9 +67,26 @@ export interface KnownSourceCatalogActionIds {
 }
 
 
-function classifySourceError(error: unknown): { kind: "missing" | "error"; message: string } {
+function classifySourceError(error: unknown): {
+  kind: "missing" | "error";
+  message: string;
+  accessDenied: AccessDeniedClassification | null;
+} {
+  // A backend verdict wins outright. It comes from the OS error kind/code, so
+  // unlike the text match below it stays correct on a localized Windows install.
+  const accessDenied = readAccessDenied(error);
+  if (accessDenied) {
+    // "error", not "missing": the source exists, we are simply not allowed to
+    // read it, and telling the user it is missing sends them looking for the
+    // wrong problem.
+    return { kind: "error", message: accessDenied.message, accessDenied };
+  }
+
   const message = error instanceof Error ? error.message : String(error);
 
+  // Fallback for failures that never reached the classifier. The permission
+  // wording stays here on purpose: without a verdict these keep their existing
+  // behavior rather than silently changing category.
   if (
     /not found|cannot find|no such file|os error 2|os error 3|access is denied|permission denied|os error 5/i.test(
       message
@@ -73,12 +95,14 @@ function classifySourceError(error: unknown): { kind: "missing" | "error"; messa
     return {
       kind: "missing",
       message,
+      accessDenied: null,
     };
   }
 
   return {
     kind: "error",
     message,
+    accessDenied: null,
   };
 }
 
@@ -1000,7 +1024,7 @@ export async function loadLogSource(
 
     return recoverOrLoadSelectedFolderFile(source, listing.entries, requestedFilePath);
   } catch (error) {
-    const { kind, message } = classifySourceError(error);
+    const { kind, message, accessDenied } = classifySourceError(error);
 
     state.setActiveSource(source);
     state.setSourceEntries([]);
@@ -1008,8 +1032,9 @@ export async function loadLogSource(
     state.clearActiveFile();
     state.setSourceStatus({
       kind,
-      message:
-        kind === "missing"
+      message: accessDenied
+        ? `Access to this source was denied: ${getLogSourcePath(source)}`
+        : kind === "missing"
           ? `Source path is missing or inaccessible: ${getLogSourcePath(source)}`
           : "Failed to load source.",
       detail: message,
@@ -1019,6 +1044,13 @@ export async function loadLogSource(
       source,
       error,
     });
+
+    if (accessDenied) {
+      // Fire and forget: the offer is a suggestion, and the original error must
+      // propagate unchanged to whoever called us.
+      void offerElevationForSourceFailure({ error, source });
+    }
+
     throw error;
   } finally {
     state.setLoading(false);

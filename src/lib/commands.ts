@@ -14,6 +14,11 @@ import type {
   EvidenceArtifactIntakeKind,
 } from "../types/evidence";
 import type { RegistryParseResult } from "../types/registry";
+import {
+  isSourceOperation,
+  recordAccessDenied,
+  type AccessDeniedClassification,
+} from "./source-error";
 import type {
   AppElevationState,
   ElevationRequest,
@@ -132,33 +137,69 @@ function humanizeErrorKind(kind: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
 }
 
-/**
- * Extracts the backend reason from a plain-data-object rejection (serialized
- * Rust enum error), preferring `message` and otherwise deriving it from `kind`.
- * Returns null for anything that is not a plain data object so the caller keeps
- * the safe fallback.
- */
-function getPlainDataErrorMessage(error: object): string | null {
-  if (!isPlainDataObject(error)) {
-    return null;
-  }
-  const message = readOwnStringData(error, "message");
-  if (message !== null) {
-    return message;
-  }
-  const kind = readOwnStringData(error, "kind");
-  if (kind !== null) {
-    return humanizeErrorKind(kind);
-  }
-  return null;
+interface CommandRejectionInfo {
+  message: string;
+  accessDenied: AccessDeniedClassification | null;
 }
 
-export function getSafeErrorMessage(
+/**
+ * Extracts the backend reason and any Access Denied verdict in a single pass.
+ *
+ * Message and classification are read together, and the prototype is probed
+ * exactly once, because every probe is another chance for a hostile Proxy trap
+ * to run. Splitting this into two functions doubled the trap count.
+ *
+ * Returns a null message for anything that is not a plain data object so the
+ * caller keeps the safe fallback.
+ */
+function inspectPlainDataError(error: object): {
+  message: string | null;
+  accessDenied: AccessDeniedClassification | null;
+} {
+  if (!isPlainDataObject(error)) {
+    return { message: null, accessDenied: null };
+  }
+
+  const kind = readOwnStringData(error, "kind");
+  const message = readOwnStringData(error, "message");
+
+  // Every field must be present and valid. A partially-formed payload yields no
+  // verdict rather than a half-trusted one, because the only thing a verdict is
+  // used for is deciding whether to offer a UAC prompt.
+  let accessDenied: AccessDeniedClassification | null = null;
+  if (kind === "accessDenied" && message !== null) {
+    const operation = readOwnStringData(error, "operation");
+    if (isSourceOperation(operation)) {
+      accessDenied = {
+        kind: "accessDenied",
+        operation,
+        path: readOwnStringData(error, "path"),
+        message,
+      };
+    }
+  }
+
+  if (message !== null) {
+    return { message, accessDenied };
+  }
+  if (kind !== null) {
+    return { message: humanizeErrorKind(kind), accessDenied };
+  }
+  return { message: null, accessDenied };
+}
+
+/**
+ * Resolves a rejection to displayable text plus any structured verdict.
+ *
+ * Shared by `getSafeErrorMessage` and the command normalizer so both agree on
+ * what a rejection means and neither inspects the value twice.
+ */
+function inspectCommandRejection(
   error: unknown,
-  fallback = "The operation failed.",
-): string {
+  fallback: string,
+): CommandRejectionInfo {
   if (typeof error === "string") {
-    return error.trim() || fallback;
+    return { message: error.trim() || fallback, accessDenied: null };
   }
 
   if (
@@ -169,7 +210,7 @@ export function getSafeErrorMessage(
     // this WeakMap channel cannot invoke Proxy traps.
     const trusted = normalizedCommandErrorMessages.get(error as Error);
     if (trusted !== undefined) {
-      return trusted;
+      return { message: trusted, accessDenied: null };
     }
 
     // Serialized Rust command errors arrive as plain data objects. Surface their
@@ -178,23 +219,31 @@ export function getSafeErrorMessage(
     // forged descriptor value is rejected. Class instances, functions, Proxies,
     // and accessor-only objects fall through to the safe fallback.
     if (typeof error === "object") {
-      const plainMessage = getPlainDataErrorMessage(error);
-      if (plainMessage !== null) {
-        return plainMessage;
+      const info = inspectPlainDataError(error);
+      if (info.message !== null) {
+        return { message: info.message, accessDenied: info.accessDenied };
       }
+      return { message: fallback, accessDenied: info.accessDenied };
     }
 
-    return fallback;
+    return { message: fallback, accessDenied: null };
   }
 
-  return fallback;
+  return { message: fallback, accessDenied: null };
+}
+
+export function getSafeErrorMessage(
+  error: unknown,
+  fallback = "The operation failed.",
+): string {
+  return inspectCommandRejection(error, fallback).message;
 }
 
 function normalizeCommandInvokeError(
   commandName: string,
   error: unknown,
 ): Error {
-  const message = getSafeErrorMessage(
+  const { message, accessDenied } = inspectCommandRejection(
     error,
     `Command '${commandName}' failed.`,
   );
@@ -210,6 +259,14 @@ function normalizeCommandInvokeError(
 
   const normalizedError = new Error(normalizedMessage);
   normalizedCommandErrorMessages.set(normalizedError, normalizedMessage);
+
+  // Carry a confirmed permission refusal across the normalization boundary.
+  // Every consumer still sees a plain Error with the same message it always had;
+  // only callers that explicitly ask get the structured verdict.
+  if (accessDenied) {
+    recordAccessDenied(normalizedError, accessDenied);
+  }
+
   return normalizedError;
 }
 
