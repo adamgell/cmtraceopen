@@ -1487,7 +1487,13 @@ fn validate_expected(
             let phase = required_string(observation, "phase", observation_id).unwrap_or("invalid");
             let disposition =
                 required_string(observation, "disposition", observation_id).unwrap_or("invalid");
-            let terminal = required_bool(observation, "terminal", observation_id).unwrap_or(false);
+            let terminal = match required_bool(observation, "terminal", observation_id) {
+                Ok(value) => value,
+                Err(error) => {
+                    failures.push(error);
+                    false
+                }
+            };
             reject_unknown_fields(
                 observation,
                 &[
