@@ -20,6 +20,13 @@ Every scenario contains:
 - optional `evidence/`: raw CCM transport records or deliberately incomplete
   synthetic input.
 
+The preparation validator treats each `(captureHost, sanitizedSourcePath,
+rotation)` tuple as one source identity in every scenario. Synthetic root
+labels must agree across the sanitized path, fingerprint, and relative evidence
+path; retained-byte fields are exact for the declared capture state. Cited CCM
+fields and source-to-phase ownership are closed, evidence line ranges cannot
+overlap, and filesystem separators are normalized before manifest comparison.
+
 Do not add real tenant, device, user, domain, path, package, baseline, or rule
 identifiers. Do not use these fixtures to admit production catalog sources
 until #318/#319 contracts and the relevant extraction profile have been

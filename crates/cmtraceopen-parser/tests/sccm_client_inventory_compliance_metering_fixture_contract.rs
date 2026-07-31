@@ -197,6 +197,78 @@ fn admitted_phases(family: &str) -> Result<&'static [&'static str], String> {
     }
 }
 
+fn admitted_source_phases(
+    family: &str,
+    source_basename: &str,
+) -> Result<&'static [&'static str], String> {
+    match (family, source_basename) {
+        ("inventory", "InventoryAgent.log") => Ok(&["Collect"]),
+        ("inventory", "InventoryProvider.log") => Ok(&["Provider", "Serialize"]),
+        ("inventory", "InventoryAgentProvider.log") => Ok(&["Queue", "Report"]),
+        ("compliance", "CIAgent.log" | "CITaskMgr.log") => Ok(&["Evaluate"]),
+        ("compliance", "DCMAgent.log") => Ok(&["Remediate"]),
+        ("compliance", "DCMReporting.log") => Ok(&["Evaluate", "Report"]),
+        ("compliance", "StateMessage.log") => Ok(&["Report"]),
+        ("metering", "SWMTRReportGen.log") => Ok(&["Collect", "Aggregate", "Report"]),
+        _ => Err(format!(
+            "{source_basename} has no admitted {family} phase ownership"
+        )),
+    }
+}
+
+fn admitted_structured_fields(family: &str) -> Result<BTreeSet<&'static str>, String> {
+    let fields = match family {
+        "inventory" => &[
+            "Family",
+            "InventoryCycleId",
+            "ResourceHandle",
+            "ReportId",
+            "Phase",
+            "Disposition",
+            "Terminal",
+            "ErrorCode",
+            "Recovery",
+            "Ordering",
+            "Coverage",
+            "Rotation",
+        ][..],
+        "compliance" => &[
+            "Family",
+            "CiId",
+            "BaselineId",
+            "StateId",
+            "ResourceHandle",
+            "Phase",
+            "Disposition",
+            "Terminal",
+            "ResultType",
+            "ErrorCode",
+            "Recovery",
+            "Ordering",
+            "PostRemediation",
+            "Coverage",
+            "Rotation",
+        ][..],
+        "metering" => &[
+            "Family",
+            "MeteringCycleId",
+            "RuleId",
+            "ReportId",
+            "ResourceHandle",
+            "Phase",
+            "Disposition",
+            "Terminal",
+            "ErrorCode",
+            "Recovery",
+            "Ordering",
+            "Coverage",
+            "Rotation",
+        ][..],
+        other => return Err(format!("unsupported structured-field family {other}")),
+    };
+    Ok(fields.iter().copied().collect())
+}
+
 fn expected_logical_artifact(family: &str) -> Result<&'static str, String> {
     match family {
         "inventory" => Ok("client-inventory"),
@@ -204,6 +276,103 @@ fn expected_logical_artifact(family: &str) -> Result<&'static str, String> {
         "metering" => Ok("client-metering"),
         other => Err(format!("unsupported workflow family {other}")),
     }
+}
+
+fn validate_structured_field_vocabulary(
+    fields: &BTreeMap<String, String>,
+    context: &str,
+) -> Result<(), String> {
+    let family = fields
+        .get("Family")
+        .ok_or_else(|| format!("{context} has no structured Family field"))?;
+    let admitted = admitted_structured_fields(family)?;
+    for field in fields.keys() {
+        if !admitted.contains(field.as_str()) {
+            return Err(format!(
+                "{context} has unadmitted structured field {field} for {family}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_cited_record_semantics(
+    fields: &BTreeMap<String, String>,
+    source_basename: &str,
+    context: &str,
+) -> Result<(), String> {
+    let family = fields
+        .get("Family")
+        .ok_or_else(|| format!("{context} has no structured Family field"))?;
+    let phase = fields
+        .get("Phase")
+        .ok_or_else(|| format!("{context} has no structured Phase field"))?;
+    if !admitted_source_phases(family, source_basename)?.contains(&phase.as_str()) {
+        return Err(format!(
+            "{context} source {source_basename} does not own phase {phase}"
+        ));
+    }
+    let disposition = fields
+        .get("Disposition")
+        .ok_or_else(|| format!("{context} has no structured Disposition field"))?;
+    let terminal = fields
+        .get("Terminal")
+        .ok_or_else(|| format!("{context} has no structured Terminal field"))?;
+    if !matches!(terminal.as_str(), "true" | "false") {
+        return Err(format!("{context} has invalid Terminal={terminal}"));
+    }
+    if !matches!(
+        disposition.as_str(),
+        "Succeeded" | "Failed" | "Progress" | "Compliant" | "NonCompliant"
+    ) {
+        return Err(format!(
+            "{context} has unadmitted Disposition={disposition}"
+        ));
+    }
+
+    let evaluation_disposition = matches!(disposition.as_str(), "Compliant" | "NonCompliant");
+    if evaluation_disposition && (family != "compliance" || phase != "Evaluate") {
+        return Err(format!(
+            "{context} borrows compliance evaluation semantics outside compliance/Evaluate"
+        ));
+    }
+    if let Some(result_type) = fields.get("ResultType") {
+        if family != "compliance" || phase != "Evaluate" || result_type != "Evaluation" {
+            return Err(format!(
+                "{context} has unowned ResultType={result_type} semantics"
+            ));
+        }
+    }
+    if fields.contains_key("ErrorCode") && (disposition != "Failed" || terminal != "true") {
+        return Err(format!(
+            "{context} ErrorCode is not bound to a terminal failure"
+        ));
+    }
+    if fields.contains_key("Recovery") && (disposition != "Succeeded" || terminal != "true") {
+        return Err(format!(
+            "{context} Recovery is not bound to terminal success"
+        ));
+    }
+    if fields.contains_key("Ordering")
+        && (!matches!(disposition.as_str(), "Succeeded" | "Compliant") || terminal != "true")
+    {
+        return Err(format!(
+            "{context} Ordering is not bound to opposing terminal evidence"
+        ));
+    }
+    if let Some(post_remediation) = fields.get("PostRemediation") {
+        if family != "compliance"
+            || phase != "Report"
+            || disposition != "Succeeded"
+            || terminal != "true"
+            || post_remediation != "Compliant"
+        {
+            return Err(format!(
+                "{context} has unowned PostRemediation={post_remediation} semantics"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn expected_profile(family: &str) -> Result<&'static str, String> {
@@ -379,6 +548,10 @@ fn walk_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+fn normalize_manifest_relative_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 static TEMP_SCENARIO_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 struct TemporaryScenario {
@@ -525,6 +698,44 @@ fn validate_relative_path(relative_path: &str, artifact_id: &str) -> Result<(), 
         return Err(format!(
             "{artifact_id} relativePath is outside the evidence root"
         ));
+    }
+    Ok(())
+}
+
+fn validate_source_topology(
+    family: &str,
+    artifact_id: &str,
+    basename: &str,
+    rotation_kind: &str,
+    sanitized_path: &str,
+    fingerprint: &str,
+    relative_path: Option<&str>,
+) -> Result<(), String> {
+    let source_tail = sanitized_path
+        .strip_prefix("SYNTHETIC://")
+        .ok_or_else(|| format!("{artifact_id} source topology is not synthetic"))?;
+    let root = source_tail
+        .split('/')
+        .next()
+        .ok_or_else(|| format!("{artifact_id} source topology has no synthetic root"))?;
+    if !root.starts_with("root-")
+        || !root
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        || sanitized_path != format!("SYNTHETIC://{root}/CCM/Logs/{basename}")
+        || fingerprint != format!("synthetic-{artifact_id}-{root}")
+    {
+        return Err(format!(
+            "{artifact_id} source topology does not bind path/fingerprint root"
+        ));
+    }
+    if let Some(relative_path) = relative_path {
+        let expected = format!("evidence/client-{family}/{root}/{rotation_kind}/{basename}");
+        if relative_path != expected {
+            return Err(format!(
+                "{artifact_id} source topology does not bind relative path {relative_path}"
+            ));
+        }
     }
     Ok(())
 }
@@ -722,7 +933,11 @@ fn evidence_backed_last_successful_phase<'a>(
             let disposition = record.fields.get("Disposition")?.as_str();
             let completed = match disposition {
                 "Succeeded" => true,
-                "Compliant" | "NonCompliant" => record_field_is(record, "ResultType", "Evaluation"),
+                "Compliant" | "NonCompliant" => {
+                    record_field_is(record, "Family", "compliance")
+                        && record_field_is(record, "Phase", "Evaluate")
+                        && record_field_is(record, "ResultType", "Evaluation")
+                }
                 _ => false,
             };
             if !completed {
@@ -810,6 +1025,10 @@ fn evidence_record_texts(
             let source_version = required_string(artifact, "sourceVersion", artifact_id)?;
             let record_context = format!("{artifact_id}:{}", start + offset);
             let fields = strict_ccm_structured_fields(line, &record_context)?;
+            validate_structured_field_vocabulary(&fields, &record_context)?;
+            let basename = required_string(artifact, "originalBasename", artifact_id)?;
+            let source_basename = basename.strip_suffix(".lo").unwrap_or(basename);
+            validate_cited_record_semantics(&fields, source_basename, &record_context)?;
             records.push(CitedEvidenceRecord {
                 fields,
                 source_version: source_version.to_owned(),
@@ -832,6 +1051,32 @@ fn validate_contract(
     let phases = admitted_phases(family)?;
     let profile = expected_profile(family)?;
 
+    require_exact_object_fields(
+        manifest,
+        &[
+            "sccmManifestVersion",
+            "contractState",
+            "proposalOnly",
+            "syntheticFixture",
+            "scenario",
+            "workflowFamily",
+            "bundle",
+            "artifacts",
+        ],
+        "manifest",
+    )?;
+    require_exact_object_fields(
+        &manifest["bundle"],
+        &[
+            "bundleId",
+            "captureHost",
+            "role",
+            "siteCode",
+            "artifactOrder",
+            "rotationOrder",
+        ],
+        "bundle",
+    )?;
     require_exact_object_fields(
         expected,
         &[
@@ -882,7 +1127,7 @@ fn validate_contract(
     require_canonical_string_field_order(artifacts, "artifactId", "manifest artifact")?;
     let mut artifacts_by_id = BTreeMap::new();
     let mut relative_paths = BTreeSet::new();
-    let mut sanitized_paths = BTreeSet::new();
+    let mut physical_source_identities = BTreeSet::new();
     let mut path_fingerprints = BTreeSet::new();
     let mut referenced_files = BTreeSet::new();
     let mut expected_coverage = BTreeMap::new();
@@ -900,6 +1145,16 @@ fn validate_contract(
         if artifact["role"] != "client" || artifact["kind"] != "ccmLog" {
             return Err(format!("{artifact_id} is not a client CCM artifact"));
         }
+        require_exact_object_fields(
+            &artifact["designOnlyCatalog"],
+            &["entryId", "groupMemberships"],
+            &format!("{artifact_id} designOnlyCatalog"),
+        )?;
+        require_exact_object_fields(
+            &artifact["rotation"],
+            &["kind", "fragmentComplete"],
+            &format!("{artifact_id} rotation"),
+        )?;
         let captured_utc = required_string(artifact, "capturedUtc", artifact_id)?;
         let parsed_captured_utc = chrono::DateTime::parse_from_rfc3339(captured_utc)
             .map_err(|error| format!("{artifact_id} capturedUtc is invalid: {error}"))?;
@@ -946,6 +1201,45 @@ fn validate_contract(
         }
         let capture_state = required_string(artifact, "captureState", artifact_id)?;
         let physical = matches!(capture_state, "captured" | "capped" | "parseFailed");
+        let mut exact_artifact_fields = vec![
+            "artifactId",
+            "bytesCopied",
+            "captureState",
+            "capturedUtc",
+            "designOnlyCatalog",
+            "kind",
+            "originalBasename",
+            "pathFingerprint",
+            "relativePath",
+            "role",
+            "rotation",
+            "sanitizedSourcePath",
+            "sourceVersion",
+        ];
+        if physical {
+            exact_artifact_fields.extend(["collectionLimit", "encoding"]);
+        }
+        if capture_state == "capped" {
+            exact_artifact_fields.push("truncated");
+        }
+        if capture_state == "captured"
+            && (artifact["collectionLimit"]["limitApplied"] != false
+                || artifact.get("truncated").is_some())
+        {
+            return Err(format!(
+                "{artifact_id} captured state provenance claims a cap/truncation"
+            ));
+        }
+        if !physical
+            && (artifact.get("encoding").is_some()
+                || artifact.get("collectionLimit").is_some()
+                || artifact.get("truncated").is_some())
+        {
+            return Err(format!(
+                "{artifact_id} nonphysical state provenance invents retained-byte fields"
+            ));
+        }
+        require_exact_object_fields(artifact, &exact_artifact_fields, "artifact")?;
         let relative_path = artifact["relativePath"].as_str();
         if physical != relative_path.is_some() {
             return Err(format!(
@@ -980,10 +1274,15 @@ fn validate_contract(
             if artifact["encoding"] != "utf-8" || std::str::from_utf8(&bytes).is_err() {
                 return Err(format!("{artifact_id} is not declared and encoded UTF-8"));
             }
+            require_exact_object_fields(
+                &artifact["collectionLimit"],
+                &["byteLimit", "limitApplied"],
+                &format!("{artifact_id} collectionLimit"),
+            )?;
+            let byte_limit = artifact["collectionLimit"]["byteLimit"]
+                .as_u64()
+                .ok_or_else(|| format!("{artifact_id} byteLimit is not an integer"))?;
             if capture_state == "capped" {
-                let byte_limit = artifact["collectionLimit"]["byteLimit"]
-                    .as_u64()
-                    .ok_or_else(|| format!("{artifact_id} capped byteLimit is not an integer"))?;
                 if artifact["collectionLimit"]["limitApplied"] != true
                     || artifact["truncated"] != true
                     || artifact["rotation"]["fragmentComplete"] != false
@@ -993,6 +1292,13 @@ fn validate_contract(
                         "{artifact_id} capped state is not an inclusive exact prefix"
                     ));
                 }
+            } else if artifact["collectionLimit"]["limitApplied"] != false
+                || artifact.get("truncated").is_some()
+                || declared_bytes > byte_limit
+            {
+                return Err(format!(
+                    "{artifact_id} {capture_state} state provenance is not uncapped"
+                ));
             }
             if capture_state == "parseFailed" && artifact["rotation"]["fragmentComplete"] != false {
                 return Err(format!(
@@ -1000,20 +1306,29 @@ fn validate_contract(
                 ));
             }
             let sanitized_path = required_string(artifact, "sanitizedSourcePath", artifact_id)?;
-            if !sanitized_path.starts_with("SYNTHETIC://") || !sanitized_path.ends_with(basename) {
-                return Err(format!("{artifact_id} source path is not sanitized"));
-            }
-            if scenario == "same-minute-collision"
-                && !sanitized_paths.insert(sanitized_path.to_owned())
-            {
-                return Err(format!(
-                    "{artifact_id} has an aliased sanitized source path"
-                ));
-            }
             let fingerprint = required_string(artifact, "pathFingerprint", artifact_id)?;
             if fingerprint.is_empty() || !path_fingerprints.insert(fingerprint.to_owned()) {
                 return Err(format!(
                     "{artifact_id} has blank or aliased pathFingerprint"
+                ));
+            }
+            validate_source_topology(
+                family,
+                artifact_id,
+                basename,
+                rotation_kind,
+                sanitized_path,
+                fingerprint,
+                Some(relative_path),
+            )?;
+            let capture_host = required_string(&manifest["bundle"], "captureHost", "bundle")?;
+            if !physical_source_identities.insert((
+                capture_host.to_owned(),
+                sanitized_path.to_owned(),
+                rotation_kind.to_owned(),
+            )) {
+                return Err(format!(
+                    "{artifact_id} has duplicate physical source identity"
                 ));
             }
             referenced_files.insert(relative_path.to_owned());
@@ -1054,24 +1369,29 @@ fn validate_contract(
             }
             if capture_state != "absent" {
                 let sanitized_path = required_string(artifact, "sanitizedSourcePath", artifact_id)?;
-                if !sanitized_path.starts_with("SYNTHETIC://")
-                    || !sanitized_path.ends_with(basename)
-                {
-                    return Err(format!(
-                        "{artifact_id} attempted source path is unsanitized"
-                    ));
-                }
-                if scenario == "same-minute-collision"
-                    && !sanitized_paths.insert(sanitized_path.to_owned())
-                {
-                    return Err(format!(
-                        "{artifact_id} has an aliased sanitized source path"
-                    ));
-                }
                 let fingerprint = required_string(artifact, "pathFingerprint", artifact_id)?;
                 if fingerprint.is_empty() || !path_fingerprints.insert(fingerprint.to_owned()) {
                     return Err(format!(
                         "{artifact_id} has blank or aliased attempted-path fingerprint"
+                    ));
+                }
+                validate_source_topology(
+                    family,
+                    artifact_id,
+                    basename,
+                    rotation_kind,
+                    sanitized_path,
+                    fingerprint,
+                    None,
+                )?;
+                let capture_host = required_string(&manifest["bundle"], "captureHost", "bundle")?;
+                if !physical_source_identities.insert((
+                    capture_host.to_owned(),
+                    sanitized_path.to_owned(),
+                    rotation_kind.to_owned(),
+                )) {
+                    return Err(format!(
+                        "{artifact_id} has duplicate physical source identity"
                     ));
                 }
             }
@@ -1081,10 +1401,11 @@ fn validate_contract(
     let actual_files = walk_files(&scenario_root.join("evidence"))?
         .into_iter()
         .map(|path| {
-            path.strip_prefix(scenario_root)
+            let relative_path = path
+                .strip_prefix(scenario_root)
                 .expect("walk root is below scenario")
-                .to_string_lossy()
-                .into_owned()
+                .to_string_lossy();
+            normalize_manifest_relative_path(&relative_path)
         })
         .collect::<BTreeSet<_>>();
     if actual_files != referenced_files {
@@ -1304,6 +1625,7 @@ fn validate_contract(
         .ok_or_else(|| "transactions are not an array".to_owned())?;
     let mut transaction_ids = BTreeSet::new();
     let mut logical_transaction_identities = BTreeSet::new();
+    let mut cited_evidence_ranges: BTreeMap<String, Vec<(u64, u64)>> = BTreeMap::new();
     let mut previous_transaction_order: Option<(String, u64, u64, String)> = None;
     let mut scenario_semantics = Vec::new();
     for transaction in transactions {
@@ -1438,6 +1760,25 @@ fn validate_contract(
         }
         if evidence_order.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err(format!("{transaction_id} evidence order is not canonical"));
+        }
+        for (artifact_id, start, end) in &evidence_order {
+            if start == &0 || end < start {
+                return Err(format!(
+                    "{transaction_id} evidence range {start}-{end} is invalid"
+                ));
+            }
+            let prior_ranges = cited_evidence_ranges
+                .entry(artifact_id.clone())
+                .or_default();
+            if prior_ranges
+                .iter()
+                .any(|(prior_start, prior_end)| start <= prior_end && prior_start <= end)
+            {
+                return Err(format!(
+                    "{transaction_id} has overlapping evidence line identity {artifact_id}:{start}-{end}"
+                ));
+            }
+            prior_ranges.push((*start, *end));
         }
         let first_evidence = evidence_order
             .first()
@@ -1714,6 +2055,19 @@ fn assert_rejected_with(
         error.contains(required_error),
         "`{label}` was rejected for the wrong reason: {error}"
     );
+}
+
+fn collect_contract_rejection(
+    failures: &mut Vec<String>,
+    label: &str,
+    result: Result<(), String>,
+    required_error: &str,
+) {
+    match result {
+        Err(error) if error.contains(required_error) => {}
+        Err(error) => failures.push(format!("{label}: wrong rejection: {error}")),
+        Ok(()) => failures.push(format!("{label}: unsafe mutation was accepted")),
+    }
 }
 
 #[test]
@@ -2247,7 +2601,7 @@ fn exact_head_review_blocker_compliance_result_type_is_source_record_local() {
         "Disposition=NonCompliant Terminal=true]LOG]!><time=\"02:02:00.000+000\" ",
         "date=\"7-30-2026\" component=\"CIAgent\" context=\"\" type=\"1\" thread=\"325\" file=\"\">\n",
         "<![LOG[SYNTHETIC FIXTURE Family=compliance CiId=CI-002 BaselineId=BASELINE-002 ",
-        "StateId=STATE-002 ResourceHandle=safe:resource:compliance-002 Phase=Report ",
+        "StateId=STATE-002 ResourceHandle=safe:resource:compliance-002 Phase=Evaluate ",
         "Disposition=Progress Terminal=false ResultType=Evaluation]LOG]!>",
         "<time=\"02:02:01.000+000\" date=\"7-30-2026\" component=\"CIAgent\" ",
         "context=\"\" type=\"1\" thread=\"325\" file=\"\">\n",
@@ -2277,7 +2631,7 @@ fn exact_head_review_blocker_compliance_result_type_is_source_record_local() {
         &temporary.root,
         &manifest,
         &expected,
-        "source-record-local",
+        "compliance evaluation result is not source-record-local",
     );
 }
 
@@ -2471,7 +2825,7 @@ fn exact_head_review_blocker_transaction_identity_and_collision_topology_are_uni
         &scenario_root,
         &manifest,
         &expected,
-        "aliased sanitized source path",
+        "source topology",
     );
 }
 
@@ -2977,5 +3331,330 @@ fn invalid_timestamp_offsets_cannot_be_promoted_to_high_confidence() {
         &scenario_root,
         &manifest,
         &expected,
+    );
+}
+
+#[test]
+fn review_blocker_physical_identity_and_cross_root_topology_are_closed() {
+    let mut failures = Vec::new();
+    for (family, target_id, source_id) in [
+        (
+            "inventory",
+            "inventory-coverage-states-skipped",
+            "inventory-coverage-states-partial",
+        ),
+        (
+            "inventory",
+            "inventory-coverage-states-unsupported",
+            "inventory-coverage-states-access-denied",
+        ),
+        (
+            "compliance",
+            "compliance-coverage-states-access-denied",
+            "compliance-coverage-states-partial",
+        ),
+    ] {
+        let (scenario_root, mut manifest, expected) = load_contract(family, "coverage-states");
+        let artifacts = manifest["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array");
+        let source_path = artifacts
+            .iter()
+            .find(|artifact| artifact["artifactId"] == source_id)
+            .expect("source artifact exists")["sanitizedSourcePath"]
+            .clone();
+        let source_root = source_path
+            .as_str()
+            .expect("source path is a string")
+            .strip_prefix("SYNTHETIC://")
+            .expect("source path is synthetic")
+            .split('/')
+            .next()
+            .expect("source path has a root")
+            .to_owned();
+        let target = artifacts
+            .iter_mut()
+            .find(|artifact| artifact["artifactId"] == target_id)
+            .expect("target artifact exists");
+        target["sanitizedSourcePath"] = source_path;
+        target["pathFingerprint"] = json!(format!("synthetic-{target_id}-{source_root}"));
+        collect_contract_rejection(
+            &mut failures,
+            &format!("{family} contradictory physical identity {target_id}/{source_id}"),
+            validate_contract(
+                family,
+                "coverage-states",
+                &scenario_root,
+                &manifest,
+                &expected,
+            ),
+            "duplicate physical source identity",
+        );
+    }
+
+    let (scenario_root, mut collapsed_manifest, expected) =
+        load_contract("inventory", "same-minute-collision");
+    collapsed_manifest["artifacts"][1]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://root-a/alternate/CCM/Logs/InventoryAgentProvider.log");
+    collect_contract_rejection(
+        &mut failures,
+        "cross-root source collapsed beneath an alternate root-a path",
+        validate_contract(
+            "inventory",
+            "same-minute-collision",
+            &scenario_root,
+            &collapsed_manifest,
+            &expected,
+        ),
+        "source topology",
+    );
+
+    let (_, mut swapped_manifest, expected) = load_contract("inventory", "same-minute-collision");
+    let first_fingerprint = swapped_manifest["artifacts"][0]["pathFingerprint"].clone();
+    swapped_manifest["artifacts"][0]["pathFingerprint"] =
+        swapped_manifest["artifacts"][1]["pathFingerprint"].clone();
+    swapped_manifest["artifacts"][1]["pathFingerprint"] = first_fingerprint;
+    collect_contract_rejection(
+        &mut failures,
+        "cross-root fingerprints swapped between exact source handles",
+        validate_contract(
+            "inventory",
+            "same-minute-collision",
+            &scenario_root,
+            &swapped_manifest,
+            &expected,
+        ),
+        "source topology",
+    );
+
+    let (success_root, mut same_root_manifest, success_expected) =
+        load_contract("inventory", "success");
+    let first_fingerprint = same_root_manifest["artifacts"][0]["pathFingerprint"].clone();
+    same_root_manifest["artifacts"][0]["pathFingerprint"] =
+        same_root_manifest["artifacts"][1]["pathFingerprint"].clone();
+    same_root_manifest["artifacts"][1]["pathFingerprint"] = first_fingerprint;
+    collect_contract_rejection(
+        &mut failures,
+        "same-root fingerprints swapped between artifact handles",
+        validate_contract(
+            "inventory",
+            "success",
+            &success_root,
+            &same_root_manifest,
+            &success_expected,
+        ),
+        "source topology",
+    );
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_manifest_and_ccm_structured_vocabularies_are_closed() {
+    let mut failures = Vec::new();
+    for (label, injected_field) in [
+        ("server cause", "ServerCause=ManagementPoint"),
+        ("server role", "Role=server"),
+        ("foreign workflow", "Workflow=compliance"),
+    ] {
+        let replacement = format!("{injected_field} Phase=Report");
+        let (temporary, manifest, expected) = copied_contract_with_evidence_replacements(
+            "inventory",
+            "success",
+            "inventory-success-report-current",
+            label,
+            &[("Phase=Report", &replacement)],
+        );
+        collect_contract_rejection(
+            &mut failures,
+            &format!("unknown CCM field {injected_field}"),
+            validate_contract(
+                "inventory",
+                "success",
+                &temporary.root,
+                &manifest,
+                &expected,
+            ),
+            "unadmitted structured field",
+        );
+    }
+
+    let (scenario_root, mut manifest, expected) = load_contract("inventory", "success");
+    manifest["artifacts"][0]["serverCause"] = json!("ManagementPoint");
+    collect_contract_rejection(
+        &mut failures,
+        "undeclared SCCM manifest artifact serverCause",
+        validate_contract("inventory", "success", &scenario_root, &manifest, &expected),
+        "artifact fields",
+    );
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_sources_own_exact_phases_and_workflow_semantics() {
+    let (temporary, manifest, mut expected) = copied_contract_with_evidence_replacements(
+        "inventory",
+        "success",
+        "inventory-success-agent-current",
+        "agent-borrows-report-phase",
+        &[(
+            "Phase=Collect Disposition=Succeeded Terminal=false",
+            "Phase=Report Disposition=Succeeded Terminal=true",
+        )],
+    );
+    expected["transactions"][0]["evidence"] = json!([{
+        "artifactId": "inventory-success-agent-current",
+        "startLine": 1,
+        "endLine": 1
+    }]);
+    assert_rejected_with(
+        "InventoryAgent record relabeled as terminal Report success",
+        "inventory",
+        "success",
+        &temporary.root,
+        &manifest,
+        &expected,
+        "does not own phase",
+    );
+}
+
+#[test]
+fn review_blocker_inventory_does_not_borrow_compliance_completion_semantics() {
+    let (scenario_root, manifest, _) = load_contract("inventory", "success");
+    let artifacts = manifest["artifacts"]
+        .as_array()
+        .expect("artifacts are an array");
+    let artifacts_by_id = artifacts
+        .iter()
+        .map(|artifact| {
+            (
+                artifact["artifactId"]
+                    .as_str()
+                    .expect("artifactId is a string")
+                    .to_owned(),
+                artifact,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let evidence = json!([{
+        "artifactId": "inventory-success-agent-current",
+        "startLine": 1,
+        "endLine": 1
+    }]);
+    let mut records = evidence_record_texts(
+        &scenario_root,
+        &artifacts_by_id,
+        evidence.as_array().expect("evidence is an array"),
+    )
+    .expect("inventory collect evidence is readable");
+    records[0]
+        .fields
+        .insert("Disposition".to_owned(), "NonCompliant".to_owned());
+    records[0]
+        .fields
+        .insert("Terminal".to_owned(), "true".to_owned());
+    records[0]
+        .fields
+        .insert("ResultType".to_owned(), "Evaluation".to_owned());
+    assert_eq!(
+        evidence_backed_last_successful_phase(
+            &records,
+            admitted_phases("inventory").expect("inventory phases"),
+            "confirmedFailure",
+        ),
+        None,
+        "inventory must not infer a predecessor from compliance evaluation semantics"
+    );
+}
+
+#[test]
+fn review_blocker_capture_state_provenance_is_closed() {
+    let mut failures = Vec::new();
+
+    let (success_root, mut captured_manifest, success_expected) =
+        load_contract("inventory", "success");
+    captured_manifest["artifacts"][0]["collectionLimit"]["limitApplied"] = json!(true);
+    captured_manifest["artifacts"][0]["truncated"] = json!(true);
+    collect_contract_rejection(
+        &mut failures,
+        "captured source claims an applied truncating cap",
+        validate_contract(
+            "inventory",
+            "success",
+            &success_root,
+            &captured_manifest,
+            &success_expected,
+        ),
+        "captured state provenance",
+    );
+
+    let (coverage_root, mut nonphysical_manifest, coverage_expected) =
+        load_contract("inventory", "coverage-states");
+    let access_denied = nonphysical_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "inventory-coverage-states-access-denied")
+        .expect("access-denied artifact exists");
+    access_denied["encoding"] = json!("utf-8");
+    access_denied["collectionLimit"] = json!({
+        "byteLimit": 0,
+        "limitApplied": true
+    });
+    access_denied["truncated"] = json!(true);
+    collect_contract_rejection(
+        &mut failures,
+        "accessDenied source invents encoding cap and truncation",
+        validate_contract(
+            "inventory",
+            "coverage-states",
+            &coverage_root,
+            &nonphysical_manifest,
+            &coverage_expected,
+        ),
+        "nonphysical state provenance",
+    );
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_evidence_line_identity_is_unique_and_nonoverlapping() {
+    let (scenario_root, manifest, expected) = load_contract("inventory", "recovery-contradictory");
+
+    let mut overlapping = expected.clone();
+    overlapping["transactions"][0]["evidence"][0]["endLine"] = json!(2);
+    assert_rejected_with(
+        "recovery cites ranges 1-2 and 2-2",
+        "inventory",
+        "recovery-contradictory",
+        &scenario_root,
+        &manifest,
+        &overlapping,
+        "overlapping evidence line",
+    );
+
+    let mut duplicated = expected;
+    duplicated["transactions"][0]["evidence"][1] =
+        duplicated["transactions"][0]["evidence"][0].clone();
+    assert_rejected(
+        "recovery duplicates the same physical evidence range",
+        "inventory",
+        "recovery-contradictory",
+        &scenario_root,
+        &manifest,
+        &duplicated,
+    );
+}
+
+#[test]
+fn review_blocker_windows_evidence_paths_use_manifest_separators() {
+    assert_eq!(
+        normalize_manifest_relative_path(
+            r"evidence\client-inventory\root-a\current\InventoryAgent.log"
+        ),
+        "evidence/client-inventory/root-a/current/InventoryAgent.log",
+        "actual evidence files must compare to manifest relativePath on Windows"
     );
 }

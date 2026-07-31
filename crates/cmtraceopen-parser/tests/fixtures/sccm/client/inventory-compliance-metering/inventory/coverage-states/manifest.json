@@ -157,8 +157,8 @@
       "kind": "ccmLog",
       "captureState": "skipped",
       "originalBasename": "InventoryAgent.log",
-      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/InventoryAgent.log",
-      "pathFingerprint": "synthetic-inventory-coverage-states-skipped-root-a",
+      "sanitizedSourcePath": "SYNTHETIC://root-d/CCM/Logs/InventoryAgent.log",
+      "pathFingerprint": "synthetic-inventory-coverage-states-skipped-root-d",
       "rotation": {
         "kind": "current",
         "fragmentComplete": false
@@ -180,8 +180,8 @@
       "kind": "ccmLog",
       "captureState": "unsupported",
       "originalBasename": "InventoryProvider.log",
-      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/InventoryProvider.log",
-      "pathFingerprint": "synthetic-inventory-coverage-states-unsupported-root-a",
+      "sanitizedSourcePath": "SYNTHETIC://root-e/CCM/Logs/InventoryProvider.log",
+      "pathFingerprint": "synthetic-inventory-coverage-states-unsupported-root-e",
       "rotation": {
         "kind": "current",
         "fragmentComplete": false
