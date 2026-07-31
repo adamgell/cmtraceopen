@@ -125,6 +125,41 @@ pub struct AppElevationState {
     pub detail: Option<String>,
 }
 
+/// Whether this platform offers a user-initiated elevation mechanism.
+///
+/// Elevation is a Windows/UAC concept. Everywhere else the menu item is hidden
+/// and the recovery prompt never appears, rather than failing at the last step.
+pub fn is_elevation_supported() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// Probe the current process's elevation, for menus and recovery prompts.
+///
+/// A probe failure reports `is_elevated: false` with a `detail`, so the UI can
+/// still offer the action instead of disabling it on an unknown state.
+pub fn current_elevation_state() -> AppElevationState {
+    if !is_elevation_supported() {
+        return AppElevationState {
+            platform_supported: false,
+            is_elevated: false,
+            detail: Some("Restarting as administrator is only supported on Windows".to_string()),
+        };
+    }
+
+    match relaunch::is_process_elevated() {
+        Ok(is_elevated) => AppElevationState {
+            platform_supported: true,
+            is_elevated,
+            detail: None,
+        },
+        Err(detail) => AppElevationState {
+            platform_supported: true,
+            is_elevated: false,
+            detail: Some(detail),
+        },
+    }
+}
+
 /// Rejection reasons for an untrusted elevation request or restore ticket.
 ///
 /// Every variant is a refusal to act. None of them is recoverable by retrying
@@ -205,10 +240,9 @@ pub fn validate_source_id(source_id: &str) -> Result<String, ElevationValidation
     if source_id.len() > MAX_SOURCE_ID_LEN {
         return Err(ElevationValidationError::SourceIdTooLong);
     }
-    if !source_id
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | ':' | '-'))
-    {
+    if !source_id.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | ':' | '-')
+    }) {
         return Err(ElevationValidationError::UnsafeSourceId);
     }
     Ok(source_id.to_string())
@@ -279,7 +313,10 @@ mod tests {
     #[test]
     fn unknown_workspace_is_rejected() {
         let parsed = serde_json::from_str::<AppWorkspace>("\"not-a-workspace\"");
-        assert!(parsed.is_err(), "unknown workspace ids must not deserialize");
+        assert!(
+            parsed.is_err(),
+            "unknown workspace ids must not deserialize"
+        );
     }
 
     #[test]

@@ -341,10 +341,7 @@ fn elevated_working_directory(exe: &std::path::Path) -> Vec<u16> {
     use std::iter::once;
     use std::os::windows::ffi::OsStrExt;
 
-    if let Some(parent) = exe
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
+    if let Some(parent) = exe.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         return parent.as_os_str().encode_wide().chain(once(0)).collect();
     }
 
@@ -447,7 +444,9 @@ mod tests {
             Self {
                 supported: true,
                 elevated: Ok(false),
-                executable: Ok(PathBuf::from(r"C:\Program Files\CMTrace Open\cmtrace-open.exe")),
+                executable: Ok(PathBuf::from(
+                    r"C:\Program Files\CMTrace Open\cmtrace-open.exe",
+                )),
                 outcome: None,
                 seen: RefCell::new(Vec::new()),
             }
@@ -688,7 +687,10 @@ mod tests {
             parse_restore_argument(&["--workspace=esp-diagnostics".to_string()]),
             None
         );
-        assert_eq!(parse_restore_argument(&["--elevation-restore=".to_string()]), None);
+        assert_eq!(
+            parse_restore_argument(&["--elevation-restore=".to_string()]),
+            None
+        );
         assert_eq!(
             parse_restore_argument(&["--elevation-restore=../../etc/passwd".to_string()]),
             None
