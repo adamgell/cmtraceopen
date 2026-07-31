@@ -1,0 +1,40 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "distributionPoint",
+  "scenario": "incomplete",
+  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
+  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
+  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
+  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId": "dp-incomplete-01-distmgr", "state": "captured"},
+    {"artifactId": "dp-incomplete-02-pkgxfer-denied", "state": "accessDenied"},
+    {"artifactId": "dp-incomplete-03-provider-absent", "state": "absent"}
+  ],
+  "transactions": [
+    {
+      "transactionId": "dp:LAB00007:content-eta:v1:safe:dp:lab-dp-01",
+      "key": {"packageId": "LAB00007", "contentId": "content-eta", "contentVersion": 1, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
+      "topologyCompatibility": "exact",
+      "correlationEligible": true,
+      "state": "incomplete",
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "lastSuccessfulPhase": "distribute",
+      "nextSourceId": "server-dp-distribution",
+      "coverageGapArtifactIds": ["dp-incomplete-02-pkgxfer-denied", "dp-incomplete-03-provider-absent"],
+      "observations": [
+        {"observationId": "01-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-incomplete-01-distmgr", "startLine": 1, "endLine": 1}]},
+        {"observationId": "02-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-incomplete-01-distmgr", "startLine": 2, "endLine": 2}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "artifactRequests": [
+    {"sourceId": "server-dp-distribution", "reasonCode": "coverageAbsent"},
+    {"sourceId": "server-dp-distribution", "reasonCode": "coverageAccessDenied"}
+  ],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+}

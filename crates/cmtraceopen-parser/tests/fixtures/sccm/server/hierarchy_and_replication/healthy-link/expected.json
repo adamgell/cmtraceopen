@@ -1,0 +1,29 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "healthy-link",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"healthy-01-replmgr","state":"captured"},{"artifactId":"healthy-02-sender","state":"captured"},{"artifactId":"healthy-03-despool","state":"captured"},{"artifactId":"healthy-04-rcmctrl","state":"captured"}],
+  "transactions": [{
+    "transactionId":"hierarchy:msg-healthy-01:LAB:CHD:link-lab-chd",
+    "key":{"messageId":"msg-healthy-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
+    "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":true,
+    "state":"succeeded","classification":"success","confidence":"high","confidenceCeiling":"high",
+    "coverageGapArtifactIds":[],
+    "observations":[
+      {"observationId":"healthy-01-initiate","phase":"initiate","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"healthy-01-replmgr","startLine":1,"endLine":1}]},
+      {"observationId":"healthy-02-queue","phase":"queueOrSerialize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"healthy-01-replmgr","startLine":2,"endLine":2}]},
+      {"observationId":"healthy-03-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"healthy-02-sender","startLine":1,"endLine":1}]},
+      {"observationId":"healthy-04-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"healthy-03-despool","startLine":1,"endLine":1}]},
+      {"observationId":"healthy-05-process","phase":"process","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"healthy-03-despool","startLine":2,"endLine":2}]},
+      {"observationId":"healthy-06-acknowledge","phase":"acknowledge","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"healthy-04-rcmctrl","startLine":1,"endLine":1}]},
+      {"observationId":"healthy-07-terminal","phase":"healthyOrTerminal","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"healthy-04-rcmctrl","startLine":2,"endLine":2}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

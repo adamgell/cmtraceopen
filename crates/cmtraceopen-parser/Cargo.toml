@@ -26,3 +26,6 @@ encoding_rs = "0.8"
 log = "0.4"
 thiserror = "2"
 base64 = "0.22"
+
+[dev-dependencies]
+sha2 = "0.11"
