@@ -32,7 +32,7 @@ const METERING_SCENARIOS: [&str; 6] = [
     "terminal-failures",
 ];
 
-const DOCUMENTED_CORPUS_DIGEST: &str = "6eef3efbb0c531ba";
+const DOCUMENTED_CORPUS_DIGEST: &str = "409f976350ffbc05";
 
 #[derive(Debug, PartialEq, Eq)]
 struct CorpusInventory {
@@ -401,6 +401,21 @@ fn evidence_record_texts(
         }
     }
     Ok(records)
+}
+
+fn record_contains_exact_key_pair(record: &str, field: &str, value: &str) -> bool {
+    const MESSAGE_PREFIX: &str = "<![LOG[";
+    const MESSAGE_SUFFIX: &str = "]LOG]!>";
+    let Some(message_start) = record.find(MESSAGE_PREFIX) else {
+        return false;
+    };
+    let payload_start = message_start + MESSAGE_PREFIX.len();
+    let Some(message_end) = record[payload_start..].find(MESSAGE_SUFFIX) else {
+        return false;
+    };
+    record[payload_start..payload_start + message_end]
+        .split_ascii_whitespace()
+        .any(|token| token.split_once('=') == Some((field, value)))
 }
 
 fn validate_contract(
@@ -838,7 +853,7 @@ fn validate_contract(
         for (record, _, _) in &records {
             for field in required_fields {
                 let value = key[*field].as_str().expect("validated key string");
-                if !record.contains(&format!("{field}={value}")) {
+                if !record_contains_exact_key_pair(record, field, value) {
                     return Err(format!(
                         "{transaction_id} {field} is not co-located in every cited CCM record"
                     ));
@@ -855,13 +870,12 @@ fn validate_contract(
         }
 
         let confidence = required_string(transaction, "confidence", transaction_id)?;
-        if confidence == "high"
-            && records.iter().any(|(_, offset, version)| {
-                offset.abs() > 1_439 || !version.starts_with("5.00.TEST.")
-            })
+        if records
+            .iter()
+            .any(|(_, offset, version)| offset.abs() > 1_439 || !version.starts_with("5.00.TEST."))
         {
             return Err(format!(
-                "{transaction_id} high confidence lacks usable offset/profile provenance"
+                "{transaction_id} exact-key transaction lacks usable offset/profile provenance"
             ));
         }
         let state = required_string(transaction, "state", transaction_id)?;
@@ -1009,7 +1023,7 @@ fn corpus_inventory_is_deterministic_and_documented() {
             scenarios: 20,
             artifacts: 54,
             evidence_files: 42,
-            evidence_bytes: 16_479,
+            evidence_bytes: 16_820,
             capture_states: BTreeMap::from([
                 ("absent".to_owned(), 3),
                 ("accessDenied".to_owned(), 3),
@@ -1260,6 +1274,101 @@ fn dynamic_evidence_mutations_cannot_fabricate_exact_or_high_confidence_facts() 
         &terminal_root,
         &terminal_manifest,
         &broad_next_artifact,
+    );
+}
+
+#[test]
+fn exact_key_tokens_reject_lookalike_field_names_and_values() {
+    let value = "INV-REPORT-001";
+    assert!(record_contains_exact_key_pair(
+        "<![LOG[ReportId=INV-REPORT-001]LOG]!>",
+        "ReportId",
+        value
+    ));
+    for lookalike in [
+        "<![LOG[OtherReportId=INV-REPORT-001]LOG]!>",
+        "<![LOG[PrefixReportId=INV-REPORT-001]LOG]!>",
+        "<![LOG[ReportId=INV-REPORT-001-suffix]LOG]!>",
+        "<![LOG[X=ReportId=INV-REPORT-001]LOG]!>",
+    ] {
+        assert!(
+            !record_contains_exact_key_pair(lookalike, "ReportId", value),
+            "look-alike key token was accepted: {lookalike}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_recovery_mutations_require_selected_profile_and_usable_offset() {
+    let (unknown_root, mut unknown_manifest, mut unknown_expected) =
+        load_contract("inventory", "recovery-contradictory");
+    let unknown_artifact_id = unknown_manifest["artifacts"][0]["artifactId"]
+        .as_str()
+        .expect("artifactId")
+        .to_owned();
+    unknown_manifest["artifacts"][0]["sourceVersion"] = json!("9.99.UNKNOWN");
+    unknown_expected["extractionProfile"]["selectionState"] = json!("mixedKnownAndUnknown");
+    unknown_expected["sourceLocalObservations"]
+        .as_array_mut()
+        .expect("sourceLocalObservations")
+        .push(json!({
+            "observationId": "inventory-recovery-unknown-profile",
+            "kind": "unknownProfile",
+            "artifactIds": [unknown_artifact_id],
+            "confidenceCeiling": "low",
+            "correlationEligible": false,
+            "claim": "Unknown source version cannot support ordered recovery."
+        }));
+    assert_rejected(
+        "medium recovery from unknown source profile",
+        "inventory",
+        "recovery-contradictory",
+        &unknown_root,
+        &unknown_manifest,
+        &unknown_expected,
+    );
+
+    let (offset_root, offset_manifest, mut offset_expected) =
+        load_contract("compliance", "malformed-unknown-profile-invalid-offset");
+    offset_expected["transactions"] = json!([{
+        "transactionId": "invalid-offset-recovery",
+        "workflow": "compliance",
+        "key": {
+            "CiId": "CI-041",
+            "BaselineId": "BASELINE-041",
+            "StateId": "STATE-041",
+            "ResourceHandle": "safe:resource:compliance-041",
+            "keyProfileKind": "complianceExact",
+            "extractionProfileId": "sccm-client-compliance-5.00.test-v1",
+            "confidence": "exact"
+        },
+        "phase": "Report",
+        "state": "recovered",
+        "classification": "recovery",
+        "confidence": "medium",
+        "lastSuccessfulPhase": "Report",
+        "evidence": [
+            {
+                "artifactId": "compliance-malformed-unknown-profile-invalid-offset-invalid-offset",
+                "startLine": 1,
+                "endLine": 1
+            },
+            {
+                "artifactId": "compliance-malformed-unknown-profile-invalid-offset-invalid-offset",
+                "startLine": 2,
+                "endLine": 2
+            }
+        ],
+        "coverageGapArtifactIds": [],
+        "nextArtifact": null
+    }]);
+    assert_rejected(
+        "medium recovery from invalid timestamp offsets",
+        "compliance",
+        "malformed-unknown-profile-invalid-offset",
+        &offset_root,
+        &offset_manifest,
+        &offset_expected,
     );
 }
 

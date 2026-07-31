@@ -42,7 +42,7 @@ low-confidence observation and a coverage/profile gap.
 The fixture root is
 `crates/cmtraceopen-parser/tests/fixtures/sccm/client/inventory-compliance-metering`.
 It contains 20 scenarios, 54 manifest artifacts, and 42 physical evidence files
-(16,479 bytes). The deterministic fixture digest is `6eef3efbb0c531ba`.
+(16,820 bytes). The deterministic fixture digest is `409f976350ffbc05`.
 
 | Family | Scenarios | Contract coverage |
 | --- | --- | --- |
@@ -116,8 +116,10 @@ of:
   aliasing;
 - cross-family key fields, uncited key values, and phase borrowing from another
   record;
+- embedded/look-alike key labels that contain an expected label as a substring;
 - high-confidence output from an unknown source profile or invalid timestamp
   offset;
+- medium-confidence recovery from an unknown profile or unusable offset;
 - promotion of missing coverage to captured evidence;
 - promotion of noncompliance to confirmed failure;
 - same-minute key borrowing between distinct root artifacts;
