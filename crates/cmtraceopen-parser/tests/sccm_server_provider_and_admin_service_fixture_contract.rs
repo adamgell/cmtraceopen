@@ -87,6 +87,71 @@ fn safe_segmented_path(value: &str, prefix: &str) -> bool {
     })
 }
 
+fn safe_opaque_token(value: &str, prefix: &str, max_suffix_len: usize) -> bool {
+    value.strip_prefix(prefix).is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix.len() <= max_suffix_len
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    })
+}
+
+fn expected_sanitized_source_path(
+    source_id: Option<&str>,
+    rotation: &Value,
+) -> Option<&'static str> {
+    match (source_id, rotation["kind"].as_str()) {
+        (Some("server-provider"), Some("current")) => {
+            Some("SYNTHETIC://configured-root/LAB/Logs/Smsprov.log")
+        }
+        (Some("server-provider"), Some("lo_")) => {
+            Some("SYNTHETIC://configured-root/LAB/Logs/Smsprov.lo_")
+        }
+        (Some("server-admin-service"), Some("current")) => {
+            Some("SYNTHETIC://configured-root/LAB/Logs/AdminService.log")
+        }
+        (Some("server-admin-service-iis"), Some("current")) => {
+            Some("SYNTHETIC://scoped-export/LAB/IIS/u_ex_synthetic.log")
+        }
+        _ => None,
+    }
+}
+
+fn public_projection_contains_sensitive_shape(value: &Value) -> bool {
+    match value {
+        Value::String(value) => {
+            let value = value.to_ascii_lowercase();
+            [
+                "@",
+                "bearer",
+                "select ",
+                "http://",
+                "https://",
+                "/adminservice",
+            ]
+            .iter()
+            .any(|term| value.contains(term))
+        }
+        Value::Array(values) => values
+            .iter()
+            .any(public_projection_contains_sensitive_shape),
+        Value::Object(values) => values
+            .values()
+            .any(public_projection_contains_sensitive_shape),
+        _ => false,
+    }
+}
+
+fn physical_line_count(scenario: &str, relative_path: &str) -> Option<u64> {
+    if !safe_segmented_path(relative_path, "evidence/") {
+        return None;
+    }
+    fs::read_to_string(corpus_root().join(scenario).join(relative_path))
+        .ok()
+        .map(|content| content.lines().count() as u64)
+}
+
 fn coverage_state(value: &str) -> Option<SccmCoverageState> {
     match value {
         "captured" => Some(SccmCoverageState::Captured),
@@ -396,9 +461,9 @@ fn expected_profile_layers(scenario: &str) -> &'static [&'static str] {
 }
 
 fn known_test_version(value: &str) -> bool {
-    value.strip_prefix("5.00.TEST.").is_some_and(|suffix| {
-        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-    })
+    value
+        .strip_prefix("5.00.TEST.")
+        .is_some_and(|suffix| suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn safe_version(value: &str) -> bool {
@@ -474,6 +539,7 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
 
     let endpoints = manifest["topology"]["endpoints"].as_array();
     let mut endpoint_layers = BTreeMap::new();
+    let mut endpoint_hosts = BTreeMap::new();
     let mut endpoint_ids = Vec::new();
     for endpoint in endpoints.into_iter().flatten() {
         if !object_has_only(
@@ -490,16 +556,18 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             failures.push(format!("{endpoint_id}: endpoint layer is not a string"));
             continue;
         };
+        let host_handle = endpoint["hostHandle"].as_str();
         if !matches!(layer, "provider" | "adminService")
             || endpoint["producerRole"] != "provider"
-            || endpoint["hostHandle"]
-                .as_str()
-                .is_none_or(|value| !value.starts_with("safe:server:"))
+            || host_handle.is_none_or(|value| !safe_opaque_token(value, "safe:server:", 64))
             || endpoint_layers
                 .insert(endpoint_id.to_owned(), layer.to_owned())
                 .is_some()
         {
             failures.push(format!("{endpoint_id}: invalid endpoint topology"));
+        }
+        if let Some(host_handle) = host_handle {
+            endpoint_hosts.insert(endpoint_id.to_owned(), host_handle.to_owned());
         }
         endpoint_ids.push(endpoint_id);
     }
@@ -520,6 +588,9 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
     let mut artifact_physical_state = BTreeMap::new();
     let mut fingerprints = BTreeSet::new();
     let mut destinations = BTreeSet::new();
+    let mut sanitized_sources = BTreeSet::new();
+    let mut artifact_endpoint_ids = BTreeSet::new();
+    let mut physical_line_counts = BTreeMap::new();
     for artifact in artifacts.into_iter().flatten() {
         if !object_has_only(
             artifact,
@@ -563,6 +634,10 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         let layer = artifact["layer"].as_str();
         let basename = artifact["originalBasename"].as_str();
         let diagnostic_use = artifact["diagnosticUse"].as_str();
+        let endpoint_id = artifact["endpointId"].as_str();
+        let producer_host = artifact["producerHostHandle"].as_str();
+        let sanitized_source_path = artifact["sanitizedSourcePath"].as_str();
+        let path_fingerprint = artifact["pathFingerprint"].as_str();
         let source_tuple = (layer, source_id, basename, diagnostic_use);
         if !matches!(
             source_tuple,
@@ -586,19 +661,20 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             failures.push(format!("{artifact_id}: unsupported source/layer tuple"));
         }
         if artifact["producerRole"] != "provider"
-            || artifact["producerHostHandle"]
-                .as_str()
-                .is_none_or(|value| !value.starts_with("safe:server:"))
+            || producer_host.is_none_or(|value| !safe_opaque_token(value, "safe:server:", 64))
+            || endpoint_id
+                .and_then(|id| endpoint_hosts.get(id))
+                .map(String::as_str)
+                != producer_host
             || DateTime::parse_from_rfc3339(artifact["collectedUtc"].as_str().unwrap_or_default())
                 .is_err()
-            || artifact["sanitizedSourcePath"]
-                .as_str()
-                .is_none_or(|value| !safe_segmented_path(value, "SYNTHETIC://"))
-            || artifact["pathFingerprint"]
-                .as_str()
-                .is_none_or(|value| value.strip_prefix("synthetic:").is_none_or(str::is_empty))
-            || artifact["pathFingerprint"]
-                .as_str()
+            || sanitized_source_path
+                != expected_sanitized_source_path(source_id, &artifact["rotation"])
+            || sanitized_source_path
+                .map(str::to_ascii_lowercase)
+                .is_none_or(|value| !sanitized_sources.insert(value))
+            || path_fingerprint.is_none_or(|value| !safe_opaque_token(value, "synthetic:", 96))
+            || path_fingerprint
                 .map(str::to_ascii_lowercase)
                 .is_none_or(|value| !fingerprints.insert(value))
             || rotation(&artifact["rotation"]).is_none()
@@ -609,7 +685,9 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         {
             failures.push(format!("{artifact_id}: invalid typed provenance"));
         }
-        let endpoint_id = artifact["endpointId"].as_str();
+        if let Some(endpoint_id) = endpoint_id {
+            artifact_endpoint_ids.insert(endpoint_id);
+        }
         let expected_endpoint_layer = endpoint_id.and_then(|id| endpoint_layers.get(id));
         let endpoint_matches = match layer {
             Some("supplementalIis") => {
@@ -624,11 +702,9 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         let state = artifact["captureState"].as_str();
         match state {
             Some("captured" | "capped" | "parseFailed") => {
-                if artifact["relativePath"]
-                    .as_str()
-                    .is_none_or(|value| !safe_segmented_path(value, "evidence/"))
-                    || artifact["relativePath"]
-                        .as_str()
+                let relative_path = artifact["relativePath"].as_str();
+                if relative_path.is_none_or(|value| !safe_segmented_path(value, "evidence/"))
+                    || relative_path
                         .map(str::to_ascii_lowercase)
                         .is_none_or(|value| !destinations.insert(value))
                     || artifact["bytesCopied"].as_u64().is_none()
@@ -643,6 +719,11 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                         .is_none_or(|value| !safe_version(value))
                 {
                     failures.push(format!("{artifact_id}: invalid physical provenance"));
+                }
+                if let Some(line_count) =
+                    relative_path.and_then(|path| physical_line_count(scenario, path))
+                {
+                    physical_line_counts.insert(artifact_id.to_owned(), line_count);
                 }
             }
             Some("absent" | "accessDenied" | "skipped" | "unsupported") => {
@@ -681,6 +762,7 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         || artifact_ids != sorted_artifact_ids
         || artifact_ids != expected_artifact_ids(scenario)
         || artifact_sources.len() != artifact_ids.len()
+        || artifact_endpoint_ids != endpoint_ids.iter().copied().collect::<BTreeSet<_>>()
     {
         failures.push("artifact IDs are not exact sorted unique strings".to_owned());
     }
@@ -704,6 +786,9 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         || expected["crossSideCausalClaims"] != Value::Array(Vec::new())
     {
         failures.push("expected output loses its preparation boundary".to_owned());
+    }
+    if public_projection_contains_sensitive_shape(expected) {
+        failures.push("public projection contains a sensitive raw shape".to_owned());
     }
 
     let profiles = expected["profiles"].as_array();
@@ -1061,26 +1146,33 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         }
         let mut cited_references = BTreeSet::new();
         for reference in references.into_iter().flatten() {
+            let artifact_id = reference["artifactId"].as_str();
+            let start = reference["startLine"].as_u64();
+            let end = reference["endLine"].as_u64();
+            let physical_range_is_valid =
+                artifact_id
+                    .zip(start)
+                    .zip(end)
+                    .is_some_and(|((artifact_id, start), end)| {
+                        start > 0
+                            && end >= start
+                            && physical_line_counts
+                                .get(artifact_id)
+                                .is_some_and(|line_count| end <= *line_count)
+                    });
             if !object_has_only(reference, &["artifactId", "startLine", "endLine"])
-                || reference["artifactId"]
-                    .as_str()
-                    .is_none_or(|id| !artifact_sources.contains_key(id))
-                || reference["artifactId"].as_str().is_some_and(|id| {
+                || artifact_id.is_none_or(|id| !artifact_sources.contains_key(id))
+                || artifact_id.is_some_and(|id| {
                     let observation_layer = observation["layer"].as_str().unwrap_or_default();
                     artifact_sources
                         .get(id)
                         .is_none_or(|(_, artifact_layer)| artifact_layer != observation_layer)
                 })
-                || reference["startLine"].as_u64().is_none_or(|line| line == 0)
-                || reference["endLine"].as_u64().is_none_or(|line| line == 0)
+                || !physical_range_is_valid
             {
                 failures.push("source-local evidence reference is malformed".to_owned());
             }
-            if let (Some(artifact_id), Some(start), Some(end)) = (
-                reference["artifactId"].as_str(),
-                reference["startLine"].as_u64(),
-                reference["endLine"].as_u64(),
-            ) {
+            if let (Some(artifact_id), Some(start), Some(end)) = (artifact_id, start, end) {
                 if !cited_references.insert((artifact_id, start, end)) {
                     failures.push("source-local evidence reference is duplicated".to_owned());
                 }
@@ -1629,6 +1721,158 @@ fn schema_and_identity_mutations_fail_closed() {
         serde_json::json!(["same-time client failure was caused"]);
     if schema_failures("provider-success", &manifest, &cross_side_claim).is_empty() {
         accepted.push("cross-side causal claim");
+    }
+
+    assert!(accepted.is_empty(), "accepted mutations: {accepted:#?}");
+}
+
+#[test]
+fn review_privacy_topology_profile_and_citation_mutations_fail_closed() {
+    let manifest = read_json("provider-success", "manifest.json").unwrap();
+    let expected = read_json("provider-success", "expected.json").unwrap();
+    let privacy_manifest = read_json("privacy-redaction", "manifest.json").unwrap();
+    let privacy_expected = read_json("privacy-redaction", "expected.json").unwrap();
+    let iis_manifest = read_json("iis-supplemental", "manifest.json").unwrap();
+    let iis_expected = read_json("iis-supplemental", "expected.json").unwrap();
+    let timeout_manifest = read_json("provider-timeout", "manifest.json").unwrap();
+    let timeout_expected = read_json("provider-timeout", "expected.json").unwrap();
+    let mut accepted = Vec::new();
+
+    let mut noncanonical_known_version = manifest.clone();
+    noncanonical_known_version["artifacts"][0]["sourceVersion"] =
+        Value::String("5.00.TEST.1".to_owned());
+    if schema_failures("provider-success", &noncanonical_known_version, &expected).is_empty() {
+        accepted.push("noncanonical synthetic source version selected an exact profile");
+    }
+
+    let mut overlong_known_version = manifest.clone();
+    overlong_known_version["artifacts"][0]["sourceVersion"] =
+        Value::String("5.00.TEST.00010".to_owned());
+    if schema_failures("provider-success", &overlong_known_version, &expected).is_empty() {
+        accepted.push("overlong synthetic source version selected an exact profile");
+    }
+
+    let mut topology_host_mismatch = manifest.clone();
+    topology_host_mismatch["artifacts"][0]["producerHostHandle"] =
+        Value::String("safe:server:different-host".to_owned());
+    if schema_failures("provider-success", &topology_host_mismatch, &expected).is_empty() {
+        accepted.push("artifact producer host diverged from its endpoint host");
+    }
+
+    let mut identity_bearing_host = manifest.clone();
+    identity_bearing_host["topology"]["endpoints"][0]["hostHandle"] =
+        Value::String("safe:server:synthetic.user@example.invalid".to_owned());
+    identity_bearing_host["artifacts"][0]["producerHostHandle"] =
+        Value::String("safe:server:synthetic.user@example.invalid".to_owned());
+    if schema_failures("provider-success", &identity_bearing_host, &expected).is_empty() {
+        accepted.push("identity-bearing host provenance");
+    }
+
+    let mut identity_bearing_source_path = manifest.clone();
+    identity_bearing_source_path["artifacts"][0]["sanitizedSourcePath"] =
+        Value::String("SYNTHETIC://Users/Adam.Gell/LAB/Logs/Smsprov.log".to_owned());
+    if schema_failures("provider-success", &identity_bearing_source_path, &expected).is_empty() {
+        accepted.push("identity-bearing sanitized source path");
+    }
+
+    let mut identity_bearing_fingerprint = manifest.clone();
+    identity_bearing_fingerprint["artifacts"][0]["pathFingerprint"] =
+        Value::String("synthetic:synthetic.user@example.invalid".to_owned());
+    if schema_failures("provider-success", &identity_bearing_fingerprint, &expected).is_empty() {
+        accepted.push("identity-bearing path fingerprint");
+    }
+
+    let mut basename_mismatch = manifest.clone();
+    basename_mismatch["artifacts"][0]["sanitizedSourcePath"] =
+        Value::String("SYNTHETIC://configured-root/LAB/Logs/AdminService.log".to_owned());
+    if schema_failures("provider-success", &basename_mismatch, &expected).is_empty() {
+        accepted.push("sanitized source path basename diverged from source identity");
+    }
+
+    let mut duplicate_sanitized_physical_identity = privacy_manifest.clone();
+    duplicate_sanitized_physical_identity["artifacts"][1]["sanitizedSourcePath"] =
+        duplicate_sanitized_physical_identity["artifacts"][0]["sanitizedSourcePath"].clone();
+    if schema_failures(
+        "privacy-redaction",
+        &duplicate_sanitized_physical_identity,
+        &privacy_expected,
+    )
+    .is_empty()
+    {
+        accepted.push("duplicate sanitized physical identity hidden by distinct fingerprints");
+    }
+
+    let mut out_of_range_source_local_citation = iis_expected.clone();
+    out_of_range_source_local_citation["sourceLocalObservations"][0]["evidence"][0]["startLine"] =
+        Value::from(9999_u64);
+    out_of_range_source_local_citation["sourceLocalObservations"][0]["evidence"][0]["endLine"] =
+        Value::from(9999_u64);
+    if schema_failures(
+        "iis-supplemental",
+        &iis_manifest,
+        &out_of_range_source_local_citation,
+    )
+    .is_empty()
+    {
+        accepted.push("source-local citation points outside physical evidence");
+    }
+
+    let mut reversed_source_local_citation = iis_expected.clone();
+    reversed_source_local_citation["sourceLocalObservations"][0]["evidence"][0]["startLine"] =
+        Value::from(2_u64);
+    reversed_source_local_citation["sourceLocalObservations"][0]["evidence"][0]["endLine"] =
+        Value::from(1_u64);
+    if schema_failures(
+        "iis-supplemental",
+        &iis_manifest,
+        &reversed_source_local_citation,
+    )
+    .is_empty()
+    {
+        accepted.push("source-local citation has a reversed line range");
+    }
+
+    let mut private_source_local_reason = privacy_expected.clone();
+    private_source_local_reason["sourceLocalObservations"][0]["reason"] =
+        Value::String("Caller synthetic.user@example.invalid used a raw token".to_owned());
+    if schema_failures(
+        "privacy-redaction",
+        &privacy_manifest,
+        &private_source_local_reason,
+    )
+    .is_empty()
+    {
+        accepted.push("source-local public reason leaks caller identity");
+    }
+
+    let mut private_request_reason = timeout_expected.clone();
+    private_request_reason["artifactRequests"][0]["reason"] =
+        Value::String("Capture caller synthetic.user@example.invalid bearer token".to_owned());
+    if schema_failures(
+        "provider-timeout",
+        &timeout_manifest,
+        &private_request_reason,
+    )
+    .is_empty()
+    {
+        accepted.push("artifact request public reason leaks caller and token material");
+    }
+
+    let mut extra_unobserved_endpoint = manifest.clone();
+    extra_unobserved_endpoint["topology"]["endpoints"]
+        .as_array_mut()
+        .unwrap()
+        .insert(
+            0,
+            serde_json::json!({
+                "endpointId": "aaa-unobserved",
+                "layer": "provider",
+                "hostHandle": "safe:server:unused",
+                "producerRole": "provider"
+            }),
+        );
+    if schema_failures("provider-success", &extra_unobserved_endpoint, &expected).is_empty() {
+        accepted.push("unobserved extra endpoint entered exact topology");
     }
 
     assert!(accepted.is_empty(), "accepted mutations: {accepted:#?}");
