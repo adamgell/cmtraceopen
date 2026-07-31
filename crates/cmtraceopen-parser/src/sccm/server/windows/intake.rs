@@ -60,7 +60,17 @@ pub struct SccmServerArtifactAssessment {
     pub collected_at_utc: String,
     pub relative_path: Option<String>,
     pub bytes_copied: u64,
+    pub capture_provenance: Option<SccmServerCaptureProvenance>,
     pub parser_eligible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmServerCaptureProvenance {
+    pub schema_version: u32,
+    pub encoding: String,
+    pub byte_limit: u64,
+    pub limit_applied: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -149,6 +159,7 @@ pub fn assess_server_intake(
 
     let mut manifest_artifact_ids = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
+    let mut path_fingerprint_lineages = BTreeMap::new();
     let mut prepared = Vec::with_capacity(manifest.artifacts.len());
     for artifact in manifest.artifacts {
         if !manifest_artifact_ids.insert(artifact.artifact_id.clone()) {
@@ -159,6 +170,7 @@ pub fn assess_server_intake(
             manifest.synthetic_fixture,
             &topology.roles_observed,
             &mut relative_paths,
+            &mut path_fingerprint_lineages,
             &payload_by_id,
         )?;
         prepared.push(normalized);
@@ -179,6 +191,13 @@ pub fn assess_server_intake(
         BTreeMap::new();
     let mut request_keys = BTreeSet::new();
     let mut next_artifact_requests = Vec::new();
+    let usable_source_keys = prepared
+        .iter()
+        .filter(|prepared_artifact| {
+            prepared_artifact.assessment.state == SccmCoverageState::Captured
+        })
+        .map(|prepared_artifact| logical_source_key(&prepared_artifact.assessment))
+        .collect::<BTreeSet<_>>();
 
     for prepared_artifact in prepared {
         let artifact = prepared_artifact.assessment;
@@ -204,7 +223,9 @@ pub fn assess_server_intake(
                 artifact_ids: vec![artifact.artifact_id.clone()],
             });
 
-        if let Some(request) = request_for_gap(&artifact) {
+        let usable_compatible_candidate =
+            usable_source_keys.contains(&logical_source_key(&artifact));
+        if let Some(request) = request_for_gap(&artifact, usable_compatible_candidate) {
             let request_key = (
                 request.logical_id.clone(),
                 role_sort_key(&request.role).to_owned(),
@@ -286,13 +307,13 @@ fn normalize_topology(
     manifest: &RawServerManifest,
 ) -> Result<SccmServerTopologyAssessment, SccmServerIntakeError> {
     let site_handle = if manifest.synthetic_fixture {
+        // Manifest v1 synthetic fixtures use a closed, committed topology vocabulary.
+        // Expanding it requires an explicit fixture/profile review, not a caller-chosen label.
         if manifest.topology.site_code != "LAB"
-            || !manifest.topology.capture_host.starts_with("LAB-")
-            || !manifest
-                .topology
-                .capture_host
-                .bytes()
-                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'-')
+            || !matches!(
+                manifest.topology.capture_host.as_str(),
+                "LAB-CM01" | "LAB-MP01"
+            )
         {
             return Err(SccmServerIntakeError::InvalidTopology);
         }
@@ -344,8 +365,11 @@ fn normalize_artifact(
     synthetic_fixture: bool,
     roles_observed: &[SccmRole],
     relative_paths: &mut BTreeSet<String>,
+    path_fingerprint_lineages: &mut BTreeMap<(String, String, String, String), String>,
     payload_by_id: &BTreeMap<&str, &[u8]>,
 ) -> Result<PreparedArtifact, SccmServerIntakeError> {
+    let source_version =
+        normalize_source_version(artifact.source_version.as_deref(), synthetic_fixture)?;
     if !safe_manifest_artifact_id(&artifact.artifact_id, synthetic_fixture)
         || !safe_source_id(&artifact.source_id)
         || !safe_lineage_id(&artifact.rotation.lineage_id, synthetic_fixture)
@@ -411,7 +435,12 @@ fn normalize_artifact(
                 {
                     return Err(SccmServerIntakeError::InvalidArtifact);
                 }
-                (family, Some(classified.basename), declared_rotation, true)
+                (
+                    family,
+                    Some(artifact.original_basename.clone()),
+                    declared_rotation,
+                    true,
+                )
             } else {
                 (family, None, None, false)
             }
@@ -426,6 +455,30 @@ fn normalize_artifact(
             return Err(SccmServerIntakeError::InvalidArtifact);
         };
 
+    let path_fingerprint_key = (
+        role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.source_id.clone(),
+        workflow_subject_role
+            .as_ref()
+            .map(role_sort_key)
+            .unwrap_or_default()
+            .to_owned(),
+        artifact
+            .configured_path_provenance
+            .path_fingerprint
+            .to_ascii_lowercase(),
+    );
+    match path_fingerprint_lineages.get(&path_fingerprint_key) {
+        Some(lineage) if lineage != &artifact.rotation.lineage_id => {
+            return Err(SccmServerIntakeError::DuplicateArtifact);
+        }
+        Some(_) => {}
+        None => {
+            path_fingerprint_lineages
+                .insert(path_fingerprint_key, artifact.rotation.lineage_id.clone());
+        }
+    }
+
     let configured_path_state =
         parse_configured_path_state(&artifact.configured_path_provenance.state)?;
     let configured_path_class = match artifact.configured_path_provenance.path_class.as_deref() {
@@ -437,16 +490,18 @@ fn normalize_artifact(
     let relative_path = validate_relative_path(
         artifact.relative_path.clone(),
         original_basename.as_deref(),
-        &artifact.capture_state,
+        &artifact,
+        rotation.as_ref(),
         relative_paths,
     )?;
-    let bytes = validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id)?;
-    let profile_eligible = artifact
-        .source_version
+    let (bytes, capture_provenance) =
+        validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id)?;
+    let profile_eligible = source_version
         .as_deref()
         .is_some_and(|version| source_version_is_profile_eligible(version, synthetic_fixture));
 
     let mut evidence = Vec::new();
+    let mut state = artifact.capture_state.clone();
     if artifact.capture_state == SccmCoverageState::Captured && parser_eligible {
         let bytes = bytes.ok_or(SccmServerIntakeError::MissingPayload)?;
         if artifact.encoding.as_deref() != Some("utf-8") {
@@ -463,7 +518,7 @@ fn normalize_artifact(
                 original_path: None,
                 host: artifact.producer_host_handle.clone(),
                 role: artifact.producer_role.clone(),
-                configmgr_version: artifact.source_version.clone(),
+                configmgr_version: source_version.clone(),
                 collected_at_utc: Some(collected_at_utc.clone()),
                 rotation: rotation
                     .clone()
@@ -473,6 +528,9 @@ fn normalize_artifact(
             },
             content,
         );
+        if evidence.is_empty() {
+            state = SccmCoverageState::ParseFailed;
+        }
     }
 
     Ok(PreparedArtifact {
@@ -493,15 +551,16 @@ fn normalize_artifact(
             original_basename,
             rotation,
             rotation_lineage_handle: artifact.rotation.lineage_id,
-            state: artifact.capture_state,
+            state,
             configured_path_state,
             configured_path_class,
             path_fingerprint: artifact.configured_path_provenance.path_fingerprint,
-            source_version: artifact.source_version,
+            source_version,
             profile_eligible,
             collected_at_utc,
             relative_path,
             bytes_copied: artifact.bytes_copied,
+            capture_provenance,
             parser_eligible,
         },
         evidence,
@@ -512,13 +571,9 @@ fn validate_payload_contract<'a>(
     artifact: &RawServerArtifact,
     relative_path: Option<&str>,
     payload_by_id: &'a BTreeMap<&str, &'a [u8]>,
-) -> Result<Option<&'a [u8]>, SccmServerIntakeError> {
+) -> Result<(Option<&'a [u8]>, Option<SccmServerCaptureProvenance>), SccmServerIntakeError> {
     let payload = payload_by_id.get(artifact.artifact_id.as_str()).copied();
-    let physical = matches!(
-        artifact.capture_state,
-        SccmCoverageState::Captured | SccmCoverageState::Capped
-    );
-    if physical {
+    if is_physical_state(&artifact.capture_state) {
         let payload = payload.ok_or(SccmServerIntakeError::MissingPayload)?;
         if relative_path.is_none() {
             return Err(SccmServerIntakeError::InvalidArtifact);
@@ -539,12 +594,32 @@ fn validate_payload_contract<'a>(
                     && artifact.bytes_copied == limit.byte_limit
                     && artifact.bytes_copied > 0
             }
+            SccmCoverageState::ParseFailed => {
+                if limit.limit_applied {
+                    artifact.bytes_copied == limit.byte_limit && artifact.bytes_copied > 0
+                } else {
+                    artifact.bytes_copied <= limit.byte_limit
+                }
+            }
             _ => false,
         };
-        if !valid_limit || artifact.encoding.is_none() {
+        let encoding = artifact
+            .encoding
+            .as_deref()
+            .filter(|encoding| safe_encoding(encoding))
+            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+        if !valid_limit || limit.byte_limit == 0 {
             return Err(SccmServerIntakeError::InvalidArtifact);
         }
-        return Ok(Some(payload));
+        return Ok((
+            Some(payload),
+            Some(SccmServerCaptureProvenance {
+                schema_version: 1,
+                encoding: encoding.to_owned(),
+                byte_limit: limit.byte_limit,
+                limit_applied: limit.limit_applied,
+            }),
+        ));
     }
 
     if payload.is_some()
@@ -555,28 +630,72 @@ fn validate_payload_contract<'a>(
     {
         return Err(SccmServerIntakeError::UnexpectedPayload);
     }
-    Ok(None)
+    Ok((None, None))
 }
 
 fn validate_relative_path(
     relative_path: Option<String>,
     original_basename: Option<&str>,
-    state: &SccmCoverageState,
+    artifact: &RawServerArtifact,
+    rotation: Option<&SccmRotation>,
     relative_paths: &mut BTreeSet<String>,
 ) -> Result<Option<String>, SccmServerIntakeError> {
-    let physical = matches!(
-        state,
-        SccmCoverageState::Captured | SccmCoverageState::Capped
-    );
-    if !physical {
+    if !is_physical_state(&artifact.capture_state) {
         if relative_path.is_some() {
             return Err(SccmServerIntakeError::InvalidArtifact);
         }
         return Ok(None);
     }
     let relative_path = relative_path.ok_or(SccmServerIntakeError::InvalidArtifact)?;
-    if !relative_path.starts_with("evidence/sccm/server/")
-        || relative_path.starts_with('/')
+    let components = relative_path.split('/').collect::<Vec<_>>();
+    let expected_role =
+        role_path_segment(&artifact.producer_role).ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let expected_rotation =
+        rotation_path_segment(rotation).ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let basename = original_basename.ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let mut cursor = 0;
+    let fixed_prefix = [
+        "evidence",
+        "sccm",
+        "server",
+        expected_role,
+        artifact.source_id.as_str(),
+    ];
+    if components.get(..fixed_prefix.len()) != Some(fixed_prefix.as_slice()) {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+    cursor += fixed_prefix.len();
+
+    if let Some(subject_role) = artifact
+        .workflow_subject
+        .as_ref()
+        .map(|subject| &subject.role)
+    {
+        let subject_segment = role_path_segment(subject_role)
+            .map(|role| format!("subject-{role}"))
+            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+        if components.get(cursor).copied() != Some(subject_segment.as_str()) {
+            return Err(SccmServerIntakeError::InvalidArtifact);
+        }
+        cursor += 1;
+    }
+    if artifact.workflow_subject.is_some()
+        && components
+            .get(cursor)
+            .is_some_and(|component| opaque_path_component(component, "instance-"))
+    {
+        cursor += 1;
+    }
+    if components
+        .get(cursor)
+        .is_some_and(|component| opaque_path_component(component, "root-"))
+    {
+        cursor += 1;
+    }
+
+    if components.get(cursor).copied() != Some(expected_rotation.as_str())
+        || components.get(cursor + 1).copied() != Some(basename)
+        || components.len() != cursor + 2
         || relative_path.contains('\\')
         || relative_path.split('/').any(|segment| {
             segment.is_empty()
@@ -586,12 +705,54 @@ fn validate_relative_path(
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         })
-        || original_basename.is_none_or(|basename| !relative_path.ends_with(basename))
-        || !relative_paths.insert(relative_path.clone())
+        || !relative_paths.insert(relative_path.to_ascii_lowercase())
     {
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
     Ok(Some(relative_path))
+}
+
+fn is_physical_state(state: &SccmCoverageState) -> bool {
+    matches!(
+        state,
+        SccmCoverageState::Captured | SccmCoverageState::Capped | SccmCoverageState::ParseFailed
+    )
+}
+
+fn safe_encoding(encoding: &str) -> bool {
+    matches!(encoding, "utf-8" | "utf-16le" | "windows-1252" | "unknown")
+}
+
+fn role_path_segment(role: &SccmRole) -> Option<&'static str> {
+    match role {
+        SccmRole::SiteServer => Some("site-server"),
+        SccmRole::ManagementPoint => Some("management-point"),
+        SccmRole::DistributionPoint => Some("distribution-point"),
+        SccmRole::SoftwareUpdatePoint => Some("software-update-point"),
+        SccmRole::WsUs => Some("wsus"),
+        SccmRole::Provider => Some("provider"),
+        SccmRole::AdminService => Some("admin-service"),
+        SccmRole::Client | SccmRole::Unknown(_) => None,
+    }
+}
+
+fn rotation_path_segment(rotation: Option<&SccmRotation>) -> Option<String> {
+    Some(match rotation? {
+        SccmRotation::Current => "current".to_owned(),
+        SccmRotation::LoUnderscore => "lo_".to_owned(),
+        SccmRotation::Numbered(value) => format!("numbered-{value}"),
+        SccmRotation::Timestamped(value) => format!("timestamped-{value}"),
+        SccmRotation::Unknown(_) => return None,
+    })
+}
+
+fn opaque_path_component(component: &str, prefix: &str) -> bool {
+    component.strip_prefix(prefix).is_some_and(|value| {
+        (8..=64).contains(&value.len())
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn parse_declared_rotation(
@@ -643,7 +804,29 @@ fn normalize_collected_utc(value: &str) -> Result<String, SccmServerIntakeError>
         .to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
-fn request_for_gap(artifact: &SccmServerArtifactAssessment) -> Option<SccmArtifactRequest> {
+fn logical_source_key(artifact: &SccmServerArtifactAssessment) -> (String, String, String) {
+    (
+        role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.source_id.clone(),
+        artifact
+            .workflow_subject_role
+            .as_ref()
+            .map(role_sort_key)
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
+fn request_for_gap(
+    artifact: &SccmServerArtifactAssessment,
+    usable_compatible_candidate: bool,
+) -> Option<SccmArtifactRequest> {
+    if artifact.state == SccmCoverageState::Absent
+        && artifact.configured_path_state == SccmServerConfiguredPathState::DefaultCandidate
+        && usable_compatible_candidate
+    {
+        return None;
+    }
     let reason = match artifact.state {
         SccmCoverageState::Absent => "source was absent; role outcome remains unknown",
         SccmCoverageState::AccessDenied => "source access was denied; role outcome remains unknown",
@@ -661,6 +844,25 @@ fn request_for_gap(artifact: &SccmServerArtifactAssessment) -> Option<SccmArtifa
             .unwrap_or_else(|| artifact.producer_role.clone()),
         reason: reason.to_owned(),
     })
+}
+
+fn normalize_source_version(
+    value: Option<&str>,
+    synthetic_fixture: bool,
+) -> Result<Option<String>, SccmServerIntakeError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let safe = if synthetic_fixture {
+        value == "5.00.TEST"
+    } else {
+        source_version_is_profile_eligible(value, false)
+            || opaque_sha256_handle(value, "cmtraceopen.version.sha256.v1:")
+    };
+    if !safe {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+    Ok(Some(value.to_owned()))
 }
 
 fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> bool {
@@ -686,17 +888,32 @@ fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> b
 
 fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return safe_synthetic_identifier(value);
+        // The top-level manifest version gate makes this the v1 synthetic-fixture vocabulary.
+        // These public identities must never become free-form based on the manifest flag alone.
+        return matches!(
+            value,
+            "a-mp-policy"
+                | "b-sitecomp"
+                | "dp-dist-current"
+                | "dp-distribution-absent-candidate"
+                | "mp-iis-skipped"
+                | "mp-policy-access-denied"
+                | "mp-policy-configured"
+                | "mp-policy-current"
+                | "mp-policy-lo"
+                | "mp-policy-multiline"
+                | "mp-policy-numbered-2"
+                | "mp-policy-root-a-current"
+                | "mp-policy-root-b-current"
+                | "mp-policy-ts-20260729-235700"
+                | "sitecomp-current"
+                | "sup-sync-capped"
+                | "sup-sync-current"
+                | "unknown-db-export"
+                | "z-site-status"
+        );
     }
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
-}
-
-fn safe_synthetic_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        })
 }
 
 fn safe_source_id(value: &str) -> bool {
@@ -715,20 +932,48 @@ fn safe_source_id(value: &str) -> bool {
 
 fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return safe_synthetic_identifier(value);
+        return matches!(
+            value,
+            "dp-dist-lab"
+                | "dp-distribution-default"
+                | "mp-iis-supplement"
+                | "mp-policy-a"
+                | "mp-policy-access"
+                | "mp-policy-configured"
+                | "mp-policy-lab"
+                | "mp-policy-multiline"
+                | "mp-policy-root-a"
+                | "mp-policy-root-b"
+                | "mp-policy-rotation"
+                | "site-status-z"
+                | "sitecomp-a"
+                | "sitecomp-lab"
+                | "sup-sync-cap"
+                | "sup-sync-lab"
+                | "unknown-db-export"
+        );
     }
     opaque_sha256_handle(value, "cmtraceopen.lineage.sha256.v1:")
 }
 
 fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return value.strip_prefix("synthetic:path:").is_some_and(|suffix| {
-            !suffix.is_empty()
-                && suffix.len() <= 96
-                && suffix
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        });
+        return matches!(
+            value,
+            "synthetic:path:a-mp"
+                | "synthetic:path:a-site"
+                | "synthetic:path:dp-default"
+                | "synthetic:path:iis-not-requested"
+                | "synthetic:path:mp-configured-a"
+                | "synthetic:path:mp-default"
+                | "synthetic:path:mp-root-a"
+                | "synthetic:path:mp-root-b"
+                | "synthetic:path:site-default"
+                | "synthetic:path:site-dp-control"
+                | "synthetic:path:site-sup-control"
+                | "synthetic:path:unsupported-db"
+                | "synthetic:path:z-site"
+        );
     }
     opaque_sha256_handle(value, "cmtraceopen.path.sha256.v1:")
 }
@@ -749,15 +994,16 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
         return true;
     };
     if synthetic_fixture {
-        return value
-            .strip_prefix(&format!("synthetic:{domain}:"))
-            .is_some_and(|suffix| {
-                !suffix.is_empty()
-                    && suffix.len() <= 96
-                    && suffix.bytes().all(|byte| {
-                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                    })
-            });
+        return match domain {
+            "host" => matches!(value, "synthetic:host:mp-01" | "synthetic:host:site-01"),
+            "subject" => {
+                matches!(
+                    value,
+                    "synthetic:subject:dp-01" | "synthetic:subject:sup-01"
+                )
+            }
+            _ => false,
+        };
     }
     opaque_sha256_handle(value, &format!("cmtraceopen.{domain}.sha256.v1:"))
 }

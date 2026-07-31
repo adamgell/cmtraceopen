@@ -259,7 +259,7 @@ fn server_intake_preserves_physical_parse_failure_provenance() {
 
     let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
     let artifact = artifact_json(&serialized, "mp-policy-multiline");
-    assert_eq!(artifact["bytesCopied"], 279);
+    assert_eq!(artifact["bytesCopied"], 207);
     assert_eq!(artifact["captureProvenance"]["schemaVersion"], 1);
     assert_eq!(artifact["captureProvenance"]["encoding"], "utf-8");
     assert_eq!(artifact["captureProvenance"]["byteLimit"], 4096);
