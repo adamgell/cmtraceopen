@@ -1,0 +1,226 @@
+{
+  "schemaVersion": "1.0.0",
+  "guards": [
+    {
+      "guardId": "conflicting-exact-key",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "incompatibilityReason",
+        "sourceLocalResults"
+      ]
+    },
+    {
+      "guardId": "incompatible-topology",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "incompatibilityReason",
+        "sourceLocalResults"
+      ]
+    },
+    {
+      "guardId": "invalid-timestamp-offset",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "orderingUnavailable",
+        "sourceLocalResults"
+      ]
+    },
+    {
+      "guardId": "missing-client-counterpart",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "clientArtifactRequest",
+        "serverLocalResults"
+      ]
+    },
+    {
+      "guardId": "missing-server-counterpart",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "clientLocalResults",
+        "serverArtifactRequest"
+      ]
+    },
+    {
+      "guardId": "partial-capture",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "coverageGap",
+        "sourceLocalResults"
+      ]
+    },
+    {
+      "guardId": "redaction-boundary",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "publicSafeHandles",
+        "redactedProjection"
+      ]
+    },
+    {
+      "guardId": "reordered-input",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "deterministicSerialization",
+        "sourceLocalResults"
+      ]
+    },
+    {
+      "guardId": "rotation-split",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "coverageGap",
+        "sourceLocalResults"
+      ]
+    },
+    {
+      "guardId": "same-time-no-key",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "candidateSymptom",
+        "sourceLocalResults"
+      ]
+    },
+    {
+      "guardId": "unknown-extraction-profile",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "profileGap",
+        "sourceLocalResults"
+      ]
+    },
+    {
+      "guardId": "unrelated-terminal-error",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "sourceLocalResults",
+        "unlinkedTerminalEvidence"
+      ]
+    },
+    {
+      "guardId": "version-mismatch",
+      "appliesTo": [
+        "contentDistributionPoint",
+        "policyManagementPoint"
+      ],
+      "forbiddenStrengths": [
+        "exactCorroborated"
+      ],
+      "forbiddenConfidences": [
+        "high"
+      ],
+      "requiredOutputs": [
+        "incompatibilityReason",
+        "sourceLocalResults"
+      ]
+    }
+  ]
+}
