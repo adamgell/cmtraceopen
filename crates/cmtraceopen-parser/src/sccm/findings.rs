@@ -1315,22 +1315,16 @@ fn has_unbound_passive_artifact_request(
 ) -> bool {
     tokens.iter().enumerate().any(|(index, token)| {
         is_passive_auxiliary(token.text)
-            && tokens.get(index + 1).is_some()
-            && !passive_subject_is_evidence(tokens, index + 1, identity_ranges)
+            && (!passive_subject_is_evidence(tokens, index, identity_ranges)
+                || !passive_predicate_is_evidence_state(tokens, index, identity_ranges))
     })
 }
 
 fn passive_subject_is_evidence(
     tokens: &[RequestReasonToken<'_>],
-    predicate_index: usize,
+    auxiliary_index: usize,
     identity_ranges: &[(usize, usize)],
 ) -> bool {
-    let auxiliary_index = tokens[..predicate_index]
-        .iter()
-        .rposition(|token| is_passive_auxiliary(token.text));
-    let Some(auxiliary_index) = auxiliary_index else {
-        return false;
-    };
     let subject_start = tokens[..auxiliary_index]
         .iter()
         .rposition(|token| {
@@ -1341,6 +1335,46 @@ fn passive_subject_is_evidence(
     tokens[subject_start..auxiliary_index].iter().any(|token| {
         token_is_covered_by_identity(token, identity_ranges)
             || is_evidence_narrative_subject(token.text)
+    })
+}
+
+fn passive_predicate_is_evidence_state(
+    tokens: &[RequestReasonToken<'_>],
+    auxiliary_index: usize,
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    let predicate = &tokens[auxiliary_index + 1..];
+    if predicate.is_empty() {
+        return false;
+    }
+
+    let has_exact_identity = predicate
+        .iter()
+        .any(|token| token_is_covered_by_identity(token, identity_ranges));
+    predicate.iter().all(|token| {
+        token_is_covered_by_identity(token, identity_ranges)
+            || is_evidence_narrative_subject(token.text)
+            || is_evidence_narrative_predicate(token.text)
+            || is_collection_narrative_introducer(token.text)
+            || is_action_coordinator(token.text)
+            || matches!(
+                token.text,
+                "a" | "an" | "by" | "in" | "not" | "of" | "the" | "to"
+            )
+            || (has_exact_identity
+                && matches!(
+                    token.text,
+                    "contain"
+                        | "contained"
+                        | "containing"
+                        | "contains"
+                        | "exact"
+                        | "include"
+                        | "included"
+                        | "includes"
+                        | "including"
+                        | "requested"
+                ))
     })
 }
 
