@@ -250,9 +250,10 @@ fn record_matches_topology(
             artifact_matches_topology(manifest, artifact)
                 && target_host_for_site(manifest, target_site).is_some()
         }
-        Some("target") => {
-            artifact["producerHostHandle"].as_str() == target_host_for_site(manifest, target_site)
-        }
+        Some("target") => artifact["producerHostHandle"]
+            .as_str()
+            .zip(target_host_for_site(manifest, target_site))
+            .is_some_and(|(producer_host, target_host)| producer_host == target_host),
         _ => false,
     }
 }
