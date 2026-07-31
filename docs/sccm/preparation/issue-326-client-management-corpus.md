@@ -203,8 +203,9 @@ cargo fmt --check --all
 git diff --check
 ```
 
-These commands prove only deterministic pure-Rust fixture contracts and the
-parser/wasm boundary. No native candidate discovery, permissions, Windows
-layout, ConfigMgr version, Software Center filename class, notification
-transport, Intune behavior, or live SCCM acceptance has been exercised.
-Passing this preparation corpus is not an issue-closure condition.
+This command set checks the deterministic pure-Rust fixture contracts, the
+package-wide parser suite, strict linting, TypeScript type checking,
+formatting/whitespace, and wasm32 compilation. It does not exercise native
+candidate discovery, permissions, Windows layout, ConfigMgr version, Software
+Center filename classes, notification transport, Intune behavior, or live SCCM
+acceptance. Passing this preparation corpus is not an issue-closure condition.
