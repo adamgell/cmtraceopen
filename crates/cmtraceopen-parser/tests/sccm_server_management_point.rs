@@ -1006,3 +1006,159 @@ fn management_point_missing_captured_phase_is_not_reported_as_an_absent_artifact
         "captured-but-unusable phase evidence is not an absent artifact"
     );
 }
+
+#[test]
+fn management_point_conflicting_duplicate_key_labels_fail_closed() {
+    let mut accepted = Vec::new();
+    for (label, duplicate) in [
+        (
+            "RequestId",
+            "RequestId={28999999-9999-9999-9999-999999999999}",
+        ),
+        (
+            "PolicyId",
+            "PolicyId={a8999999-9999-9999-9999-999999999999}",
+        ),
+        ("ClientHandle", "ClientHandle={safe:client:mp-other-99}"),
+        ("SiteCode", "SiteCode={XYZ}"),
+        ("MPHandle", "MPHandle={safe:mp:other-mp-99}"),
+    ] {
+        let mut bundle = load_bundle("healthy-policy");
+        for evidence in &mut bundle.evidence {
+            evidence.message.push(' ');
+            evidence.message.push_str(duplicate);
+        }
+        let analysis = analysis_value(&bundle);
+        if analysis["transactions"]
+            .as_array()
+            .expect("transactions")
+            .iter()
+            .any(|transaction| {
+                transaction["state"] == "succeeded" && transaction["confidence"] == "high"
+            })
+        {
+            accepted.push(label);
+        }
+    }
+
+    let mut failure = load_bundle("auth-failure");
+    failure
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Authenticate failed terminal"))
+        .expect("terminal authentication failure")
+        .message
+        .push_str(" Result=0x00000000");
+    if analysis_value(&failure)["transactions"]
+        .as_array()
+        .expect("transactions")
+        .iter()
+        .any(|transaction| {
+            transaction["state"] == "failed"
+                && transaction["classification"] == "confirmedFailure"
+                && transaction["confidence"] == "high"
+        })
+    {
+        accepted.push("Result");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "conflicting duplicate exact-profile labels were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn management_point_later_deferred_phase_invalidates_earlier_success() {
+    let mut bundle = load_bundle("healthy-policy");
+    let deferred_index = bundle
+        .evidence
+        .iter()
+        .position(|evidence| {
+            evidence
+                .message
+                .contains("Respond deferred retry scheduled")
+        })
+        .expect("deferred response");
+    let success_index = bundle
+        .evidence
+        .iter()
+        .position(|evidence| evidence.message.contains("Respond succeeded after retry"))
+        .expect("later response");
+    bundle.evidence[deferred_index].message = bundle.evidence[deferred_index].message.replace(
+        "Respond deferred retry scheduled",
+        "Respond succeeded after retry",
+    );
+    bundle.evidence[success_index].message = bundle.evidence[success_index].message.replace(
+        "Respond succeeded after retry",
+        "Respond deferred retry scheduled",
+    );
+
+    assert_no_high_success(
+        &analysis_value(&bundle),
+        "a later deferred phase observation",
+    );
+}
+
+#[test]
+fn management_point_event_markers_require_an_exact_delimiter() {
+    let mut bundle = load_bundle("healthy-policy");
+    let outcome = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Record outcome succeeded"))
+        .expect("record outcome");
+    outcome.message = outcome.message.replace(
+        "Record outcome succeeded",
+        "Record outcome succeededness",
+    );
+
+    assert_no_high_success(
+        &analysis_value(&bundle),
+        "an event marker with an alphanumeric suffix",
+    );
+}
+
+#[test]
+fn management_point_conflicting_evidence_identity_reuse_fails_closed() {
+    let mut bundle = load_bundle("healthy-policy");
+    let mut conflicting = bundle.evidence.clone();
+    for evidence in &mut conflicting {
+        evidence.message = evidence
+            .message
+            .replace(
+                "28111111-1111-1111-1111-111111111111",
+                "28999999-9999-9999-9999-999999999999",
+            )
+            .replace(
+                "a8111111-1111-1111-1111-111111111111",
+                "a8999999-9999-9999-9999-999999999999",
+            )
+            .replace(
+                "safe:client:mp-healthy-01",
+                "safe:client:mp-conflicting-99",
+            );
+    }
+    bundle.evidence.extend(conflicting);
+
+    let first = analysis_value(&bundle);
+    let high_successes = first["transactions"]
+        .as_array()
+        .expect("transactions")
+        .iter()
+        .filter(|transaction| {
+            transaction["state"] == "succeeded" && transaction["confidence"] == "high"
+        })
+        .count();
+    assert_eq!(
+        high_successes, 0,
+        "one physical evidence identity cannot authorize conflicting exact-key transactions"
+    );
+
+    bundle.evidence.reverse();
+    assert_eq!(
+        analysis_value(&bundle),
+        first,
+        "ambiguous evidence identities must have deterministic public handling"
+    );
+}
