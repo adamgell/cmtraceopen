@@ -270,6 +270,12 @@ fn parse_fixture_fields(message: &str) -> Result<BTreeMap<String, String>, Strin
         if !allowed.contains(&name) || value.is_empty() {
             return Err(format!("unsupported or empty fixture field {name}"));
         }
+        if matches!(name, "CallerHandle" | "QueryHandle" | "Authorization") {
+            if value != "[redacted:sccm-public-message-v1]" {
+                return Err(format!("raw sensitive fixture field {name}"));
+            }
+            continue;
+        }
         if fields.insert(name.to_owned(), value.to_owned()).is_some() {
             return Err(format!("duplicate fixture field {name}"));
         }
@@ -1244,14 +1250,16 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             }
             let observation_id = observation["observationId"].as_str();
             let phase = observation["phase"].as_str();
+            let disposition = observation["disposition"].as_str();
             let chain = state_chain(layer).unwrap_or_default();
             let phase_index = phase.and_then(|phase| chain.iter().position(|item| *item == phase));
             if observation_id.is_none_or(str::is_empty)
                 || phase_index.is_none()
                 || phase_index.is_some_and(|index| index < prior_phase)
-                || observation["disposition"]
-                    .as_str()
-                    .is_none_or(str::is_empty)
+                || !matches!(
+                    disposition,
+                    Some("succeeded" | "failed" | "retryableFailure" | "pending")
+                )
                 || observation["terminal"].as_bool().is_none()
             {
                 failures.push("transaction observation is not exact/monotonic".to_owned());
@@ -1272,8 +1280,8 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                     terminal_dispositions.insert(disposition);
                 }
             }
-            if let (Some(phase), Some(disposition)) = (phase, observation["disposition"].as_str()) {
-                phase_dispositions.push((phase, disposition));
+            if let (Some(phase), Some(disposition)) = (phase, disposition) {
+                phase_dispositions.push((phase, disposition, terminal));
             }
             if let Some(observation_id) = observation_id {
                 observation_ids.push(observation_id);
@@ -1368,10 +1376,28 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                     .to_owned(),
             );
         }
+        if phase_dispositions
+            .iter()
+            .any(|(_, disposition, terminal)| *disposition == "failed" && !terminal)
+            && transaction["state"] != "failed"
+        {
+            failures.push("nonterminal failure does not agree with the declared state".to_owned());
+        }
+        if phase_dispositions.iter().any(|(_, disposition, terminal)| {
+            *disposition == "retryableFailure" && (scenario != "provider-retry" || *terminal)
+        }) {
+            failures.push("retryable failure is outside the closed recovery contract".to_owned());
+        }
+        if phase_dispositions.iter().any(|(_, disposition, terminal)| {
+            *disposition == "pending"
+                && (*terminal || transaction["state"].as_str() != Some("incomplete"))
+        }) {
+            failures.push("pending disposition is outside an incomplete transaction".to_owned());
+        }
         if scenario == "provider-retry" {
             let retry_sequence = phase_dispositions
                 .iter()
-                .filter_map(|(phase, disposition)| {
+                .filter_map(|(phase, disposition, _)| {
                     (*phase == "executeProviderOperation").then_some(*disposition)
                 })
                 .collect::<Vec<_>>();

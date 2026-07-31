@@ -30,8 +30,10 @@ fn sensitive_message_label_re() -> &'static Regex {
                     | account[\x20_-]?key
                     | samaccountname
                     | accountname
+                    | callerhandle
                     | localuser
                     | identity
+                    | queryhandle
                     | user[\x20_-]?principal[\x20_-]?name
                     | credential
                     | password
@@ -107,13 +109,42 @@ fn redact_sensitive_segments(value: &str) -> String {
         projected.push_str(&value[copied_through..label.start()]);
         projected.push_str(PUBLIC_MESSAGE_REDACTION);
 
-        let value_end = sensitive_value_end(value, label.end());
+        let value_end = if is_provider_private_label(label.as_str()) {
+            provider_private_value_end(value, label.end())
+        } else {
+            sensitive_value_end(value, label.end())
+        };
         copied_through = value_end;
         search_from = value_end;
     }
 
     projected.push_str(&value[copied_through..]);
     projected
+}
+
+fn is_provider_private_label(label: &str) -> bool {
+    let label = label.to_ascii_lowercase();
+    label.contains("authorization")
+        || label.contains("callerhandle")
+        || label.contains("queryhandle")
+}
+
+fn provider_private_value_end(value: &str, value_start: usize) -> usize {
+    let remaining = &value[value_start..];
+    if remaining
+        .chars()
+        .next()
+        .is_some_and(|first| matches!(first, '"' | '\''))
+    {
+        return sensitive_value_end(value, value_start);
+    }
+
+    remaining
+        .char_indices()
+        .find_map(|(offset, character)| {
+            matches!(character, ';' | '\r' | '\n').then_some(value_start + offset)
+        })
+        .unwrap_or(value.len())
 }
 
 fn sensitive_value_end(value: &str, value_start: usize) -> usize {
