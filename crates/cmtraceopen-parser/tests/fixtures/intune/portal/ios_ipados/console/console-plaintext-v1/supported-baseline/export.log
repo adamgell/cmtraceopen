@@ -1,0 +1,6 @@
+Timestamp                       Thread     Type        Activity             PID    TTL
+2024-03-15 10:00:00.123456-0700 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Enrollment) [com.microsoft.CompanyPortal:Enrollment] Beginning device enrollment flow
+2024-03-15 10:00:00.456789-0700 0x1a2b3    Info        0x0                  312    0    CompanyPortal: (Authentication) [com.microsoft.CompanyPortal:Authentication] Acquiring token silently for resource
+2024-03-15 10:00:01.001122-0700 0x99aa1    Info        0x2b1                55     0    SpringBoard: (FrontBoard) [com.apple.FrontBoard:Common] Scene activation for target
+2024-03-15 10:00:01.552211-0700 0x1a2b4    Default     0x0                  312    0    CompanyPortal: (Sync) [com.microsoft.CompanyPortal:Sync] Requesting device sync
+2024-03-15 10:00:02.100000-0700 0x44cc2    Default     0x0                  98     0    profiled: (ManagedConfiguration) [com.apple.ManagedConfiguration:profiled] Installed configuration profile

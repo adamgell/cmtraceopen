@@ -1,0 +1,4 @@
+2024-03-15 10:00:00 INFO  Starting background worker pool
+2024-03-15 10:00:01 WARN  Retrying connection to the message queue
+2024-03-15 10:00:02 ERROR Worker exited with status 1
+2024-03-15 10:00:03 INFO  Restarting worker pool

@@ -1,0 +1,4 @@
+Timestamp                       Thread     Type        Activity             PID    TTL  Subsystem                    Category
+2024-03-15 13:00:00.000001-0700 0x4001     Default     0x0                  312    0    com.microsoft.CompanyPortal  Enrollment  CompanyPortal: (Enrollment) Profile installation requested
+2024-03-15 13:00:01.000002-0700 0x4001     Info        0x0                  312    0    com.microsoft.CompanyPortal  Compliance  CompanyPortal: (Compliance) Compliance state reported
+2024-03-15 13:00:02.000003-0700 0x4aa02    Default     0x0                  98     0    com.apple.ManagedConfiguration  profiled  profiled: (ManagedConfiguration) Profile payload applied

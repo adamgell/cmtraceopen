@@ -1,0 +1,3 @@
+Timestamp                       Type        PID
+2024-03-15 19:30:00.000001-0700 Default     312    CompanyPortal: (Sync) [com.microsoft.CompanyPortal:Sync] Sync started
+2024-03-15 19:30:01.000002-0700 Info        312    CompanyPortal: (Sync) [com.microsoft.CompanyPortal:Sync] Sync finished
