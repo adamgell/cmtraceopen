@@ -3295,3 +3295,39 @@ fn sentence_final_hostname_privacy_mutations_fail_closed() {
         "sentence-final hostname mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn sid_shaped_public_identifier_mutations_fail_closed() {
+    let synthetic_sid = "s-1-5-21-1004336348-1177238915-682003330-512";
+    let mut accepted = Vec::new();
+
+    let (observed_root, observed_manifest, mut sid_observation_id) =
+        load_contract("software-center-observed");
+    sid_observation_id["sourceLocalObservations"][0]["observationId"] =
+        Value::String(synthetic_sid.to_owned());
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &sid_observation_id,
+    ) {
+        accepted.push("SID-shaped public observation id");
+    }
+
+    let (script_root, script_manifest, mut sid_transaction_id) = load_contract("script-success");
+    sid_transaction_id["transactions"][0]["transactionId"] =
+        Value::String(synthetic_sid.to_owned());
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &script_manifest,
+        &sid_transaction_id,
+    ) {
+        accepted.push("SID-shaped public transaction id");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "SID-shaped public identifier mutations were accepted: {accepted:?}"
+    );
+}
