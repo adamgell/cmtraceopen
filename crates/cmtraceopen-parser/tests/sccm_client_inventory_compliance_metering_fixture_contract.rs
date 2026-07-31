@@ -1258,6 +1258,9 @@ fn validate_contract(
                 ))
             }
         };
+        if source_version.is_some_and(|version| !version.starts_with("5.00.TEST.")) {
+            unknown_version_artifacts.insert(artifact_id.to_owned());
+        }
 
         if let Some(relative_path) = relative_path {
             validate_relative_path(relative_path, artifact_id)?;
@@ -1345,11 +1348,7 @@ fn validate_contract(
             }
             referenced_files.insert(relative_path.to_owned());
 
-            if let Some(version) = source_version {
-                if !version.starts_with("5.00.TEST.") {
-                    unknown_version_artifacts.insert(artifact_id.to_owned());
-                }
-            } else {
+            if source_version.is_none() {
                 return Err(format!(
                     "{artifact_id} physical source has no sourceVersion"
                 ));
@@ -3745,6 +3744,105 @@ fn review_blocker_nonphysical_optional_field_json_types_are_closed() {
             ));
         }
     }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_unknown_versions_are_profile_gaps_for_every_coverage_state() {
+    let (scenario_root, manifest, expected) = load_contract("inventory", "coverage-states");
+    let mut failures = Vec::new();
+    let versioned_artifacts = manifest["artifacts"]
+        .as_array()
+        .expect("artifacts are an array")
+        .iter()
+        .filter_map(|artifact| {
+            artifact["sourceVersion"].as_str().map(|_| {
+                (
+                    artifact["artifactId"]
+                        .as_str()
+                        .expect("artifactId is a string")
+                        .to_owned(),
+                    artifact["captureState"]
+                        .as_str()
+                        .expect("captureState is a string")
+                        .to_owned(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for (artifact_id, capture_state) in versioned_artifacts {
+        let mut unknown_manifest = manifest.clone();
+        let artifact = unknown_manifest["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array")
+            .iter_mut()
+            .find(|artifact| artifact["artifactId"] == artifact_id)
+            .unwrap_or_else(|| panic!("{artifact_id} exists"));
+        artifact["sourceVersion"] = json!("9.99.UNKNOWN");
+
+        collect_contract_rejection(
+            &mut failures,
+            &format!("{capture_state} unknown version without profile gap"),
+            validate_contract(
+                "inventory",
+                "coverage-states",
+                &scenario_root,
+                &unknown_manifest,
+                &expected,
+            ),
+            "profile selection",
+        );
+
+        let mut gap_expected = expected.clone();
+        gap_expected["extractionProfile"]["selectionState"] = json!("mixedKnownAndUnknown");
+        gap_expected["sourceLocalObservations"]
+            .as_array_mut()
+            .expect("sourceLocalObservations are an array")
+            .push(json!({
+                "observationId": format!(
+                    "inventory-coverage-unknown-profile-{capture_state}"
+                ),
+                "kind": "unknownProfile",
+                "artifactIds": [artifact_id],
+                "confidenceCeiling": "low",
+                "correlationEligible": false,
+                "claim": "Unknown source version has no selected extraction profile."
+            }));
+        if let Err(error) = validate_contract(
+            "inventory",
+            "coverage-states",
+            &scenario_root,
+            &unknown_manifest,
+            &gap_expected,
+        ) {
+            failures.push(format!(
+                "{capture_state} unknown version with bounded profile gap was rejected: {error}"
+            ));
+        }
+    }
+
+    let mut absent_version = manifest.clone();
+    let absent = absent_version["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["captureState"] == "absent")
+        .expect("absent artifact exists");
+    absent["sourceVersion"] = json!("9.99.UNKNOWN");
+    collect_contract_rejection(
+        &mut failures,
+        "absent source invents an unknown version",
+        validate_contract(
+            "inventory",
+            "coverage-states",
+            &scenario_root,
+            &absent_version,
+            &expected,
+        ),
+        "absent source invents path/version identity",
+    );
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
