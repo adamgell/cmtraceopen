@@ -284,6 +284,8 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "DNS Audit (EVTX)";
     case "cmtLog":
       return "CmtLog";
+    case "companyPortal":
+      return "Company Portal";
   }
 }
 
@@ -327,6 +329,8 @@ function getImplementationLabel(
       return "DNS audit EVTX parser";
     case "cmtLog":
       return "CmtLog parser";
+    case "companyPortal":
+      return "Company Portal Windows log parser";
   }
 }
 

@@ -1387,7 +1387,7 @@ fn standalone_digest_match_is_safe_narrative(value: &str, captures: &regex::Capt
         && value[matched.end()..].is_empty()
 }
 
-fn redact_text(value: &str) -> String {
+pub(crate) fn redact_text(value: &str) -> String {
     redact_text_for_context(value, TextRedactionContext::Arbitrary)
 }
 

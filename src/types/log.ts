@@ -24,7 +24,8 @@ export type ParserKind =
   | "secureBootLog"
   | "dnsDebug"
   | "dnsAudit"
-  | "cmtLog";
+  | "cmtLog"
+  | "companyPortal";
 export type ParserImplementation =
   | "ccm"
   | "simple"
@@ -43,7 +44,8 @@ export type ParserImplementation =
   | "secureBootLog"
   | "dnsDebug"
   | "dnsAudit"
-  | "cmtLog";
+  | "cmtLog"
+  | "companyPortal";
 export type ParserProvenance = "dedicated" | "heuristic" | "fallback";
 export type ParseQuality = "structured" | "semiStructured" | "textFallback";
 export type RecordFraming = "physicalLine" | "logicalRecord";

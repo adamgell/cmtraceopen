@@ -23,6 +23,7 @@ Thumbs.db
 # Brainstorming artifacts
 .superpowers/
 
+<<<<<<< HEAD
 # Test logs, at the repository root only.
 #
 # Anchored deliberately. Unanchored, `Logs/` matches at every depth, and macOS
@@ -36,6 +37,15 @@ Thumbs.db
 # directories someone remembered, and git cannot re-include a file whose parent
 # directory is still excluded.
 /Logs/
+=======
+# Test logs
+Logs/
+# `Logs/` matches case-insensitively on macOS/Windows checkouts, and the
+# Company Portal module and its fixture tree both live under a `logs/`
+# directory. A parent directory must be re-included explicitly.
+!crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/logs/
+!crates/cmtraceopen-parser/tests/fixtures/intune/portal/windows/logs/
+>>>>>>> 376ca97a (feat(intune): parse Company Portal Windows LocalState logs (#366))
 
 # Playwright artifacts (HTML reports, run results, MCP browser session output)
 playwright-report/
