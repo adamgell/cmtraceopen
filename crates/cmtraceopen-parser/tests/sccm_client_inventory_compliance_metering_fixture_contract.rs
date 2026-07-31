@@ -1114,8 +1114,23 @@ fn validate_contract(
         return Err("bundle identity is not the sanitized client fixture identity".to_owned());
     }
     let bundle_id = required_string(&manifest["bundle"], "bundleId", "bundle")?;
-    if !bundle_id.starts_with(&format!("sccm-325-{family}-")) {
-        return Err("bundleId is not issue/family scoped".to_owned());
+    let expected_bundle_id = format!("sccm-325-{family}-{scenario}");
+    if bundle_id != expected_bundle_id {
+        return Err("bundleId is not exact issue/family/scenario identity".to_owned());
+    }
+    for (field, expected_value) in [
+        (
+            "artifactOrder",
+            "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+        ),
+        (
+            "rotationOrder",
+            "current,lo,numeric-ascending,timestamp-ascending",
+        ),
+    ] {
+        if required_string(&manifest["bundle"], field, "bundle")? != expected_value {
+            return Err(format!("bundle {field} is not the deterministic contract"));
+        }
     }
 
     let artifacts = manifest["artifacts"]
@@ -3502,6 +3517,49 @@ fn review_blocker_manifest_and_ccm_structured_vocabularies_are_closed() {
         validate_contract("inventory", "success", &scenario_root, &manifest, &expected),
         "artifact fields",
     );
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_bundle_identity_and_order_descriptors_are_closed() {
+    let (scenario_root, manifest, expected) = load_contract("inventory", "success");
+    let mutations = [
+        (
+            "foreign-scenario bundleId",
+            "bundleId",
+            json!("sccm-325-inventory-terminal-failures"),
+        ),
+        (
+            "arbitrary-suffix bundleId",
+            "bundleId",
+            json!("sccm-325-inventory-anything"),
+        ),
+        ("boolean artifactOrder", "artifactOrder", json!(false)),
+        (
+            "altered artifactOrder",
+            "artifactOrder",
+            json!("artifactId,originalBasename"),
+        ),
+        ("boolean rotationOrder", "rotationOrder", json!(false)),
+        (
+            "altered rotationOrder",
+            "rotationOrder",
+            json!("timestamp-descending,current"),
+        ),
+    ];
+    let mut failures = Vec::new();
+
+    for (label, field, value) in mutations {
+        let mut mutated = manifest.clone();
+        mutated["bundle"][field] = value;
+        collect_contract_rejection(
+            &mut failures,
+            label,
+            validate_contract("inventory", "success", &scenario_root, &mutated, &expected),
+            field,
+        );
+    }
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
