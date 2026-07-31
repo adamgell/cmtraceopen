@@ -80,8 +80,16 @@ pub enum ElevationReason {
 ///
 /// `Workspace` restores navigation only. The remaining variants each carry one
 /// validated source reference and nothing else.
+/// `rename_all_fields` is load-bearing: `rename_all` renames the variants only,
+/// so without it `KnownSource` crossed the boundary as `source_id` while the
+/// frontend sent `sourceId`, and every known-source request failed to
+/// deserialize before the handler ran. Pinned by the wire-shape tests below.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum RestoreTarget {
     /// Restore the workspace with no source.
     Workspace,
@@ -414,5 +422,58 @@ mod tests {
             request.validated().unwrap_err(),
             ElevationValidationError::UnsafeSourceId
         );
+    }
+
+    /// Pins the literal wire shape of every `RestoreTarget` variant.
+    ///
+    /// `rename_all` on an enum renames the VARIANTS only; struct-variant fields
+    /// need `rename_all_fields`. Without it `KnownSource` crossed the boundary as
+    /// `source_id` while the frontend sent `sourceId`, so every known-source
+    /// elevation request failed to deserialize before the handler ran. Neither
+    /// clippy nor tsc can see across that boundary, so it is pinned here.
+    #[test]
+    fn restore_targets_cross_the_ipc_boundary_in_camel_case() {
+        let known = RestoreTarget::KnownSource {
+            source_id: "ccm-logs".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&known).expect("serialize"),
+            serde_json::json!({ "kind": "knownSource", "sourceId": "ccm-logs" })
+        );
+
+        assert_eq!(
+            serde_json::to_value(RestoreTarget::Workspace).expect("serialize"),
+            serde_json::json!({ "kind": "workspace" })
+        );
+        assert_eq!(
+            serde_json::to_value(RestoreTarget::File {
+                path: absolute("/logs/a.log")
+            })
+            .expect("serialize"),
+            serde_json::json!({ "kind": "file", "path": "/logs/a.log" })
+        );
+    }
+
+    #[test]
+    fn a_camel_case_known_source_request_deserializes() {
+        let target: RestoreTarget =
+            serde_json::from_value(serde_json::json!({ "kind": "knownSource", "sourceId": "ccm-logs" }))
+                .expect("camelCase is the wire contract");
+
+        assert_eq!(
+            target,
+            RestoreTarget::KnownSource {
+                source_id: "ccm-logs".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn the_snake_case_known_source_form_is_rejected_rather_than_tolerated() {
+        // Accepting both would let the contract drift back without a test failing.
+        let result: Result<RestoreTarget, _> =
+            serde_json::from_value(serde_json::json!({ "kind": "knownSource", "source_id": "ccm-logs" }));
+
+        assert!(result.is_err(), "snake_case must not be accepted");
     }
 }

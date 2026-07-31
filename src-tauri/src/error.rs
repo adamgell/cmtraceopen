@@ -57,16 +57,20 @@ fn is_os_access_denied(error: &std::io::Error) -> bool {
     }
 }
 
+const TRUNCATION_MARKER: &str = "…";
+
 fn bounded_path(path: &str) -> String {
     if path.len() <= MAX_ERROR_PATH_LEN {
         return path.to_string();
     }
-    // Truncate on a char boundary so the payload stays valid UTF-8.
-    let mut end = MAX_ERROR_PATH_LEN;
+    // Reserve room for the marker so the result honours the cap rather than
+    // overshooting it by the marker's width.
+    let mut end = MAX_ERROR_PATH_LEN - TRUNCATION_MARKER.len();
+    // Then walk back to a char boundary so the payload stays valid UTF-8.
     while end > 0 && !path.is_char_boundary(end) {
         end -= 1;
     }
-    format!("{}…", &path[..end])
+    format!("{}{TRUNCATION_MARKER}", &path[..end])
 }
 
 /// Structured error type for CMTrace Open backend.
@@ -283,8 +287,39 @@ mod tests {
         ));
 
         let path = value["path"].as_str().expect("path present");
-        assert!(path.len() <= MAX_ERROR_PATH_LEN + "…".len());
+        // The cap is a cap: the marker must fit inside it, not extend past it.
+        assert!(
+            path.len() <= MAX_ERROR_PATH_LEN,
+            "truncated path overshot the cap: {} bytes",
+            path.len()
+        );
         assert!(path.ends_with('…'));
+    }
+
+    #[test]
+    fn a_path_exactly_at_the_cap_is_not_truncated() {
+        let exact = "a".repeat(MAX_ERROR_PATH_LEN);
+        let value = payload(AppError::access_denied(
+            SourceOperation::ReadFile,
+            Some(&exact),
+        ));
+
+        assert_eq!(value["path"], exact);
+    }
+
+    #[test]
+    fn truncation_never_splits_a_multi_byte_character() {
+        // Multi-byte chars straddling the cut point must not produce invalid
+        // UTF-8; `is_char_boundary` walk-back is what prevents it.
+        for pad in 0..8 {
+            let long = format!("{}{}", "a".repeat(pad), "é".repeat(MAX_ERROR_PATH_LEN));
+            let value = payload(AppError::access_denied(
+                SourceOperation::ReadFile,
+                Some(&long),
+            ));
+            let path = value["path"].as_str().expect("path present");
+            assert!(path.len() <= MAX_ERROR_PATH_LEN, "pad {pad} overshot");
+        }
     }
 
     #[test]

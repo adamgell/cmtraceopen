@@ -2240,6 +2240,55 @@ mod tests {
         }
     }
 
+    /// Every clickable item in an ORDER constant must resolve to an action.
+    ///
+    /// A hand-maintained id list in `payload_for_menu_id` cannot prove an item is
+    /// missing from it: forgetting to register one produces a menu entry that
+    /// renders, clicks, and silently does nothing. This walks the orders instead,
+    /// so a new item is wired or this test fails.
+    #[test]
+    fn every_ordered_menu_item_dispatches_an_action() {
+        // Containers and separators legitimately dispatch nothing: a submenu
+        // opens, and Quit is intercepted before payload lookup.
+        const NON_DISPATCHING: &[&str] = &[
+            MENU_SEPARATOR,
+            MENU_ID_FILE_KNOWN_SOURCES,
+            MENU_ID_FILE_RECENT,
+            MENU_ID_FILE_NEW_TIMELINE,
+            MENU_ID_VIEW_TEXT_SIZE,
+            MENU_ID_FILE_QUIT,
+            PREDEFINED_HIDE,
+            PREDEFINED_HIDE_OTHERS,
+            PREDEFINED_SHOW_ALL,
+            PREDEFINED_QUIT,
+        ];
+
+        let orders: &[&[&str]] = &[
+            FILE_ORDER,
+            FILE_ORDER_WINDOWS,
+            FILE_ORDER_MAC,
+            NEW_TIMELINE_ORDER,
+            EDIT_ORDER,
+            VIEW_ORDER,
+            TEXT_SIZE_ORDER,
+            HELP_ORDER,
+            HELP_ORDER_MAC,
+            MAC_APP_ORDER,
+        ];
+
+        for order in orders {
+            for id in *order {
+                if NON_DISPATCHING.contains(id) {
+                    continue;
+                }
+                assert!(
+                    payload_for_menu_id(id).is_some(),
+                    "menu item {id} is rendered but dispatches nothing",
+                );
+            }
+        }
+    }
+
     #[test]
     fn restart_as_administrator_is_offered_only_on_windows() {
         assert!(FILE_ORDER_WINDOWS.contains(&MENU_ID_FILE_RESTART_ELEVATED));

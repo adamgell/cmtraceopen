@@ -122,6 +122,11 @@ describe("useFileAssociation startup routing", () => {
       "C:\\Windows\\protected.log",
       expect.anything(),
     );
+
+    // The ticket lost the precedence contest, so no restore was attempted.
+    // Latching the loop guard here would suppress legitimate elevation offers
+    // for the rest of the session over a retry that never ran.
+    expect(markElevationRetryAttemptedMock).not.toHaveBeenCalled();
   });
 
   it("restores only the workspace a workspace-only ticket names", async () => {

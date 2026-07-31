@@ -45,14 +45,6 @@ export function useFileAssociation() {
       }),
     ])
       .then(async ([paths, workspace, ticket]) => {
-        if (ticket?.retryAttempted) {
-          // Mark before restoring: if the restored source is still denied, the
-          // failure must offer troubleshooting rather than a second prompt.
-          // Read from the ticket rather than inferring it from the ticket's
-          // presence, so the loop guard has one source of truth.
-          markElevationRetryAttempted();
-        }
-
         if (paths.length > 0) {
           useUiStore
             .getState()
@@ -71,6 +63,17 @@ export function useFileAssociation() {
         }
 
         if (ticket) {
+          // Mark here, not on ticket arrival: a positional file association wins
+          // the precedence contest above and returns without restoring, and
+          // latching the loop guard for a restore that never ran would suppress
+          // legitimate elevation offers for the rest of the session.
+          //
+          // Marked before restoring, so a restored source that is still denied
+          // offers troubleshooting rather than a second prompt. Read from the
+          // ticket so the guard has one source of truth.
+          if (ticket.retryAttempted) {
+            markElevationRetryAttempted();
+          }
           await restoreElevatedSource(ticket, clearFilter);
           return;
         }
