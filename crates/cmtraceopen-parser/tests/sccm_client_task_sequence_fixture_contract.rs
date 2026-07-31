@@ -3022,3 +3022,79 @@ fn finding_evidence_cannot_mix_unrelated_exact_runs() {
         .expect_err("one finding cannot cite evidence from a different exact run");
     assert!(error.contains("bound"), "{error}");
 }
+
+#[test]
+fn exact_key_admission_ignores_bracket_bounded_prefixes() {
+    let scenario = "completed";
+    for (mutation, original_token, mutated_token) in [
+        (
+            "bracket-suffixed-run-context",
+            "runContext=osd ",
+            "runContext=osd]stray ",
+        ),
+        (
+            "angle-suffixed-advertisement",
+            "advertisementId=LAB20305 ",
+            "advertisementId=LAB20305<junk> ",
+        ),
+    ] {
+        let temporary = copy_scenario_to_temporary_root(scenario, mutation);
+        let mut manifest = read_json(&temporary.root.join("manifest.json"));
+        let mut expected = read_json(&temporary.root.join("expected.json"));
+        let relative_path = manifest["artifacts"][0]["relativePath"]
+            .as_str()
+            .expect("completed artifact has a relative path");
+        let evidence_path = temporary.root.join(relative_path);
+        let original =
+            std::fs::read_to_string(&evidence_path).expect("completed evidence is readable");
+        let mutated = original.replace(original_token, mutated_token);
+        assert_ne!(mutated, original, "{mutation}: the mutation is effective");
+        std::fs::write(&evidence_path, &mutated).expect("mutated evidence is writable");
+        manifest["artifacts"][0]["bytesCopied"] = Value::from(mutated.len() as u64);
+        expected["artifactProvenance"][0]["bytesCopied"] = Value::from(mutated.len() as u64);
+
+        let error = validate_contract(scenario, &temporary.root, &manifest, &expected)
+            .expect_err("a bracket-bounded prefix of the recorded value is not the exact key");
+        assert!(error.contains("co-occur"), "{mutation}: {error}");
+    }
+}
+
+#[test]
+fn keyed_evidence_cannot_be_laundered_through_source_local_observations() {
+    let scenario = "unrelated-runs";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    let run_a_evidence = expected["transactions"][0]["evidence"][0].clone();
+    let run_b_evidence = expected["transactions"][1]["evidence"][0].clone();
+    expected["sourceLocalObservations"] = serde_json::json!([
+        {
+            "observationId": "unrelated-runs-alias-a",
+            "artifactId": run_a_evidence["artifactId"].clone(),
+            "keyConfidence": "candidate",
+            "confidence": "low",
+            "confidenceCeiling": "low",
+            "correlationEligible": false,
+            "evidence": run_a_evidence.clone(),
+            "reason": "Synthetic alias of already keyed run A evidence."
+        },
+        {
+            "observationId": "unrelated-runs-alias-b",
+            "artifactId": run_b_evidence["artifactId"].clone(),
+            "keyConfidence": "candidate",
+            "confidence": "low",
+            "confidenceCeiling": "low",
+            "correlationEligible": false,
+            "evidence": run_b_evidence.clone(),
+            "reason": "Synthetic alias of already keyed run B evidence."
+        }
+    ]);
+    expected["findings"][0]["evidence"]
+        .as_array_mut()
+        .expect("run A finding evidence is an array")
+        .push(run_b_evidence);
+
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("keyed transaction evidence cannot be laundered into source-local citations");
+    assert!(error.contains("source-local"), "{error}");
+}
