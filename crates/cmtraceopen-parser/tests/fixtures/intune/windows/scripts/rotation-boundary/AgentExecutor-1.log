@@ -1,0 +1,2 @@
+<![LOG[Starting Powershell Execution]LOG]!><time="16:59:58.0000000" date="3-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell script is: C:\Program Files (x86)\Microsoft Intune Management Extension\Policies\Scripts\11111111-1111-4111-8111-111111111111_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1.ps1]LOG]!><time="16:59:58.0000000" date="3-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">

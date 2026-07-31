@@ -1,0 +1,278 @@
+{
+  "transactions": [
+    {
+      "key": {
+        "policyId": "11111111-1111-4111-8111-111111111111",
+        "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+        "context": "system"
+      },
+      "displayName": null,
+      "bitness": "bit64",
+      "observations": [
+        "ime:1",
+        "ime:2",
+        "ime:3",
+        "ime:4",
+        "agent:1",
+        "agent:2",
+        "agent:3"
+      ],
+      "lastConfirmedPhase": "reported",
+      "state": "reportSubmitted",
+      "exitToken": {
+        "rawText": "0",
+        "decimal": 0,
+        "hexText": "0x00000000"
+      },
+      "attempts": 1,
+      "confidence": "high",
+      "evidence": [
+        {
+          "artifactId": "ime",
+          "recordNumber": 1,
+          "lineNumber": 1
+        },
+        {
+          "artifactId": "ime",
+          "recordNumber": 2,
+          "lineNumber": 2
+        },
+        {
+          "artifactId": "ime",
+          "recordNumber": 3,
+          "lineNumber": 3
+        },
+        {
+          "artifactId": "ime",
+          "recordNumber": 4,
+          "lineNumber": 4
+        },
+        {
+          "artifactId": "agent",
+          "recordNumber": 1,
+          "lineNumber": 1
+        },
+        {
+          "artifactId": "agent",
+          "recordNumber": 2,
+          "lineNumber": 2
+        },
+        {
+          "artifactId": "agent",
+          "recordNumber": 3,
+          "lineNumber": 3
+        }
+      ],
+      "nextEvidenceRequest": null
+    }
+  ],
+  "observations": [
+    {
+      "observationId": "ime:1",
+      "evidence": {
+        "artifactId": "ime",
+        "recordNumber": 1,
+        "lineNumber": 1
+      },
+      "sourceKind": "intuneManagementExtension",
+      "timestamp": {
+        "rawText": "03-12-2026 10:15:20.000",
+        "originalOffset": null,
+        "normalizedUtc": "2026-03-12T14:15:20.000Z"
+      },
+      "signal": "policyReceived",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "context": "system",
+      "bitness": "unknown",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "[PowerShell] Processing policy with id = 11111111-1111-4111-8111-111111111111",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "ime:2",
+      "evidence": {
+        "artifactId": "ime",
+        "recordNumber": 2,
+        "lineNumber": 2
+      },
+      "sourceKind": "intuneManagementExtension",
+      "timestamp": {
+        "rawText": "03-12-2026 10:15:20.000",
+        "originalOffset": null,
+        "normalizedUtc": "2026-03-12T14:15:20.000Z"
+      },
+      "signal": "scheduled",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "context": "system",
+      "bitness": "unknown",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "[PowerShell] Schedule policy 11111111-1111-4111-8111-111111111111 for execution",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "ime:3",
+      "evidence": {
+        "artifactId": "ime",
+        "recordNumber": 3,
+        "lineNumber": 3
+      },
+      "sourceKind": "intuneManagementExtension",
+      "timestamp": {
+        "rawText": "03-12-2026 10:15:32.000",
+        "originalOffset": null,
+        "normalizedUtc": "2026-03-12T14:15:32.000Z"
+      },
+      "signal": "unclassified",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "context": "system",
+      "bitness": "unknown",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "[PowerShell] Send result to service, PolicyId = 11111111-1111-4111-8111-111111111111, ExecutionContext = System",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "ime:4",
+      "evidence": {
+        "artifactId": "ime",
+        "recordNumber": 4,
+        "lineNumber": 4
+      },
+      "sourceKind": "intuneManagementExtension",
+      "timestamp": {
+        "rawText": "03-12-2026 10:15:32.000",
+        "originalOffset": null,
+        "normalizedUtc": "2026-03-12T14:15:32.000Z"
+      },
+      "signal": "reportSubmitted",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "context": "system",
+      "bitness": "unknown",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "[PowerShell] Policy result has been sent to service successfully, PolicyId = 11111111-1111-4111-8111-111111111111, ExecutionContext = System",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "agent:1",
+      "evidence": {
+        "artifactId": "agent",
+        "recordNumber": 1,
+        "lineNumber": 1
+      },
+      "sourceKind": "agentExecutor",
+      "timestamp": {
+        "rawText": "03-12-2026 10:15:22.000",
+        "originalOffset": null,
+        "normalizedUtc": "2026-03-12T14:15:22.000Z"
+      },
+      "signal": "launchAttempted",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "context": "system",
+      "bitness": "bit64",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "Starting Powershell Execution using 64-bit host",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "agent:2",
+      "evidence": {
+        "artifactId": "agent",
+        "recordNumber": 2,
+        "lineNumber": 2
+      },
+      "sourceKind": "agentExecutor",
+      "timestamp": {
+        "rawText": "03-12-2026 10:15:22.000",
+        "originalOffset": null,
+        "normalizedUtc": "2026-03-12T14:15:22.000Z"
+      },
+      "signal": "unclassified",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "context": "system",
+      "bitness": "unknown",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "Powershell script is: C:\\Program Files (x86)\\Microsoft Intune Management Extension\\Policies\\Scripts\\11111111-1111-4111-8111-111111111111_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1.ps1",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "agent:3",
+      "evidence": {
+        "artifactId": "agent",
+        "recordNumber": 3,
+        "lineNumber": 3
+      },
+      "sourceKind": "agentExecutor",
+      "timestamp": {
+        "rawText": "03-12-2026 10:15:31.000",
+        "originalOffset": null,
+        "normalizedUtc": "2026-03-12T14:15:31.000Z"
+      },
+      "signal": "executionCompleted",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "context": "system",
+      "bitness": "unknown",
+      "attempt": null,
+      "exitToken": {
+        "rawText": "0",
+        "decimal": 0,
+        "hexText": "0x00000000"
+      },
+      "message": {
+        "value": "Powershell execution is done, exitCode = 0",
+        "sensitivity": "sensitive"
+      }
+    }
+  ],
+  "unkeyedObservations": [],
+  "coverage": {
+    "artifacts": [
+      {
+        "artifactId": "ime",
+        "fileName": "IntuneManagementExtension.log",
+        "filePath": {
+          "value": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+          "sensitivity": "sensitive"
+        },
+        "sourceKind": "intuneManagementExtension",
+        "rotationOrdinal": 0
+      },
+      {
+        "artifactId": "agent",
+        "fileName": "AgentExecutor.log",
+        "filePath": {
+          "value": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+          "sensitivity": "sensitive"
+        },
+        "sourceKind": "agentExecutor",
+        "rotationOrdinal": 0
+      }
+    ],
+    "unclassifiedRecords": 0,
+    "missingExpectedSources": [],
+    "unknownVersionObserved": false
+  }
+}
