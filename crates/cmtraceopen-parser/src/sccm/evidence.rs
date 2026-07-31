@@ -15,7 +15,7 @@ fn sensitive_message_label_re() -> &'static Regex {
         Regex::new(
             r#"(?ix)
             (?:
-                ["']?\b authorization\b ["']?
+                ["']?\b authorization(?:[\x20_-]?(?:header|token))?\b ["']?
                     (?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
                     (?:[a-z][a-z0-9._-]*[\x20\t]+)?
                 |
@@ -30,8 +30,10 @@ fn sensitive_message_label_re() -> &'static Regex {
                     | account[\x20_-]?key
                     | samaccountname
                     | accountname
+                    | callerhandle
                     | localuser
                     | identity
+                    | queryhandle
                     | user[\x20_-]?principal[\x20_-]?name
                     | credential
                     | password
@@ -107,13 +109,97 @@ fn redact_sensitive_segments(value: &str) -> String {
         projected.push_str(&value[copied_through..label.start()]);
         projected.push_str(PUBLIC_MESSAGE_REDACTION);
 
-        let value_end = sensitive_value_end(value, label.end());
+        let value_end = if is_provider_private_label(label.as_str()) {
+            provider_private_value_end(value, label.end())
+        } else {
+            sensitive_value_end(value, label.end())
+        };
         copied_through = value_end;
         search_from = value_end;
     }
 
     projected.push_str(&value[copied_through..]);
     projected
+}
+
+fn is_provider_private_label(label: &str) -> bool {
+    let label = label.to_ascii_lowercase();
+    label.contains("authorization")
+        || label.contains("callerhandle")
+        || label.contains("queryhandle")
+}
+
+fn provider_private_value_end(value: &str, value_start: usize) -> usize {
+    let remaining = &value[value_start..];
+    if remaining
+        .chars()
+        .next()
+        .is_some_and(|first| matches!(first, '"' | '\''))
+    {
+        return sensitive_value_end(value, value_start);
+    }
+
+    let line_end = remaining
+        .char_indices()
+        .find_map(|(offset, character)| {
+            matches!(character, '\r' | '\n').then_some(value_start + offset)
+        })
+        .unwrap_or(value.len());
+    let private_value = &value[value_start..line_end];
+
+    private_value
+        .match_indices(';')
+        .find_map(|(offset, delimiter)| {
+            let tail_start = offset + delimiter.len();
+            provider_tail_has_independent_boundary(&private_value[tail_start..])
+                .then_some(value_start + offset)
+        })
+        .unwrap_or(line_end)
+}
+
+fn provider_tail_has_independent_boundary(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    provider_public_tail_is_safe(trimmed)
+        || sensitive_message_label_re()
+            .find(trimmed)
+            .is_some_and(|label| label.start() == 0)
+}
+
+fn provider_public_tail_is_safe(value: &str) -> bool {
+    let mut segments = value
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty());
+    let Some(first) = segments.next() else {
+        return false;
+    };
+
+    std::iter::once(first).chain(segments).all(|segment| {
+        let Some((label, value)) = segment.split_once('=') else {
+            return false;
+        };
+        let label = label.trim();
+        let value = value.trim();
+        matches!(
+            label.to_ascii_lowercase().as_str(),
+            "phase"
+                | "disposition"
+                | "terminal"
+                | "requestid"
+                | "operationhandle"
+                | "endpointid"
+                | "layer"
+                | "profileid"
+                | "status"
+                | "result"
+                | "errorcode"
+                | "hresult"
+        ) && !value.is_empty()
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'.' | b'_' | b'-' | b'{' | b'}' | b':' | b'+')
+            })
+    })
 }
 
 fn sensitive_value_end(value: &str, value_start: usize) -> usize {
@@ -173,11 +259,18 @@ fn redact_windows_identities(value: &str) -> String {
     identity_ranges.sort_unstable();
     identity_ranges.dedup();
 
+    let mut merged_ranges: Vec<(usize, usize)> = Vec::with_capacity(identity_ranges.len());
     for (start, end) in identity_ranges {
-        if start < copied_through {
-            continue;
+        if let Some((_, merged_end)) = merged_ranges.last_mut() {
+            if start <= *merged_end {
+                *merged_end = (*merged_end).max(end);
+                continue;
+            }
         }
+        merged_ranges.push((start, end));
+    }
 
+    for (start, end) in merged_ranges {
         projected.push_str(&value[copied_through..start]);
         projected.push_str(PUBLIC_MESSAGE_REDACTION);
         copied_through = end;
@@ -326,5 +419,55 @@ mod tests {
             .message
             .contains("{ABCDEFAB-0000-0000-0000-000000000001}"));
         assert_eq!(exported.execution_context, None);
+    }
+
+    #[test]
+    fn export_merges_overlapping_identity_ranges_without_mutating_raw_snapshot() {
+        let raw_identity = r"users\ADMIN\secret";
+        let raw_message = format!("{raw_identity}; status=71");
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="{raw_identity}" context="" type="1" thread="42" file="{raw_identity}">"#
+        );
+        let artifact = SccmArtifact {
+            artifact_id: "client-policy-agent".into(),
+            display_name: "PolicyAgent.log".into(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: None,
+            collected_at_utc: None,
+            rotation: SccmRotation::Current,
+            coverage: SccmCoverageState::Captured,
+            encoding: Some("utf-8".into()),
+        };
+        let record = scan_logical_records(&text, &artifact.display_name)
+            .into_iter()
+            .next()
+            .expect("fixture contains one CCM record");
+        let snapshot = SccmRawEvidenceSnapshot::from_record(&artifact, record);
+        let before = snapshot.clone();
+
+        let exported = snapshot.export();
+        let exported_json = serde_json::to_string(&exported).unwrap();
+
+        assert_eq!(snapshot, before);
+        assert!(snapshot.message.contains(raw_identity));
+        assert_eq!(snapshot.component.as_deref(), Some(raw_identity));
+        assert_eq!(snapshot.ccm_source_file.as_deref(), Some(raw_identity));
+        for private_segment in ["ADMIN", "secret"] {
+            assert!(
+                !exported_json.contains(private_segment),
+                "{private_segment} leaked after overlapping identity projection"
+            );
+        }
+        assert!(exported.message.contains("status=71"));
+        assert!(exported
+            .component
+            .as_deref()
+            .is_some_and(|value| value.contains(PUBLIC_MESSAGE_REDACTION)));
+        assert!(exported
+            .ccm_source_file
+            .as_deref()
+            .is_some_and(|value| value.contains(PUBLIC_MESSAGE_REDACTION)));
     }
 }

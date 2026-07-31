@@ -1,0 +1,52 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "provider-source-capped",
+  "bundle": {
+    "bundleRole": "server",
+    "workflow": "providerAndAdminService",
+    "capturedUtc": "2026-07-31T12:00:00Z"
+  },
+  "topology": {
+    "siteCode": "LAB",
+    "rolesObserved": ["provider"],
+    "endpoints": [
+      {
+        "endpointId": "provider-local",
+        "layer": "provider",
+        "hostHandle": "safe:server:lab-provider-01",
+        "producerRole": "provider"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "artifactId": "coverage-provider-capped",
+      "sourceId": "server-provider",
+      "producerRole": "provider",
+      "layer": "provider",
+      "producerHostHandle": "safe:server:lab-provider-01",
+      "endpointId": "provider-local",
+      "diagnosticUse": "primary",
+      "originalBasename": "Smsprov.log",
+      "sanitizedSourcePath": "SYNTHETIC://configured-root/LAB/Logs/Smsprov.log",
+      "pathFingerprint": "synthetic:provider-capped",
+      "rotation": {
+        "kind": "current",
+        "lineageId": "provider-capped",
+        "fragmentComplete": false
+      },
+      "captureState": "capped",
+      "sourceVersion": "5.00.TEST.0001",
+      "collectedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 398,
+        "limitApplied": true
+      },
+      "bytesCopied": 398,
+      "relativePath": "evidence/server-provider/provider-local/current/Smsprov.log"
+    }
+  ]
+}

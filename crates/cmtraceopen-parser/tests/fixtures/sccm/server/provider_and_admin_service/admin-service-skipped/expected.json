@@ -1,0 +1,28 @@
+{
+  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "workflow": "providerAndAdminService",
+  "scenario": "admin-service-skipped",
+  "profiles": [
+    {
+      "layer": "adminService",
+      "selectionState": "unknownVersion"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "coverage-admin-skipped",
+      "state": "skipped",
+      "sourceId": "server-admin-service",
+      "layer": "adminService"
+    }
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [],
+  "artifactRequests": [
+    {
+      "logicalArtifactId": "server-admin-service",
+      "reason": "Capture the bounded Admin Service source; skipped coverage does not establish a workflow outcome."
+    }
+  ],
+  "crossSideCausalClaims": []
+}

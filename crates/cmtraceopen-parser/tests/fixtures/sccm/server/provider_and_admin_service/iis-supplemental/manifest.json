@@ -1,0 +1,12 @@
+{
+  "sccmManifestVersion":1,
+  "proposalOnly":true,
+  "syntheticFixture":true,
+  "scenario":"iis-supplemental",
+  "bundle":{"bundleRole":"server","workflow":"providerAndAdminService","capturedUtc":"2026-07-30T22:30:00Z"},
+  "topology":{"siteCode":"LAB","rolesObserved":["provider"],"endpoints":[{"endpointId":"admin-service-lab","layer":"adminService","hostHandle":"safe:server:lab-provider-01","producerRole":"provider"}]},
+  "artifacts":[
+    {"artifactId":"admin-iis-current","sourceId":"server-admin-service","producerRole":"provider","layer":"adminService","producerHostHandle":"safe:server:lab-provider-01","endpointId":"admin-service-lab","diagnosticUse":"primary","originalBasename":"AdminService.log","sanitizedSourcePath":"SYNTHETIC://configured-root/LAB/Logs/AdminService.log","pathFingerprint":"synthetic:admin-iis-current","rotation":{"kind":"current","lineageId":"admin-iis","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T22:30:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":2495,"relativePath":"evidence/server-admin-service/admin-service-lab/current/AdminService.log"},
+    {"artifactId":"iis-supplemental-current","sourceId":"server-admin-service-iis","producerRole":"provider","layer":"supplementalIis","producerHostHandle":"safe:server:lab-provider-01","endpointId":"admin-service-lab","diagnosticUse":"supplementalOnly","originalBasename":"u_ex_synthetic.log","sanitizedSourcePath":"SYNTHETIC://scoped-export/LAB/IIS/u_ex_synthetic.log","pathFingerprint":"synthetic:iis-supplemental-current","rotation":{"kind":"current","lineageId":"iis-supplemental","fragmentComplete":true},"captureState":"captured","sourceVersion":"IIS.TEST.0001","collectedUtc":"2026-07-30T22:30:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":157,"relativePath":"evidence/server-admin-service-iis/admin-service-lab/current/u_ex_synthetic.log"}
+  ]
+}

@@ -4600,6 +4600,97 @@ fn evidence_public_message_projection_redacts_sensitive_markers_and_preserves_sa
 }
 
 #[test]
+fn evidence_public_message_projection_redacts_provider_handles_in_all_positions() {
+    let cases = [
+        (
+            "QueryHandle=SELECT * FROM SMS_R_System; status=71",
+            "SELECT * FROM SMS_R_System",
+            Some("status=71"),
+        ),
+        (
+            "phase=receive; QueryHandle:/AdminService/v1.0/device; status=72",
+            "/AdminService/v1.0/device",
+            Some("status=72"),
+        ),
+        (
+            r#"phase=receive; status=73; "QueryHandle"="opaque private query""#,
+            "opaque private query",
+            None,
+        ),
+        (
+            "CallerHandle=opaque-private-caller; status=74",
+            "opaque-private-caller",
+            Some("status=74"),
+        ),
+        (
+            r#"phase=receive; CallerHandle:"opaque private caller"; status=75"#,
+            "opaque private caller",
+            Some("status=75"),
+        ),
+        (
+            r#"phase=receive; status=76; "CallerHandle"="private-caller-tail""#,
+            "private-caller-tail",
+            None,
+        ),
+        (
+            "Authorization=Bearer private-auth-start; status=77",
+            "private-auth-start",
+            Some("status=77"),
+        ),
+        (
+            "phase=receive; Authorization: Custom private-auth-middle; status=78",
+            "private-auth-middle",
+            Some("status=78"),
+        ),
+        (
+            r#"phase=receive; status=79; "Authorization"="private-auth-tail""#,
+            "private-auth-tail",
+            None,
+        ),
+        (
+            "AuthorizationHeader=Custom private-credential-value; status=81",
+            "private-credential-value",
+            Some("status=81"),
+        ),
+        (
+            "AuthorizationToken=private-auth-token-value; status=82",
+            "private-auth-token-value",
+            Some("status=82"),
+        ),
+        (
+            "QueryHandle=SELECT 1; DROP TABLE private_object; status=80",
+            "DROP TABLE private_object",
+            Some("status=80"),
+        ),
+    ];
+
+    for (raw_message, sensitive, safe_tail) in cases {
+        let text = format!(
+            r#"<![LOG[{raw_message}]LOG]!><time="10:00:00.000-240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+        );
+        let evidence = normalize_ccm_artifact(client_policy_artifact(), &text);
+        let message = &evidence[0].message;
+        let json = serde_json::to_string(&evidence).unwrap();
+
+        assert!(
+            !message.contains(sensitive),
+            "{sensitive} leaked from {raw_message}"
+        );
+        assert_public_json_omits(&json, sensitive);
+        assert!(
+            message.contains("[redacted:sccm-public-message-v1]"),
+            "{raw_message} was not classified as sensitive"
+        );
+        if let Some(safe_tail) = safe_tail {
+            assert!(
+                message.contains(safe_tail),
+                "{safe_tail} was swallowed for {raw_message}"
+            );
+        }
+    }
+}
+
+#[test]
 fn evidence_public_message_projection_fails_closed_without_path_or_code_false_positives() {
     let assignment_id = "{ABCDEFAB-0000-0000-0000-000000000001}";
     let text = format!(
