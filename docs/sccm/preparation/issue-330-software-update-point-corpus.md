@@ -51,6 +51,14 @@ copied-byte count, and a collision-safe evidence destination. Nonphysical
 states omit encoding, byte, limit, relative-path, and fragment completion
 facts.
 
+Rotation provenance is structural rather than self-asserted. A canonical
+rotation kind/value must agree with the sanitized source basename and with the
+collision-safe destination segment (`current`, `lo_`, `numbered-N`, or
+`timestamped-YYYYMMDD-HHMMSS`). Numbered values are nonzero, timestamps are
+canonical calendar values, lineage IDs are bounded safe tokens, and physical
+source identity does not become unique merely because an artifact declares a
+different rotation.
+
 An absent or access-denied default candidate is source coverage only. It cannot
 erase an observed SUP role or prove the role healthy, failed, broken,
 uninstalled, or unavailable.
@@ -135,6 +143,12 @@ capture chronology, physical/nonphysical provenance, source-local
 classifications, observation order, transaction cardinality, destination
 collisions, unknown causal fields, and client update identity borrowing. Every
 mutation must fail closed.
+
+Scenario `evidence/` trees are recursively closed against their physical
+manifest artifacts, and every such artifact must appear in expected coverage.
+Mutation-only byte sequences are stored outside all scenario trees under the
+explicit versioned `software_update_point_mutation_assets/manifest.json`
+test-only contract with exact byte counts and purposes.
 
 ## Deferred implementation and validation
 

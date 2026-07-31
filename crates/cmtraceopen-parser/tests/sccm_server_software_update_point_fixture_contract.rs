@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDateTime};
 use cmtraceopen_parser::sccm::{
     normalize_ccm_artifact, SccmArtifact, SccmCoverageState, SccmEvidence, SccmRole, SccmRotation,
     SccmTimeOrderingState,
@@ -158,6 +158,39 @@ fn corpus_root() -> std::path::PathBuf {
         .join("tests/fixtures/sccm/server/software_update_point")
 }
 
+fn mutation_asset_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/sccm/server/software_update_point_mutation_assets")
+}
+
+fn relative_fixture_files(root: &std::path::Path) -> Result<BTreeSet<String>, String> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = BTreeSet::new();
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|error| format!("{} is readable: {error}", directory.display()))?;
+        for entry in entries {
+            let path = entry
+                .map_err(|error| format!("{} has a readable entry: {error}", directory.display()))?
+                .path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.is_file() {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|error| {
+                        format!("{} is beneath {}: {error}", path.display(), root.display())
+                    })?
+                    .to_str()
+                    .ok_or_else(|| format!("{} is valid UTF-8", path.display()))?
+                    .replace(std::path::MAIN_SEPARATOR, "/");
+                files.insert(relative);
+            }
+        }
+    }
+    Ok(files)
+}
+
 fn read_json(scenario: &str, filename: &str) -> Result<Value, String> {
     let path = corpus_root().join(scenario).join(filename);
     let contents = std::fs::read_to_string(&path)
@@ -278,11 +311,20 @@ fn rotation_from_manifest(rotation: &Value) -> Result<SccmRotation, String> {
         "numbered" => rotation["value"]
             .as_u64()
             .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value != 0)
             .map(SccmRotation::Numbered)
-            .ok_or_else(|| "numbered rotation requires a u32 value".to_owned()),
-        "timestamped" => required_string(rotation, "value", "rotation")
-            .map(str::to_owned)
-            .map(SccmRotation::Timestamped),
+            .ok_or_else(|| "numbered rotation requires a nonzero u32 value".to_owned()),
+        "timestamped" => {
+            let value = required_string(rotation, "value", "rotation")?;
+            if value.len() == "YYYYMMDD-HHMMSS".len()
+                && NaiveDateTime::parse_from_str(value, "%Y%m%d-%H%M%S")
+                    .is_ok_and(|timestamp| timestamp.format("%Y%m%d-%H%M%S").to_string() == value)
+            {
+                Ok(SccmRotation::Timestamped(value.to_owned()))
+            } else {
+                Err("timestamped rotation requires canonical YYYYMMDD-HHMMSS".to_owned())
+            }
+        }
         other => Err(format!("unsupported fixture rotation {other}")),
     }
 }
@@ -413,6 +455,48 @@ fn sanitized_source_path_is_safe(value: &str) -> bool {
     })
 }
 
+fn rotation_source_basename(basename: &str, rotation: &SccmRotation) -> Option<String> {
+    match rotation {
+        SccmRotation::Current => Some(basename.to_owned()),
+        SccmRotation::LoUnderscore => basename
+            .strip_suffix(".log")
+            .map(|stem| format!("{stem}.lo_")),
+        SccmRotation::Numbered(value) => basename
+            .ends_with(".log")
+            .then(|| format!("{basename}.{value}")),
+        SccmRotation::Timestamped(value) => basename
+            .ends_with(".log")
+            .then(|| format!("{basename}.{value}")),
+        SccmRotation::Unknown(_) => None,
+    }
+}
+
+fn rotation_destination_segment(rotation: &SccmRotation) -> Option<String> {
+    match rotation {
+        SccmRotation::Current => Some("current".to_owned()),
+        SccmRotation::LoUnderscore => Some("lo_".to_owned()),
+        SccmRotation::Numbered(value) => Some(format!("numbered-{value}")),
+        SccmRotation::Timestamped(value) => Some(format!("timestamped-{value}")),
+        SccmRotation::Unknown(_) => None,
+    }
+}
+
+fn bounded_token_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .next_back()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
 fn prefixed_token_is_nonempty(value: &str, prefix: &str) -> bool {
     value.strip_prefix(prefix).is_some_and(|suffix| {
         !suffix.is_empty()
@@ -447,6 +531,7 @@ fn validate_manifest(
     scenario: &str,
     scenario_root: &std::path::Path,
     manifest: &Value,
+    fixture_overrides: &BTreeMap<String, Vec<u8>>,
 ) -> Result<ParsedScenario, Vec<String>> {
     let mut failures = Vec::new();
     reject_unknown_fields(
@@ -666,20 +751,25 @@ fn validate_manifest(
             "timestamped" => artifact["rotation"]["value"].as_str().is_some(),
             _ => false,
         };
-        if rotation_lineage.is_empty() || !rotation_value_shape_valid {
+        let rotation_model = rotation_from_manifest(&artifact["rotation"]);
+        if !bounded_token_is_safe(&rotation_lineage)
+            || !rotation_value_shape_valid
+            || rotation_model.is_err()
+        {
             failures.push(format!(
                 "{artifact_id} has incomplete or incoherent rotation provenance"
             ));
         }
-        let rotation_value = artifact["rotation"]["value"]
-            .as_str()
-            .map(str::to_owned)
-            .or_else(|| {
-                artifact["rotation"]["value"]
-                    .as_u64()
-                    .map(|value| value.to_string())
-            })
-            .unwrap_or_default();
+        if let Ok(rotation) = &rotation_model {
+            let source_basename = artifact["sanitizedSourcePath"]
+                .as_str()
+                .and_then(|value| value.rsplit('/').next());
+            if rotation_source_basename(basename, rotation).as_deref() != source_basename {
+                failures.push(format!(
+                    "{artifact_id} rotation is not bound to its sanitized source path"
+                ));
+            }
+        }
         let identity = (
             artifact["producerHostHandle"]
                 .as_str()
@@ -689,9 +779,6 @@ fn validate_manifest(
                 .as_str()
                 .unwrap_or_default()
                 .to_ascii_lowercase(),
-            basename.to_ascii_lowercase(),
-            rotation_kind.clone(),
-            rotation_value,
         );
         if !physical_identities.insert(identity) {
             failures.push(format!(
@@ -730,7 +817,7 @@ fn validate_manifest(
                 continue;
             }
         };
-        let rotation_model = match rotation_from_manifest(&artifact["rotation"]) {
+        let rotation_model = match rotation_model {
             Ok(value) => value,
             Err(error) => {
                 failures.push(format!("{artifact_id}: {error}"));
@@ -756,21 +843,31 @@ fn validate_manifest(
                     "{artifact_id} has an unsafe or mismatched evidence path"
                 ));
             }
+            if rotation_destination_segment(&rotation_model).as_deref()
+                != relative_path.rsplit('/').nth(1)
+            {
+                failures.push(format!(
+                    "{artifact_id} rotation is not bound to its evidence destination"
+                ));
+            }
             if !relative_paths.insert(relative_path.to_ascii_lowercase()) {
                 failures.push(format!(
                     "{artifact_id} collides with an evidence destination"
                 ));
             }
             let fixture_path = scenario_root.join(relative_path);
-            let bytes = match std::fs::read(&fixture_path) {
-                Ok(value) => value,
-                Err(error) => {
-                    failures.push(format!(
-                        "{} is readable for {artifact_id}: {error}",
-                        fixture_path.display()
-                    ));
-                    continue;
-                }
+            let bytes = match fixture_overrides.get(relative_path) {
+                Some(value) => value.clone(),
+                None => match std::fs::read(&fixture_path) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        failures.push(format!(
+                            "{} is readable for {artifact_id}: {error}",
+                            fixture_path.display()
+                        ));
+                        continue;
+                    }
+                },
             };
             if artifact["bytesCopied"].as_u64() != Some(bytes.len() as u64) {
                 failures.push(format!(
@@ -1846,13 +1943,36 @@ fn validate_scenario_values(
     manifest: &Value,
     expected: &Value,
 ) -> Result<(), Vec<String>> {
+    validate_scenario_values_with_overrides(scenario, manifest, expected, &BTreeMap::new())
+}
+
+fn validate_scenario_values_with_overrides(
+    scenario: &str,
+    manifest: &Value,
+    expected: &Value,
+    fixture_overrides: &BTreeMap<String, Vec<u8>>,
+) -> Result<(), Vec<String>> {
     let scenario_root = corpus_root().join(scenario);
-    let parsed = validate_manifest(scenario, &scenario_root, manifest)?;
+    let parsed = validate_manifest(scenario, &scenario_root, manifest, fixture_overrides)?;
     validate_expected(scenario, manifest, expected, &parsed)
 }
 
 fn mutation_was_accepted(scenario: &str, manifest: &Value, expected: &Value) -> bool {
     validate_scenario_values(scenario, manifest, expected).is_ok()
+}
+
+fn mutation_was_accepted_with_asset(
+    scenario: &str,
+    manifest: &Value,
+    expected: &Value,
+    evidence_path: &str,
+    mutation_asset: &str,
+) -> bool {
+    let asset_path = mutation_asset_root().join(mutation_asset);
+    let bytes = std::fs::read(&asset_path)
+        .unwrap_or_else(|error| panic!("{} is readable: {error}", asset_path.display()));
+    let overrides = BTreeMap::from([(evidence_path.to_owned(), bytes)]);
+    validate_scenario_values_with_overrides(scenario, manifest, expected, &overrides).is_ok()
 }
 
 #[test]
@@ -1884,6 +2004,152 @@ fn software_update_point_scenario_matrix_is_complete_and_loadable() {
 }
 
 #[test]
+fn every_scenario_evidence_asset_is_manifest_and_coverage_closed() {
+    for scenario in SCENARIOS {
+        let manifest = read_json(scenario, "manifest.json").expect("manifest loads");
+        let expected = read_json(scenario, "expected.json").expect("expected loads");
+        let scenario_root = corpus_root().join(scenario);
+        let evidence_files = relative_fixture_files(&scenario_root.join("evidence"))
+            .unwrap_or_else(|error| panic!("{scenario}: {error}"))
+            .into_iter()
+            .map(|path| format!("evidence/{path}"))
+            .collect::<BTreeSet<_>>();
+        let physical_artifacts = manifest["artifacts"]
+            .as_array()
+            .expect("manifest.artifacts is an array")
+            .iter()
+            .filter(|artifact| {
+                matches!(
+                    artifact["captureState"].as_str(),
+                    Some("captured" | "capped" | "parseFailed")
+                )
+            })
+            .map(|artifact| {
+                (
+                    artifact["relativePath"]
+                        .as_str()
+                        .expect("physical artifact has relativePath")
+                        .to_owned(),
+                    artifact["artifactId"]
+                        .as_str()
+                        .expect("physical artifact has artifactId")
+                        .to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let coverage_ids = expected["coverage"]
+            .as_array()
+            .expect("expected.coverage is an array")
+            .iter()
+            .map(|coverage| {
+                coverage["artifactId"]
+                    .as_str()
+                    .expect("coverage has artifactId")
+                    .to_owned()
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            evidence_files,
+            physical_artifacts.keys().cloned().collect(),
+            "{scenario} has physical fixture assets outside its manifest"
+        );
+        assert!(
+            physical_artifacts
+                .values()
+                .all(|artifact_id| coverage_ids.contains(artifact_id)),
+            "{scenario} has a physical manifest artifact outside expected coverage"
+        );
+    }
+}
+
+#[test]
+fn mutation_assets_have_an_explicit_separate_test_contract() {
+    let root = mutation_asset_root();
+    let manifest_path = root.join("manifest.json");
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|error| panic!("{} is readable: {error}", manifest_path.display())),
+    )
+    .unwrap_or_else(|error| panic!("{} contains valid JSON: {error}", manifest_path.display()));
+    assert_eq!(manifest["contractVersion"], 1);
+    assert_eq!(manifest["syntheticFixture"], true);
+    assert_eq!(manifest["testOnly"], true);
+
+    let assets = manifest["assets"]
+        .as_array()
+        .expect("mutation assets are an array");
+    let actual_asset_files = relative_fixture_files(&root)
+        .expect("mutation asset directory is readable")
+        .into_iter()
+        .filter(|path| path != "manifest.json")
+        .collect::<BTreeSet<_>>();
+    let declared_asset_files = assets
+        .iter()
+        .map(|asset| {
+            asset["relativePath"]
+                .as_str()
+                .expect("mutation asset has relativePath")
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual_asset_files, declared_asset_files,
+        "mutation-only bytes must not exist outside their explicit test contract"
+    );
+
+    let actual_contract = assets
+        .iter()
+        .map(|asset| {
+            let relative_path = asset["relativePath"]
+                .as_str()
+                .expect("mutation asset has relativePath");
+            let bytes = std::fs::read(root.join(relative_path))
+                .unwrap_or_else(|error| panic!("{relative_path} is readable: {error}"));
+            assert_eq!(
+                asset["bytesCopied"].as_u64(),
+                Some(bytes.len() as u64),
+                "{relative_path} retains an exact byte count"
+            );
+            assert!(
+                String::from_utf8_lossy(&bytes).contains("SYNTHETIC FIXTURE"),
+                "{relative_path} retains its synthetic marker"
+            );
+            (
+                asset["assetId"]
+                    .as_str()
+                    .expect("mutation asset has assetId"),
+                relative_path,
+                asset["testPurpose"]
+                    .as_str()
+                    .expect("mutation asset has testPurpose"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual_contract,
+        [
+            (
+                "cross-family-lo-wcm",
+                "cross-family-lo-wcm.log",
+                "rejectCrossFamilyRotationGrouping"
+            ),
+            (
+                "incomplete-required-numbered-wsyncmgr",
+                "incomplete-required-numbered-wsyncmgr.log",
+                "rejectIncompleteRequiredRotationSuccess"
+            ),
+            (
+                "parse-failed-valid-numbered-wsusctrl",
+                "parse-failed-valid-numbered-wsusctrl.log",
+                "rejectParseFailedUsableCcm"
+            ),
+        ],
+        "the bounded mutation-asset contract changed"
+    );
+}
+
+#[test]
 fn structured_fields_are_unique_closed_and_not_nested_ccm() {
     let valid = "[sccm-public-message-v1] SYNTHETIC FIXTURE; Phase=synchronize; Disposition=succeeded; Terminal=false; SyncRunId=sync-01; SiteCode=LAB; SupHandle=safe:sup:lab-sup-01; ProfileId=sup-server-5.00.test-v1";
     assert!(parse_fixture_fields(valid).is_ok());
@@ -1897,6 +2163,138 @@ fn structured_fields_are_unique_closed_and_not_nested_ccm() {
             parse_fixture_fields(invalid).is_err(),
             "ambiguous or unsupported fields were accepted: {invalid}"
         );
+    }
+}
+
+#[test]
+fn rotation_metadata_must_bind_to_source_and_evidence_paths() {
+    let success_manifest = read_json("sync-success", "manifest.json").expect("manifest loads");
+    let success_expected = read_json("sync-success", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let wcm = artifact_index(&success_manifest, "sync-success-01-wcm");
+    let lo = artifact_index(&rotation_manifest, "rotation-02-lo");
+    let current = artifact_index(&rotation_manifest, "rotation-01-current");
+    let mut accepted = Vec::new();
+
+    let mut unbound_kind = success_manifest.clone();
+    unbound_kind["artifacts"][wcm]["rotation"]["kind"] = json!("lo_");
+    if mutation_was_accepted("sync-success", &unbound_kind, &success_expected) {
+        accepted.push("lo_ rotation retained current source and destination paths");
+    }
+
+    let mut unbound_source = success_manifest.clone();
+    unbound_source["artifacts"][wcm]["rotation"]["kind"] = json!("lo_");
+    unbound_source["artifacts"][wcm]["relativePath"] =
+        json!("evidence/server-sup-sync/site/lo_/WCM.log");
+    let current_wcm_path = corpus_root()
+        .join("sync-success")
+        .join("evidence/server-sup-sync/site/current/WCM.log");
+    let current_wcm_bytes = std::fs::read(&current_wcm_path)
+        .unwrap_or_else(|error| panic!("{} is readable: {error}", current_wcm_path.display()));
+    let unbound_source_overrides = BTreeMap::from([(
+        "evidence/server-sup-sync/site/lo_/WCM.log".to_owned(),
+        current_wcm_bytes,
+    )]);
+    if validate_scenario_values_with_overrides(
+        "sync-success",
+        &unbound_source,
+        &success_expected,
+        &unbound_source_overrides,
+    )
+    .is_ok()
+    {
+        accepted.push("lo_ rotation retained a current sanitized source path");
+    }
+
+    let mut unbound_number = success_manifest.clone();
+    unbound_number["artifacts"][wcm]["rotation"]["kind"] = json!("numbered");
+    unbound_number["artifacts"][wcm]["rotation"]["value"] = json!(1);
+    unbound_number["artifacts"][wcm]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://configured-root/Site/Logs/WCM.log.1");
+    if mutation_was_accepted("sync-success", &unbound_number, &success_expected) {
+        accepted.push("numbered rotation value was absent from its evidence destination");
+    }
+
+    let mut duplicate_physical_source = rotation_manifest.clone();
+    duplicate_physical_source["artifacts"][lo]["sanitizedSourcePath"] =
+        duplicate_physical_source["artifacts"][current]["sanitizedSourcePath"].clone();
+    if mutation_was_accepted(
+        "rotation-boundary",
+        &duplicate_physical_source,
+        &rotation_expected,
+    ) {
+        accepted.push("self-declared rotation metadata disguised one physical source collision");
+    }
+
+    let mut unsafe_timestamp = success_manifest.clone();
+    unsafe_timestamp["artifacts"][wcm]["rotation"]["kind"] = json!("timestamped");
+    unsafe_timestamp["artifacts"][wcm]["rotation"]["value"] = json!("20260730-150060");
+    unsafe_timestamp["artifacts"][wcm]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://configured-root/Site/Logs/WCM.log.20260730-150060");
+    unsafe_timestamp["artifacts"][wcm]["relativePath"] =
+        json!("evidence/server-sup-sync/site/timestamped-20260730-150060/WCM.log");
+    if mutation_was_accepted("sync-success", &unsafe_timestamp, &success_expected) {
+        accepted.push("noncanonical rotation timestamp");
+    }
+
+    let mut path_like_timestamp = success_manifest.clone();
+    path_like_timestamp["artifacts"][wcm]["rotation"]["kind"] = json!("timestamped");
+    path_like_timestamp["artifacts"][wcm]["rotation"]["value"] =
+        json!("../../Users/Real/secret.log");
+    if mutation_was_accepted("sync-success", &path_like_timestamp, &success_expected) {
+        accepted.push("path-like rotation timestamp");
+    }
+
+    let mut unsafe_lineage = success_manifest.clone();
+    unsafe_lineage["artifacts"][wcm]["rotation"]["lineageId"] = json!("C:\\Users\\Real\\WCM.log");
+    if mutation_was_accepted("sync-success", &unsafe_lineage, &success_expected) {
+        accepted.push("unsafe rotation lineage syntax");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "unbound or unsafe rotation provenance was accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn canonical_numbered_and_timestamped_rotation_bindings_remain_loadable() {
+    let manifest = read_json("sync-success", "manifest.json").expect("manifest loads");
+    let expected = read_json("sync-success", "expected.json").expect("expected loads");
+    let wcm = artifact_index(&manifest, "sync-success-01-wcm");
+    let current_path = corpus_root()
+        .join("sync-success")
+        .join("evidence/server-sup-sync/site/current/WCM.log");
+    let bytes = std::fs::read(&current_path)
+        .unwrap_or_else(|error| panic!("{} is readable: {error}", current_path.display()));
+
+    for (kind, value, source_path, evidence_path) in [
+        (
+            "numbered",
+            json!(1),
+            "SYNTHETIC://configured-root/Site/Logs/WCM.log.1",
+            "evidence/server-sup-sync/site/numbered-1/WCM.log",
+        ),
+        (
+            "timestamped",
+            json!("20260730-150000"),
+            "SYNTHETIC://configured-root/Site/Logs/WCM.log.20260730-150000",
+            "evidence/server-sup-sync/site/timestamped-20260730-150000/WCM.log",
+        ),
+    ] {
+        let mut rotated = manifest.clone();
+        rotated["artifacts"][wcm]["rotation"]["kind"] = json!(kind);
+        rotated["artifacts"][wcm]["rotation"]["value"] = value;
+        rotated["artifacts"][wcm]["sanitizedSourcePath"] = json!(source_path);
+        rotated["artifacts"][wcm]["relativePath"] = json!(evidence_path);
+        let overrides = BTreeMap::from([(evidence_path.to_owned(), bytes.clone())]);
+        validate_scenario_values_with_overrides("sync-success", &rotated, &expected, &overrides)
+            .unwrap_or_else(|failures| {
+                panic!("{kind} canonical binding:\n{}", failures.join("\n"))
+            });
     }
 }
 
@@ -2468,7 +2866,7 @@ fn partial_capture_malformed_bytes_and_rotation_family_fail_closed() {
                 "limitApplied": false
             },
             "bytesCopied": 182,
-            "relativePath": "evidence/server-sup-sync/site/numbered/wsyncmgr.log"
+            "relativePath": "evidence/server-sup-sync/site/numbered-1/wsyncmgr.log"
         }));
     let mut incomplete_required_expected = success_expected.clone();
     incomplete_required_expected["coverage"]
@@ -2478,10 +2876,12 @@ fn partial_capture_malformed_bytes_and_rotation_family_fail_closed() {
             "artifactId": "sync-success-04-wsync-partial",
             "state": "captured"
         }));
-    if mutation_was_accepted(
+    if mutation_was_accepted_with_asset(
         "sync-success",
         &incomplete_required_rotation,
         &incomplete_required_expected,
+        "evidence/server-sup-sync/site/numbered-1/wsyncmgr.log",
+        "incomplete-required-numbered-wsyncmgr.log",
     ) {
         accepted.push("captured incomplete required rotation retained high-confidence success");
     }
@@ -2494,11 +2894,13 @@ fn partial_capture_malformed_bytes_and_rotation_family_fail_closed() {
     parse_failed_valid_ccm["artifacts"][malformed]["rotation"]["value"] = json!(1);
     parse_failed_valid_ccm["artifacts"][malformed]["bytesCopied"] = json!(326);
     parse_failed_valid_ccm["artifacts"][malformed]["relativePath"] =
-        json!("evidence/server-sup-sync/sup/numbered/WSUSCtrl.log");
-    if mutation_was_accepted(
+        json!("evidence/server-sup-sync/sup/numbered-1/WSUSCtrl.log");
+    if mutation_was_accepted_with_asset(
         "rotation-boundary",
         &parse_failed_valid_ccm,
         &rotation_expected,
+        "evidence/server-sup-sync/sup/numbered-1/WSUSCtrl.log",
+        "parse-failed-valid-numbered-wsusctrl.log",
     ) {
         accepted.push("parse-failed artifact contained usable normalized CCM evidence");
     }
@@ -2510,10 +2912,12 @@ fn partial_capture_malformed_bytes_and_rotation_family_fail_closed() {
         json!("SYNTHETIC://configured-root/Site/Logs/WCM.lo_");
     cross_family_rotation["artifacts"][lo]["relativePath"] =
         json!("evidence/server-sup-sync/site/lo_/WCM.log");
-    if mutation_was_accepted(
+    if mutation_was_accepted_with_asset(
         "rotation-boundary",
         &cross_family_rotation,
         &rotation_expected,
+        "evidence/server-sup-sync/site/lo_/WCM.log",
+        "cross-family-lo-wcm.log",
     ) {
         accepted.push("rotation split grouped different canonical log families");
     }
