@@ -304,7 +304,7 @@ pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysi
                 HealthFactKind::IdentitySucceeded {
                     client_guid: succeeded_guid
                 } if succeeded_guid == failed_guid
-            ) && is_later_in_same_artifact(&failure.reference, &candidate.reference)
+            ) && fact_is_strictly_before(failure, candidate)
         })
     };
     if let Some(failure) = facts.iter().find(|fact| {
@@ -844,7 +844,7 @@ fn parse_health_fact(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option
 }
 
 fn parse_setup_fact(message: &str) -> Option<HealthFactKind> {
-    if message.contains("Bootstrap completed ") {
+    if has_health_event_prefix(message, "Bootstrap completed ") {
         let bootstrap_id =
             field_value(message, "bootstrapId").filter(|value| valid_bootstrap_id(value))?;
         let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
@@ -853,7 +853,8 @@ fn parse_setup_fact(message: &str) -> Option<HealthFactKind> {
             client_guid: client_guid.to_ascii_lowercase(),
         });
     }
-    if message.contains("Bootstrap terminal failure ") && has_nonzero_error(message) {
+    if has_health_event_prefix(message, "Bootstrap terminal failure ") && has_nonzero_error(message)
+    {
         let bootstrap_id =
             field_value(message, "bootstrapId").filter(|value| valid_bootstrap_id(value))?;
         return Some(HealthFactKind::SetupFailed {
@@ -864,7 +865,7 @@ fn parse_setup_fact(message: &str) -> Option<HealthFactKind> {
 }
 
 fn parse_service_fact(message: &str) -> Option<HealthFactKind> {
-    if !message.contains("Client service evaluation succeeded ") {
+    if !has_health_event_prefix(message, "Client service evaluation succeeded ") {
         return None;
     }
     let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
@@ -875,15 +876,21 @@ fn parse_service_fact(message: &str) -> Option<HealthFactKind> {
 
 fn parse_identity_fact(message: &str) -> Option<HealthFactKind> {
     let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
-    if message.contains("Identity registration succeeded ")
-        || message.contains("[redacted:sccm-public-message-v1] succeeded clientGuid=")
+    if has_health_event_prefix(message, "Identity registration succeeded ")
+        || has_health_event_prefix(
+            message,
+            "[redacted:sccm-public-message-v1] succeeded clientGuid=",
+        )
     {
         return Some(HealthFactKind::IdentitySucceeded {
             client_guid: client_guid.to_ascii_lowercase(),
         });
     }
-    if (message.contains("Identity registration terminal failure ")
-        || message.contains("[redacted:sccm-public-message-v1] terminal failure clientGuid="))
+    if (has_health_event_prefix(message, "Identity registration terminal failure ")
+        || has_health_event_prefix(
+            message,
+            "[redacted:sccm-public-message-v1] terminal failure clientGuid=",
+        ))
         && has_nonzero_error(message)
     {
         return Some(HealthFactKind::IdentityFailed {
@@ -894,13 +901,13 @@ fn parse_identity_fact(message: &str) -> Option<HealthFactKind> {
 }
 
 fn parse_location_fact(message: &str) -> Option<HealthFactKind> {
-    if message.contains("Location query started ") {
+    if has_health_event_prefix(message, "Location query started ") {
         let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
         return Some(HealthFactKind::LocationQuery {
             client_guid: client_guid.to_ascii_lowercase(),
         });
     }
-    if message.contains("Site assignment succeeded ") {
+    if has_health_event_prefix(message, "Site assignment succeeded ") {
         let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
         let site_code = field_value(message, "siteCode").filter(|value| valid_site_code(value))?;
         return Some(HealthFactKind::SiteAssigned {
@@ -908,7 +915,7 @@ fn parse_location_fact(message: &str) -> Option<HealthFactKind> {
             site_code: site_code.to_owned(),
         });
     }
-    if message.contains("Management point selected ") {
+    if has_health_event_prefix(message, "Management point selected ") {
         let site_code = field_value(message, "siteCode").filter(|value| valid_site_code(value))?;
         let host =
             field_value(message, "managementPointHost").filter(|value| valid_test_host(value))?;
@@ -917,7 +924,7 @@ fn parse_location_fact(message: &str) -> Option<HealthFactKind> {
             host: host.to_owned(),
         });
     }
-    if message.contains("Transport request started ") {
+    if has_health_event_prefix(message, "Transport request started ") {
         let request_id =
             field_value(message, "requestId").filter(|value| valid_request_id(value))?;
         let host =
@@ -927,7 +934,9 @@ fn parse_location_fact(message: &str) -> Option<HealthFactKind> {
             host: host.to_owned(),
         });
     }
-    if message.contains("Transport response completed ") && has_success_status(message) {
+    if has_health_event_prefix(message, "Transport response completed ")
+        && has_success_status(message)
+    {
         let request_id =
             field_value(message, "requestId").filter(|value| valid_request_id(value))?;
         let host =
@@ -937,7 +946,8 @@ fn parse_location_fact(message: &str) -> Option<HealthFactKind> {
             host: host.to_owned(),
         });
     }
-    if message.contains("Transport terminal failure ") && has_nonzero_error(message) {
+    if has_health_event_prefix(message, "Transport terminal failure ") && has_nonzero_error(message)
+    {
         let request_id =
             field_value(message, "requestId").filter(|value| valid_request_id(value))?;
         let host =
@@ -947,13 +957,25 @@ fn parse_location_fact(message: &str) -> Option<HealthFactKind> {
             host: host.to_owned(),
         });
     }
-    if message.contains("Generic network warning ") && has_nonzero_error(message) {
+    if has_health_event_prefix(message, "Generic network warning ") && has_nonzero_error(message) {
         return Some(HealthFactKind::GenericLocationSymptom);
     }
-    if message.contains("Unrelated text mentions ") {
+    if has_health_event_prefix(message, "Unrelated text mentions ") {
         return Some(HealthFactKind::UnrelatedLocationText);
     }
     None
+}
+
+fn has_health_event_prefix(message: &str, event_prefix: &str) -> bool {
+    health_event_payload(message).is_some_and(|payload| payload.starts_with(event_prefix))
+}
+
+fn health_event_payload(message: &str) -> Option<&str> {
+    let payload = message.strip_prefix("[sccm-public-message-v1] ")?;
+    if let Some(synthetic_fixture) = payload.strip_prefix("# SYNTHETIC FIXTURE: ") {
+        return synthetic_fixture.split_once("; ").map(|(_, event)| event);
+    }
+    Some(payload)
 }
 
 fn field_value<'a>(message: &'a str, key: &str) -> Option<&'a str> {
