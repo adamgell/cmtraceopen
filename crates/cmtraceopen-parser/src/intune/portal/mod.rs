@@ -5,4 +5,7 @@
 //! sub-case of IME or ESP. Platform-specific contracts live under the matching
 //! platform module.
 
+pub mod android;
+pub mod ios_ipados;
+pub mod macos;
 pub mod windows;
