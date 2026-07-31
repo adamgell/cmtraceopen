@@ -2427,6 +2427,70 @@ fn complete_winpe_record_may_have_no_smsts_path_observation() {
 }
 
 #[test]
+fn equal_relocation_timestamps_are_ambiguous() {
+    let scenario = "relocated-fragments";
+    let temporary = copy_scenario_to_temporary_root(scenario, "equal-relocation-timestamps");
+    let mut manifest = read_json(&temporary.root.join("manifest.json"));
+    let mut expected = read_json(&temporary.root.join("expected.json"));
+    let artifact_id = "task-sequence-relocated-02-setup";
+    let artifact_index = manifest["artifacts"]
+        .as_array()
+        .expect("artifacts are an array")
+        .iter()
+        .position(|artifact| artifact["artifactId"] == artifact_id)
+        .expect("setup relocation artifact exists");
+    let relative_path = manifest["artifacts"][artifact_index]["relativePath"]
+        .as_str()
+        .expect("setup relocation artifact has a relative path")
+        .to_owned();
+    let evidence_path = temporary.root.join(relative_path);
+    let original = std::fs::read_to_string(&evidence_path).expect("setup evidence is readable");
+    let tied = original.replace("01:10:01.000+000", "01:10:00.000+000");
+    assert_ne!(tied, original, "the equal-timestamp mutation is effective");
+    std::fs::write(&evidence_path, &tied).expect("mutated setup evidence is writable");
+
+    manifest["artifacts"][artifact_index]["bytesCopied"] = Value::from(tied.len() as u64);
+    let provenance_index = expected["artifactProvenance"]
+        .as_array()
+        .expect("artifact provenance is an array")
+        .iter()
+        .position(|item| item["artifactId"] == artifact_id)
+        .expect("setup relocation provenance exists");
+    expected["artifactProvenance"][provenance_index]["bytesCopied"] =
+        Value::from(tied.len() as u64);
+
+    let error = validate_contract(scenario, &temporary.root, &manifest, &expected)
+        .expect_err("equal cited timestamps cannot establish relocation order");
+    assert!(error.contains("ambiguous"), "{error}");
+}
+
+#[test]
+fn timestamp_binding_preserves_millisecond_precision() {
+    let scenario = "winpe";
+    let temporary = copy_scenario_to_temporary_root(scenario, "subsecond-timestamp");
+    let mut manifest = read_json(&temporary.root.join("manifest.json"));
+    let mut expected = read_json(&temporary.root.join("expected.json"));
+    let relative_path = manifest["artifacts"][0]["relativePath"]
+        .as_str()
+        .expect("WinPE artifact has a relative path");
+    let evidence_path = temporary.root.join(relative_path);
+    let original = std::fs::read_to_string(&evidence_path).expect("WinPE evidence is readable");
+    let subsecond = original.replace("01:00:01.000+000", "01:00:01.123+000");
+    assert_ne!(
+        subsecond, original,
+        "the subsecond timestamp mutation is effective"
+    );
+    std::fs::write(&evidence_path, &subsecond).expect("mutated evidence is writable");
+
+    manifest["artifacts"][0]["bytesCopied"] = Value::from(subsecond.len() as u64);
+    expected["artifactProvenance"][0]["bytesCopied"] = Value::from(subsecond.len() as u64);
+
+    let error = validate_contract(scenario, &temporary.root, &manifest, &expected)
+        .expect_err("whole-second expected output cannot match subsecond evidence");
+    assert!(error.contains("timestamp"), "{error}");
+}
+
+#[test]
 fn coherent_review_mutations_fail_closed() {
     let mut accepted = Vec::new();
 
