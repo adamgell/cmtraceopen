@@ -5,7 +5,7 @@
   "workflowDiagnosisExpected": true,
   "lastSuccessfulPhase": "setup",
   "findings": [
-    {"findingId":"health-service-malformed","class":"symptom","phase":"service","role":"client","confidence":"low","fixtureEvidence":[],"coverageGapArtifactIds":["health-malformed-evaluation-current"],"nextArtifacts":[{"logicalArtifactId":"client-evaluation","reason":"capture a complete parseable service or evaluation record"}],"mustNotClaim":["service failure","identity failure","management point cause"]}
+    {"findingId":"health-service-malformed","class":"insufficientEvidence","phase":"service","role":"client","confidence":"low","fixtureEvidence":[],"coverageGapArtifactIds":["health-malformed-evaluation-current"],"nextArtifacts":[{"logicalArtifactId":"client-evaluation","reason":"capture a complete parseable service or evaluation record"}],"mustNotClaim":["service failure","identity failure","management point cause"]}
   ],
   "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"absent"},{"logicalArtifactId":"client-location","state":"absent"}],
   "assertions": ["unclosed CCM input is retained only as safe malformed coverage","malformed input does not create a phase transition or terminal finding"]
