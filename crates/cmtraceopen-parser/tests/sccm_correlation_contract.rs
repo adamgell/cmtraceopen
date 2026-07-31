@@ -510,13 +510,6 @@ fn check_scenario(scenario: &ScenarioContract, spec: &MatrixSpec) -> Result<(), 
             "{scenario_id}: missing key lacks the same-time guard"
         ));
     }
-    if scenario.key_relation == KeyRelation::Conflicting
-        && !scenario
-            .guard_ids
-            .contains(&"conflicting-exact-key".to_owned())
-    {
-        return Err(format!("{scenario_id}: conflicting key lacks its guard"));
-    }
     if scenario.key_relation == KeyRelation::VersionMismatch
         && !scenario.guard_ids.contains(&"version-mismatch".to_owned())
     {
@@ -524,70 +517,90 @@ fn check_scenario(scenario: &ScenarioContract, spec: &MatrixSpec) -> Result<(), 
             "{scenario_id}: key version mismatch lacks its guard"
         ));
     }
-    if scenario.topology == TopologyState::Incompatible
-        && !scenario
-            .guard_ids
-            .contains(&"incompatible-topology".to_owned())
+    if scenario.coverage == CoverageState::ClientOnly
+        && scenario.expected.artifact_requests.is_empty()
     {
         return Err(format!(
-            "{scenario_id}: incompatible topology lacks its guard"
+            "{scenario_id}: client-only coverage must request server artifacts"
         ));
     }
-    if scenario.timestamp_provenance == TimestampState::InvalidOffset
-        && !scenario
-            .guard_ids
-            .contains(&"invalid-timestamp-offset".to_owned())
+    if scenario.coverage == CoverageState::ServerOnly
+        && scenario.expected.artifact_requests.is_empty()
     {
-        return Err(format!("{scenario_id}: invalid offset lacks its guard"));
+        return Err(format!(
+            "{scenario_id}: server-only coverage must request client artifacts"
+        ));
     }
-    if scenario.coverage == CoverageState::ClientOnly {
-        if !scenario
-            .guard_ids
-            .contains(&"missing-server-counterpart".to_owned())
-        {
+
+    if (scenario.client_fixture_ref == "absent") != (scenario.coverage == CoverageState::ServerOnly)
+    {
+        return Err(format!(
+            "{scenario_id}: an absent client fixture ref must match server-only coverage"
+        ));
+    }
+    if (scenario.server_fixture_ref == "absent") != (scenario.coverage == CoverageState::ClientOnly)
+    {
+        return Err(format!(
+            "{scenario_id}: an absent server fixture ref must match client-only coverage"
+        ));
+    }
+    for guard in GUARD_IDS {
+        let declared = scenario.guard_ids.iter().any(|declared| declared == guard);
+        let demonstrated = guard_demonstrated(guard, scenario);
+        if declared && !demonstrated {
             return Err(format!(
-                "{scenario_id}: client-only coverage lacks its guard"
+                "{scenario_id}: guard {guard} is declared but not demonstrated by the inputs"
             ));
         }
-        if scenario.expected.artifact_requests.is_empty() {
+        if demonstrated && !declared {
             return Err(format!(
-                "{scenario_id}: client-only coverage must request server artifacts"
+                "{scenario_id}: inputs demonstrate guard {guard} which is not declared"
             ));
         }
-    }
-    if scenario.coverage == CoverageState::ServerOnly {
-        if !scenario
-            .guard_ids
-            .contains(&"missing-client-counterpart".to_owned())
-        {
-            return Err(format!(
-                "{scenario_id}: server-only coverage lacks its guard"
-            ));
-        }
-        if scenario.expected.artifact_requests.is_empty() {
-            return Err(format!(
-                "{scenario_id}: server-only coverage must request client artifacts"
-            ));
-        }
-    }
-    if scenario.coverage == CoverageState::Partial
-        && !scenario.guard_ids.contains(&"partial-capture".to_owned())
-    {
-        return Err(format!("{scenario_id}: partial coverage lacks its guard"));
-    }
-    if scenario.rotation == RotationState::Split
-        && !scenario.guard_ids.contains(&"rotation-split".to_owned())
-    {
-        return Err(format!("{scenario_id}: split rotation lacks its guard"));
-    }
-    if scenario.terminal_relation == TerminalRelation::Unrelated
-        && !scenario
-            .guard_ids
-            .contains(&"unrelated-terminal-error".to_owned())
-    {
-        return Err(format!("{scenario_id}: unrelated terminal lacks its guard"));
     }
     Ok(())
+}
+
+/// True when the scenario's own input state instantiates the guard's
+/// adversarial construction. Every declared guard must be demonstrated by
+/// the inputs, and every demonstrated guard must be declared, so a guard
+/// label can never outlive a neutralized input.
+fn guard_demonstrated(guard: &str, scenario: &ScenarioContract) -> bool {
+    match guard {
+        "conflicting-exact-key" => scenario.key_relation == KeyRelation::Conflicting,
+        "incompatible-topology" => scenario.topology == TopologyState::Incompatible,
+        "invalid-timestamp-offset" => {
+            scenario.timestamp_provenance == TimestampState::InvalidOffset
+        }
+        "missing-client-counterpart" => {
+            scenario.coverage == CoverageState::ServerOnly
+                && scenario.client_fixture_ref == "absent"
+                && scenario.server_fixture_ref != "absent"
+        }
+        "missing-server-counterpart" => {
+            scenario.coverage == CoverageState::ClientOnly
+                && scenario.server_fixture_ref == "absent"
+                && scenario.client_fixture_ref != "absent"
+        }
+        "partial-capture" => scenario.coverage == CoverageState::Partial,
+        "redaction-boundary" => !scenario.private_input_markers.is_empty(),
+        "reordered-input" => {
+            scenario.scenario_id.ends_with("-reordered-input-a")
+                || scenario.scenario_id.ends_with("-reordered-input-b")
+        }
+        "rotation-split" => scenario.rotation == RotationState::Split,
+        "same-time-no-key" => {
+            scenario.key_relation == KeyRelation::Missing
+                && scenario.timestamp_provenance == TimestampState::Usable
+        }
+        "unknown-extraction-profile" => scenario.profile_state == ProfileState::Unknown,
+        "unrelated-terminal-error" => scenario.terminal_relation == TerminalRelation::Unrelated,
+        "version-mismatch" => {
+            scenario.profile_state == ProfileState::VersionMismatch
+                && scenario.key_relation == KeyRelation::VersionMismatch
+        }
+        _ => false,
+    }
 }
 
 fn check_matrix_contract(matrix: &ScenarioMatrix, spec: &MatrixSpec) -> Result<(), String> {
