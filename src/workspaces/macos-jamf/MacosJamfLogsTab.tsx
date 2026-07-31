@@ -49,7 +49,7 @@ export function MacosJamfLogsTab() {
     <div>
       <Subtitle2>JAMF Logs</Subtitle2>
       <Caption1>
-        {files.length} file(s) - {formatBytes(totalSizeBytes)} - {scannedDirectories.length} directories scanned
+        {files.length} file(s) - {formatBytes(totalSizeBytes)} - {scannedDirectories.length} directories with logs
       </Caption1>
       <Button onClick={reload} style={{ marginLeft: 12 }}>Re-scan</Button>
       <table style={{ width: "100%", marginTop: 12 }}>

@@ -8,6 +8,13 @@ use crate::jamf::paths;
 
 const JAMF_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// PlistBuddy reads a local file, but "local" is a claim the filesystem gets to
+/// break: a plist on a hung network home or a wedged PlistBuddy would stall the
+/// whole environment probe, so bound it like the `jamf` calls.
+const PLISTBUDDY_TIMEOUT: Duration = Duration::from_secs(5);
+
+const PLISTBUDDY: &str = "/usr/libexec/PlistBuddy";
+
 /// Runs a command, killing it if it outlives `timeout`.
 ///
 /// `/usr/local/bin/jamf` talks to the JSS, so it can block for a long time on a
@@ -190,10 +197,11 @@ fn read_jamf_version() -> Option<String> {
 }
 
 fn read_jss_url() -> Option<String> {
-    let output = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Print :jss_url", paths::JAMF_PLIST])
-        .output()
-        .ok()?;
+    let output = output_with_timeout(
+        PLISTBUDDY,
+        &["-c", "Print :jss_url", paths::JAMF_PLIST],
+        PLISTBUDDY_TIMEOUT,
+    )?;
     if !output.status.success() {
         return None;
     }
@@ -204,10 +212,11 @@ fn read_jss_url() -> Option<String> {
 fn read_jamf_connect_version() -> Option<String> {
     let plist_buf = paths::jamf_connect_info_plist();
     let plist = plist_buf.to_string_lossy();
-    let output = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Print :CFBundleShortVersionString", plist.as_ref()])
-        .output()
-        .ok()?;
+    let output = output_with_timeout(
+        PLISTBUDDY,
+        &["-c", "Print :CFBundleShortVersionString", plist.as_ref()],
+        PLISTBUDDY_TIMEOUT,
+    )?;
     if !output.status.success() {
         return None;
     }
@@ -220,12 +229,14 @@ fn read_jamf_connect_idp() -> Option<String> {
         if !Path::new(plist).is_file() {
             continue;
         }
-        let output = match Command::new("/usr/libexec/PlistBuddy")
-            .args(["-c", &format!("Print :{key}"), plist])
-            .output()
-        {
-            Ok(o) => o,
-            Err(_) => continue,
+        let print_key = format!("Print :{key}");
+        let output = match output_with_timeout(
+            PLISTBUDDY,
+            &["-c", &print_key, plist],
+            PLISTBUDDY_TIMEOUT,
+        ) {
+            Some(o) => o,
+            None => continue,
         };
         if !output.status.success() {
             continue;

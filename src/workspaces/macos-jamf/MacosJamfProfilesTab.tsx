@@ -64,16 +64,26 @@ export function MacosJamfProfilesTab() {
         <Caption1>{profiles.length} profile(s)</Caption1>
         <ul style={{ marginTop: 8, listStyle: "none", padding: 0 }}>
           {profiles.map((p) => (
-            <li
-              key={p.profileIdentifier}
-              style={{
-                cursor: "pointer",
-                padding: "4px 8px",
-                fontWeight: selected?.profileIdentifier === p.profileIdentifier ? 600 : 400,
-              }}
-              onClick={() => setSelected(p)}
-            >
-              {p.profileDisplayName}
+            <li key={p.profileIdentifier}>
+              <button
+                type="button"
+                aria-pressed={selected?.profileIdentifier === p.profileIdentifier}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  background: "none",
+                  border: "none",
+                  font: "inherit",
+                  color: "inherit",
+                  cursor: "pointer",
+                  padding: "4px 8px",
+                  fontWeight: selected?.profileIdentifier === p.profileIdentifier ? 600 : 400,
+                }}
+                onClick={() => setSelected(p)}
+              >
+                {p.profileDisplayName}
+              </button>
             </li>
           ))}
         </ul>

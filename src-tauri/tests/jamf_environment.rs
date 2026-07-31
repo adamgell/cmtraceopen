@@ -6,8 +6,10 @@ use app_lib::jamf::detect::collect_environment_impl;
 fn collect_environment_does_not_panic() {
     let env = collect_environment_impl().expect("env collection should never fail");
     assert!(!env.summary.is_empty());
-    if env.jamf_installed {
-        assert!(env.jamf_version.is_some(), "jamf installed but version unknown");
+    // An installed binary does not guarantee `jamf version` succeeds (it can
+    // fail or time out), so only the inverse is a real invariant.
+    if !env.jamf_installed {
+        assert!(env.jamf_version.is_none(), "version reported without a binary");
     }
 }
 

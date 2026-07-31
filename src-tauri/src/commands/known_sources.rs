@@ -832,9 +832,11 @@ fn macos_known_log_sources() -> Vec<KnownSourceMetadata> {
             KnownSourceGroupingMetadata {
                 family_id: "macos-jamf".to_string(),
                 family_label: "macOS JAMF".to_string(),
-                group_id: "jamf-self-service".to_string(),
-                group_label: "Self Service".to_string(),
-                group_order: 60,
+                // Neutral group: this folder holds more than Self Service —
+                // JAMF Connect and debug logs land here too.
+                group_id: "jamf-user-logs".to_string(),
+                group_label: "User Logs".to_string(),
+                group_order: 61,
                 source_order: 20,
             },
             None,
