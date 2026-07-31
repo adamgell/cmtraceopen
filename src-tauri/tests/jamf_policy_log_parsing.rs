@@ -93,6 +93,53 @@ fn policy_executions_carry_an_elapsed_time() {
     assert_eq!(reboot.duration_ms, None);
 }
 
+/// Mirrors the real enforcement sequence seen on a managed host: a custom
+/// trigger fires a policy, which installs a package. The install lines are the
+/// only record that the policy delivered anything, so they must classify as
+/// install events rather than generic info.
+#[test]
+fn package_installs_are_classified_not_treated_as_noise() {
+    let log = "\
+Wed Jul 22 20:09:53 host jamf[5906]: Executing Policy zScaler Enforcement
+Wed Jul 22 20:10:04 host jamf[6003]: Checking for policies triggered by \"zScaler\" for user \"a\"...
+Wed Jul 22 20:10:08 host jamf[6003]: Executing Policy zScaler 4.5.2.312
+Wed Jul 22 20:10:21 host jamf[6003]: Installing Zscaler-osx-4.5.2.312-installer.pkg...
+Wed Jul 22 20:10:32 host jamf[6003]: Successfully installed Zscaler-osx-4.5.2.312-installer.pkg.
+";
+    let path = std::env::temp_dir().join("cmtrace_jamf_install.log");
+    std::fs::write(&path, log).expect("write");
+
+    let result = parse_policy_log_impl(&path).expect("parse");
+
+    let installing = result
+        .events
+        .iter()
+        .find(|e| matches!(&e.result, JamfPolicyResult::InProgress)
+            && e.policy_name.as_deref() == Some("Zscaler-osx-4.5.2.312-installer.pkg"))
+        .expect("the Installing line should name the package");
+    assert!(matches!(&installing.trigger, JamfPolicyTrigger::Other(k) if k == "install"));
+
+    let installed = result
+        .events
+        .iter()
+        .find(|e| matches!(&e.result, JamfPolicyResult::Success))
+        .expect("the Successfully installed line should be a success");
+    assert_eq!(
+        installed.policy_name.as_deref(),
+        Some("Zscaler-osx-4.5.2.312-installer.pkg"),
+        "trailing period must be trimmed from the package name"
+    );
+    assert!(matches!(&installed.trigger, JamfPolicyTrigger::Other(k) if k == "install"));
+
+    // The custom trigger keeps its own identity.
+    assert!(result
+        .events
+        .iter()
+        .any(|e| matches!(&e.trigger, JamfPolicyTrigger::Event(name) if name == "zScaler")));
+
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn a_recycled_pid_does_not_extend_an_earlier_policy() {
     // Same PID, but a different invocation days later. Pairing the two would

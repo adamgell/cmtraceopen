@@ -218,6 +218,34 @@ fn classify(
             JamfPolicyResult::InProgress,
         );
     }
+    // Package install lines are the record of what a policy actually delivered —
+    // "Installing Zscaler-osx-4.5.2.312-installer.pkg..." followed by
+    // "Successfully installed ...". Classifying them as generic info buried the
+    // one line that confirms the install worked.
+    if let Some(pkg) = msg.strip_prefix("Successfully installed ") {
+        return (
+            JamfPolicyTrigger::Other("install".to_string()),
+            None,
+            Some(pkg.trim_end_matches('.').to_string()),
+            JamfPolicyResult::Success,
+        );
+    }
+    if let Some(pkg) = msg.strip_prefix("Installing ") {
+        return (
+            JamfPolicyTrigger::Other("install".to_string()),
+            None,
+            Some(pkg.trim_end_matches("...").trim_end_matches('.').to_string()),
+            JamfPolicyResult::InProgress,
+        );
+    }
+    if let Some(rest) = msg.strip_prefix("Failed to install ") {
+        return (
+            JamfPolicyTrigger::Other("install".to_string()),
+            None,
+            None,
+            JamfPolicyResult::Failure(format!("Failed to install {rest}")),
+        );
+    }
     if let Some(rest) = msg.strip_prefix("Error running ") {
         return (
             JamfPolicyTrigger::Other("error".to_string()),
