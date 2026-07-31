@@ -11,6 +11,7 @@ const SCENARIOS: &[&str] = &[
     "absent-remote-source",
     "backlog-retry",
     "clock-offset-unknown",
+    "generic-site-token",
     "healthy-link",
     "incomplete",
     "receiver-processing-failure",
@@ -207,6 +208,166 @@ fn normalized_records(
     records
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HierarchyCandidateKey {
+    message_id: String,
+    link_id: String,
+    origin_site_code: String,
+    target_site_code: String,
+    extraction_profile_id: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HierarchyCandidateFact {
+    phase: String,
+    disposition: String,
+    terminal: bool,
+    artifact_id: String,
+    producer_host_handle: String,
+    direction: String,
+    relative_path: String,
+    path_fingerprint: String,
+    rotation_kind: String,
+    rotation_value: Option<String>,
+    rotation_lineage_id: String,
+    line_start: u32,
+    line_end: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+struct HierarchyCandidateGroup {
+    key: HierarchyCandidateKey,
+    facts: Vec<HierarchyCandidateFact>,
+}
+
+fn hierarchy_candidate_groups(
+    scenario: &str,
+    artifacts: &[Value],
+) -> Result<Vec<HierarchyCandidateGroup>, String> {
+    let mut grouped_facts =
+        BTreeMap::<HierarchyCandidateKey, BTreeSet<HierarchyCandidateFact>>::new();
+    for artifact in artifacts {
+        let state = required_string(artifact, "captureState", scenario)?;
+        if !matches!(state, "captured" | "capped") {
+            continue;
+        }
+        let artifact_id = required_string(artifact, "artifactId", scenario)?;
+        let basename = required_string(artifact, "originalBasename", scenario)?;
+        let relative_path = required_string(artifact, "relativePath", scenario)?;
+        let producer_host_handle = required_string(artifact, "producerHostHandle", scenario)?;
+        let direction = required_string(artifact, "direction", scenario)?;
+        let path_fingerprint = required_string(artifact, "pathFingerprint", scenario)?;
+        let rotation_kind = required_string(&artifact["rotation"], "kind", scenario)?;
+        let rotation_lineage_id = required_string(&artifact["rotation"], "lineageId", scenario)?;
+        let rotation_value = artifact["rotation"]["value"]
+            .as_str()
+            .map(str::to_owned)
+            .or_else(|| {
+                artifact["rotation"]["value"]
+                    .as_u64()
+                    .map(|value| value.to_string())
+            });
+        let content = std::fs::read_to_string(corpus_root().join(scenario).join(relative_path))
+            .map_err(|error| {
+                format!("{scenario}/{artifact_id}: physical evidence is readable: {error}")
+            })?;
+        let model = SccmArtifact {
+            artifact_id: artifact_id.to_owned(),
+            display_name: basename.to_owned(),
+            original_path: None,
+            host: Some(producer_host_handle.to_owned()),
+            role: SccmRole::SiteServer,
+            configmgr_version: artifact["sourceVersion"].as_str().map(str::to_owned),
+            collected_at_utc: artifact["collectedUtc"].as_str().map(str::to_owned),
+            rotation: rotation(&artifact["rotation"])
+                .ok_or_else(|| format!("{scenario}/{artifact_id}: rotation is valid"))?,
+            coverage: coverage_state(state)
+                .ok_or_else(|| format!("{scenario}/{artifact_id}: coverage is valid"))?,
+            encoding: Some("utf-8".to_owned()),
+        };
+        for record in normalize_ccm_artifact(model, &content) {
+            let Ok(fields) = parse_fixture_fields(&record.message) else {
+                continue;
+            };
+            let Some(message_id) = fields.get("MessageId") else {
+                continue;
+            };
+            let Some(link_id) = fields.get("LinkId") else {
+                continue;
+            };
+            let Some(origin_site_code) = fields.get("OriginSite") else {
+                continue;
+            };
+            let Some(target_site_code) = fields.get("TargetSite") else {
+                continue;
+            };
+            let Some(extraction_profile_id) = fields.get("ProfileId") else {
+                continue;
+            };
+            let Some(phase) = fields.get("Phase") else {
+                continue;
+            };
+            let Some(disposition) = fields.get("Disposition") else {
+                continue;
+            };
+            let Some(terminal) = fields.get("Terminal") else {
+                continue;
+            };
+            if extraction_profile_id != EXACT_PROFILE || !phase_is_owned_by(basename, phase) {
+                continue;
+            }
+            let terminal = match terminal.as_str() {
+                "true" => true,
+                "false" => false,
+                _ => continue,
+            };
+            let Some(line_start) = record.reference.line_start else {
+                continue;
+            };
+            let Some(line_end) = record.reference.line_end else {
+                continue;
+            };
+            let key = HierarchyCandidateKey {
+                message_id: message_id.to_owned(),
+                link_id: link_id.to_owned(),
+                origin_site_code: origin_site_code.to_owned(),
+                target_site_code: target_site_code.to_owned(),
+                extraction_profile_id: extraction_profile_id.to_owned(),
+            };
+            let fact = HierarchyCandidateFact {
+                phase: phase.to_owned(),
+                disposition: disposition.to_owned(),
+                terminal,
+                artifact_id: artifact_id.to_owned(),
+                producer_host_handle: producer_host_handle.to_owned(),
+                direction: direction.to_owned(),
+                relative_path: relative_path.to_owned(),
+                path_fingerprint: path_fingerprint.to_owned(),
+                rotation_kind: rotation_kind.to_owned(),
+                rotation_value: rotation_value.clone(),
+                rotation_lineage_id: rotation_lineage_id.to_owned(),
+                line_start,
+                line_end,
+            };
+            grouped_facts.entry(key).or_default().insert(fact);
+        }
+    }
+    Ok(grouped_facts
+        .into_iter()
+        .map(|(key, facts)| HierarchyCandidateGroup {
+            key,
+            facts: facts.into_iter().collect(),
+        })
+        .collect())
+}
+
+fn hierarchy_candidate_bytes(scenario: &str, artifacts: &[Value]) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&hierarchy_candidate_groups(scenario, artifacts)?)
+        .map_err(|error| format!("{scenario}: candidate output serializes: {error}"))
+}
+
 fn phase_is_owned_by(basename: &str, phase: &str) -> bool {
     matches!(
         (basename, phase),
@@ -339,9 +500,11 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
     }
     let mut topology_target_sites = BTreeSet::new();
     let mut topology_target_hosts = BTreeSet::new();
+    let mut topology_target_host_by_site = BTreeMap::new();
     if let (Some(site), Some(host)) = (primary_target_site, primary_target_host) {
         topology_target_sites.insert(site);
         topology_target_hosts.insert(host);
+        topology_target_host_by_site.insert(site, host);
     }
     if let Some(additional_targets) = topology.get("additionalTargets") {
         let Some(additional_targets) = additional_targets.as_array() else {
@@ -361,6 +524,8 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                 || !topology_target_hosts.insert(host.unwrap_or_default())
             {
                 failures.push("additional topology target is invalid or duplicated".to_owned());
+            } else if let (Some(site), Some(host)) = (site, host) {
+                topology_target_host_by_site.insert(site, host);
             }
         }
     }
@@ -432,6 +597,23 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         {
             failures.push(format!("{artifact_id}: invalid typed provenance"));
         }
+        let direction = artifact["direction"].as_str();
+        let producer_host = artifact["producerHostHandle"].as_str();
+        match direction {
+            Some("origin") if producer_host != topology["originHostHandle"].as_str() => {
+                failures.push(format!(
+                    "{artifact_id}: origin evidence host diverges from topology"
+                ));
+            }
+            Some("target")
+                if producer_host.is_none_or(|host| !topology_target_hosts.contains(host)) =>
+            {
+                failures.push(format!(
+                    "{artifact_id}: target evidence host is outside topology"
+                ));
+            }
+            _ => {}
+        }
         if artifact["pathFingerprint"]
             .as_str()
             .map(str::to_ascii_lowercase)
@@ -463,6 +645,51 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                 {
                     failures.push(format!("{artifact_id}: invalid physical provenance"));
                 }
+                if direction == Some("target")
+                    && relative_path.is_some_and(|path| safe_segmented_path(path, "evidence/"))
+                    && producer_host.is_some()
+                {
+                    let path = corpus_root()
+                        .join(scenario)
+                        .join(relative_path.unwrap_or_default());
+                    let Ok(content) = std::fs::read_to_string(path) else {
+                        failures.push(format!(
+                            "{artifact_id}: target evidence is unavailable for topology validation"
+                        ));
+                        continue;
+                    };
+                    let model = SccmArtifact {
+                        artifact_id: artifact_id.to_owned(),
+                        display_name: artifact["originalBasename"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                        original_path: None,
+                        host: producer_host.map(str::to_owned),
+                        role: SccmRole::SiteServer,
+                        configmgr_version: artifact["sourceVersion"].as_str().map(str::to_owned),
+                        collected_at_utc: artifact["collectedUtc"].as_str().map(str::to_owned),
+                        rotation: rotation(&artifact["rotation"]).unwrap_or(SccmRotation::Current),
+                        coverage: state
+                            .and_then(coverage_state)
+                            .unwrap_or(SccmCoverageState::ParseFailed),
+                        encoding: Some("utf-8".to_owned()),
+                    };
+                    for record in normalize_ccm_artifact(model, &content) {
+                        let Ok(fields) = parse_fixture_fields(&record.message) else {
+                            continue;
+                        };
+                        let target_site = fields.get("TargetSite").map(String::as_str);
+                        if target_site
+                            .and_then(|site| topology_target_host_by_site.get(site).copied())
+                            != producer_host
+                        {
+                            failures.push(format!(
+                                "{artifact_id}: target evidence host does not match record topology"
+                            ));
+                        }
+                    }
+                }
             }
             Some("absent" | "accessDenied" | "skipped" | "unsupported") => {
                 if artifact.get("relativePath").is_some()
@@ -484,6 +711,35 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
     sorted_artifact_ids.dedup();
     if artifact_ids != sorted_artifact_ids {
         failures.push("artifact IDs are not sorted and unique".to_owned());
+    }
+
+    let manifest_coverage = artifacts
+        .into_iter()
+        .flatten()
+        .map(|artifact| {
+            artifact["artifactId"]
+                .as_str()
+                .zip(artifact["captureState"].as_str())
+        })
+        .collect::<Option<Vec<_>>>();
+    let coverage_values = expected["coverage"].as_array();
+    let declared_coverage = coverage_values.and_then(|rows| {
+        rows.iter()
+            .map(|row| {
+                if !object_has_only(row, &["artifactId", "state"]) {
+                    return None;
+                }
+                row["artifactId"].as_str().zip(row["state"].as_str())
+            })
+            .collect::<Option<Vec<_>>>()
+    });
+    if manifest_coverage.as_ref() != declared_coverage.as_ref()
+        || declared_coverage.as_ref().is_some_and(|rows| {
+            rows.iter()
+                .any(|(_, state)| coverage_state(state).is_none())
+        })
+    {
+        failures.push("coverage rows are not the exact typed manifest projection".to_owned());
     }
 
     if !object_has_only(
@@ -613,6 +869,30 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         {
             failures.push("coverage gap IDs are not exact sorted strings".to_owned());
         }
+        for gap_id in &gap_ids {
+            let manifest_matches = artifacts
+                .into_iter()
+                .flatten()
+                .filter(|artifact| artifact["artifactId"].as_str() == Some(*gap_id))
+                .collect::<Vec<_>>();
+            let coverage_matches = coverage_values
+                .into_iter()
+                .flatten()
+                .filter(|row| row["artifactId"].as_str() == Some(*gap_id))
+                .collect::<Vec<_>>();
+            if manifest_matches.len() != 1
+                || coverage_matches.len() != 1
+                || manifest_matches[0]["captureState"]
+                    .as_str()
+                    .and_then(coverage_state)
+                    .is_none()
+                || manifest_matches[0]["captureState"] == "captured"
+                || coverage_matches[0]["state"] != manifest_matches[0]["captureState"]
+            {
+                failures
+                    .push("coverage gap does not close against one non-captured row".to_owned());
+            }
+        }
         if transaction["confidence"] == "high"
             && (transaction["confidenceCeiling"] != "high"
                 || transaction["topologyCompatibility"] != "exact"
@@ -729,34 +1009,108 @@ fn hierarchy_candidates_are_deterministic_and_collision_resistant() {
             "{scenario}: artifact IDs are unique"
         );
 
-        let canonical = artifacts
-            .iter()
-            .map(|artifact| {
-                (
-                    artifact["artifactId"].as_str(),
-                    artifact["direction"].as_str(),
-                    artifact["originalBasename"].as_str(),
-                    artifact["captureState"].as_str(),
-                )
-            })
-            .collect::<BTreeSet<_>>();
-        let reversed = artifacts
-            .iter()
-            .rev()
-            .map(|artifact| {
-                (
-                    artifact["artifactId"].as_str(),
-                    artifact["direction"].as_str(),
-                    artifact["originalBasename"].as_str(),
-                    artifact["captureState"].as_str(),
-                )
-            })
-            .collect::<BTreeSet<_>>();
+        let canonical = hierarchy_candidate_bytes(scenario, artifacts)
+            .unwrap_or_else(|error| panic!("{scenario}: {error}"));
+        let mut reversed_artifacts = artifacts.clone();
+        reversed_artifacts.reverse();
+        let reversed = hierarchy_candidate_bytes(scenario, &reversed_artifacts)
+            .unwrap_or_else(|error| panic!("{scenario}: {error}"));
         assert_eq!(
             canonical, reversed,
-            "{scenario}: input order changed candidate projection"
+            "{scenario}: input order changed byte-identical candidate output"
         );
     }
+
+    let manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let mut artifacts = manifest["artifacts"]
+        .as_array()
+        .expect("healthy artifacts are an array")
+        .clone();
+    let mut collision = artifacts[1].clone();
+    collision["artifactId"] = Value::String("healthy-05-sender-numbered".to_owned());
+    collision["pathFingerprint"] = Value::String("synthetic:healthy-sender-numbered".to_owned());
+    collision["rotation"] = serde_json::json!({
+        "kind": "numbered",
+        "value": 1,
+        "lineageId": "healthy-sender-numbered",
+        "fragmentComplete": true
+    });
+    artifacts.push(collision);
+    let groups =
+        hierarchy_candidate_groups("healthy-link", &artifacts).expect("candidates project");
+    let exact_groups = groups
+        .iter()
+        .filter(|group| {
+            group.key.message_id == "msg-healthy-01"
+                && group.key.link_id == "link-lab-chd"
+                && group.key.origin_site_code == "LAB"
+                && group.key.target_site_code == "CHD"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        exact_groups.len(),
+        1,
+        "same-key evidence must form one candidate group"
+    );
+    let colliding_sender_facts = exact_groups[0]
+        .facts
+        .iter()
+        .filter(|fact| fact.phase == "send")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        colliding_sender_facts.len(),
+        2,
+        "same-key sender facts with distinct rotation provenance must both survive"
+    );
+    assert_ne!(
+        colliding_sender_facts[0].artifact_id,
+        colliding_sender_facts[1].artifact_id
+    );
+    assert_ne!(
+        colliding_sender_facts[0].rotation_kind,
+        colliding_sender_facts[1].rotation_kind
+    );
+    let canonical =
+        hierarchy_candidate_bytes("healthy-link", &artifacts).expect("candidates serialize");
+    artifacts.reverse();
+    let reversed =
+        hierarchy_candidate_bytes("healthy-link", &artifacts).expect("candidates serialize");
+    assert_eq!(
+        canonical, reversed,
+        "provenance collision changed canonical candidate bytes"
+    );
+}
+
+#[test]
+fn generic_ccm_site_code_token_cannot_create_a_hierarchy_candidate() {
+    let scenario = "generic-site-token";
+    let manifest =
+        read_json(scenario, "manifest.json").unwrap_or_else(|error| panic!("{scenario}: {error}"));
+    let expected =
+        read_json(scenario, "expected.json").unwrap_or_else(|error| panic!("{scenario}: {error}"));
+    let records = normalized_records(scenario, &manifest);
+    assert_eq!(records.len(), 1, "generic CCM evidence remains observable");
+    let record = records.values().next().expect("generic evidence exists");
+    assert!(
+        record.message.contains("CHD"),
+        "negative contains a site-code-looking token"
+    );
+    assert!(
+        parse_fixture_fields(&record.message).is_err(),
+        "generic CCM text must not satisfy the exact hierarchy grammar"
+    );
+    let candidates = hierarchy_candidate_groups(
+        scenario,
+        manifest["artifacts"]
+            .as_array()
+            .expect("generic artifacts are an array"),
+    )
+    .expect("generic artifacts project safely");
+    assert!(
+        candidates.is_empty(),
+        "a site-code-looking token alone created a hierarchy candidate"
+    );
+    assert_eq!(expected["transactions"], Value::Array(Vec::new()));
 }
 
 #[test]
@@ -771,15 +1125,6 @@ fn hierarchy_outputs_never_promote_coverage_or_time_to_cause() {
         let coverage = expected["coverage"]
             .as_array()
             .unwrap_or_else(|| panic!("{scenario}: coverage is an array"));
-        let coverage_by_id = coverage
-            .iter()
-            .filter_map(|row| {
-                Some((
-                    row["artifactId"].as_str()?.to_owned(),
-                    row["state"].as_str()?.to_owned(),
-                ))
-            })
-            .collect::<BTreeMap<_, _>>();
         for transaction in expected["transactions"]
             .as_array()
             .unwrap_or_else(|| panic!("{scenario}: transactions are an array"))
@@ -801,10 +1146,22 @@ fn hierarchy_outputs_never_promote_coverage_or_time_to_cause() {
                 let artifact_id = gap
                     .as_str()
                     .unwrap_or_else(|| panic!("{scenario}: gap ID is a string"));
-                assert_ne!(
-                    coverage_by_id.get(artifact_id).map(String::as_str),
-                    Some("captured"),
-                    "{scenario}: complete capture was labeled a gap"
+                let matches = coverage
+                    .iter()
+                    .filter(|row| row["artifactId"].as_str() == Some(artifact_id))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    matches.len(),
+                    1,
+                    "{scenario}: gap must close against exactly one coverage row"
+                );
+                assert!(
+                    matches[0]["state"]
+                        .as_str()
+                        .and_then(coverage_state)
+                        .is_some()
+                        && matches[0]["state"] != "captured",
+                    "{scenario}: gap row must have a typed non-captured state"
                 );
             }
         }
@@ -1620,6 +1977,119 @@ fn hierarchy_schema_and_identity_mutations_fail_closed() {
         .is_empty()
     {
         accepted.push("invalid-offset transaction became high confidence");
+    }
+
+    let mut origin_evidence_on_target_host = healthy_manifest.clone();
+    origin_evidence_on_target_host["artifacts"][1]["producerHostHandle"] =
+        healthy_manifest["topology"]["targetHostHandle"].clone();
+    if identity_and_schema_failures(
+        "healthy-link",
+        &origin_evidence_on_target_host,
+        &healthy_expected,
+    )
+    .is_empty()
+    {
+        accepted.push("origin evidence retained a target host");
+    }
+
+    let mut target_evidence_on_origin_host = healthy_manifest.clone();
+    target_evidence_on_origin_host["artifacts"][2]["producerHostHandle"] =
+        healthy_manifest["topology"]["originHostHandle"].clone();
+    if identity_and_schema_failures(
+        "healthy-link",
+        &target_evidence_on_origin_host,
+        &healthy_expected,
+    )
+    .is_empty()
+    {
+        accepted.push("target evidence retained an origin host");
+    }
+
+    let mismatch_manifest =
+        read_json("topology-mismatch", "manifest.json").expect("manifest loads");
+    let mismatch_expected =
+        read_json("topology-mismatch", "expected.json").expect("expected loads");
+    let mut additional_target_on_primary_host = mismatch_manifest.clone();
+    additional_target_on_primary_host["artifacts"][1]["producerHostHandle"] =
+        mismatch_manifest["topology"]["targetHostHandle"].clone();
+    if identity_and_schema_failures(
+        "topology-mismatch",
+        &additional_target_on_primary_host,
+        &mismatch_expected,
+    )
+    .is_empty()
+    {
+        accepted.push("additional-target evidence retained the primary target host");
+    }
+
+    let mut fabricated_gap = absent_expected.clone();
+    fabricated_gap["transactions"][0]["coverageGapArtifactIds"][0] =
+        Value::String("unknown-artifact".to_owned());
+    if identity_and_schema_failures("absent-remote-source", &absent_manifest, &fabricated_gap)
+        .is_empty()
+    {
+        accepted.push("fabricated coverage-gap artifact ID");
+    }
+
+    let mut missing_coverage_row = absent_expected.clone();
+    missing_coverage_row["coverage"]
+        .as_array_mut()
+        .expect("coverage is mutable")
+        .remove(1);
+    if identity_and_schema_failures(
+        "absent-remote-source",
+        &absent_manifest,
+        &missing_coverage_row,
+    )
+    .is_empty()
+    {
+        accepted.push("missing manifest coverage row");
+    }
+
+    let mut duplicate_coverage_row = absent_expected.clone();
+    let repeated_row = duplicate_coverage_row["coverage"][1].clone();
+    duplicate_coverage_row["coverage"]
+        .as_array_mut()
+        .expect("coverage is mutable")
+        .push(repeated_row);
+    if identity_and_schema_failures(
+        "absent-remote-source",
+        &absent_manifest,
+        &duplicate_coverage_row,
+    )
+    .is_empty()
+    {
+        accepted.push("duplicate manifest coverage row");
+    }
+
+    let mut unknown_coverage_row = absent_expected.clone();
+    unknown_coverage_row["coverage"]
+        .as_array_mut()
+        .expect("coverage is mutable")
+        .push(serde_json::json!({
+            "artifactId": "unknown-artifact",
+            "state": "absent"
+        }));
+    if identity_and_schema_failures(
+        "absent-remote-source",
+        &absent_manifest,
+        &unknown_coverage_row,
+    )
+    .is_empty()
+    {
+        accepted.push("unknown manifest coverage row");
+    }
+
+    let mut malformed_coverage_row = absent_expected.clone();
+    malformed_coverage_row["coverage"][1]["unexpected"] = Value::Bool(true);
+    if identity_and_schema_failures(
+        "absent-remote-source",
+        &absent_manifest,
+        &malformed_coverage_row,
+    )
+    .is_empty()
+    {
+        accepted.push("malformed manifest coverage row");
     }
 
     let mut causal_claim = healthy_expected.clone();

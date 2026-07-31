@@ -6,10 +6,12 @@ physical provenance; `expected.json` records the proposed #331 evidence
 contract while production reducers remain dependency-blocked.
 
 Only raw CCM files from the existing hierarchy catalog are present:
-`replmgr.log`, `sender.log`, `despool.log`, and `rcmctrl.log`. Every complete
-record includes the semantic `SYNTHETIC FIXTURE` marker and exact synthetic
-message/link/site/profile fields. Partial rotation/cap fixtures retain the
-marker but intentionally do not form a logical CCM record.
+`replmgr.log`, `sender.log`, `despool.log`, and `rcmctrl.log`. Exact semantic
+records include the `SYNTHETIC FIXTURE` marker and synthetic
+message/link/site/profile fields. The generic-message negative contains the
+marker and a site-code-looking token without the exact hierarchy grammar, so
+it cannot create a candidate. Partial rotation/cap fixtures retain the marker
+but intentionally do not form a logical CCM record.
 
 The corpus must remain deterministic, safe to publish, and role/topology aware.
 Do not replace safe handles with hostnames, add database/network collection, or

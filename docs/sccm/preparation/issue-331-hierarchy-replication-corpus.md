@@ -33,24 +33,31 @@ because its record occurred nearby in time.
 
 Origin and target direction, safe host handle, site code, source path,
 rotation lineage, and physical capture identity remain attached to every
-artifact. Cross-host ordering is usable only when each cited record has usable
-offset provenance. Missing, conflicting, or invalid offsets prevent a
-high-confidence ordered diagnosis even if terminal-looking evidence exists.
+artifact. Origin artifacts must use the declared origin host. Target artifacts
+must use the host declared for the exact primary or additional target site in
+their profile-recognized record. Cross-host ordering is usable only when each
+cited record has usable offset provenance. Missing, conflicting, or invalid
+offsets prevent a high-confidence ordered diagnosis even if terminal-looking
+evidence exists.
 
 Two same-minute sender failures for different target sites are separate
 transactions. The topology-mismatch fixture deliberately uses the same
 message ID with different link and target-site keys; it produces no joined
 transaction. The rotation fixture splits one transport record across current
 and `.lo_` artifacts; neither fragment may emit a logical CCM record or a
-terminal result.
+terminal result. Candidate groups serialize in exact-key and full-provenance
+order, so reversed artifact input is byte-identical while same-key facts with
+different path, host, or rotation identity remain distinct.
 
 ## Coverage and conclusions
 
 The additive SCCM manifest keeps `captured`, `absent`, `accessDenied`, `capped`,
 `skipped`, `unsupported`, and `parseFailed` distinct. A missing remote artifact
 is a coverage state, not evidence that the remote role is absent or broken.
-Bounded follow-up requests name only the relevant hierarchy source, direction,
-target site, and basenames.
+Every transaction gap ID must resolve to exactly one typed non-captured
+manifest coverage row; missing, duplicated, malformed, or unknown rows fail
+closed. Bounded follow-up requests name only the relevant hierarchy source,
+direction, target site, and basenames.
 
 The proposed state sequence is:
 
@@ -80,6 +87,7 @@ separately reviewed pair; time alone is never eligible.
 | `recovery` | Later same-key send/process success produces recovery |
 | `absent-remote-source` | Missing target source is a low-confidence gap with one bounded request |
 | `clock-offset-unknown` | Invalid offsets prohibit high-confidence cross-host ordering |
+| `generic-site-token` | A valid generic CCM record with `CHD` but no exact hierarchy grammar creates no candidate |
 | `topology-mismatch` | Same message with incompatible link/target keys remains unlinked |
 | `rotation-boundary` | Partial current/`.lo_` fragments never form a record or transaction |
 | `incomplete` | Capped partial origin evidence remains source-local coverage |
