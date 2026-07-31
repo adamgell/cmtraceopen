@@ -18,13 +18,13 @@ The shared matrix defines thirteen mandatory guards. Each first-pair matrix inst
 - private-marker redaction;
 - reordered input.
 
-Every adversarial expected result forbids `exactCorroborated`, caps confidence below High, preserves source findings, and uses stable reason/request/result identifiers. Reordered input A/B cases pin identical expected public projections and result contracts.
+Every adversarial expected result forbids `exactCorroborated`, caps confidence below High, preserves source findings, and uses stable reason/request/result identifiers. Every declared guard must be demonstrated by the scenario's own input state, and each guard's `requiredOutputs` token is an executable predicate checked against the scenario's expected contract. Reordered input A/B cases encode one `orderedInputEvidence` manifest of side-tagged synthetic tokens, with B replaying A's multiset in opposite order, and pin identical expected public projections and result contracts.
 
-Fixture references have explicit status:
+Fixture references have explicit status and are bound to their pair side:
 
-- `repo:` references point to already merged synthetic upstream fixture directories;
-- `issue:#329:` references name pending DP scenarios without pretending they exist on the program baseline;
-- `synthetic:` references describe future pair-local sanitized inputs;
-- `absent` is an intentional missing counterpart, never proof of failure.
+- `repo:` references point to already merged synthetic upstream fixture directories under the citing side's own corpus prefix;
+- `issue:#329:` references name pending DP scenarios without pretending they exist on the program baseline; the content server side may use nothing else (or `absent`) until #329 is independently accepted;
+- `synthetic:` references describe future pair-local sanitized inputs and are only valid on merged sides;
+- `absent` is an intentional missing counterpart, must agree with the declared one-sided coverage, and is never proof of failure.
 
 No raw Windows path, live hostname, user, tenant, token, or database data belongs here. The only identity-shaped values are reserved synthetic private markers used to prove that expected public projections omit them.
