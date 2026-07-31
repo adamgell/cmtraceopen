@@ -393,6 +393,10 @@ fn ambiguous_identity_or_nonclient_role_fails_closed() {
 #[test]
 fn identity_bearing_relative_paths_fail_before_public_projection() {
     let unsafe_relative_paths = [
+        "evidence/client-RealUser/PolicyAgent.log",
+        "evidence/client-corp-example-test/PolicyAgent.log",
+        "evidence/client-app-enforce/root-realuser/current/AppEnforce.log",
+        "evidence/client-app-enforce/root-corp-example-test/current/AppEnforce.log",
         "evidence/client-policy-agent/RealUser@example.test/PolicyAgent.log",
         "evidence/client-policy-agent/Users/RealUser/PolicyAgent.log",
         "evidence/client-policy-agent/home/real-user/PolicyAgent.log",
@@ -484,7 +488,9 @@ fn approved_collision_safe_relative_layouts_remain_accepted() {
     let approved_relative_paths = [
         "evidence/client-policy-agent/PolicyAgent.log",
         "evidence/client-policy-agent/current/PolicyAgent.log",
+        "evidence/client-location-services-shared/current/LocationServices.log",
         "evidence/client-app-enforce/root-a/current/AppEnforce.log",
+        "evidence/client-app-enforce/root-0123456789abcdef/current/AppEnforce.log",
         "evidence/client-app-enforce/numbered-2/AppEnforce.log.2",
         "evidence/client-app-enforce/timestamped-20260730-030405/AppEnforce.log.20260730-030405",
         "evidence/sccm/client/client-app-enforce/current/AppEnforce.log",
