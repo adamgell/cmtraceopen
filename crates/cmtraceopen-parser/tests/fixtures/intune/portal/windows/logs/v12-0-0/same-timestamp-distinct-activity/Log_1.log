@@ -1,0 +1,2 @@
+2026-05-04T10:15:20.6660000Z  INFO      Event       SignIn      7    1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [SignIn] interactive sign-in started
+2026-05-04T10:15:20.6660000Z  INFO      Event       DeviceSync  8    1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [Sync] background sync started

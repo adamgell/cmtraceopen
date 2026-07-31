@@ -207,8 +207,11 @@ WUfB ring policy values are visible in `MDMDiagHtmlReport.html` under Update CSP
 
 | Source | Path | Format | Purpose |
 |---|---|---|---|
-| CP app logs | `C:\Users\<user>\AppData\Local\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState\Log_<n>.log` | Plain text | Per-user CP events, errors, enrollment state |
+| CP app logs | `C:\Users\<user>\AppData\Local\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState\Log_<n>.log` | Column-aligned: ISO-8601 UTC, severity, category, scenario, sequence, activity GUID, app version, message | Per-user CP events, errors, enrollment state |
+| CP bridge logs | `...\LocalState\Log.<BridgeName>_<n>.log` (`BridgeLauncher`, `ConfigurationManagerBridge`, `IntuneManagementExtensionBridge`) | Same grammar as the app log | ConfigMgr `root\ccm\ClientSDK` queries and IME service calls made on behalf of CP |
 | MDM diagnostic export | `C:\Users\Public\Public Documents\MDMDiagnostics\` | .cab + .html | Exported via Settings > Accounts > Access work or school > Export management log files |
+
+The record grammar is derived from a single published app-version sample (`12-0-0`), so the parser is version-scoped: a record reporting any other app version still parses but is reported as experimental/low confidence rather than presented as a validated read.
 
 Collect diagnostics from the Company Portal app via **Help & support > Upload logs** or navigate directly to the LocalState folder.
 

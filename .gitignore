@@ -28,6 +28,11 @@ docs/
 
 # Test logs
 Logs/
+# `Logs/` matches case-insensitively on macOS/Windows checkouts, and the
+# Company Portal module and its fixture tree both live under a `logs/`
+# directory. A parent directory must be re-included explicitly.
+!crates/cmtraceopen-parser/src/intune/portal/windows/company_portal/logs/
+!crates/cmtraceopen-parser/tests/fixtures/intune/portal/windows/logs/
 
 # Playwright artifacts (HTML reports, run results, MCP browser session output)
 playwright-report/

@@ -66,6 +66,7 @@ pub enum ParserKind {
     DnsDebug,
     DnsAudit,
     CmtLog,
+    CompanyPortal,
 }
 
 /// Concrete parser implementation currently used by the backend.
@@ -89,6 +90,7 @@ pub enum ParserImplementation {
     DnsDebug,
     DnsAudit,
     CmtLog,
+    CompanyPortal,
 }
 
 /// How the backend arrived at the parser selection.

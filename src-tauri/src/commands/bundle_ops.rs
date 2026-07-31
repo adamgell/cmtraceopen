@@ -816,6 +816,7 @@ fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
             ParserKind::DnsDebug => "Windows DNS Server debug log".to_string(),
             ParserKind::DnsAudit => "Windows DNS Server audit log".to_string(),
             ParserKind::CmtLog => "CMTrace Open structured log".to_string(),
+            ParserKind::CompanyPortal => "Company Portal app log".to_string(),
         },
     }
 }

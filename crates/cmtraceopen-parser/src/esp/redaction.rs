@@ -1338,7 +1338,11 @@ fn standalone_digest_match_is_safe_narrative(value: &str, captures: &regex::Capt
         && value[matched.end()..].is_empty()
 }
 
-fn redact_text(value: &str) -> String {
+/// Redact arbitrary evidence text we did not author.
+///
+/// `pub(crate)` so sibling evidence modules reuse this rule table instead of
+/// writing their own; the rules are about text content, not about ESP.
+pub(crate) fn redact_text(value: &str) -> String {
     redact_text_for_context(value, TextRedactionContext::Arbitrary)
 }
 

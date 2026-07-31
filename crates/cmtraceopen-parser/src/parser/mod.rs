@@ -127,6 +127,9 @@ pub fn parse_lines_with_selection(
         crate::models::log_entry::ParserImplementation::CmtLog => {
             cmtlog::parse_lines(lines, file_path)
         }
+        crate::models::log_entry::ParserImplementation::CompanyPortal => {
+            crate::intune::portal::windows::company_portal::logs::parse_lines(lines, file_path)
+        }
         crate::models::log_entry::ParserImplementation::GenericTimestamped => {
             match selection.parser {
                 crate::models::log_entry::ParserKind::Cbs => cbs::parse_lines(lines, file_path),
