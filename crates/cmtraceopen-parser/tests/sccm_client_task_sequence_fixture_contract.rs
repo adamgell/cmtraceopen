@@ -1173,6 +1173,13 @@ fn validate_contract(
                 ));
             }
         }
+        if key.get("keyProfileKind").and_then(Value::as_str)
+            != Some("executionPackageAdvertisementContext")
+        {
+            return Err(format!(
+                "{transaction_id}: keyProfileKind is not the reviewed task sequence profile"
+            ));
+        }
         if key.get("confidence").and_then(Value::as_str) != Some("exact")
             || key.get("extractionProfileId").and_then(Value::as_str) != extraction_profile_id
             || extraction_profile_id.is_none()
@@ -1254,6 +1261,27 @@ fn validate_contract(
                 "{transaction_id}: phase/state semantics are not bound to cited evidence"
             ));
         }
+        let admissible_last_successful_phase = if state == "succeeded" {
+            phase
+        } else {
+            let phase_index = STATE_CHAIN
+                .iter()
+                .position(|candidate| candidate == &phase)
+                .expect("phase membership was validated");
+            phase_index
+                .checked_sub(1)
+                .map(|index| STATE_CHAIN[index])
+                .ok_or_else(|| {
+                    format!(
+                        "{transaction_id}: lastSuccessfulPhase has no admissible observed predecessor"
+                    )
+                })?
+        };
+        if last_successful_phase != admissible_last_successful_phase {
+            return Err(format!(
+                "{transaction_id}: lastSuccessfulPhase is not the admissible observed phase"
+            ));
+        }
 
         let path_items = transaction["pathSequence"]
             .as_array()
@@ -1320,6 +1348,19 @@ fn validate_contract(
             .iter()
             .map(|(_, artifact_id)| artifact_id.as_str())
             .collect::<Vec<_>>();
+        let evidence_artifact_order = evidence_refs
+            .iter()
+            .map(|evidence_ref| {
+                evidence_ref["artifactId"]
+                    .as_str()
+                    .ok_or_else(|| format!("{transaction_id}: evidence artifactId is missing"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if evidence_artifact_order != declared_artifact_order {
+            return Err(format!(
+                "{transaction_id}: evidence order must be unique and match canonical path sequence"
+            ));
+        }
         let relocation_ordinals = declared_path_sequence
             .iter()
             .map(|(ordinal, _)| *ordinal)
