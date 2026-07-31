@@ -352,11 +352,25 @@ fn source_version_matches_selected_profile(value: &str) -> bool {
         .is_some_and(|suffix| suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+fn contains_sid_shaped_run(value: &str) -> bool {
+    value.match_indices("s-1-").any(|(index, _)| {
+        let mut numeric_segments = 0usize;
+        for segment in value[index + 4..].split('-') {
+            if segment.is_empty() || !segment.bytes().all(|byte| byte.is_ascii_digit()) {
+                break;
+            }
+            numeric_segments += 1;
+        }
+        numeric_segments >= 2
+    })
+}
+
 fn public_identifier_is_safe(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 96
         && value.as_bytes()[0].is_ascii_lowercase()
         && !value.starts_with("s-1-5-")
+        && !contains_sid_shaped_run(value)
         && value.split('-').all(|segment| {
             !segment.is_empty()
                 && segment
@@ -381,7 +395,8 @@ fn public_free_text_is_safe(value: &str) -> bool {
         return false;
     }
 
-    if value.to_ascii_lowercase().contains("s-1-5-") {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("s-1-5-") || contains_sid_shaped_run(&lower) {
         return false;
     }
 
@@ -3437,8 +3452,9 @@ fn sid_authority_variant_mutations_fail_closed() {
     }
 
     let mut sid_claim = observed_expected;
-    sid_claim["sourceLocalObservations"][0]["claim"] =
-        Value::String(format!("Observed records remain under {entra_sid} markers."));
+    sid_claim["sourceLocalObservations"][0]["claim"] = Value::String(format!(
+        "Observed records remain under {entra_sid} markers."
+    ));
     if mutation_was_accepted(
         "software-center-observed",
         &observed_root,
@@ -3460,8 +3476,7 @@ fn sid_authority_variant_mutations_fail_closed() {
         accepted.push("capability-authority SID as a public transaction id");
     }
 
-    let (deferred_root, deferred_manifest, mut sid_reason) =
-        load_contract("notification-deferred");
+    let (deferred_root, deferred_manifest, mut sid_reason) = load_contract("notification-deferred");
     sid_reason["transactions"][0]["nextArtifact"]["reason"] = Value::String(format!(
         "Collect the bounded continuation for {capability_sid} records."
     ));
