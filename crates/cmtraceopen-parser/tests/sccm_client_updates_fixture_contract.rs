@@ -2165,6 +2165,13 @@ fn manifest_artifact_failures(scenario_dir: &Path, artifact: &Value) -> Vec<Stri
                 "{artifact_id}: {state} artifact cannot claim physical bytes"
             ));
         }
+        for field in ["encoding", "collectionLimit", "truncated"] {
+            if !artifact[field].is_null() {
+                failures.push(format!(
+                    "{artifact_id}: noncapture artifact cannot carry physical {field} metadata"
+                ));
+            }
+        }
     } else {
         failures.push(format!("{artifact_id}: unknown captureState {state}"));
     }
