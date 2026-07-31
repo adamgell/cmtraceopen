@@ -2840,3 +2840,57 @@ fn rotation_path_provenance_cannot_be_borrowed_from_a_shared_fingerprint() {
         accepted.join(", ")
     );
 }
+
+#[test]
+fn exact_key_admission_requires_complete_value_tokens() {
+    let scenario = "completed";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    expected["transactions"][0]["key"]["executionId"] =
+        Value::String("72400000-0000-0000-0000-00000000000".to_owned());
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("a strict prefix of the recorded execution token is not the exact key");
+    assert!(error.contains("co-occur"), "{error}");
+
+    let temporary = copy_scenario_to_temporary_root(scenario, "suffixed-execution-token");
+    let mut manifest = read_json(&temporary.root.join("manifest.json"));
+    let mut expected = read_json(&temporary.root.join("expected.json"));
+    let relative_path = manifest["artifacts"][0]["relativePath"]
+        .as_str()
+        .expect("completed artifact has a relative path");
+    let evidence_path = temporary.root.join(relative_path);
+    let original = std::fs::read_to_string(&evidence_path).expect("completed evidence is readable");
+    let suffixed = original.replace(
+        "executionId=72400000-0000-0000-0000-000000000005 ",
+        "executionId=72400000-0000-0000-0000-000000000005X ",
+    );
+    assert_ne!(
+        suffixed, original,
+        "the suffixed execution token mutation is effective"
+    );
+    std::fs::write(&evidence_path, &suffixed).expect("mutated evidence is writable");
+    manifest["artifacts"][0]["bytesCopied"] = Value::from(suffixed.len() as u64);
+    expected["artifactProvenance"][0]["bytesCopied"] = Value::from(suffixed.len() as u64);
+
+    let error = validate_contract(scenario, &temporary.root, &manifest, &expected)
+        .expect_err("a suffixed recorded token cannot satisfy the declared exact key");
+    assert!(error.contains("co-occur"), "{error}");
+}
+
+#[test]
+fn finding_evidence_cannot_mix_unrelated_exact_runs() {
+    let scenario = "unrelated-runs";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    let run_b_evidence = expected["transactions"][1]["evidence"][0].clone();
+    expected["findings"][0]["evidence"]
+        .as_array_mut()
+        .expect("run A finding evidence is an array")
+        .push(run_b_evidence);
+
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("one finding cannot cite evidence from a different exact run");
+    assert!(error.contains("bound"), "{error}");
+}
