@@ -24,7 +24,7 @@
 #![allow(dead_code)]
 
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 /// Envelope version every Intune fixture manifest declares.
@@ -50,7 +50,34 @@ pub const CAPTURE_STATES: [&str; 7] = [
 ];
 
 /// Capture states that must be backed by a real file on disk.
-pub const CAPTURE_STATES_WITH_FILE: [&str; 2] = ["captured", "capped"];
+///
+/// `parseFailed` belongs here: it means the artifact *was* collected and could
+/// not be interpreted, so the malformed bytes are the entire point of the
+/// scenario. Requiring it to have no file would make the malformed-evidence
+/// fixture that epic #356 mandates of every child issue inexpressible.
+pub const CAPTURE_STATES_WITH_FILE: [&str; 3] = ["captured", "capped", "parseFailed"];
+
+/// Capture states that may or may not have a file.
+///
+/// `unsupported` covers both "we recognized the format and refuse to parse it",
+/// which has bytes, and "this source does not exist on this platform", which does
+/// not. Both are legitimate, so neither is enforced.
+pub const CAPTURE_STATES_OPTIONAL_FILE: [&str; 1] = ["unsupported"];
+
+/// The coverage status `expected.json` must report for each capture state.
+///
+/// Without this binding a corpus can declare an artifact absent in its manifest
+/// and available in its expected output, which is the self-declared-contract
+/// drift the whole fixture format exists to prevent.
+pub const CAPTURE_STATE_COVERAGE: [(&str, &str); 7] = [
+    ("captured", "available"),
+    ("capped", "capped"),
+    ("absent", "missing"),
+    ("accessDenied", "permissionDenied"),
+    ("skipped", "skipped"),
+    ("unsupported", "unsupported"),
+    ("parseFailed", "parseFailed"),
+];
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
@@ -69,10 +96,20 @@ pub fn corpus_root(corpus_relative: &str) -> PathBuf {
 }
 
 /// Sorted scenario directory names inside a corpus.
+///
+/// Panics when the corpus directory is missing. Returning an empty vec made a
+/// misspelled corpus path indistinguishable from an empty corpus, so a test that
+/// loops over scenarios reported success having validated nothing. A loud
+/// failure is the only useful behavior here.
 pub fn scenario_names(corpus: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(corpus) else {
-        return Vec::new();
-    };
+    let entries = std::fs::read_dir(corpus).unwrap_or_else(|error| {
+        panic!(
+            "corpus directory {} is readable: {error}\n\
+             (a missing directory here usually means the corpus path is misspelled \
+             or the fixtures were never created)",
+            corpus.display()
+        )
+    });
     let mut names = entries
         .map(|entry| entry.expect("corpus directory entry is readable").path())
         .filter(|path| path.is_dir())
@@ -208,8 +245,27 @@ pub fn validate_scenario(
     validate_evidence_closure(scenario, scenario_root, &referenced, &mut failures);
     validate_expected_coverage(scenario, manifest, expected, &mut failures);
     validate_findings_are_evidence_backed(scenario, expected, &mut failures);
+    validate_descriptor_privacy(scenario, scenario_root, &mut failures);
 
     failures
+}
+
+/// Scan `manifest.json` and `expected.json` themselves for private data.
+///
+/// The evidence files are scanned as they are read, but the descriptors are hand
+/// written and carry exactly the free-text fields where a real path or identity
+/// gets typed by mistake: `sanitizedSourcePath`, `displayName`, and finding
+/// summaries. Scanning only the evidence left the likeliest leak unchecked.
+pub fn validate_descriptor_privacy(scenario: &str, scenario_root: &Path, failures: &mut Failures) {
+    for descriptor in ["manifest.json", "expected.json"] {
+        let path = scenario_root.join(descriptor);
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                failures.absorb(privacy_problems(&format!("{scenario}/{descriptor}"), &contents))
+            }
+            Err(error) => failures.push(format!("{scenario}: {descriptor} is not readable: {error}")),
+        }
+    }
 }
 
 fn validate_envelope(scenario: &str, manifest: &Value, expected: &Value, failures: &mut Failures) {
@@ -274,8 +330,9 @@ fn validate_artifacts(
 
         let relative_path = artifact["relativePath"].as_str();
         let needs_file = CAPTURE_STATES_WITH_FILE.contains(&capture_state);
+        let may_have_file = CAPTURE_STATES_OPTIONAL_FILE.contains(&capture_state);
 
-        if !needs_file {
+        if !needs_file && !may_have_file {
             failures.require(relative_path.is_none(), || {
                 format!("{scenario}/{id}: captureState {capture_state} must have relativePath null")
             });
@@ -286,9 +343,19 @@ fn validate_artifacts(
         }
 
         let Some(relative_path) = relative_path else {
-            failures.push(format!(
-                "{scenario}/{id}: captureState {capture_state} requires a relativePath"
-            ));
+            if needs_file {
+                failures.push(format!(
+                    "{scenario}/{id}: captureState {capture_state} requires a relativePath"
+                ));
+            } else {
+                // Optional-file state with no file: still must not claim bytes.
+                failures.require(artifact["bytesCopied"].as_u64() == Some(0), || {
+                    format!(
+                        "{scenario}/{id}: captureState {capture_state} has no file but reports bytesCopied {}",
+                        artifact["bytesCopied"]
+                    )
+                });
+            }
             continue;
         };
 
@@ -334,10 +401,28 @@ fn validate_artifacts(
             )),
         }
 
-        if let Ok(canonical) = file_path.canonicalize() {
-            failures.require(referenced.insert(canonical), || {
-                format!("{scenario}/{id}: {relative_path} is referenced by more than one artifact")
-            });
+        // Resolve symlinks and confirm the target is still inside the scenario.
+        // The component check above is lexical only, so without this a symlink
+        // under evidence/ reads host files and the privacy scan runs against
+        // content that is not in the corpus at all.
+        match (file_path.canonicalize(), scenario_root.canonicalize()) {
+            (Ok(canonical), Ok(root)) => {
+                if canonical.starts_with(&root) {
+                    failures.require(referenced.insert(canonical), || {
+                        format!(
+                            "{scenario}/{id}: {relative_path} is referenced by more than one artifact"
+                        )
+                    });
+                } else {
+                    failures.push(format!(
+                        "{scenario}/{id}: {relative_path} resolves to {}, outside the scenario directory",
+                        canonical.display()
+                    ));
+                }
+            }
+            _ => failures.push(format!(
+                "{scenario}/{id}: {relative_path} could not be resolved to a real path"
+            )),
         }
     }
 
@@ -418,6 +503,45 @@ fn validate_expected_coverage(
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
 
+    // Bind each coverage status to the capture state that produced it. Comparing
+    // only the id sets let a corpus declare an artifact absent in the manifest
+    // and available in the expected output.
+    let capture_states = manifest["artifacts"]
+        .as_array()
+        .map(|artifacts| {
+            artifacts
+                .iter()
+                .filter_map(|artifact| {
+                    Some((
+                        artifact["artifactId"].as_str()?.to_owned(),
+                        artifact["captureState"].as_str()?.to_owned(),
+                    ))
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    for entry in coverage {
+        let Some(id) = entry["artifactId"].as_str() else {
+            continue;
+        };
+        let Some(capture_state) = capture_states.get(id) else {
+            continue;
+        };
+        let Some((_, required)) = CAPTURE_STATE_COVERAGE
+            .iter()
+            .find(|(state, _)| state == capture_state)
+        else {
+            continue;
+        };
+        let declared = entry["status"].as_str().unwrap_or_default();
+        failures.require(declared == *required, || {
+            format!(
+                "{scenario}/{id}: manifest captureState {capture_state} requires coverage status {required:?}, expected.json declares {declared:?}"
+            )
+        });
+    }
+
     for missing in manifest_ids.difference(&coverage_ids) {
         failures.push(format!(
             "{scenario}: manifest artifact {missing} has no coverage entry in expected.json"
@@ -474,9 +598,15 @@ pub fn privacy_problems(context: &str, contents: &str) -> Failures {
         "BEGIN PRIVATE KEY",
         "BEGIN RSA PRIVATE KEY",
     ] {
-        failures.require(!contents.contains(forbidden), || {
-            format!("{context}: contains forbidden fixture material {forbidden:?}")
-        });
+        // Check the JSON-escaped form too. Inside manifest.json and
+        // expected.json a Windows path is necessarily written `C:\\Users\\`,
+        // so searching only for the literal `C:\Users\` never matches and the
+        // descriptors leak exactly the paths this list exists to block.
+        let escaped = forbidden.replace('\\', "\\\\");
+        failures.require(
+            !contents.contains(forbidden) && !contents.contains(escaped.as_str()),
+            || format!("{context}: contains forbidden fixture material {forbidden:?}"),
+        );
     }
 
     if let Some(sid) = find_windows_sid(contents) {

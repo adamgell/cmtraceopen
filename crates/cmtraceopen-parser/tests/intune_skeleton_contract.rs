@@ -224,12 +224,69 @@ fn a_finding_citing_neither_evidence_nor_a_coverage_gap_is_rejected() {
     );
 }
 
+#[test]
+fn coverage_status_contradicting_the_capture_state_is_rejected() {
+    // The manifest declares skeleton-appworkload-absent as absent. Claiming it
+    // was available is self-declared contract drift: the corpus would assert
+    // coverage it never had, and any finding citing that entry inherits the lie.
+    let (manifest, expected) = reference_pair();
+    assert_rejected(
+        "coverage status drift",
+        &manifest,
+        &mutated(&expected, "/coverage/1/status", json!("available")),
+        "requires coverage status",
+    );
+}
+
+#[test]
+fn a_missing_coverage_status_is_rejected() {
+    let (manifest, expected) = reference_pair();
+    assert_rejected(
+        "absent coverage status",
+        &manifest,
+        &mutated(&expected, "/coverage/0/status", json!(null)),
+        "requires coverage status",
+    );
+}
+
+#[test]
+fn parse_failed_artifacts_may_carry_evidence() {
+    // parseFailed means the artifact was collected and could not be interpreted,
+    // so the malformed bytes are the point. Epic #356 requires a malformed
+    // scenario from every child issue; forcing parseFailed to have no file made
+    // that shape inexpressible.
+    let (manifest, expected) = reference_pair();
+    let manifest = mutated(&manifest, "/artifacts/0/captureState", json!("parseFailed"));
+    let expected = mutated(&expected, "/coverage/0/status", json!("parseFailed"));
+    validate(&reference_root(), &manifest, &expected)
+        .assert_empty("parseFailed artifact with real evidence");
+}
+
+#[test]
+fn parse_failed_without_evidence_is_still_rejected() {
+    let (manifest, expected) = reference_pair();
+    let manifest = mutated(&manifest, "/artifacts/1/captureState", json!("parseFailed"));
+    let expected = mutated(&expected, "/coverage/1/status", json!("parseFailed"));
+    assert_rejected(
+        "parseFailed with no file",
+        &manifest,
+        &expected,
+        "requires a relativePath",
+    );
+}
+
 // ── Privacy scanner ─────────────────────────────────────────────────────────
 
 #[test]
 fn privacy_scanner_flags_forbidden_material() {
     for (label, sample) in [
         ("user path", "opened C:\\Users\\adam\\file.log"),
+        // JSON-escaped form: this is how a Windows path is necessarily written
+        // inside manifest.json, and the literal-only check never matched it.
+        (
+            "json-escaped user path",
+            r#"{"path":"C:\\Users\\adam\\file.log"}"#,
+        ),
         ("bearer token", "Authorization: Bearer abc.def.ghi"),
         ("client secret", "client_secret=hunter2"),
         ("sid", "owner S-1-5-21-1004336348-1177238915-682003330-512"),
@@ -268,6 +325,103 @@ fn privacy_scanner_allows_reserved_synthetic_domains() {
         privacy_problems("sample", "user synthetic.user@example.invalid signed in").is_empty(),
         "reserved .invalid domains are the documented way to write a synthetic identity"
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_symlink_escaping_the_scenario_is_rejected() {
+    // The component check is lexical, so without target resolution a symlink
+    // under evidence/ reads host files and the privacy scan runs against content
+    // that is not in the corpus at all.
+    use std::os::unix::fs::symlink;
+
+    let temp = std::env::temp_dir().join(format!(
+        "cmtrace-symlink-escape-{}",
+        std::process::id()
+    ));
+    let scenario = temp.join("escape");
+    let evidence = scenario.join("evidence/skeleton-ime/current");
+    std::fs::create_dir_all(&evidence).expect("scratch scenario is creatable");
+
+    let outside = temp.join("outside.log");
+    std::fs::write(&outside, "SYNTHETIC FIXTURE outside the corpus\n")
+        .expect("outside file is writable");
+    let link = evidence.join("IntuneManagementExtension.log");
+    let _ = std::fs::remove_file(&link);
+    symlink(&outside, &link).expect("symlink is creatable");
+
+    let bytes = std::fs::metadata(&link).expect("link target metadata").len();
+    let manifest = json!({
+        "intuneManifestVersion": 1,
+        "syntheticFixture": true,
+        "scenario": "escape",
+        "artifacts": [{
+            "artifactId": "escaping",
+            "captureState": "captured",
+            "relativePath": "evidence/skeleton-ime/current/IntuneManagementExtension.log",
+            "bytesCopied": bytes,
+        }],
+    });
+    let expected = json!({
+        "scenario": "escape",
+        "coverage": [{ "artifactId": "escaping", "status": "available" }],
+        "findings": [],
+    });
+
+    let failures = validate_scenario("escape", &scenario, &manifest, &expected);
+    let outside_rejected = failures
+        .entries()
+        .iter()
+        .any(|entry| entry.contains("outside the scenario directory"));
+
+    std::fs::remove_dir_all(&temp).ok();
+    assert!(
+        outside_rejected,
+        "a symlink resolving outside the scenario must be rejected, got {:?}",
+        failures.entries()
+    );
+}
+
+#[test]
+fn descriptor_files_are_privacy_scanned() {
+    // manifest.json and expected.json are hand written and carry the free-text
+    // fields where a real path or identity gets typed by mistake. Scanning only
+    // the evidence left the likeliest leak unchecked.
+    let scenario = std::env::temp_dir().join(format!(
+        "cmtrace-descriptor-privacy-{}/leaky",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&scenario).expect("scratch scenario is creatable");
+    std::fs::write(
+        scenario.join("manifest.json"),
+        r#"{"sanitizedSourcePath":"C:\\Users\\jsmith\\AppData\\Local\\app.log"}"#,
+    )
+    .expect("manifest is writable");
+    std::fs::write(scenario.join("expected.json"), r#"{"displayName":"ok"}"#)
+        .expect("expected is writable");
+
+    let mut failures = Failures::new();
+    support::validate_descriptor_privacy("leaky", &scenario, &mut failures);
+    let leaked = failures
+        .entries()
+        .iter()
+        .any(|entry| entry.contains("manifest.json") && entry.contains("forbidden fixture material"));
+
+    std::fs::remove_dir_all(scenario.parent().expect("temp parent")).ok();
+    assert!(
+        leaked,
+        "a user path in manifest.json must be caught, got {:?}",
+        failures.entries()
+    );
+}
+
+#[test]
+#[should_panic(expected = "is readable")]
+fn a_missing_corpus_directory_panics_rather_than_passing_vacuously() {
+    // Returning an empty vec made a misspelled corpus path indistinguishable
+    // from an empty corpus, so a loop over scenarios validated nothing and
+    // still reported success.
+    scenario_names(&support::corpus_root("_skeleton/definitely-not-a-corpus"));
 }
 
 #[test]
