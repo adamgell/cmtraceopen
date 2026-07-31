@@ -149,8 +149,12 @@ pub struct SccmClientIntakeArtifact {
     pub artifact: SccmArtifact,
     /// Collision-safe path identity. Mandatory for physical states; a
     /// non-physical marker may also carry one to pin which configured
-    /// location the marker refers to (for example, absent under one root
-    /// while a sibling root was captured).
+    /// location the marker refers to (for example, absent under two
+    /// sibling roots declared as distinct missing locations). A marker can
+    /// never share its source identity (basename plus rotation) with a
+    /// physical declaration, regardless of fingerprints: physical evidence
+    /// for a source disproves any absent, denied, or skipped claim about
+    /// that same source.
     pub path_fingerprint: Option<String>,
     pub relative_path: Option<String>,
     pub fragment_complete: Option<bool>,
@@ -490,7 +494,18 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
     let mut artifact_ids = BTreeSet::new();
     let mut path_fingerprints = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
-    let mut marker_identities = BTreeSet::new();
+    // Canonical source identity (casefolded basename plus rotation
+    // discriminator) for every declaration, split by declaration shape so
+    // the identity intersects across ALL declarations for a source: a
+    // marker can never contradict physical evidence, and a fingerprint-less
+    // marker can never double-declare a source any other declaration
+    // already claims. The sibling server intake instead makes the path
+    // fingerprint mandatory on every declaration; the client keeps
+    // optional marker fingerprints for the committed all-absent fixture
+    // bundles, so this intersection is the fail-closed equivalent here.
+    let mut physical_source_identities = BTreeSet::new();
+    let mut pinned_marker_identities = BTreeSet::new();
+    let mut unpinned_marker_identities = BTreeSet::new();
 
     for source in &bundle.artifacts {
         if source.artifact.role != SccmRole::Client {
@@ -559,6 +574,10 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
         let fragment_complete = source
             .fragment_complete
             .ok_or(SccmClientIntakeError::MissingFragmentCompleteness)?;
+        let source_identity = (
+            source.artifact.display_name.to_ascii_lowercase(),
+            rotation_identity(&source.artifact.rotation),
+        );
         if is_physical_state(&source.artifact.coverage) {
             if source.artifact.coverage == SccmCoverageState::Capped && fragment_complete {
                 return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
@@ -576,6 +595,15 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
                 .relative_path
                 .as_deref()
                 .ok_or(SccmClientIntakeError::MissingPhysicalProvenance)?;
+            // Physical evidence for a source disproves any non-physical
+            // claim about that same source, regardless of fingerprints and
+            // in either declaration order.
+            if pinned_marker_identities.contains(&source_identity)
+                || unpinned_marker_identities.contains(&source_identity)
+            {
+                return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+            }
+            physical_source_identities.insert(source_identity);
         } else {
             if source.relative_path.is_some() {
                 return Err(SccmClientIntakeError::InvalidRelativePath);
@@ -584,20 +612,30 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
                 return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
             }
             // Non-physical markers have no payload lineage, so their
-            // canonical identity is the declared source itself: basename,
-            // rotation, and the optional path fingerprint. Distinct caller
-            // labels must not double-declare the same missing source.
-            let marker_identity = (
-                source.artifact.display_name.to_ascii_lowercase(),
-                rotation_identity(&source.artifact.rotation),
-                source
-                    .path_fingerprint
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_ascii_lowercase(),
-            );
-            if !marker_identities.insert(marker_identity) {
-                return Err(SccmClientIntakeError::DuplicateArtifactId);
+            // canonical identity is the declared source itself. A marker
+            // for a physically declared source is a self-contradiction.
+            if physical_source_identities.contains(&source_identity) {
+                return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+            }
+            if source.path_fingerprint.is_some() {
+                // Markers pinned to distinct configured roots by distinct
+                // fingerprints stay distinct sources; reusing a fingerprint
+                // already failed the shared fingerprint dedup above. An
+                // unpinned marker claims the whole source, so a pinned
+                // sibling for the same source is a double-declaration.
+                if unpinned_marker_identities.contains(&source_identity) {
+                    return Err(SccmClientIntakeError::DuplicateArtifactId);
+                }
+                pinned_marker_identities.insert(source_identity);
+            } else {
+                // Distinct caller labels must not double-declare the same
+                // missing source, whether the sibling is pinned or not.
+                if pinned_marker_identities.contains(&source_identity)
+                    || unpinned_marker_identities.contains(&source_identity)
+                {
+                    return Err(SccmClientIntakeError::DuplicateArtifactId);
+                }
+                unpinned_marker_identities.insert(source_identity);
             }
         }
     }
@@ -726,8 +764,9 @@ fn marker_coverage_reason(coverage: &SccmCoverageState, basename: &str) -> Optio
     }
 }
 
-/// Stable rotation discriminator for the canonical identity of non-physical
-/// markers, which carry no payload fingerprint or lineage.
+/// Stable rotation discriminator for the canonical source identity shared
+/// by every declaration, physical or marker, so collisions intersect across
+/// all declaration shapes for a source.
 fn rotation_identity(rotation: &SccmRotation) -> String {
     match rotation {
         SccmRotation::Current => "current".to_owned(),
