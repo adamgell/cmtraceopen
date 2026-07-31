@@ -53,7 +53,19 @@ export function MacosJamfWorkspace() {
   })();
 
   return (
-    <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+    // The banner and tab strip stay put; only the tab body scrolls. Matches the
+    // macOS Diagnostics shell, and is what keeps long tables usable.
+    <div
+      style={{
+        padding: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+        height: "100%",
+        overflow: "hidden",
+        boxSizing: "border-box",
+      }}
+    >
       <MacosJamfEnvironmentBanner
         environment={envSlice.data ?? null}
         loading={envSlice.status === "loading"}
@@ -61,7 +73,9 @@ export function MacosJamfWorkspace() {
         onRetry={() => void loadEnvironment()}
       />
       <MacosJamfTabStrip active={activeTab} onChange={setActiveTab} />
-      <Suspense fallback={<div>Loading...</div>}>{tabBody}</Suspense>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <Suspense fallback={<div>Loading...</div>}>{tabBody}</Suspense>
+      </div>
     </div>
   );
 }
