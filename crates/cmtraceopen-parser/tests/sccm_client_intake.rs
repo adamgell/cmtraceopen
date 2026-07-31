@@ -140,6 +140,24 @@ fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntake
     }
 }
 
+fn serialized_json_contains_windows_user_root(serialized_casefolded: &str) -> bool {
+    serialized_casefolded.contains(r"c:\users")
+}
+
+#[test]
+fn serialized_privacy_probe_detects_json_escaped_windows_user_path() {
+    let leaked_json = serde_json::to_string(&serde_json::json!({
+        "originalPath": r"C:\Users\RealUser\PolicyAgent.log"
+    }))
+    .expect("leak probe serializes")
+    .to_ascii_lowercase();
+
+    assert!(
+        serialized_json_contains_windows_user_root(&leaked_json),
+        "privacy probe must detect a Windows user path after JSON escaping: {leaked_json}"
+    );
+}
+
 #[test]
 fn complete_client_intake_covers_every_declared_group_without_a_diagnosis() {
     let declared = declared_client_source_groups();
