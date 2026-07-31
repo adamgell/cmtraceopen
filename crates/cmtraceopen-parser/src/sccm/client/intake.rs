@@ -252,7 +252,7 @@ pub enum SccmClientIntakeError {
     MissingPhysicalProvenance,
     #[error("client intake fragment completeness must be explicitly declared")]
     MissingFragmentCompleteness,
-    #[error("a nonphysical coverage state cannot declare a complete fragment")]
+    #[error("a capped or nonphysical coverage state cannot declare a complete fragment")]
     InvalidFragmentCompleteness,
 }
 
@@ -532,6 +532,9 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             .fragment_complete
             .ok_or(SccmClientIntakeError::MissingFragmentCompleteness)?;
         if is_physical_state(&source.artifact.coverage) {
+            if source.artifact.coverage == SccmCoverageState::Capped && fragment_complete {
+                return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
+            }
             source
                 .path_fingerprint
                 .as_deref()
