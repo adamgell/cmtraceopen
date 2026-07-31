@@ -3368,3 +3368,53 @@ fn absurd_citation_ranges_fail_fast_before_expansion() {
         "absurd ownership endLine must fail range validation, got: {error}"
     );
 }
+
+#[test]
+fn network_identifier_token_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let (observed_root, observed_manifest, observed_expected) =
+        load_contract("software-center-observed");
+
+    let mut dotted_quad_claim = observed_expected.clone();
+    dotted_quad_claim["sourceLocalObservations"][0]["claim"] =
+        Value::String("Observed records remain under 10.20.30.40.".to_owned());
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &dotted_quad_claim,
+    ) {
+        accepted.push("sentence-final dotted quad in a public observation claim");
+    }
+
+    let mut hyphen_label_host_claim = observed_expected;
+    hyphen_label_host_claim["sourceLocalObservations"][0]["claim"] =
+        Value::String("Observed records remain under lab-client-01.corp.local-side.".to_owned());
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &hyphen_label_host_claim,
+    ) {
+        accepted.push("hyphen-joined final label hostname in a public observation claim");
+    }
+
+    let (deferred_root, deferred_manifest, mut dotted_quad_reason) =
+        load_contract("notification-deferred");
+    dotted_quad_reason["transactions"][0]["nextArtifact"]["reason"] =
+        Value::String("Collect the bounded continuation from 10.20.30.40.".to_owned());
+    if mutation_was_accepted(
+        "notification-deferred",
+        &deferred_root,
+        &deferred_manifest,
+        &dotted_quad_reason,
+    ) {
+        accepted.push("sentence-final dotted quad in a next-artifact request reason");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "network-identifier token mutations were accepted: {accepted:?}"
+    );
+}
