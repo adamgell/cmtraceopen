@@ -2068,6 +2068,19 @@ fn refresh_artifact_bytes(
     manifest["artifacts"][artifact_index]["bytesCopied"] = json!(byte_count);
 }
 
+fn remove_physical_capture_fields(artifact: &mut Value) {
+    let artifact = artifact
+        .as_object_mut()
+        .expect("fixture artifact is an object");
+    for field in ["encoding", "collectionLimit", "bytesCopied", "relativePath"] {
+        artifact.remove(field);
+    }
+    artifact["rotation"]
+        .as_object_mut()
+        .expect("fixture rotation is an object")
+        .remove("fragmentComplete");
+}
+
 #[test]
 fn exact_content_version_dp_topology_and_terminal_evidence_fail_closed() {
     let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
@@ -3353,5 +3366,270 @@ fn captured_incomplete_fragments_satisfy_the_bounded_next_source() {
     assert!(
         validation.is_ok(),
         "captured incomplete fragments were not usable as bounded coverage gaps: {validation:?}"
+    );
+}
+
+#[test]
+fn unresolved_required_transfer_coverage_cannot_retain_high_success() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let transfer_artifact_id = healthy_manifest["artifacts"][1]["artifactId"].clone();
+    let mut accepted = Vec::new();
+
+    let mut capped_manifest = healthy_manifest.clone();
+    let mut capped_expected = healthy_expected.clone();
+    let bytes_copied = capped_manifest["artifacts"][1]["bytesCopied"].clone();
+    capped_manifest["artifacts"][1]["captureState"] = json!("capped");
+    capped_manifest["artifacts"][1]["collectionLimit"] =
+        json!({"byteLimit": bytes_copied, "limitApplied": true});
+    capped_expected["coverage"][1]["state"] = json!("capped");
+    capped_expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .remove(2);
+    capped_expected["transactions"][0]["coverageGapArtifactIds"] =
+        json!([transfer_artifact_id.clone()]);
+    capped_expected["artifactRequests"] = json!([{
+        "sourceId": "server-dp-distribution",
+        "reasonCode": "coverageCapped"
+    }]);
+    if mutation_was_accepted("healthy-package", &capped_manifest, &capped_expected) {
+        accepted.push("capped transfer evidence was removed from high success");
+    }
+
+    let mut denied_manifest = healthy_manifest.clone();
+    let mut denied_expected = healthy_expected.clone();
+    denied_manifest["artifacts"][1]["captureState"] = json!("accessDenied");
+    remove_physical_capture_fields(&mut denied_manifest["artifacts"][1]);
+    denied_expected["coverage"][1]["state"] = json!("accessDenied");
+    denied_expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .remove(2);
+    denied_expected["transactions"][0]["coverageGapArtifactIds"] =
+        json!([transfer_artifact_id.clone()]);
+    denied_expected["artifactRequests"] = json!([{
+        "sourceId": "server-dp-distribution",
+        "reasonCode": "coverageAccessDenied"
+    }]);
+    if mutation_was_accepted("healthy-package", &denied_manifest, &denied_expected) {
+        accepted.push("access-denied transfer evidence was removed from high success");
+    }
+
+    let temporary = temporary_scenario("healthy-package");
+    let mut split_manifest = healthy_manifest;
+    let mut split_expected = healthy_expected;
+    let relative_path = split_manifest["artifacts"][1]["relativePath"]
+        .as_str()
+        .expect("transfer artifact has a path")
+        .to_owned();
+    std::fs::write(
+        temporary.root.join(&relative_path),
+        "SYNTHETIC FIXTURE CURRENT FRAGMENT ONLY <![LOG[Phase=transfer; PackageId=LAB00001\n",
+    )
+    .expect("temporary transfer fragment is written");
+    split_manifest["artifacts"][1]["rotation"]["fragmentComplete"] = json!(false);
+    refresh_artifact_bytes(&mut split_manifest, 1, &temporary.root);
+    split_expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .remove(2);
+    split_expected["transactions"][0]["coverageGapArtifactIds"] = json!([transfer_artifact_id]);
+    split_expected["artifactRequests"] = json!([{
+        "sourceId": "server-dp-distribution",
+        "reasonCode": "coverageRotationSplit"
+    }]);
+    if mutation_at_root_was_accepted(
+        "healthy-package",
+        &temporary.root,
+        &split_manifest,
+        &split_expected,
+    ) {
+        accepted.push("split transfer fragment was removed from high success");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "unresolved required transfer coverage retained high success: {accepted:?}"
+    );
+}
+
+#[test]
+fn later_same_key_success_prevents_stale_high_terminal_failure() {
+    let temporary = temporary_scenario("validation-failure");
+    let mut manifest = read_json("validation-failure", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("validation-failure", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+    let fixture_path = temporary.root.join(&relative_path);
+    let mut contents =
+        std::fs::read_to_string(&fixture_path).expect("provider fixture is readable");
+    contents.push_str(
+        "<![LOG[SYNTHETIC FIXTURE; Phase=makeAvailable; Disposition=succeeded; Terminal=false; PackageId=LAB00004; ContentId=content-delta; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time=\"12:04:04.000+000\" date=\"07-30-2026\" component=\"SMSDPProv\" context=\"\" type=\"1\" thread=\"403\" file=\"smsdpprov.cpp:405\">\n",
+    );
+    std::fs::write(&fixture_path, contents).expect("later recovery evidence is written");
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+    expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .push(json!({
+            "observationId": "05-available",
+            "phase": "makeAvailable",
+            "disposition": "succeeded",
+            "terminal": false,
+            "evidence": [{
+                "artifactId": "dp-validation-failure-03-provider",
+                "startLine": 2,
+                "endLine": 2
+            }]
+        }));
+    expected["transactions"][0]["lastSuccessfulPhase"] = json!("makeAvailable");
+
+    assert!(
+        !mutation_at_root_was_accepted("validation-failure", &temporary.root, &manifest, &expected,),
+        "a later same-key success retained a stale high confirmed failure"
+    );
+}
+
+#[test]
+fn incomplete_transaction_gaps_are_bound_to_the_exact_distribution_point() {
+    let mut manifest = read_json("incomplete", "manifest.json").expect("manifest loads");
+    let expected = read_json("incomplete", "expected.json").expect("expected loads");
+    manifest["topology"]["distributionPointHandles"] = json!([EXACT_DP, EXACT_DP_02]);
+    manifest["artifacts"][1]["workflowSubjectHandle"] = json!(EXACT_DP_02);
+    manifest["artifacts"][2]["producerHostHandle"] = json!(EXACT_DP_02);
+    manifest["artifacts"][2]["workflowSubjectHandle"] = json!(EXACT_DP_02);
+    manifest["artifacts"][2]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://dp-02-root/Logs/SMSDPProv.log");
+
+    assert!(
+        !mutation_was_accepted("incomplete", &manifest, &expected),
+        "DP-02 gaps and requests satisfied an exact DP-01 transaction"
+    );
+}
+
+#[test]
+fn rotation_split_requires_one_physical_log_family() {
+    let temporary = temporary_scenario("rotation-boundary");
+    let mut manifest = read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let expected = read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let old_relative_path = manifest["artifacts"][1]["relativePath"]
+        .as_str()
+        .expect("lo_ artifact has a path")
+        .to_owned();
+    let new_relative_path = "evidence/server-dp-distribution/site/lo_/PkgXferMgr.log".to_owned();
+    let new_fixture_path = temporary.root.join(&new_relative_path);
+    std::fs::create_dir_all(
+        new_fixture_path
+            .parent()
+            .expect("temporary replacement has a parent"),
+    )
+    .expect("temporary replacement parent is created");
+    std::fs::copy(temporary.root.join(old_relative_path), &new_fixture_path)
+        .expect("lo_ fragment is copied into another physical log family");
+    manifest["artifacts"][1]["originalBasename"] = json!("PkgXferMgr.log");
+    manifest["artifacts"][1]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://site-root/Logs/PkgXferMgr.lo_");
+    manifest["artifacts"][1]["relativePath"] = json!(new_relative_path);
+
+    assert!(
+        !mutation_at_root_was_accepted("rotation-boundary", &temporary.root, &manifest, &expected,),
+        "distmgr current plus PkgXferMgr lo_ formed one rotation split"
+    );
+}
+
+#[test]
+fn parse_failed_raw_bytes_remain_synthetic_and_identity_free() {
+    let temporary = temporary_scenario("rotation-boundary");
+    let mut manifest = read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let expected = read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("malformed artifact has a path")
+        .to_owned();
+    let fixture_path = temporary.root.join(&relative_path);
+    let mut contents =
+        std::fs::read_to_string(&fixture_path).expect("malformed fixture is readable");
+    contents
+        .push_str("real.user@example.com C:\\Users\\RealUser\\SMSDPProv.log secret=RealSecret\n");
+    std::fs::write(&fixture_path, contents).expect("identity-bearing malformed bytes are written");
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+
+    assert!(
+        !mutation_at_root_was_accepted("rotation-boundary", &temporary.root, &manifest, &expected,),
+        "parse-failed raw bytes retained uncited identity, path, and secret markers"
+    );
+}
+
+#[test]
+fn observation_ids_reject_identity_bearing_values_across_output_classes() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let mut healthy_expected =
+        read_json("healthy-package", "expected.json").expect("expected loads");
+    healthy_expected["transactions"][0]["observations"][0]["observationId"] =
+        json!("01-C:\\Users\\RealUser");
+
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let mut rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    rotation_expected["sourceLocalObservations"][0]["observationId"] =
+        json!("rotation-01-C:\\Users\\RealUser");
+
+    let accepted = [
+        (
+            "transaction observation ID",
+            mutation_was_accepted("healthy-package", &healthy_manifest, &healthy_expected),
+        ),
+        (
+            "source-local observation ID",
+            mutation_was_accepted("rotation-boundary", &rotation_manifest, &rotation_expected),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(label, was_accepted)| was_accepted.then_some(label))
+    .collect::<Vec<_>>();
+
+    assert!(
+        accepted.is_empty(),
+        "identity-bearing public observation IDs were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn rotation_lineage_rejects_identity_bearing_values() {
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    manifest["artifacts"][0]["rotation"]["lineageId"] = json!("C:\\Users\\RealUser\\distmgr");
+
+    assert!(
+        !mutation_was_accepted("healthy-package", &manifest, &expected),
+        "identity-bearing rotation lineage was accepted"
+    );
+}
+
+#[test]
+fn path_fingerprints_are_bounded_declared_synthetic_identities() {
+    let manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut identity_bearing = manifest.clone();
+    identity_bearing["artifacts"][0]["pathFingerprint"] = json!("synthetic:real-user-hostname");
+    if mutation_was_accepted("healthy-package", &identity_bearing, &expected) {
+        accepted.push("identity-bearing fingerprint");
+    }
+
+    let mut oversized = manifest;
+    oversized["artifacts"][0]["pathFingerprint"] = json!(format!("synthetic:{}", "a".repeat(256)));
+    if mutation_was_accepted("healthy-package", &oversized, &expected) {
+        accepted.push("oversized fingerprint");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "unbounded or undeclared path fingerprints were accepted: {accepted:?}"
     );
 }
