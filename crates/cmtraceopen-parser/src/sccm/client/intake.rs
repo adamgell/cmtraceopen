@@ -14,6 +14,99 @@ const MAX_ARTIFACT_ID_CHARS: usize = 160;
 const MAX_BASENAME_CHARS: usize = 160;
 const MAX_METADATA_TOKEN_CHARS: usize = 128;
 const MAX_PATH_IDENTITY_CHARS: usize = 512;
+// Synthetic fingerprints are fixture-only provenance. Keep their vocabulary
+// finite so the public field cannot become an arbitrary user/context channel.
+// Extending this list is a privacy-contract change that requires review.
+const SYNTHETIC_FINGERPRINT_TOKENS: &[&str] = &[
+    "a",
+    "absent",
+    "access",
+    "agent",
+    "app",
+    "approved",
+    "auth",
+    "b",
+    "basename",
+    "bits",
+    "boundary",
+    "c",
+    "cache",
+    "candidate",
+    "capped",
+    "ccmsetup",
+    "client",
+    "collision",
+    "complete",
+    "completeness",
+    "content",
+    "contradictory",
+    "current",
+    "custom",
+    "deferred",
+    "denied",
+    "dependency",
+    "deployment",
+    "detect",
+    "detection",
+    "download",
+    "dp",
+    "enforce",
+    "enforcement",
+    "evaluate",
+    "evaluation",
+    "exit",
+    "failure",
+    "false",
+    "fingerprint",
+    "gate",
+    "health",
+    "identity",
+    "incomplete",
+    "intent",
+    "invalid",
+    "lo",
+    "location",
+    "lookalike",
+    "malformed",
+    "missing",
+    "mp",
+    "multiline",
+    "negative",
+    "no",
+    "not",
+    "numbered",
+    "offset",
+    "one",
+    "or",
+    "path",
+    "persist",
+    "policy",
+    "recovery",
+    "relative",
+    "report",
+    "reporting",
+    "requirements",
+    "root",
+    "rotation",
+    "scheduler",
+    "services",
+    "setup",
+    "site",
+    "state",
+    "success",
+    "supplemental",
+    "targeted",
+    "time",
+    "transfer",
+    "transport",
+    "two",
+    "unknown",
+    "unsafe",
+    "update",
+    "updates",
+    "valid",
+    "version",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -616,16 +709,25 @@ fn is_safe_path_identity(value: &str) -> bool {
     }
 
     if let Some(payload) = value.strip_prefix("synthetic-") {
-        return is_safe_path_segment(payload);
+        return is_safe_synthetic_fingerprint(payload);
     }
 
     match value.split_once(':') {
-        Some(("synthetic", payload)) => {
-            !payload.is_empty() && payload.split(':').all(is_safe_path_segment)
-        }
+        Some(("synthetic", payload)) => is_safe_synthetic_fingerprint(payload),
         Some(("sha256", digest)) => is_lowercase_hex_handle(digest),
         _ => false,
     }
+}
+
+fn is_safe_synthetic_fingerprint(payload: &str) -> bool {
+    !payload.is_empty()
+        && payload.split([':', '-']).all(|token| {
+            !token.is_empty()
+                && (SYNTHETIC_FINGERPRINT_TOKENS.contains(&token)
+                    || token
+                        .parse::<u16>()
+                        .is_ok_and(|number| number <= 9_999 && number.to_string() == token))
+        })
 }
 
 fn is_safe_relative_path(value: &str) -> bool {
