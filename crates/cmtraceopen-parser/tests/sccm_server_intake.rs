@@ -97,7 +97,7 @@ fn server_intake_normalizes_role_coverage_and_logical_records() {
     assert!(absent.findings.is_empty());
     assert_eq!(absent.next_artifact_requests.len(), 1);
     assert_eq!(
-        absent.next_artifact_requests[0].source_id,
+        absent.next_artifact_requests[0].logical_id,
         "server-dp-distribution"
     );
 
