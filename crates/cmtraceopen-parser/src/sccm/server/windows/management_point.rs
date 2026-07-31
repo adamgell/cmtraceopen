@@ -976,14 +976,22 @@ fn source_is_admitted(source: &SccmManagementPointSource) -> bool {
         && classified.rotation == source.artifact.rotation
 }
 
+/// Supplemental sources are subject-scoped inputs, never MP-produced
+/// evidence. `mpcontrol.log` is produced by the site-server MP control
+/// workflow about the Management Point, so it is only supplemental when
+/// the bundle models it under the site-server producer role declared in
+/// the shared catalog; an MP-produced claim fails closed as rejected
+/// evidence instead.
 fn is_supplemental_source(source: &SccmManagementPointSource) -> bool {
-    source.source_group == MP_IIS_GROUP
-        || (source.source_group == MP_POLICY_GROUP
-            && source.producer == "SMS_MP_CONTROL_MANAGER"
-            && source
-                .artifact
-                .display_name
-                .eq_ignore_ascii_case("mpcontrol.log"))
+    if source.source_group == MP_IIS_GROUP {
+        return true;
+    }
+    if source.source_group != MP_POLICY_GROUP || source.artifact.role != SccmRole::SiteServer {
+        return false;
+    }
+    let classified = classify_artifact_name(&source.artifact.display_name, SccmRole::SiteServer);
+    classified.logical_name == "mpcontrol"
+        && classified.family == SccmArtifactFamily::ManagementPoint
 }
 
 fn validated_token_value(message: &str, label: &str) -> Option<Option<String>> {
@@ -1564,7 +1572,7 @@ fn coverage_for_group(bundle: &SccmManagementPointBundle, group: &str) -> SccmCo
     let states = bundle
         .sources
         .iter()
-        .filter(|source| source.source_group == group)
+        .filter(|source| source.source_group == group && !is_supplemental_source(source))
         .map(|source| {
             if source.artifact.coverage == SccmCoverageState::Captured
                 && (source.fragment_complete != Some(true)
