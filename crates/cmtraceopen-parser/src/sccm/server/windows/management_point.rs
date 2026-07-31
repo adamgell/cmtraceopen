@@ -5,9 +5,10 @@ use serde::Serialize;
 
 use crate::models::log_entry::Severity;
 use crate::sccm::{
-    SccmArtifact, SccmArtifactRequest, SccmConfidence, SccmCoverageState, SccmEvidence,
-    SccmEvidenceRef, SccmFinding, SccmFindingBuilder, SccmFindingClass, SccmFindingCoverageGap,
-    SccmKeyConfidence, SccmPhase, SccmRole, SccmTerminalEvidence, SccmTimestamp,
+    classify_artifact_name, SccmArtifact, SccmArtifactFamily, SccmArtifactRequest, SccmConfidence,
+    SccmCoverageState, SccmEvidence, SccmEvidenceRef, SccmFinding, SccmFindingBuilder,
+    SccmFindingClass, SccmFindingCoverageGap, SccmKeyConfidence, SccmPhase, SccmRole,
+    SccmTerminalEvidence, SccmTimestamp,
 };
 
 pub const SCCM_MANAGEMENT_POINT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
@@ -275,14 +276,20 @@ pub fn analyze_management_point(bundle: &SccmManagementPointBundle) -> SccmManag
         if is_supplemental_source(source) {
             continue;
         }
-        if !source_is_admitted(source)
-            || !safe_evidence_reference(&evidence.reference)
-            || evidence.role != SccmRole::ManagementPoint
-            || source.artifact.coverage != SccmCoverageState::Captured
+        if source.artifact.coverage != SccmCoverageState::Captured
             || source.fragment_complete != Some(true)
+        {
+            // Bytes retained beside a noncaptured manifest state are
+            // coverage-only. They cannot become malformed evidence or an
+            // outcome.
+            continue;
+        }
+        if !source_is_admitted(source)
+            || !evidence_reference_fits_source(evidence, source)
+            || evidence.role != SccmRole::ManagementPoint
             || !topology_is_valid
         {
-            if safe_evidence_reference(&evidence.reference) {
+            if evidence_reference_fits_source(evidence, source) {
                 rejected_references.push(evidence.reference.clone());
             }
             continue;
@@ -854,23 +861,23 @@ fn parse_phase_outcome(
     message: &str,
     producer: &str,
 ) -> Option<(SccmManagementPointPhase, FactOutcome, bool)> {
-    let lowercase = message.to_ascii_lowercase();
+    let lowercase = event_payload(message)?.to_ascii_lowercase();
     let succeeded = FactOutcome::Succeeded;
     let failed = FactOutcome::Failed;
     let deferred = FactOutcome::Deferred;
 
     match producer {
-        "MP_GetAuth" if lowercase.contains("receive request succeeded") => {
+        "MP_GetAuth" if lowercase.starts_with("receive request succeeded") => {
             Some((SccmManagementPointPhase::ReceiveRequest, succeeded, false))
         }
-        "MP_GetAuth" if lowercase.contains("authenticate succeeded") => {
+        "MP_GetAuth" if lowercase.starts_with("authenticate succeeded") => {
             Some((SccmManagementPointPhase::Authenticate, succeeded, false))
         }
-        "MP_GetAuth" if lowercase.contains("authenticate failed terminal") => {
+        "MP_GetAuth" if lowercase.starts_with("authenticate failed terminal") => {
             Some((SccmManagementPointPhase::Authenticate, failed, true))
         }
         "MP_CliReg" | "MP_RegistrationManager"
-            if lowercase.contains("register or identify succeeded") =>
+            if lowercase.starts_with("register or identify succeeded") =>
         {
             Some((
                 SccmManagementPointPhase::RegisterOrIdentify,
@@ -879,47 +886,58 @@ fn parse_phase_outcome(
             ))
         }
         "MP_CliReg" | "MP_RegistrationManager"
-            if lowercase.contains("register or identify failed terminal") =>
+            if lowercase.starts_with("register or identify failed terminal") =>
         {
             Some((SccmManagementPointPhase::RegisterOrIdentify, failed, true))
         }
-        "MP_Location" if lowercase.contains("resolve location succeeded") => Some((
+        "MP_Location" if lowercase.starts_with("resolve location succeeded") => Some((
             SccmManagementPointPhase::ResolveLocationOrPolicy,
             succeeded,
             false,
         )),
-        "MP_Location" if lowercase.contains("resolve location failed terminal") => Some((
+        "MP_Location" if lowercase.starts_with("resolve location failed terminal") => Some((
             SccmManagementPointPhase::ResolveLocationOrPolicy,
             failed,
             true,
         )),
-        "MP_GetPolicy" if lowercase.contains("resolve policy succeeded") => Some((
+        "MP_GetPolicy" if lowercase.starts_with("resolve policy succeeded") => Some((
             SccmManagementPointPhase::ResolveLocationOrPolicy,
             succeeded,
             false,
         )),
-        "MP_GetPolicy" if lowercase.contains("resolve policy failed terminal") => Some((
+        "MP_GetPolicy" if lowercase.starts_with("resolve policy failed terminal") => Some((
             SccmManagementPointPhase::ResolveLocationOrPolicy,
             failed,
             true,
         )),
-        "MP_GetPolicy" if lowercase.contains("respond deferred") => {
+        "MP_GetPolicy" if lowercase.starts_with("respond deferred") => {
             Some((SccmManagementPointPhase::Respond, deferred, false))
         }
-        "MP_GetPolicy" if lowercase.contains("respond succeeded") => {
+        "MP_GetPolicy" if lowercase.starts_with("respond succeeded") => {
             Some((SccmManagementPointPhase::Respond, succeeded, false))
         }
-        "MP_GetPolicy" if lowercase.contains("respond failed terminal") => {
+        "MP_GetPolicy" if lowercase.starts_with("respond failed terminal") => {
             Some((SccmManagementPointPhase::Respond, failed, true))
         }
-        "MP_GetPolicy" if lowercase.contains("record outcome succeeded") => {
+        "MP_GetPolicy" if lowercase.starts_with("record outcome succeeded") => {
             Some((SccmManagementPointPhase::RecordOutcome, succeeded, false))
         }
-        "MP_GetPolicy" if lowercase.contains("record outcome failed terminal") => {
+        "MP_GetPolicy" if lowercase.starts_with("record outcome failed terminal") => {
             Some((SccmManagementPointPhase::RecordOutcome, failed, true))
         }
         _ => None,
     }
+}
+
+fn event_payload(message: &str) -> Option<&str> {
+    let projected = message
+        .strip_prefix("[sccm-public-message-v1] ")
+        .unwrap_or(message)
+        .trim_start();
+    if projected.starts_with("SYNTHETIC FIXTURE ") {
+        return projected.split_once(": ").map(|(_, payload)| payload);
+    }
+    Some(projected)
 }
 
 fn source_is_admitted(source: &SccmManagementPointSource) -> bool {
@@ -928,27 +946,20 @@ fn source_is_admitted(source: &SccmManagementPointSource) -> bool {
     {
         return false;
     }
-    let lowercase_name = source.artifact.display_name.to_ascii_lowercase();
-    match (source.source_group.as_str(), source.producer.as_str()) {
-        (MP_AUTH_GROUP, "MP_GetAuth") => supported_basename(&lowercase_name, "mp_getauth"),
-        (MP_AUTH_GROUP, "MP_CliReg") => supported_basename(&lowercase_name, "mp_clireg"),
-        (MP_AUTH_GROUP, "MP_RegistrationManager") => {
-            supported_basename(&lowercase_name, "mp_registrationmanager")
-        }
-        (MP_POLICY_GROUP, "MP_GetPolicy") => supported_basename(&lowercase_name, "mp_getpolicy"),
-        (MP_POLICY_GROUP, "MP_Location") => supported_basename(&lowercase_name, "mp_location"),
-        _ => false,
-    }
-}
-
-fn supported_basename(name: &str, stem: &str) -> bool {
-    name == format!("{stem}.log")
-        || name == format!("{stem}.lo_")
-        || name
-            .strip_prefix(&format!("{stem}.log."))
-            .is_some_and(|suffix| {
-                !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
-            })
+    let expected_logical_id = match (source.source_group.as_str(), source.producer.as_str()) {
+        (MP_AUTH_GROUP, "MP_GetAuth") => "mpGetAuth",
+        (MP_AUTH_GROUP, "MP_CliReg") => "mpCliReg",
+        (MP_AUTH_GROUP, "MP_RegistrationManager") => "mpRegistrationManager",
+        (MP_POLICY_GROUP, "MP_GetPolicy") => "mpGetPolicy",
+        (MP_POLICY_GROUP, "MP_Location") => "mpLocation",
+        _ => return false,
+    };
+    let classified =
+        classify_artifact_name(&source.artifact.display_name, SccmRole::ManagementPoint);
+    classified.logical_name == expected_logical_id
+        && classified.family == SccmArtifactFamily::ManagementPoint
+        && classified.supported_for_diagnosis
+        && classified.rotation == source.artifact.rotation
 }
 
 fn is_supplemental_source(source: &SccmManagementPointSource) -> bool {
@@ -964,20 +975,39 @@ fn is_supplemental_source(source: &SccmManagementPointSource) -> bool {
 fn token_value(message: &str, label: &str) -> Option<String> {
     let lowercase = message.to_ascii_lowercase();
     let needle = format!("{}=", label.to_ascii_lowercase());
-    let start = lowercase.find(&needle)? + needle.len();
-    let remainder = &message[start..];
-    let (value, _) = if let Some(braced) = remainder.strip_prefix('{') {
-        let end = braced.find('}')?;
-        (&braced[..end], end + 2)
-    } else {
+    for (label_start, _) in lowercase.match_indices(&needle) {
+        let exact_label_boundary = label_start == 0
+            || message[..label_start]
+                .chars()
+                .next_back()
+                .is_some_and(|character| !character.is_ascii_alphanumeric() && character != '_');
+        if !exact_label_boundary {
+            continue;
+        }
+
+        let remainder = &message[label_start + needle.len()..];
+        if let Some(braced) = remainder.strip_prefix('{') {
+            let end = braced.find('}')?;
+            let suffix = &braced[end + 1..];
+            let exact_value_boundary = suffix.chars().next().is_none_or(|character| {
+                character.is_whitespace() || matches!(character, ',' | ';' | '&')
+            });
+            if exact_value_boundary && end > 0 {
+                return Some(braced[..end].to_owned());
+            }
+            continue;
+        }
+
         let end = remainder
             .find(|character: char| {
                 character.is_whitespace() || matches!(character, ',' | ';' | '&')
             })
             .unwrap_or(remainder.len());
-        (&remainder[..end], end)
-    };
-    (!value.is_empty()).then(|| value.to_owned())
+        if end > 0 {
+            return Some(remainder[..end].to_owned());
+        }
+    }
+    None
 }
 
 fn normalize_uuid(value: &str) -> Option<String> {
@@ -986,7 +1016,10 @@ fn normalize_uuid(value: &str) -> Option<String> {
         && bytes.iter().enumerate().all(|(index, byte)| match index {
             8 | 13 | 18 | 23 => *byte == b'-',
             _ => byte.is_ascii_hexdigit(),
-        });
+        })
+        && bytes
+            .iter()
+            .any(|byte| byte.is_ascii_hexdigit() && *byte != b'0');
     valid.then(|| value.to_ascii_lowercase())
 }
 
@@ -1016,8 +1049,17 @@ fn valid_safe_handle(value: &str, prefix: &str) -> bool {
     !payload.is_empty()
         && payload.len() <= 128
         && payload
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && payload
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && !payload.contains("..")
+        && payload
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn safe_opaque_id(value: &str) -> bool {
@@ -1035,6 +1077,21 @@ fn safe_evidence_reference(reference: &SccmEvidenceRef) -> bool {
             (reference.line_start, reference.line_end),
             (Some(start), Some(end)) if start > 0 && end >= start
         )
+}
+
+fn evidence_reference_fits_source(
+    evidence: &SccmEvidence,
+    source: &SccmManagementPointSource,
+) -> bool {
+    safe_evidence_reference(&evidence.reference)
+        && evidence.evidence_id == evidence.reference.entry_id
+        && source.physical_line_end.is_some_and(|physical_end| {
+            physical_end > 0
+                && evidence
+                    .reference
+                    .line_end
+                    .is_some_and(|line_end| line_end <= physical_end)
+        })
 }
 
 fn sort_facts(facts: &mut [ManagementPointFact]) {
@@ -1249,6 +1306,9 @@ fn append_unconsumed_explicit_coverage(
             || sources.iter().any(|source| {
                 source.artifact.coverage == SccmCoverageState::Captured
                     && source.fragment_complete == Some(true)
+                    && source
+                        .physical_line_end
+                        .is_some_and(|line_end| line_end > 0)
                     && source_is_admitted(source)
             })
         {
@@ -1454,7 +1514,10 @@ fn coverage_for_group(bundle: &SccmManagementPointBundle, group: &str) -> SccmCo
         .filter(|source| source.source_group == group)
         .map(|source| {
             if source.artifact.coverage == SccmCoverageState::Captured
-                && source.fragment_complete != Some(true)
+                && (source.fragment_complete != Some(true)
+                    || source
+                        .physical_line_end
+                        .is_none_or(|line_end| line_end == 0))
             {
                 SccmCoverageState::ParseFailed
             } else {
