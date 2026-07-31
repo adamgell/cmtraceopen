@@ -1,0 +1,21 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "backlog-retry",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"backlog-01-replmgr","state":"captured"}],
+  "transactions": [{
+    "transactionId":"hierarchy:msg-backlog-01:LAB:CHD:link-lab-chd",
+    "key":{"messageId":"msg-backlog-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
+    "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":false,
+    "state":"deferred","classification":"blockedOrDeferred","confidence":"medium","confidenceCeiling":"medium",
+    "coverageGapArtifactIds":[],
+    "observations":[{"observationId":"backlog-01-queue","phase":"queueOrSerialize","disposition":"retrying","terminal":false,"evidence":[{"artifactId":"backlog-01-replmgr","startLine":1,"endLine":1}]}]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

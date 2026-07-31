@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE Family=compliance CiId=CI-030 BaselineId=BASELINE-030 StateId=STATE-030 ResourceHandle=safe:resource:compliance-030 Phase=Evaluate Disposition=NonCompliant Terminal=true ResultType=Evaluation]LOG]!><time="02:30:00.000+000" date="7-30-2026" component="CIAgent" context="" type="1" thread="325" file="">

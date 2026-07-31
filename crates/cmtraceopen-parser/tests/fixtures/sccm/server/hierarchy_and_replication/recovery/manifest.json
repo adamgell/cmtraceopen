@@ -1,0 +1,12 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "recovery",
+  "bundle": {"bundleRole":"server","workflow":"hierarchyAndReplication","capturedUtc":"2026-07-30T20:00:00Z"},
+  "topology": {"originSiteCode":"LAB","targetSiteCode":"CHD","originHostHandle":"safe:server:lab-pri-01","targetHostHandle":"safe:server:lab-chd-01","rolesObserved":["siteServer"]},
+  "artifacts": [
+    {"artifactId":"recovery-01-sender","sourceId":"server-hierarchy-transfer","producerRole":"siteServer","producerHostHandle":"safe:server:lab-pri-01","direction":"origin","originalBasename":"sender.log","sanitizedSourcePath":"SYNTHETIC://configured-root/LAB/Logs/sender.log","pathFingerprint":"synthetic:recovery-sender","rotation":{"kind":"current","lineageId":"recovery-sender","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T19:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":647,"relativePath":"evidence/server-hierarchy-transfer/origin/current/sender.log"},
+    {"artifactId":"recovery-02-despool","sourceId":"server-hierarchy-transfer","producerRole":"siteServer","producerHostHandle":"safe:server:lab-chd-01","direction":"target","originalBasename":"despool.log","sanitizedSourcePath":"SYNTHETIC://configured-root/CHD/Logs/despool.log","pathFingerprint":"synthetic:recovery-despool","rotation":{"kind":"current","lineageId":"recovery-despool","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T19:00:01Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":1002,"relativePath":"evidence/server-hierarchy-transfer/target/current/despool.log"}
+  ]
+}

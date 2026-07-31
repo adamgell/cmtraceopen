@@ -2,10 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use cmtraceopen_parser::sccm::server::windows::{
+    analyze_management_point, SccmManagementPointBundle, SccmManagementPointSource,
+    SccmManagementPointTopology,
+};
 use cmtraceopen_parser::sccm::{
-    analyze_management_point, declared_source_catalog, normalize_ccm_artifact, SccmArtifact,
-    SccmArtifactFamily, SccmCoverageState, SccmManagementPointBundle, SccmManagementPointSource,
-    SccmManagementPointTopology, SccmRole, SccmRotation,
+    declared_source_catalog, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
+    SccmCoverageState, SccmRole, SccmRotation,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
