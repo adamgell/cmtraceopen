@@ -1240,12 +1240,24 @@ fn validate_contract(
             ));
         }
         require_exact_object_fields(artifact, &exact_artifact_fields, "artifact")?;
-        let relative_path = artifact["relativePath"].as_str();
-        if physical != relative_path.is_some() {
-            return Err(format!(
-                "{artifact_id} physical path does not match capture state {capture_state}"
-            ));
-        }
+        let relative_path = match (&artifact["relativePath"], physical) {
+            (Value::String(relative_path), true) => Some(relative_path.as_str()),
+            (Value::Null, false) => None,
+            _ => {
+                return Err(format!(
+                    "{artifact_id} relativePath type does not match capture state {capture_state}"
+                ))
+            }
+        };
+        let source_version = match &artifact["sourceVersion"] {
+            Value::String(source_version) => Some(source_version.as_str()),
+            Value::Null => None,
+            _ => {
+                return Err(format!(
+                    "{artifact_id} sourceVersion is neither a string nor null"
+                ))
+            }
+        };
 
         if let Some(relative_path) = relative_path {
             validate_relative_path(relative_path, artifact_id)?;
@@ -1333,7 +1345,7 @@ fn validate_contract(
             }
             referenced_files.insert(relative_path.to_owned());
 
-            if let Some(version) = artifact["sourceVersion"].as_str() {
+            if let Some(version) = source_version {
                 if !version.starts_with("5.00.TEST.") {
                     unknown_version_artifacts.insert(artifact_id.to_owned());
                 }
@@ -3615,6 +3627,124 @@ fn review_blocker_capture_state_provenance_is_closed() {
         ),
         "nonphysical state provenance",
     );
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_nonphysical_optional_field_json_types_are_closed() {
+    let (scenario_root, manifest, expected) = load_contract("inventory", "coverage-states");
+    let mut failures = Vec::new();
+    let mutations = vec![
+        (
+            "accessDenied.relativePath=false",
+            "accessDenied",
+            "relativePath",
+            json!(false),
+            "relativePath",
+        ),
+        (
+            "skipped.relativePath=0",
+            "skipped",
+            "relativePath",
+            json!(0),
+            "relativePath",
+        ),
+        (
+            "unsupported.relativePath=[]",
+            "unsupported",
+            "relativePath",
+            json!([]),
+            "relativePath",
+        ),
+        (
+            "absent.relativePath={}",
+            "absent",
+            "relativePath",
+            json!({}),
+            "relativePath",
+        ),
+        (
+            "accessDenied.sourceVersion=false",
+            "accessDenied",
+            "sourceVersion",
+            json!(false),
+            "sourceVersion",
+        ),
+        (
+            "skipped.sourceVersion={unexpected:true}",
+            "skipped",
+            "sourceVersion",
+            json!({"unexpected": true}),
+            "sourceVersion",
+        ),
+        (
+            "unsupported.sourceVersion=[]",
+            "unsupported",
+            "sourceVersion",
+            json!([]),
+            "sourceVersion",
+        ),
+        (
+            "accessDenied.sanitizedSourcePath=false",
+            "accessDenied",
+            "sanitizedSourcePath",
+            json!(false),
+            "sanitizedSourcePath",
+        ),
+        (
+            "skipped.pathFingerprint={}",
+            "skipped",
+            "pathFingerprint",
+            json!({}),
+            "pathFingerprint",
+        ),
+    ];
+
+    for (label, capture_state, field, value, required_error) in mutations {
+        let mut mutated = manifest.clone();
+        let artifact = mutated["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array")
+            .iter_mut()
+            .find(|artifact| artifact["captureState"] == capture_state)
+            .unwrap_or_else(|| panic!("{capture_state} artifact exists"));
+        artifact[field] = value;
+        collect_contract_rejection(
+            &mut failures,
+            label,
+            validate_contract(
+                "inventory",
+                "coverage-states",
+                &scenario_root,
+                &mutated,
+                &expected,
+            ),
+            required_error,
+        );
+    }
+
+    for capture_state in ["accessDenied", "skipped", "unsupported"] {
+        let mut version_unknown = manifest.clone();
+        let artifact = version_unknown["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array")
+            .iter_mut()
+            .find(|artifact| artifact["captureState"] == capture_state)
+            .unwrap_or_else(|| panic!("{capture_state} artifact exists"));
+        artifact["sourceVersion"] = Value::Null;
+        if let Err(error) = validate_contract(
+            "inventory",
+            "coverage-states",
+            &scenario_root,
+            &version_unknown,
+            &expected,
+        ) {
+            failures.push(format!(
+                "{capture_state}.sourceVersion=null: valid optional version was rejected: {error}"
+            ));
+        }
+    }
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
