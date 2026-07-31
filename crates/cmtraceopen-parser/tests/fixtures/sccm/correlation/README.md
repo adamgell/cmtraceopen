@@ -23,7 +23,7 @@ Every adversarial expected result forbids `exactCorroborated`, caps confidence b
 Fixture references have explicit status and are bound to their pair side:
 
 - `repo:` references point to already merged synthetic upstream fixture directories under the citing side's own corpus prefix;
-- `issue:#329:` references name pending DP scenarios without pretending they exist on the program baseline; the content server side may use nothing else (or `absent`) until #329 is independently accepted;
+- `issue:#329:` references mark DP scenarios whose public fact interface is not independently accepted; the #329 preparation corpus is merged on the program baseline, but until its fact interface is accepted (no production reducer exists for the #322/#329 pair) the content server side may use nothing else (or `absent`);
 - `synthetic:` references describe future pair-local sanitized inputs and are only valid on merged sides;
 - `absent` is an intentional missing counterpart, must agree with the declared one-sided coverage, and is never proof of failure.
 

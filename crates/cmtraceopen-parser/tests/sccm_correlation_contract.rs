@@ -259,8 +259,9 @@ enum PairState {
 ///
 /// `Merged` sides may only cite already merged synthetic corpus directories
 /// under their own side prefix (or pair-local `synthetic:` inputs). `Pending`
-/// sides have no accepted corpus on the program baseline, so they must stay
-/// honestly marked with `issue:` refs until the upstream issue is accepted.
+/// sides may have a merged preparation corpus, but their public fact
+/// interface is not independently accepted, so they must stay honestly
+/// marked with `issue:` refs until that acceptance lands.
 enum SideCorpus {
     Merged { repo_prefix: &'static str },
     Pending { issue: &'static str },
@@ -296,8 +297,10 @@ const CONTENT_SPEC: MatrixSpec = MatrixSpec {
     client_side: SideCorpus::Merged {
         repo_prefix: "crates/cmtraceopen-parser/tests/fixtures/sccm/client/deployment/",
     },
-    // #329 DP evidence is not independently accepted yet, so the server side
-    // may only name pending scenarios and must never cite a merged corpus.
+    // #329's preparation corpus is merged, but its public fact interface is
+    // not independently accepted (no production reducer exists for the
+    // #322/#329 pair), so the server side stays issue-marked and must not
+    // present the corpus as accepted upstream facts.
     server_side: SideCorpus::Pending { issue: "#329" },
 };
 
