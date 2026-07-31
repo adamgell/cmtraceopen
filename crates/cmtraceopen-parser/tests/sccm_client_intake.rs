@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::{
     assess_client_intake, declared_client_source_groups, SccmArtifact, SccmClientIntakeArtifact,
-    SccmClientIntakeBundle, SccmCoverageState, SccmRole, SccmRotation,
+    SccmClientIntakeBundle, SccmClientIntakeError, SccmCoverageState, SccmRole, SccmRotation,
 };
 use serde::Deserialize;
 
@@ -388,4 +388,117 @@ fn ambiguous_identity_or_nonclient_role_fails_closed() {
     let mut wrong_role = load_bundle("complete");
     wrong_role.artifacts[0].artifact.role = SccmRole::ManagementPoint;
     assert!(assess_client_intake(&wrong_role).is_err());
+}
+
+#[test]
+fn identity_bearing_relative_paths_fail_before_public_projection() {
+    let unsafe_relative_paths = [
+        "evidence/client-policy-agent/RealUser@example.test/PolicyAgent.log",
+        "evidence/client-policy-agent/Users/RealUser/PolicyAgent.log",
+        "evidence/client-policy-agent/home/real-user/PolicyAgent.log",
+        "evidence/client-policy-agent/corp.example.test/PolicyAgent.log",
+        "evidence/client-policy-agent/profile=RealUser/PolicyAgent.log",
+        "evidence/client-policy-agent/LAB%5CRealUser/PolicyAgent.log",
+        "evidence/client-policy-agent/Real User/PolicyAgent.log",
+        "evidence/client-policy-agent/résumé-real-user/PolicyAgent.log",
+        "evidence/client-policy-agent/\0/PolicyAgent.log",
+        "evidence/client-policy-agent/../PolicyAgent.log",
+        "evidence/client-policy-agent/..",
+        "evidence/client-policy-agent/.",
+        "/evidence/client-policy-agent/current/PolicyAgent.log",
+        "evidence/client-policy-agent/C:/Users/RealUser/PolicyAgent.log",
+        "evidence/client-policy-agent/LAB\\RealUser/PolicyAgent.log",
+    ];
+
+    for (index, relative_path) in unsafe_relative_paths.into_iter().enumerate() {
+        let mut artifact =
+            synthetic_artifact(&format!("unsafe-relative-{index}"), "PolicyAgent.log");
+        artifact.relative_path = Some(relative_path.to_owned());
+
+        let result = assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![artifact],
+        });
+        assert!(
+            matches!(result, Err(SccmClientIntakeError::InvalidRelativePath)),
+            "identity-bearing path reached the public assessment: {relative_path:?} => {result:?}"
+        );
+    }
+}
+
+#[test]
+fn unsafe_path_fingerprints_fail_before_public_projection() {
+    let unsafe_fingerprints = [
+        "synthetic\0raw-user",
+        "synthetic\u{7f}raw-user",
+        "synthetic-résumé-user",
+        "synthetic=raw-user",
+        "synthetic%5craw-user",
+        "synthetic/raw-user",
+        "synthetic\\raw-user",
+        "synthetic@raw-user",
+        "synthetic raw-user",
+    ];
+
+    for (index, fingerprint) in unsafe_fingerprints.into_iter().enumerate() {
+        let mut artifact =
+            synthetic_artifact(&format!("unsafe-fingerprint-{index}"), "PolicyAgent.log");
+        artifact.relative_path =
+            Some("evidence/client-policy-agent/current/PolicyAgent.log".to_owned());
+        artifact.path_fingerprint = Some(fingerprint.to_owned());
+
+        let result = assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![artifact],
+        });
+        assert!(
+            matches!(result, Err(SccmClientIntakeError::InvalidPathFingerprint)),
+            "unsafe fingerprint reached the public assessment: {fingerprint:?} => {result:?}"
+        );
+    }
+}
+
+#[test]
+fn approved_namespaced_path_fingerprints_remain_accepted() {
+    let approved_fingerprints = [
+        "synthetic-root-a-current",
+        "synthetic:policy-current",
+        "synthetic:path:client-root-a",
+        "sha256:0123456789abcdef",
+    ];
+
+    for (index, fingerprint) in approved_fingerprints.into_iter().enumerate() {
+        let mut artifact =
+            synthetic_artifact(&format!("approved-fingerprint-{index}"), "PolicyAgent.log");
+        artifact.relative_path =
+            Some("evidence/client-policy-agent/current/PolicyAgent.log".to_owned());
+        artifact.path_fingerprint = Some(fingerprint.to_owned());
+
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![artifact],
+        })
+        .unwrap_or_else(|error| panic!("approved fingerprint {fingerprint:?} failed: {error}"));
+    }
+}
+
+#[test]
+fn approved_collision_safe_relative_layouts_remain_accepted() {
+    let approved_relative_paths = [
+        "evidence/client-policy-agent/PolicyAgent.log",
+        "evidence/client-policy-agent/current/PolicyAgent.log",
+        "evidence/client-app-enforce/root-a/current/AppEnforce.log",
+        "evidence/client-app-enforce/numbered-2/AppEnforce.log.2",
+        "evidence/client-app-enforce/timestamped-20260730-030405/AppEnforce.log.20260730-030405",
+        "evidence/sccm/client/client-app-enforce/current/AppEnforce.log",
+        "evidence/unknown/CustomVendorHook.log",
+    ];
+
+    for (index, relative_path) in approved_relative_paths.into_iter().enumerate() {
+        let mut artifact =
+            synthetic_artifact(&format!("approved-relative-{index}"), "PolicyAgent.log");
+        artifact.relative_path = Some(relative_path.to_owned());
+
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![artifact],
+        })
+        .unwrap_or_else(|error| panic!("approved path {relative_path:?} failed: {error}"));
+    }
 }
