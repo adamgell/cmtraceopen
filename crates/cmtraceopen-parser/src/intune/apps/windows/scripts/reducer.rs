@@ -20,6 +20,13 @@ use super::models::{
 use super::rules::{classify_record, RecordClassification};
 use super::sources::{classify_artifact, ScriptSourceInput};
 
+/// Render a CCM offset in minutes as `+HH:MM` / `-HH:MM`.
+fn format_offset(minutes: i32) -> String {
+    let sign = if minutes < 0 { '-' } else { '+' };
+    let absolute = minutes.unsigned_abs();
+    format!("{sign}{:02}:{:02}", absolute / 60, absolute % 60)
+}
+
 /// Lifecycle rank. A later-ranked signal replaces an earlier one; equal ranks
 /// resolve to the later record, which is how a retry sequence lands on its
 /// final attempt instead of its first.
@@ -378,12 +385,12 @@ pub fn analyze_script_bundle(inputs: &[ScriptSourceInput]) -> ScriptAnalysis {
 
             let timestamp = line.timestamp.as_ref().map(|raw| ScriptTimestamp {
                 raw_text: raw.clone(),
-                // `ime_parser` resolves the CCM offset while producing
-                // `timestamp_utc`; a present `normalized_utc` therefore means
-                // the offset was valid. The offset text itself is not carried
-                // on `ImeLine`, so it is reported as absent rather than guessed.
-                original_offset: None,
-                normalized_utc: line.timestamp_utc.clone(),
+                original_offset: line.timezone_offset.map(format_offset),
+                // Only trust the UTC form when the record stated its own
+                // offset. Without one, `ime_parser` fills `timestamp_utc` from
+                // the parsing machine's local offset, which is a property of
+                // whoever opened the log rather than of the evidence.
+                normalized_utc: line.timezone_offset.and(line.timestamp_utc.clone()),
             });
 
             records.push(PendingRecord {
@@ -445,12 +452,7 @@ pub fn analyze_script_bundle(inputs: &[ScriptSourceInput]) -> ScriptAnalysis {
 
     let mut transactions: Vec<ScriptTransaction> = Vec::new();
     for (key, indices) in grouped {
-        transactions.push(reduce_transaction(
-            key,
-            &indices,
-            &records,
-            unknown_version_observed,
-        ));
+        transactions.push(reduce_transaction(key, &indices, &records));
     }
 
     let mut missing_expected_sources = Vec::new();
@@ -480,10 +482,42 @@ fn reduce_transaction(
     key: ScriptTransactionKey,
     indices: &[usize],
     records: &[PendingRecord],
-    unknown_version_observed: bool,
 ) -> ScriptTransaction {
     let mut ordered: Vec<usize> = indices.to_vec();
-    ordered.sort_by_key(|&index| (records[index].artifact_index, records[index].record_number));
+    // Ordering decides which attempt a retry sequence reports, so it has to be
+    // defensible. When every record in this transaction states its own UTC
+    // offset, real time is the better order and is used. Otherwise we fall back
+    // to source order, because the alternative -- a UTC value derived from the
+    // parsing machine's timezone -- is not evidence.
+    //
+    // Source order means artifact order as the caller supplied it. That matters
+    // when one transaction spans a live log and a rotation: the caller is
+    // expected to pass rotations oldest first.
+    let all_timestamps_trustworthy = ordered.iter().all(|&index| {
+        records[index]
+            .timestamp
+            .as_ref()
+            .is_some_and(|timestamp| timestamp.normalized_utc.is_some())
+    });
+
+    if all_timestamps_trustworthy {
+        ordered.sort_by(|&left, &right| {
+            let key = |index: usize| {
+                (
+                    records[index]
+                        .timestamp
+                        .as_ref()
+                        .and_then(|timestamp| timestamp.normalized_utc.clone())
+                        .unwrap_or_default(),
+                    records[index].artifact_index,
+                    records[index].record_number,
+                )
+            };
+            key(left).cmp(&key(right))
+        });
+    } else {
+        ordered.sort_by_key(|&index| (records[index].artifact_index, records[index].record_number));
+    }
 
     let mut state = ScriptState::InsufficientEvidence;
     let mut last_confirmed_phase: Option<ScriptPhase> = None;
@@ -493,6 +527,7 @@ fn reduce_transaction(
     let mut has_output_evidence = false;
     let mut executions = 0u32;
     let mut transaction_saw_executor = false;
+    let mut transaction_unknown_version = false;
 
     for &index in &ordered {
         let record = &records[index];
@@ -512,6 +547,12 @@ fn reduce_transaction(
         }
         if record.source_kind == ScriptSourceKind::AgentExecutor {
             transaction_saw_executor = true;
+        }
+        // Scoped to this transaction on purpose. An unrecognised record
+        // belonging to some other policy in the same bundle must not silently
+        // demote a fully evidenced result over here.
+        if classification.execution_shaped_but_unmatched {
+            transaction_unknown_version = true;
         }
         if classification.bitness != ScriptInterpreterBitness::Unknown
             && bitness == ScriptInterpreterBitness::Unknown
@@ -551,7 +592,7 @@ fn reduce_transaction(
     let confidence = confidence_for(
         state,
         &key,
-        unknown_version_observed,
+        transaction_unknown_version,
         transaction_saw_executor,
     );
 

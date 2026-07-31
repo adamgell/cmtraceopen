@@ -160,6 +160,29 @@ fn assert_scenario(scenario: &str) -> ScriptAnalysis {
         );
     }
 
+    if let Some(rule) = expected.get("timestampMustBe") {
+        let id = rule["observationId"].as_str().expect("observationId");
+        let observation = analysis
+            .observations
+            .iter()
+            .find(|observation| observation.observation_id == id)
+            .unwrap_or_else(|| panic!("{scenario}: no observation {id}"));
+        let timestamp = observation
+            .timestamp
+            .as_ref()
+            .unwrap_or_else(|| panic!("{scenario}: observation {id} has no timestamp"));
+        assert_eq!(
+            timestamp.original_offset.as_deref(),
+            rule["originalOffset"].as_str(),
+            "{scenario}: original offset"
+        );
+        assert_eq!(
+            timestamp.normalized_utc.as_deref(),
+            rule["normalizedUtc"].as_str(),
+            "{scenario}: normalized utc"
+        );
+    }
+
     if let Some(forbidden) = expected.get("redactionMustNotContain") {
         let redacted = redacted_export_projection(&analysis);
         let text = serde_json::to_string(&redacted).expect("redacted analysis must serialize");
@@ -283,6 +306,37 @@ fn privacy_fixture_redacts_deterministically() {
     let first = serde_json::to_string(&redacted_export_projection(&analysis)).unwrap();
     let second = serde_json::to_string(&redacted_export_projection(&analysis)).unwrap();
     assert_eq!(first, second, "redacted export must be deterministic");
+}
+
+#[test]
+fn an_unrecognised_record_demotes_only_its_own_transaction() {
+    assert_scenario("multi-policy-partial-unknown-version");
+}
+
+#[test]
+fn a_record_stating_its_own_offset_yields_a_trustworthy_utc_value() {
+    assert_scenario("explicit-timezone-offset");
+}
+
+/// A record with no embedded offset must not report a UTC value, because the
+/// only one available would be derived from the parsing machine's timezone.
+/// Without this rule the golden below would differ per developer machine.
+#[test]
+fn a_record_without_an_offset_reports_no_normalized_utc() {
+    let (analysis, _) = load_scenario("success-device-context");
+    for observation in &analysis.observations {
+        let timestamp = observation.timestamp.as_ref().expect("timestamp");
+        assert!(
+            !timestamp.raw_text.is_empty(),
+            "raw timestamp text must always survive"
+        );
+        assert_eq!(
+            timestamp.normalized_utc, None,
+            "{} invented a UTC value from a record with no offset",
+            observation.observation_id
+        );
+        assert_eq!(timestamp.original_offset, None);
+    }
 }
 
 // -- Cross-cutting contract -------------------------------------------------

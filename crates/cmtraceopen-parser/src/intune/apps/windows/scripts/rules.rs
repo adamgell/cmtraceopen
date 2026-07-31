@@ -320,6 +320,22 @@ fn extract_ids(message: &str) -> (Option<String>, Option<String>) {
 pub fn classify_record(source_kind: ScriptSourceKind, message: &str) -> RecordClassification {
     let mut result = RecordClassification::empty();
 
+    // Identifiers are only extracted from a *confirmed* platform-script source.
+    //
+    // Without this gate, an artifact that merely happens to be named
+    // `AgentExecutor.log` -- and which `classify_artifact` correctly refused to
+    // confirm -- could still mint a transaction from any line that happened to
+    // contain a policy GUID. HealthScripts is excluded for the same reason from
+    // the other direction: it is remediation evidence, and until #360 defines
+    // the handoff, letting it carry a key would attach remediation records to a
+    // platform-script transaction.
+    if !matches!(
+        source_kind,
+        ScriptSourceKind::AgentExecutor | ScriptSourceKind::IntuneManagementExtension
+    ) {
+        return result;
+    }
+
     let (policy_id, run_id) = extract_ids(message);
     result.policy_id = policy_id;
     result.run_id = run_id;
@@ -595,6 +611,29 @@ mod tests {
         // must not be demoted to low confidence because of it.
         let result = agent(r"Launching: powershell.exe -ExecutionPolicy Bypass -File script.ps1");
         assert!(!result.execution_shaped_but_unmatched);
+    }
+
+    #[test]
+    fn an_unconfirmed_artifact_yields_no_identifiers_at_all() {
+        // `classify_artifact` refused to confirm this source. If identifiers
+        // were still extracted, an unrelated file that merely mentions a policy
+        // GUID could mint a transaction.
+        let result = classify_record(
+            ScriptSourceKind::Unknown,
+            &format!(r"Powershell script is: C:\\Policies\\Scripts\\{POLICY}_{RUN}.ps1"),
+        );
+        assert_eq!(result.policy_id, None);
+        assert_eq!(result.run_id, None);
+        assert!(!result.is_key_bearing());
+    }
+
+    #[test]
+    fn health_scripts_records_carry_no_key_into_a_script_transaction() {
+        let result = classify_record(
+            ScriptSourceKind::HealthScripts,
+            &format!("Remediation for PolicyId = {POLICY}"),
+        );
+        assert_eq!(result.policy_id, None);
     }
 
     #[test]

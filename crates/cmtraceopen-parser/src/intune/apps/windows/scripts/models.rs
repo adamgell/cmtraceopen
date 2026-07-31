@@ -42,9 +42,15 @@ impl ScriptClassifiedString {
     }
 }
 
-/// A source timestamp. The original text is always preserved; the UTC form is
-/// only populated when the source carried an offset we could resolve, so
-/// ordering never silently invents a timezone.
+/// A source timestamp.
+///
+/// The original text is always preserved. `normalized_utc` is populated **only**
+/// when the record embedded its own UTC offset, which `original_offset` then
+/// reports. IME records frequently carry no offset at all; in that case the
+/// underlying parser can still render a UTC-looking value, but it derives it
+/// from the *parsing machine's* local offset rather than from the evidence. A
+/// value like that is not source-accurate, so it is deliberately not surfaced
+/// here and ordering never silently inherits a timezone the log never stated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptTimestamp {

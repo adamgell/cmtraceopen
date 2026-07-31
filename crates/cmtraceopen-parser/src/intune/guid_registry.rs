@@ -436,6 +436,7 @@ mod tests {
             message: msg.to_string(),
             component: None,
             thread: None,
+            timezone_offset: None,
         }
     }
 

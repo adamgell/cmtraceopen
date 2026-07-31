@@ -17,6 +17,13 @@ pub struct ImeLine {
     /// CCM `thread=` attribute. Consumers that correlate a sequence of records
     /// belonging to one operation need this to avoid joining interleaved work.
     pub thread: Option<u32>,
+    /// Timezone offset in minutes, present only when the record embedded one.
+    ///
+    /// `None` means the log carried no offset. `timestamp_utc` is still filled
+    /// in for display, but it is derived from the *parsing machine's* local
+    /// offset in that case, so consumers that need trustworthy ordering must
+    /// check this field rather than assume `timestamp_utc` is source-accurate.
+    pub timezone_offset: Option<i32>,
 }
 
 fn ime_record_re() -> &'static Regex {
@@ -45,7 +52,6 @@ struct ParsedImeRecord {
     severity: Severity,
     thread_display: Option<String>,
     source_file: Option<String>,
-    timezone_offset: Option<i32>,
     format: LogFormat,
 }
 
@@ -85,7 +91,7 @@ pub fn parse_ime_entries(content: &str, file_path: &str) -> (Vec<LogEntry>, u32)
             source_file: entry.source_file,
             format: entry.format,
             file_path: file_path.to_string(),
-            timezone_offset: entry.timezone_offset,
+            timezone_offset: entry.line.timezone_offset,
             error_code_spans: Vec::new(),
             ip_address: None,
             host_name: None,
@@ -257,13 +263,13 @@ fn parse_record(
             message,
             component,
             thread,
+            timezone_offset,
         },
         timestamp_millis,
         timestamp_display,
         severity,
         thread_display,
         source_file,
-        timezone_offset,
         format: LogFormat::Ccm,
     })
 }
@@ -599,13 +605,13 @@ fn push_unmatched_segment(
                     message: trimmed.to_string(),
                     component: None,
                     thread: None,
+                    timezone_offset: None,
                 },
                 timestamp_millis: None,
                 timestamp_display: None,
                 severity: detect_severity_from_text(trimmed),
                 thread_display: None,
                 source_file: None,
-                timezone_offset: None,
                 format: LogFormat::Plain,
             });
             *parse_errors += 1;
@@ -638,13 +644,13 @@ fn parse_fallback_lines(content: &str) -> ParsedImeChunk {
                     message: message.clone(),
                     component: None,
                     thread: None,
+                    timezone_offset: None,
                 },
                 timestamp_millis: None,
                 timestamp_display: timestamp,
                 severity: detect_severity_from_text(&message),
                 thread_display: None,
                 source_file: None,
-                timezone_offset: None,
                 format: LogFormat::Plain,
             });
         } else {
@@ -656,13 +662,13 @@ fn parse_fallback_lines(content: &str) -> ParsedImeChunk {
                     message: trimmed.to_string(),
                     component: None,
                     thread: None,
+                    timezone_offset: None,
                 },
                 timestamp_millis: None,
                 timestamp_display: None,
                 severity: detect_severity_from_text(trimmed),
                 thread_display: None,
                 source_file: None,
-                timezone_offset: None,
                 format: LogFormat::Plain,
             });
         }

@@ -239,6 +239,7 @@ mod tests {
             message: msg.to_string(),
             component: Some("AppWorkload".to_string()),
             thread: None,
+            timezone_offset: None,
         }
     }
 

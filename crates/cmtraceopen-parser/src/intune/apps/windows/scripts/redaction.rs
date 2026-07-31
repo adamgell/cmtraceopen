@@ -48,12 +48,24 @@ fn user_path_re() -> &'static Regex {
     })
 }
 
-/// A PowerShell command line supplied inline.
+/// A command line or credential value supplied inline after a flag.
+///
+/// Two properties matter here and both were bugs before:
+///
+/// * The value must stop at a line break rather than at the end of the string.
+///   A CCM record is one *logical* record and routinely contains newlines (see
+///   the `multiline-ccm-record` fixture). Anchoring on `$` meant a `-Command`
+///   inside a multi-line record matched nothing at all and leaked in full.
+/// * The flag vocabulary covers credential-bearing switches, not just
+///   `-Command`. A launch record reading `-Password hunter2` is exactly as
+///   sensitive as an inline command and was previously exported verbatim.
 fn command_line_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"(?i)(?P<flag>-(?:Command|EncodedCommand)\s+)(?P<value>\S.*)$")
-            .expect("command line regex must compile")
+        Regex::new(
+            r"(?i)(?P<flag>-(?:Command|EncodedCommand|Password|Secret|ClientSecret|Token|AccessToken|ApiKey|Api[-_]?Key|Credential|Authorization)\s+)(?P<value>[^\r\n]+)",
+        )
+        .expect("command line regex must compile")
     })
 }
 
@@ -69,7 +81,7 @@ pub fn redact_text(value: &str) -> String {
 
     command_line_re()
         .replace_all(&masked, |caps: &regex::Captures<'_>| {
-            let value = &caps["value"];
+            let value = caps["value"].trim_end();
             // Already masked: re-masking would hash the token and break
             // idempotence.
             if value.starts_with("[command:") && value.ends_with(']') {
@@ -179,6 +191,43 @@ mod tests {
     #[test]
     fn projection_is_idempotent() {
         let once = redact_text(r"adele.vance@contoso.example at C:\Users\adele.vance\a.ps1");
+        let twice = redact_text(&once);
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn command_value_is_masked_inside_a_multiline_record() {
+        // A CCM record is one logical record and may contain newlines. The
+        // value must be found and masked without an end-of-string anchor.
+        let record =
+            "Launching: powershell.exe -Command Set-Secret hunter2\nAt line:1 char:1\n+ throw";
+        let redacted = redact_text(record);
+        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
+        assert!(
+            redacted.contains("At line:1 char:1"),
+            "the rest of the record must survive: {redacted:?}"
+        );
+    }
+
+    #[test]
+    fn credential_flags_beyond_command_are_masked() {
+        for (flag, secret) in [
+            ("-Password", "hunter2"),
+            ("-ApiKey", "abc123def"),
+            ("-ClientSecret", "s3cr3tvalue"),
+            ("-Token", "tok-9999"),
+        ] {
+            let redacted = redact_text(&format!("powershell.exe {flag} {secret}"));
+            assert!(
+                !redacted.contains(secret),
+                "{flag} leaked its value: {redacted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn multiline_redaction_is_idempotent() {
+        let once = redact_text("cmd -Command Set-Secret hunter2\nsecond line");
         let twice = redact_text(&once);
         assert_eq!(once, twice);
     }

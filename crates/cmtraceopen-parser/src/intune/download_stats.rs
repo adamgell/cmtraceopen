@@ -527,6 +527,7 @@ mod tests {
                 message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
             ImeLine {
                 line_number: 2,
@@ -535,6 +536,7 @@ mod tests {
                 message: "Download completed successfully. Content size: 5242880 bytes, speed: 1048576 Bps, Delivery Optimization: 75.5%".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
         ];
 
@@ -554,6 +556,7 @@ mod tests {
                 message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
             ImeLine {
                 line_number: 2,
@@ -562,6 +565,7 @@ mod tests {
                 message: "Content download stalled with no progress for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
         ];
 
@@ -580,6 +584,7 @@ mod tests {
                 .to_string(),
             component: None,
             thread: None,
+            timezone_offset: None,
         }];
 
         let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
@@ -596,6 +601,7 @@ mod tests {
                 message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
             ImeLine {
                 line_number: 2,
@@ -604,6 +610,7 @@ mod tests {
                 message: "Download failed, retrying content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
         ];
 
@@ -621,6 +628,7 @@ mod tests {
             message: "Adding new state transition - From: Install In Progress To: Download In Progress With Event: Download Started.".to_string(),
             component: None,
             thread: None,
+            timezone_offset: None,
         }];
 
         let downloads = extract_downloads(
@@ -640,6 +648,7 @@ mod tests {
             message: r#"RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"MaxRetries\":3,\"RetryIntervalInMinutes\":5,\"DownloadStartTimeUTC\":\"\\/Date(-62135578800000)\\/\"}"#.to_string(),
             component: None,
             thread: None,
+            timezone_offset: None,
         }];
 
         let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
@@ -656,6 +665,7 @@ mod tests {
                 message: r#"Starting content download RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"ApplicationName\":\"Contoso App\"}"#.to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
             ImeLine {
                 line_number: 2,
@@ -664,6 +674,7 @@ mod tests {
                 message: r#"Download completed successfully RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"ApplicationName\":\"Contoso App\"}"#.to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
         ];
 
@@ -686,6 +697,7 @@ mod tests {
                 message: "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
             ImeLine {
                 line_number: 2,
@@ -694,6 +706,7 @@ mod tests {
                 message: "Download completed successfully. Content size: 5242880 bytes, speed: 1048576 Bps, Delivery Optimization: 75.5%".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             },
         ];
 

@@ -1697,6 +1697,7 @@ mod tests {
             message: message.to_string(),
             component: None,
             thread: None,
+            timezone_offset: None,
         }
     }
 
@@ -1710,6 +1711,7 @@ mod tests {
                 message: "Assignment evaluation failed for app with id: a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string(),
                 component: None,
                 thread: None,
+                timezone_offset: None,
             }],
             "C:/Logs/AppActionProcessor.log",
             &empty_registry(),
