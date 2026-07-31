@@ -677,12 +677,22 @@ fn validate_evidence_reference(
 fn validate_coverage_gaps(
     coverage_gaps: &[SccmFindingCoverageGap],
 ) -> Result<(), SccmFindingValidationError> {
-    if coverage_gaps.iter().any(|gap| {
-        !is_canonical_opaque_id(&gap.artifact_id)
+    let mut coverage_by_artifact: BTreeMap<&str, &SccmFindingCoverageGap> = BTreeMap::new();
+    for gap in coverage_gaps {
+        if !is_canonical_opaque_id(&gap.artifact_id)
             || gap.artifact_id.chars().count() > MAX_SCCM_COVERAGE_GAP_ARTIFACT_ID_CHARS
             || gap.coverage == SccmCoverageState::Captured
-    }) {
-        return Err(SccmFindingValidationError::InvalidCoverageGap);
+        {
+            return Err(SccmFindingValidationError::InvalidCoverageGap);
+        }
+
+        if let Some(previous) = coverage_by_artifact.get(gap.artifact_id.as_str()) {
+            if previous.role != gap.role || previous.coverage != gap.coverage {
+                return Err(SccmFindingValidationError::InvalidCoverageGap);
+            }
+        } else {
+            coverage_by_artifact.insert(gap.artifact_id.as_str(), gap);
+        }
     }
     Ok(())
 }
@@ -859,33 +869,47 @@ fn has_root_collection_scope(tokens: &[&str]) -> bool {
 }
 
 fn has_broad_collection_scope(tokens: &[&str]) -> bool {
-    for (action_index, action) in tokens.iter().enumerate() {
-        if !is_collection_action(action) {
-            continue;
-        }
-        for broad_index in (action_index + 1)..tokens.len().min(action_index + 4) {
-            if !matches!(
-                tokens[broad_index],
-                "all" | "every" | "entire" | "whole" | "full" | "complete"
-            ) {
-                continue;
-            }
-            for target_index in (broad_index + 1)..tokens.len().min(broad_index + 4) {
-                if !is_collection_target(tokens[target_index]) {
-                    continue;
-                }
-                if matches!(tokens[target_index], "disk" | "disks")
-                    && tokens
-                        .get(target_index + 1)
-                        .is_some_and(|descriptor| matches!(*descriptor, "imaging" | "encryption"))
-                {
-                    break;
-                }
-                return true;
-            }
-        }
-    }
-    false
+    let has_collection_target = tokens.iter().any(|token| is_collection_target(token));
+    has_collection_target
+        && tokens.iter().enumerate().any(|(index, token)| {
+            is_broad_quantifier(token) && !is_reviewed_bounded_narrative(tokens, index)
+        })
+}
+
+fn is_broad_quantifier(token: &str) -> bool {
+    matches!(
+        token,
+        "all" | "every" | "entire" | "whole" | "full" | "complete"
+    )
+}
+
+fn is_reviewed_bounded_narrative(tokens: &[&str], quantifier_index: usize) -> bool {
+    let quantifier = tokens[quantifier_index];
+    let bounded_disk_description = matches!(quantifier, "full" | "whole")
+        && tokens
+            .get(quantifier_index + 1)
+            .is_some_and(|target| matches!(*target, "disk" | "disks"))
+        && tokens
+            .get(quantifier_index + 2)
+            .is_some_and(|descriptor| matches!(*descriptor, "imaging" | "encryption"))
+        && has_specific_log_reference(tokens, quantifier_index + 3);
+    let downloaded_files_observation = quantifier == "all"
+        && tokens.get(quantifier_index + 1) == Some(&"files")
+        && tokens.get(quantifier_index + 2) == Some(&"were")
+        && tokens.get(quantifier_index + 3) == Some(&"downloaded")
+        && has_specific_log_reference(tokens, quantifier_index + 4);
+
+    bounded_disk_description || downloaded_files_observation
+}
+
+fn has_specific_log_reference(tokens: &[&str], start: usize) -> bool {
+    tokens[start..].windows(2).any(|pair| {
+        pair[1] == "log"
+            && !matches!(
+                pair[0],
+                "a" | "all" | "any" | "every" | "each" | "system" | "the"
+            )
+    })
 }
 
 fn validate_terminal_evidence(

@@ -135,6 +135,19 @@ const COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 5] = [
     "Collect every log on the system.",
 ];
 
+const ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 10] = [
+    "Every log on the system must be collected.",
+    "Request all files on the system.",
+    "Obtain every directory from the machine.",
+    "Copy the entire filesystem for review.",
+    "Enumerate all folders under the client.",
+    "Download all logs from the device.",
+    "Archive the whole disk.",
+    "All files from every directory are required.",
+    "Collect all of the files.",
+    "Scan every single directory.",
+];
+
 const BOUNDED_NARRATIVE_ARTIFACT_REQUEST_REASONS: [&str; 5] = [
     "Collect the full disk imaging Task Sequence log.",
     "Confirm the whole-disk encryption status recorded in PolicyAgent.log.",
@@ -1255,6 +1268,7 @@ fn finding_artifact_requests_reject_structurally_unbounded_reasons() {
         .into_iter()
         .chain(ROOTED_ARTIFACT_REQUEST_REASONS)
         .chain(COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
+        .chain(ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
     {
         let result = SccmFindingBuilder::new("unbounded-structural-request")
             .class(SccmFindingClass::Symptom)
@@ -1342,6 +1356,7 @@ fn finding_artifact_request_bounds_apply_to_deserialization_and_serialization() 
             "Scan the full disk for related evidence.",
         ])
         .chain(COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
+        .chain(ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS)
     {
         let mut direct = finding.clone();
         direct.next_artifacts[0].reason = reason.into();
@@ -1561,6 +1576,92 @@ fn finding_insufficient_evidence_requires_an_explicit_noncaptured_gap() {
         captured_is_not_a_gap.unwrap_err(),
         SccmFindingValidationError::InvalidCoverageGap
     );
+}
+
+#[test]
+fn finding_rejects_conflicting_coverage_for_one_artifact_identity() {
+    let first = finding_client_gap("client-policy-agent", SccmCoverageState::Absent);
+    let conflicts = [
+        (
+            "state",
+            vec![
+                first.clone(),
+                finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied),
+            ],
+        ),
+        (
+            "role",
+            vec![
+                first.clone(),
+                SccmFindingCoverageGap {
+                    artifact_id: "client-policy-agent".into(),
+                    role: SccmRole::ManagementPoint,
+                    coverage: SccmCoverageState::Absent,
+                },
+            ],
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (label, gaps) in conflicts {
+        let builder = SccmFindingBuilder::new(format!("conflicting-coverage-builder-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .coverage_gaps(gaps.clone())
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+            accepted.push(format!("builder: {label}"));
+        }
+
+        let mut direct =
+            finding_with_gap_and_request(&format!("conflicting-coverage-direct-{label}"));
+        direct.coverage_gaps = gaps.clone();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+            accepted.push(format!("direct validate: {label}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {label}"));
+        }
+
+        let mut json = serde_json::to_value(finding_with_gap_and_request(&format!(
+            "conflicting-coverage-json-{label}"
+        )))
+        .unwrap();
+        json["coverageGaps"] = serde_json::to_value(gaps).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {label}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted conflicting coverage: {accepted:#?}"
+    );
+
+    let duplicate = finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied);
+    let built = SccmFindingBuilder::new("duplicate-coverage-builder")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .coverage_gaps(vec![duplicate.clone(), duplicate.clone()])
+        .build()
+        .unwrap();
+    assert_eq!(built.coverage_gaps, vec![duplicate.clone()]);
+
+    let mut direct = built.clone();
+    direct.coverage_gaps = vec![duplicate.clone(), duplicate];
+    direct.validate().unwrap();
+    let serialized = serde_json::to_value(&direct).unwrap();
+    assert_eq!(serialized["coverageGaps"].as_array().unwrap().len(), 1);
+    let deserialized = serde_json::from_value::<SccmFinding>(serialized).unwrap();
+    assert_eq!(deserialized.coverage_gaps.len(), 1);
 }
 
 #[test]
