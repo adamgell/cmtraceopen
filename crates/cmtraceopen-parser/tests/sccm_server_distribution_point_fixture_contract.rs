@@ -2279,6 +2279,17 @@ fn replace_fixture_text(
         .expect("temporary fixture mutation is written");
 }
 
+fn append_fixture_record(scenario_root: &std::path::Path, relative_path: &str, record: &str) {
+    let path = scenario_root.join(relative_path);
+    let mut contents = std::fs::read_to_string(&path).expect("temporary fixture is readable");
+    if !contents.ends_with('\n') {
+        contents.push('\n');
+    }
+    contents.push_str(record);
+    contents.push('\n');
+    std::fs::write(&path, contents).expect("temporary fixture mutation is written");
+}
+
 fn refresh_artifact_bytes(
     manifest: &mut Value,
     artifact_index: usize,
@@ -3301,6 +3312,73 @@ fn terminal_success_is_bound_to_the_cited_serve_or_report_record() {
     assert!(
         !mutation_at_root_was_accepted("healthy-package", &temporary.root, &manifest, &expected,),
         "an earlier terminal success survived later nonterminal ServeOrReport evidence"
+    );
+}
+
+#[test]
+fn later_same_key_retry_invalidates_stale_high_success() {
+    let temporary = temporary_scenario("healthy-package");
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+
+    append_fixture_record(
+        &temporary.root,
+        &relative_path,
+        r#"<![LOG[SYNTHETIC FIXTURE; Phase=serveOrReport; Disposition=retrying; Terminal=false; PackageId=LAB00001; ContentId=content-alpha; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time="12:00:06.000+000" date="07-30-2026" component="SMSDPProv" context="" type="2" thread="103" file="smsdpprov.cpp:304">"#,
+    );
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+    expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .push(json!({
+            "observationId": "07-report-retry",
+            "phase": "serveOrReport",
+            "disposition": "retrying",
+            "terminal": false,
+            "evidence": [{"artifactId": "dp-healthy-03-provider", "startLine": 4, "endLine": 4}]
+        }));
+
+    assert!(
+        !mutation_at_root_was_accepted("healthy-package", &temporary.root, &manifest, &expected,),
+        "a later same-key retry retained stale high-confidence success"
+    );
+}
+
+#[test]
+fn later_same_key_success_invalidates_stale_deferred_outcome() {
+    let temporary = temporary_scenario("transfer-retry");
+    let mut manifest = read_json("transfer-retry", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("transfer-retry", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][1]["relativePath"]
+        .as_str()
+        .expect("transfer artifact has a path")
+        .to_owned();
+
+    append_fixture_record(
+        &temporary.root,
+        &relative_path,
+        r#"<![LOG[SYNTHETIC FIXTURE; Phase=transfer; Disposition=succeeded; Terminal=false; PackageId=LAB00003; ContentId=content-gamma; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time="12:03:03.000+000" date="07-30-2026" component="PkgXferMgr" context="" type="1" thread="302" file="pkgxfermgr.cpp:304">"#,
+    );
+    refresh_artifact_bytes(&mut manifest, 1, &temporary.root);
+    expected["transactions"][0]["lastSuccessfulPhase"] = json!("transfer");
+    expected["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .push(json!({
+            "observationId": "04-transfer-succeeded",
+            "phase": "transfer",
+            "disposition": "succeeded",
+            "terminal": false,
+            "evidence": [{"artifactId": "dp-transfer-retry-02-pkgxfer", "startLine": 2, "endLine": 2}]
+        }));
+
+    assert!(
+        !mutation_at_root_was_accepted("transfer-retry", &temporary.root, &manifest, &expected,),
+        "a later same-key success retained stale deferred classification"
     );
 }
 
