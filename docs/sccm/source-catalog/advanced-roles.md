@@ -45,15 +45,18 @@ Candidate names must be confirmed against configured role provenance before prom
 
 Catalog filenames and card IDs are sorted and unique. Nested role, basename, path, privacy, version-prefix, fixture, key, and supersession lists are also sorted where ordering affects serialization or comparison. Active cards cannot name a successor. Deprecated cards must name a valid successor present in the catalog and can never be semantically admitted. Supersession metadata cannot promote a card.
 
-The synthetic catalog-fixture matrix proves:
+The synthetic catalog-fixture matrix (`missing-required-field`, `redaction-required`, `unvalidated-source`, `valid`) proves:
 
 - a valid candidate remains outside the semantic catalog;
 - a missing required owner is rejected;
 - a candidate cannot declare a production reducer or diagnostic capabilities;
-- high-sensitivity data cannot disable redaction or project raw sensitive fields;
-- unknown parser and promotion values are retained for review and rejected;
-- RuleValidated admission still requires validated, nonempty, deterministic key kinds;
-- deprecation without an existing catalog successor is rejected, and deprecated cards remain outside semantic admission.
+- high-sensitivity data cannot disable redaction or project raw sensitive fields.
+
+Dedicated admission tests prove:
+
+- unknown parser and promotion values are retained for review and rejected (`unknown_parser_and_promotion_values_are_preserved_then_rejected`);
+- RuleValidated admission still requires validated, nonempty, deterministic key kinds (`only_a_fully_linked_rule_validated_card_is_semantically_admitted`);
+- deprecation without an existing catalog successor is rejected, and deprecated cards remain outside semantic admission (`deprecation_requires_an_explicit_successor_and_never_panics`).
 
 ## Native validation boundary
 
