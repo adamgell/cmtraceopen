@@ -49,8 +49,11 @@ Each manifest preserves:
   either an exact handle or the bounded `manifestTopology` basis used by one
   site-server file that contains records for multiple declared DPs;
 - source ID, exact basename, source grammar, synthetic version, path
-  fingerprint, and `SYNTHETIC://` provenance;
-- rotation kind, lineage, and fragment completeness;
+  fingerprint, and `SYNTHETIC://` provenance; path identities are compared
+  with Windows case-folding, and sanitized paths must use a declared
+  synthetic root plus the rotation-correct basename;
+- rotation kind, nonempty typed lineage, and typed fragment completeness for
+  physical captures;
 - capture state, collection timestamp, encoding, byte policy, exact copied
   byte count, and bounded relative evidence path; and
 - deterministic artifact identity and ordering.
@@ -61,6 +64,8 @@ contain records for both. A physical site-server source is captured once;
 changing its path fingerprint or destination cannot duplicate it merely to
 attach another workflow-subject handle. Each admitted logical record must
 carry an exact DP handle from the bounded manifest topology.
+An explicit multi-DP handle array is parsed element by element; malformed,
+unknown, duplicate, or primary-omitting entries cannot be projected away.
 
 ## State and exact-key contract
 
@@ -93,8 +98,9 @@ case aliases, a changed version, or a changed DP handle cannot satisfy an
 exact transaction. Observation order uses the additive normalized SCCM
 timestamp provenance, not the legacy public `LogEntry.timezone_offset`.
 Evidence later than the canonical bundle capture is rejected. Observation IDs
-are unique within a transaction, and one physical
-`(artifactId, startLine, endLine)` reference can be consumed only once.
+are nonempty and unique across transaction and source-local output classes,
+and one physical `(artifactId, startLine, endLine)` reference can be consumed
+only once across the scenario.
 
 The outcome rules are conservative:
 
@@ -113,6 +119,8 @@ The outcome rules are conservative:
 `captured`, `absent`, `accessDenied`, `capped`, `skipped`, `unsupported`, and
 `parseFailed` remain distinct physical manifest states. The expected coverage
 array is an exact, sorted projection of physical artifact IDs and states.
+Coverage-gap artifact IDs are nonempty typed strings, sorted, unique, and
+bound to a declared non-complete physical artifact.
 
 Artifact requests contain only a catalogued source ID and one versioned reason
 code:

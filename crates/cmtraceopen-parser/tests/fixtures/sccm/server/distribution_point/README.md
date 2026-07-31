@@ -13,6 +13,12 @@ exact DP/content/version identity from each normalized logical CCM record.
 - `expected.json` is a preparation label, not a frozen production API.
 - Exact package/content/version/DP/profile keys keep versions and DPs
   independent.
+- Case-folded path fingerprints stay unique, sanitized roots and rotated
+  basenames stay synthetic, and topology arrays retain only typed declared
+  handles.
+- Rotation lineage/fragment fields, observation IDs, evidence references, and
+  coverage-gap IDs fail closed on malformed, empty, duplicate, or reused
+  values.
 - Missing, denied, malformed, capped, or split evidence is coverage only.
 - Client records and timestamps alone never establish a DP transaction or
   cross-side cause.
