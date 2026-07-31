@@ -1044,6 +1044,46 @@ fn reordered_scenarios_encode_opposite_order_input_evidence() {
     }
 }
 
+fn check_mutated_guard_matrix(mutate: impl FnOnce(&mut Value)) -> Result<(), String> {
+    let mut value = read_json(&corpus_root().join("shared/adversarial-matrix.json"));
+    mutate(&mut value);
+    let matrix: GuardMatrix = typed(value)?;
+    check_guard_matrix(&matrix)
+}
+
+fn guard_slot<'a>(matrix: &'a mut Value, guard_id: &str) -> &'a mut Value {
+    matrix["guards"]
+        .as_array_mut()
+        .expect("guard matrix fixture has a guards array")
+        .iter_mut()
+        .find(|guard| guard["guardId"] == guard_id)
+        .unwrap_or_else(|| panic!("guard {guard_id} exists in the fixture"))
+}
+
+#[test]
+fn adversarial_required_output_mutations_fail_closed() {
+    let error = check_mutated_guard_matrix(|matrix| {
+        guard_slot(matrix, "invalid-timestamp-offset")["requiredOutputs"] =
+            serde_json::json!(["arbitraryOutput"]);
+    })
+    .expect_err("required outputs must stay pinned executable obligations, not free strings");
+    assert!(error.contains("invalid-timestamp-offset"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-invalid-offset")["expectedPublicProjection"] =
+            serde_json::json!({ "outcome": "notCausal" });
+    })
+    .expect_err("dropping the ordering obligation from the projection must fail");
+    assert!(error.contains("policy-invalid-offset"), "{error}");
+
+    let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
+        scenario_slot(matrix, "policy-client-only")["expected"]["artifactRequests"] =
+            serde_json::json!(["diagnostic-bundle"]);
+    })
+    .expect_err("a client-only scenario must request server-side artifacts");
+    assert!(error.contains("policy-client-only"), "{error}");
+}
+
 #[test]
 fn adversarial_reordered_input_mutations_fail_closed() {
     let error = check_mutated_matrix(POLICY_MATRIX_FIXTURE, &POLICY_SPEC, |matrix| {
