@@ -3589,6 +3589,176 @@ fn hierarchy_candidate_identity_and_provenance_are_safe_bounded_opaque_ids() {
     );
 }
 
+fn exact_sender_projection(
+    message_id: &str,
+    link_id: &str,
+    origin_site: &str,
+    target_site: &str,
+    profile_id: &str,
+    disposition: &str,
+    terminal: &str,
+) -> String {
+    format!(
+        "[sccm-public-message-v1] SYNTHETIC FIXTURE; Phase=send; Disposition={disposition}; Terminal={terminal}; MessageId={message_id}; LinkId={link_id}; OriginSite={origin_site}; TargetSite={target_site}; ProfileId={profile_id}"
+    )
+}
+
+#[test]
+fn hierarchy_serialized_candidate_host_provenance_is_bounded() {
+    let mut manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let oversized_handle = format!("safe:server:{}", "a".repeat(129));
+    manifest["topology"]["originHostHandle"] = serde_json::json!(oversized_handle);
+    manifest["artifacts"][1]["producerHostHandle"] = serde_json::json!(oversized_handle);
+
+    let candidates = hierarchy_candidate_groups("healthy-link", &manifest)
+        .expect("oversized safe-looking provenance fails closed deterministically");
+    assert!(
+        candidates
+            .iter()
+            .flat_map(|group| &group.facts)
+            .all(|fact| fact.artifact_id != "healthy-02-sender"),
+        "an oversized producer host handle reached serialized candidate facts"
+    );
+}
+
+#[test]
+fn hierarchy_candidate_relative_paths_have_total_and_segment_bounds() {
+    let manifest = read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let mutations = [
+        (
+            "oversized segment",
+            format!("evidence/{}/sender.log", "a".repeat(129)),
+        ),
+        (
+            "oversized total path",
+            format!("evidence/{}sender.log", "segment/".repeat(80)),
+        ),
+    ];
+    let mut accepted = Vec::new();
+
+    for (label, relative_path) in mutations {
+        let mut mutated = manifest.clone();
+        mutated["artifacts"][1]["relativePath"] = serde_json::json!(relative_path);
+        if artifact_is_exact_candidate(&mutated, &mutated["artifacts"][1]) {
+            accepted.push(label);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "unbounded relative paths entered exact candidate admission: {accepted:?}"
+    );
+}
+
+#[test]
+fn hierarchy_exact_profile_keys_use_closed_shared_lexical_rules() {
+    let valid = exact_sender_projection(
+        "msg-healthy-01",
+        "link-lab-chd",
+        "LAB",
+        "CHD",
+        EXACT_PROFILE,
+        "succeeded",
+        "false",
+    );
+    assert!(parse_fixture_fields(&valid).is_ok(), "control must parse");
+
+    let oversized_message = "m".repeat(129);
+    let oversized_link = "l".repeat(129);
+    let invalid = [
+        exact_sender_projection(
+            &oversized_message,
+            "link-lab-chd",
+            "LAB",
+            "CHD",
+            EXACT_PROFILE,
+            "succeeded",
+            "false",
+        ),
+        exact_sender_projection(
+            "msg-healthy-01",
+            &oversized_link,
+            "LAB",
+            "CHD",
+            EXACT_PROFILE,
+            "succeeded",
+            "false",
+        ),
+        exact_sender_projection(
+            "msg-healthy-01",
+            "link-lab-chd",
+            "LABX",
+            "CHD",
+            EXACT_PROFILE,
+            "succeeded",
+            "false",
+        ),
+        exact_sender_projection(
+            "msg-healthy-01",
+            "link-lab-chd",
+            "LAB",
+            "CHD",
+            "hierarchy-server-5.00.test-v2",
+            "succeeded",
+            "false",
+        ),
+    ];
+
+    for message in invalid {
+        assert!(
+            parse_fixture_fields(&message).is_err(),
+            "an out-of-profile exact key grammar was accepted"
+        );
+    }
+}
+
+#[test]
+fn hierarchy_disposition_and_terminal_grammar_is_closed_before_candidate_creation() {
+    for (disposition, terminal) in [
+        ("succeeded", "false"),
+        ("succeeded", "true"),
+        ("failed", "true"),
+        ("retrying", "false"),
+    ] {
+        let message = exact_sender_projection(
+            "msg-healthy-01",
+            "link-lab-chd",
+            "LAB",
+            "CHD",
+            EXACT_PROFILE,
+            disposition,
+            terminal,
+        );
+        assert!(
+            parse_fixture_fields(&message).is_ok(),
+            "declared disposition/terminal pair must parse: {disposition}/{terminal}"
+        );
+    }
+
+    let oversized_disposition = "a".repeat(129);
+    for (disposition, terminal) in [
+        (oversized_disposition.as_str(), "false"),
+        ("notADeclaredReplicationDisposition", "false"),
+        ("failed", "false"),
+        ("retrying", "true"),
+        ("succeeded", "truthy"),
+    ] {
+        let message = exact_sender_projection(
+            "msg-healthy-01",
+            "link-lab-chd",
+            "LAB",
+            "CHD",
+            EXACT_PROFILE,
+            disposition,
+            terminal,
+        );
+        assert!(
+            parse_fixture_fields(&message).is_err(),
+            "undeclared disposition/terminal grammar was accepted: {disposition}/{terminal}"
+        );
+    }
+}
+
 #[test]
 fn hierarchy_nonterminal_transactions_cannot_advertise_high_confidence_ceiling() {
     let manifest = read_json("backlog-retry", "manifest.json").expect("backlog manifest loads");
