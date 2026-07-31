@@ -4,5 +4,7 @@
 //! remain outside `cmtraceopen-parser`.
 
 mod intake;
+mod policy;
 
 pub use intake::*;
+pub use policy::*;

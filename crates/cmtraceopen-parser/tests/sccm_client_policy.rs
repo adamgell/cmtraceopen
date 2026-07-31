@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::{
-    analyze_client_policy, normalize_ccm_artifact, SccmArtifact, SccmCoverageState,
-    SccmNormalizedBundle, SccmRole, SccmRotation,
+    analyze_client_policy, declared_source_catalog, normalize_ccm_artifact, SccmArtifact,
+    SccmArtifactFamily, SccmCoverageState, SccmNormalizedBundle, SccmRole, SccmRotation,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -187,6 +187,28 @@ fn actual_transaction_projection(analysis: &Value) -> Vec<Value> {
         .collect()
 }
 
+fn reference_is_within_expected_ranges(reference: &Value, expected_ranges: &[Value]) -> bool {
+    let Some(artifact_id) = reference["artifactId"].as_str() else {
+        return false;
+    };
+    let Some(line_start) = reference["lineStart"].as_u64() else {
+        return false;
+    };
+    let Some(line_end) = reference["lineEnd"].as_u64() else {
+        return false;
+    };
+
+    expected_ranges.iter().any(|expected_reference| {
+        expected_reference["artifactId"].as_str() == Some(artifact_id)
+            && expected_reference["startLine"]
+                .as_u64()
+                .is_some_and(|start| start <= line_start)
+            && expected_reference["endLine"]
+                .as_u64()
+                .is_some_and(|end| line_end <= end)
+    })
+}
+
 fn assert_transaction_evidence_is_within_expected_ranges(
     scenario: &str,
     analysis: &Value,
@@ -229,21 +251,9 @@ fn assert_transaction_evidence_is_within_expected_ranges(
             let artifact_id = reference["artifactId"]
                 .as_str()
                 .expect("analysis artifact ID");
-            let line_start = reference["lineStart"]
-                .as_u64()
-                .expect("analysis line start");
-            let line_end = reference["lineEnd"].as_u64().expect("analysis line end");
             assert!(
-                expected_ranges.iter().any(|expected_reference| {
-                    expected_reference["artifactId"].as_str() == Some(artifact_id)
-                        && expected_reference["startLine"]
-                            .as_u64()
-                            .is_some_and(|start| start <= line_start)
-                        && expected_reference["endLine"]
-                            .as_u64()
-                            .is_some_and(|end| line_end <= end)
-                }),
-                "{scenario}: {transaction_id} emitted an uncited range {artifact_id}:{line_start}-{line_end}"
+                reference_is_within_expected_ranges(reference, expected_ranges),
+                "{scenario}: {transaction_id} emitted an uncited range in {artifact_id}"
             );
             observed_artifacts.insert(artifact_id);
         }
@@ -256,6 +266,246 @@ fn assert_transaction_evidence_is_within_expected_ranges(
                 observed_artifacts.contains(artifact_id),
                 "{scenario}: {transaction_id} omitted expected artifact {artifact_id}"
             );
+        }
+    }
+}
+
+fn assert_transaction_keys_and_counterpart_match_contract(
+    scenario: &str,
+    analysis: &Value,
+    expected: &Value,
+) {
+    let actual_by_id = analysis["transactions"]
+        .as_array()
+        .expect("analysis transactions")
+        .iter()
+        .map(|transaction| {
+            (
+                transaction["transactionId"]
+                    .as_str()
+                    .expect("transaction ID"),
+                transaction,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for expected_transaction in expected["transactions"]
+        .as_array()
+        .expect("expected transactions")
+    {
+        let transaction_id = expected_transaction["transactionId"]
+            .as_str()
+            .expect("expected transaction ID");
+        let actual = actual_by_id
+            .get(transaction_id)
+            .unwrap_or_else(|| panic!("{scenario}: missing transaction {transaction_id}"));
+        let expected_key = &expected_transaction["key"];
+        assert_eq!(
+            actual["key"],
+            json!({
+                "assignmentId": expected_key["assignmentId"],
+                "policyId": expected_key["policyId"],
+                "requestId": expected_key["requestId"],
+                "clientHandle": expected_key["clientHandle"],
+                "siteCode": expected_key["siteCode"],
+                "managementPointHostHandle": expected_key["managementPointHostHandle"],
+                "extractionProfileId": expected_key["extractionProfileId"],
+            }),
+            "{scenario}: {transaction_id} key"
+        );
+
+        let expected_counterpart = &expected_transaction["counterpartReadyFact"];
+        assert_eq!(
+            actual["counterpartReadyFact"]["phase"], expected_counterpart["phase"],
+            "{scenario}: {transaction_id} counterpart phase"
+        );
+        assert_eq!(
+            actual["counterpartReadyFact"]["extractionProfileId"],
+            expected_counterpart["extractionProfileId"],
+            "{scenario}: {transaction_id} counterpart profile"
+        );
+        assert!(
+            reference_is_within_expected_ranges(
+                &actual["counterpartReadyFact"]["evidence"],
+                std::slice::from_ref(&expected_counterpart["evidence"]),
+            ),
+            "{scenario}: {transaction_id} counterpart evidence"
+        );
+    }
+}
+
+fn source_local_projection(value: &Value, next_field: &str) -> Vec<Value> {
+    value["sourceLocalObservations"]
+        .as_array()
+        .expect("source-local observations")
+        .iter()
+        .map(|observation| {
+            let next_logical_id = if next_field == "nextArtifact" {
+                observation["nextArtifact"]["logicalArtifactId"].clone()
+            } else {
+                observation["nextArtifacts"]
+                    .as_array()
+                    .and_then(|requests| requests.first())
+                    .map(|request| request["logicalId"].clone())
+                    .unwrap_or(Value::Null)
+            };
+            json!({
+                "observationId": observation["observationId"],
+                "phase": observation["phase"],
+                "state": observation["state"],
+                "classification": observation["classification"],
+                "confidence": observation["confidence"],
+                "correlationEligible": observation["correlationEligible"],
+                "nextArtifactLogicalId": next_logical_id,
+            })
+        })
+        .collect()
+}
+
+fn assert_source_local_evidence_is_within_expected_ranges(
+    scenario: &str,
+    analysis: &Value,
+    expected: &Value,
+) {
+    let actual_by_id = analysis["sourceLocalObservations"]
+        .as_array()
+        .expect("source-local observations")
+        .iter()
+        .map(|observation| {
+            (
+                observation["observationId"]
+                    .as_str()
+                    .expect("observation ID"),
+                observation,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for expected_observation in expected["sourceLocalObservations"]
+        .as_array()
+        .expect("expected source-local observations")
+    {
+        let observation_id = expected_observation["observationId"]
+            .as_str()
+            .expect("expected observation ID");
+        let actual = actual_by_id
+            .get(observation_id)
+            .unwrap_or_else(|| panic!("{scenario}: missing observation {observation_id}"));
+        let expected_ranges = expected_observation["evidence"]
+            .as_array()
+            .expect("expected observation evidence");
+        let actual_references = actual["evidence"].as_array().expect("observation evidence");
+        assert!(
+            actual_references
+                .iter()
+                .all(|reference| reference_is_within_expected_ranges(reference, expected_ranges)),
+            "{scenario}: {observation_id} emitted uncited evidence"
+        );
+        for expected_reference in expected_ranges {
+            assert!(
+                actual_references.iter().any(|reference| {
+                    reference["artifactId"] == expected_reference["artifactId"]
+                }),
+                "{scenario}: {observation_id} omitted expected evidence"
+            );
+        }
+    }
+}
+
+fn finding_signature(class: &str, confidence: &str, next_group: Option<&str>) -> String {
+    format!("{class}|{confidence}|{}", next_group.unwrap_or("<none>"))
+}
+
+fn expected_finding_signatures(expected: &Value) -> Vec<String> {
+    let mut signatures = expected["findings"]
+        .as_array()
+        .expect("expected findings")
+        .iter()
+        .map(|finding| {
+            let class = match finding["class"].as_str().expect("finding class") {
+                "contradictoryEvidence" | "lowConfidenceSymptom" => "symptom",
+                class => class,
+            };
+            let confidence = match finding["confidence"].as_str().expect("finding confidence") {
+                "medium" => "moderate",
+                confidence => confidence,
+            };
+            finding_signature(
+                class,
+                confidence,
+                finding["nextArtifact"]["logicalArtifactId"].as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    signatures.sort();
+    signatures
+}
+
+fn actual_finding_signatures(analysis: &Value) -> Vec<String> {
+    let mut signatures = analysis["findings"]
+        .as_array()
+        .expect("analysis findings")
+        .iter()
+        .map(|finding| {
+            assert_eq!(finding["phase"], "policy");
+            assert_eq!(finding["role"], "client");
+            let mut groups = finding["nextArtifacts"]
+                .as_array()
+                .expect("finding requests")
+                .iter()
+                .filter_map(|request| match request["logicalId"].as_str()? {
+                    "clientLocation" => Some("client-location"),
+                    "policyAgent" => Some("client-policy-agent"),
+                    "ciAgent" | "stateMessage" => Some("client-policy-state"),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            assert!(groups.len() <= 1, "one finding requested unrelated groups");
+            finding_signature(
+                finding["class"].as_str().expect("finding class"),
+                finding["confidence"].as_str().expect("finding confidence"),
+                groups.pop_first(),
+            )
+        })
+        .collect::<Vec<_>>();
+    signatures.sort();
+    signatures
+}
+
+fn assert_findings_are_cited_and_conservative(analysis: &Value) {
+    for finding in analysis["findings"].as_array().expect("analysis findings") {
+        let evidence = finding["evidence"].as_array().expect("finding evidence");
+        let terminal = finding["terminalEvidence"]
+            .as_array()
+            .expect("terminal evidence");
+        let gaps = finding["coverageGaps"]
+            .as_array()
+            .expect("finding coverage gaps");
+        let requests = finding["nextArtifacts"]
+            .as_array()
+            .expect("finding requests");
+
+        for terminal_reference in terminal {
+            assert!(
+                evidence.contains(&terminal_reference["reference"]),
+                "terminal evidence must also be cited"
+            );
+        }
+        match finding["class"].as_str().expect("finding class") {
+            "confirmedFailure" if finding["confidence"] == "high" => {
+                assert!(
+                    !terminal.is_empty(),
+                    "high confirmed failure needs terminal evidence"
+                );
+            }
+            "insufficientEvidence" => {
+                assert!(!gaps.is_empty(), "insufficient evidence needs a gap");
+                assert!(
+                    !requests.is_empty(),
+                    "insufficient evidence needs a request"
+                );
+            }
+            _ => {}
         }
     }
 }
@@ -276,18 +526,14 @@ fn policy_reducer_matches_the_frozen_terminal_and_coverage_contracts() {
             "{scenario}"
         );
         assert_transaction_evidence_is_within_expected_ranges(scenario, &analysis, &expected);
+        assert_transaction_keys_and_counterpart_match_contract(scenario, &analysis, &expected);
 
         assert_eq!(
-            analysis["sourceLocalObservations"]
-                .as_array()
-                .expect("source-local observations")
-                .len(),
-            expected["sourceLocalObservations"]
-                .as_array()
-                .expect("expected source-local observations")
-                .len(),
+            source_local_projection(&analysis, "nextArtifacts"),
+            source_local_projection(&expected, "nextArtifact"),
             "{scenario}"
         );
+        assert_source_local_evidence_is_within_expected_ranges(scenario, &analysis, &expected);
         assert_eq!(
             analysis["findings"]
                 .as_array()
@@ -299,6 +545,12 @@ fn policy_reducer_matches_the_frozen_terminal_and_coverage_contracts() {
                 .len(),
             "{scenario}"
         );
+        assert_eq!(
+            actual_finding_signatures(&analysis),
+            expected_finding_signatures(&expected),
+            "{scenario}: finding semantics"
+        );
+        assert_findings_are_cited_and_conservative(&analysis);
         assert!(
             !serde_json::to_string(&analysis)
                 .expect("analysis JSON")
@@ -325,7 +577,10 @@ fn policy_analysis_is_deterministic_under_bundle_reordering() {
     }
 }
 
-fn combine_bundles(mut left: SccmNormalizedBundle, mut right: SccmNormalizedBundle) -> SccmNormalizedBundle {
+fn combine_bundles(
+    mut left: SccmNormalizedBundle,
+    mut right: SccmNormalizedBundle,
+) -> SccmNormalizedBundle {
     left.artifacts.append(&mut right.artifacts);
     left.evidence.append(&mut right.evidence);
     left.artifacts
@@ -343,9 +598,7 @@ fn policy_failure_requires_a_nonzero_terminal_result() {
         .iter_mut()
         .find(|evidence| evidence.message.contains("failed terminal"))
         .expect("request failure evidence");
-    failed.message = failed
-        .message
-        .replace("Result=0x80070005", "Status=0");
+    failed.message = failed.message.replace("Result=0x80070005", "Status=0");
 
     let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
     assert!(
@@ -355,7 +608,10 @@ fn policy_failure_requires_a_nonzero_terminal_result() {
             .is_empty(),
         "a successful status token cannot substantiate a terminal failure"
     );
-    assert_eq!(analysis["sourceLocalObservations"][0]["correlationEligible"], false);
+    assert_eq!(
+        analysis["sourceLocalObservations"][0]["correlationEligible"],
+        false
+    );
 }
 
 #[test]
@@ -389,8 +645,7 @@ fn policy_missing_or_unknown_profile_never_emits_an_exact_transaction() {
             artifact.configmgr_version = version.map(str::to_owned);
         }
 
-        let analysis =
-            serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+        let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
         assert!(
             analysis["transactions"]
                 .as_array()
@@ -398,13 +653,11 @@ fn policy_missing_or_unknown_profile_never_emits_an_exact_transaction() {
                 .is_empty(),
             "{version:?} must not emit an exact transaction"
         );
-        assert!(
-            analysis["sourceLocalObservations"]
-                .as_array()
-                .expect("source-local observations")
-                .iter()
-                .all(|observation| observation["correlationEligible"] == false)
-        );
+        assert!(analysis["sourceLocalObservations"]
+            .as_array()
+            .expect("source-local observations")
+            .iter()
+            .all(|observation| observation["correlationEligible"] == false));
     }
 }
 
@@ -423,16 +676,13 @@ fn policy_unsafe_client_handle_is_rejected_and_not_exported() {
         artifact.original_path = Some(r"C:\Users\Adam.Gell\PolicyAgent.log".to_owned());
     }
 
-    let serialized =
-        serde_json::to_string(&analyze_client_policy(&bundle)).expect("analysis JSON");
+    let serialized = serde_json::to_string(&analyze_client_policy(&bundle)).expect("analysis JSON");
     assert!(!serialized.contains("Adam.Gell"));
     let analysis: Value = serde_json::from_str(&serialized).expect("analysis value");
-    assert!(
-        analysis["transactions"]
-            .as_array()
-            .expect("transactions")
-            .is_empty()
-    );
+    assert!(analysis["transactions"]
+        .as_array()
+        .expect("transactions")
+        .is_empty());
 }
 
 #[test]
@@ -449,29 +699,24 @@ fn policy_partial_required_source_never_proves_success() {
     let transaction = &analysis["transactions"][0];
     assert_ne!(transaction["state"], "succeeded");
     assert_ne!(transaction["confidence"], "high");
-    assert!(
-        analysis["coverageGaps"]
-            .as_array()
-            .expect("coverage gaps")
-            .iter()
-            .any(|gap| gap["coverage"] == "partial")
-    );
+    assert!(analysis["coverageGaps"]
+        .as_array()
+        .expect("coverage gaps")
+        .iter()
+        .any(|gap| gap["coverage"] == "partial"));
 }
 
 #[test]
 fn policy_unrelated_assignment_failure_does_not_change_the_target() {
     let bundle = combine_bundles(load_bundle("complete"), load_bundle("download-failure"));
     let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
-    let transactions = analysis["transactions"]
-        .as_array()
-        .expect("transactions");
+    let transactions = analysis["transactions"].as_array().expect("transactions");
     assert_eq!(transactions.len(), 2);
 
     let complete = transactions
         .iter()
         .find(|transaction| {
-            transaction["transactionId"]
-                == "policy:assignment:11111111-1111-1111-1111-111111111111"
+            transaction["transactionId"] == "policy:assignment:11111111-1111-1111-1111-111111111111"
         })
         .expect("complete transaction");
     assert_eq!(complete["state"], "succeeded");
@@ -502,8 +747,7 @@ fn policy_same_timestamp_different_keys_stay_separate() {
 #[test]
 fn policy_output_contains_no_raw_messages_paths_or_execution_context() {
     let bundle = load_bundle("complete");
-    let serialized =
-        serde_json::to_string(&analyze_client_policy(&bundle)).expect("analysis JSON");
+    let serialized = serde_json::to_string(&analyze_client_policy(&bundle)).expect("analysis JSON");
     for prohibited in [
         "SYNTHETIC FIXTURE",
         "synthetic.cc",
@@ -516,4 +760,75 @@ fn policy_output_contains_no_raw_messages_paths_or_execution_context() {
             "public analysis leaked {prohibited}"
         );
     }
+}
+
+#[test]
+fn policy_catalog_declares_the_state_sources_used_by_the_reducer() {
+    let policy_sources = declared_source_catalog()
+        .into_iter()
+        .filter(|source| {
+            source.role == SccmRole::Client && source.family == SccmArtifactFamily::ClientPolicy
+        })
+        .map(|source| (source.basename, source.logical_name))
+        .collect::<BTreeSet<_>>();
+
+    for expected in [
+        ("CIAgent.log", "ciAgent"),
+        ("CIDownloader.log", "ciDownloader"),
+        ("StateMessage.log", "stateMessage"),
+        ("StatusAgent.log", "statusAgent"),
+    ] {
+        let expected = (expected.0.to_owned(), expected.1.to_owned());
+        assert!(
+            policy_sources.contains(&expected),
+            "missing policy source {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn policy_phase_from_the_wrong_source_is_only_a_local_observation() {
+    let mut bundle = load_bundle("complete");
+    let evaluate_artifact = bundle
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.display_name == "CIAgent.log")
+        .expect("evaluation artifact");
+    evaluate_artifact.display_name = "StateMessage.log".to_owned();
+
+    let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+    let transaction = &analysis["transactions"][0];
+    assert_eq!(transaction["state"], "incomplete");
+    assert_ne!(transaction["confidence"], "high");
+    assert!(analysis["sourceLocalObservations"]
+        .as_array()
+        .expect("source-local observations")
+        .iter()
+        .all(|observation| observation["correlationEligible"] == false));
+}
+
+#[test]
+fn policy_recovery_requires_the_same_validated_assignment_key() {
+    let mut bundle = load_bundle("recovery");
+    let later_success = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Download succeeded"))
+        .expect("recovery success");
+    later_success.message = later_success.message.replace(
+        "23232323-2323-2323-2323-232323232323",
+        "33333333-3333-3333-3333-333333333333",
+    );
+
+    let analysis = serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON");
+    let failed = analysis["transactions"]
+        .as_array()
+        .expect("transactions")
+        .iter()
+        .find(|transaction| {
+            transaction["transactionId"] == "policy:assignment:23232323-2323-2323-2323-232323232323"
+        })
+        .expect("original assignment transaction");
+    assert_eq!(failed["state"], "failed");
+    assert_eq!(failed["classification"], "confirmedFailure");
 }
