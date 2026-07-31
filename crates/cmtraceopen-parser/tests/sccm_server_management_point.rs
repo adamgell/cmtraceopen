@@ -590,3 +590,286 @@ fn management_point_catalog_declares_every_reducer_source() {
         );
     }
 }
+
+fn analysis_value(bundle: &SccmManagementPointBundle) -> Value {
+    serde_json::to_value(analyze_management_point(bundle)).expect("analysis JSON")
+}
+
+fn assert_no_high_success(value: &Value, context: &str) {
+    assert!(
+        value["transactions"]
+            .as_array()
+            .expect("transactions")
+            .iter()
+            .all(|transaction| {
+                transaction["state"] != "succeeded" || transaction["confidence"] != "high"
+            }),
+        "{context}: untrusted evidence produced high success"
+    );
+}
+
+#[test]
+fn management_point_terminal_failure_requires_a_nonzero_result_and_an_exact_event_marker() {
+    let mut zero_result = load_bundle("auth-failure");
+    let failed = zero_result
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Authenticate failed terminal"))
+        .expect("auth failure evidence");
+    failed.message = failed.message.replace("Result=0x80010001", "Status=0");
+    let analysis = analysis_value(&zero_result);
+    assert!(
+        analysis["transactions"]
+            .as_array()
+            .expect("transactions")
+            .iter()
+            .all(|transaction| transaction["classification"] != "confirmedFailure"),
+        "zero status is not a terminal MP failure"
+    );
+
+    let mut narrated_success = load_bundle("healthy-policy");
+    let response = narrated_success
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Respond succeeded after retry"))
+        .expect("response success evidence");
+    response.message = response.message.replace(
+        "Respond succeeded after retry",
+        "Do not treat Respond succeeded after retry text as an outcome",
+    );
+    assert_no_high_success(
+        &analysis_value(&narrated_success),
+        "narrated event-marker text",
+    );
+}
+
+#[test]
+fn management_point_exact_keys_reject_embedded_labels_suffixes_nil_ids_and_unsafe_handles() {
+    let base = load_bundle("healthy-policy");
+
+    let mut embedded_label = base.clone();
+    for evidence in &mut embedded_label.evidence {
+        evidence.message = evidence.message.replace("RequestId=", "NotRequestId=");
+    }
+    assert!(
+        analysis_value(&embedded_label)["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "an embedded RequestId label is not an exact key"
+    );
+
+    let mut suffixed_uuid = base.clone();
+    for evidence in &mut suffixed_uuid.evidence {
+        evidence.message = evidence.message.replace(
+            "RequestId={28111111-1111-1111-1111-111111111111}",
+            "RequestId={28111111-1111-1111-1111-111111111111}suffix",
+        );
+    }
+    assert!(
+        analysis_value(&suffixed_uuid)["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "a UUID with trailing token data is not exact"
+    );
+
+    let mut nil_uuid = base.clone();
+    for evidence in &mut nil_uuid.evidence {
+        evidence.message = evidence.message.replace(
+            "28111111-1111-1111-1111-111111111111",
+            "00000000-0000-0000-0000-000000000000",
+        );
+    }
+    assert!(
+        analysis_value(&nil_uuid)["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "the nil UUID is not a usable request key"
+    );
+
+    let mut unsafe_handle = base;
+    for evidence in &mut unsafe_handle.evidence {
+        evidence.message = evidence
+            .message
+            .replace("safe:client:mp-healthy-01", "safe:client:..private");
+    }
+    assert!(
+        analysis_value(&unsafe_handle)["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "an unsafe client handle is not correlation eligible"
+    );
+}
+
+#[test]
+fn management_point_evidence_references_must_fit_the_captured_physical_source() {
+    let mut bundle = load_bundle("healthy-policy");
+    let outcome = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Record outcome succeeded"))
+        .expect("outcome evidence");
+    outcome.reference.line_end = Some(999);
+    outcome.reference.entry_id = format!("{}:4-999", outcome.reference.artifact_id);
+    outcome.evidence_id = outcome.reference.entry_id.clone();
+
+    let analysis = analysis_value(&bundle);
+    assert_no_high_success(&analysis, "out-of-bounds physical citation");
+    assert!(
+        serde_json::to_string(&analysis)
+            .expect("analysis JSON")
+            .find("\"lineEnd\":999")
+            .is_none(),
+        "an out-of-bounds citation reached public output"
+    );
+}
+
+#[test]
+fn management_point_noncaptured_sources_are_coverage_states_not_malformed_evidence() {
+    for coverage in [
+        SccmCoverageState::AccessDenied,
+        SccmCoverageState::Capped,
+        SccmCoverageState::Skipped,
+        SccmCoverageState::Unsupported,
+        SccmCoverageState::ParseFailed,
+    ] {
+        let mut bundle = load_bundle("healthy-policy");
+        let policy_artifact_id = bundle
+            .sources
+            .iter_mut()
+            .find(|source| source.source_group == "server-mp-policy")
+            .map(|source| {
+                source.artifact.coverage = coverage.clone();
+                source.artifact.artifact_id.clone()
+            })
+            .expect("policy source");
+        let analysis = analysis_value(&bundle);
+
+        assert_no_high_success(&analysis, "noncaptured policy source");
+        assert!(
+            analysis["coverageGaps"]
+                .as_array()
+                .expect("coverage gaps")
+                .iter()
+                .any(|gap| {
+                    gap["logicalArtifactId"] == "server-mp-policy"
+                        && gap["state"] == serde_json::to_value(&coverage).expect("coverage state")
+                }),
+            "{coverage:?}: exact coverage state must be retained"
+        );
+        assert!(
+            analysis["sourceLocalObservations"]
+                .as_array()
+                .expect("source-local observations")
+                .iter()
+                .all(|observation| {
+                    observation["classification"] != "lowConfidenceSymptom"
+                        || observation["evidence"]
+                            .as_array()
+                            .expect("observation evidence")
+                            .iter()
+                            .all(|reference| reference["artifactId"] != policy_artifact_id)
+                }),
+            "{coverage:?}: noncaptured bytes were misclassified as malformed evidence"
+        );
+    }
+}
+
+#[test]
+fn management_point_profile_topology_source_and_time_mutations_fail_closed() {
+    let base = load_bundle("healthy-policy");
+
+    for version in [None, Some("5.00.UNKNOWN.0000")] {
+        let mut bundle = base.clone();
+        for source in &mut bundle.sources {
+            source.artifact.configmgr_version = version.map(str::to_owned);
+        }
+        assert!(
+            analysis_value(&bundle)["transactions"]
+                .as_array()
+                .expect("transactions")
+                .is_empty(),
+            "{version:?}: unknown profile emitted an exact transaction"
+        );
+    }
+
+    let mut topology_mismatch = base.clone();
+    topology_mismatch.topology.management_point_host_handle =
+        "safe:mp:other-management-point".to_owned();
+    assert!(
+        analysis_value(&topology_mismatch)["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "incompatible topology emitted a transaction"
+    );
+
+    let mut wrong_source = base.clone();
+    let policy_source = wrong_source
+        .sources
+        .iter_mut()
+        .find(|source| source.producer == "MP_GetPolicy")
+        .expect("policy source");
+    policy_source.producer = "MP_GetAuth".to_owned();
+    assert_no_high_success(&analysis_value(&wrong_source), "wrong source ownership");
+
+    let mut invalid_offset = base.clone();
+    let response = invalid_offset
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Respond succeeded after retry"))
+        .expect("response success");
+    response.timestamp.ordering_state =
+        cmtraceopen_parser::sccm::SccmTimeOrderingState::OffsetInvalid;
+    response.timestamp.utc_millis = None;
+    assert_no_high_success(&analysis_value(&invalid_offset), "invalid offset");
+
+    let mut inverted = base;
+    let receive_millis = inverted
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("Receive request succeeded"))
+        .and_then(|evidence| evidence.timestamp.utc_millis)
+        .expect("receive UTC");
+    let outcome = inverted
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Record outcome succeeded"))
+        .expect("outcome evidence");
+    outcome.timestamp.utc_millis = Some(receive_millis - 1);
+    assert_no_high_success(&analysis_value(&inverted), "phase time inversion");
+}
+
+#[test]
+fn management_point_output_never_exports_input_paths_hosts_or_raw_messages() {
+    let mut bundle = load_bundle("healthy-policy");
+    for source in &mut bundle.sources {
+        source.artifact.original_path =
+            Some(r"C:\Users\Adam.Gell\private\MP_GetPolicy.log".to_owned());
+        source.artifact.host = Some("LAB-MP01.private.example".to_owned());
+    }
+    let evidence = bundle.evidence.first_mut().expect("fixture evidence");
+    evidence
+        .message
+        .push_str(" AuthorizationHeader=Bearer private-secret; QueryHandle=SELECT private_object");
+
+    let serialized =
+        serde_json::to_string(&analyze_management_point(&bundle)).expect("analysis JSON");
+    for prohibited in [
+        "Adam.Gell",
+        "LAB-MP01",
+        "private.example",
+        "private-secret",
+        "private_object",
+        "AuthorizationHeader",
+        "QueryHandle",
+    ] {
+        assert!(
+            !serialized.contains(prohibited),
+            "public MP output leaked {prohibited}"
+        );
+    }
+}
