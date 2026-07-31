@@ -4,6 +4,7 @@ mod commands;
 mod constants;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
+pub mod elevation;
 pub mod error;
 pub use cmtraceopen_parser::error_db;
 #[cfg(feature = "esp-diagnostics")]
