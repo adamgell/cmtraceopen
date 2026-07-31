@@ -819,14 +819,7 @@ fn reason_scope_is_within_catalog_artifact(
         return false;
     }
 
-    let clauses = request_clauses(reason).collect::<Vec<_>>();
-    let has_collection_directive = clauses.iter().any(|clause| {
-        tokenize_request_reason(clause)
-            .iter()
-            .any(|token| is_collection_action(token.text))
-    });
-
-    clauses.into_iter().all(|clause| {
+    request_clauses(reason).all(|clause| {
         let tokens = tokenize_request_reason(clause);
         let identity_ranges = exact_collectable_identity_ranges(clause, authorization);
         let is_confirmation = tokens.first().is_some_and(|token| token.text == "confirm");
@@ -837,13 +830,11 @@ fn reason_scope_is_within_catalog_artifact(
             confirmation_clause_is_non_authorizing(&tokens, &identity_ranges)
         } else if contains_collection_directive {
             collection_clause_is_catalog_bounded(clause, &tokens, &identity_ranges)
-        } else if has_collection_directive {
-            // An authorized action cannot lend its identity to another
-            // strong-punctuation clause. Only independently safe evidence
-            // observations remain non-authorizing.
-            narrative_clause_is_safe_observation(clause, &tokens, &identity_ranges)
         } else {
-            narrative_clause_has_no_collection_scope(&tokens)
+            // A clause without a recognized collection action is never an
+            // alternate authorization path. It must independently match the
+            // same positive, non-authorizing evidence grammar.
+            narrative_clause_is_safe_observation(clause, &tokens, &identity_ranges)
         }
     })
 }
@@ -1106,7 +1097,7 @@ fn collection_action_has_exact_catalog_target(
     if !is_collection_narrative_introducer(trailing[0].text) {
         return false;
     }
-    if !narrative_tokens_are_non_authorizing(clause, &trailing, identity_ranges) {
+    if !narrative_suffix_is_non_authorizing(clause, &trailing, identity_ranges) {
         return false;
     }
 
@@ -1280,13 +1271,93 @@ fn narrative_clause_is_safe_observation(
     identity_ranges: &[(usize, usize)],
 ) -> bool {
     narrative_tokens_are_non_authorizing(clause, tokens, identity_ranges)
-        && tokens.iter().any(|token| {
-            token_is_covered_by_identity(token, identity_ranges)
-                || is_evidence_narrative_subject(token.text)
-        })
+        && narrative_tokens_have_evidence_observation(tokens, identity_ranges)
+}
+
+fn narrative_suffix_is_non_authorizing(
+    clause: &str,
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    narrative_tokens_are_non_authorizing(clause, tokens, identity_ranges)
+        && (narrative_tokens_have_evidence_observation(tokens, identity_ranges)
+            || is_bounded_reference_suffix(tokens)
+            || is_bounded_bundle_suffix(tokens)
+            || is_bounded_completion_suffix(tokens))
+}
+
+fn narrative_tokens_have_evidence_observation(
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    tokens.iter().all(|token| {
+        token_is_covered_by_identity(token, identity_ranges)
+            || is_evidence_narrative_subject(token.text)
+            || is_evidence_narrative_predicate(token.text)
+            || is_collection_narrative_introducer(token.text)
+            || is_action_coordinator(token.text)
+            || matches!(
+                token.text,
+                "a" | "an" | "by" | "in" | "not" | "of" | "review" | "the" | "to"
+            )
+    }) && tokens.iter().any(|token| {
+        token_is_covered_by_identity(token, identity_ranges)
+            || is_evidence_narrative_subject(token.text)
+    }) && tokens
+        .iter()
+        .any(|token| is_evidence_narrative_predicate(token.text))
+}
+
+fn is_bounded_reference_suffix(tokens: &[RequestReasonToken<'_>]) -> bool {
+    tokens.first().is_some_and(|token| token.text == "cited")
+        && tokens.iter().any(|token| token.text == "by")
         && tokens
             .iter()
-            .any(|token| is_evidence_narrative_predicate(token.text))
+            .any(|token| matches!(token.text, "assignment" | "entry"))
+        && tokens.iter().all(|token| {
+            matches!(
+                token.text,
+                "a" | "an"
+                    | "assignment"
+                    | "by"
+                    | "cited"
+                    | "entry"
+                    | "exact"
+                    | "id"
+                    | "reference"
+                    | "requested"
+                    | "the"
+            )
+        })
+}
+
+fn is_bounded_bundle_suffix(tokens: &[RequestReasonToken<'_>]) -> bool {
+    tokens.first().is_some_and(|token| token.text == "from")
+        && tokens.iter().any(|token| token.text == "bounded")
+        && tokens.iter().any(|token| token.text == "bundle")
+        && tokens.iter().all(|token| {
+            matches!(
+                token.text,
+                "a" | "an" | "bounded" | "bundle" | "from" | "requested" | "the"
+            )
+        })
+}
+
+fn is_bounded_completion_suffix(tokens: &[RequestReasonToken<'_>]) -> bool {
+    tokens
+        .first()
+        .is_some_and(|token| matches!(token.text, "after" | "before"))
+        && tokens.iter().any(|token| token.text == "completion")
+        && tokens.iter().all(|token| {
+            token
+                .text
+                .chars()
+                .all(|character| character.is_ascii_digit())
+                || matches!(
+                    token.text,
+                    "after" | "and" | "before" | "completion" | "plus" | "then"
+                )
+        })
 }
 
 fn narrative_tokens_are_non_authorizing(
