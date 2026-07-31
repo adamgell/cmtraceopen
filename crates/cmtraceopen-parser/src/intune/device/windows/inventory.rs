@@ -205,6 +205,19 @@ pub fn parse_content(
         }
     }
 
+    // Rotation-failure severity can only be decided once continuations are
+    // attached, because the failure evidence is usually the .NET exception
+    // beneath the header rather than the header text itself.
+    if matches!(dialect, DeviceInventoryLogDialect::RotationFailure) {
+        for record in records.iter_mut() {
+            record.severity = if rotation_record_is_failure(&record.message) {
+                Severity::Error
+            } else {
+                Severity::Info
+            };
+        }
+    }
+
     let entries = records
         .into_iter()
         .enumerate()
@@ -226,18 +239,76 @@ fn count_headers(content: &str, regex: &Regex) -> usize {
         .count()
 }
 
+/// Whether a rotation-failure *header* message states a rotation failure.
+///
+/// Deliberately narrow. The contract is that a record is Error because the
+/// header or an exception identifies a failure, never because a continuation
+/// happens to contain a generic keyword, so this does not match a bare "error".
+fn rotation_header_states_failure(message: &str) -> bool {
+    let lowered = message.trim().to_ascii_lowercase();
+    lowered.contains("failed to rotate")
+        || lowered.contains("rotation failed")
+        || lowered.contains("failed to roll")
+        || lowered.starts_with("failed ")
+        || lowered.starts_with("unhandled ")
+}
+
+/// Whether a continuation line is .NET exception evidence: either a namespaced
+/// exception type (`System.IO.IOException: ...`) or an `at ...` stack frame.
+fn looks_like_dotnet_exception(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // A stack frame is indented and starts with `at `.
+    if trimmed.starts_with("at ") && line.starts_with([' ', '\t']) {
+        return true;
+    }
+    dotnet_exception_re().is_match(trimmed)
+}
+
+fn dotnet_exception_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"^(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*Exception\b")
+            .expect("Device Inventory .NET exception regex must compile")
+    })
+}
+
+/// Whether an assembled rotation record identifies a failure, from its header
+/// or from exception evidence in its continuations.
+fn rotation_record_is_failure(message: &str) -> bool {
+    let mut lines = message.lines();
+    let header = lines.next().unwrap_or_default();
+    rotation_header_states_failure(header) || lines.any(looks_like_dotnet_exception)
+}
+
+/// Detect the rotation-failure dialect.
+///
+/// Requires an ISO-8601 header plus compatible evidence: either a header that
+/// states a rotation failure, or a .NET exception continuation beneath one. A
+/// file of plain ISO-8601 records with neither is not this dialect and is left
+/// to the generic timestamped parser.
 fn has_rotation_failure_signature(content: &str) -> bool {
-    content
-        .lines()
-        .map(|line| line.trim_end_matches('\r'))
-        .filter_map(|line| rotation_re().captures(line))
-        .any(|captures| {
-            captures.name("message").is_some_and(|message| {
-                message
-                    .as_str()
-                    .contains("Failed to rotate Device Inventory")
-            })
-        })
+    let mut saw_header = false;
+    let mut header_states_failure = false;
+    let mut exception_under_header = false;
+
+    for line in content.lines().map(|line| line.trim_end_matches('\r')) {
+        if let Some(captures) = rotation_re().captures(line) {
+            saw_header = true;
+            if captures
+                .name("message")
+                .is_some_and(|message| rotation_header_states_failure(message.as_str()))
+            {
+                header_states_failure = true;
+            }
+        } else if saw_header && looks_like_dotnet_exception(line) {
+            exception_under_header = true;
+        }
+    }
+
+    saw_header && (header_states_failure || exception_under_header)
 }
 
 fn has_filename_hint(file_path: &str, expected_stem: &str) -> bool {
@@ -318,11 +389,15 @@ fn parse_rotation(caps: &Captures<'_>, line_number: u32) -> (LogEntry, bool) {
     let message = caps.name("message").expect("message capture").as_str();
     let timezone_offset = timestamp.map(|value| value.offset().local_minus_utc() / 60);
 
+    // Severity is neutral here and resolved in `parse_content` once
+    // continuations have been attached: the contract is Error only when the
+    // header or exception content identifies a failure, and the exception
+    // lines are not visible yet at this point.
     (
         log_entry(
             line_number,
             message,
-            Severity::Error,
+            Severity::Info,
             EntryMetadata {
                 timestamp: timestamp.map(|value| value.timestamp_millis()),
                 timestamp_display: timestamp

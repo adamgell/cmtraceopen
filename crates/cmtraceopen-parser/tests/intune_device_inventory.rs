@@ -3,9 +3,13 @@ use cmtraceopen_parser::{
         detect_dialect, parse_content, DeviceInventoryLogDialect,
     },
     models::log_entry::{
-        LogFormat, ParserImplementation, ParserKind, ParserSpecialization, RecordFraming, Severity,
+        LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
+        ParserSpecialization, RecordFraming, Severity,
     },
-    parser::parse_content as parse_with_dispatcher,
+    parser::{
+        detect::ResolvedParser, parse_content as parse_with_dispatcher,
+        parse_content_with_selection, parse_lines_with_selection, timestamped::DateOrder,
+    },
 };
 
 const HARVESTER: &str = "7/30/2026 6:00:53 AM [Information] Completed harvesting signed policies: 118 succeeded, 0 failed to collect.\n7/30/2026 10:08:52 AM [Warning] Reporting dropped attribute error for ExampleField: ErrorCode=404.\n7/30/2026 10:08:53 AM [Error] Harvester error code: 404, Message: ExampleField result is null.";
@@ -115,6 +119,76 @@ fn rejects_generic_iso_timestamp_content_as_rotation_failure() {
     let generic_iso = "2026-07-30T13:05:01.1234567-04:00 Completed an unrelated service operation.";
 
     assert_eq!(detect_dialect("unrelated.log", generic_iso), None);
+}
+
+#[test]
+fn a_device_inventory_selection_without_a_dialect_degrades_instead_of_panicking() {
+    // A Device Inventory selection normally carries the dialect detection
+    // resolved. One that does not is malformed, not impossible, and the
+    // hardened dispatcher must fall back rather than panic the parse.
+    let dialect_less = ResolvedParser::new(
+        ParserKind::IntuneDeviceInventory,
+        ParserImplementation::IntuneDeviceInventory,
+        ParserProvenance::Dedicated,
+        ParseQuality::Structured,
+        RecordFraming::LogicalRecord,
+        DateOrder::MonthFirst,
+        None,
+    );
+
+    let parsed = parse_content_with_selection(ROTATION_FAILURE, "whatever.log", &dialect_less);
+    assert!(!parsed.entries.is_empty());
+
+    let lines: Vec<&str> = ROTATION_FAILURE.lines().collect();
+    let (entries, _) = parse_lines_with_selection(&lines, "whatever.log", &dialect_less);
+    assert!(!entries.is_empty());
+}
+
+#[test]
+fn detects_rotation_failure_from_exception_evidence_without_the_literal_wording() {
+    // The producer's rotation wording is not a fixed string. A .NET exception
+    // beneath an ISO-8601 header is sufficient evidence on its own.
+    let other_wording = "2026-07-30T13:05:01.1234567-04:00 Could not roll the inventory log over.\nSystem.UnauthorizedAccessException: Access to the path is denied.\n   at Synthetic.Inventory.Rotate()";
+
+    assert_eq!(
+        detect_dialect("unrelated.log", other_wording),
+        Some(DeviceInventoryLogDialect::RotationFailure)
+    );
+}
+
+#[test]
+fn rotation_severity_comes_from_failure_evidence_not_from_every_header() {
+    // A header with no failure wording and no exception beneath it is an
+    // ordinary record: the dialect does not make every line an Error.
+    let mixed = "2026-07-30T13:05:00.0000000-04:00 Starting scheduled inventory rotation.\n2026-07-30T13:05:01.1234567-04:00 Failed to rotate Device Inventory log.\nSystem.IO.IOException: The process cannot access the file.\n   at Synthetic.Inventory.Rotate()\n2026-07-30T13:05:02.0000000-04:00 Rotation retry scheduled.";
+
+    let (entries, parse_errors) = parse_content(
+        "IntuneDeviceInventory.log",
+        mixed,
+        DeviceInventoryLogDialect::RotationFailure,
+    );
+
+    assert_eq!(parse_errors, 0);
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].severity, Severity::Info);
+    assert_eq!(entries[1].severity, Severity::Error);
+    assert_eq!(entries[2].severity, Severity::Info);
+}
+
+#[test]
+fn rotation_severity_ignores_a_generic_keyword_in_a_continuation() {
+    // The contract is explicit: Error comes from the header or from exception
+    // content, never because a continuation happens to mention "error".
+    let keyword_only = "2026-07-30T13:05:00.0000000-04:00 Rotation summary follows.\n  previous run reported error counters: 0";
+
+    let (entries, _) = parse_content(
+        "IntuneDeviceInventory.log",
+        keyword_only,
+        DeviceInventoryLogDialect::RotationFailure,
+    );
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].severity, Severity::Info);
 }
 
 #[test]

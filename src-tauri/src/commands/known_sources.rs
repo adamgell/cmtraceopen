@@ -209,7 +209,7 @@ fn windows_intune_device_inventory_known_sources() -> Vec<KnownSourceMetadata> {
         family_id: "windows-intune".to_string(),
         family_label: "Windows Intune".to_string(),
         group_id: "intune-device-inventory".to_string(),
-        group_label: "Device Inventory".to_string(),
+        group_label: "Device Inventory Agent".to_string(),
         group_order: 15,
         source_order: 10,
     };

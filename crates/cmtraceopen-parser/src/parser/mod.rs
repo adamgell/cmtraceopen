@@ -108,12 +108,17 @@ pub fn parse_lines_with_selection(
             intune_macos::parse_lines(lines, file_path)
         }
         crate::models::log_entry::ParserImplementation::IntuneDeviceInventory => {
-            inventory::parse_content(
-                file_path,
-                &lines.join("\n"),
-                device_inventory_dialect(selection.specialization)
-                    .expect("Device Inventory selection carries a dialect"),
-            )
+            // A Device Inventory selection normally carries the dialect that
+            // detection resolved. A selection that arrives without one is
+            // malformed rather than impossible — it can only reach here from a
+            // hand-built `ResolvedParser` or a future override surface — so it
+            // degrades to the generic timestamped reading instead of panicking
+            // the whole parse. All three dialects are timestamp-led, so the
+            // fallback still produces usable records.
+            match device_inventory_dialect(selection.specialization) {
+                Some(dialect) => inventory::parse_content(file_path, &lines.join("\n"), dialect),
+                None => timestamped::parse_lines(lines, file_path, selection.date_order),
+            }
         }
         crate::models::log_entry::ParserImplementation::Dhcp => dhcp::parse_lines(lines, file_path),
         crate::models::log_entry::ParserImplementation::Burn => burn::parse_lines(lines, file_path),
@@ -164,12 +169,17 @@ pub fn parse_content_with_selection(
         crate::models::log_entry::ParserImplementation::Ccm => {
             ccm::parse_content(content, file_path, selection.specialization)
         }
-        crate::models::log_entry::ParserImplementation::IntuneDeviceInventory => {
+        // See the matching arm in `parse_lines_with_selection`: a Device
+        // Inventory selection missing its dialect degrades to the generic
+        // timestamped reading rather than panicking.
+        crate::models::log_entry::ParserImplementation::IntuneDeviceInventory
+            if device_inventory_dialect(selection.specialization).is_some() =>
+        {
             inventory::parse_content(
                 file_path,
                 content,
                 device_inventory_dialect(selection.specialization)
-                    .expect("Device Inventory selection carries a dialect"),
+                    .expect("guarded by the match arm above"),
             )
         }
         _ => {
@@ -177,13 +187,19 @@ pub fn parse_content_with_selection(
             parse_lines_with_selection(&lines, file_path, selection)
         }
     };
-    // For whole-content parse paths (which don't go through parse_lines_with_selection),
-    // ensure error code spans are annotated.
-    if matches!(
-        selection.implementation,
-        crate::models::log_entry::ParserImplementation::Ccm
-            | crate::models::log_entry::ParserImplementation::IntuneDeviceInventory
-    ) {
+    // For whole-content parse paths (which don't go through
+    // parse_lines_with_selection), ensure error code spans are annotated. The
+    // Device Inventory arm only takes that path when it resolved a dialect; a
+    // dialect-less selection fell through to parse_lines_with_selection, which
+    // already annotated.
+    let used_whole_content_path = match selection.implementation {
+        crate::models::log_entry::ParserImplementation::Ccm => true,
+        crate::models::log_entry::ParserImplementation::IntuneDeviceInventory => {
+            device_inventory_dialect(selection.specialization).is_some()
+        }
+        _ => false,
+    };
+    if used_whole_content_path {
         annotate_error_code_spans(&mut entries);
     }
 
