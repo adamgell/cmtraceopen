@@ -20,11 +20,13 @@
   "primaryTransactionId": null,
   "transactions": [],
   "sourceLocalObservations": [
-    {"observationId":"observation:unrelated-client-like-key","key":null,"keyConfidence":"none","classification":"incompatibleKey","phase":"resolveLocationOrPolicy","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","correlationEligible":false,"borrowedKeys":false,"nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Capture a bounded authentication-family source with the exact versioned request key."},"evidence":[{"artifactId":"mp-unrelated-policy-current","startLine":1,"endLine":1}]}
+    {"observationId":"observation:coverage:server-mp-auth","key":null,"keyConfidence":"none","classification":"insufficientEvidence","phase":"receiveRequest","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","correlationEligible":false,"borrowedKeys":false,"nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Capture bounded MP_GetAuth.log coverage before evaluating Management Point requests."},"evidence":[]},
+    {"observationId":"observation:unrelated-client-like-key:server-mp-policy","key":null,"keyConfidence":"none","classification":"incompatibleKey","phase":"resolveLocationOrPolicy","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","correlationEligible":false,"borrowedKeys":false,"nextArtifact":{"logicalArtifactId":"server-mp-policy","reason":"Capture a bounded policy-family source with the exact versioned request key."},"evidence":[{"artifactId":"mp-unrelated-policy-current","startLine":1,"endLine":1}]}
   ],
   "contextFacts": [],
   "findings": [
-    {"findingId":"finding:mp-unrelated-client-like-key","subjectId":"observation:unrelated-client-like-key","class":"lowConfidenceSymptom","phase":"resolveLocationOrPolicy","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Capture a bounded authentication-family source with the exact versioned request key."},"evidence":[{"artifactId":"mp-unrelated-policy-current","startLine":1,"endLine":1}]}
+    {"findingId":"finding:mp-coverage:server-mp-auth","subjectId":"observation:coverage:server-mp-auth","class":"insufficientEvidence","phase":"receiveRequest","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Capture bounded MP_GetAuth.log coverage before evaluating Management Point requests."},"evidence":[]},
+    {"findingId":"finding:unrelated-client-like-key:server-mp-policy","subjectId":"observation:unrelated-client-like-key:server-mp-policy","class":"lowConfidenceSymptom","phase":"resolveLocationOrPolicy","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","nextArtifact":{"logicalArtifactId":"server-mp-policy","reason":"Capture a bounded policy-family source with the exact versioned request key."},"evidence":[{"artifactId":"mp-unrelated-policy-current","startLine":1,"endLine":1}]}
   ],
   "clientLikeTokensAttached": false,
   "timeProximityUsed": false,

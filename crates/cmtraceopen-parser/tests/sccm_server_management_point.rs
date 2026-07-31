@@ -1515,21 +1515,89 @@ fn mp_produced_mpcontrol_claims_fail_closed_as_rejected_evidence() {
     }
 
     let analysis = analysis_value(&bundle);
-    assert!(
-        analysis["sourceLocalObservations"]
-            .as_array()
-            .expect("source-local observations")
-            .iter()
-            .any(|observation| {
-                observation["classification"] == "lowConfidenceSymptom"
-                    && observation["correlationEligible"] == false
-                    && observation["evidence"]
-                        .as_array()
-                        .expect("observation evidence")
-                        .iter()
-                        .any(|reference| reference["artifactId"] == "mp-iis-control-current")
-            }),
-        "an mpcontrol source claiming MP production is a contract violation \
-         and must surface as rejected evidence, not silent supplemental input"
+    let rejected = analysis["sourceLocalObservations"]
+        .as_array()
+        .expect("source-local observations")
+        .iter()
+        .find(|observation| {
+            observation["classification"] == "lowConfidenceSymptom"
+                && observation["correlationEligible"] == false
+                && observation["evidence"]
+                    .as_array()
+                    .expect("observation evidence")
+                    .iter()
+                    .any(|reference| reference["artifactId"] == "mp-iis-control-current")
+        })
+        .expect(
+            "an mpcontrol source claiming MP production is a contract violation \
+             and must surface as rejected evidence, not silent supplemental input",
+        );
+    assert_eq!(
+        observation_request_groups(rejected),
+        vec!["server-mp-policy"],
+        "the rejected mpcontrol record belongs to the policy group, so its \
+         remediation hint must request the MP-produced policy logs"
+    );
+}
+
+fn observation_request_groups(observation: &Value) -> Vec<&str> {
+    observation["nextArtifacts"]
+        .as_array()
+        .expect("observation requests")
+        .iter()
+        .map(|request| {
+            request["logicalArtifactId"]
+                .as_str()
+                .expect("request logical artifact id")
+        })
+        .collect()
+}
+
+#[test]
+fn rejected_records_request_their_owning_source_group() {
+    let mut bundle = load_bundle("healthy-policy");
+    bundle
+        .sources
+        .iter_mut()
+        .find(|source| source.artifact.artifact_id == "mp-healthy-auth-current")
+        .expect("auth source")
+        .fragment_complete = Some(false);
+
+    let analysis = analysis_value(&bundle);
+    let observations = analysis["sourceLocalObservations"]
+        .as_array()
+        .expect("source-local observations");
+
+    let policy_rejected = observations
+        .iter()
+        .find(|observation| {
+            observation["evidence"]
+                .as_array()
+                .expect("observation evidence")
+                .iter()
+                .any(|reference| reference["artifactId"] == "mp-healthy-policy-current")
+        })
+        .expect("rejected policy-group records must surface");
+    assert_eq!(
+        observation_request_groups(policy_rejected),
+        vec!["server-mp-policy"],
+        "a rejected policy-group record must request its own group, \
+         not MP_GetAuth.log"
+    );
+
+    let auth_rejected = observations
+        .iter()
+        .find(|observation| {
+            observation["evidence"]
+                .as_array()
+                .expect("observation evidence")
+                .iter()
+                .any(|reference| reference["artifactId"] == "mp-healthy-registration-current")
+        })
+        .expect("rejected auth-group records must surface");
+    assert_eq!(
+        observation_request_groups(auth_rejected),
+        vec!["server-mp-auth"],
+        "a rejected auth-group record keeps requesting the auth group"
     );
 }
