@@ -1,0 +1,56 @@
+name: Label new issues and PRs
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const item = context.payload.issue || context.payload.pull_request;
+            if (!item) return;
+            const title = item.title || '';
+
+            // Domain/topic labels, keyed by a regex matched against the title.
+            const topicRules = [
+              [/^epic:/i, ['epic']],
+              [/\bsccm\b/i, ['sccm', 'parser']],
+              [/\bintune\b/i, ['intune', 'parser']],
+              [/\bjamf\b/i, ['jamf', 'workspace']],
+              [/company portal/i, ['intune', 'portal', 'parser']],
+              [/autopilot|\benrollment\b/i, ['enrollment']],
+              [/\bdevice inventory\b|windows device|macos device/i, ['device']],
+              [/win32 app|store app|platform-script|remediation|package deployment|shell-script execution/i, ['apps']],
+              [/build\(macos\)|notarization|developer id signing/i, ['build', 'macos']],
+              [/restart as administrator|\belevation\b/i, ['windows', 'security', 'feature']],
+            ];
+
+            // Change-type label, keyed off a conventional-commit-style PR title prefix.
+            const prefixRules = [
+              [/^test\(/i, ['test']],
+              [/^feat\(|^feature/i, ['feature']],
+              [/^build\(/i, ['build']],
+              [/^fix\(/i, ['bug']],
+            ];
+
+            const labels = new Set(['enhancement']);
+            for (const [re, ls] of [...topicRules, ...prefixRules]) {
+              if (re.test(title)) ls.forEach(l => labels.add(l));
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: item.number,
+              labels: Array.from(labels),
+            });
