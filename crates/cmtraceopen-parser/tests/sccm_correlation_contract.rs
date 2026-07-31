@@ -283,6 +283,32 @@ fn validate_fixture_ref(value: &str, issue: &str) -> bool {
     false
 }
 
+fn collect_decoded_strings(value: &Value, sink: &mut Vec<String>) {
+    match value {
+        Value::String(text) => sink.push(text.clone()),
+        Value::Array(items) => {
+            for item in items {
+                collect_decoded_strings(item, sink);
+            }
+        }
+        Value::Object(entries) => {
+            for (key, item) in entries {
+                sink.push(key.clone());
+                collect_decoded_strings(item, sink);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn projection_string_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+}
+
 fn check_scenario(scenario: &ScenarioContract, spec: &MatrixSpec) -> Result<(), String> {
     let scenario_id = scenario.scenario_id.as_str();
     if scenario.client_issue != spec.client_issue {
@@ -365,12 +391,22 @@ fn check_scenario(scenario: &ScenarioContract, spec: &MatrixSpec) -> Result<(), 
         return Err(format!("{scenario_id}: deterministic result id is empty"));
     }
 
-    let public_json = serde_json::to_string(&scenario.expected_public_projection)
-        .expect("expected public projection serializes");
-    for marker in &scenario.private_input_markers {
-        if public_json.contains(marker) {
+    let mut decoded_strings = Vec::new();
+    collect_decoded_strings(&scenario.expected_public_projection, &mut decoded_strings);
+    for text in &decoded_strings {
+        if !projection_string_is_safe(text) {
             return Err(format!(
-                "{scenario_id}: private marker leaked into expected public projection"
+                "{scenario_id}: decoded projection string {text:?} is outside the closed public grammar"
+            ));
+        }
+    }
+    for marker in &scenario.private_input_markers {
+        if marker.is_empty() {
+            return Err(format!("{scenario_id}: private marker is empty"));
+        }
+        if decoded_strings.iter().any(|text| text.contains(marker)) {
+            return Err(format!(
+                "{scenario_id}: private marker leaked into a decoded projection value"
             ));
         }
     }
