@@ -418,6 +418,7 @@ fn identity_bearing_relative_paths_fail_before_public_projection() {
     for (index, relative_path) in unsafe_relative_paths.into_iter().enumerate() {
         let mut artifact =
             synthetic_artifact(&format!("unsafe-relative-{index}"), "PolicyAgent.log");
+        artifact.path_fingerprint = Some("synthetic:policy-current".to_owned());
         artifact.relative_path = Some(relative_path.to_owned());
 
         let result = assess_client_intake(&SccmClientIntakeBundle {
@@ -512,6 +513,7 @@ fn approved_collision_safe_relative_layouts_remain_accepted() {
     for (index, relative_path) in approved_relative_paths.into_iter().enumerate() {
         let mut artifact =
             synthetic_artifact(&format!("approved-relative-{index}"), "PolicyAgent.log");
+        artifact.path_fingerprint = Some("synthetic:policy-current".to_owned());
         artifact.relative_path = Some(relative_path.to_owned());
 
         assess_client_intake(&SccmClientIntakeBundle {

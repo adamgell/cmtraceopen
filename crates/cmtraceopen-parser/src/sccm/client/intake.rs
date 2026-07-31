@@ -14,6 +14,7 @@ const MAX_ARTIFACT_ID_CHARS: usize = 160;
 const MAX_BASENAME_CHARS: usize = 160;
 const MAX_METADATA_TOKEN_CHARS: usize = 128;
 const MAX_PATH_IDENTITY_CHARS: usize = 512;
+const MAX_SYNTHETIC_FINGERPRINT_TOKENS: usize = 10;
 // Synthetic fingerprints are fixture-only provenance. Keep their vocabulary
 // finite so the public field cannot become an arbitrary user/context channel.
 // Extending this list is a privacy-contract change that requires review.
@@ -720,13 +721,16 @@ fn is_safe_path_identity(value: &str) -> bool {
 }
 
 fn is_safe_synthetic_fingerprint(payload: &str) -> bool {
-    !payload.is_empty()
-        && payload.split([':', '-']).all(|token| {
+    let tokens = payload.split([':', '-']).collect::<Vec<_>>();
+    !tokens.is_empty()
+        && tokens.len() <= MAX_SYNTHETIC_FINGERPRINT_TOKENS
+        && tokens.iter().enumerate().all(|(index, token)| {
             !token.is_empty()
-                && (SYNTHETIC_FINGERPRINT_TOKENS.contains(&token)
-                    || token
-                        .parse::<u16>()
-                        .is_ok_and(|number| number <= 9_999 && number.to_string() == token))
+                && (SYNTHETIC_FINGERPRINT_TOKENS.contains(token)
+                    || (*token == "2"
+                        && index > 0
+                        && index + 1 == tokens.len()
+                        && tokens[index - 1] == "numbered"))
         })
 }
 
