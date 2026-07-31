@@ -3318,3 +3318,21 @@ fn hierarchy_coderabbit_0a6ba32_rotation_uses_shared_wire_kind() {
         "the #331 fixture contract must not preserve a private rotation alias"
     );
 }
+
+#[test]
+fn hierarchy_coderabbit_0a6ba32_identity_matrices_reject_unknown_scenarios() {
+    let unknown = "future-unregistered-scenario";
+
+    assert_ne!(
+        expected_transaction_ids(unknown),
+        expected_transaction_ids("generic-site-token")
+    );
+    assert_ne!(
+        expected_observation_ids(unknown),
+        expected_observation_ids("generic-site-token")
+    );
+    assert_ne!(
+        expected_source_local_ids(unknown),
+        expected_source_local_ids("healthy-link")
+    );
+}
