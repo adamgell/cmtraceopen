@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use chrono::DateTime;
 use cmtraceopen_parser::sccm::{
     classify_artifact_name, normalize_ccm_artifact, normalize_key, SccmArtifact,
     SccmArtifactFamily, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence, SccmKeyConfidence,
-    SccmRole, SccmRotation, SccmTimeOrderingState,
+    SccmRole, SccmRotation, SccmTimeOrderingState, SccmTimestamp,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const SCENARIOS: &[&str] = &[
     "absent-remote-source",
@@ -107,6 +109,35 @@ fn safe_server_handle(value: &str) -> bool {
     value
         .strip_prefix("safe:server:")
         .is_some_and(safe_opaque_id)
+}
+
+#[derive(Clone, Copy)]
+enum CandidateProvenanceDomain {
+    ProducerHost,
+    PathFingerprint,
+}
+
+impl CandidateProvenanceDomain {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::ProducerHost => "producer-host",
+            Self::PathFingerprint => "path-fingerprint",
+        }
+    }
+}
+
+fn candidate_provenance_token(domain: CandidateProvenanceDomain, value: &str) -> String {
+    let domain = domain.label();
+    let mut digest = Sha256::new();
+    digest.update(b"cmtraceopen:sccm-hierarchy-provenance:v1\0");
+    digest.update(domain.as_bytes());
+    digest.update(b"\0");
+    digest.update(value.as_bytes());
+    let mut token = format!("sccm-provenance:v1:{domain}:sha256:");
+    for byte in digest.finalize() {
+        let _ = write!(&mut token, "{byte:02x}");
+    }
+    token
 }
 
 fn artifact_path_matches_basename(artifact: &Value, field: &str, prefix: &str) -> bool {
@@ -433,6 +464,39 @@ struct HierarchyCandidateKey {
     extraction_profile_id: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(transparent)]
+struct HierarchyCandidateTimestamp(SccmTimestamp);
+
+impl Ord for HierarchyCandidateTimestamp {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .original_display
+            .cmp(&other.0.original_display)
+            .then_with(|| self.0.offset_minutes.cmp(&other.0.offset_minutes))
+            .then_with(|| self.0.utc_millis.cmp(&other.0.utc_millis))
+            .then_with(|| {
+                timestamp_ordering_rank(&self.0.ordering_state)
+                    .cmp(&timestamp_ordering_rank(&other.0.ordering_state))
+            })
+    }
+}
+
+impl PartialOrd for HierarchyCandidateTimestamp {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+const fn timestamp_ordering_rank(state: &SccmTimeOrderingState) -> u8 {
+    match state {
+        SccmTimeOrderingState::NormalizedUtc => 0,
+        SccmTimeOrderingState::OffsetMissing => 1,
+        SccmTimeOrderingState::OffsetInvalid => 2,
+        SccmTimeOrderingState::TimestampMissing => 3,
+    }
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HierarchyCandidateFact {
@@ -449,6 +513,7 @@ struct HierarchyCandidateFact {
     rotation_lineage_id: String,
     line_start: u32,
     line_end: u32,
+    timestamp: HierarchyCandidateTimestamp,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -565,15 +630,22 @@ fn hierarchy_candidate_groups(
                 disposition: disposition.to_owned(),
                 terminal,
                 artifact_id: artifact_id.to_owned(),
-                producer_host_handle: producer_host_handle.to_owned(),
+                producer_host_handle: candidate_provenance_token(
+                    CandidateProvenanceDomain::ProducerHost,
+                    producer_host_handle,
+                ),
                 direction: direction.to_owned(),
                 relative_path: relative_path.to_owned(),
-                path_fingerprint: path_fingerprint.to_owned(),
+                path_fingerprint: candidate_provenance_token(
+                    CandidateProvenanceDomain::PathFingerprint,
+                    path_fingerprint,
+                ),
                 rotation_kind: rotation_kind.to_owned(),
                 rotation_value: rotation_value.clone(),
                 rotation_lineage_id: rotation_lineage_id.to_owned(),
                 line_start,
                 line_end,
+                timestamp: HierarchyCandidateTimestamp(record.timestamp.clone()),
             };
             grouped_facts.entry(key).or_default().insert(fact);
         }
@@ -614,6 +686,49 @@ fn evidence_reference_key(reference: &Value) -> Option<(String, u32, u32)> {
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())?;
     (line_start <= line_end).then_some((artifact_id, line_start, line_end))
+}
+
+#[derive(Debug)]
+struct UsableTimestampCursor {
+    artifact_id: String,
+    line_end: u32,
+    utc_millis: i64,
+}
+
+fn advance_usable_timestamp_sequence(
+    prior: &mut Option<UsableTimestampCursor>,
+    artifact_id: &str,
+    record: &SccmEvidence,
+) -> Result<(), &'static str> {
+    let (Some(line_start), Some(line_end), Some(utc_millis)) = (
+        record.reference.line_start,
+        record.reference.line_end,
+        record.timestamp.utc_millis,
+    ) else {
+        return Err("unusable or reversed time");
+    };
+    if record.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
+        || line_start > line_end
+    {
+        return Err("unusable or reversed time");
+    }
+    if let Some(previous) = prior {
+        if utc_millis < previous.utc_millis {
+            return Err("unusable or reversed time");
+        }
+        if utc_millis == previous.utc_millis && artifact_id != previous.artifact_id {
+            return Err("equal UTC across distinct artifacts is unusable");
+        }
+        if utc_millis == previous.utc_millis && line_start <= previous.line_end {
+            return Err("equal UTC without forward physical lines is unusable");
+        }
+    }
+    *prior = Some(UsableTimestampCursor {
+        artifact_id: artifact_id.to_owned(),
+        line_end,
+        utc_millis,
+    });
+    Ok(())
 }
 
 fn observation_matches_record(
@@ -1517,6 +1632,7 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         )),
     }
     for transaction in transactions.into_iter().flatten() {
+        let mut prior_timestamp = None;
         if !object_has_only(
             transaction,
             &[
@@ -1720,6 +1836,15 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                     failures.push(
                         "transaction observation semantics diverge from cited evidence".to_owned(),
                     );
+                }
+                if transaction["timestampOrdering"] == "usable" {
+                    if let Err(error) = advance_usable_timestamp_sequence(
+                        &mut prior_timestamp,
+                        reference_key.0.as_str(),
+                        record,
+                    ) {
+                        failures.push(format!("{transaction_id}: {error}"));
+                    }
                 }
                 if transaction["confidence"] == "high"
                     && record.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
@@ -2383,7 +2508,7 @@ fn hierarchy_transactions_require_exact_keys_topology_time_and_citations() {
             }
 
             let mut prior_phase = 0usize;
-            let mut prior_utc = i64::MIN;
+            let mut prior_timestamp = None;
             let mut cited_terminal = false;
             let mut cited_records = BTreeSet::new();
             for observation in observations {
@@ -2478,20 +2603,12 @@ fn hierarchy_transactions_require_exact_keys_topology_time_and_citations() {
                     }
                     match transaction["timestampOrdering"].as_str() {
                         Some("usable") => {
-                            if record.timestamp.ordering_state
-                                != SccmTimeOrderingState::NormalizedUtc
-                                || record.timestamp.utc_millis.is_none()
-                                || record
-                                    .timestamp
-                                    .utc_millis
-                                    .is_some_and(|utc| utc < prior_utc)
-                            {
-                                failures.push(format!(
-                                    "{scenario}/{transaction_id}: unusable or reversed time"
-                                ));
-                            }
-                            if let Some(utc) = record.timestamp.utc_millis {
-                                prior_utc = utc;
+                            if let Err(error) = advance_usable_timestamp_sequence(
+                                &mut prior_timestamp,
+                                artifact_id,
+                                record,
+                            ) {
+                                failures.push(format!("{scenario}/{transaction_id}: {error}"));
                             }
                         }
                         Some("unusableInvalidOffset") => {
@@ -3880,6 +3997,11 @@ fn hierarchy_identity_bearing_safe_looking_values_are_domain_separated_before_se
         sender.producer_host_handle, sender.path_fingerprint,
         "equal-looking inputs must remain separated by provenance domain"
     );
+    assert_ne!(
+        candidate_provenance_token(CandidateProvenanceDomain::ProducerHost, "same-input"),
+        candidate_provenance_token(CandidateProvenanceDomain::PathFingerprint, "same-input"),
+        "identical input bytes must hash differently in distinct provenance domains"
+    );
     let serialized = serde_json::to_string(&groups).expect("candidate groups serialize");
     assert!(
         !serialized.contains("RealUser"),
@@ -3892,9 +4014,8 @@ fn hierarchy_equal_utc_requires_same_artifact_and_forward_physical_lines() {
     let expected = read_json("healthy-link", "expected.json").expect("healthy expected loads");
     let mut cross_artifact =
         read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
-    cross_artifact["artifacts"][2]["relativePath"] = serde_json::json!(
-        "evidence/server-hierarchy-transfer/target/equal-instant/despool.log"
-    );
+    cross_artifact["artifacts"][2]["relativePath"] =
+        serde_json::json!("evidence/server-hierarchy-transfer/target/equal-instant/despool.log");
 
     let cross_artifact_failures =
         identity_and_schema_failures("healthy-link", &cross_artifact, &expected);
@@ -3907,9 +4028,8 @@ fn hierarchy_equal_utc_requires_same_artifact_and_forward_physical_lines() {
 
     let mut same_artifact =
         read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
-    same_artifact["artifacts"][0]["relativePath"] = serde_json::json!(
-        "evidence/server-hierarchy-control/origin/equal-instant/replmgr.log"
-    );
+    same_artifact["artifacts"][0]["relativePath"] =
+        serde_json::json!("evidence/server-hierarchy-control/origin/equal-instant/replmgr.log");
     let same_artifact_failures =
         identity_and_schema_failures("healthy-link", &same_artifact, &expected);
     assert!(

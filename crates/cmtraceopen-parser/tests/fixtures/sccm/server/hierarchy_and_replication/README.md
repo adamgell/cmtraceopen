@@ -12,6 +12,11 @@ marker and synthetic message/link/site/profile fields. The generic-message
 negative contains the marker and a site-code-looking token without the exact
 hierarchy grammar, so it cannot create a candidate. Partial rotation/cap
 fixtures retain the marker but intentionally do not form a logical CCM record.
+The healthy-link adversarial variants also freeze timestamp ordering: equal UTC
+instants are usable only for forward physical lines in the same artifact, not
+as ordering evidence between artifacts. Candidate facts retain the complete
+shared timestamp shape and replace host/path inputs with versioned,
+domain-separated SHA-256 provenance tokens before serialization.
 
 The corpus must remain deterministic, safe to publish, and role/topology aware.
 Do not replace safe handles with hostnames, add database/network collection, or
