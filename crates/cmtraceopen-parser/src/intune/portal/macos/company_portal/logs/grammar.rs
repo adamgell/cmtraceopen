@@ -149,8 +149,18 @@ pub fn is_company_portal_process(process: &str) -> bool {
 
 /// Map the structural severity letter to a [`Severity`].
 ///
-/// Unknown letters fall back to `Info`, matching the generic macOS Intune
-/// parser. Message text is never sniffed.
+/// `E` and `W` match [`crate::parser::intune_macos`], and unknown letters fall
+/// back to `Info` as it does. Message text is never sniffed.
+///
+/// `F` is a deliberate divergence: the generic parser has no arm for it, so it
+/// would land in the `Info` fallback. `Severity` has no "unknown" variant, so
+/// some value must be chosen, and rendering a fatal record as `Info` would bury
+/// the single most important line in a troubleshooting log. Upgrading an
+/// unobserved letter to `Error` is the safe direction to be wrong in; the
+/// reverse is not. No committed fixture exercises `F` yet, so this mapping is
+/// asserted directly by `fatal_severity_letter_maps_to_error` rather than by a
+/// fixture. If a real capture proves Company Portal never emits `F`, delete the
+/// arm and the test together.
 pub fn severity_from_letter(letter: &str) -> Severity {
     match letter {
         "E" | "F" => Severity::Error,

@@ -780,6 +780,34 @@ fn confirmed_confidence_does_not_require_a_version_banner() {
     assert!(parse.app_version.raw_text.is_none());
 }
 
+/// `F` is the one severity letter where this module deliberately diverges from
+/// `parser::intune_macos`, which has no `F` arm and would fall back to `Info`.
+/// Rendering a fatal record as `Info` hides the most important line in the file,
+/// so the divergence is intentional. Pinned here so it is not "corrected" back.
+#[test]
+fn fatal_severity_letter_maps_to_error() {
+    let fatal = "2026-05-12 08:14:20:104 | CompanyPortal | F | 261510 | AppDelegate | Unrecoverable state, terminating\n";
+    let parse = parse_company_portal_macos_log(
+        fatal,
+        &PortalLogSource::new(log_path("basic-records", "CompanyPortal.log")),
+    );
+
+    assert_eq!(parse.coverage.parsed_record_count, 1);
+    assert_eq!(parse.records[0].severity, Severity::Error);
+
+    // E and W still match the generic parser exactly.
+    for (letter, expected) in [("E", Severity::Error), ("W", Severity::Warning)] {
+        let line = format!(
+            "2026-05-12 08:14:20:104 | CompanyPortal | {letter} | 261510 | AppDelegate | probe\n"
+        );
+        let probe = parse_company_portal_macos_log(
+            &line,
+            &PortalLogSource::new(log_path("basic-records", "CompanyPortal.log")),
+        );
+        assert_eq!(probe.records[0].severity, expected);
+    }
+}
+
 #[test]
 fn fixture_root_layout_is_versioned_by_scenario() {
     // Documents the on-disk contract the include_* macros above depend on.
