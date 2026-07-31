@@ -5,16 +5,23 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::sccm::rotation::is_canonical_rotation_timestamp;
 use crate::sccm::{
     SccmArtifact, SccmCoverageState, SccmRole, SccmRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
 
 const MAX_ARTIFACT_ID_CHARS: usize = 160;
 const MAX_BASENAME_CHARS: usize = 160;
+const MAX_COLLECTED_AT_CHARS: usize = 64;
 const MAX_PATH_IDENTITY_CHARS: usize = 512;
 const MAX_SYNTHETIC_FINGERPRINT_TOKENS: usize = 10;
+const NATIVE_ARTIFACT_ID_PREFIX_V1: &str = "sccm-artifact:v1:sha256:";
+const OPAQUE_UNSUPPORTED_BASENAME_PREFIX_V1: &str = "sccm-unknown-v1-sha256-";
 const OPAQUE_ROTATION_KIND_V1: &str = "cmtraceopen.rotation.opaque.v1";
+const REVIEWED_UNSUPPORTED_SYNTHETIC_BASENAMES: &[&str] = &[
+    "CustomVendorHook.log",
+    "CustomVendorHook.lo_",
+    "PolicyAgent.log.backup",
+];
 // Synthetic fingerprints are fixture-only provenance. Keep their vocabulary
 // finite so the public field cannot become an arbitrary user/context channel.
 // Extending this list is a privacy-contract change that requires review.
@@ -25,6 +32,7 @@ const SYNTHETIC_FINGERPRINT_TOKENS: &[&str] = &[
     "agent",
     "app",
     "approved",
+    "artifact",
     "auth",
     "b",
     "basename",
@@ -89,6 +97,7 @@ const SYNTHETIC_FINGERPRINT_TOKENS: &[&str] = &[
     "requirements",
     "root",
     "rotation",
+    "rotations",
     "scheduler",
     "services",
     "setup",
@@ -462,19 +471,19 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
         if !is_safe_artifact_id(&source.artifact.artifact_id) {
             return Err(SccmClientIntakeError::InvalidArtifactId);
         }
-        if !is_safe_basename(&source.artifact.display_name) {
-            return Err(SccmClientIntakeError::InvalidBasename);
-        }
         if serde_json::to_value(&source.artifact.rotation).is_err()
             || !is_safe_unknown_rotation(&source.artifact.rotation)
         {
             return Err(SccmClientIntakeError::InvalidRotation);
         }
+        if !is_safe_basename(&source.artifact.display_name, &source.artifact.rotation) {
+            return Err(SccmClientIntakeError::InvalidBasename);
+        }
         if source
             .artifact
             .collected_at_utc
             .as_deref()
-            .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_err())
+            .is_some_and(|value| !is_safe_collected_at(value))
         {
             return Err(SccmClientIntakeError::InvalidCollectedAt);
         }
@@ -507,7 +516,11 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             }
         }
         if let Some(relative_path) = source.relative_path.as_deref() {
-            if !is_safe_relative_path(relative_path) {
+            if !is_safe_relative_path(
+                relative_path,
+                &source.artifact.display_name,
+                &source.artifact.rotation,
+            ) {
                 return Err(SccmClientIntakeError::InvalidRelativePath);
             }
             if !relative_paths.insert(relative_path.to_ascii_lowercase()) {
@@ -549,7 +562,7 @@ fn matching_groups(
         .filter(|group| {
             group.accepted_basenames.iter().any(|basename| {
                 expected_rotated_name(basename, rotation)
-                    .is_some_and(|expected| expected.eq_ignore_ascii_case(display_name))
+                    .is_some_and(|expected| expected == display_name)
             })
         })
         .collect()
@@ -665,20 +678,60 @@ fn is_physical_state(coverage: &SccmCoverageState) -> bool {
 }
 
 fn is_safe_artifact_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().count() <= MAX_ARTIFACT_ID_CHARS
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-._:".contains(character))
+    if value.is_empty() || value.chars().count() > MAX_ARTIFACT_ID_CHARS {
+        return false;
+    }
+
+    if let Some(payload) = value.strip_prefix("fixture-") {
+        return is_safe_synthetic_fingerprint(payload);
+    }
+
+    value
+        .strip_prefix(NATIVE_ARTIFACT_ID_PREFIX_V1)
+        .is_some_and(|digest| digest.len() == 64 && is_lowercase_hex_handle(digest))
 }
 
-fn is_safe_basename(value: &str) -> bool {
-    !value.is_empty()
+fn is_safe_basename(value: &str, rotation: &SccmRotation) -> bool {
+    let structurally_safe = !value.is_empty()
         && value == value.trim()
         && value.chars().count() <= MAX_BASENAME_CHARS
         && value.is_ascii()
         && !value.contains(['/', '\\', ':', '@'])
-        && !value.chars().any(char::is_control)
+        && !value.chars().any(char::is_control);
+    if !structurally_safe {
+        return false;
+    }
+
+    if !matching_groups(value, rotation).is_empty() {
+        return true;
+    }
+
+    if matches!(rotation, SccmRotation::Unknown(_)) && is_canonical_client_basename(value) {
+        return true;
+    }
+
+    REVIEWED_UNSUPPORTED_SYNTHETIC_BASENAMES.contains(&value)
+        || is_opaque_unsupported_basename(value)
+}
+
+fn is_canonical_client_basename(value: &str) -> bool {
+    CLIENT_SOURCE_GROUPS
+        .iter()
+        .any(|group| group.accepted_basenames.contains(&value))
+}
+
+fn is_opaque_unsupported_basename(value: &str) -> bool {
+    value
+        .strip_prefix(OPAQUE_UNSUPPORTED_BASENAME_PREFIX_V1)
+        .and_then(|value| value.strip_suffix(".log"))
+        .is_some_and(|digest| digest.len() == 64 && is_lowercase_hex_handle(digest))
+}
+
+fn is_safe_collected_at(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_COLLECTED_AT_CHARS
+        && value.is_ascii()
+        && DateTime::parse_from_rfc3339(value).is_ok()
 }
 
 fn is_safe_unknown_rotation(rotation: &SccmRotation) -> bool {
@@ -747,7 +800,7 @@ fn is_safe_synthetic_fingerprint(payload: &str) -> bool {
         })
 }
 
-fn is_safe_relative_path(value: &str) -> bool {
+fn is_safe_relative_path(value: &str, display_name: &str, rotation: &SccmRotation) -> bool {
     if value.chars().count() > MAX_PATH_IDENTITY_CHARS {
         return false;
     }
@@ -761,18 +814,47 @@ fn is_safe_relative_path(value: &str) -> bool {
         return false;
     };
 
-    match body {
-        [group, basename] => is_safe_client_bundle_group(group) && is_safe_path_segment(basename),
-        [group, rotation, basename] => {
-            is_safe_client_bundle_group(group)
-                && is_safe_rotation_path_segment(rotation)
-                && is_safe_path_segment(basename)
-        }
-        [group, root, rotation, basename] => {
-            is_safe_client_bundle_group(group)
-                && is_safe_root_path_segment(root)
-                && is_safe_rotation_path_segment(rotation)
-                && is_safe_path_segment(basename)
+    let (group, rotation_segment, basename, root_is_safe) = match body {
+        [group, basename] => (*group, None, *basename, true),
+        [group, rotation, basename] => (*group, Some(*rotation), *basename, true),
+        [group, root, rotation, basename] => (
+            *group,
+            Some(*rotation),
+            *basename,
+            is_safe_root_path_segment(root),
+        ),
+        _ => return false,
+    };
+
+    root_is_safe
+        && is_safe_client_bundle_group(group)
+        && is_expected_client_bundle_group(group, display_name, rotation)
+        && basename == display_name
+        && is_safe_path_segment(basename)
+        && is_expected_rotation_path_segment(rotation_segment, rotation)
+}
+
+fn is_expected_client_bundle_group(
+    group: &str,
+    display_name: &str,
+    rotation: &SccmRotation,
+) -> bool {
+    let matching_groups = matching_groups(display_name, rotation);
+    match matching_groups.as_slice() {
+        [] => group == "unknown",
+        [matching_group] => group == matching_group.logical_artifact_id,
+        _ => group == "client-location-services-shared" && display_name == "LocationServices.log",
+    }
+}
+
+fn is_expected_rotation_path_segment(segment: Option<&str>, rotation: &SccmRotation) -> bool {
+    match (segment, rotation) {
+        (None, SccmRotation::Current | SccmRotation::Unknown(_)) => true,
+        (Some("current"), SccmRotation::Current) => true,
+        (Some("lo"), SccmRotation::LoUnderscore) => true,
+        (Some(segment), SccmRotation::Numbered(number)) => segment == format!("numbered-{number}"),
+        (Some(segment), SccmRotation::Timestamped(timestamp)) => {
+            segment == format!("timestamped-{timestamp}")
         }
         _ => false,
     }
@@ -809,17 +891,4 @@ fn is_lowercase_hex_handle(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn is_safe_rotation_path_segment(value: &str) -> bool {
-    value == "current"
-        || value == "lo"
-        || value.strip_prefix("numbered-").is_some_and(|number| {
-            number
-                .parse::<u32>()
-                .is_ok_and(|parsed| parsed > 0 && parsed.to_string() == number)
-        })
-        || value
-            .strip_prefix("timestamped-")
-            .is_some_and(is_canonical_rotation_timestamp)
 }

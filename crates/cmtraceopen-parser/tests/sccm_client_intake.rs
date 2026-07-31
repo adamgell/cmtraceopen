@@ -116,6 +116,11 @@ fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntake
         "PolicyAgent.log" => "client-policy-agent",
         _ => "unknown",
     };
+    let relative_path = if source_group == "unknown" {
+        format!("evidence/{source_group}/{display_name}")
+    } else {
+        format!("evidence/{source_group}/current/{display_name}")
+    };
     SccmClientIntakeArtifact {
         artifact: SccmArtifact {
             artifact_id: format!("fixture-{artifact_id}"),
@@ -130,7 +135,7 @@ fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntake
             encoding: Some("utf-8".to_owned()),
         },
         path_fingerprint: Some(format!("synthetic-{artifact_id}")),
-        relative_path: Some(format!("evidence/{source_group}/current/{display_name}")),
+        relative_path: Some(relative_path),
         fragment_complete: Some(true),
     }
 }
