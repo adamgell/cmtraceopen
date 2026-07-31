@@ -32,6 +32,7 @@ const STATE_CHAIN: &[&str] = &[
 ];
 
 const EXACT_PROFILE: &str = "hierarchy-server-5.00.test-v1";
+const EXACT_SOURCE_VERSION: &str = "5.00.TEST.0001";
 
 fn corpus_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -81,6 +82,15 @@ fn safe_segmented_path(value: &str, prefix: &str) -> bool {
                         byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
                     })
             })
+    })
+}
+
+fn safe_server_handle(value: &str) -> bool {
+    value.strip_prefix("safe:server:").is_some_and(|payload| {
+        !payload.is_empty()
+            && payload
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     })
 }
 
@@ -463,9 +473,125 @@ struct ArtifactRequestBasis {
     basenames: Vec<String>,
 }
 
-fn request_direction_matches(request_direction: &str, artifact_direction: &str) -> bool {
-    request_direction == artifact_direction
-        || (request_direction == "both" && matches!(artifact_direction, "origin" | "target"))
+fn exact_request_direction(directions: &BTreeSet<&str>) -> Option<String> {
+    match directions.iter().copied().collect::<Vec<_>>().as_slice() {
+        ["origin"] => Some("origin".to_owned()),
+        ["target"] => Some("target".to_owned()),
+        ["origin", "target"] => Some("both".to_owned()),
+        _ => None,
+    }
+}
+
+fn exact_target_site_for_artifact(manifest: &Value, artifact: &Value) -> Option<String> {
+    let producer_host = artifact["producerHostHandle"].as_str()?;
+    match artifact["direction"].as_str()? {
+        "origin" => {
+            if manifest["topology"]["originHostHandle"].as_str() != Some(producer_host) {
+                return None;
+            }
+            let target_sites = declared_target_site_codes(manifest);
+            (target_sites.len() == 1)
+                .then(|| target_sites.into_iter().next().map(str::to_owned))
+                .flatten()
+        }
+        "target" => {
+            let matching_sites = std::iter::once((
+                manifest["topology"]["targetSiteCode"].as_str(),
+                manifest["topology"]["targetHostHandle"].as_str(),
+            ))
+            .chain(
+                manifest["topology"]["additionalTargets"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|target| (target["siteCode"].as_str(), target["hostHandle"].as_str())),
+            )
+            .filter_map(|(site, host)| (host == Some(producer_host)).then_some(site).flatten())
+            .collect::<BTreeSet<_>>();
+            (matching_sites.len() == 1)
+                .then(|| matching_sites.into_iter().next().map(str::to_owned))
+                .flatten()
+        }
+        _ => None,
+    }
+}
+
+fn coverage_request_basis(
+    manifest: &Value,
+    source_id: &str,
+    reason: &str,
+) -> Option<ArtifactRequestBasis> {
+    let matching = manifest["artifacts"]
+        .as_array()?
+        .iter()
+        .filter(|artifact| {
+            artifact["sourceId"].as_str() == Some(source_id)
+                && match reason {
+                    "coverageAbsent" => artifact["captureState"] == "absent",
+                    "coverageCapped" => artifact["captureState"] == "capped",
+                    "coverageRotationSplit" => {
+                        matches!(
+                            artifact["captureState"].as_str(),
+                            Some("captured" | "capped")
+                        ) && artifact["rotation"]["fragmentComplete"] == false
+                    }
+                    _ => false,
+                }
+        })
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return None;
+    }
+
+    let directions = matching
+        .iter()
+        .map(|artifact| artifact["direction"].as_str())
+        .collect::<Option<BTreeSet<_>>>()?;
+    let target_sites = matching
+        .iter()
+        .map(|artifact| exact_target_site_for_artifact(manifest, artifact))
+        .collect::<Option<BTreeSet<_>>>()?;
+    let basenames = matching
+        .iter()
+        .map(|artifact| artifact["originalBasename"].as_str().map(str::to_owned))
+        .collect::<Option<BTreeSet<_>>>()?;
+
+    if target_sites.len() != 1 {
+        return None;
+    }
+    if reason == "coverageRotationSplit" {
+        let lineages = matching
+            .iter()
+            .map(|artifact| artifact["rotation"]["lineageId"].as_str())
+            .collect::<Option<BTreeSet<_>>>()?;
+        let canonical_rotation = matching.iter().all(|artifact| {
+            matches!(
+                (
+                    artifact["originalBasename"].as_str(),
+                    artifact["rotation"]["kind"].as_str(),
+                    artifact["rotation"].get("value"),
+                ),
+                (Some("sender.log"), Some("current"), None)
+                    | (Some("sender.lo_"), Some("lo_"), None)
+            )
+        });
+        let canonical_basenames =
+            BTreeSet::from(["sender.lo_".to_owned(), "sender.log".to_owned()]);
+        if matching.len() != 2
+            || lineages.len() != 1
+            || !canonical_rotation
+            || basenames != canonical_basenames
+        {
+            return None;
+        }
+    }
+
+    Some(ArtifactRequestBasis {
+        source_id: source_id.to_owned(),
+        direction: exact_request_direction(&directions)?,
+        target_site_code: target_sites.into_iter().next()?,
+        basenames: basenames.into_iter().collect(),
+    })
 }
 
 fn invalid_offset_request_basis(scenario: &str, manifest: &Value) -> Option<ArtifactRequestBasis> {
@@ -540,7 +666,6 @@ fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value)
         failures.push(format!("{scenario}: artifact requests are not an array"));
         return failures;
     };
-    let artifacts = manifest["artifacts"].as_array();
     let target_sites = declared_target_site_codes(manifest);
     let request_keys = requests
         .iter()
@@ -619,40 +744,8 @@ fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value)
                 invalid_offset_request_basis(scenario, manifest).as_ref() == Some(&actual_basis)
             }
             Some(reason @ ("coverageAbsent" | "coverageCapped" | "coverageRotationSplit")) => {
-                let expected_state = match reason {
-                    "coverageAbsent" => Some("absent"),
-                    "coverageCapped" => Some("capped"),
-                    "coverageRotationSplit" => None,
-                    _ => unreachable!(),
-                };
-                let matching = artifacts
-                    .into_iter()
-                    .flatten()
-                    .filter(|artifact| {
-                        artifact["sourceId"].as_str() == source_id
-                            && artifact["direction"]
-                                .as_str()
-                                .is_some_and(|artifact_direction| {
-                                    request_direction_matches(
-                                        direction.unwrap_or_default(),
-                                        artifact_direction,
-                                    )
-                                })
-                            && expected_state.map_or_else(
-                                || artifact["rotation"]["fragmentComplete"] == false,
-                                |state| artifact["captureState"] == state,
-                            )
-                    })
-                    .collect::<Vec<_>>();
-                let matching_basenames = matching
-                    .iter()
-                    .filter_map(|artifact| artifact["originalBasename"].as_str())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                !matching.is_empty()
-                    && (reason != "coverageRotationSplit" || matching.len() >= 2)
-                    && matching_basenames == basenames
+                coverage_request_basis(manifest, source_id.unwrap_or_default(), reason).as_ref()
+                    == Some(&actual_basis)
             }
             _ => false,
         };
@@ -696,16 +789,16 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         failures.push("manifest contains an unsupported field or shape".to_owned());
     }
     let topology = &manifest["topology"];
+    let origin_host = topology["originHostHandle"].as_str();
     let primary_target_site = topology["targetSiteCode"].as_str();
     let primary_target_host = topology["targetHostHandle"].as_str();
     if topology["originSiteCode"]
         .as_str()
         .is_none_or(str::is_empty)
         || primary_target_site.is_none_or(str::is_empty)
-        || topology["originHostHandle"]
-            .as_str()
-            .is_none_or(|value| !value.starts_with("safe:server:"))
-        || primary_target_host.is_none_or(|value| !value.starts_with("safe:server:"))
+        || origin_host.is_none_or(|value| !safe_server_handle(value))
+        || primary_target_host.is_none_or(|value| !safe_server_handle(value))
+        || origin_host == primary_target_host
     {
         failures.push("topology lacks exact safe origin/target identity".to_owned());
     }
@@ -730,7 +823,8 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
             let site = target["siteCode"].as_str();
             let host = target["hostHandle"].as_str();
             if site.is_none_or(str::is_empty)
-                || host.is_none_or(|value| !value.starts_with("safe:server:"))
+                || host.is_none_or(|value| !safe_server_handle(value))
+                || host == origin_host
                 || !topology_target_sites.insert(site.unwrap_or_default())
                 || !topology_target_hosts.insert(host.unwrap_or_default())
             {
@@ -783,8 +877,11 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         {
             failures.push("artifact contains an unsupported field or shape".to_owned());
         }
-        let Some(artifact_id) = artifact["artifactId"].as_str() else {
-            failures.push("artifactId is not a string".to_owned());
+        let Some(artifact_id) = artifact["artifactId"]
+            .as_str()
+            .filter(|artifact_id| !artifact_id.is_empty())
+        else {
+            failures.push("artifactId is not a non-empty string".to_owned());
             continue;
         };
         artifact_ids.push(artifact_id);
@@ -794,9 +891,10 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         }
         if artifact["producerRole"] != "siteServer"
             || !matches!(artifact["direction"].as_str(), Some("origin" | "target"))
-            || !artifact["sourceVersion"]
+            || artifact["sourceVersion"].as_str() != Some(EXACT_SOURCE_VERSION)
+            || artifact["collectedUtc"]
                 .as_str()
-                .is_some_and(|value| value.starts_with("5.00.TEST.") && value.len() > 10)
+                .is_none_or(|value| DateTime::parse_from_rfc3339(value).is_err())
             || !artifact["sanitizedSourcePath"]
                 .as_str()
                 .is_some_and(|value| safe_segmented_path(value, "SYNTHETIC://"))
@@ -940,7 +1038,10 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                 if !object_has_only(row, &["artifactId", "state"]) {
                     return None;
                 }
-                row["artifactId"].as_str().zip(row["state"].as_str())
+                row["artifactId"]
+                    .as_str()
+                    .filter(|artifact_id| !artifact_id.is_empty())
+                    .zip(row["state"].as_str())
             })
             .collect::<Option<Vec<_>>>()
     });
@@ -1070,7 +1171,13 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         }
         let gap_values = transaction["coverageGapArtifactIds"].as_array();
         let gap_ids = gap_values
-            .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|artifact_id| !artifact_id.is_empty())
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let mut sorted_gap_ids = gap_ids.clone();
         sorted_gap_ids.sort_unstable();
@@ -1128,13 +1235,19 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
             ) {
                 failures.push("observation contains an unsupported field or shape".to_owned());
             }
+            if observation["observationId"]
+                .as_str()
+                .is_none_or(str::is_empty)
+            {
+                failures.push("transaction observation has an empty identity".to_owned());
+            }
             let references = observation["evidence"].as_array();
             if references.is_none_or(Vec::is_empty) {
                 failures.push("transaction observation lacks cited evidence".to_owned());
             }
             for reference in references.into_iter().flatten() {
                 if !object_has_only(reference, &["artifactId", "startLine", "endLine"])
-                    || reference["artifactId"].as_str().is_none()
+                    || reference["artifactId"].as_str().is_none_or(str::is_empty)
                     || reference["startLine"]
                         .as_u64()
                         .and_then(|value| u32::try_from(value).ok())
@@ -1158,8 +1271,67 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
     if observation_ids != expected_observation_ids(scenario) {
         failures.push("observation identity/cardinality matrix changed".to_owned());
     }
-    let source_local_ids = expected["sourceLocalObservations"]
-        .as_array()
+    let source_local_observations = expected["sourceLocalObservations"].as_array();
+    for observation in source_local_observations.into_iter().flatten() {
+        if !object_has_only(
+            observation,
+            &[
+                "observationId",
+                "classification",
+                "confidence",
+                "correlationEligible",
+                "artifactIds",
+                "evidence",
+            ],
+        ) || observation["observationId"]
+            .as_str()
+            .is_none_or(str::is_empty)
+        {
+            failures.push("source-local observation has an invalid shape or identity".to_owned());
+        }
+        let artifact_id_values = observation["artifactIds"].as_array();
+        let source_local_artifact_ids = artifact_id_values
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|artifact_id| !artifact_id.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut sorted_source_local_artifact_ids = source_local_artifact_ids.clone();
+        sorted_source_local_artifact_ids.sort_unstable();
+        sorted_source_local_artifact_ids.dedup();
+        if artifact_id_values.is_none_or(|values| {
+            values.len() != source_local_artifact_ids.len() || source_local_artifact_ids.is_empty()
+        }) || source_local_artifact_ids != sorted_source_local_artifact_ids
+            || source_local_artifact_ids
+                .iter()
+                .any(|artifact_id| !artifact_ids.contains(artifact_id))
+        {
+            failures.push("source-local artifact IDs are not exact closed identities".to_owned());
+        }
+        let references = observation["evidence"].as_array();
+        if references.is_none() {
+            failures.push("source-local evidence is not an array".to_owned());
+        }
+        for reference in references.into_iter().flatten() {
+            if !object_has_only(reference, &["artifactId", "startLine", "endLine"])
+                || reference["artifactId"].as_str().is_none_or(str::is_empty)
+                || reference["startLine"]
+                    .as_u64()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .is_none()
+                || reference["endLine"]
+                    .as_u64()
+                    .and_then(|value| u32::try_from(value).ok())
+                    .is_none()
+            {
+                failures.push("source-local evidence reference is not exact and typed".to_owned());
+            }
+        }
+    }
+    let source_local_ids = source_local_observations
         .into_iter()
         .flatten()
         .filter_map(|observation| observation["observationId"].as_str())
@@ -2277,5 +2449,187 @@ fn hierarchy_artifact_request_mutations_fail_closed() {
     assert!(
         accepted.is_empty(),
         "artifact request provenance mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn hierarchy_review_4826191775_mutations_fail_closed() {
+    let absent_manifest =
+        read_json("absent-remote-source", "manifest.json").expect("absent manifest loads");
+    let absent_expected =
+        read_json("absent-remote-source", "expected.json").expect("absent expected loads");
+    let incomplete_manifest =
+        read_json("incomplete", "manifest.json").expect("incomplete manifest loads");
+    let incomplete_expected =
+        read_json("incomplete", "expected.json").expect("incomplete expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("rotation manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("rotation expected loads");
+    let healthy_manifest =
+        read_json("healthy-link", "manifest.json").expect("healthy manifest loads");
+    let healthy_expected =
+        read_json("healthy-link", "expected.json").expect("healthy expected loads");
+
+    let mut accepted = Vec::new();
+    let mut audit = |label: &'static str, scenario: &str, manifest: &Value, expected: &Value| {
+        if identity_and_schema_failures(scenario, manifest, expected).is_empty() {
+            accepted.push(label);
+        }
+    };
+
+    let mut absent_both = absent_expected.clone();
+    absent_both["artifactRequests"][0]["direction"] = serde_json::json!("both");
+    audit(
+        "target-only absent request broadened to both",
+        "absent-remote-source",
+        &absent_manifest,
+        &absent_both,
+    );
+
+    let mut capped_both = incomplete_expected.clone();
+    capped_both["artifactRequests"][0]["direction"] = serde_json::json!("both");
+    audit(
+        "origin-only capped request broadened to both",
+        "incomplete",
+        &incomplete_manifest,
+        &capped_both,
+    );
+
+    let mut rotation_both = rotation_expected.clone();
+    rotation_both["artifactRequests"][0]["direction"] = serde_json::json!("both");
+    audit(
+        "origin-only rotation request broadened to both",
+        "rotation-boundary",
+        &rotation_manifest,
+        &rotation_both,
+    );
+
+    let mut wrong_declared_site_manifest = absent_manifest.clone();
+    wrong_declared_site_manifest["topology"]["additionalTargets"] = serde_json::json!([{
+        "siteCode": "SEC",
+        "hostHandle": "safe:server:lab-sec-01"
+    }]);
+    let mut wrong_declared_site_expected = absent_expected.clone();
+    wrong_declared_site_expected["artifactRequests"][0]["targetSiteCode"] =
+        serde_json::json!("SEC");
+    audit(
+        "coverage request targeted a different declared site",
+        "absent-remote-source",
+        &wrong_declared_site_manifest,
+        &wrong_declared_site_expected,
+    );
+
+    let mut wrong_coverage_host_manifest = absent_manifest.clone();
+    wrong_coverage_host_manifest["topology"]["additionalTargets"] = serde_json::json!([{
+        "siteCode": "SEC",
+        "hostHandle": "safe:server:lab-sec-01"
+    }]);
+    wrong_coverage_host_manifest["artifacts"][1]["producerHostHandle"] =
+        serde_json::json!("safe:server:lab-sec-01");
+    audit(
+        "coverage artifact moved to a different target host",
+        "absent-remote-source",
+        &wrong_coverage_host_manifest,
+        &absent_expected,
+    );
+
+    let mut split_lineage = rotation_manifest.clone();
+    split_lineage["artifacts"][1]["rotation"]["lineageId"] = serde_json::json!("unrelated-lineage");
+    audit(
+        "rotation request joined unrelated lineages",
+        "rotation-boundary",
+        &split_lineage,
+        &rotation_expected,
+    );
+
+    let mut wrong_rotation_identity = rotation_manifest.clone();
+    wrong_rotation_identity["artifacts"][1]["rotation"] = serde_json::json!({
+        "kind": "numbered",
+        "value": 1,
+        "lineageId": "rotation-sender",
+        "fragmentComplete": false
+    });
+    audit(
+        "sender.lo_ declared as a numbered rotation",
+        "rotation-boundary",
+        &wrong_rotation_identity,
+        &rotation_expected,
+    );
+
+    let mut out_of_profile_version = healthy_manifest.clone();
+    out_of_profile_version["artifacts"][2]["sourceVersion"] = serde_json::json!("5.00.TEST.9999");
+    audit(
+        "unadmitted source version retained selected profile",
+        "healthy-link",
+        &out_of_profile_version,
+        &healthy_expected,
+    );
+
+    let mut noncanonical_version = healthy_manifest.clone();
+    noncanonical_version["artifacts"][2]["sourceVersion"] =
+        serde_json::json!("5.00.TEST.not-canonical");
+    audit(
+        "noncanonical source version retained selected profile",
+        "healthy-link",
+        &noncanonical_version,
+        &healthy_expected,
+    );
+
+    let mut invalid_collection_time = healthy_manifest.clone();
+    invalid_collection_time["artifacts"][2]["collectedUtc"] = serde_json::json!("not-a-timestamp");
+    audit(
+        "invalid collection timestamp retained exact output",
+        "healthy-link",
+        &invalid_collection_time,
+        &healthy_expected,
+    );
+
+    let mut empty_target_handle = healthy_manifest.clone();
+    empty_target_handle["topology"]["targetHostHandle"] = serde_json::json!("safe:server:");
+    empty_target_handle["artifacts"][2]["producerHostHandle"] = serde_json::json!("safe:server:");
+    empty_target_handle["artifacts"][3]["producerHostHandle"] = serde_json::json!("safe:server:");
+    audit(
+        "empty safe target-handle payload retained exact topology",
+        "healthy-link",
+        &empty_target_handle,
+        &healthy_expected,
+    );
+
+    let mut colliding_hosts = healthy_manifest.clone();
+    let origin_host = colliding_hosts["topology"]["originHostHandle"].clone();
+    colliding_hosts["topology"]["targetHostHandle"] = origin_host.clone();
+    colliding_hosts["artifacts"][2]["producerHostHandle"] = origin_host.clone();
+    colliding_hosts["artifacts"][3]["producerHostHandle"] = origin_host;
+    audit(
+        "origin and target sites shared one host handle",
+        "healthy-link",
+        &colliding_hosts,
+        &healthy_expected,
+    );
+
+    let mut empty_identity_manifest = absent_manifest.clone();
+    empty_identity_manifest["artifacts"][1]["artifactId"] = serde_json::json!("");
+    empty_identity_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifact array is mutable")
+        .swap(0, 1);
+    let mut empty_identity_expected = absent_expected.clone();
+    empty_identity_expected["coverage"][1]["artifactId"] = serde_json::json!("");
+    empty_identity_expected["coverage"]
+        .as_array_mut()
+        .expect("coverage array is mutable")
+        .swap(0, 1);
+    empty_identity_expected["transactions"][0]["coverageGapArtifactIds"][0] = serde_json::json!("");
+    audit(
+        "empty artifact and gap identity retained exact coverage",
+        "absent-remote-source",
+        &empty_identity_manifest,
+        &empty_identity_expected,
+    );
+
+    assert!(
+        accepted.is_empty(),
+        "review 4826191775 mutations were accepted: {accepted:?}"
     );
 }

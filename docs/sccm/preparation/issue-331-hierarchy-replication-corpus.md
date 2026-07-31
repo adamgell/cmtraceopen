@@ -29,6 +29,13 @@ Unknown profiles and partial keys are source-local candidates only. They must
 retain a key-extraction gap and cannot be upgraded by another source merely
 because its record occurred nearby in time.
 
+The synthetic profile `hierarchy-server-5.00.test-v1` admits only the exact
+synthetic source version `5.00.TEST.0001`, the `siteServer` role, and an RFC3339
+`collectedUtc` value with a usable numeric or `Z` offset. A missing, malformed,
+or different source version/time value is outside that profile. Its record may
+remain source-local with an extraction gap, but it cannot retain an exact key,
+exact topology, or high-confidence transaction output.
+
 ## Topology and time
 
 Origin and target direction, safe host handle, site code, source path,
@@ -47,17 +54,49 @@ transaction. The rotation fixture splits one transport record across current
 and `.lo_` artifacts; neither fragment may emit a logical CCM record or a
 terminal result. Candidate groups serialize in exact-key and full-provenance
 order, so reversed artifact input is byte-identical while same-key facts with
-different path, host, or rotation identity remain distinct.
+different path, host, or rotation identity remain distinct. The immutable
+transaction key never absorbs an artifact path, host handle, rotation, or line
+range. Conversely, sharing that key never permits distinct evidence facts to be
+deduplicated: every fact retains its full artifact and line provenance, and an
+incompatible host, site, profile, or rotation remains source-local.
 
 ## Coverage and conclusions
 
 The additive SCCM manifest keeps `captured`, `absent`, `accessDenied`, `capped`,
 `skipped`, `unsupported`, and `parseFailed` distinct. A missing remote artifact
 is a coverage state, not evidence that the remote role is absent or broken.
-Every transaction gap ID must resolve to exactly one typed non-captured
-manifest coverage row; missing, duplicated, malformed, or unknown rows fail
-closed. Bounded follow-up requests name only the relevant hierarchy source,
-direction, target site, and basenames.
+
+The gap column below applies per artifact. A non-captured artifact enters a
+transaction's `coverageGapArtifactIds` only when an exact transaction candidate
+already exists; otherwise it remains a source-local coverage gap.
+
+| Coverage state | Gap mapping | Bounded request in this profile |
+| --- | --- | --- |
+| `captured` | No coverage gap; evidence still must parse and cite successfully | None |
+| `absent` | One gap for that exact artifact ID when the source is required | `coverageAbsent` for that artifact's exact source/direction/site/host/basename basis |
+| `accessDenied` | One gap for that exact artifact ID; never proof that the role failed | None until an access-remediation request reason is versioned |
+| `capped` | One gap for that exact artifact ID when required evidence may be truncated | `coverageCapped` for that artifact's exact provenance basis |
+| `skipped` | One gap for that exact artifact ID when the source was required | None; preserve the collection decision |
+| `unsupported` | One gap for that exact artifact ID | None; do not imply that recollection can make the source supported |
+| `parseFailed` | One gap for that exact physical artifact ID | None; retain the parse failure without converting it to absence |
+
+Coverage rows aggregate by artifact identity, never only by source name or
+state: each manifest artifact has exactly one coverage row, and every
+transaction gap ID resolves to exactly one non-captured manifest/coverage pair.
+Multiple missing artifacts therefore remain sorted, unique per-artifact gaps;
+they are not collapsed into a single broad “remote coverage” gap. Missing,
+duplicated, empty, malformed, or unknown identities fail closed.
+
+`coverageRotationSplit` is not an eighth coverage state. It is permitted only
+for the exact current/`.lo_` sender pair with one lineage, canonical
+basename/rotation identities, one direction, and one site/host mapping.
+`invalidOffset` is likewise a time-provenance request reason, not a coverage
+state. Every request must equal the provenance derived from its evidence;
+`both` is valid only when both origin and target evidence are actually present.
+No request is synthesized for `accessDenied`, `skipped`, `unsupported`, or
+`parseFailed` under this profile. Bounded follow-up requests name only the
+relevant hierarchy source, exact direction, target site, mapped host, and
+basenames.
 
 The proposed state sequence is:
 
