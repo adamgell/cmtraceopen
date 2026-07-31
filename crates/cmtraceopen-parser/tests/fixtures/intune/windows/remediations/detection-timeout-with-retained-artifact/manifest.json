@@ -1,0 +1,17 @@
+{
+  "description": "A detection that timed out ends the run; with its output artifact supplied there is nothing further to request.",
+  "artifacts": [
+    {
+      "artifactId": "hs",
+      "fileName": "HealthScripts.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\HealthScripts.log",
+      "contentFile": "HealthScripts.log"
+    },
+    {
+      "artifactId": "out",
+      "fileName": "11111111-1111-4111-8111-111111111111_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1.error",
+      "filePath": "C:\\Program Files (x86)\\Microsoft Intune Management Extension\\Policies\\Results\\11111111-1111-4111-8111-111111111111_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1.error",
+      "contentFile": "11111111-1111-4111-8111-111111111111_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1.error"
+    }
+  ]
+}

@@ -261,29 +261,29 @@ fn parse_exit_token(stage: RemediationStage, raw: &str) -> RemediationExitToken 
         None => (false, trimmed),
     };
 
-    let (decimal, hex_text) = if let Some(hex) = digits
+    // Parse first, then render. Deriving `hex_text` from the source text made
+    // the same code render two ways (`0x1` vs `0x00000001`), dropped the sign
+    // (`-0x1` rendered as `0x1` while `-1` rendered as `0xFFFFFFFF`), and could
+    // leave a hex form present when the value was unreadable.
+    let decimal = if let Some(hex) = digits
         .strip_prefix("0x")
         .or_else(|| digits.strip_prefix("0X"))
     {
-        let value = i64::from_str_radix(hex, 16).ok();
-        (
-            value.map(|v| if negative { -v } else { v }),
-            Some(format!("0x{}", hex.to_ascii_uppercase())),
-        )
+        i64::from_str_radix(hex, 16).ok()
     } else {
-        let value = digits.parse::<i64>().ok();
-        let signed = value.map(|v| if negative { -v } else { v });
-        // A value outside the unsigned 32-bit view gets no hex form rather than
-        // a truncated one that would print a different number.
-        let hex_text = signed
-            .and_then(|v| {
-                u32::try_from(v)
-                    .ok()
-                    .or_else(|| i32::try_from(v).ok().map(|v| v as u32))
-            })
-            .map(|v| format!("0x{v:08X}"));
-        (signed, hex_text)
-    };
+        digits.parse::<i64>().ok()
+    }
+    .map(|value| if negative { -value } else { value });
+
+    // A value outside the unsigned 32-bit view gets no hex form rather than a
+    // truncated one that would print a different number.
+    let hex_text = decimal
+        .and_then(|value| {
+            u32::try_from(value)
+                .ok()
+                .or_else(|| i32::try_from(value).ok().map(|value| value as u32))
+        })
+        .map(|value| format!("0x{value:08X}"));
 
     RemediationExitToken {
         stage,
@@ -321,6 +321,19 @@ fn extract_invocation(message: &str) -> RemediationInvocation {
     }
 }
 
+/// The stage named by a script path, e.g. `...\{policy}_{run}\detect.ps1`.
+///
+/// The path states the stage as plainly as the prose does, and `detect.ps1`
+/// matches none of the prose rules -- they require the word `script` to follow.
+fn stage_from_script_path(message: &str) -> Option<RemediationStage> {
+    let caps = script_path_re().captures(message)?;
+    match caps.name("stage")?.as_str().to_ascii_lowercase().as_str() {
+        "detect" => Some(RemediationStage::Detection),
+        "remediate" => Some(RemediationStage::Remediation),
+        _ => None,
+    }
+}
+
 fn extract_ids(message: &str) -> (Option<String>, Option<String>) {
     if let Some(caps) = script_path_re().captures(message) {
         return (
@@ -348,10 +361,22 @@ fn extract_payload(message: &str) -> Option<(String, bool)> {
     let bytes = message.as_bytes();
     let mut depth = 0i32;
     let mut end = None;
+    // Braces inside a JSON string are data, not structure. Detection scripts
+    // emit arbitrary text into these fields, so a `}` inside a string value is
+    // ordinary; counting it would truncate the payload and then report the
+    // truncation as malformed.
+    let mut in_string = false;
+    let mut escaped = false;
     for (index, byte) in bytes.iter().enumerate().skip(start) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
         match byte {
-            b'{' => depth += 1,
-            b'}' => {
+            b'\\' if in_string => escaped = true,
+            b'"' => in_string = !in_string,
+            b'{' if !in_string => depth += 1,
+            b'}' if !in_string => {
                 depth -= 1;
                 if depth == 0 {
                     end = Some(index + 1);
@@ -383,7 +408,7 @@ pub fn classify_record(
     let (policy_id, run_id) = extract_ids(message);
     result.policy_id = policy_id;
     result.run_id = run_id;
-    result.stage = extract_stage(message);
+    result.stage = extract_stage(message).or_else(|| stage_from_script_path(message));
     result.invocation = extract_invocation(message);
     result.attempt = attempt_re()
         .captures(message)
@@ -590,6 +615,67 @@ mod tests {
         let (raw, parsed) = result.payload.unwrap();
         assert!(!parsed);
         assert_eq!(raw, r#"{"Compliant":}"#);
+    }
+
+    #[test]
+    fn a_brace_inside_a_json_string_does_not_close_the_payload() {
+        let result = health(
+            r#"Detection script completed with result {"Detail":"a } b","Compliant":false}"#,
+        );
+        let (raw, parsed) = result.payload.unwrap();
+        assert!(parsed, "got {raw}");
+        assert!(raw.ends_with(r#""Compliant":false}"#), "got {raw}");
+    }
+
+    #[test]
+    fn an_escaped_quote_inside_a_json_string_is_handled() {
+        let result =
+            health(r#"Detection script completed with result {"Detail":"say \" }","Ok":true}"#);
+        let (raw, parsed) = result.payload.unwrap();
+        assert!(parsed, "got {raw}");
+    }
+
+    #[test]
+    fn a_script_path_names_its_own_stage() {
+        let result = health(&format!(
+            r"Running C:\Windows\IMECache\HealthScripts\{POLICY}_{RUN}\detect.ps1"
+        ));
+        assert_eq!(result.stage, Some(RemediationStage::Detection));
+        let result = health(&format!(
+            r"Running C:\Windows\IMECache\HealthScripts\{POLICY}_{RUN}\remediate.ps1"
+        ));
+        assert_eq!(result.stage, Some(RemediationStage::Remediation));
+    }
+
+    #[test]
+    fn hex_and_decimal_exit_codes_render_the_same_way() {
+        let from_hex = health("Detection script completed, exitCode = 0x1")
+            .exit_token
+            .unwrap();
+        let from_decimal = health("Detection script completed, exitCode = 1")
+            .exit_token
+            .unwrap();
+        assert_eq!(from_hex.decimal, from_decimal.decimal);
+        assert_eq!(from_hex.hex_text, from_decimal.hex_text);
+        assert_eq!(from_hex.hex_text.as_deref(), Some("0x00000001"));
+    }
+
+    #[test]
+    fn a_negative_hex_exit_code_keeps_its_sign() {
+        let token = health("Detection script completed, exitCode = -0x1")
+            .exit_token
+            .unwrap();
+        assert_eq!(token.decimal, Some(-1));
+        assert_eq!(token.hex_text.as_deref(), Some("0xFFFFFFFF"));
+    }
+
+    #[test]
+    fn an_unreadable_exit_code_carries_no_hex_form() {
+        let token = health("Detection script completed, exitCode = 0xFFFFFFFFFFFFFFFFF")
+            .exit_token
+            .unwrap();
+        assert_eq!(token.decimal, None);
+        assert_eq!(token.hex_text, None);
     }
 
     #[test]

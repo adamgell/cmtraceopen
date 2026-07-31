@@ -430,8 +430,15 @@ fn next_evidence_request(
         DetectionState::Launched => {
             return Some("HealthScripts.log record reporting the detection result".to_string())
         }
-        DetectionState::Failed | DetectionState::TimedOut if !has_output_evidence => {
-            return Some("retained detection output artifact for this policy and run".to_string())
+        // Detection ended the run, so remediation is legitimately absent and
+        // must not be requested -- that would contradict `confidence_for`,
+        // which treats these as complete stories.
+        DetectionState::Failed | DetectionState::TimedOut => {
+            return if has_output_evidence {
+                None
+            } else {
+                Some("retained detection output artifact for this policy and run".to_string())
+            }
         }
         DetectionState::Compliant => {
             // Nothing was wrong. The only thing left to confirm is reporting.
@@ -553,7 +560,8 @@ fn reduce_transaction(
     let mut report = RemediationReportState::NotObserved;
     let mut attempts = 0u32;
     let mut payloads: Vec<RemediationPayload> = Vec::new();
-    let mut has_output_evidence = has_output_artifact;
+    // Only a retained artifact actually supplied in the bundle counts.
+    let has_output_evidence = has_output_artifact;
     let mut saw_orchestrator = false;
     let mut unknown_version = false;
 
@@ -568,9 +576,10 @@ fn reduce_transaction(
         if classification.stage_shaped_but_unmatched {
             unknown_version = true;
         }
-        if classification.signal == RemediationSignal::OutputCaptured {
-            has_output_evidence = true;
-        }
+        // Deliberately does NOT set `has_output_evidence`. A record naming an
+        // output path proves the script wrote one somewhere on the device; it
+        // does not prove the artifact is in this bundle. Suppressing the
+        // request on that basis would hide a genuinely missing artifact.
         if classification.signal == RemediationSignal::StageLaunched {
             attempts += 1;
         }
@@ -659,6 +668,12 @@ fn apply_detection(
     let Some(next) = next else {
         return;
     };
+    // A completion whose code we could not read proves the stage ran, but it
+    // must not erase a result an earlier readable code already established.
+    if next == DetectionState::InsufficientEvidence && outcome.state != DetectionState::NotStarted {
+        outcome.evidence.push(evidence.clone());
+        return;
+    }
     outcome.state = next;
     // The token always reflects the most recent completion, including one whose
     // code could not be read.
@@ -685,6 +700,12 @@ fn apply_remediation(
     let Some(next) = next else {
         return;
     };
+    if next == RemediationRunState::InsufficientEvidence
+        && outcome.state != RemediationRunState::NotStarted
+    {
+        outcome.evidence.push(evidence.clone());
+        return;
+    }
     outcome.state = next;
     if classification.signal == RemediationSignal::StageCompleted {
         outcome.exit_token = classification.exit_token.clone();

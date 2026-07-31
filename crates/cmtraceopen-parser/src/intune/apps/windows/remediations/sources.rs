@@ -24,18 +24,33 @@ const AGENT_EXECUTOR_COMPONENTS: &[&str] = &["AgentExecutor"];
 /// Components that confirm a *file* is the primary IME log. Wider than the
 /// record-scope list in `rules.rs` on purpose: any workload's component proves
 /// the file's identity, but only some may speak for this workload.
-const IME_FILE_COMPONENTS: &[&str] = &["IntuneManagementExtension", "PowerShell", "Win32App"];
+const IME_FILE_COMPONENTS: &[&str] = &[
+    "IntuneManagementExtension",
+    "PowerShell",
+    "Win32App",
+    "HealthScripts",
+];
 
 /// Strip a rotation suffix and the `.log` extension.
 ///
 /// `_Name` marks an archived copy: a rotation whose ordinal we cannot trust to
 /// be sequential, so the ordinal stays `None` rather than pretending to be 1.
+/// Strip `suffix` from the end of `value`, ignoring case.
+///
+/// Windows file names are case-insensitive, so `HealthScripts.Log` and
+/// `{policy}_{run}.Output` are the same artifacts as their lowercase forms.
+fn strip_suffix_ignore_case<'a>(value: &'a str, suffix: &str) -> Option<&'a str> {
+    let split = value.len().checked_sub(suffix.len())?;
+    if !value.is_char_boundary(split) {
+        return None;
+    }
+    let (head, tail) = value.split_at(split);
+    tail.eq_ignore_ascii_case(suffix).then_some(head)
+}
+
 fn split_rotation(file_name: &str) -> (String, Option<u32>) {
     let trimmed = file_name.trim();
-    let without_ext = trimmed
-        .strip_suffix(".log")
-        .or_else(|| trimmed.strip_suffix(".LOG"))
-        .unwrap_or(trimmed);
+    let without_ext = strip_suffix_ignore_case(trimmed, ".log").unwrap_or(trimmed);
 
     let (without_ext, underscore_archive) = match without_ext.strip_prefix('_') {
         Some(rest) => (rest, true),
@@ -87,11 +102,8 @@ fn is_guid(value: &str) -> bool {
 /// and are deliberately never parsed.
 fn output_artifact_key(file_name: &str) -> Option<(String, String)> {
     let trimmed = file_name.trim();
-    let stem = trimmed
-        .strip_suffix(".output")
-        .or_else(|| trimmed.strip_suffix(".error"))
-        .or_else(|| trimmed.strip_suffix(".OUTPUT"))
-        .or_else(|| trimmed.strip_suffix(".ERROR"))?;
+    let stem = strip_suffix_ignore_case(trimmed, ".output")
+        .or_else(|| strip_suffix_ignore_case(trimmed, ".error"))?;
     let (policy, run) = stem.split_once('_')?;
     if !is_guid(policy) || !is_guid(run) {
         return None;
@@ -225,6 +237,27 @@ mod tests {
         let run = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1";
         let artifact = classify_artifact(&input(&format!("{policy}_{run}.output")), &[]);
         assert_eq!(artifact.source_kind, RemediationSourceKind::ScriptOutput);
+    }
+
+    #[test]
+    fn extensions_match_case_insensitively_like_windows_does() {
+        let policy = "11111111-1111-4111-8111-111111111111";
+        let run = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1";
+        assert_eq!(split_rotation("HealthScripts.Log").0, "HealthScripts");
+        assert!(output_artifact_key(&format!("{policy}_{run}.Output")).is_some());
+        assert!(output_artifact_key(&format!("{policy}_{run}.ERROR")).is_some());
+    }
+
+    #[test]
+    fn an_ime_log_of_only_health_scripts_records_is_still_confirmed() {
+        let artifact = classify_artifact(
+            &input("IntuneManagementExtension.log"),
+            &components(&["HealthScripts"]),
+        );
+        assert_eq!(
+            artifact.source_kind,
+            RemediationSourceKind::IntuneManagementExtension
+        );
     }
 
     #[test]

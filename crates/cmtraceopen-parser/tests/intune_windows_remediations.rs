@@ -325,6 +325,22 @@ fn a_stray_record_on_a_reused_thread_cannot_overwrite_a_reported_run() {
     );
 }
 
+/// A detection that failed or timed out ended the run. Remediation is
+/// legitimately absent, so it must never be requested -- doing so would
+/// contradict the confidence rule that calls these complete stories.
+#[test]
+fn a_terminal_detection_never_requests_remediation_records() {
+    assert_scenario("detection-timeout-with-retained-artifact");
+}
+
+/// A completion whose code could not be read proves the stage ran, but it must
+/// not erase a result an earlier readable code already established.
+#[test]
+fn a_later_unreadable_completion_does_not_erase_a_determined_result() {
+    let analysis = assert_scenario("later-completion-without-readable-code");
+    assert!(analysis.transactions[0].detection.exit_token.is_some());
+}
+
 // -- Cross-cutting contract -------------------------------------------------
 
 /// The property the whole module rests on: `0` means "compliant" from

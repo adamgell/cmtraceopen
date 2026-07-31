@@ -63,6 +63,9 @@ fn user_path_re() -> &'static Regex {
 ///   A CCM record is one *logical* record and routinely contains newlines (see
 ///   the `multiline-ccm-record` fixture). Anchoring on `$` meant a `-Command`
 ///   inside a multi-line record matched nothing at all and leaked in full.
+/// * The separator between flag and value may be whitespace, `:` or `=`.
+///   `-Password:hunter2` and `-Token=abc` are as common as the spaced form and
+///   were previously exported verbatim.
 /// * The flag vocabulary covers credential-bearing switches, not just
 ///   `-Command`. A launch record reading `-Password hunter2` is exactly as
 ///   sensitive as an inline command and was previously exported verbatim.
@@ -70,7 +73,7 @@ fn command_line_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?P<flag>-(?:Command|EncodedCommand|Password|Secret|ClientSecret|Token|AccessToken|ApiKey|Api[-_]?Key|Credential|Authorization)\s+)(?P<value>[^\r\n]+)",
+            r"(?i)(?P<flag>-(?:Command|EncodedCommand|Password|Secret|ClientSecret|Token|AccessToken|ApiKey|Api[-_]?Key|Credential|Authorization)[\s:=]+)(?P<value>[^\r\n]+)",
         )
         .expect("command line regex must compile")
     })
@@ -126,6 +129,19 @@ mod tests {
     fn a_json_escaped_path_mask_is_idempotent() {
         let once = redact_text(r#"{"Path":"C:\\Users\\John Doe\\AppData"}"#);
         assert_eq!(once, redact_text(&once));
+    }
+
+    #[test]
+    fn credential_values_using_colon_or_equals_are_masked() {
+        for text in [
+            "app.exe -Password:hunter2",
+            "app.exe -Password=hunter2",
+            "app.exe -Token=abc123",
+        ] {
+            let redacted = redact_text(text);
+            assert!(!redacted.contains("hunter2"), "{text} -> {redacted}");
+            assert!(!redacted.contains("abc123"), "{text} -> {redacted}");
+        }
     }
 
     #[test]
