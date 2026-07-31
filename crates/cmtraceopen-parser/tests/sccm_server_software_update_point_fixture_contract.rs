@@ -1975,6 +1975,48 @@ fn mutation_was_accepted_with_asset(
     validate_scenario_values_with_overrides(scenario, manifest, expected, &overrides).is_ok()
 }
 
+fn mutation_asset_schema_failures(manifest: &Value) -> Vec<String> {
+    let mut failures = Vec::new();
+    reject_unknown_fields(
+        manifest,
+        &["contractVersion", "syntheticFixture", "testOnly", "assets"],
+        "mutation-assets",
+        &mut failures,
+    );
+    if manifest["contractVersion"] != 1
+        || manifest["syntheticFixture"] != true
+        || manifest["testOnly"] != true
+    {
+        failures.push(
+            "mutation assets must retain the versioned synthetic test-only boundary".to_owned(),
+        );
+    }
+
+    let Some(assets) = manifest["assets"].as_array() else {
+        failures.push("mutation-assets.assets must be an array".to_owned());
+        return failures;
+    };
+    for (index, asset) in assets.iter().enumerate() {
+        let context = format!("mutation-assets.assets[{index}]");
+        reject_unknown_fields(
+            asset,
+            &["assetId", "relativePath", "bytesCopied", "testPurpose"],
+            &context,
+            &mut failures,
+        );
+        for field in ["assetId", "relativePath", "testPurpose"] {
+            if required_string(asset, field, &context).is_err() {
+                failures.push(format!("{context}.{field} must be a string"));
+            }
+        }
+        if asset["bytesCopied"].as_u64().is_none() {
+            failures.push(format!("{context}.bytesCopied must be an unsigned integer"));
+        }
+    }
+
+    failures
+}
+
 #[test]
 fn software_update_point_scenario_matrix_is_complete_and_loadable() {
     let root = corpus_root();
@@ -2064,6 +2106,50 @@ fn every_scenario_evidence_asset_is_manifest_and_coverage_closed() {
 }
 
 #[test]
+fn mutation_asset_contract_rejects_unknown_and_capture_masquerade_fields() {
+    let manifest_path = mutation_asset_root().join("manifest.json");
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|error| panic!("{} is readable: {error}", manifest_path.display())),
+    )
+    .unwrap_or_else(|error| panic!("{} contains valid JSON: {error}", manifest_path.display()));
+    let mut accepted = Vec::new();
+
+    let mut unknown_top_level = manifest.clone();
+    unknown_top_level["sccmManifestVersion"] = json!(1);
+    if mutation_asset_schema_failures(&unknown_top_level).is_empty() {
+        accepted.push("unknown top-level manifest vocabulary");
+    }
+
+    let mut unknown_asset_row = manifest.clone();
+    unknown_asset_row["assets"][0]["description"] = json!("not part of the contract");
+    if mutation_asset_schema_failures(&unknown_asset_row).is_empty() {
+        accepted.push("unknown mutation asset-row vocabulary");
+    }
+
+    let mut captured_artifact_masquerade = manifest.clone();
+    captured_artifact_masquerade["assets"][0]["artifactId"] = json!("captured-artifact-01");
+    captured_artifact_masquerade["assets"][0]["sourceId"] = json!("server-sup-sync");
+    captured_artifact_masquerade["assets"][0]["captureState"] = json!("captured");
+    if mutation_asset_schema_failures(&captured_artifact_masquerade).is_empty() {
+        accepted.push("captured-artifact masquerade vocabulary");
+    }
+
+    let mut captured_manifest_masquerade = manifest;
+    captured_manifest_masquerade["assets"][0]["proposalOnly"] = json!(true);
+    captured_manifest_masquerade["assets"][0]["syntheticFixture"] = json!(true);
+    captured_manifest_masquerade["assets"][0]["sccmManifestVersion"] = json!(1);
+    if mutation_asset_schema_failures(&captured_manifest_masquerade).is_empty() {
+        accepted.push("captured-manifest masquerade vocabulary");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "the mutation-only asset contract accepted schema bypasses: {accepted:?}"
+    );
+}
+
+#[test]
 fn mutation_assets_have_an_explicit_separate_test_contract() {
     let root = mutation_asset_root();
     let manifest_path = root.join("manifest.json");
@@ -2072,6 +2158,12 @@ fn mutation_assets_have_an_explicit_separate_test_contract() {
             .unwrap_or_else(|error| panic!("{} is readable: {error}", manifest_path.display())),
     )
     .unwrap_or_else(|error| panic!("{} contains valid JSON: {error}", manifest_path.display()));
+    let schema_failures = mutation_asset_schema_failures(&manifest);
+    assert!(
+        schema_failures.is_empty(),
+        "mutation asset schema failed closed:\n{}",
+        schema_failures.join("\n")
+    );
     assert_eq!(manifest["contractVersion"], 1);
     assert_eq!(manifest["syntheticFixture"], true);
     assert_eq!(manifest["testOnly"], true);

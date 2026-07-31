@@ -148,7 +148,12 @@ Scenario `evidence/` trees are recursively closed against their physical
 manifest artifacts, and every such artifact must appear in expected coverage.
 Mutation-only byte sequences are stored outside all scenario trees under the
 explicit versioned `software_update_point_mutation_assets/manifest.json`
-test-only contract with exact byte counts and purposes.
+test-only contract with exact byte counts and purposes. That contract is
+schema-closed to `contractVersion`, `syntheticFixture`, `testOnly`, and
+`assets`; each asset row is schema-closed to `assetId`, `relativePath`,
+`bytesCopied`, and `testPurpose`. Captured-artifact or collection-manifest
+vocabulary is rejected so mutation bytes cannot masquerade as collected
+evidence.
 
 ## Deferred implementation and validation
 
