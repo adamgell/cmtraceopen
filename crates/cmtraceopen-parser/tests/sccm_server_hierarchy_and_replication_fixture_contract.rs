@@ -188,6 +188,21 @@ fn artifact_has_exact_source_tuple(artifact: &Value) -> bool {
         })
 }
 
+fn artifact_has_exact_public_provenance(artifact: &Value) -> bool {
+    artifact["producerHostHandle"]
+        .as_str()
+        .is_some_and(safe_server_handle)
+        && artifact["sanitizedSourcePath"]
+            .as_str()
+            .is_some_and(|value| safe_segmented_path(value, "SYNTHETIC://"))
+        && artifact["pathFingerprint"].as_str().is_some_and(|value| {
+            value
+                .strip_prefix("synthetic:")
+                .is_some_and(|suffix| !suffix.is_empty())
+        })
+        && artifact["sourceVersion"].as_str() == Some(EXACT_SOURCE_VERSION)
+}
+
 fn target_host_for_site<'a>(manifest: &'a Value, site: &str) -> Option<&'a str> {
     let hosts = std::iter::once((
         manifest["topology"]["targetSiteCode"].as_str(),
@@ -592,7 +607,7 @@ fn transaction_semantics_are_coherent(transaction: &Value) -> bool {
         let Some(terminal) = observation["terminal"].as_bool() else {
             return false;
         };
-        if !matches!(disposition, "succeeded" | "failed" | "retrying") {
+        if !observation_disposition_is_coherent(disposition, terminal) {
             return false;
         }
         retrying |= disposition == "retrying";
@@ -618,6 +633,13 @@ fn transaction_semantics_are_coherent(transaction: &Value) -> bool {
         ("incomplete", "insufficientEvidence")
     };
     transaction["state"] == state && transaction["classification"] == classification
+}
+
+fn observation_disposition_is_coherent(disposition: &str, terminal: bool) -> bool {
+    matches!(
+        (disposition, terminal),
+        ("succeeded", false | true) | ("failed", true) | ("retrying", false)
+    )
 }
 
 fn expected_transaction_ids(scenario: &str) -> &'static [&'static str] {
@@ -1192,18 +1214,10 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         if artifact["producerRole"] != "siteServer"
             || !matches!(artifact["direction"].as_str(), Some("origin" | "target"))
             || !artifact_has_exact_source_tuple(artifact)
-            || artifact["sourceVersion"].as_str() != Some(EXACT_SOURCE_VERSION)
+            || !artifact_has_exact_public_provenance(artifact)
             || artifact["collectedUtc"]
                 .as_str()
                 .is_none_or(|value| DateTime::parse_from_rfc3339(value).is_err())
-            || !artifact["sanitizedSourcePath"]
-                .as_str()
-                .is_some_and(|value| safe_segmented_path(value, "SYNTHETIC://"))
-            || !artifact["pathFingerprint"].as_str().is_some_and(|value| {
-                value
-                    .strip_prefix("synthetic:")
-                    .is_some_and(|suffix| !suffix.is_empty())
-            })
         {
             failures.push(format!("{artifact_id}: invalid typed provenance"));
         }
@@ -2037,21 +2051,7 @@ fn hierarchy_manifest_sources_and_physical_evidence_are_bounded() {
                     "{context}: source escapes the raw CCM hierarchy catalog"
                 ));
             }
-            if !artifact["producerHostHandle"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("safe:server:"))
-                || !artifact["sanitizedSourcePath"]
-                    .as_str()
-                    .is_some_and(|value| safe_segmented_path(value, "SYNTHETIC://"))
-                || !artifact["pathFingerprint"].as_str().is_some_and(|value| {
-                    value
-                        .strip_prefix("synthetic:")
-                        .is_some_and(|suffix| !suffix.is_empty())
-                })
-                || !artifact["sourceVersion"]
-                    .as_str()
-                    .is_some_and(|value| value.starts_with("5.00.TEST.") && value.len() > 10)
-            {
+            if !artifact_has_exact_public_provenance(artifact) {
                 failures.push(format!("{context}: unsafe or empty provenance"));
             }
             if artifact["pathFingerprint"]
@@ -2282,12 +2282,7 @@ fn hierarchy_transactions_require_exact_keys_topology_time_and_citations() {
                     ));
                 }
                 prior_phase = phase_index;
-                if !matches!(
-                    (disposition, terminal),
-                    ("succeeded", false | true)
-                        | ("failed", true)
-                        | ("retrying" | "deferred", false)
-                ) {
+                if !observation_disposition_is_coherent(disposition, terminal) {
                     failures.push(format!(
                         "{scenario}/{observation_id}: incoherent disposition/terminality"
                     ));
