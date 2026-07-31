@@ -26,7 +26,19 @@ const MIN_WELL_FORMED_RATIO: f32 = 0.5;
 /// folder. A hint only — never sufficient on its own.
 pub fn path_hint_matches(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
-    normalized.contains(COMPANY_PORTAL_LOG_DIRECTORY_HINT)
+
+    // A bare substring test also accepts sibling directories whose names merely
+    // start with the hint, such as `Library/Logs/CompanyPortalBackup/`. The hint
+    // can never change the source kind, but it is reported in detection
+    // metadata as a signature, so it should not claim a match it does not have.
+    // Require the hint to end at a path-segment boundary.
+    normalized
+        .match_indices(COMPANY_PORTAL_LOG_DIRECTORY_HINT)
+        .any(|(start, matched)| {
+            let starts_segment = start == 0 || normalized.as_bytes()[start - 1] == b'/';
+            let after = &normalized[start + matched.len()..];
+            starts_segment && (after.is_empty() || after.starts_with('/'))
+        })
 }
 
 fn looks_like_unified_log_ndjson(line: &str) -> bool {

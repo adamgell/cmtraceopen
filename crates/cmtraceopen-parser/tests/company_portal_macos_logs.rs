@@ -935,6 +935,36 @@ fn non_ascii_identities_are_redacted() {
     assert!(json.contains("[redacted:email:"));
 }
 
+/// The path hint is reported as a detection signature, so it must not claim a
+/// match for a sibling directory that merely starts with the same name.
+#[test]
+fn path_hint_requires_a_segment_boundary() {
+    assert!(path_hint_matches(
+        "/Users/x/Library/Logs/CompanyPortal/CompanyPortal.log"
+    ));
+    assert!(path_hint_matches(
+        "C:\\Users\\x\\Library\\Logs\\CompanyPortal\\CompanyPortal.log"
+    ));
+    assert!(path_hint_matches("/Users/x/Library/Logs/CompanyPortal"));
+
+    assert!(!path_hint_matches(
+        "/Users/x/Library/Logs/CompanyPortalBackup/CompanyPortal.log"
+    ));
+    assert!(!path_hint_matches(
+        "/Users/x/Library/Logs/NotCompanyPortal/CompanyPortal.log"
+    ));
+
+    // And the hint still cannot decide the source kind either way.
+    let hinted_but_wrong_content = parse_company_portal_macos_log(
+        UNIFIED_LOG,
+        &PortalLogSource::new("/Users/x/Library/Logs/CompanyPortal/CompanyPortal.log"),
+    );
+    assert_eq!(
+        hinted_but_wrong_content.detection.source_kind,
+        PortalSourceKind::MacosUnifiedLogExport
+    );
+}
+
 #[test]
 fn fixture_root_layout_is_versioned_by_scenario() {
     // Documents the on-disk contract the include_* macros above depend on.
