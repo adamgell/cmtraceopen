@@ -5,6 +5,6 @@
   "scenario": "incomplete",
   "bundle": {"role":"client","workflow":"taskSequence","siteCode":"LAB"},
   "artifacts": [
-    {"artifactId":"task-sequence-incomplete-smsts-absent","designOnlyCatalog":{"entryId":"client-task-sequence-smsts","groupMemberships":["client-task-sequence-smsts"]},"role":"client","kind":"ccmLog","captureState":"absent","encoding":null,"collectionLimit":null,"originalBasename":"smsts.log","sanitizedSourcePath":null,"smstsLogPathEvidence":null,"pathFingerprint":"synthetic:incomplete:candidate","pathClass":"unknown","rotation":{"kind":"current","fragmentComplete":false},"relocationOrdinal":0,"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:35:00Z","bytesCopied":0,"relativePath":null}
+    {"artifactId":"task-sequence-incomplete-smsts-absent","designOnlyCatalog":{"entryId":"client-task-sequence-smsts","groupMemberships":["client-task-sequence-smsts"]},"role":"client","kind":"ccmLog","captureState":"absent","encoding":null,"collectionLimit":null,"originalBasename":"smsts.log","sanitizedSourcePath":null,"smstsLogPathEvidence":null,"pathFingerprint":"synthetic:incomplete:candidate","pathClass":"unknown","rotation":{"kind":"current"},"relocationOrdinal":0,"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:35:00Z","bytesCopied":0,"relativePath":null}
   ]
 }

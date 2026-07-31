@@ -33,5 +33,5 @@
   "findings": [
     {"findingId":"reboot-continuation-deferred","classification":"blockedOrDeferred","evidence":[{"artifactId":"task-sequence-reboot-continuation-smsts-current","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false}
   ],
-  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName"]}
+  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"]}
 }

@@ -33,5 +33,5 @@
   "findings": [
     {"findingId":"software-install-terminal-failure","classification":"confirmedFailure","evidence":[{"artifactId":"task-sequence-software-install-failure-smsts-current","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false}
   ],
-  "correlationBoundary": {"scope":"taskSequenceOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName"],"causeBoundary":"No application, policy, or server causality is inferred from this task sequence record."}
+  "correlationBoundary": {"scope":"taskSequenceOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"],"causeBoundary":"No application, policy, or server causality is inferred from this task sequence record."}
 }

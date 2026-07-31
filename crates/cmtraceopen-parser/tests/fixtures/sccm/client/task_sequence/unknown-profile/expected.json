@@ -17,5 +17,5 @@
   "findings": [
     {"findingId":"unknown-profile-insufficient","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-unknown-profile-smsts-current","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false,"boundedNextArtifact":{"logicalArtifactId":"client-task-sequence-smsts","pathClass":"unknown","reason":"Add a reviewed extraction profile for the observed version before correlation."}}
   ],
-  "correlationBoundary": {"scope":"sourceLocalOnly","joinFields":[],"forbiddenJoinFields":["filename","path","timestamp","displayName"]}
+  "correlationBoundary": {"scope":"sourceLocalOnly","joinFields":[],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"]}
 }

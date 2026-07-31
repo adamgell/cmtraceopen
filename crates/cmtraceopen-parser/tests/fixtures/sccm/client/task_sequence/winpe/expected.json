@@ -33,5 +33,5 @@
   "findings": [
     {"findingId":"winpe-nonterminal","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-winpe-smsts-current","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false}
   ],
-  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName"]}
+  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"]}
 }

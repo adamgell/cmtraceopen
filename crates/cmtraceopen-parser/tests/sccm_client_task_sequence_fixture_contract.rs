@@ -43,6 +43,20 @@ const STATE_CHAIN: [&str; 8] = [
 ];
 
 const PATH_CLASSES: [&str; 5] = ["client", "fullOs", "setup", "unknown", "winpe"];
+const EXACT_KEY_JOIN_FIELDS: [&str; 4] = [
+    "executionId",
+    "taskSequencePackageId",
+    "advertisementId",
+    "runContext",
+];
+const FORBIDDEN_JOIN_FIELDS: [&str; 5] =
+    ["component", "displayName", "filename", "path", "timestamp"];
+const TRANSACTION_CORRELATION_SCOPES: [&str; 4] = [
+    "clientOnly",
+    "clientOnlyOrderingUnknown",
+    "clientRelocationOnly",
+    "taskSequenceOnly",
+];
 const EXPECTED_ARTIFACTS: usize = 22;
 const EXPECTED_EVIDENCE_FILES: usize = 21;
 const EXPECTED_EVIDENCE_BYTES: u64 = 8_243;
@@ -757,6 +771,10 @@ fn validate_manifest_and_storage(
             return Err(format!(
                 "{scenario}/{artifact_id}: noncapture artifact invents physical provenance"
             ));
+        } else if !artifact["rotation"]["fragmentComplete"].is_null() {
+            return Err(format!(
+                "{scenario}/{artifact_id}: noncapture artifact declares physical fragment completeness"
+            ));
         } else if path_class != "unknown" {
             return Err(format!(
                 "{scenario}/{artifact_id}: noncapture pathClass must remain unknown"
@@ -1160,6 +1178,50 @@ fn validate_contract(
         ));
     }
 
+    let declared_scope = expected["correlationBoundary"]["scope"]
+        .as_str()
+        .ok_or_else(|| format!("{scenario}: correlation scope is not a string"))?;
+    let declared_join_fields = string_array(&expected["correlationBoundary"]["joinFields"])?;
+    let mut declared_forbidden_fields =
+        string_array(&expected["correlationBoundary"]["forbiddenJoinFields"])?;
+    declared_forbidden_fields.sort();
+    if declared_forbidden_fields != FORBIDDEN_JOIN_FIELDS.map(str::to_owned) {
+        return Err(format!(
+            "{scenario}: declared forbidden join fields do not match the enforced list"
+        ));
+    }
+    if transactions.is_empty() {
+        let enforced_scope = if expected["sourceLocalObservations"]
+            .as_array()
+            .is_some_and(|observations| !observations.is_empty())
+        {
+            "sourceLocalOnly"
+        } else {
+            "coverageOnly"
+        };
+        if declared_scope != enforced_scope {
+            return Err(format!(
+                "{scenario}: correlation scope exceeds source-local enforcement"
+            ));
+        }
+        if !declared_join_fields.is_empty() {
+            return Err(format!(
+                "{scenario}: an unkeyed scenario cannot declare join fields"
+            ));
+        }
+    } else {
+        if !TRANSACTION_CORRELATION_SCOPES.contains(&declared_scope) {
+            return Err(format!(
+                "{scenario}: correlation scope is not an enforced client-side scope"
+            ));
+        }
+        if declared_join_fields != EXACT_KEY_JOIN_FIELDS.map(str::to_owned) {
+            return Err(format!(
+                "{scenario}: declared join fields do not match the enforced exact key fields"
+            ));
+        }
+    }
+
     for transaction in transactions {
         let transaction_id = transaction["transactionId"]
             .as_str()
@@ -1167,19 +1229,14 @@ fn validate_contract(
         let key = transaction["key"]
             .as_object()
             .ok_or_else(|| format!("{transaction_id}: key is not an object"))?;
-        for required in [
-            "executionId",
-            "taskSequencePackageId",
-            "advertisementId",
-            "runContext",
-        ] {
+        for required in EXACT_KEY_JOIN_FIELDS {
             if !key.get(required).is_some_and(Value::is_string) {
                 return Err(format!(
                     "{transaction_id}: missing exact key field {required}"
                 ));
             }
         }
-        for forbidden in ["filename", "path", "timestamp", "displayName", "component"] {
+        for forbidden in FORBIDDEN_JOIN_FIELDS {
             if key.contains_key(forbidden) {
                 return Err(format!(
                     "{transaction_id}: forbidden join field {forbidden}"

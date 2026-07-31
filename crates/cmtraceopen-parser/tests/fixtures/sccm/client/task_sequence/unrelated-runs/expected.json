@@ -52,5 +52,5 @@
     {"findingId":"run-a-nonterminal","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-unrelated-run-a","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false},
     {"findingId":"run-b-nonterminal","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-unrelated-run-b","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false}
   ],
-  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName"],"sameTimestampDoesNotJoin":true}
+  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"],"sameTimestampDoesNotJoin":true}
 }

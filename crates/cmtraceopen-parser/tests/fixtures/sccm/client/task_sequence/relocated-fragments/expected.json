@@ -44,5 +44,5 @@
   ],
   "sourceLocalObservations": [],
   "findings": [],
-  "correlationBoundary": {"scope":"clientRelocationOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName"],"pathOrderSource":"_SMSTSLogPath plus explicit relocationOrdinal"}
+  "correlationBoundary": {"scope":"clientRelocationOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"],"pathOrderSource":"_SMSTSLogPath plus explicit relocationOrdinal"}
 }

@@ -22,5 +22,5 @@
   "findings": [
     {"findingId":"rotation-boundary-partial-record","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-rotation-boundary-current","startLine":1,"endLine":1},{"artifactId":"task-sequence-rotation-boundary-lo","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false,"boundedNextArtifact":{"logicalArtifactId":"client-task-sequence-smsts","pathClass":"client","reason":"Replay the controlled archived-to-current rotation join after final intake interfaces land."}}
   ],
-  "correlationBoundary": {"scope":"sourceLocalOnly","joinFields":[],"forbiddenJoinFields":["filename","path","timestamp","displayName"],"rotationOrder":["lo","current"]}
+  "correlationBoundary": {"scope":"sourceLocalOnly","joinFields":[],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"],"rotationOrder":["lo","current"]}
 }
