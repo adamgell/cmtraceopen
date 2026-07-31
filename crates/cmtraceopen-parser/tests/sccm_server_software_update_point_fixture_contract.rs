@@ -36,6 +36,112 @@ const EXACT_WSUS: &str = "safe:wsus:lab-wsus-01";
 const EXACT_SITE_SERVER: &str = "safe:server:lab-pri-01";
 const EXACT_CLIENT: &str = "safe:client:lab-client-01";
 
+fn expected_observation_signature(
+    scenario: &str,
+) -> &'static [(&'static str, &'static str, &'static str, bool)] {
+    match scenario {
+        "incomplete" => &[("sync-10-01-configure", "configure", "succeeded", false)],
+        "metadata-failure" => &[
+            ("sync-05-01-configure", "configure", "succeeded", false),
+            ("sync-05-02-synchronize", "synchronize", "succeeded", false),
+            (
+                "sync-05-03-import",
+                "importOrProcessMetadata",
+                "failed",
+                true,
+            ),
+        ],
+        "rotation-boundary" => &[],
+        "sup-setup-failure" => &[("sync-06-01-configure", "configure", "failed", true)],
+        "supplemental-wsus-skipped" => &[
+            ("sync-07-01-configure", "configure", "succeeded", false),
+            ("sync-07-02-synchronize", "synchronize", "succeeded", false),
+            (
+                "sync-07-03-import",
+                "importOrProcessMetadata",
+                "succeeded",
+                false,
+            ),
+            ("sync-07-04-validate", "validateWsus", "succeeded", false),
+            (
+                "sync-07-05-publish",
+                "publishAvailability",
+                "succeeded",
+                false,
+            ),
+            (
+                "sync-07-06-terminal",
+                "healthyOrTerminal",
+                "succeeded",
+                true,
+            ),
+        ],
+        "sync-retry" => &[
+            ("sync-04-01-configure", "configure", "succeeded", false),
+            ("sync-04-02-retry", "synchronize", "retrying", false),
+        ],
+        "sync-success" => &[
+            ("sync-01-01-configure", "configure", "succeeded", false),
+            ("sync-01-02-synchronize", "synchronize", "succeeded", false),
+            (
+                "sync-01-03-import",
+                "importOrProcessMetadata",
+                "succeeded",
+                false,
+            ),
+            ("sync-01-04-validate", "validateWsus", "succeeded", false),
+            (
+                "sync-01-05-publish",
+                "publishAvailability",
+                "succeeded",
+                false,
+            ),
+            (
+                "sync-01-06-terminal",
+                "healthyOrTerminal",
+                "succeeded",
+                true,
+            ),
+        ],
+        "unrelated-update-key" => &[
+            ("sync-08-01-configure", "configure", "succeeded", false),
+            ("sync-08-02-synchronize", "synchronize", "succeeded", false),
+            (
+                "sync-08-03-import",
+                "importOrProcessMetadata",
+                "succeeded",
+                false,
+            ),
+            ("sync-08-04-validate", "validateWsus", "succeeded", false),
+            (
+                "sync-08-05-publish",
+                "publishAvailability",
+                "succeeded",
+                false,
+            ),
+            (
+                "sync-08-06-terminal",
+                "healthyOrTerminal",
+                "succeeded",
+                true,
+            ),
+        ],
+        "wcm-configuration-failure" => &[("sync-02-01-configure", "configure", "failed", true)],
+        "wsus-health-failure" => &[
+            ("sync-03-01-configure", "configure", "succeeded", false),
+            ("sync-03-02-synchronize", "synchronize", "succeeded", false),
+            (
+                "sync-03-03-import",
+                "importOrProcessMetadata",
+                "succeeded",
+                false,
+            ),
+            ("sync-03-04-validate", "validateWsus", "failed", true),
+        ],
+        _ => &[],
+    }
+}
+
 fn corpus_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sccm/server/software_update_point")
@@ -269,11 +375,40 @@ fn source_path_is_bounded(relative_path: &str, basename: &str) -> bool {
         && relative_path.starts_with("evidence/")
         && !relative_path.starts_with('/')
         && !relative_path.contains('\\')
-        && !relative_path.split('/').any(|segment| segment == "..")
+        && relative_path.split('/').all(|segment| {
+            !segment.is_empty()
+                && !matches!(segment, "." | "..")
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
         && relative_path
             .rsplit('/')
             .next()
             .is_some_and(|candidate| candidate == basename)
+}
+
+fn sanitized_source_path_is_safe(value: &str) -> bool {
+    value.strip_prefix("SYNTHETIC://").is_some_and(|suffix| {
+        !suffix.is_empty()
+            && !suffix.contains('\\')
+            && suffix.split('/').all(|segment| {
+                !segment.is_empty()
+                    && !matches!(segment, "." | "..")
+                    && segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    })
+            })
+    })
+}
+
+fn prefixed_token_is_nonempty(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    })
 }
 
 #[derive(Debug)]
@@ -342,14 +477,15 @@ fn validate_manifest(
         failures.push("manifest topology is not the exact synthetic LAB SUP/WSUS scope".to_owned());
     }
 
-    let roles = manifest["topology"]["rolesObserved"]
-        .as_array()
+    let role_values = manifest["topology"]["rolesObserved"].as_array();
+    let roles = role_values
         .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
     let mut sorted_roles = roles.clone();
     sorted_roles.sort_unstable();
     sorted_roles.dedup();
-    if roles != sorted_roles
+    if role_values.is_none_or(|values| values.len() != roles.len())
+        || roles != sorted_roles
         || !roles.contains(&"siteServer")
         || !roles.contains(&"softwareUpdatePoint")
         || roles
@@ -476,19 +612,22 @@ fn validate_manifest(
             ));
         }
         let path_fingerprint = artifact["pathFingerprint"].as_str();
-        if !path_fingerprint.is_some_and(|value| value.starts_with("synthetic:"))
+        if !path_fingerprint.is_some_and(|value| prefixed_token_is_nonempty(value, "synthetic:"))
             || !artifact["sanitizedSourcePath"]
                 .as_str()
-                .is_some_and(|value| value.starts_with("SYNTHETIC://"))
+                .is_some_and(sanitized_source_path_is_safe)
         {
             failures.push(format!("{artifact_id} leaks or omits path provenance"));
         }
-        if path_fingerprint.is_some_and(|value| !path_fingerprints.insert(value)) {
+        if path_fingerprint
+            .map(str::to_ascii_lowercase)
+            .is_some_and(|value| !path_fingerprints.insert(value))
+        {
             failures.push(format!("{artifact_id} reuses a physical path fingerprint"));
         }
         if !artifact["sourceVersion"]
             .as_str()
-            .is_some_and(|value| value.starts_with("5.00.TEST."))
+            .is_some_and(|value| prefixed_token_is_nonempty(value, "5.00.TEST."))
         {
             failures.push(format!(
                 "{artifact_id} is outside the synthetic version profile"
@@ -531,8 +670,8 @@ fn validate_manifest(
             artifact["sanitizedSourcePath"]
                 .as_str()
                 .unwrap_or_default()
-                .to_owned(),
-            basename.to_owned(),
+                .to_ascii_lowercase(),
+            basename.to_ascii_lowercase(),
             rotation_kind.clone(),
             rotation_value,
         );
@@ -599,7 +738,7 @@ fn validate_manifest(
                     "{artifact_id} has an unsafe or mismatched evidence path"
                 ));
             }
-            if !relative_paths.insert(relative_path.to_owned()) {
+            if !relative_paths.insert(relative_path.to_ascii_lowercase()) {
                 failures.push(format!(
                     "{artifact_id} collides with an evidence destination"
                 ));
@@ -881,11 +1020,12 @@ fn validate_expected(
     {
         failures.push("expected output loses the preparation/dependency boundary".to_owned());
     }
-    if expected["stateChain"]
-        .as_array()
+    let state_values = expected["stateChain"].as_array();
+    let state_chain = state_values
         .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .as_deref()
-        != Some(STATE_CHAIN)
+        .unwrap_or_default();
+    if state_values.is_none_or(|values| values.len() != state_chain.len())
+        || state_chain != STATE_CHAIN
     {
         failures.push("expected state chain does not match the #330 contract".to_owned());
     }
@@ -1023,6 +1163,33 @@ fn validate_expected(
                 continue;
             }
         };
+        let actual_signature = observations
+            .iter()
+            .map(|observation| {
+                (
+                    observation["observationId"].as_str(),
+                    observation["phase"].as_str(),
+                    observation["disposition"].as_str(),
+                    observation["terminal"].as_bool(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected_signature = expected_observation_signature(scenario)
+            .iter()
+            .map(|(observation_id, phase, disposition, terminal)| {
+                (
+                    Some(*observation_id),
+                    Some(*phase),
+                    Some(*disposition),
+                    Some(*terminal),
+                )
+            })
+            .collect::<Vec<_>>();
+        if actual_signature != expected_signature {
+            failures.push(format!(
+                "{scenario} does not retain its exact required observation chain"
+            ));
+        }
         let observation_order = observations
             .iter()
             .filter_map(|observation| observation["observationId"].as_str())
@@ -1977,4 +2144,88 @@ fn terminal_failure_with_optional_gap_has_a_medium_confidence_ceiling() {
     expected["transactions"][transaction]["confidenceCeiling"] = json!("medium");
     validate_scenario_values("wcm-configuration-failure", &manifest, &expected)
         .unwrap_or_else(|failures| panic!("{}", failures.join("\n")));
+}
+
+#[test]
+fn required_phase_identity_and_manifest_strings_fail_closed() {
+    let success_manifest = read_json("sync-success", "manifest.json").expect("manifest loads");
+    let success_expected = read_json("sync-success", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+    let transaction_id = "sup:sync-01:LAB:safe:sup:lab-sup-01";
+    let transaction = transaction_index(&success_expected, transaction_id);
+
+    let mut missing_required_phase = success_expected.clone();
+    let synchronize =
+        observation_index(&success_expected, transaction_id, "sync-01-02-synchronize");
+    missing_required_phase["transactions"][transaction]["observations"]
+        .as_array_mut()
+        .expect("observations are mutable")
+        .remove(synchronize);
+    if mutation_was_accepted("sync-success", &success_manifest, &missing_required_phase) {
+        accepted.push("sync-success survived without its required synchronize phase");
+    }
+
+    let mut renamed_observation = success_expected.clone();
+    let terminal = observation_index(&success_expected, transaction_id, "sync-01-06-terminal");
+    renamed_observation["transactions"][transaction]["observations"][terminal]["observationId"] =
+        json!("sync-01-06-terminal-renamed");
+    if mutation_was_accepted("sync-success", &success_manifest, &renamed_observation) {
+        accepted.push("a scenario observation identity was renamed");
+    }
+
+    let current = artifact_index(&rotation_manifest, "rotation-01-current");
+    let lo = artifact_index(&rotation_manifest, "rotation-02-lo");
+    let mut dot_alias = rotation_manifest.clone();
+    dot_alias["artifacts"][lo]["relativePath"] =
+        json!("evidence/server-sup-sync/site/current/./wsyncmgr.log");
+    dot_alias["artifacts"][lo]["bytesCopied"] =
+        dot_alias["artifacts"][current]["bytesCopied"].clone();
+    if mutation_was_accepted("rotation-boundary", &dot_alias, &rotation_expected) {
+        accepted.push("dot-segment path alias reused a physical evidence destination");
+    }
+
+    let wcm = artifact_index(&success_manifest, "sync-success-01-wcm");
+    let mut unsafe_source_path = success_manifest.clone();
+    unsafe_source_path["artifacts"][wcm]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://configured-root/Site/Logs/../secrets.txt");
+    if mutation_was_accepted("sync-success", &unsafe_source_path, &success_expected) {
+        accepted.push("sanitized source path accepted traversal syntax");
+    }
+
+    let mut empty_fingerprint = success_manifest.clone();
+    empty_fingerprint["artifacts"][wcm]["pathFingerprint"] = json!("synthetic:");
+    if mutation_was_accepted("sync-success", &empty_fingerprint, &success_expected) {
+        accepted.push("empty synthetic path fingerprint");
+    }
+
+    let mut empty_version = success_manifest.clone();
+    empty_version["artifacts"][wcm]["sourceVersion"] = json!("5.00.TEST.");
+    if mutation_was_accepted("sync-success", &empty_version, &success_expected) {
+        accepted.push("empty synthetic source-version suffix");
+    }
+
+    let mut non_string_role = success_manifest.clone();
+    non_string_role["topology"]["rolesObserved"] =
+        json!(["siteServer", "softwareUpdatePoint", 7, "wsUs"]);
+    if mutation_was_accepted("sync-success", &non_string_role, &success_expected) {
+        accepted.push("non-string topology role");
+    }
+
+    let mut non_string_state = success_expected.clone();
+    non_string_state["stateChain"]
+        .as_array_mut()
+        .expect("state chain is mutable")
+        .push(json!(7));
+    if mutation_was_accepted("sync-success", &success_manifest, &non_string_state) {
+        accepted.push("non-string state-chain entry");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "required-phase/schema/path mutations were accepted: {accepted:?}"
+    );
 }
