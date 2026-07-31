@@ -377,27 +377,27 @@ fn scenario_directories() -> Vec<String> {
     scenarios
 }
 
-fn json_string(value: &Value, field: &str) -> String {
+fn json_string(value: &Value, field: &str) -> Result<String, String> {
     value[field]
         .as_str()
-        .unwrap_or_else(|| panic!("{field} must be a string"))
-        .to_owned()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{field} must be a string"))
 }
 
 fn optional_json_string(value: &Value, field: &str) -> Option<String> {
     value[field].as_str().map(str::to_owned)
 }
 
-fn string_array(values: &Value, field: &str) -> Vec<String> {
+fn string_array(values: &Value, field: &str) -> Result<Vec<String>, String> {
     values[field]
         .as_array()
-        .unwrap_or_else(|| panic!("{field} must be an array"))
+        .ok_or_else(|| format!("{field} must be an array"))?
         .iter()
         .map(|value| {
             value
                 .as_str()
-                .unwrap_or_else(|| panic!("{field} values must be strings"))
-                .to_owned()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{field} values must be strings"))
         })
         .collect()
 }
@@ -496,10 +496,13 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
             findings.len()
         ));
     }
-    let transaction_ids = transactions
-        .iter()
-        .map(|transaction| json_string(transaction, "transactionId"))
-        .collect::<Vec<_>>();
+    let mut transaction_ids = Vec::new();
+    for transaction in transactions {
+        match json_string(transaction, "transactionId") {
+            Ok(transaction_id) => transaction_ids.push(transaction_id),
+            Err(error) => failures.push(format!("{scenario}: transaction {error}")),
+        }
+    }
     let mut sorted_transaction_ids = transaction_ids.clone();
     sorted_transaction_ids.sort();
     if transaction_ids != sorted_transaction_ids
@@ -530,17 +533,23 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
             ));
         }
     }
-    let subject_ids = transactions
-        .iter()
-        .map(|transaction| json_string(transaction, "transactionId"))
-        .chain(
-            observations
-                .iter()
-                .map(|observation| json_string(observation, "observationId")),
-        )
-        .collect::<BTreeSet<_>>();
+    let mut subject_ids = transaction_ids.iter().cloned().collect::<BTreeSet<_>>();
+    for observation in observations {
+        match json_string(observation, "observationId") {
+            Ok(observation_id) => {
+                subject_ids.insert(observation_id);
+            }
+            Err(error) => failures.push(format!("{scenario}: observation {error}")),
+        }
+    }
     for finding in findings {
-        let subject_id = json_string(finding, "subjectId");
+        let subject_id = match json_string(finding, "subjectId") {
+            Ok(subject_id) => subject_id,
+            Err(error) => {
+                failures.push(format!("{scenario}: finding {error}"));
+                continue;
+            }
+        };
         if !subject_ids.contains(&subject_id)
             || finding["evidence"].as_array().is_none_or(Vec::is_empty)
             || (finding["class"] == "confirmedFailure"
@@ -555,9 +564,9 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     if contract.transactions + contract.observations > 0 {
         if let Some(subject) = subject(expected, contract) {
             if optional_json_string(subject, "phase").as_deref() != contract.phase
-                || json_string(subject, "state") != contract.state
-                || json_string(subject, "classification") != contract.classification
-                || json_string(subject, "confidenceCeiling") != contract.confidence_ceiling
+                || subject["state"].as_str() != Some(contract.state)
+                || subject["classification"].as_str() != Some(contract.classification)
+                || subject["confidenceCeiling"].as_str() != Some(contract.confidence_ceiling)
                 || optional_json_string(subject, "lastSuccessfulPhase").as_deref()
                     != contract.last_successful_phase
             {
@@ -579,15 +588,18 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
         failures.push(format!("{scenario}: coverage must be an array"));
         return failures;
     };
-    let coverage_pairs = coverage
-        .iter()
-        .map(|entry| {
-            (
-                json_string(entry, "logicalArtifactId"),
-                json_string(entry, "state"),
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut coverage_pairs = Vec::new();
+    for entry in coverage {
+        match (
+            json_string(entry, "logicalArtifactId"),
+            json_string(entry, "state"),
+        ) {
+            (Ok(logical_id), Ok(state)) => coverage_pairs.push((logical_id, state)),
+            (Err(error), _) | (_, Err(error)) => {
+                failures.push(format!("{scenario}: coverage entry {error}"));
+            }
+        }
+    }
     let expected_coverage_pairs = contract
         .coverage
         .iter()
@@ -600,9 +612,14 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     }
 
     let handoff = &expected["correlationHandoff"];
-    let facts = handoff["counterpartReadyFacts"]
-        .as_array()
-        .expect("counterpartReadyFacts must be an array");
+    let empty_facts = Vec::new();
+    let facts = match handoff["counterpartReadyFacts"].as_array() {
+        Some(facts) => facts,
+        None => {
+            failures.push(format!("{scenario}: counterpartReadyFacts must be an array"));
+            &empty_facts
+        }
+    };
     if handoff["issue"] != "#333"
         || handoff["serverPrerequisiteIssue"] != "#330"
         || handoff["performed"] != false
@@ -642,18 +659,23 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
         }
     }
 
-    let prohibited = string_array(expected, "prohibitedClaims").join("\n");
-    for required in [
-        "SUP or server root cause",
-        "time-only cross-artifact causality",
-        "policy reducer dependency",
-        "native Windows acceptance",
-    ] {
-        if !prohibited.contains(required) {
-            failures.push(format!(
-                "{scenario}: prohibited claims must include {required:?}"
-            ));
+    match string_array(expected, "prohibitedClaims") {
+        Ok(prohibited_claims) => {
+            let prohibited = prohibited_claims.join("\n");
+            for required in [
+                "SUP or server root cause",
+                "time-only cross-artifact causality",
+                "policy reducer dependency",
+                "native Windows acceptance",
+            ] {
+                if !prohibited.contains(required) {
+                    failures.push(format!(
+                        "{scenario}: prohibited claims must include {required:?}"
+                    ));
+                }
+            }
         }
+        Err(error) => failures.push(format!("{scenario}: {error}")),
     }
 
     let profile = &expected["extractionProfile"];
@@ -691,10 +713,15 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
         }
     }
     if scenario == "same-minute-separate" {
-        let update_ids = transactions
-            .iter()
-            .map(|transaction| json_string(&transaction["key"], "updateId"))
-            .collect::<BTreeSet<_>>();
+        let mut update_ids = BTreeSet::new();
+        for transaction in transactions {
+            match json_string(&transaction["key"], "updateId") {
+                Ok(update_id) => {
+                    update_ids.insert(update_id);
+                }
+                Err(error) => failures.push(format!("{scenario}: transaction key {error}")),
+            }
+        }
         if update_ids.len() != 2 {
             failures.push(
                 "same-minute-separate: exact update keys must remain two transactions".to_owned(),
@@ -1218,11 +1245,15 @@ fn transaction_binding_failures(
             }
         }
 
-        let actual_gaps = string_array(transaction, "coverageGapArtifactIds");
-        if actual_gaps != expected_transaction_gaps(scenario) {
-            failures.push(format!(
-                "{scenario}: coverage gaps drifted for {transaction_id}: {actual_gaps:?}"
-            ));
+        match string_array(transaction, "coverageGapArtifactIds") {
+            Ok(actual_gaps) => {
+                if actual_gaps != expected_transaction_gaps(scenario) {
+                    failures.push(format!(
+                        "{scenario}: coverage gaps drifted for {transaction_id}: {actual_gaps:?}"
+                    ));
+                }
+            }
+            Err(error) => failures.push(format!("{scenario}: {transaction_id} {error}")),
         }
     }
     failures
@@ -2317,7 +2348,13 @@ fn software_update_fixture_bytes_paths_lines_and_ccm_records_are_exact() {
                     .into_iter()
                     .map(|failure| format!("{}: {failure}", contract.name)),
             );
-            let artifact_id = json_string(artifact, "artifactId");
+            let artifact_id = match json_string(artifact, "artifactId") {
+                Ok(artifact_id) => artifact_id,
+                Err(error) => {
+                    failures.push(format!("{}: manifest artifact {error}", contract.name));
+                    continue;
+                }
+            };
             let Some(relative_path) = artifact["relativePath"].as_str() else {
                 continue;
             };
