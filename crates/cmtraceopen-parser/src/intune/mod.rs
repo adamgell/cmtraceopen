@@ -1,3 +1,4 @@
+pub mod device;
 pub mod download_stats;
 pub mod event_tracker;
 pub mod guid_registry;
