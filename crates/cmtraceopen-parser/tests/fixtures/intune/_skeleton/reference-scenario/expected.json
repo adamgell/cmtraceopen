@@ -1,0 +1,24 @@
+{
+  "scenario": "reference-scenario",
+  "workload": "_skeleton",
+  "coverage": [
+    { "artifactId": "skeleton-ime-current", "status": "available" },
+    { "artifactId": "skeleton-appworkload-absent", "status": "missing" }
+  ],
+  "findings": [
+    {
+      "findingId": "skeleton-coverage-gap",
+      "severity": "info",
+      "confidence": "high",
+      "title": "Expected app workload evidence was not collected",
+      "summary": "AppWorkload.log was absent, so app-level enforcement cannot be evaluated from this bundle.",
+      "recommendedChecks": ["Collect AppWorkload.log and re-run the analysis"],
+      "evidence": [],
+      "coverageGapIds": ["skeleton-appworkload-absent"]
+    }
+  ],
+  "assertions": [
+    "a finding may cite a coverage gap instead of evidence, but never neither",
+    "an absent artifact still produces a coverage entry"
+  ]
+}

@@ -4,4 +4,5 @@
 //! single "app" state machine, because a platform script, a remediation pair,
 //! and a Win32 installer reach terminal states for different reasons.
 
+pub mod macos;
 pub mod windows;
