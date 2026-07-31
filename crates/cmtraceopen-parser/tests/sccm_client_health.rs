@@ -405,6 +405,44 @@ fn health_duplicate_artifact_ids_fail_closed_without_order_authority() {
 }
 
 #[test]
+fn health_server_role_identity_collisions_do_not_change_client_analysis() {
+    let baseline = load_bundle("success");
+    let expected = serde_json::to_string(&analyze_client_health(&baseline))
+        .expect("baseline client analysis JSON");
+    let mut bundle = baseline.clone();
+
+    let mut server_artifact = baseline
+        .artifacts
+        .first()
+        .expect("success fixture artifact")
+        .clone();
+    server_artifact.artifact_id = "server-role-collision".to_owned();
+    server_artifact.display_name = "MP_GetPolicy.log".to_owned();
+    server_artifact.role = SccmRole::ManagementPoint;
+    bundle.artifacts.push(server_artifact.clone());
+    bundle.artifacts.push(server_artifact);
+
+    let mut server_evidence = baseline
+        .evidence
+        .first()
+        .expect("success fixture evidence")
+        .clone();
+    server_evidence.evidence_id = "evidence:server-role-collision".to_owned();
+    server_evidence.reference.artifact_id = "server-role-collision".to_owned();
+    server_evidence.reference.entry_id = "server-role-collision-entry".to_owned();
+    server_evidence.role = SccmRole::ManagementPoint;
+    bundle.evidence.push(server_evidence.clone());
+    bundle.evidence.push(server_evidence);
+
+    assert_eq!(
+        serde_json::to_string(&analyze_client_health(&bundle))
+            .expect("client analysis with unrelated server collisions"),
+        expected,
+        "server-role identity collisions are outside the client-health authority boundary"
+    );
+}
+
+#[test]
 fn health_equal_time_opposing_transport_outcomes_are_contradictory() {
     fn with_failure_artifact_id(artifact_id: &str) -> SccmNormalizedBundle {
         let mut bundle = load_bundle("success");
