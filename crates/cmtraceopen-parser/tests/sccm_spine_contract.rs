@@ -135,7 +135,7 @@ const COMPACT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 5] = [
     "Collect every log on the system.",
 ];
 
-const ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 10] = [
+const ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 12] = [
     "Every log on the system must be collected.",
     "Request all files on the system.",
     "Obtain every directory from the machine.",
@@ -146,14 +146,94 @@ const ORDER_INDEPENDENT_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 10] = [
     "All files from every directory are required.",
     "Collect all of the files.",
     "Scan every single directory.",
+    "Collect PolicyAgent.log plus logs at root.",
+    "Collect PolicyAgent.log plus systemwide collection scope.",
 ];
 
-const BOUNDED_NARRATIVE_ARTIFACT_REQUEST_REASONS: [&str; 5] = [
-    "Collect the full disk imaging Task Sequence log.",
-    "Confirm the whole-disk encryption status recorded in PolicyAgent.log.",
-    "Confirm the system-wide assignment recorded in PolicyAgent.log.",
-    "Confirm recursive retry behavior recorded in PolicyAgent.log.",
-    "Confirm all files were downloaded, as recorded in PolicyAgent.log.",
+const BOUNDED_NARRATIVE_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
+    ("smsts", "Collect the full disk imaging Task Sequence log."),
+    (
+        "policyAgent",
+        "Confirm the whole-disk encryption status recorded in PolicyAgent.log.",
+    ),
+    (
+        "policyAgent",
+        "Confirm the system-wide assignment recorded in PolicyAgent.log.",
+    ),
+    (
+        "policyAgent",
+        "Confirm recursive retry behavior recorded in PolicyAgent.log.",
+    ),
+    (
+        "policyAgent",
+        "Confirm all files were downloaded, as recorded in PolicyAgent.log.",
+    ),
+];
+
+const REVIEW_UNBOUNDED_ARTIFACT_REQUEST_REASONS: [&str; 19] = [
+    "System-wide logs are required.",
+    "Systemwide logs are required.",
+    "Drive-wide files are requested.",
+    "Logs from the filesystem root are required.",
+    "The filesystem root must be archived.",
+    "Recursive collection of system logs is required.",
+    "Recursive traversal of the filesystem is required.",
+    "All files were downloaded; collect them, as recorded in PolicyAgent.log.",
+    "Archive the whole disk; encryption is recorded in PolicyAgent.log.",
+    "Collect the full disk; imaging is recorded in Smsts.log.",
+    "Collect the full disk imaging Task Sequence log recursively across directories.",
+    "Collect the full disk imaging Task Sequence log and include recursive directory traversal.",
+    "Collect the full disk imaging Task Sequence log; include folders recursively.",
+    "Collect the full disk imaging Task Sequence log using recursion across folders.",
+    "Confirm all files were downloaded, as recorded in PolicyAgent.log, with recursive directory inclusion.",
+    "Confirm all files were downloaded, as recorded in PolicyAgent.log; recursive traversal across directories is also required.",
+    "Collect the full disk imaging Task Sequence log plus system-wide logs.",
+    "Collect the full disk imaging Task Sequence log plus systemwide logs.",
+    "Confirm all files were downloaded, as recorded in PolicyAgent.log, plus logs from the filesystem root.",
+];
+
+const REVIEW_BOUNDED_NAMED_ARTIFACT_REQUESTS: [(&str, &str); 14] = [
+    ("policyAgent", "Collect the complete PolicyAgent.log file."),
+    ("policyAgent", "Collect every cited PolicyAgent.log entry."),
+    (
+        "policyAgent",
+        "Confirm all assignment IDs in the cited PolicyAgent.log record.",
+    ),
+    (
+        "dataTransferService",
+        "Confirm complete file download status in DataTransferService.log.",
+    ),
+    ("policyAgent", "Collect all rotations of PolicyAgent.log."),
+    (
+        "policyAgent",
+        "Confirm every retry in PolicyAgent.log for assignment A.",
+    ),
+    (
+        "policyAgent",
+        "Collect the whole PolicyAgent.log record cited by entry A.",
+    ),
+    (
+        "policyAgent",
+        "Confirm the full client policy in PolicyAgent.log.",
+    ),
+    ("smsts", "Collect the complete Task Sequence log."),
+    (
+        "dataTransferService",
+        "Confirm all content files were downloaded, as recorded in DataTransferService.log.",
+    ),
+    (
+        "dataTransferService",
+        "Confirm all of the files were downloaded, as recorded in DataTransferService.log.",
+    ),
+    (
+        "dataTransferService",
+        "Confirm every file was downloaded, as recorded in DataTransferService.log.",
+    ),
+    ("smsts", "Confirm the full disk-image status in Smsts.log."),
+    (
+        "smsts",
+        "Collect the complete disk imaging Task Sequence log.",
+    ),
 ];
 
 #[derive(Clone, Copy, Debug)]
@@ -1294,20 +1374,35 @@ fn finding_artifact_requests_reject_structurally_unbounded_reasons() {
 #[test]
 fn finding_artifact_requests_accept_specific_bounded_reasons() {
     let existing = [
-        "Confirm the bounded policy request outcome.",
-        "Collect the PolicyAgent record cited by assignment A.",
-        "Confirm the root cause recorded by PolicyAgent.",
-        "Confirm the disk status code recorded in PolicyAgent.log.",
-        "Collect the disk imaging Task Sequence log.",
-        "Collect Logs/PolicyAgent.log from the bounded bundle.",
-        r"Collect Logs\PolicyAgent.log from the bounded bundle.",
+        ("policyAgent", "Confirm the bounded policy request outcome."),
+        (
+            "policyAgent",
+            "Collect the PolicyAgent record cited by assignment A.",
+        ),
+        (
+            "policyAgent",
+            "Confirm the root cause recorded by PolicyAgent.",
+        ),
+        (
+            "policyAgent",
+            "Confirm the disk status code recorded in PolicyAgent.log.",
+        ),
+        ("smsts", "Collect the disk imaging Task Sequence log."),
+        (
+            "policyAgent",
+            "Collect Logs/PolicyAgent.log from the bounded bundle.",
+        ),
+        (
+            "policyAgent",
+            r"Collect Logs\PolicyAgent.log from the bounded bundle.",
+        ),
     ];
     let canonical = finding_with_gap_and_request("bounded-reason-parity");
     let mut rejected = Vec::new();
 
-    for reason in existing
+    for (logical_id, reason) in existing
         .into_iter()
-        .chain(BOUNDED_NARRATIVE_ARTIFACT_REQUEST_REASONS)
+        .chain(BOUNDED_NARRATIVE_ARTIFACT_REQUESTS)
     {
         if SccmFindingBuilder::new("bounded-structural-request")
             .class(SccmFindingClass::Symptom)
@@ -1316,7 +1411,7 @@ fn finding_artifact_requests_accept_specific_bounded_reasons() {
             .severity(Severity::Warning)
             .confidence(SccmConfidence::Low)
             .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
-            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .next_artifact(finding_request(logical_id, SccmRole::Client, reason))
             .build()
             .is_err()
         {
@@ -1324,7 +1419,7 @@ fn finding_artifact_requests_accept_specific_bounded_reasons() {
         }
 
         let mut direct = canonical.clone();
-        direct.next_artifacts[0].reason = reason.into();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::Client, reason);
         if direct.validate().is_err() {
             rejected.push(format!("direct validate: {reason}"));
         }
@@ -1333,7 +1428,8 @@ fn finding_artifact_requests_accept_specific_bounded_reasons() {
         }
 
         let mut json = serde_json::to_value(&canonical).unwrap();
-        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        json["nextArtifacts"][0] =
+            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
         if serde_json::from_value::<SccmFinding>(json).is_err() {
             rejected.push(format!("deserializer: {reason}"));
         }
@@ -1381,6 +1477,90 @@ fn finding_artifact_request_bounds_apply_to_deserialization_and_serialization() 
     assert!(
         accepted.is_empty(),
         "accepted unbounded request boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_unbounded_scope_matrix_fails_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-unbounded-scope-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_UNBOUNDED_ARTIFACT_REQUEST_REASONS {
+        let builder = SccmFindingBuilder::new("review-unbounded-scope-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted reviewed unbounded request boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_bounded_named_artifact_matrix_passes_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-bounded-scope-parity");
+    let mut rejected = Vec::new();
+
+    for (logical_id, reason) in REVIEW_BOUNDED_NAMED_ARTIFACT_REQUESTS {
+        let builder = SccmFindingBuilder::new("review-bounded-scope-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request(logical_id, SccmRole::Client, reason))
+            .build();
+        if builder.is_err() {
+            rejected.push(format!("builder: {logical_id}: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = finding_request(logical_id, SccmRole::Client, reason);
+        if direct.validate().is_err() {
+            rejected.push(format!("direct validate: {logical_id}: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {logical_id}: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] =
+            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {logical_id}: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected reviewed bounded request boundaries: {rejected:#?}"
     );
 }
 
@@ -1723,7 +1903,7 @@ fn finding_artifact_requests_require_declared_logical_id_and_role() {
 
 #[test]
 fn finding_artifact_requests_require_nonempty_bounded_reasons_and_count() {
-    for reason in ["", "   "] {
+    for reason in ["", "   ", ".", ";", "!?"] {
         let result = SccmFindingBuilder::new("empty-request-reason")
             .class(SccmFindingClass::InsufficientEvidence)
             .phase(SccmPhase::Policy)

@@ -709,9 +709,6 @@ fn validate_artifact_requests(
         if !is_canonical_opaque_id(&request.logical_id) {
             return Err(SccmFindingValidationError::UndeclaredArtifactRequest);
         }
-        if !is_bounded_request_reason(&request.reason) {
-            return Err(SccmFindingValidationError::InvalidArtifactRequestReason);
-        }
 
         let mut logical_matches = catalog
             .iter()
@@ -719,18 +716,34 @@ fn validate_artifact_requests(
         let Some(first_match) = logical_matches.next() else {
             return Err(SccmFindingValidationError::UndeclaredArtifactRequest);
         };
-        if first_match.role != request.role
-            && !logical_matches.any(|entry| entry.role == request.role)
-        {
+        let requested_source = if first_match.role == request.role {
+            first_match
+        } else if let Some(role_match) = logical_matches.find(|entry| entry.role == request.role) {
+            role_match
+        } else {
             return Err(SccmFindingValidationError::ArtifactRequestRoleMismatch);
+        };
+        if !is_bounded_request_reason(
+            &request.reason,
+            &requested_source.basename,
+            &requested_source.logical_name,
+        ) {
+            return Err(SccmFindingValidationError::InvalidArtifactRequestReason);
         }
     }
     Ok(())
 }
 
-fn is_bounded_request_reason(reason: &str) -> bool {
+fn is_bounded_request_reason(
+    reason: &str,
+    requested_basename: &str,
+    requested_logical_id: &str,
+) -> bool {
     let trimmed = reason.trim();
     if trimmed.is_empty()
+        || !trimmed
+            .chars()
+            .any(|character| character.is_ascii_alphanumeric())
         || trimmed.chars().count() > MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS
         || contains_rooted_path(trimmed)
         || trimmed.contains(['*', '?', '[', ']'])
@@ -738,7 +751,11 @@ fn is_bounded_request_reason(reason: &str) -> bool {
         return false;
     }
 
-    !has_unbounded_request_scope(&trimmed.to_ascii_lowercase())
+    let lowercase = trimmed.to_ascii_lowercase();
+    let clauses_are_bounded = request_clauses(&lowercase).all(|clause| {
+        !has_unbounded_request_scope(clause, requested_basename, requested_logical_id)
+    });
+    clauses_are_bounded
 }
 
 fn contains_rooted_path(reason: &str) -> bool {
@@ -753,8 +770,37 @@ fn contains_rooted_path(reason: &str) -> bool {
     })
 }
 
-fn has_unbounded_request_scope(reason: &str) -> bool {
-    let tokens = reason
+fn request_clauses(reason: &str) -> impl Iterator<Item = &str> {
+    let mut clauses = Vec::new();
+    let mut start = 0;
+    let mut characters = reason.char_indices().peekable();
+
+    while let Some((index, character)) = characters.next() {
+        let next = characters.peek().map(|(_, next)| *next);
+        let is_sentence_period =
+            character == '.' && next.is_none_or(|next| !next.is_ascii_alphanumeric());
+        if matches!(character, ';' | '\n' | '\r' | '!' | '?') || is_sentence_period {
+            let clause = reason[start..index].trim();
+            if !clause.is_empty() {
+                clauses.push(clause);
+            }
+            start = index + character.len_utf8();
+        }
+    }
+
+    let trailing = reason[start..].trim();
+    if !trailing.is_empty() {
+        clauses.push(trailing);
+    }
+    clauses.into_iter()
+}
+
+fn has_unbounded_request_scope(
+    clause: &str,
+    requested_basename: &str,
+    requested_logical_id: &str,
+) -> bool {
+    let tokens = clause
         .split(|character: char| !character.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
@@ -766,7 +812,7 @@ fn has_unbounded_request_scope(reason: &str) -> bool {
         || has_recursive_collection_scope(&tokens)
         || has_wide_collection_scope(&tokens)
         || has_root_collection_scope(&tokens)
-        || has_broad_collection_scope(&tokens)
+        || has_unscoped_broad_collection_scope(&tokens, requested_basename, requested_logical_id)
 }
 
 fn is_collection_action(token: &str) -> bool {
@@ -816,64 +862,70 @@ fn is_compact_unbounded_scope(token: &str) -> bool {
         .any(|prefix| token.strip_prefix(prefix).is_some_and(is_collection_target))
 }
 
-fn has_nearby_collection_action_before(tokens: &[&str], index: usize) -> bool {
-    let start = index.saturating_sub(4);
-    tokens[start..index]
-        .iter()
-        .any(|token| is_collection_action(token))
+fn is_collection_container(token: &str) -> bool {
+    matches!(
+        token,
+        "client"
+            | "device"
+            | "directory"
+            | "directories"
+            | "disk"
+            | "disks"
+            | "drive"
+            | "drives"
+            | "filesystem"
+            | "filesystems"
+            | "folder"
+            | "folders"
+            | "machine"
+            | "site"
+            | "system"
+            | "volume"
+            | "volumes"
+    )
+}
+
+fn is_collection_scope_subject(token: &str) -> bool {
+    is_collection_target(token) || matches!(token, "archive" | "collection" | "scope" | "traversal")
 }
 
 fn has_recursive_collection_scope(tokens: &[&str]) -> bool {
-    tokens.iter().enumerate().any(|(index, token)| {
-        token.starts_with("recurs")
-            && (has_nearby_collection_action_before(tokens, index)
-                || tokens
-                    .iter()
-                    .skip(index + 1)
-                    .take(2)
-                    .any(|candidate| is_collection_action(candidate)))
-    })
+    let mentions_recursion = tokens.iter().any(|token| token.starts_with("recurs"));
+    let describes_collection = tokens.iter().any(|token| {
+        is_collection_action(token)
+            || is_collection_container(token)
+            || matches!(*token, "collection" | "inclusion" | "traversal")
+    });
+    mentions_recursion && describes_collection
 }
 
 fn has_wide_collection_scope(tokens: &[&str]) -> bool {
     tokens.iter().enumerate().any(|(index, token)| {
-        let compound = matches!(
-            *token,
-            "drivewide" | "diskwide" | "volumewide" | "filesystemwide" | "sitewide" | "systemwide"
-        ) && tokens
-            .get(index + 1)
-            .is_some_and(|target| is_collection_target(target));
-        let separated = matches!(
-            *token,
-            "drive" | "disk" | "volume" | "filesystem" | "site" | "system"
-        ) && tokens.get(index + 1) == Some(&"wide")
+        let compound = token
+            .strip_suffix("wide")
+            .is_some_and(is_collection_container)
+            && tokens
+                .get(index + 1)
+                .is_some_and(|target| is_collection_scope_subject(target));
+        let separated = is_collection_container(token)
+            && tokens.get(index + 1) == Some(&"wide")
             && tokens
                 .get(index + 2)
-                .is_some_and(|target| is_collection_target(target));
+                .is_some_and(|target| is_collection_scope_subject(target));
 
-        (compound || separated) && has_nearby_collection_action_before(tokens, index)
+        compound || separated
     })
 }
 
 fn has_root_collection_scope(tokens: &[&str]) -> bool {
     tokens.iter().enumerate().any(|(root_index, token)| {
-        if *token != "root" {
+        if !token.starts_with("root") || tokens.get(root_index + 1) == Some(&"cause") {
             return false;
         }
-        tokens.iter().enumerate().any(|(target_index, target)| {
-            is_collection_target(target)
-                && root_index.abs_diff(target_index) <= 2
-                && has_nearby_collection_action_before(tokens, root_index.min(target_index))
+        tokens.iter().any(|candidate| {
+            is_collection_action(candidate) || is_collection_scope_subject(candidate)
         })
     })
-}
-
-fn has_broad_collection_scope(tokens: &[&str]) -> bool {
-    let has_collection_target = tokens.iter().any(|token| is_collection_target(token));
-    has_collection_target
-        && tokens.iter().enumerate().any(|(index, token)| {
-            is_broad_quantifier(token) && !is_reviewed_bounded_narrative(tokens, index)
-        })
 }
 
 fn is_broad_quantifier(token: &str) -> bool {
@@ -883,33 +935,136 @@ fn is_broad_quantifier(token: &str) -> bool {
     )
 }
 
-fn is_reviewed_bounded_narrative(tokens: &[&str], quantifier_index: usize) -> bool {
-    let quantifier = tokens[quantifier_index];
-    let bounded_disk_description = matches!(quantifier, "full" | "whole")
-        && tokens
-            .get(quantifier_index + 1)
-            .is_some_and(|target| matches!(*target, "disk" | "disks"))
-        && tokens
-            .get(quantifier_index + 2)
-            .is_some_and(|descriptor| matches!(*descriptor, "imaging" | "encryption"))
-        && has_specific_log_reference(tokens, quantifier_index + 3);
-    let downloaded_files_observation = quantifier == "all"
-        && tokens.get(quantifier_index + 1) == Some(&"files")
-        && tokens.get(quantifier_index + 2) == Some(&"were")
-        && tokens.get(quantifier_index + 3) == Some(&"downloaded")
-        && has_specific_log_reference(tokens, quantifier_index + 4);
+fn has_unscoped_broad_collection_scope(
+    tokens: &[&str],
+    requested_basename: &str,
+    requested_logical_id: &str,
+) -> bool {
+    tokens.iter().enumerate().any(|(quantifier_index, token)| {
+        if !is_broad_quantifier(token) {
+            return false;
+        }
 
-    bounded_disk_description || downloaded_files_observation
+        let (scope_start, scope_end) = broad_scope_segment(tokens, quantifier_index);
+        let scope = &tokens[scope_start..scope_end];
+        let targets = scope
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| is_collection_target(candidate))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            return false;
+        }
+
+        let identity_ranges =
+            requested_artifact_identity_ranges(scope, requested_basename, requested_logical_id);
+        if identity_ranges.is_empty() || has_environment_collection_scope(scope) {
+            return true;
+        }
+
+        targets.into_iter().any(|target_index| {
+            !target_is_bounded_to_requested_artifact(
+                scope,
+                target_index,
+                &identity_ranges,
+                requested_logical_id,
+            )
+        })
+    })
 }
 
-fn has_specific_log_reference(tokens: &[&str], start: usize) -> bool {
-    tokens[start..].windows(2).any(|pair| {
-        pair[1] == "log"
-            && !matches!(
-                pair[0],
-                "a" | "all" | "any" | "every" | "each" | "system" | "the"
-            )
-    })
+fn broad_scope_segment(tokens: &[&str], quantifier_index: usize) -> (usize, usize) {
+    let is_boundary = |index: usize| {
+        matches!(tokens[index], "plus" | "also" | "then")
+            || (tokens[index] == "and"
+                && tokens
+                    .get(index + 1)
+                    .is_some_and(|next| is_broad_quantifier(next) || is_collection_action(next)))
+    };
+    let start = (0..quantifier_index)
+        .rev()
+        .find(|index| is_boundary(*index))
+        .map_or(0, |index| index + 1);
+    let end = ((quantifier_index + 1)..tokens.len())
+        .find(|index| is_boundary(*index))
+        .unwrap_or(tokens.len());
+    (start, end)
+}
+
+fn requested_artifact_identity_ranges(
+    tokens: &[&str],
+    requested_basename: &str,
+    requested_logical_id: &str,
+) -> Vec<(usize, usize)> {
+    let basename = normalize_catalog_identity(requested_basename);
+    let logical_id = normalize_catalog_identity(requested_logical_id);
+    let mut ranges = tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, token)| **token == basename || **token == logical_id)
+        .map(|(index, _)| (index, index + 1))
+        .collect::<Vec<_>>();
+
+    if logical_id == "smsts" {
+        ranges.extend(tokens.windows(3).enumerate().filter_map(|(index, window)| {
+            (window == ["task", "sequence", "log"]).then_some((index, index + 3))
+        }));
+    }
+    ranges
+}
+
+fn normalize_catalog_identity(identity: &str) -> String {
+    identity
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn has_environment_collection_scope(tokens: &[&str]) -> bool {
+    tokens
+        .windows(2)
+        .any(|pair| is_collection_container(pair[0]) && is_collection_target(pair[1]))
+        || tokens.iter().enumerate().any(|(index, token)| {
+            matches!(*token, "across" | "from" | "on" | "throughout" | "under")
+                && tokens
+                    .iter()
+                    .skip(index + 1)
+                    .take(3)
+                    .any(|candidate| is_collection_container(candidate))
+        })
+}
+
+fn target_is_bounded_to_requested_artifact(
+    tokens: &[&str],
+    target_index: usize,
+    identity_ranges: &[(usize, usize)],
+    requested_logical_id: &str,
+) -> bool {
+    let identity_precedes_target = identity_ranges
+        .iter()
+        .any(|(start, end)| *start <= target_index && target_index.saturating_sub(*end) <= 2);
+    let is_state_observation = tokens.iter().any(|token| {
+        matches!(
+            *token,
+            "download" | "downloaded" | "encryption" | "image" | "imaging" | "state" | "status"
+        )
+    });
+
+    match tokens[target_index] {
+        "directory" | "directories" | "disk" | "disks" | "drive" | "drives" | "filesystem"
+        | "filesystems" | "folder" | "folders" | "volume" | "volumes" => {
+            is_state_observation
+                && (requested_logical_id.eq_ignore_ascii_case("smsts")
+                    || tokens
+                        .iter()
+                        .any(|token| matches!(*token, "encryption" | "status")))
+        }
+        "file" | "files" => identity_precedes_target || is_state_observation,
+        "logs" => identity_precedes_target,
+        _ => true,
+    }
 }
 
 fn validate_terminal_evidence(
