@@ -82,16 +82,19 @@ packageId
 + extractionProfileId
 ```
 
-The synthetic profile is `dp-server-5.00.test-v1`, limited to
-`5.00.TEST.*` fixture evidence. It is not a claim that a real ConfigMgr build
-has been validated.
+The synthetic profile is `dp-server-5.00.test-v1`, pinned to the exact
+`5.00.TEST.0001` fixture version. Missing, malformed, unknown, or
+prefix-collision versions cannot retain the exact profile. This is not a claim
+that a real ConfigMgr build has been validated.
 
 The focused contract parses semicolon-delimited synthetic fields as unique
 `Name=Value` pairs. Substring lookalikes, duplicate fields, missing fields,
 case aliases, a changed version, or a changed DP handle cannot satisfy an
 exact transaction. Observation order uses the additive normalized SCCM
 timestamp provenance, not the legacy public `LogEntry.timezone_offset`.
-Evidence later than the canonical bundle capture is rejected.
+Evidence later than the canonical bundle capture is rejected. Observation IDs
+are unique within a transaction, and one physical
+`(artifactId, startLine, endLine)` reference can be consumed only once.
 
 The outcome rules are conservative:
 
@@ -140,9 +143,11 @@ uninstalled, unavailable, healthy, or failed.
 | `absent-dp` | Missing source candidates do not erase or diagnose an observed DP role |
 | `incomplete` | Exact early phases survive while absent/denied downstream coverage requests the bounded source |
 
-The contract test also mutates exact versions, DP topology, terminal evidence,
-coverage states, role provenance, causal fields, rotations, and transaction
-cardinality. Each mutation must fail closed.
+The contract test also mutates exact versions, typed role topology, terminal
+evidence, coverage states, role provenance, causal fields, canonical rotation
+shapes, transaction cardinality, path fingerprints, safe segmented source and
+destination paths, observation IDs, and evidence consumption. Each mutation
+must fail closed.
 
 ## Deferred implementation and validation
 

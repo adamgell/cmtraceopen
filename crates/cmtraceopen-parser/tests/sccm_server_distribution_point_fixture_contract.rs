@@ -30,6 +30,7 @@ const STATE_CHAIN: &[&str] = &[
 ];
 
 const EXACT_PROFILE: &str = "dp-server-5.00.test-v1";
+const EXACT_SOURCE_VERSION: &str = "5.00.TEST.0001";
 const EXACT_SITE: &str = "LAB";
 const EXACT_DP: &str = "safe:dp:lab-dp-01";
 const EXACT_SITE_SERVER: &str = "safe:server:lab-pri-01";
@@ -108,16 +109,20 @@ fn coverage_from_manifest(state: &str) -> Result<SccmCoverageState, String> {
 
 fn rotation_from_manifest(rotation: &Value) -> Result<SccmRotation, String> {
     match required_string(rotation, "kind", "rotation")? {
-        "current" => Ok(SccmRotation::Current),
-        "lo_" => Ok(SccmRotation::LoUnderscore),
-        "numbered" => rotation["value"]
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-            .map(SccmRotation::Numbered)
-            .ok_or_else(|| "numbered rotation requires a u32 value".to_owned()),
-        "timestamped" => required_string(rotation, "value", "rotation")
-            .map(str::to_owned)
-            .map(SccmRotation::Timestamped),
+        "current" if rotation.get("value").is_none() => Ok(SccmRotation::Current),
+        "current" => Err("current rotation must not contain a value".to_owned()),
+        "lo_" if rotation.get("value").is_none() => Ok(SccmRotation::LoUnderscore),
+        "lo_" => Err("lo_ rotation must not contain a value".to_owned()),
+        "numbered" => serde_json::from_value(json!({
+            "kind": "numbered",
+            "value": rotation["value"].clone(),
+        }))
+        .map_err(|error| format!("numbered rotation is noncanonical: {error}")),
+        "timestamped" => serde_json::from_value(json!({
+            "kind": "timestamped",
+            "value": rotation["value"].clone(),
+        }))
+        .map_err(|error| format!("timestamped rotation is noncanonical: {error}")),
         other => Err(format!("unsupported fixture rotation {other}")),
     }
 }
@@ -233,16 +238,43 @@ fn parse_fixture_fields(message: &str) -> Result<BTreeMap<String, String>, Strin
     Ok(fields)
 }
 
+fn path_segment_is_safe(segment: &str) -> bool {
+    !segment.is_empty()
+        && !matches!(segment, "." | "..")
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn segmented_path_is_safe(path: &str) -> bool {
+    !path.is_empty() && !path.contains('\\') && path.split('/').all(path_segment_is_safe)
+}
+
 fn source_path_is_bounded(relative_path: &str, basename: &str) -> bool {
-    !relative_path.is_empty()
-        && relative_path.starts_with("evidence/")
-        && !relative_path.starts_with('/')
-        && !relative_path.contains('\\')
-        && !relative_path.split('/').any(|segment| segment == "..")
+    relative_path
+        .strip_prefix("evidence/")
+        .is_some_and(segmented_path_is_safe)
         && relative_path
             .rsplit('/')
             .next()
             .is_some_and(|candidate| candidate == basename)
+}
+
+fn sanitized_source_path_is_bounded(source_path: &str) -> bool {
+    source_path
+        .strip_prefix("SYNTHETIC://")
+        .is_some_and(segmented_path_is_safe)
+}
+
+fn path_fingerprint_is_safe(path_fingerprint: &str) -> bool {
+    path_fingerprint
+        .strip_prefix("synthetic:")
+        .is_some_and(|suffix| {
+            !suffix.is_empty()
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
 }
 
 fn validate_manifest(
@@ -324,10 +356,25 @@ fn validate_manifest(
         .into_iter()
         .collect::<BTreeSet<_>>();
 
-    let roles = manifest["topology"]["rolesObserved"]
-        .as_array()
-        .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let mut roles = Vec::new();
+    match required_array(&manifest["topology"], "rolesObserved", "topology") {
+        Ok(values) => {
+            for value in values {
+                match value.as_str() {
+                    Some(role) if matches!(role, "distributionPoint" | "siteServer") => {
+                        roles.push(role);
+                    }
+                    Some(role) => {
+                        failures.push(format!("rolesObserved contains unsupported role {role}"))
+                    }
+                    None => failures.push(
+                        "rolesObserved entries must be strings in the allowed role set".to_owned(),
+                    ),
+                }
+            }
+        }
+        Err(error) => failures.push(error),
+    }
     let mut sorted_roles = roles.clone();
     sorted_roles.sort_unstable();
     sorted_roles.dedup();
@@ -371,6 +418,7 @@ fn validate_manifest(
     let mut evidence_by_reference = BTreeMap::new();
     let mut relative_paths = BTreeSet::new();
     let mut physical_source_identities = BTreeSet::new();
+    let mut path_fingerprints = BTreeSet::new();
     for artifact in artifacts {
         let artifact_id = match required_string(artifact, "artifactId", "artifact") {
             Ok(value) => value,
@@ -492,10 +540,15 @@ fn validate_manifest(
         }
         let path_fingerprint = artifact["pathFingerprint"].as_str();
         let sanitized_source_path = artifact["sanitizedSourcePath"].as_str();
-        if !path_fingerprint.is_some_and(|value| value.starts_with("synthetic:"))
-            || !sanitized_source_path.is_some_and(|value| value.starts_with("SYNTHETIC://"))
+        if !path_fingerprint.is_some_and(path_fingerprint_is_safe)
+            || !sanitized_source_path.is_some_and(sanitized_source_path_is_bounded)
         {
             failures.push(format!("{artifact_id} leaks or omits path provenance"));
+        }
+        if path_fingerprint.is_some_and(|value| !path_fingerprints.insert(value.to_owned())) {
+            failures.push(format!(
+                "{artifact_id} duplicates another physical path fingerprint"
+            ));
         }
         let rotation_kind = artifact["rotation"]["kind"].as_str();
         let rotation_value = artifact["rotation"]["value"]
@@ -526,9 +579,7 @@ fn validate_manifest(
             }
         }
         if artifact["sourceKind"] != "ccmLog"
-            || !artifact["sourceVersion"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("5.00.TEST."))
+            || artifact["sourceVersion"].as_str() != Some(EXACT_SOURCE_VERSION)
         {
             failures.push(format!(
                 "{artifact_id} is outside the synthetic CCM/profile source boundary"
@@ -763,6 +814,16 @@ fn evidence_for<'a>(
     reference: &Value,
     context: &str,
 ) -> Result<&'a SccmEvidence, String> {
+    let key = evidence_reference_key(reference, context)?;
+    parsed.evidence.get(&key).ok_or_else(|| {
+        format!(
+            "{context} does not cite a physical logical record: {}:{}-{}",
+            key.0, key.1, key.2
+        )
+    })
+}
+
+fn evidence_reference_key(reference: &Value, context: &str) -> Result<(String, u32, u32), String> {
     let artifact_id = required_string(reference, "artifactId", context)?;
     let line_start = reference["startLine"]
         .as_u64()
@@ -772,14 +833,7 @@ fn evidence_for<'a>(
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())
         .ok_or_else(|| format!("{context}.endLine must be a u32"))?;
-    parsed
-        .evidence
-        .get(&(artifact_id.to_owned(), line_start, line_end))
-        .ok_or_else(|| {
-            format!(
-                "{context} does not cite a physical logical record: {artifact_id}:{line_start}-{line_end}"
-            )
-        })
+    Ok((artifact_id.to_owned(), line_start, line_end))
 }
 
 fn exact_key_fields(
@@ -1064,9 +1118,22 @@ fn validate_expected(
         let mut terminal_deferred = false;
         let mut previous_utc = i64::MIN;
         let mut previous_phase = 0usize;
+        let mut seen_observation_ids = BTreeSet::new();
+        let mut consumed_evidence = BTreeSet::new();
         for observation in observations {
-            let observation_id =
-                required_string(observation, "observationId", transaction_id).unwrap_or("invalid");
+            let observation_id = match required_string(observation, "observationId", transaction_id)
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    failures.push(error);
+                    continue;
+                }
+            };
+            if !seen_observation_ids.insert(observation_id) {
+                failures.push(format!(
+                    "{transaction_id} contains duplicate observationId {observation_id}"
+                ));
+            }
             let phase = required_string(observation, "phase", observation_id).unwrap_or("invalid");
             let disposition =
                 required_string(observation, "disposition", observation_id).unwrap_or("invalid");
@@ -1113,6 +1180,13 @@ fn validate_expected(
                     &format!("{observation_id}.evidence"),
                     &mut failures,
                 );
+                if evidence_reference_key(reference, observation_id)
+                    .is_ok_and(|key| !consumed_evidence.insert(key))
+                {
+                    failures.push(format!(
+                        "{transaction_id} consumes one physical evidence reference more than once"
+                    ));
+                }
                 let cited_artifact_id =
                     required_string(reference, "artifactId", observation_id).unwrap_or("invalid");
                 match parsed.artifacts.get(cited_artifact_id) {
@@ -1882,5 +1956,180 @@ fn source_local_classifications_are_bound_to_physical_coverage_semantics() {
     assert!(
         accepted.is_empty(),
         "source-local classifications were detached from physical coverage: {accepted:?}"
+    );
+}
+
+#[test]
+fn path_provenance_aliases_fail_closed() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut duplicate_fingerprint = healthy_manifest.clone();
+    duplicate_fingerprint["artifacts"][1]["pathFingerprint"] =
+        duplicate_fingerprint["artifacts"][0]["pathFingerprint"].clone();
+    if mutation_was_accepted("healthy-package", &duplicate_fingerprint, &healthy_expected) {
+        accepted.push("duplicate path fingerprint");
+    }
+
+    let mut dot_segment_alias = healthy_manifest.clone();
+    dot_segment_alias["artifacts"][1]["relativePath"] =
+        json!("evidence/server-dp-distribution/site/current/./PkgXferMgr.log");
+    if mutation_was_accepted("healthy-package", &dot_segment_alias, &healthy_expected) {
+        accepted.push("dot-segment physical evidence alias");
+    }
+
+    let mut unsafe_source_path = healthy_manifest.clone();
+    unsafe_source_path["artifacts"][2]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://../../Users/RealUser/SMSDPProv.log");
+    if mutation_was_accepted("healthy-package", &unsafe_source_path, &healthy_expected) {
+        accepted.push("unsafe sanitized source path");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "unsafe or colliding path provenance was accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn exact_profile_requires_the_pinned_synthetic_source_version() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut missing_version = healthy_manifest.clone();
+    missing_version["artifacts"][0]
+        .as_object_mut()
+        .expect("artifact is an object")
+        .remove("sourceVersion");
+    if mutation_was_accepted("healthy-package", &missing_version, &healthy_expected) {
+        accepted.push("missing source version retained Exact");
+    }
+
+    for (label, version) in [
+        ("unknown source version retained Exact", "5.00.TEST.UNKNOWN"),
+        ("malformed source version retained Exact", "5.00.TEST."),
+        (
+            "prefix-collision source version retained Exact",
+            "5.00.TEST.0001-extra",
+        ),
+    ] {
+        let mut mutated = healthy_manifest.clone();
+        mutated["artifacts"][0]["sourceVersion"] = json!(version);
+        if mutation_was_accepted("healthy-package", &mutated, &healthy_expected) {
+            accepted.push(label);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "unvalidated source versions selected the Exact profile: {accepted:?}"
+    );
+}
+
+#[test]
+fn topology_roles_are_typed_and_known() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut non_string_role = healthy_manifest.clone();
+    non_string_role["topology"]["rolesObserved"]
+        .as_array_mut()
+        .expect("roles are an array")
+        .push(json!(7));
+    if mutation_was_accepted("healthy-package", &non_string_role, &healthy_expected) {
+        accepted.push("non-string observed role");
+    }
+
+    let mut unknown_role = healthy_manifest.clone();
+    unknown_role["topology"]["rolesObserved"]
+        .as_array_mut()
+        .expect("roles are an array")
+        .push(json!("unknownRole"));
+    if mutation_was_accepted("healthy-package", &unknown_role, &healthy_expected) {
+        accepted.push("unknown observed role");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "malformed role topology was accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn rotation_shapes_match_the_shared_canonical_contract() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut current_with_value = healthy_manifest.clone();
+    current_with_value["artifacts"][0]["rotation"]["value"] = json!("unexpected");
+    if mutation_was_accepted("healthy-package", &current_with_value, &healthy_expected) {
+        accepted.push("current rotation with value");
+    }
+
+    let mut lo_with_value = rotation_manifest.clone();
+    lo_with_value["artifacts"][1]["rotation"]["value"] = json!("unexpected");
+    if mutation_was_accepted("rotation-boundary", &lo_with_value, &rotation_expected) {
+        accepted.push("lo_ rotation with value");
+    }
+
+    let mut numbered_zero = healthy_manifest.clone();
+    numbered_zero["artifacts"][0]["rotation"]["kind"] = json!("numbered");
+    numbered_zero["artifacts"][0]["rotation"]["value"] = json!(0);
+    if mutation_was_accepted("healthy-package", &numbered_zero, &healthy_expected) {
+        accepted.push("numbered rotation with zero value");
+    }
+
+    let mut malformed_timestamp = healthy_manifest.clone();
+    malformed_timestamp["artifacts"][0]["rotation"]["kind"] = json!("timestamped");
+    malformed_timestamp["artifacts"][0]["rotation"]["value"] = json!("20260730_122000");
+    if mutation_was_accepted("healthy-package", &malformed_timestamp, &healthy_expected) {
+        accepted.push("timestamped rotation with noncanonical value");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "noncanonical rotation shapes were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn transaction_observation_ids_and_evidence_are_single_use() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut duplicate_observation_id = healthy_expected.clone();
+    duplicate_observation_id["transactions"][0]["observations"][1]["observationId"] =
+        json!("01-receive");
+    if mutation_was_accepted(
+        "healthy-package",
+        &healthy_manifest,
+        &duplicate_observation_id,
+    ) {
+        accepted.push("duplicate observation ID");
+    }
+
+    let mut reused_evidence = healthy_expected.clone();
+    let mut repeated = reused_evidence["transactions"][0]["observations"][5].clone();
+    repeated["observationId"] = json!("07-report-copy");
+    reused_evidence["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .push(repeated);
+    if mutation_was_accepted("healthy-package", &healthy_manifest, &reused_evidence) {
+        accepted.push("one physical evidence reference consumed twice");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "duplicate observations or reused evidence were accepted: {accepted:?}"
     );
 }
