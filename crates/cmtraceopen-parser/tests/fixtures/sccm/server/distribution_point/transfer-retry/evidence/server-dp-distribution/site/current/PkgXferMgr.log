@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE; Phase=transfer; Disposition=retrying; Terminal=false; PackageId=LAB00003; ContentId=content-gamma; ContentVersion=1; SiteCode=LAB; DpHandle=safe:dp:lab-dp-01; ProfileId=dp-server-5.00.test-v1]LOG]!><time="12:03:02.000+000" date="07-30-2026" component="PkgXferMgr" context="" type="2" thread="302" file="pkgxfermgr.cpp:303">
