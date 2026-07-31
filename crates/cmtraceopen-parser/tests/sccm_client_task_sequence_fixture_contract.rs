@@ -397,6 +397,15 @@ fn smsts_log_paths(contents: &str) -> BTreeSet<String> {
         .collect()
 }
 
+fn complete_field_tokens(record_text: &str) -> BTreeSet<&str> {
+    record_text
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, '[' | ']' | '<' | '>')
+        })
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
 fn path_class_for_sanitized_path(path: &str) -> Option<&'static str> {
     [
         ("SYNTHETIC://client/", "client"),
@@ -1233,12 +1242,13 @@ fn validate_contract(
             }
 
             let record_text = evidence_text(scenario_root, &artifacts_by_id, evidence_ref)?;
+            let record_tokens = complete_field_tokens(&record_text);
             if let Some(missing_needle) = key_needles
                 .iter()
-                .find(|needle| !record_text.contains(needle.as_str()))
+                .find(|needle| !record_tokens.contains(needle.as_str()))
             {
                 return Err(format!(
-                    "{transaction_id}: declared key fields do not co-occur in cited complete CCM record ({missing_needle})"
+                    "{transaction_id}: declared key fields do not co-occur as complete tokens in cited complete CCM record ({missing_needle})"
                 ));
             }
             cited_record_texts.push(record_text);
@@ -1670,32 +1680,48 @@ fn validate_contract(
         let classification = finding["classification"]
             .as_str()
             .ok_or_else(|| format!("{finding_id}: classification is not a string"))?;
-        let outcome_is_transaction_bound = match classification {
-            "success" | "confirmedFailure" => transactions.iter().any(|transaction| {
+        let binding_transactions = transactions
+            .iter()
+            .filter(|transaction| {
                 transaction["classification"] == classification
-                    && !transaction["terminalEvidence"].is_null()
-                    && evidence
-                        .iter()
-                        .any(|evidence_ref| evidence_ref == &transaction["terminalEvidence"])
-            }),
-            "blockedOrDeferred" => transactions.iter().any(|transaction| {
-                transaction["classification"] == "blockedOrDeferred"
+                    && !evidence.is_empty()
                     && transaction["evidence"]
                         .as_array()
                         .is_some_and(|transaction_evidence| {
-                            evidence.iter().any(|evidence_ref| {
+                            evidence.iter().all(|evidence_ref| {
                                 transaction_evidence
                                     .iter()
                                     .any(|transaction_ref| transaction_ref == evidence_ref)
                             })
                         })
-            }),
-            "insufficientEvidence" => true,
+            })
+            .collect::<Vec<_>>();
+        let cited_refs_are_source_local = !evidence.is_empty()
+            && evidence.iter().all(|evidence_ref| {
+                observations
+                    .iter()
+                    .any(|observation| &observation["evidence"] == evidence_ref)
+            });
+        let outcome_is_transaction_bound = match classification {
+            "success" | "confirmedFailure" => {
+                matches!(binding_transactions.as_slice(), [transaction] if {
+                    !transaction["terminalEvidence"].is_null()
+                        && evidence
+                            .iter()
+                            .any(|evidence_ref| evidence_ref == &transaction["terminalEvidence"])
+                })
+            }
+            "blockedOrDeferred" => binding_transactions.len() == 1,
+            "insufficientEvidence" => {
+                binding_transactions.len() == 1
+                    || (binding_transactions.is_empty()
+                        && (evidence.is_empty() || cited_refs_are_source_local))
+            }
             _ => false,
         };
         if !outcome_is_transaction_bound {
             return Err(format!(
-                "{finding_id}: finding outcome is not bound to terminal/keyed transaction evidence"
+                "{finding_id}: finding outcome is not bound to exactly one keyed transaction or its source-local citations"
             ));
         }
         if finding["serverCauseClaimed"] != false
