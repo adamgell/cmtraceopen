@@ -1115,3 +1115,209 @@ fn health_public_output_rejects_unsafe_artifact_provenance() {
         );
     }
 }
+
+#[test]
+fn health_terminal_error_field_requires_a_whitespace_delimiter() {
+    for prefixed_field in ["http-error=0x80072EFD", "http_error=0x80072EFD"] {
+        let mut bundle = load_bundle("transport-failure");
+        assert!(
+            has_high_confirmed_failure(&bundle),
+            "the unmodified fixture must prove terminal admission is exercised"
+        );
+        replace_first_message(&mut bundle, "error=0x80072EFD", prefixed_field);
+
+        let analysis = analyze_client_health(&bundle);
+        assert!(
+            !has_high_confirmed_failure(&bundle),
+            "{prefixed_field} is not the whitespace-delimited error field"
+        );
+        assert_eq!(
+            analysis.last_successful_phase,
+            Some(SccmHealthPhase::ManagementPoint),
+            "a punctuation-prefixed field cannot advance or fail transport"
+        );
+        assert_eq!(analysis.findings.len(), 1);
+        assert_eq!(
+            analysis.findings[0].finding.finding_id,
+            "health-transport-insufficient"
+        );
+    }
+}
+
+#[test]
+fn health_same_bootstrap_setup_recovers_across_canonical_rotation() {
+    let mut bundle = load_bundle("setup-failure");
+    let original_artifact_id = bundle.artifacts[0].artifact_id.clone();
+    let rotated_artifact_id = "health-setup-failure-ccmsetup-lo";
+    let current_artifact_id = "health-setup-recovery-ccmsetup-current";
+
+    bundle.artifacts[0].artifact_id = rotated_artifact_id.to_owned();
+    bundle.artifacts[0].display_name = "ccmsetup.lo_".to_owned();
+    bundle.artifacts[0].rotation = SccmRotation::LoUnderscore;
+    let mut current_artifact = bundle.artifacts[0].clone();
+    current_artifact.artifact_id = current_artifact_id.to_owned();
+    current_artifact.display_name = "ccmsetup.log".to_owned();
+    current_artifact.rotation = SccmRotation::Current;
+    bundle.artifacts.push(current_artifact);
+
+    let failure = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.reference.artifact_id == original_artifact_id)
+        .expect("setup terminal evidence");
+    failure.evidence_id = "evidence:health-setup-failure-rotation".to_owned();
+    failure.reference.artifact_id = rotated_artifact_id.to_owned();
+    failure.reference.entry_id = "setup-failure-rotation".to_owned();
+    failure.timestamp.ordering_state = SccmTimeOrderingState::NormalizedUtc;
+    failure.timestamp.utc_millis = Some(10);
+
+    let mut recovery = failure.clone();
+    recovery.evidence_id = "evidence:health-setup-recovery-current".to_owned();
+    recovery.reference.artifact_id = current_artifact_id.to_owned();
+    recovery.reference.entry_id = "setup-recovery-current".to_owned();
+    recovery.timestamp.utc_millis = Some(20);
+    recovery.message = recovery
+        .message
+        .replace("Bootstrap terminal failure", "Bootstrap completed")
+        .replace(
+            " error=0x80070005",
+            " clientGuid=AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+        );
+    assert!(
+        recovery.message.contains(
+            "Bootstrap completed bootstrapId=BOOT-TEST-010 clientGuid=AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+        ),
+        "recovery must carry the exact supported same-bootstrap success marker"
+    );
+    bundle.evidence.push(recovery);
+
+    let analysis = analyze_client_health(&bundle);
+    assert_eq!(analysis.last_successful_phase, Some(SccmHealthPhase::Setup));
+    assert!(!has_high_confirmed_failure(&bundle));
+    assert!(analysis.findings.iter().all(|finding| {
+        !matches!(
+            finding.finding.finding_id.as_str(),
+            "health-setup-terminal" | "health-setup-contradictory"
+        )
+    }));
+
+    let mut reversed = bundle.clone();
+    reversed.artifacts.reverse();
+    reversed.evidence.reverse();
+    assert_eq!(
+        serde_json::to_string(&analyze_client_health(&reversed)).expect("reversed analysis JSON"),
+        serde_json::to_string(&analysis).expect("forward analysis JSON"),
+        "canonical setup recovery cannot depend on vector order"
+    );
+
+    let mut incompatible_rotation = bundle;
+    let current = incompatible_rotation
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.artifact_id == current_artifact_id)
+        .expect("current recovery artifact");
+    current.rotation = SccmRotation::LoUnderscore;
+    assert_ne!(
+        analyze_client_health(&incompatible_rotation).last_successful_phase,
+        Some(SccmHealthPhase::Setup),
+        "a display-name/rotation mismatch cannot prove cross-rotation recovery"
+    );
+}
+
+#[test]
+fn health_conflicting_evidence_id_or_reference_collisions_fail_closed() {
+    fn assert_collision(bundle: &SccmNormalizedBundle, case: &str) {
+        let analysis = analyze_client_health(bundle);
+        assert_eq!(analysis.last_successful_phase, None, "{case}");
+        assert_eq!(analysis.findings.len(), 1, "{case}");
+        assert_eq!(
+            analysis.findings[0].finding.finding_id, "health-evidence-identity-collision",
+            "{case}"
+        );
+        assert_eq!(
+            analysis.findings[0].finding.class,
+            SccmFindingClass::InsufficientEvidence,
+            "{case}"
+        );
+        assert_eq!(
+            analysis.findings[0].finding.confidence,
+            SccmConfidence::Low,
+            "{case}"
+        );
+        assert!(!has_high_confirmed_failure(bundle), "{case}");
+    }
+
+    let baseline = load_bundle("identity-failure");
+    let failure = baseline
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("terminal failure clientGuid="))
+        .expect("identity failure evidence")
+        .clone();
+
+    let mut same_id_and_reference = baseline.clone();
+    let mut conflicting = failure.clone();
+    conflicting.message = conflicting
+        .message
+        .replace(
+            "[redacted:sccm-public-message-v1] terminal failure",
+            "[redacted:sccm-public-message-v1] succeeded",
+        )
+        .replace(" error=0x80004005", "");
+    same_id_and_reference.evidence.push(conflicting.clone());
+    assert_collision(
+        &same_id_and_reference,
+        "one identity cannot attest conflicting messages",
+    );
+
+    let mut duplicate_id = baseline.clone();
+    conflicting.reference.entry_id = "duplicate-id-distinct-reference".to_owned();
+    conflicting.reference.line_start = Some(2);
+    conflicting.reference.line_end = Some(2);
+    duplicate_id.evidence.push(conflicting.clone());
+    assert_collision(&duplicate_id, "duplicate evidence ID");
+
+    let mut duplicate_reference = baseline;
+    conflicting.evidence_id = "evidence:health-distinct-id-duplicate-reference".to_owned();
+    conflicting.reference = failure.reference.clone();
+    duplicate_reference.evidence.push(conflicting);
+    assert_collision(&duplicate_reference, "duplicate evidence reference");
+}
+
+#[test]
+fn health_invalid_cross_artifact_chronology_cannot_prove_complete_transport() {
+    let mut bundle = load_bundle("success");
+    for evidence in &mut bundle.evidence {
+        evidence.timestamp.ordering_state = SccmTimeOrderingState::OffsetInvalid;
+        evidence.timestamp.utc_millis = None;
+    }
+
+    let analysis = analyze_client_health(&bundle);
+    assert_eq!(
+        analysis.last_successful_phase,
+        Some(SccmHealthPhase::ManagementPoint)
+    );
+    assert_eq!(analysis.findings.len(), 1);
+    let finding = &analysis.findings[0];
+    assert_eq!(
+        finding.finding.finding_id,
+        "health-transport-chronology-uncertain"
+    );
+    assert_eq!(finding.finding.class, SccmFindingClass::Symptom);
+    assert_eq!(finding.finding.confidence, SccmConfidence::Low);
+    assert_eq!(
+        finding.finding.evidence.len(),
+        7,
+        "the chronology finding must cite the complete client-side chain"
+    );
+    assert_eq!(analysis.artifact_requests.len(), 1);
+
+    let mut reversed = bundle.clone();
+    reversed.artifacts.reverse();
+    reversed.evidence.reverse();
+    assert_eq!(
+        serde_json::to_string(&analyze_client_health(&reversed)).expect("reversed analysis JSON"),
+        serde_json::to_string(&analysis).expect("forward analysis JSON"),
+        "incomparable chronology must fail closed deterministically"
+    );
+}
