@@ -642,29 +642,31 @@ fn observation_disposition_is_coherent(disposition: &str, terminal: bool) -> boo
     )
 }
 
-fn expected_transaction_ids(scenario: &str) -> &'static [&'static str] {
+fn expected_transaction_ids(scenario: &str) -> Option<&'static [&'static str]> {
     match scenario {
-        "absent-remote-source" => &["hierarchy:msg-absent-01:LAB:CHD:link-lab-chd"],
-        "backlog-retry" => &["hierarchy:msg-backlog-01:LAB:CHD:link-lab-chd"],
-        "clock-offset-unknown" => &["hierarchy:msg-clock-01:LAB:CHD:link-lab-chd"],
-        "healthy-link" => &["hierarchy:msg-healthy-01:LAB:CHD:link-lab-chd"],
-        "receiver-processing-failure" => &["hierarchy:msg-receiver-01:LAB:CHD:link-lab-chd"],
-        "recovery" => &["hierarchy:msg-recovery-01:LAB:CHD:link-lab-chd"],
-        "sender-failure" => &[
+        "absent-remote-source" => Some(&["hierarchy:msg-absent-01:LAB:CHD:link-lab-chd"]),
+        "backlog-retry" => Some(&["hierarchy:msg-backlog-01:LAB:CHD:link-lab-chd"]),
+        "clock-offset-unknown" => Some(&["hierarchy:msg-clock-01:LAB:CHD:link-lab-chd"]),
+        "healthy-link" => Some(&["hierarchy:msg-healthy-01:LAB:CHD:link-lab-chd"]),
+        "receiver-processing-failure" => Some(&["hierarchy:msg-receiver-01:LAB:CHD:link-lab-chd"]),
+        "recovery" => Some(&["hierarchy:msg-recovery-01:LAB:CHD:link-lab-chd"]),
+        "sender-failure" => Some(&[
             "hierarchy:msg-send-chd:LAB:CHD:link-lab-chd",
             "hierarchy:msg-send-sec:LAB:SEC:link-lab-sec",
-        ],
-        "incomplete" | "rotation-boundary" | "topology-mismatch" => &[],
-        _ => &[],
+        ]),
+        "generic-site-token" | "incomplete" | "rotation-boundary" | "topology-mismatch" => {
+            Some(&[])
+        }
+        _ => None,
     }
 }
 
-fn expected_observation_ids(scenario: &str) -> &'static [&'static str] {
+fn expected_observation_ids(scenario: &str) -> Option<&'static [&'static str]> {
     match scenario {
-        "absent-remote-source" => &["absent-01-send"],
-        "backlog-retry" => &["backlog-01-queue"],
-        "clock-offset-unknown" => &["clock-01-send", "clock-02-process"],
-        "healthy-link" => &[
+        "absent-remote-source" => Some(&["absent-01-send"]),
+        "backlog-retry" => Some(&["backlog-01-queue"]),
+        "clock-offset-unknown" => Some(&["clock-01-send", "clock-02-process"]),
+        "healthy-link" => Some(&[
             "healthy-01-initiate",
             "healthy-02-queue",
             "healthy-03-send",
@@ -672,31 +674,41 @@ fn expected_observation_ids(scenario: &str) -> &'static [&'static str] {
             "healthy-05-process",
             "healthy-06-acknowledge",
             "healthy-07-terminal",
-        ],
-        "receiver-processing-failure" => &[
+        ]),
+        "receiver-processing-failure" => Some(&[
             "receiver-01-send",
             "receiver-02-receive",
             "receiver-03-process",
-        ],
-        "recovery" => &[
+        ]),
+        "recovery" => Some(&[
             "recovery-01-retry",
             "recovery-02-send",
             "recovery-03-receive",
             "recovery-04-process",
             "recovery-05-terminal",
-        ],
-        "sender-failure" => &["sender-01-chd-failure", "sender-02-sec-failure"],
-        "incomplete" | "rotation-boundary" | "topology-mismatch" => &[],
-        _ => &[],
+        ]),
+        "sender-failure" => Some(&["sender-01-chd-failure", "sender-02-sec-failure"]),
+        "generic-site-token" | "incomplete" | "rotation-boundary" | "topology-mismatch" => {
+            Some(&[])
+        }
+        _ => None,
     }
 }
 
-fn expected_source_local_ids(scenario: &str) -> &'static [&'static str] {
+fn expected_source_local_ids(scenario: &str) -> Option<&'static [&'static str]> {
     match scenario {
-        "incomplete" => &["incomplete-01-fragment"],
-        "rotation-boundary" => &["rotation-01-split"],
-        "topology-mismatch" => &["mismatch-01-origin", "mismatch-02-target"],
-        _ => &[],
+        "incomplete" => Some(&["incomplete-01-fragment"]),
+        "rotation-boundary" => Some(&["rotation-01-split"]),
+        "topology-mismatch" => Some(&["mismatch-01-origin", "mismatch-02-target"]),
+        "absent-remote-source"
+        | "backlog-retry"
+        | "clock-offset-unknown"
+        | "generic-site-token"
+        | "healthy-link"
+        | "receiver-processing-failure"
+        | "recovery"
+        | "sender-failure" => Some(&[]),
+        _ => None,
     }
 }
 
@@ -1438,8 +1450,12 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         .flatten()
         .filter_map(|transaction| transaction["transactionId"].as_str())
         .collect::<Vec<_>>();
-    if transaction_ids != expected_transaction_ids(scenario) {
-        failures.push("transaction identity/cardinality matrix changed".to_owned());
+    match expected_transaction_ids(scenario) {
+        Some(expected_ids) if transaction_ids.as_slice() == expected_ids => {}
+        Some(_) => failures.push("transaction identity/cardinality matrix changed".to_owned()),
+        None => failures.push(format!(
+            "{scenario}: scenario is not registered in the transaction identity matrix"
+        )),
     }
     for transaction in transactions.into_iter().flatten() {
         if !object_has_only(
@@ -1643,8 +1659,12 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         .flat_map(|transaction| transaction["observations"].as_array().into_iter().flatten())
         .filter_map(|observation| observation["observationId"].as_str())
         .collect::<Vec<_>>();
-    if observation_ids != expected_observation_ids(scenario) {
-        failures.push("observation identity/cardinality matrix changed".to_owned());
+    match expected_observation_ids(scenario) {
+        Some(expected_ids) if observation_ids.as_slice() == expected_ids => {}
+        Some(_) => failures.push("observation identity/cardinality matrix changed".to_owned()),
+        None => failures.push(format!(
+            "{scenario}: scenario is not registered in the observation identity matrix"
+        )),
     }
     let source_local_observations = expected["sourceLocalObservations"].as_array();
     for observation in source_local_observations.into_iter().flatten() {
@@ -1766,8 +1786,12 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         .flatten()
         .filter_map(|observation| observation["observationId"].as_str())
         .collect::<Vec<_>>();
-    if source_local_ids != expected_source_local_ids(scenario) {
-        failures.push("source-local identity/cardinality matrix changed".to_owned());
+    match expected_source_local_ids(scenario) {
+        Some(expected_ids) if source_local_ids.as_slice() == expected_ids => {}
+        Some(_) => failures.push("source-local identity/cardinality matrix changed".to_owned()),
+        None => failures.push(format!(
+            "{scenario}: scenario is not registered in the source-local identity matrix"
+        )),
     }
 
     failures.extend(artifact_request_failures(scenario, manifest, expected));
