@@ -1,0 +1,11 @@
+{
+  "description": "A record carrying its own UTC offset yields a source-accurate normalized time.",
+  "artifacts": [
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}
