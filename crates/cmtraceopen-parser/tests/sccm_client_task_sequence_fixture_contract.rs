@@ -83,6 +83,42 @@ fn read_json(path: &Path) -> Value {
         .unwrap_or_else(|error| panic!("{} must contain valid JSON: {error}", path.display()))
 }
 
+struct TemporaryScenario {
+    root: PathBuf,
+}
+
+impl Drop for TemporaryScenario {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn copy_scenario_to_temporary_root(scenario: &str, mutation: &str) -> TemporaryScenario {
+    let source_root = task_sequence_root().join(scenario);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is after the Unix epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "cmtraceopen-sccm-324-{}-{nonce}-{mutation}",
+        std::process::id()
+    ));
+    for source in walk_files(&source_root) {
+        let relative = source
+            .strip_prefix(&source_root)
+            .expect("scenario file is below its root");
+        let destination = root.join(relative);
+        std::fs::create_dir_all(
+            destination
+                .parent()
+                .expect("scenario file has a parent directory"),
+        )
+        .expect("temporary scenario directory is created");
+        std::fs::copy(&source, &destination).expect("scenario file is copied");
+    }
+    TemporaryScenario { root }
+}
+
 fn scenario_directories() -> Vec<String> {
     let mut scenarios = std::fs::read_dir(task_sequence_root())
         .expect("the #324 Task Sequence fixture root must exist")
@@ -503,8 +539,6 @@ fn validate_manifest_and_storage(
     let mut referenced_files = BTreeSet::new();
     let mut logical_states = BTreeMap::<String, Vec<String>>::new();
     let mut logical_paths = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut observed_paths_by_fingerprint = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut captured_path_claims = Vec::<(String, String, String, String)>::new();
 
     for artifact in artifacts {
         let artifact_id = artifact["artifactId"]
@@ -644,11 +678,14 @@ fn validate_manifest_and_storage(
             let sanitized_path = artifact["sanitizedSourcePath"]
                 .as_str()
                 .ok_or_else(|| format!("{scenario}/{artifact_id}: no sanitized source path"))?;
-            if !sanitized_path.starts_with("SYNTHETIC://")
-                || artifact["smstsLogPathEvidence"] != sanitized_path
-            {
+            if !sanitized_path.starts_with("SYNTHETIC://") {
                 return Err(format!(
-                    "{scenario}/{artifact_id}: _SMSTSLogPath provenance is not bound"
+                    "{scenario}/{artifact_id}: sanitized source path is not synthetic"
+                ));
+            }
+            if path_class_for_sanitized_path(sanitized_path) != Some(path_class) {
+                return Err(format!(
+                    "{scenario}/{artifact_id}: pathClass is not bound to sanitized capture provenance"
                 ));
             }
             let contents = std::fs::read_to_string(&fixture_path)
@@ -668,17 +705,37 @@ fn validate_manifest_and_storage(
                     "{scenario}/{artifact_id}: fragmentComplete is not bound to physical CCM grammar"
                 ));
             }
-            let fingerprint = path_fingerprint.to_owned();
-            observed_paths_by_fingerprint
-                .entry(fingerprint.clone())
-                .or_default()
-                .extend(smsts_log_paths(&contents));
-            captured_path_claims.push((
-                artifact_id.to_owned(),
-                fingerprint,
-                sanitized_path.to_owned(),
-                path_class.to_owned(),
-            ));
+            let observed_paths = smsts_log_paths(&contents);
+            let declared_path = if artifact["smstsLogPathEvidence"].is_null() {
+                None
+            } else {
+                Some(
+                    artifact["smstsLogPathEvidence"]
+                        .as_str()
+                        .ok_or_else(|| {
+                            format!(
+                                "{scenario}/{artifact_id}: smstsLogPathEvidence is neither a string nor null"
+                            )
+                        })?,
+                )
+            };
+            match declared_path {
+                Some(declared_path)
+                    if declared_path == sanitized_path
+                        && observed_paths.len() == 1
+                        && observed_paths.contains(declared_path) => {}
+                Some(_) => {
+                    return Err(format!(
+                        "{scenario}/{artifact_id}: _SMSTSLogPath is not observed in this physical artifact"
+                    ));
+                }
+                None if !fragment_complete && observed_paths.is_empty() => {}
+                None => {
+                    return Err(format!(
+                        "{scenario}/{artifact_id}: physical _SMSTSLogPath presence/absence is not declared exactly"
+                    ));
+                }
+            }
         } else if artifact["relativePath"].is_string()
             || artifact["sanitizedSourcePath"].is_string()
             || artifact["smstsLogPathEvidence"].is_string()
@@ -692,22 +749,6 @@ fn validate_manifest_and_storage(
         } else if path_class != "unknown" {
             return Err(format!(
                 "{scenario}/{artifact_id}: noncapture pathClass must remain unknown"
-            ));
-        }
-    }
-
-    for (artifact_id, fingerprint, sanitized_path, path_class) in captured_path_claims {
-        let observed_paths = observed_paths_by_fingerprint
-            .get(&fingerprint)
-            .ok_or_else(|| format!("{scenario}/{artifact_id}: no _SMSTSLogPath evidence"))?;
-        if observed_paths.len() != 1 || !observed_paths.contains(&sanitized_path) {
-            return Err(format!(
-                "{scenario}/{artifact_id}: sanitized _SMSTSLogPath is not bound to physical evidence"
-            ));
-        }
-        if path_class_for_sanitized_path(&sanitized_path) != Some(path_class.as_str()) {
-            return Err(format!(
-                "{scenario}/{artifact_id}: pathClass is not bound to _SMSTSLogPath evidence"
             ));
         }
     }
@@ -912,6 +953,184 @@ fn validate_contract(
                 "{scenario}/{artifact_id}: rotation/relocation provenance drifted"
             ));
         }
+    }
+
+    let logical_reconstructions = expected
+        .as_object()
+        .ok_or_else(|| "expected contract is not an object".to_owned())?
+        .get("logicalReconstructions")
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| "logicalReconstructions is not an array".to_owned())
+        })
+        .transpose()?
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let reconstruction_ids = logical_reconstructions
+        .iter()
+        .map(|reconstruction| {
+            reconstruction["reconstructionId"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "logical reconstruction ID is not a string".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut sorted_reconstruction_ids = reconstruction_ids.clone();
+    sorted_reconstruction_ids.sort();
+    if reconstruction_ids != sorted_reconstruction_ids
+        || reconstruction_ids.iter().collect::<BTreeSet<_>>().len() != reconstruction_ids.len()
+    {
+        return Err(format!(
+            "{scenario}: logical reconstruction IDs must be unique and sorted"
+        ));
+    }
+
+    let missing_physical_path_evidence = artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact["captureState"] == "captured" && artifact["smstsLogPathEvidence"].is_null()
+        })
+        .map(|artifact| {
+            artifact["artifactId"]
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "artifactId is not a string".to_owned())
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let mut reconstructed_missing_path_evidence = BTreeSet::new();
+    let mut reconstructed_artifacts = BTreeSet::new();
+    for reconstruction in logical_reconstructions {
+        let reconstruction_id = reconstruction["reconstructionId"]
+            .as_str()
+            .expect("reconstruction IDs were checked as strings");
+        let logical_artifact_id = reconstruction["logicalArtifactId"]
+            .as_str()
+            .ok_or_else(|| format!("{reconstruction_id}: logicalArtifactId is not a string"))?;
+        let ordered_ids = string_array(&reconstruction["orderedArtifactIds"])?;
+        if ordered_ids.len() != 2 {
+            return Err(format!(
+                "{reconstruction_id}: controlled rotation must name exactly lo then current"
+            ));
+        }
+        let lo_id = &ordered_ids[0];
+        let current_id = &ordered_ids[1];
+        if !reconstructed_artifacts.insert(lo_id.clone())
+            || !reconstructed_artifacts.insert(current_id.clone())
+        {
+            return Err(format!(
+                "{reconstruction_id}: physical fragment is reconstructed more than once"
+            ));
+        }
+        let lo = artifacts_by_id
+            .get(lo_id.as_str())
+            .ok_or_else(|| format!("{reconstruction_id}: unknown lo artifact {lo_id}"))?;
+        let current = artifacts_by_id
+            .get(current_id.as_str())
+            .ok_or_else(|| format!("{reconstruction_id}: unknown current artifact {current_id}"))?;
+        let sanitized_path = reconstruction["sanitizedSourcePath"]
+            .as_str()
+            .ok_or_else(|| format!("{reconstruction_id}: sanitizedSourcePath is missing"))?;
+        let path_class = reconstruction["pathClass"]
+            .as_str()
+            .ok_or_else(|| format!("{reconstruction_id}: pathClass is missing"))?;
+        let path_fingerprint = reconstruction["pathFingerprint"]
+            .as_str()
+            .ok_or_else(|| format!("{reconstruction_id}: pathFingerprint is missing"))?;
+        if logical_artifact_id != "client-task-sequence-smsts"
+            || reconstruction["coverageState"] != "partial"
+            || reconstruction["confidence"] != "low"
+            || reconstruction["correlationEligible"] != false
+            || lo["captureState"] != "captured"
+            || current["captureState"] != "captured"
+            || lo["rotation"]["kind"] != "lo"
+            || current["rotation"]["kind"] != "current"
+            || lo["rotation"]["fragmentComplete"] != false
+            || current["rotation"]["fragmentComplete"] != false
+            || lo["pathFingerprint"] != path_fingerprint
+            || current["pathFingerprint"] != path_fingerprint
+            || lo["sanitizedSourcePath"] != sanitized_path
+            || current["sanitizedSourcePath"] != sanitized_path
+            || lo["pathClass"] != path_class
+            || current["pathClass"] != path_class
+            || lo["sourceVersion"] != current["sourceVersion"]
+            || lo["relocationOrdinal"] != current["relocationOrdinal"]
+            || lo["smstsLogPathEvidence"] != sanitized_path
+            || !current["smstsLogPathEvidence"].is_null()
+            || derived_coverage
+                .get(logical_artifact_id)
+                .map(String::as_str)
+                != Some("partial")
+            || expected["correlationBoundary"]["scope"] != "sourceLocalOnly"
+            || !string_array(&expected["correlationBoundary"]["joinFields"])?.is_empty()
+            || string_array(&expected["correlationBoundary"]["rotationOrder"])?
+                != ["lo".to_owned(), "current".to_owned()]
+            || !expected["transactions"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+        {
+            return Err(format!(
+                "{reconstruction_id}: controlled lo-to-current reconstruction metadata is invalid"
+            ));
+        }
+        reconstructed_missing_path_evidence.insert(current_id.clone());
+        let source_local_artifact_ids = expected["sourceLocalObservations"]
+            .as_array()
+            .ok_or_else(|| format!("{reconstruction_id}: sourceLocalObservations is missing"))?
+            .iter()
+            .filter_map(|observation| observation["artifactId"].as_str())
+            .collect::<BTreeSet<_>>();
+        if ![lo_id.as_str(), current_id.as_str()]
+            .into_iter()
+            .all(|artifact_id| source_local_artifact_ids.contains(artifact_id))
+        {
+            return Err(format!(
+                "{reconstruction_id}: both physical fragments must remain source-local observations"
+            ));
+        }
+
+        let path_evidence = &reconstruction["smstsLogPathEvidence"];
+        if path_evidence["artifactId"] != lo_id.as_str() {
+            return Err(format!(
+                "{reconstruction_id}: logical path evidence must cite the lo fragment"
+            ));
+        }
+        let path_evidence_text = evidence_text(scenario_root, &artifacts_by_id, path_evidence)?;
+        let observed_paths = smsts_log_paths(&path_evidence_text);
+        if observed_paths.len() != 1 || !observed_paths.contains(sanitized_path) {
+            return Err(format!(
+                "{reconstruction_id}: logical path citation does not contain the declared _SMSTSLogPath"
+            ));
+        }
+
+        let mut joined_contents = String::new();
+        for artifact in [*lo, *current] {
+            let relative_path = artifact["relativePath"]
+                .as_str()
+                .ok_or_else(|| format!("{reconstruction_id}: fragment path is missing"))?;
+            joined_contents.push_str(
+                &std::fs::read_to_string(scenario_root.join(relative_path))
+                    .map_err(|error| format!("{reconstruction_id}/{relative_path}: {error}"))?,
+            );
+        }
+        let (joined_entries, joined_errors) = parse_content(
+            &joined_contents,
+            "controlled-logical-reconstruction.log",
+            None,
+        );
+        if joined_errors != 0
+            || joined_entries.len() != 1
+            || joined_entries[0].format != LogFormat::Ccm
+        {
+            return Err(format!(
+                "{reconstruction_id}: ordered physical fragments do not form exactly one CCM record"
+            ));
+        }
+    }
+    if reconstructed_missing_path_evidence != missing_physical_path_evidence {
+        return Err(format!(
+            "{scenario}: every missing per-artifact _SMSTSLogPath must have one explicit logical reconstruction"
+        ));
     }
 
     let transactions = expected["transactions"]
@@ -2261,6 +2480,131 @@ fn coherent_review_mutations_fail_closed() {
     assert!(
         accepted.is_empty(),
         "validate_contract accepted {} coherent review mutations: {}",
+        accepted.len(),
+        accepted.join(", ")
+    );
+}
+
+#[test]
+fn rotation_path_provenance_cannot_be_borrowed_from_a_shared_fingerprint() {
+    let scenario = "rotation-boundary";
+    let source_root = task_sequence_root().join(scenario);
+    let source_manifest = read_json(&source_root.join("manifest.json"));
+    let source_expected = read_json(&source_root.join("expected.json"));
+    let original_path = "SYNTHETIC://client/CCM/Logs/smsts.log";
+    let drifted_path = "SYNTHETIC://client/CCM/Logs/drift/smsts.log";
+    let lo_id = "task-sequence-rotation-boundary-lo";
+    let mut accepted = Vec::new();
+
+    let changed = copy_scenario_to_temporary_root(scenario, "changed-path-token");
+    let mut manifest = source_manifest.clone();
+    let mut expected = source_expected.clone();
+    let lo_index = manifest["artifacts"]
+        .as_array()
+        .expect("rotation artifacts are an array")
+        .iter()
+        .position(|artifact| artifact["artifactId"] == lo_id)
+        .expect("rotation corpus has smsts.lo_");
+    let lo_relative_path = manifest["artifacts"][lo_index]["relativePath"]
+        .as_str()
+        .expect("smsts.lo_ has a relative path");
+    let lo_path = changed.root.join(lo_relative_path);
+    let original_lo = std::fs::read_to_string(&lo_path).expect("smsts.lo_ is UTF-8");
+    let changed_lo = original_lo.replace(original_path, drifted_path);
+    assert_ne!(original_lo, changed_lo, "the path token mutation applies");
+    std::fs::write(&lo_path, &changed_lo).expect("mutated smsts.lo_ is written");
+    let changed_bytes = changed_lo.len() as u64;
+    for artifact in manifest["artifacts"]
+        .as_array_mut()
+        .expect("rotation artifacts are an array")
+    {
+        artifact["sanitizedSourcePath"] = Value::String(drifted_path.to_owned());
+        artifact["smstsLogPathEvidence"] = Value::String(drifted_path.to_owned());
+        if artifact["artifactId"] == lo_id {
+            artifact["bytesCopied"] = Value::from(changed_bytes);
+        }
+    }
+    for provenance in expected["artifactProvenance"]
+        .as_array_mut()
+        .expect("rotation provenance is an array")
+    {
+        provenance["sanitizedSourcePath"] = Value::String(drifted_path.to_owned());
+        provenance["smstsLogPathEvidence"] = Value::String(drifted_path.to_owned());
+        if provenance["artifactId"] == lo_id {
+            provenance["bytesCopied"] = Value::from(changed_bytes);
+        }
+    }
+    expected["logicalReconstructions"][0]["sanitizedSourcePath"] =
+        Value::String(drifted_path.to_owned());
+    if validate_contract(scenario, &changed.root, &manifest, &expected).is_ok() {
+        accepted.push("current fragment borrowed changed lo path");
+    }
+
+    let donor = copy_scenario_to_temporary_root(scenario, "same-fingerprint-donor");
+    let mut manifest = source_manifest.clone();
+    let mut expected = source_expected.clone();
+    let lo_index = manifest["artifacts"]
+        .as_array()
+        .expect("rotation artifacts are an array")
+        .iter()
+        .position(|artifact| artifact["artifactId"] == lo_id)
+        .expect("rotation corpus has smsts.lo_");
+    let lo_relative_path = manifest["artifacts"][lo_index]["relativePath"]
+        .as_str()
+        .expect("smsts.lo_ has a relative path")
+        .to_owned();
+    let lo_path = donor.root.join(&lo_relative_path);
+    let original_lo = std::fs::read_to_string(&lo_path).expect("smsts.lo_ is UTF-8");
+    let removed_lo = original_lo.replace("_SMSTSLogPath=", "_REMOVEDLogPath=");
+    assert_ne!(original_lo, removed_lo, "the path token removal applies");
+    std::fs::write(&lo_path, &removed_lo).expect("mutated smsts.lo_ is written");
+    let removed_bytes = removed_lo.len() as u64;
+    manifest["artifacts"][lo_index]["bytesCopied"] = Value::from(removed_bytes);
+    let lo_provenance_index = expected["artifactProvenance"]
+        .as_array()
+        .expect("rotation provenance is an array")
+        .iter()
+        .position(|item| item["artifactId"] == lo_id)
+        .expect("rotation provenance contains smsts.lo_");
+    expected["artifactProvenance"][lo_provenance_index]["bytesCopied"] = Value::from(removed_bytes);
+
+    let donor_id = "task-sequence-rotation-boundary-donor";
+    let donor_relative_path = "evidence/client-task-sequence-smsts/client/donor/smsts.lo_";
+    let donor_path = donor.root.join(donor_relative_path);
+    std::fs::create_dir_all(
+        donor_path
+            .parent()
+            .expect("donor evidence has a parent directory"),
+    )
+    .expect("donor directory is created");
+    std::fs::write(&donor_path, &original_lo).expect("donor evidence is written");
+    let mut donor_artifact = manifest["artifacts"][lo_index].clone();
+    donor_artifact["artifactId"] = Value::String(donor_id.to_owned());
+    donor_artifact["relativePath"] = Value::String(donor_relative_path.to_owned());
+    donor_artifact["bytesCopied"] = Value::from(original_lo.len() as u64);
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("rotation artifacts are an array")
+        .push(donor_artifact);
+
+    let mut donor_provenance = expected["artifactProvenance"][lo_provenance_index].clone();
+    donor_provenance["artifactId"] = Value::String(donor_id.to_owned());
+    donor_provenance["bytesCopied"] = Value::from(original_lo.len() as u64);
+    expected["artifactProvenance"]
+        .as_array_mut()
+        .expect("rotation provenance is an array")
+        .insert(1, donor_provenance);
+    expected["coverage"][0]["artifactIds"]
+        .as_array_mut()
+        .expect("partial artifact IDs are an array")
+        .insert(1, Value::String(donor_id.to_owned()));
+    if validate_contract(scenario, &donor.root, &manifest, &expected).is_ok() {
+        accepted.push("same-fingerprint donor supplied another fragment path");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "validate_contract accepted {} shared-fingerprint provenance mutations: {}",
         accepted.len(),
         accepted.join(", ")
     );

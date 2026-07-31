@@ -8,8 +8,11 @@
   "reorderedInputDeterministic": true,
   "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"partial","pathClasses":["client"],"artifactIds":["task-sequence-rotation-boundary-current","task-sequence-rotation-boundary-lo"]}],
   "artifactProvenance": [
-    {"artifactId":"task-sequence-rotation-boundary-current","bytesCopied":141,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smsts.log","rotationKind":"current","fragmentComplete":false,"relocationOrdinal":0},
+    {"artifactId":"task-sequence-rotation-boundary-current","bytesCopied":141,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":null,"rotationKind":"current","fragmentComplete":false,"relocationOrdinal":0},
     {"artifactId":"task-sequence-rotation-boundary-lo","bytesCopied":259,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smsts.log","rotationKind":"lo","fragmentComplete":false,"relocationOrdinal":0}
+  ],
+  "logicalReconstructions": [
+    {"reconstructionId":"rotation-boundary-lo-current","logicalArtifactId":"client-task-sequence-smsts","orderedArtifactIds":["task-sequence-rotation-boundary-lo","task-sequence-rotation-boundary-current"],"pathFingerprint":"synthetic:rotation-boundary:client","pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":{"artifactId":"task-sequence-rotation-boundary-lo","startLine":1,"endLine":1},"coverageState":"partial","confidence":"low","correlationEligible":false}
   ],
   "transactions": [],
   "sourceLocalObservations": [

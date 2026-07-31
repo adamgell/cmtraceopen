@@ -31,15 +31,19 @@ paths. Each captured artifact pins:
 
 - a physical artifact ID and safe repository-relative path;
 - the original basename and rotation kind;
-- the sanitized source path;
-- the `_SMSTSLogPath` value observed in the cited record;
+- the sanitized capture source path;
+- either the `_SMSTSLogPath` value observed in that physical artifact or an
+  explicit null for an incomplete fragment that contains no such token;
 - a path class and relocation ordinal;
 - the source version, capture timestamp, encoding, and exact byte count; and
 - whether that physical fragment is a complete logical CCM record.
 
-`_SMSTSLogPath` is the authoritative path observation. A filename, display
-name, timestamp, directory name, or assumed operating-system stage cannot
-invent relocation or merge two artifacts.
+An observed `_SMSTSLogPath` is the authoritative in-record path observation.
+A sanitized capture source path remains capture provenance; it cannot
+fabricate an in-record observation. A filename, display name, timestamp,
+directory name, assumed operating-system stage, or shared fingerprint cannot
+invent relocation, supply another physical artifact's path evidence, or merge
+two artifacts.
 
 The `relocated-fragments` scenario pins the order:
 
@@ -138,8 +142,19 @@ itself. A controlled test-only archived-to-current concatenation produces
 exactly one CCM record.
 
 The two physical artifacts retain distinct IDs and paths, the same path
-fingerprint, explicit rotation kinds, and `partial` logical coverage. Until the
-final intake interfaces define controlled logical reconstruction, both remain
+fingerprint, explicit rotation kinds, and `partial` logical coverage. The
+archived prefix contains and independently cites `_SMSTSLogPath`; the current
+suffix declares its per-artifact `smstsLogPathEvidence` as null because that
+token is not present in the suffix.
+
+The expected contract models the test-only logical reconstruction explicitly:
+`logicalReconstructions` orders the archived artifact before the current
+artifact and cites the archived line where `_SMSTSLogPath` is physically
+observed. Both artifacts must share the declared sanitized capture path,
+class, fingerprint, version, and relocation ordinal, and the ordered
+concatenation must produce exactly one CCM record. The shared fingerprint
+alone carries no path provenance. Until the final intake interfaces define
+production logical reconstruction, both fragments remain partial,
 low-confidence, non-correlatable source-local observations.
 
 ## Coverage semantics
@@ -210,6 +225,8 @@ Adversarial mutations prove the contract rejects:
 - an execution ID not present in the cited evidence;
 - a normalized timestamp not produced by the cited CCM record;
 - two artifact IDs that alias one physical evidence path;
+- one rotation fragment borrowing `_SMSTSLogPath` from another artifact or a
+  same-fingerprint donor;
 - escalation of an unkeyed observation above low confidence; and
 - a confirmed failure with no terminal citation.
 
