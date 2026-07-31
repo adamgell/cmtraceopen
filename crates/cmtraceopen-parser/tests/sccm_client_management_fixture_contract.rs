@@ -2983,3 +2983,41 @@ fn profile_citation_and_public_observation_mutations_fail_closed() {
         "profile, citation, or public observation mutations were accepted: {accepted:?}"
     );
 }
+
+#[test]
+fn overlapping_evidence_citation_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let (mixed_root, mixed_manifest, mut mixed_expected) = load_contract("mixed-unrelated");
+    mixed_expected["ownership"]["evidence"] = serde_json::json!([
+        { "artifactId": "mixed-owner-unknown", "startLine": 1, "endLine": 1 },
+        { "artifactId": "mixed-owner-unknown", "startLine": 1, "endLine": 2 }
+    ]);
+    if mutation_was_accepted(
+        "mixed-unrelated",
+        &mixed_root,
+        &mixed_manifest,
+        &mixed_expected,
+    ) {
+        accepted.push("sorted overlapping ownership ranges double-count logical record 1");
+    }
+
+    let (script_root, script_manifest, mut script_expected) = load_contract("script-success");
+    script_expected["transactions"][0]["evidence"] = serde_json::json!([
+        { "artifactId": "script-success-current", "startLine": 1, "endLine": 2 },
+        { "artifactId": "script-success-current", "startLine": 2, "endLine": 3 }
+    ]);
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &script_manifest,
+        &script_expected,
+    ) {
+        accepted.push("sorted overlapping transaction ranges double-count the Execute record");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "overlapping evidence citation mutations were accepted: {accepted:?}"
+    );
+}
