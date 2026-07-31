@@ -568,16 +568,6 @@ fn check_scenario(scenario: &ScenarioContract, spec: &MatrixSpec) -> Result<(), 
             ));
         }
     }
-    if scenario.private_input_markers.is_empty()
-        != !scenario
-            .guard_ids
-            .contains(&"redaction-boundary".to_owned())
-    {
-        return Err(format!(
-            "{scenario_id}: private markers and the redaction guard must be declared together"
-        ));
-    }
-
     if scenario.profile_state != ProfileState::Validated
         && !scenario
             .guard_ids
