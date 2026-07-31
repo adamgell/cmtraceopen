@@ -2456,6 +2456,140 @@ fn exact_rotation_topology_rejects_an_empty_endpoint() {
 }
 
 #[test]
+fn provider_sensitive_fields_never_enter_public_or_candidate_projections() {
+    const REDACTED: &str = "[redacted:sccm-public-message-v1]";
+    let prefix = "[sccm-public-message-v1] ";
+    let core = "Phase=receive; Disposition=succeeded; Terminal=false; RequestId=11111111-1111-1111-1111-111111111111; OperationHandle=safe-operation-read-device; EndpointId=provider-local; Layer=provider; ProfileId=provider-server-5.00.test-v1";
+    let raw_fields = [
+        (
+            "CallerHandle=opaque-private-caller",
+            "opaque-private-caller",
+        ),
+        (
+            "CallerHandle=private-caller-middle",
+            "private-caller-middle",
+        ),
+        ("CallerHandle=private-caller-tail", "private-caller-tail"),
+        (
+            "QueryHandle=/AdminService/v1.0/device",
+            "/AdminService/v1.0/device",
+        ),
+        (
+            "QueryHandle=SELECT * FROM SMS_R_System",
+            "SELECT * FROM SMS_R_System",
+        ),
+        ("QueryHandle=opaque-private-query", "opaque-private-query"),
+        (
+            "Authorization=Bearer private-auth-start",
+            "private-auth-start",
+        ),
+        (
+            "Authorization=Custom private-auth-middle",
+            "private-auth-middle",
+        ),
+        ("Authorization=Basic private-auth-tail", "private-auth-tail"),
+    ];
+
+    for (index, (raw_field, sensitive)) in raw_fields.into_iter().enumerate() {
+        let message = match index % 3 {
+            0 => format!("{prefix}SYNTHETIC FIXTURE; {raw_field}; {core}"),
+            1 => format!(
+                "{prefix}SYNTHETIC FIXTURE; Phase=receive; {raw_field}; Disposition=succeeded; Terminal=false; RequestId=11111111-1111-1111-1111-111111111111; OperationHandle=safe-operation-read-device; EndpointId=provider-local; Layer=provider; ProfileId=provider-server-5.00.test-v1"
+            ),
+            _ => format!("{prefix}SYNTHETIC FIXTURE; {core}; {raw_field}"),
+        };
+        let error = parse_fixture_fields(&message)
+            .expect_err("a raw sensitive fixture field must fail closed");
+        assert!(
+            !error.contains(sensitive),
+            "candidate error leaked {sensitive}"
+        );
+    }
+
+    for field in ["CallerHandle", "QueryHandle", "Authorization"] {
+        let message = format!("{prefix}SYNTHETIC FIXTURE; {core}; {field}={REDACTED}");
+        let fields = parse_fixture_fields(&message)
+            .unwrap_or_else(|error| panic!("{field} redaction marker was rejected: {error}"));
+        assert!(
+            !fields.contains_key(field),
+            "{field} entered exact facts after redaction"
+        );
+    }
+
+    let manifest = read_json("privacy-redaction", "manifest.json").unwrap();
+    let records = normalized_records("privacy-redaction", &manifest);
+    let public_json = serde_json::to_string(&records.values().collect::<Vec<_>>()).unwrap();
+    for sensitive in [
+        "synthetic.user@example.invalid",
+        "SYNTHETIC-RAW-BEARER-DO-NOT-EXPORT",
+        "SELECT * FROM SMS_R_System",
+        "/AdminService/v1.0/device",
+    ] {
+        assert!(
+            !public_json.contains(sensitive),
+            "public evidence leaked {sensitive}"
+        );
+    }
+    for record in records.values() {
+        let fields = parse_fixture_fields(&record.message)
+            .unwrap_or_else(|error| panic!("projected fixture field is invalid: {error}"));
+        for field in ["CallerHandle", "QueryHandle", "Authorization"] {
+            assert!(
+                !fields.contains_key(field),
+                "{field} entered an exact-key correlation candidate"
+            );
+        }
+    }
+}
+
+#[test]
+fn nonterminal_disposition_and_recovery_vocabulary_is_closed() {
+    let manifest = read_json("provider-success", "manifest.json").unwrap();
+    let expected = read_json("provider-success", "expected.json").unwrap();
+    let records = normalized_records("provider-success", &manifest);
+    let mut accepted = Vec::new();
+
+    for disposition in ["manufacturedRecovery", "failed", "retryableFailure"] {
+        let mut paired_expected = expected.clone();
+        let observation = &mut paired_expected["transactions"][0]["observations"][2];
+        observation["disposition"] = Value::String(disposition.to_owned());
+        let artifact_id = observation["evidence"][0]["artifactId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let start_line =
+            u32::try_from(observation["evidence"][0]["startLine"].as_u64().unwrap()).unwrap();
+        let end_line =
+            u32::try_from(observation["evidence"][0]["endLine"].as_u64().unwrap()).unwrap();
+        let mut paired_records = records.clone();
+        let record = paired_records
+            .get_mut(&(artifact_id, start_line, end_line))
+            .expect("paired evidence record exists");
+        record.message = record.message.replacen(
+            "Disposition=succeeded",
+            &format!("Disposition={disposition}"),
+            1,
+        );
+
+        if schema_failures_with_records(
+            "provider-success",
+            &manifest,
+            &paired_expected,
+            &paired_records,
+        )
+        .is_empty()
+        {
+            accepted.push(disposition);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "paired high-success mutations accepted nonterminal dispositions: {accepted:#?}"
+    );
+}
+
+#[test]
 fn provider_retry_requires_an_explicit_retryable_failure_then_recovery() {
     let manifest = read_json("provider-retry", "manifest.json").unwrap();
     let mut expected = read_json("provider-retry", "expected.json").unwrap();
