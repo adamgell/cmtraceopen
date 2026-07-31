@@ -2993,6 +2993,83 @@ fn software_update_fixture_rejects_cbs_log_with_configmgr_source_version() {
 }
 
 #[test]
+fn software_update_fixture_rejects_physical_metadata_on_noncapture_artifacts() {
+    let marker = "noncapture artifact cannot carry physical";
+    let mut missing_rejections = Vec::new();
+
+    let incomplete_scenario = "incomplete";
+    let incomplete_dir = updates_root().join(incomplete_scenario);
+    let incomplete_manifest = read_json(&incomplete_dir.join("manifest.json"));
+    let incomplete_expected = read_json(&incomplete_dir.join("expected.json"));
+    let incomplete_contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == incomplete_scenario)
+        .expect("incomplete contract exists");
+    assert_eq!(
+        incomplete_manifest["artifacts"][1]["captureState"], "absent",
+        "mutation must target an absent artifact"
+    );
+
+    for (label, field, value) in [
+        ("stale encoding", "encoding", serde_json::json!("utf-8")),
+        (
+            "stale collectionLimit",
+            "collectionLimit",
+            serde_json::json!({"byteLimit": 4096, "limitApplied": false}),
+        ),
+        ("stale truncated", "truncated", serde_json::json!(false)),
+    ] {
+        let mut manifest = incomplete_manifest.clone();
+        manifest["artifacts"][1][field] = value;
+        let failures = scenario_semantic_failures(
+            &incomplete_dir,
+            &manifest,
+            &incomplete_expected,
+            incomplete_contract,
+        );
+        if !failures.iter().any(|failure| failure.contains(marker)) {
+            missing_rejections.push(format!(
+                "{label} on absent artifact: {}",
+                failures.join(" | ")
+            ));
+        }
+    }
+
+    let access_scenario = "access-denied";
+    let access_dir = updates_root().join(access_scenario);
+    let access_manifest = read_json(&access_dir.join("manifest.json"));
+    let access_expected = read_json(&access_dir.join("expected.json"));
+    let access_contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == access_scenario)
+        .expect("access-denied contract exists");
+    assert_eq!(
+        access_manifest["artifacts"][1]["captureState"], "accessDenied",
+        "mutation must target an access-denied artifact"
+    );
+    let mut denied_with_encoding = access_manifest.clone();
+    denied_with_encoding["artifacts"][1]["encoding"] = serde_json::json!("utf-8");
+    let failures = scenario_semantic_failures(
+        &access_dir,
+        &denied_with_encoding,
+        &access_expected,
+        access_contract,
+    );
+    if !failures.iter().any(|failure| failure.contains(marker)) {
+        missing_rejections.push(format!(
+            "stale encoding on access-denied artifact: {}",
+            failures.join(" | ")
+        ));
+    }
+
+    assert!(
+        missing_rejections.is_empty(),
+        "noncapture artifacts accepted stale physical metadata:\n{}",
+        missing_rejections.join("\n")
+    );
+}
+
+#[test]
 fn software_update_fixture_rejects_duplicate_and_overlapping_citations() {
     let success_scenario = "success";
     let success_dir = updates_root().join(success_scenario);
