@@ -415,6 +415,14 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         accepted.push("unknown extraction profile created high failure");
     }
 
+    let mut missing_profile = load_bundle("identity-failure");
+    for artifact in &mut missing_profile.artifacts {
+        artifact.configmgr_version = None;
+    }
+    if has_high_confirmed_failure(&missing_profile) {
+        accepted.push("missing extraction profile created high failure");
+    }
+
     let mut access_denied_identity = load_bundle("identity-failure");
     let identity_id = access_denied_identity
         .artifacts
@@ -447,6 +455,24 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         accepted.push("capped sources created a successful phase");
     }
 
+    for coverage in [
+        SccmCoverageState::Partial,
+        SccmCoverageState::Skipped,
+        SccmCoverageState::Unsupported,
+        SccmCoverageState::ParseFailed,
+    ] {
+        let mut incomplete_coverage = load_bundle("success");
+        for artifact in &mut incomplete_coverage.artifacts {
+            artifact.coverage = coverage.clone();
+        }
+        if analyze_client_health(&incomplete_coverage)
+            .last_successful_phase
+            .is_some()
+        {
+            accepted.push("non-captured coverage created a successful phase");
+        }
+    }
+
     let mut mismatched_request = load_bundle("success");
     replace_first_message(
         &mut mismatched_request,
@@ -457,6 +483,16 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
         == Some(SccmHealthPhase::Transport)
     {
         accepted.push("mismatched request key created transport success");
+    }
+
+    let mut unsafe_request = load_bundle("success");
+    for evidence in &mut unsafe_request.evidence {
+        evidence.message = evidence.message.replace("REQ-TEST-001", "REQ-REAL-001");
+    }
+    if analyze_client_health(&unsafe_request).last_successful_phase
+        == Some(SccmHealthPhase::Transport)
+    {
+        accepted.push("out-of-profile request key created transport success");
     }
 
     assert!(
@@ -488,6 +524,17 @@ fn health_terminal_chronology_and_recovery_are_source_local_and_ordered() {
     }
     if has_high_confirmed_failure(&time_inverted_identity) {
         accepted.push("cross-artifact time inversion retained high identity failure");
+    }
+
+    let mut invalid_offset_identity = load_bundle("identity-failure");
+    for evidence in &mut invalid_offset_identity.evidence {
+        if evidence.reference.artifact_id.contains("identity-current") {
+            evidence.timestamp.ordering_state = SccmTimeOrderingState::OffsetInvalid;
+            evidence.timestamp.utc_millis = None;
+        }
+    }
+    if has_high_confirmed_failure(&invalid_offset_identity) {
+        accepted.push("invalid timestamp offset retained high identity failure");
     }
 
     let mut failure_before_start = load_bundle("transport-failure");
@@ -534,6 +581,28 @@ fn health_terminal_chronology_and_recovery_are_source_local_and_ordered() {
         || !has_high_confirmed_failure(&later_failure)
     {
         accepted.push("earlier response suppressed later same-key terminal failure");
+    }
+
+    let mut later_recovery = load_bundle("transport-failure");
+    let recovery_index = later_recovery
+        .evidence
+        .iter()
+        .position(|evidence| evidence.message.contains("Transport terminal failure"))
+        .expect("transport failure evidence");
+    let mut response = later_recovery.evidence[recovery_index].clone();
+    response.message = response
+        .message
+        .replace("Transport terminal failure", "Transport response completed")
+        .replace("error=0x80072EFD", "status=200");
+    response.reference.line_start = Some(5);
+    response.reference.line_end = Some(5);
+    response.reference.entry_id = "later-recovery".to_owned();
+    later_recovery.evidence.push(response);
+    let recovery_analysis = analyze_client_health(&later_recovery);
+    if recovery_analysis.last_successful_phase != Some(SccmHealthPhase::Transport)
+        || has_high_confirmed_failure(&later_recovery)
+    {
+        accepted.push("later same-key transport response did not prove source-local recovery");
     }
 
     assert!(
@@ -604,6 +673,21 @@ fn health_public_output_rejects_unsafe_artifact_provenance() {
         assert!(
             !serialized.contains(prohibited),
             "public health analysis leaked {prohibited}: {serialized}"
+        );
+    }
+
+    let success_serialized = serde_json::to_string(&analyze_client_health(&load_bundle("success")))
+        .expect("success analysis JSON");
+    for prohibited in [
+        "mp-lab.contoso.invalid",
+        "REQ-TEST-001",
+        "11111111-1111-1111-1111-111111111111",
+        "Bootstrap completed",
+        "Transport response completed",
+    ] {
+        assert!(
+            !success_serialized.contains(prohibited),
+            "public success analysis leaked {prohibited}: {success_serialized}"
         );
     }
 }
