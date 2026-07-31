@@ -1,5 +1,5 @@
 {
-  "contractState":"proposedPendingReviewed318And335",
+  "contractState":"preparationOnlyReviewedDependenciesAvailable",
   "workflow":"providerAndAdminService",
   "scenario":"provider-authz-denied",
   "profiles":[{"layer":"provider","selectionState":"selectedSynthetic","profileId":"provider-server-5.00.test-v1"}],

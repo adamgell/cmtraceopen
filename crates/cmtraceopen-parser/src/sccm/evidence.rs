@@ -15,7 +15,7 @@ fn sensitive_message_label_re() -> &'static Regex {
         Regex::new(
             r#"(?ix)
             (?:
-                ["']?\b authorization\b ["']?
+                ["']?\b authorization(?:[\x20_-]?(?:header|token))?\b ["']?
                     (?:[\x20\t]*[:=][\x20\t]*|[\x20\t]+)
                     (?:[a-z][a-z0-9._-]*[\x20\t]+)?
                 |
@@ -139,12 +139,67 @@ fn provider_private_value_end(value: &str, value_start: usize) -> usize {
         return sensitive_value_end(value, value_start);
     }
 
-    remaining
+    let line_end = remaining
         .char_indices()
         .find_map(|(offset, character)| {
-            matches!(character, ';' | '\r' | '\n').then_some(value_start + offset)
+            matches!(character, '\r' | '\n').then_some(value_start + offset)
         })
-        .unwrap_or(value.len())
+        .unwrap_or(value.len());
+    let private_value = &value[value_start..line_end];
+
+    private_value
+        .match_indices(';')
+        .find_map(|(offset, delimiter)| {
+            let tail_start = offset + delimiter.len();
+            provider_tail_has_independent_boundary(&private_value[tail_start..])
+                .then_some(value_start + offset)
+        })
+        .unwrap_or(line_end)
+}
+
+fn provider_tail_has_independent_boundary(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    provider_public_tail_is_safe(trimmed)
+        || sensitive_message_label_re()
+            .find(trimmed)
+            .is_some_and(|label| label.start() == 0)
+}
+
+fn provider_public_tail_is_safe(value: &str) -> bool {
+    let mut segments = value
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty());
+    let Some(first) = segments.next() else {
+        return false;
+    };
+
+    std::iter::once(first).chain(segments).all(|segment| {
+        let Some((label, value)) = segment.split_once('=') else {
+            return false;
+        };
+        let label = label.trim();
+        let value = value.trim();
+        matches!(
+            label.to_ascii_lowercase().as_str(),
+            "phase"
+                | "disposition"
+                | "terminal"
+                | "requestid"
+                | "operationhandle"
+                | "endpointid"
+                | "layer"
+                | "profileid"
+                | "status"
+                | "result"
+                | "errorcode"
+                | "hresult"
+        ) && !value.is_empty()
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric()
+                    || matches!(byte, b'.' | b'_' | b'-' | b'{' | b'}' | b':' | b'+')
+            })
+    })
 }
 
 fn sensitive_value_end(value: &str, value_start: usize) -> usize {

@@ -1,5 +1,5 @@
 {
-  "contractState":"proposedPendingReviewed318And335",
+  "contractState":"preparationOnlyReviewedDependenciesAvailable",
   "workflow":"providerAndAdminService",
   "scenario":"iis-supplemental",
   "profiles":[{"layer":"adminService","selectionState":"selectedSynthetic","profileId":"admin-service-server-5.00.test-v1"}],
@@ -16,9 +16,11 @@
       "publicSummary":"Admin Service evidence independently records a terminal success.",
       "observations":[
         {"observationId":"admin-iis-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-iis-current","startLine":1,"endLine":1}]},
-        {"observationId":"admin-iis-02-route","phase":"route","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-iis-current","startLine":2,"endLine":2}]},
-        {"observationId":"admin-iis-03-respond","phase":"respond","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-iis-current","startLine":3,"endLine":3}]},
-        {"observationId":"admin-iis-04-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"admin-iis-current","startLine":4,"endLine":4}]}
+        {"observationId":"admin-iis-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-iis-current","startLine":2,"endLine":2}]},
+        {"observationId":"admin-iis-03-route","phase":"route","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-iis-current","startLine":3,"endLine":3}]},
+        {"observationId":"admin-iis-04-backend","phase":"executeBackendOperation","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-iis-current","startLine":4,"endLine":4}]},
+        {"observationId":"admin-iis-05-respond","phase":"respond","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-iis-current","startLine":5,"endLine":5}]},
+        {"observationId":"admin-iis-06-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"admin-iis-current","startLine":6,"endLine":6}]}
       ]
     }
   ],

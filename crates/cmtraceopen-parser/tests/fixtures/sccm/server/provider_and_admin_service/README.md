@@ -30,10 +30,17 @@ cannot invent a role, endpoint, or installed component.
 | `provider-query-failure` | Provider terminal failure | operation failure is source-specific; query text is not a key |
 | `provider-retry` | Provider retry then terminal success | one cited retryable operation failure must recover on the same exact key before terminal success |
 | `provider-timeout` | Provider incomplete | invalid offset and no terminal outcome keep confidence low |
+| `provider-source-absent` | Provider coverage only | absent source requests only bounded Provider evidence |
+| `provider-source-capped` | Provider coverage only | capped partial bytes cannot form a transaction or outcome |
+| `provider-source-unsupported` | Provider coverage only | unsupported source/profile cannot form an exact key |
 | `contradictory-evidence` | Provider contradictory terminal outcomes | every admitted same-key record is cited; conflicting terminal results stay incomplete and low-confidence |
 | `admin-service-success` | Admin Service terminal success | six-stage Admin Service grammar is independent |
 | `admin-service-auth-failure` | Admin Service terminal failure | explicit authentication failure only |
 | `admin-service-backend-failure` | Admin Service terminal failure | backend evidence does not claim client or console impact |
+| `admin-service-access-denied` | Admin Service coverage only | access denial is not workflow failure evidence |
+| `admin-service-parse-failed` | Admin Service coverage only | malformed evidence requests bounded recapture/repair |
+| `admin-service-skipped` | Admin Service coverage only | skipped collection is not a workflow outcome |
+| `blocked-deferred` | Admin Service incomplete | pending evidence stays low-confidence without a terminal outcome |
 | `iis-supplemental` | Admin Service success plus IIS context | IIS cannot create or raise transaction confidence |
 | `privacy-redaction` | distinct Provider/Admin Service successes | same request-like ID stays split by layer/endpoint; raw synthetic sensitive shapes are absent publicly |
 | `rotation-boundary` | no transaction | split fragments and unknown version cannot create an exact key |
@@ -62,5 +69,6 @@ cannot invent a role, endpoint, or installed component.
 - Public expected output contains no cross-side causal claim. Any future
   correlation remains outside #332 and must satisfy #333 contracts.
 
-The manifest/expected JSON is a proposal pending reviewed #318 and #335
-interfaces. It must not be treated as an implemented native manifest.
+The manifest/expected JSON is preparation-only with reviewed #318 and #335
+dependencies available. It must not be treated as an implemented native
+manifest.

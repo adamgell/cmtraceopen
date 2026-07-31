@@ -84,7 +84,7 @@ noncorrelatable.
 
 ## Test-first record
 
-The first focused test failed because the exact eleven-scenario fixture root
+The first focused test failed because the initial eleven-scenario fixture root
 did not exist. After the corpus was added, the privacy transaction test failed
 because the public redactor correctly replaced a sensitive tail with a
 redaction marker; the fixture-field reader was narrowed to recognize that
@@ -103,6 +103,13 @@ relative paths to source/endpoint/rotation identity, unknown versions to a
 closed public grammar, and exact topology to a nonempty endpoint. The corpus
 also now contains an explicit same-key retry/recovery scenario and a
 contradictory-terminal scenario that remains incomplete and low-confidence.
+
+The current twenty-scenario matrix additionally separates absent,
+access-denied, capped, skipped, unsupported, parse-failed/malformed, and
+blocked/deferred coverage. None of those states is promoted into success or
+failure. Every high-success transaction now cites the complete layer-specific
+phase sequence, and every retryable failure requires a later success at the
+same phase.
 
 ## Explicit limits
 

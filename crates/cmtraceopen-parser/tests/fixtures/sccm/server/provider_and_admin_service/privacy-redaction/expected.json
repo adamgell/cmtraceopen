@@ -1,5 +1,5 @@
 {
-  "contractState":"proposedPendingReviewed318And335",
+  "contractState":"preparationOnlyReviewedDependenciesAvailable",
   "workflow":"providerAndAdminService",
   "scenario":"privacy-redaction",
   "profiles":[
@@ -19,7 +19,11 @@
       "publicSummary":"Admin Service privacy fixture completed with redacted public evidence.",
       "observations":[
         {"observationId":"privacy-admin-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":1,"endLine":1}]},
-        {"observationId":"privacy-admin-02-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"privacy-admin-current","startLine":2,"endLine":2}]}
+        {"observationId":"privacy-admin-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":2,"endLine":2}]},
+        {"observationId":"privacy-admin-03-route","phase":"route","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":3,"endLine":3}]},
+        {"observationId":"privacy-admin-04-backend","phase":"executeBackendOperation","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":4,"endLine":4}]},
+        {"observationId":"privacy-admin-05-respond","phase":"respond","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":5,"endLine":5}]},
+        {"observationId":"privacy-admin-06-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"privacy-admin-current","startLine":6,"endLine":6}]}
       ]
     },
     {
@@ -30,7 +34,10 @@
       "publicSummary":"Provider privacy fixture completed with redacted public evidence.",
       "observations":[
         {"observationId":"privacy-provider-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":1,"endLine":1}]},
-        {"observationId":"privacy-provider-02-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"privacy-provider-current","startLine":2,"endLine":2}]}
+        {"observationId":"privacy-provider-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":2,"endLine":2}]},
+        {"observationId":"privacy-provider-03-execute","phase":"executeProviderOperation","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":3,"endLine":3}]},
+        {"observationId":"privacy-provider-04-respond","phase":"respond","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":4,"endLine":4}]},
+        {"observationId":"privacy-provider-05-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"privacy-provider-current","startLine":5,"endLine":5}]}
       ]
     }
   ],

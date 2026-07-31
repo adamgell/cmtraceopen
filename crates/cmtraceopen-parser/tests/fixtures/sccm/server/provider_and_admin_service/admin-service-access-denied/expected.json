@@ -1,5 +1,5 @@
 {
-  "contractState": "proposedPendingReviewed318And335",
+  "contractState": "preparationOnlyReviewedDependenciesAvailable",
   "workflow": "providerAndAdminService",
   "scenario": "admin-service-access-denied",
   "profiles": [

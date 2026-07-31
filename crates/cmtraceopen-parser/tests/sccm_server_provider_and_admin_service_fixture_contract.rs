@@ -267,13 +267,13 @@ fn parse_fixture_fields(message: &str) -> Result<BTreeMap<String, String>, Strin
         "Authorization",
     ];
     let mut fields = BTreeMap::new();
-    for segment in segments {
+    for (segment_index, segment) in segments.enumerate() {
         if segment.starts_with("[redacted:") && segment.ends_with(']') {
             continue;
         }
         let (name, value) = segment
             .split_once('=')
-            .ok_or_else(|| format!("fixture field is not Name=Value: {segment}"))?;
+            .ok_or_else(|| format!("fixture field at segment {segment_index} is not Name=Value"))?;
         if !allowed.contains(&name) || value.is_empty() {
             return Err(format!("unsupported or empty fixture field {name}"));
         }
@@ -521,16 +521,25 @@ fn expected_observation_ids(scenario: &str) -> &'static [&'static str] {
         ],
         "iis-supplemental" => &[
             "admin-iis-01-receive",
-            "admin-iis-02-route",
-            "admin-iis-03-respond",
-            "admin-iis-04-outcome",
+            "admin-iis-02-authorize",
+            "admin-iis-03-route",
+            "admin-iis-04-backend",
+            "admin-iis-05-respond",
+            "admin-iis-06-outcome",
         ],
         "incomplete" => &["incomplete-admin-01-receive", "incomplete-admin-02-route"],
         "privacy-redaction" => &[
             "privacy-admin-01-receive",
-            "privacy-admin-02-outcome",
+            "privacy-admin-02-authorize",
+            "privacy-admin-03-route",
+            "privacy-admin-04-backend",
+            "privacy-admin-05-respond",
+            "privacy-admin-06-outcome",
             "privacy-provider-01-receive",
-            "privacy-provider-02-outcome",
+            "privacy-provider-02-authorize",
+            "privacy-provider-03-execute",
+            "privacy-provider-04-respond",
+            "privacy-provider-05-outcome",
         ],
         "provider-authz-denied" => &[
             "provider-authz-01-receive",
@@ -1044,7 +1053,7 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
             "artifactRequests",
             "crossSideCausalClaims",
         ],
-    ) || expected["contractState"] != "proposedPendingReviewed318And335"
+    ) || expected["contractState"] != "preparationOnlyReviewedDependenciesAvailable"
         || expected["workflow"] != "providerAndAdminService"
         || expected["scenario"] != scenario
         || expected["crossSideCausalClaims"] != Value::Array(Vec::new())
@@ -1448,6 +1457,19 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
         }) {
             failures.push("retryable failure is outside the closed recovery contract".to_owned());
         }
+        for (index, (phase, disposition, _)) in phase_dispositions.iter().enumerate() {
+            if *disposition == "retryableFailure"
+                && !phase_dispositions[index + 1..].iter().any(
+                    |(later_phase, later_disposition, _)| {
+                        later_phase == phase && *later_disposition == "succeeded"
+                    },
+                )
+            {
+                failures.push(
+                    "retryable failure lacks a later same-phase successful recovery".to_owned(),
+                );
+            }
+        }
         if phase_dispositions.iter().any(|(_, disposition, terminal)| {
             *disposition == "pending"
                 && (*terminal || transaction["state"].as_str() != Some("incomplete"))
@@ -1465,6 +1487,48 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                 failures.push(
                     "provider retry lacks one explicit retryable failure followed by recovery"
                         .to_owned(),
+                );
+            }
+        }
+        if transaction["state"] == "succeeded" {
+            let success_sequence_is_exact = match layer {
+                "provider" if scenario == "provider-retry" => {
+                    phase_dispositions
+                        == [
+                            ("receive", "succeeded", false),
+                            ("authenticateOrAuthorize", "succeeded", false),
+                            ("executeProviderOperation", "retryableFailure", false),
+                            ("executeProviderOperation", "succeeded", false),
+                            ("respond", "succeeded", false),
+                            ("recordOutcome", "succeeded", true),
+                        ]
+                }
+                "provider" => {
+                    phase_dispositions
+                        == [
+                            ("receive", "succeeded", false),
+                            ("authenticateOrAuthorize", "succeeded", false),
+                            ("executeProviderOperation", "succeeded", false),
+                            ("respond", "succeeded", false),
+                            ("recordOutcome", "succeeded", true),
+                        ]
+                }
+                "adminService" => {
+                    phase_dispositions
+                        == [
+                            ("receive", "succeeded", false),
+                            ("authenticateOrAuthorize", "succeeded", false),
+                            ("route", "succeeded", false),
+                            ("executeBackendOperation", "succeeded", false),
+                            ("respond", "succeeded", false),
+                            ("recordOutcome", "succeeded", true),
+                        ]
+                }
+                _ => false,
+            };
+            if !success_sequence_is_exact {
+                failures.push(
+                    "successful transaction omits or reorders a required layer phase".to_owned(),
                 );
             }
         }

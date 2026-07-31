@@ -1,5 +1,5 @@
 {
-  "contractState":"proposedPendingReviewed318And335",
+  "contractState":"preparationOnlyReviewedDependenciesAvailable",
   "workflow":"providerAndAdminService",
   "scenario":"admin-service-auth-failure",
   "profiles":[{"layer":"adminService","selectionState":"selectedSynthetic","profileId":"admin-service-server-5.00.test-v1"}],
