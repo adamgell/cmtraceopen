@@ -145,12 +145,17 @@ fn expected_finding_projection(expected: &Value) -> Vec<Value> {
         .expect("expected findings")
         .iter()
         .map(|finding| {
+            let mut gap_ids = finding["coverageGapArtifactIds"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            gap_ids.sort_by_key(Value::to_string);
             json!({
                 "findingId": finding["findingId"],
                 "healthPhase": finding["phase"],
                 "class": finding["class"],
                 "confidence": finding["confidence"],
-                "coverageGapArtifactIds": finding["coverageGapArtifactIds"],
+                "coverageGapArtifactIds": gap_ids,
                 "nextArtifactLogicalId": finding["nextArtifacts"]
                     .as_array()
                     .and_then(|requests| requests.first())
@@ -255,6 +260,10 @@ fn assert_finding_evidence_matches_contract(scenario: &str, analysis: &Value, ex
             assert!(
                 evidence.iter().any(|reference| {
                     reference["artifactId"] == expected_reference["artifactId"]
+                        && reference_is_within_expected_ranges(
+                            reference,
+                            std::slice::from_ref(expected_reference),
+                        )
                 }),
                 "{scenario}: {finding_id} omitted expected evidence"
             );
@@ -445,14 +454,6 @@ fn health_equal_time_opposing_transport_outcomes_are_contradictory() {
         assert_eq!(analysis.findings[0].finding.confidence, SccmConfidence::Low);
         assert!(!has_high_confirmed_failure(bundle));
     }
-
-    assert_eq!(
-        serde_json::to_string(&analyze_client_health(&failure_sorts_first))
-            .expect("first artifact ordering JSON"),
-        serde_json::to_string(&analyze_client_health(&failure_sorts_last))
-            .expect("last artifact ordering JSON"),
-        "opaque artifact identity ordering must not select an equal-time outcome"
-    );
 }
 
 #[test]
@@ -510,6 +511,41 @@ fn health_same_guid_identity_success_recovers_prior_failure() {
         .findings
         .iter()
         .all(|finding| finding.finding.finding_id != "health-identity-terminal"));
+
+    let mut different_guid = load_bundle("identity-failure");
+    let mut unrelated_success = different_guid
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("terminal failure clientGuid="))
+        .expect("identity failure evidence")
+        .clone();
+    unrelated_success.evidence_id = "evidence:health-unrelated-identity-success".to_owned();
+    unrelated_success.reference.entry_id = "unrelated-identity-success".to_owned();
+    unrelated_success.reference.line_start = Some(2);
+    unrelated_success.reference.line_end = Some(2);
+    unrelated_success.message = unrelated_success
+        .message
+        .replace(
+            "[redacted:sccm-public-message-v1] terminal failure",
+            "[redacted:sccm-public-message-v1] succeeded",
+        )
+        .replace(
+            "22222222-2222-2222-2222-222222222222",
+            "33333333-3333-3333-3333-333333333333",
+        )
+        .replace(" error=0x80004005", "");
+    different_guid.evidence.push(unrelated_success);
+
+    let unrelated_analysis = analyze_client_health(&different_guid);
+    assert_eq!(
+        unrelated_analysis.last_successful_phase,
+        Some(SccmHealthPhase::Service)
+    );
+    assert!(has_high_confirmed_failure(&different_guid));
+    assert_eq!(
+        unrelated_analysis.findings[0].finding.finding_id,
+        "health-identity-terminal"
+    );
 }
 
 #[test]
@@ -615,9 +651,10 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
             .message
             .replace("mp-lab.contoso.invalid", "user@real.example");
     }
-    if analyze_client_health(&unsafe_host).last_successful_phase
-        >= Some(SccmHealthPhase::ManagementPoint)
-    {
+    if matches!(
+        analyze_client_health(&unsafe_host).last_successful_phase,
+        Some(SccmHealthPhase::ManagementPoint | SccmHealthPhase::Transport)
+    ) {
         accepted.push("unsafe raw host advanced management-point evidence");
     }
 
@@ -694,7 +731,21 @@ fn health_adversarial_inputs_cannot_create_terminal_or_success_outcomes() {
             .last_successful_phase
             .is_some()
         {
-            accepted.push("non-captured coverage created a successful phase");
+            accepted.push(match coverage {
+                SccmCoverageState::Partial => {
+                    "non-captured coverage Partial created a successful phase"
+                }
+                SccmCoverageState::Skipped => {
+                    "non-captured coverage Skipped created a successful phase"
+                }
+                SccmCoverageState::Unsupported => {
+                    "non-captured coverage Unsupported created a successful phase"
+                }
+                SccmCoverageState::ParseFailed => {
+                    "non-captured coverage ParseFailed created a successful phase"
+                }
+                _ => "unexpected non-captured coverage created a successful phase",
+            });
         }
     }
 

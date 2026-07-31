@@ -149,6 +149,24 @@ enum TransportResolution<'a> {
 }
 
 pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysis {
+    if let Some((phase, source_group)) = duplicate_artifact_scope(bundle) {
+        let finding = insufficient_finding(
+            "health-artifact-identity-collision",
+            phase,
+            None,
+            "Artifact identities are not unique",
+            "Duplicate artifact identities make source selection ambiguous, so no workflow outcome was evaluated.",
+            Vec::new(),
+            vec![SccmFindingCoverageGap {
+                artifact_id: source_group.to_owned(),
+                role: SccmRole::Client,
+                coverage: SccmCoverageState::ParseFailed,
+            }],
+            request_for_phase(phase),
+        );
+        return finalize_health_analysis(None, vec![finding]);
+    }
+
     let artifacts_by_id = bundle
         .artifacts
         .iter()
@@ -246,41 +264,56 @@ pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysi
         let has_captured_without_record = service_artifacts
             .iter()
             .any(|artifact| artifact.coverage == SccmCoverageState::Captured);
+        let (finding_id, title, summary) = if has_captured_without_record {
+            (
+                "health-service-malformed",
+                "Client service evidence is malformed",
+                "A captured service artifact contained no complete version-profiled logical record.",
+            )
+        } else {
+            (
+                "health-service-coverage-gap",
+                "Client service evidence is incomplete",
+                "No complete version-profiled service or evaluation outcome was available.",
+            )
+        };
         findings.push(insufficient_finding(
-            if has_captured_without_record {
-                "health-service-malformed"
-            } else {
-                "health-service-coverage-gap"
-            },
+            finding_id,
             SccmHealthPhase::Service,
             last_successful_phase,
-            if has_captured_without_record {
-                "Client service evidence is malformed"
-            } else {
-                "Client service evidence is incomplete"
-            },
-            if has_captured_without_record {
-                "A captured service artifact contained no complete version-profiled logical record."
-            } else {
-                "No complete version-profiled service or evaluation outcome was available."
-            },
+            title,
+            summary,
             Vec::new(),
             coverage_gaps_for_missing_group(&service_artifacts, CLIENT_EVALUATION_GROUP, false),
             request_for_phase(SccmHealthPhase::Service),
         ));
         return finalize_health_analysis(last_successful_phase, findings);
     };
-    {
-        last_successful_phase = Some(SccmHealthPhase::Service);
-    }
+    last_successful_phase = Some(SccmHealthPhase::Service);
 
+    let identity_recovered = |failure: &HealthFact| {
+        let HealthFactKind::IdentityFailed {
+            client_guid: failed_guid,
+        } = &failure.kind
+        else {
+            return false;
+        };
+        facts.iter().any(|candidate| {
+            matches!(
+                &candidate.kind,
+                HealthFactKind::IdentitySucceeded {
+                    client_guid: succeeded_guid
+                } if succeeded_guid == failed_guid
+            ) && is_later_in_same_artifact(&failure.reference, &candidate.reference)
+        })
+    };
     if let Some(failure) = facts.iter().find(|fact| {
         matches!(
             &fact.kind,
             HealthFactKind::IdentityFailed {
                 client_guid: fact_client_guid
             } if fact_client_guid == &client_guid
-        )
+        ) && !identity_recovered(fact)
     }) {
         if chain_has_usable_order(&[setup_fact, service_fact, failure]) {
             findings.push(terminal_finding(
@@ -485,6 +518,45 @@ pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysi
     finalize_health_analysis(last_successful_phase, findings)
 }
 
+fn duplicate_artifact_scope(
+    bundle: &SccmNormalizedBundle,
+) -> Option<(SccmHealthPhase, &'static str)> {
+    let mut artifacts = bundle.artifacts.iter().collect::<Vec<_>>();
+    artifacts.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| left.display_name.cmp(&right.display_name))
+    });
+    let duplicate_id = artifacts
+        .windows(2)
+        .find(|pair| pair[0].artifact_id == pair[1].artifact_id)?[0]
+        .artifact_id
+        .as_str();
+    let phase = artifacts
+        .iter()
+        .filter(|artifact| artifact.artifact_id == duplicate_id)
+        .map(|artifact| {
+            match classify_artifact_name(&artifact.display_name, SccmRole::Client).family {
+                SccmArtifactFamily::ClientSetup => SccmHealthPhase::Setup,
+                SccmArtifactFamily::ClientHealth => SccmHealthPhase::Service,
+                SccmArtifactFamily::ClientIdentity => SccmHealthPhase::Identity,
+                SccmArtifactFamily::ClientLocation => SccmHealthPhase::SiteAssignment,
+                _ => SccmHealthPhase::Setup,
+            }
+        })
+        .min()
+        .unwrap_or(SccmHealthPhase::Setup);
+    let source_group = match phase {
+        SccmHealthPhase::Setup => CLIENT_SETUP_GROUP,
+        SccmHealthPhase::Service => CLIENT_EVALUATION_GROUP,
+        SccmHealthPhase::Identity => CLIENT_IDENTITY_GROUP,
+        SccmHealthPhase::SiteAssignment
+        | SccmHealthPhase::ManagementPoint
+        | SccmHealthPhase::Transport => CLIENT_LOCATION_GROUP,
+    };
+    Some((phase, source_group))
+}
+
 fn resolve_setup(facts: &[HealthFact]) -> SetupResolution<'_> {
     let successes = facts
         .iter()
@@ -604,7 +676,7 @@ fn resolve_transport<'a>(
                 let preceding_starts = starts
                     .iter()
                     .copied()
-                    .filter(|started| fact_is_strictly_after(started, outcome))
+                    .filter(|started| fact_is_strictly_before(started, outcome))
                     .collect::<Vec<_>>();
                 latest_comparable_fact(&preceding_starts).map(|started| (started, outcome))
             })
@@ -621,17 +693,26 @@ fn resolve_transport<'a>(
             contradictory_evidence.extend(outcome_facts.iter().map(|fact| fact.reference.clone()));
             continue;
         };
+        let latest_succeeded = matches!(
+            latest_outcome.kind,
+            HealthFactKind::TransportSucceeded { .. }
+        );
+        let has_equal_time_opposition = outcome_facts.iter().any(|candidate| {
+            compare_fact_order(latest_outcome, candidate) == Some(std::cmp::Ordering::Equal)
+                && matches!(candidate.kind, HealthFactKind::TransportSucceeded { .. })
+                    != latest_succeeded
+        });
+        if has_equal_time_opposition {
+            contradictory_evidence.extend(outcome_facts.iter().map(|fact| fact.reference.clone()));
+            continue;
+        }
         let started = outcomes
             .iter()
             .find_map(|(started, outcome)| {
                 std::ptr::eq(*outcome, latest_outcome).then_some(*started)
             })
             .expect("latest transport outcome came from an admitted pair");
-        let succeeded = matches!(
-            latest_outcome.kind,
-            HealthFactKind::TransportSucceeded { .. }
-        );
-        resolved.push((started, latest_outcome, succeeded));
+        resolved.push((started, latest_outcome, latest_succeeded));
     }
 
     if !contradictory_evidence.is_empty() {
@@ -709,7 +790,7 @@ fn compare_fact_order(left: &HealthFact, right: &HealthFact) -> Option<std::cmp:
     None
 }
 
-fn fact_is_strictly_after(earlier: &HealthFact, later: &HealthFact) -> bool {
+fn fact_is_strictly_before(earlier: &HealthFact, later: &HealthFact) -> bool {
     compare_fact_order(earlier, later) == Some(std::cmp::Ordering::Less)
 }
 
@@ -726,7 +807,7 @@ fn chain_has_known_inversion(facts: &[&HealthFact]) -> bool {
 fn chain_has_usable_order(facts: &[&HealthFact]) -> bool {
     facts
         .windows(2)
-        .all(|pair| fact_is_strictly_after(pair[0], pair[1]))
+        .all(|pair| fact_is_strictly_before(pair[0], pair[1]))
 }
 
 fn parse_health_fact(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option<HealthFact> {
@@ -769,7 +850,7 @@ fn parse_setup_fact(message: &str) -> Option<HealthFactKind> {
         let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
         return Some(HealthFactKind::SetupSucceeded {
             bootstrap_id: bootstrap_id.to_owned(),
-            client_guid: client_guid.to_owned(),
+            client_guid: client_guid.to_ascii_lowercase(),
         });
     }
     if message.contains("Bootstrap terminal failure ") && has_nonzero_error(message) {
@@ -788,7 +869,7 @@ fn parse_service_fact(message: &str) -> Option<HealthFactKind> {
     }
     let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
     Some(HealthFactKind::ServiceSucceeded {
-        client_guid: client_guid.to_owned(),
+        client_guid: client_guid.to_ascii_lowercase(),
     })
 }
 
@@ -798,7 +879,7 @@ fn parse_identity_fact(message: &str) -> Option<HealthFactKind> {
         || message.contains("[redacted:sccm-public-message-v1] succeeded clientGuid=")
     {
         return Some(HealthFactKind::IdentitySucceeded {
-            client_guid: client_guid.to_owned(),
+            client_guid: client_guid.to_ascii_lowercase(),
         });
     }
     if (message.contains("Identity registration terminal failure ")
@@ -806,7 +887,7 @@ fn parse_identity_fact(message: &str) -> Option<HealthFactKind> {
         && has_nonzero_error(message)
     {
         return Some(HealthFactKind::IdentityFailed {
-            client_guid: client_guid.to_owned(),
+            client_guid: client_guid.to_ascii_lowercase(),
         });
     }
     None
@@ -816,14 +897,14 @@ fn parse_location_fact(message: &str) -> Option<HealthFactKind> {
     if message.contains("Location query started ") {
         let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
         return Some(HealthFactKind::LocationQuery {
-            client_guid: client_guid.to_owned(),
+            client_guid: client_guid.to_ascii_lowercase(),
         });
     }
     if message.contains("Site assignment succeeded ") {
         let client_guid = field_value(message, "clientGuid").filter(|value| valid_guid(value))?;
         let site_code = field_value(message, "siteCode").filter(|value| valid_site_code(value))?;
         return Some(HealthFactKind::SiteAssigned {
-            client_guid: client_guid.to_owned(),
+            client_guid: client_guid.to_ascii_lowercase(),
             site_code: site_code.to_owned(),
         });
     }
@@ -877,7 +958,9 @@ fn parse_location_fact(message: &str) -> Option<HealthFactKind> {
 
 fn field_value<'a>(message: &'a str, key: &str) -> Option<&'a str> {
     let marker = format!("{key}=");
-    let mut matches = message.match_indices(&marker);
+    let mut matches = message
+        .match_indices(&marker)
+        .filter(|(index, _)| *index == 0 || !message.as_bytes()[index - 1].is_ascii_alphanumeric());
     let (first, _) = matches.next()?;
     if matches.next().is_some() {
         return None;
