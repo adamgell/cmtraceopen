@@ -219,6 +219,34 @@ export function useAppMenu() {
             await invoke("set_always_on_top", { enabled: next });
             return;
           }
+          case "restart_as_administrator": {
+            const [{ confirm }, elevation, context] = await Promise.all([
+              import("@tauri-apps/plugin-dialog"),
+              import("../lib/elevation"),
+              import("../lib/elevation-context"),
+            ]);
+
+            const request = context.activeElevationRequest("explicitMenu");
+            // Ask before touching the backend: UAC must never appear without
+            // an explicit click, and Cancel must cost nothing.
+            const confirmed = await confirm(
+              context.elevationConfirmationMessage(request.target),
+              { title: "Restart as administrator", kind: "warning" },
+            );
+            if (!confirmed) {
+              return;
+            }
+
+            const outcome = await elevation.requestElevatedRestart(request);
+            if (outcome.status !== "launched") {
+              // A launched restart is terminal — the process is exiting, so
+              // there is no one left to inform.
+              console.info("[app-menu] administrator restart not started", {
+                outcome: elevation.describeElevationOutcome(outcome),
+              });
+            }
+            return;
+          }
           case "increase_text_size":
             increaseLogListTextSize();
             return;

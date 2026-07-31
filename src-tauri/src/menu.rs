@@ -34,6 +34,7 @@ pub const MENU_ID_FILE_NEW_TIMELINE_FROM_FOLDER: &str = "file.new_timeline_from_
 pub const MENU_ID_FILE_NEW_EMPTY_TIMELINE: &str = "file.new_empty_timeline";
 pub const MENU_ID_FILE_SAVE_SESSION: &str = "file.save_session";
 pub const MENU_ID_FILE_OPEN_SESSION: &str = "file.open_session";
+pub const MENU_ID_FILE_RESTART_AS_ADMINISTRATOR: &str = "file.restart_as_administrator";
 pub const MENU_ID_FILE_QUIT: &str = "file.quit";
 
 pub const MENU_ID_EDIT_FIND: &str = "edit.find";
@@ -98,6 +99,26 @@ const FILE_ORDER: &[&str] = &[
     MENU_SEPARATOR,
     MENU_ID_FILE_OPEN_SESSION,
     MENU_ID_FILE_SAVE_SESSION,
+    MENU_SEPARATOR,
+    MENU_ID_FILE_QUIT,
+];
+/// Windows gains the elevation action in its own group above Exit.
+///
+/// UAC is a Windows concept, so the item is not rendered at all elsewhere
+/// rather than being shown disabled — muda has no `set_visible`, so an item
+/// that should never apply must not be created.
+const FILE_ORDER_WINDOWS: &[&str] = &[
+    MENU_ID_FILE_OPEN_LOG_FILE,
+    MENU_ID_FILE_OPEN_LOG_FOLDER,
+    MENU_ID_FILE_KNOWN_SOURCES,
+    MENU_ID_FILE_RECENT,
+    MENU_SEPARATOR,
+    MENU_ID_FILE_NEW_TIMELINE,
+    MENU_SEPARATOR,
+    MENU_ID_FILE_OPEN_SESSION,
+    MENU_ID_FILE_SAVE_SESSION,
+    MENU_SEPARATOR,
+    MENU_ID_FILE_RESTART_AS_ADMINISTRATOR,
     MENU_SEPARATOR,
     MENU_ID_FILE_QUIT,
 ];
@@ -376,10 +397,10 @@ fn top_level_menu_order(platform: MenuPlatform) -> &'static [&'static str] {
 }
 
 fn file_item_order(platform: MenuPlatform) -> &'static [&'static str] {
-    if platform == MenuPlatform::Macos {
-        FILE_ORDER_MAC
-    } else {
-        FILE_ORDER
+    match platform {
+        MenuPlatform::Macos => FILE_ORDER_MAC,
+        MenuPlatform::Windows => FILE_ORDER_WINDOWS,
+        _ => FILE_ORDER,
     }
 }
 
@@ -614,6 +635,14 @@ fn build_file_menu<R: Runtime>(
     let open_session = normal_item(app, MENU_ID_FILE_OPEN_SESSION, "Open Session…", platform)?;
     let save_session = normal_item(app, MENU_ID_FILE_SAVE_SESSION, "Save Session…", platform)?;
     let quit = normal_item(app, MENU_ID_FILE_QUIT, "Exit", platform)?;
+    // Built unconditionally but only referenced by FILE_ORDER_WINDOWS, so on
+    // other platforms it is dropped without ever being appended.
+    let restart_as_administrator = normal_item(
+        app,
+        MENU_ID_FILE_RESTART_AS_ADMINISTRATOR,
+        "Restart as Administrator…",
+        platform,
+    )?;
 
     let submenu = Submenu::with_id(app, MENU_ID_FILE, "File", true)?;
     for &item_id in file_item_order(platform) {
@@ -625,6 +654,7 @@ fn build_file_menu<R: Runtime>(
             MENU_ID_FILE_NEW_TIMELINE => submenu.append(&new_timeline)?,
             MENU_ID_FILE_OPEN_SESSION => submenu.append(&open_session)?,
             MENU_ID_FILE_SAVE_SESSION => submenu.append(&save_session)?,
+            MENU_ID_FILE_RESTART_AS_ADMINISTRATOR => submenu.append(&restart_as_administrator)?,
             MENU_ID_FILE_QUIT => submenu.append(&quit)?,
             MENU_SEPARATOR => append_separator(app, &submenu)?,
             _ => unreachable!("unknown File menu item: {item_id}"),
@@ -1815,8 +1845,34 @@ mod tests {
 
     #[test]
     fn submenu_order_matches_the_native_menu_design() {
-        assert_eq!(file_item_order(MenuPlatform::Windows), FILE_ORDER);
+        assert_eq!(file_item_order(MenuPlatform::Windows), FILE_ORDER_WINDOWS);
         assert_eq!(file_item_order(MenuPlatform::Macos), FILE_ORDER_MAC);
+        assert_eq!(file_item_order(MenuPlatform::Linux), FILE_ORDER);
+
+        // UAC is Windows-only, and muda has no `set_visible`, so the item must
+        // be absent from the other platforms' menus rather than shown disabled.
+        assert!(
+            FILE_ORDER_WINDOWS.contains(&MENU_ID_FILE_RESTART_AS_ADMINISTRATOR),
+            "Windows File menu must offer the elevation action"
+        );
+        for order in [FILE_ORDER, FILE_ORDER_MAC] {
+            assert!(
+                !order.contains(&MENU_ID_FILE_RESTART_AS_ADMINISTRATOR),
+                "only Windows may render the elevation action"
+            );
+        }
+
+        // It sits in its own group directly above Exit: a destructive-adjacent
+        // action should not be adjacent to Save Session.
+        let windows_tail = &FILE_ORDER_WINDOWS[FILE_ORDER_WINDOWS.len() - 3..];
+        assert_eq!(
+            windows_tail,
+            [
+                MENU_ID_FILE_RESTART_AS_ADMINISTRATOR,
+                MENU_SEPARATOR,
+                MENU_ID_FILE_QUIT,
+            ]
+        );
         assert_eq!(
             NEW_TIMELINE_ORDER,
             [
