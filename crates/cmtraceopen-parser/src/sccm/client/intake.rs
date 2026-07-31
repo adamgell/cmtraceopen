@@ -482,7 +482,7 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             .artifact
             .configmgr_version
             .as_deref()
-            .is_some_and(|value| !is_safe_metadata_token(value))
+            .is_some_and(|value| !is_safe_configmgr_version(value))
         {
             return Err(SccmClientIntakeError::InvalidConfigMgrVersion);
         }
@@ -490,7 +490,7 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             .artifact
             .encoding
             .as_deref()
-            .is_some_and(|value| !is_safe_metadata_token(value))
+            .is_some_and(|value| !is_supported_encoding(value))
         {
             return Err(SccmClientIntakeError::InvalidEncoding);
         }
@@ -702,6 +702,27 @@ fn is_safe_metadata_token(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "-._".contains(character))
+}
+
+fn is_safe_configmgr_version(value: &str) -> bool {
+    if matches!(value, "5.00.TEST.0000" | "5.00.UNKNOWN.0000") {
+        return true;
+    }
+
+    let mut components = value.split('.');
+    matches!(components.next(), Some("5"))
+        && matches!(components.next(), Some("00"))
+        && components.next().is_some_and(is_four_ascii_digits)
+        && components.next().is_some_and(is_four_ascii_digits)
+        && components.next().is_none()
+}
+
+fn is_four_ascii_digits(value: &str) -> bool {
+    value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn is_supported_encoding(value: &str) -> bool {
+    matches!(value, "utf-8" | "utf-16le" | "utf-16be" | "windows-1252")
 }
 
 fn is_safe_path_identity(value: &str) -> bool {
