@@ -98,6 +98,9 @@ The preparation manifest is additive and does not reuse generic
 - `captured`, `partial`, `capped`, `absent`, `accessDenied`, `malformed`, or
   `unsupported` effective coverage.
 
+Raw `captureState: parseFailed` maps only to effective `malformed` coverage; it
+never becomes `captured`.
+
 Every non-complete artifact is surfaced by a low-confidence source-local
 observation. It cannot prove success, failure, ownership, delivery, or
 nonexistence.
@@ -145,6 +148,8 @@ The focused Rust target dynamically proves that the validator rejects:
 - unversioned profile aliases and unknown-version promotion;
 - capped coverage relabeled captured;
 - invalid-offset evidence promoted to high confidence;
+- terminal phases moved before receipt, ownership observed after an operational
+  transaction, and distinct phases assigned the same ambiguous timestamp;
 - a coherent attempt to mark Software Center candidates admitted and parser
   eligible;
 - a server-causal claim in client-only source-local output; and
@@ -170,6 +175,12 @@ was added. That second red run reported 7 passed / 2 failed and exposed six
 accepted fabrications: server role alias, source alias, raw path, fingerprint
 collision, coherent unsupported-source promotion, and server-causal text.
 The validator was then hardened at those exact boundaries.
+
+CodeRabbit review exposed a third red boundary: reversed terminal phases, late
+ownership evidence, and equal timestamps for distinct phases were all
+accepted. The evidence envelope now retains parsed UTC milliseconds, phase
+progression must be strictly chronological, and cited SCCM ownership must
+strictly precede the first operational event.
 
 ## Replay and acceptance limits
 

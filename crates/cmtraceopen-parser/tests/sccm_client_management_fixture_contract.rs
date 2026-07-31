@@ -43,6 +43,7 @@ struct CorpusInventory {
 #[derive(Debug)]
 struct EvidenceRecord {
     message: String,
+    timestamp: Option<i64>,
     offset: Option<i32>,
     source_version: String,
 }
@@ -411,6 +412,7 @@ fn evidence_records(
             }
             records.push(EvidenceRecord {
                 message: entries[0].message.clone(),
+                timestamp: entries[0].timestamp,
                 offset: entries[0].timezone_offset,
                 source_version: required_string(artifact, "sourceVersion", artifact_id)?.to_owned(),
             });
@@ -443,6 +445,7 @@ fn all_artifact_records(
         }
         records.push(EvidenceRecord {
             message: entries[0].message.clone(),
+            timestamp: entries[0].timestamp,
             offset: entries[0].timezone_offset,
             source_version: required_string(artifact, "sourceVersion", artifact_id)?.to_owned(),
         });
@@ -466,6 +469,79 @@ fn allowed_phases(workflow: &str) -> Result<&'static [&'static str], String> {
         "notification" => Ok(&["Receive", "DeferOrDispatch", "Acknowledge"]),
         other => Err(format!("{other} does not have operational phases")),
     }
+}
+
+fn phase_rank(workflow: &str, message: &str) -> Result<usize, String> {
+    let phases = message
+        .split_ascii_whitespace()
+        .filter_map(|token| token.strip_prefix("Phase="))
+        .collect::<Vec<_>>();
+    if phases.len() != 1 {
+        return Err("cited operational record does not have one exact phase".to_owned());
+    }
+    allowed_phases(workflow)?
+        .iter()
+        .position(|phase| *phase == phases[0])
+        .ok_or_else(|| format!("cited operational record has unknown phase {}", phases[0]))
+}
+
+fn validate_temporal_progression(
+    workflow: &str,
+    transaction_id: &str,
+    asserted_phase: &str,
+    records: &[EvidenceRecord],
+    latest_ownership_timestamp: i64,
+) -> Result<(), String> {
+    let asserted_rank = allowed_phases(workflow)?
+        .iter()
+        .position(|phase| *phase == asserted_phase)
+        .ok_or_else(|| format!("{transaction_id} has unknown asserted phase {asserted_phase}"))?;
+    let mut phase_bounds = BTreeMap::<usize, (i64, i64)>::new();
+    for record in records {
+        let timestamp = record
+            .timestamp
+            .ok_or_else(|| format!("{transaction_id} cites a record without a usable timestamp"))?;
+        let rank = phase_rank(workflow, &record.message)
+            .map_err(|error| format!("{transaction_id}: {error}"))?;
+        phase_bounds
+            .entry(rank)
+            .and_modify(|(minimum, maximum)| {
+                *minimum = (*minimum).min(timestamp);
+                *maximum = (*maximum).max(timestamp);
+            })
+            .or_insert((timestamp, timestamp));
+    }
+
+    if phase_bounds.keys().next() != Some(&0)
+        || phase_bounds.keys().next_back() != Some(&asserted_rank)
+    {
+        return Err(format!(
+            "{transaction_id} cited phases do not run from receive to the asserted phase"
+        ));
+    }
+
+    let earliest_operational = phase_bounds
+        .values()
+        .map(|(minimum, _)| *minimum)
+        .min()
+        .expect("nonempty transaction evidence was checked");
+    if latest_ownership_timestamp >= earliest_operational {
+        return Err(format!(
+            "{transaction_id} ownership is late or temporally ambiguous"
+        ));
+    }
+
+    let mut previous_maximum = None;
+    for (minimum, maximum) in phase_bounds.values() {
+        if previous_maximum.is_some_and(|previous| previous >= *minimum) {
+            return Err(format!(
+                "{transaction_id} cited phase timestamps are reversed or ambiguous"
+            ));
+        }
+        previous_maximum = Some(*maximum);
+    }
+
+    Ok(())
 }
 
 fn validate_contract(
@@ -822,7 +898,8 @@ fn validate_contract(
             return Err("ownership classification is not bound to cited evidence".to_owned());
         }
         if ownership_records.iter().any(|record| {
-            record.offset.is_none_or(|offset| offset.abs() > 1_439)
+            record.timestamp.is_none()
+                || record.offset.is_none_or(|offset| offset.abs() > 1_439)
                 || !record.source_version.starts_with("5.00.TEST.")
         }) {
             return Err(
@@ -906,6 +983,10 @@ fn validate_contract(
     if matches!(workflow, "coManagement" | "softwareCenter" | "mixed") && !transactions.is_empty() {
         return Err(format!("{workflow} cannot ship operational transactions"));
     }
+    let latest_ownership_timestamp = ownership_records
+        .iter()
+        .filter_map(|record| record.timestamp)
+        .max();
     let mut transaction_ids = BTreeSet::new();
     let mut transaction_order = Vec::new();
     for transaction in transactions {
@@ -1024,16 +1105,24 @@ fn validate_contract(
             ));
         }
         let confidence = required_string(transaction, "confidence", transaction_id)?;
-        if confidence == "high"
-            && records.iter().any(|record| {
-                record.offset.is_none_or(|offset| offset.abs() > 1_439)
-                    || !record.source_version.starts_with("5.00.TEST.")
-            })
-        {
+        if records.iter().any(|record| {
+            record.timestamp.is_none()
+                || record.offset.is_none_or(|offset| offset.abs() > 1_439)
+                || !record.source_version.starts_with("5.00.TEST.")
+        }) {
             return Err(format!(
-                "{transaction_id} high confidence lacks usable time/profile provenance"
+                "{transaction_id} lacks usable time/profile provenance"
             ));
         }
+        validate_temporal_progression(
+            workflow,
+            transaction_id,
+            phase,
+            &records,
+            latest_ownership_timestamp.ok_or_else(|| {
+                format!("{transaction_id} lacks timestamped SCCM ownership evidence")
+            })?,
+        )?;
         let classification = required_string(transaction, "classification", transaction_id)?;
         let state = required_string(transaction, "state", transaction_id)?;
         let has_record = |disposition: &str, terminal: bool| {
@@ -1476,6 +1565,27 @@ fn management_corpus_inventory_and_digest_are_pinned() {
 }
 
 #[test]
+fn parse_failed_capture_maps_to_malformed_effective_coverage() {
+    let (_, manifest, expected) = load_contract("software-center-insufficient");
+    let artifact = manifest["artifacts"]
+        .as_array()
+        .expect("artifacts are an array")
+        .iter()
+        .find(|artifact| artifact["artifactId"] == "software-center-insufficient-malformed")
+        .expect("malformed candidate artifact is present");
+    assert_eq!(artifact["captureState"], "parseFailed");
+    assert_eq!(effective_state(artifact), Ok("malformed"));
+
+    let coverage = expected["coverage"]
+        .as_array()
+        .expect("coverage is an array")
+        .iter()
+        .find(|row| row["artifactId"] == "software-center-insufficient-malformed")
+        .expect("malformed candidate has explicit coverage");
+    assert_eq!(coverage["state"], "malformed");
+}
+
+#[test]
 fn every_management_scenario_satisfies_the_preparation_contract() {
     for scenario in SCENARIOS {
         let (scenario_root, manifest, expected) = load_contract(scenario);
@@ -1723,6 +1833,78 @@ fn adversarial_key_profile_coverage_and_invalid_offset_mutations_fail_closed() {
     assert!(
         accepted.is_empty(),
         "identity/profile/coverage mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn adversarial_reversed_phase_late_ownership_and_equal_time_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let reversed_phase =
+        copy_scenario_to_temporary_root("script-success", "reversed-terminal-phase");
+    let reversed_phase_path = reversed_phase
+        .root
+        .join("evidence/client-scripts/current/Scripts.log");
+    let original =
+        std::fs::read_to_string(&reversed_phase_path).expect("temporary evidence is readable");
+    std::fs::write(
+        &reversed_phase_path,
+        original.replace("11:00:03.000+000", "10:59:59.000+000"),
+    )
+    .expect("terminal phase timestamp is moved before receive");
+    let manifest = load_json(&reversed_phase.root.join("manifest.json"));
+    let expected = load_json(&reversed_phase.root.join("expected.json"));
+    if mutation_was_accepted("script-success", &reversed_phase.root, &manifest, &expected) {
+        accepted.push("terminal script phase predates receive");
+    }
+
+    let late_ownership = copy_scenario_to_temporary_root("notification-received", "late-ownership");
+    let late_ownership_path = late_ownership
+        .root
+        .join("evidence/client-co-management/current/CoManagementHandler.log");
+    let original =
+        std::fs::read_to_string(&late_ownership_path).expect("temporary evidence is readable");
+    std::fs::write(
+        &late_ownership_path,
+        original.replace("12:00:00.000+000", "12:00:03.000+000"),
+    )
+    .expect("ownership timestamp is moved after operational evidence");
+    let manifest = load_json(&late_ownership.root.join("manifest.json"));
+    let expected = load_json(&late_ownership.root.join("expected.json"));
+    if mutation_was_accepted(
+        "notification-received",
+        &late_ownership.root,
+        &manifest,
+        &expected,
+    ) {
+        accepted.push("ownership evidence postdates the transaction");
+    }
+
+    let equal_time = copy_scenario_to_temporary_root("notification-deferred", "equal-phase-time");
+    let equal_time_path = equal_time
+        .root
+        .join("evidence/client-notification/current/CcmNotificationAgent.log");
+    let original =
+        std::fs::read_to_string(&equal_time_path).expect("temporary evidence is readable");
+    std::fs::write(
+        &equal_time_path,
+        original.replace("12:01:02.000+000", "12:01:01.000+000"),
+    )
+    .expect("distinct phases are assigned the same timestamp");
+    let manifest = load_json(&equal_time.root.join("manifest.json"));
+    let expected = load_json(&equal_time.root.join("expected.json"));
+    if mutation_was_accepted(
+        "notification-deferred",
+        &equal_time.root,
+        &manifest,
+        &expected,
+    ) {
+        accepted.push("distinct notification phases share an ambiguous timestamp");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "temporal provenance mutations were accepted: {accepted:?}"
     );
 }
 
