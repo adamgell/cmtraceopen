@@ -3706,19 +3706,26 @@ fn review_blocker_public_identities_are_nonempty_control_free_and_scoped() {
     let mut failures = Vec::new();
 
     for (label, replacement) in [
-        ("blank artifactId", ""),
-        ("control-bearing artifactId", "metering-success\nforeign"),
+        ("blank artifactId", String::new()),
+        (
+            "control-bearing artifactId",
+            "metering-success\nforeign".to_owned(),
+        ),
         (
             "foreign-family artifactId",
-            "inventory-success-report-current",
+            "inventory-success-report-current".to_owned(),
+        ),
+        (
+            "overlong artifactId",
+            format!("metering-success-{}", "a".repeat(112)),
         ),
     ] {
         let (scenario_root, mut manifest, mut expected) = load_contract("metering", "success");
-        manifest["artifacts"][0]["artifactId"] = json!(replacement);
+        manifest["artifacts"][0]["artifactId"] = json!(&replacement);
         manifest["artifacts"][0]["pathFingerprint"] =
             json!(format!("synthetic-{replacement}-root-a"));
-        expected["coverage"][0]["artifactId"] = json!(replacement);
-        expected["transactions"][0]["evidence"][0]["artifactId"] = json!(replacement);
+        expected["coverage"][0]["artifactId"] = json!(&replacement);
+        expected["transactions"][0]["evidence"][0]["artifactId"] = json!(&replacement);
         collect_contract_rejection(
             &mut failures,
             label,
@@ -3728,12 +3735,22 @@ fn review_blocker_public_identities_are_nonempty_control_free_and_scoped() {
     }
 
     for (label, replacement) in [
-        ("blank transactionId", ""),
-        ("control-bearing transactionId", "metering-success\nforeign"),
-        ("foreign-family transactionId", "inventory-success"),
+        ("blank transactionId", String::new()),
+        (
+            "control-bearing transactionId",
+            "metering-success\nforeign".to_owned(),
+        ),
+        (
+            "foreign-family transactionId",
+            "inventory-success".to_owned(),
+        ),
+        (
+            "overlong transactionId",
+            format!("metering-{}", "a".repeat(120)),
+        ),
     ] {
         let (scenario_root, manifest, mut expected) = load_contract("metering", "success");
-        expected["transactions"][0]["transactionId"] = json!(replacement);
+        expected["transactions"][0]["transactionId"] = json!(&replacement);
         collect_contract_rejection(
             &mut failures,
             label,
@@ -3743,15 +3760,22 @@ fn review_blocker_public_identities_are_nonempty_control_free_and_scoped() {
     }
 
     for (label, replacement) in [
-        ("blank observationId", ""),
+        ("blank observationId", String::new()),
         (
             "control-bearing observationId",
-            "metering-coverage-only\nforeign",
+            "metering-coverage-only\nforeign".to_owned(),
         ),
-        ("foreign-family observationId", "inventory-coverage-only"),
+        (
+            "foreign-family observationId",
+            "inventory-coverage-only".to_owned(),
+        ),
+        (
+            "overlong observationId",
+            format!("metering-{}", "a".repeat(120)),
+        ),
     ] {
         let (scenario_root, manifest, mut expected) = load_contract("metering", "coverage-states");
-        expected["sourceLocalObservations"][0]["observationId"] = json!(replacement);
+        expected["sourceLocalObservations"][0]["observationId"] = json!(&replacement);
         collect_contract_rejection(
             &mut failures,
             label,
