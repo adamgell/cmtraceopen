@@ -808,6 +808,13 @@ fn build_counterpart_fact(
     let fact = facts
         .iter()
         .filter(|fact| fact.policy_id.is_some())
+        .filter(|fact| fact.phase <= transaction.phase)
+        .filter(|fact| {
+            transaction.state != SccmManagementPointState::Failed
+                || (fact.phase == transaction.phase
+                    && fact.outcome == FactOutcome::Failed
+                    && fact.terminal)
+        })
         .filter(|fact| {
             matches!(
                 fact.timestamp.ordering_state,
