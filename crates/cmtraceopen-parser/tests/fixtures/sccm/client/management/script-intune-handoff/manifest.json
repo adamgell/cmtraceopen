@@ -21,7 +21,7 @@
       "parserEligible": true,
       "captureState": "captured",
       "relativePath": "evidence/client-scripts/current/Scripts.log",
-      "sanitizedSourcePath": "SYNTHETIC://client/management/script-intune-handoff/Scripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/script-intune-handoff/client-scripts/Scripts.log",
       "pathFingerprint": "safe:path:326:script-intune-error",
       "sourceVersion": "5.00.TEST.3260",
       "encoding": "utf-8",
@@ -32,7 +32,8 @@
       "collectionLimit": {
         "capped": false,
         "limitBytes": null
-      }
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
     },
     {
       "artifactId": "script-intune-owner",
@@ -43,7 +44,7 @@
       "parserEligible": true,
       "captureState": "captured",
       "relativePath": "evidence/client-co-management/current/CoManagementHandler.log",
-      "sanitizedSourcePath": "SYNTHETIC://client/management/script-intune-handoff/CoManagementHandler.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/script-intune-handoff/client-co-management/CoManagementHandler.log",
       "pathFingerprint": "safe:path:326:script-intune-owner",
       "sourceVersion": "5.00.TEST.3260",
       "encoding": "utf-8",
@@ -54,7 +55,8 @@
       "collectionLimit": {
         "capped": false,
         "limitBytes": null
-      }
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
     }
   ]
 }

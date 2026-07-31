@@ -21,7 +21,7 @@
       "parserEligible": true,
       "captureState": "accessDenied",
       "relativePath": null,
-      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/access/CcmNotificationAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-notification/access/CcmNotificationAgent.log",
       "pathFingerprint": "safe:path:326:mixed-notification-access",
       "sourceVersion": null,
       "encoding": null,
@@ -32,7 +32,8 @@
       "collectionLimit": {
         "capped": false,
         "limitBytes": null
-      }
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
     },
     {
       "artifactId": "mixed-notification-invalid",
@@ -43,7 +44,7 @@
       "parserEligible": true,
       "captureState": "captured",
       "relativePath": "evidence/client-notification/current/CcmNotificationAgent.log",
-      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/current/CcmNotificationAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-notification/current/CcmNotificationAgent.log",
       "pathFingerprint": "safe:path:326:mixed-notification-invalid",
       "sourceVersion": "5.00.TEST.3260",
       "encoding": "utf-8",
@@ -54,7 +55,8 @@
       "collectionLimit": {
         "capped": false,
         "limitBytes": null
-      }
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
     },
     {
       "artifactId": "mixed-owner-unknown",
@@ -65,7 +67,7 @@
       "parserEligible": true,
       "captureState": "captured",
       "relativePath": "evidence/client-co-management/current/CoManagementHandler.log",
-      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/CoManagementHandler.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-co-management/CoManagementHandler.log",
       "pathFingerprint": "safe:path:326:mixed-owner-unknown",
       "sourceVersion": "5.99.UNKNOWN.3260",
       "encoding": "utf-8",
@@ -76,7 +78,8 @@
       "collectionLimit": {
         "capped": false,
         "limitBytes": null
-      }
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
     },
     {
       "artifactId": "mixed-script-root-a",
@@ -87,7 +90,7 @@
       "parserEligible": true,
       "captureState": "captured",
       "relativePath": "evidence/client-scripts/root-a/current/Scripts.log",
-      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/root-a/Scripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-scripts/root-a/Scripts.log",
       "pathFingerprint": "safe:path:326:mixed-script-root-a",
       "sourceVersion": "5.00.TEST.3260",
       "encoding": "utf-8",
@@ -98,7 +101,8 @@
       "collectionLimit": {
         "capped": false,
         "limitBytes": null
-      }
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
     },
     {
       "artifactId": "mixed-script-root-b",
@@ -109,7 +113,7 @@
       "parserEligible": true,
       "captureState": "captured",
       "relativePath": "evidence/client-scripts/root-b/current/Scripts.log",
-      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/root-b/Scripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-scripts/root-b/Scripts.log",
       "pathFingerprint": "safe:path:326:mixed-script-root-b",
       "sourceVersion": "5.00.TEST.3260",
       "encoding": "utf-8",
@@ -120,7 +124,8 @@
       "collectionLimit": {
         "capped": false,
         "limitBytes": null
-      }
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
     }
   ]
 }

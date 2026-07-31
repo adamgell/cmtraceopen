@@ -1,4 +1,8 @@
-use cmtraceopen_parser::models::log_entry::LogFormat;
+use chrono::{DateTime, SecondsFormat, Utc};
+use cmtraceopen_parser::sccm::{
+    normalize_ccm_artifact, SccmArtifact, SccmCoverageState, SccmRole, SccmRotation,
+    SccmTimeOrderingState,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -42,9 +46,9 @@ struct CorpusInventory {
 
 #[derive(Debug)]
 struct EvidenceRecord {
-    message: String,
+    fields: BTreeMap<String, String>,
     timestamp: Option<i64>,
-    offset: Option<i32>,
+    ordering_state: SccmTimeOrderingState,
     source_version: String,
 }
 
@@ -156,6 +160,37 @@ fn required_string<'a>(value: &'a Value, field: &str, context: &str) -> Result<&
         .ok_or_else(|| format!("{context} {field} is not a string"))
 }
 
+fn require_exact_object_fields(
+    value: &Value,
+    expected_fields: &[&str],
+    context: &str,
+) -> Result<(), String> {
+    let actual_fields = value
+        .as_object()
+        .ok_or_else(|| format!("{context} is not an object"))?
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected_fields = expected_fields.iter().copied().collect::<BTreeSet<_>>();
+    if actual_fields != expected_fields {
+        return Err(format!(
+            "{context} fields are not closed: {actual_fields:?} != {expected_fields:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn captured_utc_millis(artifact: &Value, context: &str) -> Result<i64, String> {
+    let raw = required_string(artifact, "capturedUtc", context)?;
+    let parsed = DateTime::parse_from_rfc3339(raw)
+        .map_err(|error| format!("{context} capturedUtc is invalid: {error}"))?
+        .with_timezone(&Utc);
+    if parsed.to_rfc3339_opts(SecondsFormat::Secs, true) != raw {
+        return Err(format!("{context} capturedUtc is not canonical UTC"));
+    }
+    Ok(parsed.timestamp_millis())
+}
+
 fn expected_profile(workflow: &str) -> Result<&'static str, String> {
     match workflow {
         "coManagement" => Ok("sccm-client-co-management-5.00.test-v1"),
@@ -182,6 +217,26 @@ fn workflow_logical_artifacts(workflow: &str) -> Result<&'static [&'static str],
     }
 }
 
+fn expected_workload(workflow: &str) -> Result<&'static str, String> {
+    match workflow {
+        "coManagement" | "scripts" | "mixed" => Ok("Scripts"),
+        "notification" => Ok("ClientNotification"),
+        "softwareCenter" => Ok("SoftwareCenter"),
+        other => Err(format!("unsupported workflow {other}")),
+    }
+}
+
+fn expected_transaction_count(scenario: &str) -> usize {
+    match scenario {
+        "notification-deferred"
+        | "notification-failure"
+        | "notification-received"
+        | "script-failure"
+        | "script-success" => 1,
+        _ => 0,
+    }
+}
+
 fn source_contract(
     logical_artifact: &str,
     source_name: &str,
@@ -204,6 +259,7 @@ fn source_contract(
 
 fn validate_relative_path(
     relative_path: &str,
+    logical_artifact: &str,
     source_name: &str,
     rotation_kind: &str,
 ) -> Result<(), String> {
@@ -220,6 +276,7 @@ fn validate_relative_path(
         .map(|component| component.as_os_str().to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     if components.first().map(String::as_str) != Some("evidence")
+        || components.get(1).map(String::as_str) != Some(logical_artifact)
         || components.last().map(String::as_str) != Some(source_name)
         || !components
             .iter()
@@ -234,10 +291,11 @@ fn validate_relative_path(
 
 fn validate_source_path(
     scenario: &str,
+    logical_artifact: &str,
     source_name: &str,
     sanitized_source_path: &str,
 ) -> Result<(), String> {
-    let required_prefix = format!("SYNTHETIC://client/management/{scenario}/");
+    let required_prefix = format!("SYNTHETIC://client/management/{scenario}/{logical_artifact}/");
     let suffix = sanitized_source_path
         .strip_prefix(&required_prefix)
         .unwrap_or_default();
@@ -373,6 +431,11 @@ fn evidence_records(
         .ok_or_else(|| "evidence refs are not an array".to_owned())?;
     let mut records = Vec::new();
     for evidence_ref in refs {
+        require_exact_object_fields(
+            evidence_ref,
+            &["artifactId", "endLine", "startLine"],
+            "evidence ref",
+        )?;
         let artifact_id = required_string(evidence_ref, "artifactId", "evidence ref")?;
         let artifact = artifacts
             .get(artifact_id)
@@ -403,19 +466,7 @@ fn evidence_records(
             ));
         }
         for line in &lines[start - 1..end] {
-            let (entries, _) =
-                cmtraceopen_parser::parser::ccm::parse_content(line, artifact_id, None);
-            if entries.len() != 1 || entries[0].format != LogFormat::Ccm {
-                return Err(format!(
-                    "{artifact_id} cited line is not one complete CCM logical record"
-                ));
-            }
-            records.push(EvidenceRecord {
-                message: entries[0].message.clone(),
-                timestamp: entries[0].timestamp,
-                offset: entries[0].timezone_offset,
-                source_version: required_string(artifact, "sourceVersion", artifact_id)?.to_owned(),
-            });
+            records.push(normalized_record(artifact, line)?);
         }
     }
     Ok(records)
@@ -437,20 +488,180 @@ fn all_artifact_records(
         .map_err(|error| format!("{artifact_id} evidence is readable: {error}"))?;
     let mut records = Vec::new();
     for line in contents.lines() {
-        let (entries, _) = cmtraceopen_parser::parser::ccm::parse_content(line, artifact_id, None);
-        if entries.len() != 1 || entries[0].format != LogFormat::Ccm {
-            return Err(format!(
-                "{artifact_id} complete physical artifact has a malformed CCM record"
-            ));
-        }
-        records.push(EvidenceRecord {
-            message: entries[0].message.clone(),
-            timestamp: entries[0].timestamp,
-            offset: entries[0].timezone_offset,
-            source_version: required_string(artifact, "sourceVersion", artifact_id)?.to_owned(),
-        });
+        records.push(normalized_record(artifact, line)?);
     }
     Ok(records)
+}
+
+fn normalized_record(artifact: &Value, line: &str) -> Result<EvidenceRecord, String> {
+    let artifact_id = required_string(artifact, "artifactId", "artifact")?;
+    if !line.starts_with("<![LOG[")
+        || line.matches("<![LOG[").count() != 1
+        || line.matches("]LOG]!>").count() != 1
+        || !line.contains("]LOG]!><time=\"")
+    {
+        return Err(format!(
+            "{artifact_id} line is not one unnested complete CCM record"
+        ));
+    }
+
+    let source_name = required_string(artifact, "sourceName", artifact_id)?;
+    let source_version = required_string(artifact, "sourceVersion", artifact_id)?;
+    let model = SccmArtifact {
+        artifact_id: artifact_id.to_owned(),
+        display_name: source_name.to_owned(),
+        original_path: None,
+        host: None,
+        role: SccmRole::Client,
+        configmgr_version: Some(source_version.to_owned()),
+        collected_at_utc: Some(required_string(artifact, "capturedUtc", artifact_id)?.to_owned()),
+        rotation: match required_string(&artifact["rotation"], "kind", artifact_id)? {
+            "current" => SccmRotation::Current,
+            "lo" => SccmRotation::LoUnderscore,
+            other => return Err(format!("{artifact_id} has unsupported rotation {other}")),
+        },
+        coverage: match required_string(artifact, "captureState", artifact_id)? {
+            "captured" => SccmCoverageState::Captured,
+            "absent" => SccmCoverageState::Absent,
+            "accessDenied" => SccmCoverageState::AccessDenied,
+            "capped" => SccmCoverageState::Capped,
+            "parseFailed" => SccmCoverageState::ParseFailed,
+            "unsupported" => SccmCoverageState::Unsupported,
+            other => return Err(format!("{artifact_id} has unsupported coverage {other}")),
+        },
+        encoding: artifact["encoding"].as_str().map(str::to_owned),
+    };
+    let evidence = normalize_ccm_artifact(model, line);
+    if evidence.len() != 1
+        || evidence[0].reference.line_start != Some(1)
+        || evidence[0].reference.line_end != Some(1)
+    {
+        return Err(format!(
+            "{artifact_id} line does not normalize to one logical CCM record"
+        ));
+    }
+    let evidence = &evidence[0];
+    let message = evidence
+        .message
+        .strip_prefix("[sccm-public-message-v1] ")
+        .ok_or_else(|| format!("{artifact_id} lacks the versioned public message projection"))?
+        .to_owned();
+    let fields = record_fields(&message, artifact_id)?;
+    validate_record_field_contract(
+        required_string(artifact, "logicalArtifactId", artifact_id)?,
+        &fields,
+        artifact_id,
+    )?;
+    let captured = captured_utc_millis(artifact, artifact_id)?;
+    if evidence
+        .timestamp
+        .utc_millis
+        .is_some_and(|timestamp| timestamp > captured)
+    {
+        return Err(format!("{artifact_id} record postdates capturedUtc"));
+    }
+
+    Ok(EvidenceRecord {
+        fields,
+        timestamp: evidence.timestamp.utc_millis,
+        ordering_state: evidence.timestamp.ordering_state.clone(),
+        source_version: source_version.to_owned(),
+    })
+}
+
+fn record_fields(message: &str, context: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut fields = BTreeMap::new();
+    for token in message.split_ascii_whitespace() {
+        let Some((field, value)) = token.split_once('=') else {
+            continue;
+        };
+        if field.is_empty()
+            || value.is_empty()
+            || !field
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(format!(
+                "{context} contains malformed structured token {token}"
+            ));
+        }
+        if fields.insert(field.to_owned(), value.to_owned()).is_some() {
+            return Err(format!(
+                "{context} contains duplicate structured field {field}"
+            ));
+        }
+    }
+    Ok(fields)
+}
+
+fn validate_record_field_contract(
+    logical_artifact: &str,
+    fields: &BTreeMap<String, String>,
+    context: &str,
+) -> Result<(), String> {
+    let actual = fields.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let exact = |required: &[&str], optional: &[&str]| {
+        let required = required.iter().copied().collect::<BTreeSet<_>>();
+        let mut allowed = required.clone();
+        allowed.extend(optional.iter().copied());
+        actual.is_superset(&required) && actual.is_subset(&allowed)
+    };
+
+    let valid = match logical_artifact {
+        "client-co-management" => exact(
+            &[
+                "Disposition",
+                "Ownership",
+                "OwnershipEpochId",
+                "Terminal",
+                "Workload",
+            ],
+            &[],
+        ),
+        "client-notification" => exact(
+            &[
+                "ChannelId",
+                "Disposition",
+                "NotificationId",
+                "Phase",
+                "ResourceHandle",
+                "Terminal",
+            ],
+            &["Signal"],
+        ),
+        "client-scripts" if fields.contains_key("ScriptId") => exact(
+            &[
+                "CommandContextHandle",
+                "Disposition",
+                "ExecutionId",
+                "Phase",
+                "ResourceHandle",
+                "ScriptId",
+                "Terminal",
+            ],
+            &["Signal"],
+        ),
+        "client-scripts" => {
+            let allowed = BTreeSet::from([
+                "Disposition",
+                "SameMinute",
+                "Signal",
+                "Terminal",
+                "UnkeyedCandidate",
+                "UnrelatedServiceError",
+            ]);
+            !actual.is_empty()
+                && actual.is_subset(&allowed)
+                && (actual.contains("UnkeyedCandidate") || actual.contains("UnrelatedServiceError"))
+        }
+        other => return Err(format!("{context} has unsupported record family {other}")),
+    };
+    if !valid {
+        return Err(format!(
+            "{context} structured fields are outside the closed {logical_artifact} contract: {actual:?}"
+        ));
+    }
+    Ok(())
 }
 
 fn key_fields(workflow: &str) -> Result<&'static [&'static str], String> {
@@ -471,18 +682,15 @@ fn allowed_phases(workflow: &str) -> Result<&'static [&'static str], String> {
     }
 }
 
-fn phase_rank(workflow: &str, message: &str) -> Result<usize, String> {
-    let phases = message
-        .split_ascii_whitespace()
-        .filter_map(|token| token.strip_prefix("Phase="))
-        .collect::<Vec<_>>();
-    if phases.len() != 1 {
-        return Err("cited operational record does not have one exact phase".to_owned());
-    }
+fn phase_rank(workflow: &str, record: &EvidenceRecord) -> Result<usize, String> {
+    let phase = record
+        .fields
+        .get("Phase")
+        .ok_or_else(|| "cited operational record does not have one exact phase".to_owned())?;
     allowed_phases(workflow)?
         .iter()
-        .position(|phase| *phase == phases[0])
-        .ok_or_else(|| format!("cited operational record has unknown phase {}", phases[0]))
+        .position(|candidate| *candidate == phase)
+        .ok_or_else(|| format!("cited operational record has unknown phase {phase}"))
 }
 
 fn validate_temporal_progression(
@@ -501,8 +709,8 @@ fn validate_temporal_progression(
         let timestamp = record
             .timestamp
             .ok_or_else(|| format!("{transaction_id} cites a record without a usable timestamp"))?;
-        let rank = phase_rank(workflow, &record.message)
-            .map_err(|error| format!("{transaction_id}: {error}"))?;
+        let rank =
+            phase_rank(workflow, record).map_err(|error| format!("{transaction_id}: {error}"))?;
         phase_bounds
             .entry(rank)
             .and_modify(|(minimum, maximum)| {
@@ -512,11 +720,13 @@ fn validate_temporal_progression(
             .or_insert((timestamp, timestamp));
     }
 
-    if phase_bounds.keys().next() != Some(&0)
-        || phase_bounds.keys().next_back() != Some(&asserted_rank)
-    {
+    let required_ranks = match (workflow, asserted_phase) {
+        ("notification", "Acknowledge") => vec![0, 2],
+        _ => (0..=asserted_rank).collect::<Vec<_>>(),
+    };
+    if phase_bounds.keys().copied().ne(required_ranks) {
         return Err(format!(
-            "{transaction_id} cited phases do not run from receive to the asserted phase"
+            "{transaction_id} cited phases do not contain the required workflow progression"
         ));
     }
 
@@ -550,6 +760,41 @@ fn validate_contract(
     manifest: &Value,
     expected: &Value,
 ) -> Result<(), String> {
+    require_exact_object_fields(
+        manifest,
+        &[
+            "artifacts",
+            "bundle",
+            "contractState",
+            "proposalOnly",
+            "sccmManifestVersion",
+            "scenario",
+            "syntheticFixture",
+            "workflowFamily",
+        ],
+        "manifest",
+    )?;
+    require_exact_object_fields(
+        &manifest["bundle"],
+        &["bundleId", "captureHost", "role", "siteCode"],
+        "manifest bundle",
+    )?;
+    require_exact_object_fields(
+        expected,
+        &[
+            "contractState",
+            "coverage",
+            "extractionProfile",
+            "findings",
+            "ownership",
+            "prohibitedClaims",
+            "scenario",
+            "sourceLocalObservations",
+            "transactions",
+            "workflow",
+        ],
+        "expected contract",
+    )?;
     if manifest["sccmManifestVersion"] != 1
         || manifest["contractState"] != "proposedPending318And319"
         || manifest["proposalOnly"] != true
@@ -590,6 +835,38 @@ fn validate_contract(
 
     for artifact in artifacts {
         let artifact_id = required_string(artifact, "artifactId", "artifact")?;
+        require_exact_object_fields(
+            artifact,
+            &[
+                "artifactId",
+                "capturedUtc",
+                "captureState",
+                "catalogState",
+                "collectionLimit",
+                "encoding",
+                "logicalArtifactId",
+                "parserEligible",
+                "pathFingerprint",
+                "relativePath",
+                "role",
+                "rotation",
+                "sanitizedSourcePath",
+                "sourceName",
+                "sourceVersion",
+            ],
+            artifact_id,
+        )?;
+        require_exact_object_fields(
+            &artifact["rotation"],
+            &["fragmentComplete", "kind"],
+            &format!("{artifact_id} rotation"),
+        )?;
+        require_exact_object_fields(
+            &artifact["collectionLimit"],
+            &["capped", "limitBytes"],
+            &format!("{artifact_id} collectionLimit"),
+        )?;
+        captured_utc_millis(artifact, artifact_id)?;
         artifact_order.push(artifact_id.to_owned());
         if artifacts_by_id
             .insert(artifact_id.to_owned(), artifact)
@@ -648,13 +925,18 @@ fn validate_contract(
             ));
         }
         if let Some(relative_path) = relative_path {
-            validate_relative_path(relative_path, source_name, rotation_kind)?;
+            validate_relative_path(relative_path, logical_artifact, source_name, rotation_kind)?;
             if !relative_paths.insert(relative_path.to_owned()) {
                 return Err(format!("duplicate physical evidence path {relative_path}"));
             }
             let sanitized_source_path =
                 required_string(artifact, "sanitizedSourcePath", artifact_id)?;
-            validate_source_path(scenario, source_name, sanitized_source_path)?;
+            validate_source_path(
+                scenario,
+                logical_artifact,
+                source_name,
+                sanitized_source_path,
+            )?;
             let path_fingerprint = required_string(artifact, "pathFingerprint", artifact_id)?;
             if !path_fingerprint.starts_with("safe:path:326:")
                 || !path_fingerprints.insert(path_fingerprint.to_owned())
@@ -698,7 +980,7 @@ fn validate_contract(
                 "accessDenied" | "unsupported" => {
                     let source_path =
                         required_string(artifact, "sanitizedSourcePath", artifact_id)?;
-                    validate_source_path(scenario, source_name, source_path)?;
+                    validate_source_path(scenario, logical_artifact, source_name, source_path)?;
                     let path_fingerprint =
                         required_string(artifact, "pathFingerprint", artifact_id)?;
                     if !path_fingerprint.starts_with("safe:path:326:")
@@ -724,7 +1006,7 @@ fn validate_contract(
         if !records.is_empty()
             && records
                 .iter()
-                .any(|record| record.offset.is_some_and(|offset| offset.abs() > 1_439))
+                .any(|record| record.ordering_state == SccmTimeOrderingState::OffsetInvalid)
         {
             invalid_offset_artifacts.insert(artifact_id.to_owned());
         }
@@ -779,6 +1061,11 @@ fn validate_contract(
     let mut coverage_order = Vec::new();
     for row in coverage {
         let artifact_id = required_string(row, "artifactId", "coverage row")?;
+        require_exact_object_fields(
+            row,
+            &["artifactId", "logicalArtifactId", "state"],
+            artifact_id,
+        )?;
         coverage_order.push(artifact_id.to_owned());
         if declared_coverage
             .insert(
@@ -811,6 +1098,11 @@ fn validate_contract(
         _ => "selected",
     };
     let profile = &expected["extractionProfile"];
+    require_exact_object_fields(
+        profile,
+        &["id", "selectionState", "versionPrefix"],
+        "extractionProfile",
+    )?;
     if profile["id"] != expected_profile(workflow)?
         || profile["versionPrefix"] != "5.00.TEST."
         || profile["selectionState"] != required_profile_selection
@@ -836,8 +1128,25 @@ fn validate_contract(
     }
 
     let ownership = &expected["ownership"];
+    require_exact_object_fields(
+        ownership,
+        &[
+            "classification",
+            "confidence",
+            "coverageGapArtifactIds",
+            "evidence",
+            "terminalHandoff",
+            "workload",
+        ],
+        "ownership",
+    )?;
     let ownership_class = required_string(ownership, "classification", "ownership")?;
     let ownership_confidence = required_string(ownership, "confidence", "ownership")?;
+    if ownership["workload"] != expected_workload(workflow)? {
+        return Err(format!(
+            "ownership workload does not match the exact {workflow} workflow"
+        ));
+    }
     if !matches!(
         ownership_class,
         "SccmOwned" | "IntuneOwned" | "SharedOrTransitioning" | "UnknownOwnership"
@@ -889,17 +1198,15 @@ fn validate_contract(
         let workload = required_string(ownership, "workload", "ownership")?;
         if ownership_records.is_empty()
             || ownership_records.iter().any(|record| {
-                !record.message.contains(&format!("Workload={workload}"))
-                    || !record
-                        .message
-                        .contains(&format!("Ownership={ownership_class}"))
+                record.fields.get("Workload").map(String::as_str) != Some(workload)
+                    || record.fields.get("Ownership").map(String::as_str) != Some(ownership_class)
             })
         {
             return Err("ownership classification is not bound to cited evidence".to_owned());
         }
         if ownership_records.iter().any(|record| {
-            record.timestamp.is_none()
-                || record.offset.is_none_or(|offset| offset.abs() > 1_439)
+            record.ordering_state != SccmTimeOrderingState::NormalizedUtc
+                || record.timestamp.is_none()
                 || !record.source_version.starts_with("5.00.TEST.")
         }) {
             return Err(
@@ -909,24 +1216,24 @@ fn validate_contract(
         match ownership_class {
             "SccmOwned"
                 if ownership_records.iter().any(|record| {
-                    !record.message.contains("Disposition=Owned")
-                        || !record.message.contains("Terminal=true")
+                    record.fields.get("Disposition").map(String::as_str) != Some("Owned")
+                        || record.fields.get("Terminal").map(String::as_str) != Some("true")
                 }) =>
             {
                 return Err("SCCM ownership lacks terminal owned evidence".to_owned());
             }
             "IntuneOwned"
                 if ownership_records.iter().any(|record| {
-                    !record.message.contains("Disposition=Handoff")
-                        || !record.message.contains("Terminal=true")
+                    record.fields.get("Disposition").map(String::as_str) != Some("Handoff")
+                        || record.fields.get("Terminal").map(String::as_str) != Some("true")
                 }) =>
             {
                 return Err("Intune ownership lacks terminal handoff evidence".to_owned());
             }
             "SharedOrTransitioning"
                 if ownership_records.iter().any(|record| {
-                    !record.message.contains("Disposition=Transitioning")
-                        || !record.message.contains("Terminal=false")
+                    record.fields.get("Disposition").map(String::as_str) != Some("Transitioning")
+                        || record.fields.get("Terminal").map(String::as_str) != Some("false")
                 }) =>
             {
                 return Err("transitioning ownership lacks nonterminal evidence".to_owned());
@@ -942,10 +1249,10 @@ fn validate_contract(
         }
     } else if !ownership_records
         .iter()
-        .any(|record| record.message.contains("Ownership=SccmOwned"))
+        .any(|record| record.fields.get("Ownership").map(String::as_str) == Some("SccmOwned"))
         || !ownership_records
             .iter()
-            .any(|record| record.message.contains("Ownership=IntuneOwned"))
+            .any(|record| record.fields.get("Ownership").map(String::as_str) == Some("IntuneOwned"))
     {
         return Err("cited unknown ownership is not an explicit contradiction".to_owned());
     }
@@ -977,6 +1284,11 @@ fn validate_contract(
     let transactions = expected["transactions"]
         .as_array()
         .ok_or_else(|| "transactions are not an array".to_owned())?;
+    if transactions.len() != expected_transaction_count(scenario) {
+        return Err(format!(
+            "{scenario} transaction cardinality is not the exact scenario contract"
+        ));
+    }
     if ownership_class != "SccmOwned" && !transactions.is_empty() {
         return Err("operational transactions require evidenced SCCM ownership".to_owned());
     }
@@ -988,9 +1300,27 @@ fn validate_contract(
         .filter_map(|record| record.timestamp)
         .max();
     let mut transaction_ids = BTreeSet::new();
+    let mut transaction_keys = BTreeSet::new();
     let mut transaction_order = Vec::new();
     for transaction in transactions {
         let transaction_id = required_string(transaction, "transactionId", "transaction")?;
+        require_exact_object_fields(
+            transaction,
+            &[
+                "classification",
+                "confidence",
+                "coverageGapArtifactIds",
+                "evidence",
+                "key",
+                "lastSuccessfulPhase",
+                "nextArtifact",
+                "phase",
+                "state",
+                "transactionId",
+                "workflow",
+            ],
+            transaction_id,
+        )?;
         transaction_order.push(transaction_id.to_owned());
         if !transaction_ids.insert(transaction_id.to_owned()) {
             return Err(format!("duplicate transactionId {transaction_id}"));
@@ -1046,6 +1376,15 @@ fn validate_contract(
                 ));
             }
         }
+        let transaction_key = fields
+            .iter()
+            .map(|field| required_string(key, field, transaction_id).map(str::to_owned))
+            .collect::<Result<Vec<_>, _>>()?;
+        if !transaction_keys.insert(transaction_key) {
+            return Err(format!(
+                "{transaction_id} duplicates an exact normalized transaction key"
+            ));
+        }
         let transaction_evidence = transaction["evidence"]
             .as_array()
             .ok_or_else(|| format!("{transaction_id} evidence is not an array"))?;
@@ -1085,7 +1424,7 @@ fn validate_contract(
         for record in &records {
             for field in fields {
                 let value = required_string(key, field, transaction_id)?;
-                if !record.message.contains(&format!("{field}={value}")) {
+                if record.fields.get(*field).map(String::as_str) != Some(value) {
                     return Err(format!(
                         "{transaction_id} key {field} is not co-located in every cited record"
                     ));
@@ -1106,8 +1445,8 @@ fn validate_contract(
         }
         let confidence = required_string(transaction, "confidence", transaction_id)?;
         if records.iter().any(|record| {
-            record.timestamp.is_none()
-                || record.offset.is_none_or(|offset| offset.abs() > 1_439)
+            record.ordering_state != SccmTimeOrderingState::NormalizedUtc
+                || record.timestamp.is_none()
                 || !record.source_version.starts_with("5.00.TEST.")
         }) {
             return Err(format!(
@@ -1127,11 +1466,10 @@ fn validate_contract(
         let state = required_string(transaction, "state", transaction_id)?;
         let has_record = |disposition: &str, terminal: bool| {
             records.iter().any(|record| {
-                record.message.contains(&format!("Phase={phase}"))
-                    && record
-                        .message
-                        .contains(&format!("Disposition={disposition}"))
-                    && record.message.contains(&format!("Terminal={terminal}"))
+                record.fields.get("Phase").map(String::as_str) == Some(phase)
+                    && record.fields.get("Disposition").map(String::as_str) == Some(disposition)
+                    && record.fields.get("Terminal").map(String::as_str)
+                        == Some(if terminal { "true" } else { "false" })
             })
         };
         match classification {
@@ -1159,11 +1497,11 @@ fn validate_contract(
                     || last_successful_phase == phase
                     || !has_record("Failed", true)
                     || !records.iter().any(|record| {
-                        record
-                            .message
-                            .contains(&format!("Phase={last_successful_phase}"))
-                            && record.message.contains("Disposition=Succeeded")
-                            && record.message.contains("Terminal=false")
+                        record.fields.get("Phase").map(String::as_str)
+                            == Some(last_successful_phase)
+                            && record.fields.get("Disposition").map(String::as_str)
+                                == Some("Succeeded")
+                            && record.fields.get("Terminal").map(String::as_str) == Some("false")
                     })
                 {
                     return Err(format!(
@@ -1257,12 +1595,25 @@ fn validate_contract(
         .as_array()
         .ok_or_else(|| "sourceLocalObservations are not an array".to_owned())?;
     let mut observed_noncomplete = BTreeSet::new();
+    let mut observed_malformed = BTreeSet::new();
     let mut observed_unknown_profiles = BTreeSet::new();
     let mut observed_invalid_offsets = BTreeSet::new();
     let mut observation_ids = BTreeSet::new();
     let mut observation_order = Vec::new();
     for observation in observations {
         let observation_id = required_string(observation, "observationId", "observation")?;
+        require_exact_object_fields(
+            observation,
+            &[
+                "artifactIds",
+                "claim",
+                "confidenceCeiling",
+                "correlationEligible",
+                "kind",
+                "observationId",
+            ],
+            observation_id,
+        )?;
         observation_order.push(observation_id.to_owned());
         if !observation_ids.insert(observation_id.to_owned()) {
             return Err(format!("duplicate observationId {observation_id}"));
@@ -1302,10 +1653,28 @@ fn validate_contract(
             || claim_tokens
                 .iter()
                 .any(|token| matches!(*token, "prove" | "proved" | "proves"))
+            || (claim_tokens.contains("because")
+                && claim_tokens.iter().any(|token| {
+                    matches!(
+                        *token,
+                        "failed"
+                            | "failure"
+                            | "unavailable"
+                            | "outcome"
+                            | "succeeded"
+                            | "success"
+                            | "broken"
+                    )
+                }))
             || claim_tokens
                 .iter()
                 .any(|token| matches!(*token, "server" | "servers"))
             || lower_claim.contains("intune failure")
+            || lower_claim.contains("resulted in")
+            || lower_claim.contains("responsible for")
+            || lower_claim.contains("due to")
+            || lower_claim.contains("led to")
+            || lower_claim.contains("root cause")
         {
             return Err(format!(
                 "{observation_id} makes an unsupported causal claim"
@@ -1339,13 +1708,21 @@ fn validate_contract(
             if kind == "invalidOffset" {
                 observed_invalid_offsets.insert(artifact_id.to_owned());
             }
+            if kind == "malformedRecord" {
+                observed_malformed.insert(artifact_id.to_owned());
+            }
         }
         match kind {
             "coverageGap"
                 if artifact_ids.iter().any(|artifact_id| {
                     artifacts_by_id
                         .get(artifact_id.as_str())
-                        .is_some_and(|artifact| effective_state(artifact) == Ok("captured"))
+                        .is_some_and(|artifact| {
+                            matches!(
+                                effective_state(artifact),
+                                Ok("captured" | "malformed" | "unsupported")
+                            )
+                        })
                 }) =>
             {
                 return Err(format!(
@@ -1452,13 +1829,13 @@ fn validate_contract(
                         .get(artifact_id.as_str())
                         .expect("observation artifacts validated");
                     for record in all_artifact_records(scenario_root, artifact)? {
-                        let has_script_key = ["ScriptId=", "ExecutionId=", "ResourceHandle="]
+                        let has_script_key = ["ScriptId", "ExecutionId", "ResourceHandle"]
                             .iter()
-                            .all(|token| record.message.contains(token));
+                            .all(|field| record.fields.contains_key(*field));
                         let has_notification_key =
-                            ["NotificationId=", "ChannelId=", "ResourceHandle="]
+                            ["NotificationId", "ChannelId", "ResourceHandle"]
                                 .iter()
-                                .all(|token| record.message.contains(token));
+                                .all(|field| record.fields.contains_key(*field));
                         if has_script_key || has_notification_key {
                             return Err(format!(
                                 "{observation_id} labels an exact-key record unkeyed"
@@ -1485,6 +1862,16 @@ fn validate_contract(
             "noncomplete coverage is not surfaced exactly: {observed_noncomplete:?} != {noncomplete:?}"
         ));
     }
+    let malformed = expected_coverage
+        .iter()
+        .filter(|(_, (_, state))| state == "malformed")
+        .map(|(artifact_id, _)| artifact_id.to_owned())
+        .collect::<BTreeSet<_>>();
+    if observed_malformed != malformed {
+        return Err(format!(
+            "malformed coverage is not surfaced exactly: {observed_malformed:?} != {malformed:?}"
+        ));
+    }
     if observed_unknown_profiles != unknown_version_artifacts {
         return Err(format!(
             "unknown profile observations differ: {observed_unknown_profiles:?} != {unknown_version_artifacts:?}"
@@ -1506,6 +1893,20 @@ fn mutation_was_accepted(
     expected: &Value,
 ) -> bool {
     validate_contract(scenario, scenario_root, manifest, expected).is_ok()
+}
+
+fn replace_in_file(path: &Path, from: &str, to: &str) {
+    let original = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("{} is readable: {error}", path.display()));
+    let mutated = original.replace(from, to);
+    assert_ne!(
+        original,
+        mutated,
+        "{} contains the mutation target {from:?}",
+        path.display()
+    );
+    std::fs::write(path, mutated)
+        .unwrap_or_else(|error| panic!("{} is writable: {error}", path.display()));
 }
 
 #[test]
@@ -1955,5 +2356,347 @@ fn unsupported_candidate_and_causal_claim_mutations_fail_closed() {
     assert!(
         accepted.is_empty(),
         "unsupported capability/causal mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn exact_record_field_and_envelope_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let key_lookalike = copy_scenario_to_temporary_root("script-success", "other-script-id");
+    let key_path = key_lookalike
+        .root
+        .join("evidence/client-scripts/current/Scripts.log");
+    replace_in_file(&key_path, "ScriptId=", "OtherScriptId=");
+    let manifest = load_json(&key_lookalike.root.join("manifest.json"));
+    let expected = load_json(&key_lookalike.root.join("expected.json"));
+    if mutation_was_accepted("script-success", &key_lookalike.root, &manifest, &expected) {
+        accepted.push("OtherScriptId satisfied ScriptId");
+    }
+
+    let terminal_lookalike =
+        copy_scenario_to_temporary_root("script-success", "other-terminal-fields");
+    let terminal_path = terminal_lookalike
+        .root
+        .join("evidence/client-scripts/current/Scripts.log");
+    replace_in_file(&terminal_path, "Disposition=", "OtherDisposition=");
+    replace_in_file(&terminal_path, "Terminal=", "OtherTerminal=");
+    let manifest = load_json(&terminal_lookalike.root.join("manifest.json"));
+    let expected = load_json(&terminal_lookalike.root.join("expected.json"));
+    if mutation_was_accepted(
+        "script-success",
+        &terminal_lookalike.root,
+        &manifest,
+        &expected,
+    ) {
+        accepted.push("lookalike disposition and terminal fields");
+    }
+
+    let duplicate_key = copy_scenario_to_temporary_root("script-success", "conflicting-script-id");
+    let duplicate_key_path = duplicate_key
+        .root
+        .join("evidence/client-scripts/current/Scripts.log");
+    replace_in_file(
+        &duplicate_key_path,
+        "ScriptId=SCRIPT-326-SUCCESS",
+        "ScriptId=SCRIPT-326-SUCCESS ScriptId=SCRIPT-326-SHADOW",
+    );
+    let manifest = load_json(&duplicate_key.root.join("manifest.json"));
+    let expected = load_json(&duplicate_key.root.join("expected.json"));
+    if mutation_was_accepted("script-success", &duplicate_key.root, &manifest, &expected) {
+        accepted.push("conflicting duplicate ScriptId");
+    }
+
+    let nested_ccm = copy_scenario_to_temporary_root("script-success", "nested-ccm-envelope");
+    let nested_ccm_path = nested_ccm
+        .root
+        .join("evidence/client-scripts/current/Scripts.log");
+    replace_in_file(
+        &nested_ccm_path,
+        "]LOG]!><time=",
+        "]LOG]!><![LOG[NARRATIVE ONLY]LOG]!><time=",
+    );
+    let manifest = load_json(&nested_ccm.root.join("manifest.json"));
+    let expected = load_json(&nested_ccm.root.join("expected.json"));
+    if mutation_was_accepted("script-success", &nested_ccm.root, &manifest, &expected) {
+        accepted.push("nested premature CCM envelope");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "record-local field/envelope mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn ownership_and_workflow_separation_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let ownership_lookalike =
+        copy_scenario_to_temporary_root("script-success", "other-ownership-fields");
+    let ownership_path = ownership_lookalike
+        .root
+        .join("evidence/client-co-management/current/CoManagementHandler.log");
+    replace_in_file(&ownership_path, "Workload=", "OtherWorkload=");
+    replace_in_file(&ownership_path, "Ownership=", "OtherOwnership=");
+    replace_in_file(&ownership_path, "Disposition=", "OtherDisposition=");
+    replace_in_file(&ownership_path, "Terminal=", "OtherTerminal=");
+    let manifest = load_json(&ownership_lookalike.root.join("manifest.json"));
+    let expected = load_json(&ownership_lookalike.root.join("expected.json"));
+    if mutation_was_accepted(
+        "script-success",
+        &ownership_lookalike.root,
+        &manifest,
+        &expected,
+    ) {
+        accepted.push("lookalike ownership fields");
+    }
+
+    let contradictory =
+        copy_scenario_to_temporary_root("script-success", "contradictory-ownership");
+    let contradictory_path = contradictory
+        .root
+        .join("evidence/client-co-management/current/CoManagementHandler.log");
+    replace_in_file(
+        &contradictory_path,
+        "Disposition=Owned Terminal=true",
+        "Disposition=Owned Terminal=true Ownership=IntuneOwned Disposition=Handoff",
+    );
+    let manifest = load_json(&contradictory.root.join("manifest.json"));
+    let expected = load_json(&contradictory.root.join("expected.json"));
+    if mutation_was_accepted("script-success", &contradictory.root, &manifest, &expected) {
+        accepted.push("contradictory SCCM and Intune ownership");
+    }
+
+    let workflow_borrow =
+        copy_scenario_to_temporary_root("script-success", "borrowed-notification-ownership");
+    let workflow_borrow_path = workflow_borrow
+        .root
+        .join("evidence/client-co-management/current/CoManagementHandler.log");
+    replace_in_file(
+        &workflow_borrow_path,
+        "Workload=Scripts",
+        "Workload=ClientNotification",
+    );
+    let manifest = load_json(&workflow_borrow.root.join("manifest.json"));
+    let mut expected = load_json(&workflow_borrow.root.join("expected.json"));
+    expected["ownership"]["workload"] = Value::String("ClientNotification".to_owned());
+    if mutation_was_accepted(
+        "script-success",
+        &workflow_borrow.root,
+        &manifest,
+        &expected,
+    ) {
+        accepted.push("scripts borrowed notification ownership");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "ownership/workflow mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn additive_timestamp_and_capture_chronology_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let fractional_tail = copy_scenario_to_temporary_root("script-success", "seven-digit-fraction");
+    let fractional_path = fractional_tail
+        .root
+        .join("evidence/client-scripts/current/Scripts.log");
+    replace_in_file(&fractional_path, "+000", "1234");
+    let fractional_owner_path = fractional_tail
+        .root
+        .join("evidence/client-co-management/current/CoManagementHandler.log");
+    replace_in_file(&fractional_owner_path, "+000", "1234");
+    let manifest = load_json(&fractional_tail.root.join("manifest.json"));
+    let expected = load_json(&fractional_tail.root.join("expected.json"));
+    if mutation_was_accepted(
+        "script-success",
+        &fractional_tail.root,
+        &manifest,
+        &expected,
+    ) {
+        accepted.push("seven-digit fractional tail treated as offset");
+    }
+
+    let signless_offset =
+        copy_scenario_to_temporary_root("script-success", "signless-offset-ordering");
+    let signless_path = signless_offset
+        .root
+        .join("evidence/client-scripts/current/Scripts.log");
+    replace_in_file(&signless_path, "11:00:01.000+000", "14:00:01.000240");
+    replace_in_file(&signless_path, "11:00:02.000+000", "14:00:02.000240");
+    replace_in_file(&signless_path, "11:00:03.000+000", "14:00:03.000240");
+    let manifest = load_json(&signless_offset.root.join("manifest.json"));
+    let expected = load_json(&signless_offset.root.join("expected.json"));
+    if mutation_was_accepted(
+        "script-success",
+        &signless_offset.root,
+        &manifest,
+        &expected,
+    ) {
+        accepted.push("signless offset chronology");
+    }
+
+    let (scenario_root, mut manifest, expected) = load_contract("script-success");
+    for artifact in manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+    {
+        artifact["capturedUtc"] = Value::String("2026-07-30T00:00:00Z".to_owned());
+    }
+    if mutation_was_accepted("script-success", &scenario_root, &manifest, &expected) {
+        accepted.push("capture time predates cited evidence");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "timestamp/capture mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn coverage_causal_and_unknown_semantic_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let (scenario_root, manifest, expected) = load_contract("software-center-insufficient");
+    let mut generic_parse_failure = expected.clone();
+    let malformed = generic_parse_failure["sourceLocalObservations"]
+        .as_array_mut()
+        .expect("observations are an array")
+        .iter_mut()
+        .find(|observation| {
+            observation["observationId"] == "software-center-insufficient-malformed-gap"
+        })
+        .expect("malformed observation exists");
+    malformed["kind"] = Value::String("coverageGap".to_owned());
+    if mutation_was_accepted(
+        "software-center-insufficient",
+        &scenario_root,
+        &manifest,
+        &generic_parse_failure,
+    ) {
+        accepted.push("parseFailed surfaced as a generic coverage gap");
+    }
+
+    let (scenario_root, manifest, expected) = load_contract("software-center-observed");
+    for (claim, label) in [
+        (
+            "The Management Point resulted in the client failure.",
+            "Management Point resulted-in causality",
+        ),
+        (
+            "The Intune service was responsible for the client outcome.",
+            "Intune responsible-for causality",
+        ),
+        (
+            "Because the BGB endpoint failed, notification was unavailable.",
+            "BGB because causality",
+        ),
+    ] {
+        let mut causal = expected.clone();
+        causal["sourceLocalObservations"][0]["claim"] = Value::String(claim.to_owned());
+        if mutation_was_accepted(
+            "software-center-observed",
+            &scenario_root,
+            &manifest,
+            &causal,
+        ) {
+            accepted.push(label);
+        }
+    }
+
+    let (scenario_root, manifest, mut expected) = load_contract("script-success");
+    expected["ownership"]["intuneFailure"] = Value::Bool(true);
+    expected["transactions"][0]["serverCause"] = Value::String("ManagementPoint".to_owned());
+    if mutation_was_accepted("script-success", &scenario_root, &manifest, &expected) {
+        accepted.push("unknown ownership and transaction semantics");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "coverage/causal/unknown semantic mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn transaction_identity_cardinality_and_phase_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+    let (scenario_root, manifest, expected) = load_contract("script-success");
+
+    let mut missing_transaction = expected.clone();
+    missing_transaction["transactions"] = Value::Array(Vec::new());
+    if mutation_was_accepted(
+        "script-success",
+        &scenario_root,
+        &manifest,
+        &missing_transaction,
+    ) {
+        accepted.push("required transaction removed");
+    }
+
+    let mut duplicate_key = expected.clone();
+    let mut cloned_transaction = duplicate_key["transactions"][0].clone();
+    cloned_transaction["transactionId"] = Value::String("script-success-exec-326-z".to_owned());
+    duplicate_key["transactions"]
+        .as_array_mut()
+        .expect("transactions are an array")
+        .push(cloned_transaction);
+    if mutation_was_accepted("script-success", &scenario_root, &manifest, &duplicate_key) {
+        accepted.push("exact transaction key cloned under another ID");
+    }
+
+    let mut missing_phase = expected.clone();
+    missing_phase["transactions"][0]["evidence"] = serde_json::json!([
+        {
+            "artifactId": "script-success-current",
+            "startLine": 1,
+            "endLine": 1
+        },
+        {
+            "artifactId": "script-success-current",
+            "startLine": 3,
+            "endLine": 3
+        }
+    ]);
+    if mutation_was_accepted("script-success", &scenario_root, &manifest, &missing_phase) {
+        accepted.push("Execute phase omitted between Receive and Report");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "transaction identity/cardinality/phase mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn source_workflow_root_and_sanitized_role_path_mutation_fails_closed() {
+    let temporary = copy_scenario_to_temporary_root("script-success", "cross-root-server-path");
+    let old_path = temporary
+        .root
+        .join("evidence/client-scripts/current/Scripts.log");
+    let new_path = temporary
+        .root
+        .join("evidence/client-co-management/current/Scripts.log");
+    std::fs::create_dir_all(
+        new_path
+            .parent()
+            .expect("cross-root destination has a parent"),
+    )
+    .expect("cross-root destination exists");
+    std::fs::rename(&old_path, &new_path).expect("evidence is moved across workflow roots");
+
+    let mut manifest = load_json(&temporary.root.join("manifest.json"));
+    manifest["artifacts"][0]["relativePath"] =
+        Value::String("evidence/client-co-management/current/Scripts.log".to_owned());
+    manifest["artifacts"][0]["sanitizedSourcePath"] = Value::String(
+        "SYNTHETIC://client/management/script-success/server/mp/Scripts.log".to_owned(),
+    );
+    let expected = load_json(&temporary.root.join("expected.json"));
+
+    assert!(
+        !mutation_was_accepted("script-success", &temporary.root, &manifest, &expected),
+        "cross-workflow evidence root and server-shaped sanitized path were accepted"
     );
 }

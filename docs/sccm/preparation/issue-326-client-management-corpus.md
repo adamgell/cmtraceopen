@@ -75,8 +75,16 @@ All values are bound to the named synthetic extraction profile. Handles use a
 root, signal, display text, and ingestion order cannot create or merge a key.
 A terminal record is high-confidence only when the exact key is co-located,
 the source version selects the test profile, the CCM record is complete, and
-its offset is usable. Unknown profiles and offsets outside ±1,439 minutes stay
-source-local and noncorrelatable.
+its additive SCCM timestamp envelope has normalized UTC provenance. Signless
+legacy offsets retain their SCCM interpretation; seven-digit fractional tails
+remain offset-missing. Unknown profiles and unusable offsets stay source-local
+and noncorrelatable. Every artifact has a canonical `capturedUtc`, and no cited
+normalized record may postdate its capture.
+
+Structured fields are parsed as exact, unique, record-local names under the
+workflow source contract. Substring lookalikes, conflicting duplicate fields,
+nested CCM envelopes, and fields borrowed from another record cannot satisfy a
+key, phase, ownership, disposition, or terminal assertion.
 
 Raw command arguments and user context are not present. The corpus uses only
 `CommandContextHandle` and `UserContextHandle` values under the `safe:`
@@ -89,8 +97,9 @@ The preparation manifest is additive and does not reuse generic
 
 - exact client role and logical source group;
 - exact source/capability admission state;
-- sanitized source path and collision-safe path fingerprint when a candidate
-  path was observed;
+- canonical capture-attempt time;
+- sanitized source path bound to the client role and logical source group, plus
+  a collision-safe path fingerprint when a candidate path was observed;
 - unique bundle-relative path for physical bytes;
 - explicit current versus `.lo_` rotation and fragment completeness;
 - collection-cap provenance for capped bytes;
@@ -143,13 +152,24 @@ The focused Rust target dynamically proves that the validator rejects:
 
 - client artifacts relabeled as server role;
 - case-folded or invented source aliases;
-- raw Windows paths and aliased cross-root path fingerprints;
+- raw Windows paths, cross-workflow evidence roots, server-shaped sanitized
+  paths, and aliased cross-root path fingerprints;
 - borrowed exact transaction keys;
+- substring field lookalikes, conflicting duplicate fields, and nested CCM
+  envelopes;
+- contradictory ownership and ownership borrowed across workflows;
 - unversioned profile aliases and unknown-version promotion;
 - capped coverage relabeled captured;
-- invalid-offset evidence promoted to high confidence;
+- invalid/signless/missing-offset evidence promoted to high confidence and
+  capture times earlier than cited evidence;
+- parse-failed evidence relabeled as a generic coverage gap;
 - terminal phases moved before receipt, ownership observed after an operational
-  transaction, and distinct phases assigned the same ambiguous timestamp;
+  transaction, distinct phases assigned the same ambiguous timestamp, and
+  required intermediate script phases omitted;
+- missing scenario transactions, duplicate exact transaction keys, and
+  out-of-order transactions;
+- unknown ownership/transaction semantic fields and unsupported causal phrasing
+  using `because`, `resulted in`, or `responsible for`;
 - a coherent attempt to mark Software Center candidates admitted and parser
   eligible;
 - a server-causal claim in client-only source-local output; and
@@ -182,24 +202,33 @@ accepted. The evidence envelope now retains parsed UTC milliseconds, phase
 progression must be strictly chronological, and cited SCCM ownership must
 strictly precede the first operational event.
 
+Independent exact-head review of PR #373 exposed a fourth red boundary. The
+permanent Rust 1.88 run executed 17 tests: the 11 prior tests passed while six
+new adversarial groups failed with all 19 reviewed mutations accepted. The
+correction now consumes #318 `normalize_ccm_artifact` timestamp provenance,
+closes record/JSON field sets, binds paths and ownership to workflow source
+groups, requires exact scenario transaction cardinality and unique keys, and
+preserves malformed coverage semantics. The same focused target is green at
+17/17 only after those structural corrections.
+
 ## Replay and acceptance limits
 
 Run the preparation target:
 
 ```bash
-cargo test --locked -p cmtraceopen-parser --test sccm_client_management_fixture_contract
+cargo +1.88.0 test --locked -p cmtraceopen-parser --test sccm_client_management_fixture_contract
 ```
 
 Before review, also run:
 
 ```bash
-cargo test --locked -p cmtraceopen-parser --test sccm_spine_contract
-cargo test --locked -p cmtraceopen-parser --test sccm_client_intake_fixture_contract
-cargo test --locked -p cmtraceopen-parser
+cargo +1.88.0 test --locked -p cmtraceopen-parser --test sccm_spine_contract
+cargo +1.88.0 test --locked -p cmtraceopen-parser --test sccm_client_intake_fixture_contract
+cargo +1.88.0 test --locked -p cmtraceopen-parser
 cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
-cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
+cargo +1.88.0 check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
 npx tsc --noEmit
-cargo fmt --check --all
+rustfmt +1.88.0 --edition 2021 --check crates/cmtraceopen-parser/tests/sccm_client_management_fixture_contract.rs
 git diff --check
 ```
 

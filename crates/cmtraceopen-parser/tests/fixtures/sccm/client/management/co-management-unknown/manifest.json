@@ -32,7 +32,8 @@
       "collectionLimit": {
         "capped": false,
         "limitBytes": null
-      }
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
     }
   ]
 }
