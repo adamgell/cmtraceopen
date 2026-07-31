@@ -154,7 +154,9 @@ fn synthetic_marker(
 }
 
 fn serialized_json_contains_windows_user_root(serialized_casefolded: &str) -> bool {
-    serialized_casefolded.contains(r"c:\\users")
+    // Match both the JSON-escaped backslash form and the forward-slash
+    // normalized form so a normalized leak without a sentinel is caught.
+    serialized_casefolded.contains(r"c:\\users") || serialized_casefolded.contains("c:/users")
 }
 
 #[test]
