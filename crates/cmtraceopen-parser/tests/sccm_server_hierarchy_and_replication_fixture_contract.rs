@@ -281,6 +281,19 @@ fn object_has_only(value: &Value, fields: &[&str]) -> bool {
         .is_some_and(|object| object.keys().all(|field| fields.contains(&field.as_str())))
 }
 
+fn declared_target_site_codes(manifest: &Value) -> BTreeSet<&str> {
+    std::iter::once(manifest["topology"]["targetSiteCode"].as_str())
+        .chain(
+            manifest["topology"]["additionalTargets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|target| target["siteCode"].as_str()),
+        )
+        .flatten()
+        .collect()
+}
+
 fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<String> {
     let mut failures = Vec::new();
     if !object_has_only(
@@ -304,10 +317,52 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
             "targetSiteCode",
             "originHostHandle",
             "targetHostHandle",
+            "additionalTargets",
             "rolesObserved",
         ],
     ) {
         failures.push("manifest contains an unsupported field or shape".to_owned());
+    }
+    let topology = &manifest["topology"];
+    let primary_target_site = topology["targetSiteCode"].as_str();
+    let primary_target_host = topology["targetHostHandle"].as_str();
+    if topology["originSiteCode"]
+        .as_str()
+        .is_none_or(str::is_empty)
+        || primary_target_site.is_none_or(str::is_empty)
+        || topology["originHostHandle"]
+            .as_str()
+            .is_none_or(|value| !value.starts_with("safe:server:"))
+        || primary_target_host.is_none_or(|value| !value.starts_with("safe:server:"))
+    {
+        failures.push("topology lacks exact safe origin/target identity".to_owned());
+    }
+    let mut topology_target_sites = BTreeSet::new();
+    let mut topology_target_hosts = BTreeSet::new();
+    if let (Some(site), Some(host)) = (primary_target_site, primary_target_host) {
+        topology_target_sites.insert(site);
+        topology_target_hosts.insert(host);
+    }
+    if let Some(additional_targets) = topology.get("additionalTargets") {
+        let Some(additional_targets) = additional_targets.as_array() else {
+            failures.push("additional topology targets are not an array".to_owned());
+            return failures;
+        };
+        for target in additional_targets {
+            if !object_has_only(target, &["siteCode", "hostHandle"]) {
+                failures.push("additional topology target has unsupported fields".to_owned());
+                continue;
+            }
+            let site = target["siteCode"].as_str();
+            let host = target["hostHandle"].as_str();
+            if site.is_none_or(str::is_empty)
+                || host.is_none_or(|value| !value.starts_with("safe:server:"))
+                || !topology_target_sites.insert(site.unwrap_or_default())
+                || !topology_target_hosts.insert(host.unwrap_or_default())
+            {
+                failures.push("additional topology target is invalid or duplicated".to_owned());
+            }
+        }
     }
     let role_values = manifest["topology"]["rolesObserved"].as_array();
     if role_values.is_none_or(|roles| {
@@ -538,6 +593,13 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                 )
         {
             failures.push("transaction is not derived from one exact immutable key".to_owned());
+        }
+        if key["originSiteCode"].as_str() != topology["originSiteCode"].as_str()
+            || key["targetSiteCode"]
+                .as_str()
+                .is_none_or(|site| !topology_target_sites.contains(site))
+        {
+            failures.push("transaction key is outside declared topology".to_owned());
         }
         let gap_values = transaction["coverageGapArtifactIds"].as_array();
         let gap_ids = gap_values
@@ -967,6 +1029,7 @@ fn hierarchy_transactions_require_exact_keys_topology_time_and_citations() {
         let transactions = expected["transactions"]
             .as_array()
             .expect("transactions are an array");
+        let declared_target_sites = declared_target_site_codes(&manifest);
         let transaction_ids = transactions
             .iter()
             .filter_map(|transaction| transaction["transactionId"].as_str())
@@ -998,6 +1061,15 @@ fn hierarchy_transactions_require_exact_keys_topology_time_and_citations() {
             {
                 failures.push(format!("{scenario}/{transaction_id}: key is not exact"));
                 continue;
+            }
+            if key["originSiteCode"].as_str() != manifest["topology"]["originSiteCode"].as_str()
+                || key["targetSiteCode"]
+                    .as_str()
+                    .is_none_or(|site| !declared_target_sites.contains(site))
+            {
+                failures.push(format!(
+                    "{scenario}/{transaction_id}: key is outside declared topology"
+                ));
             }
             let derived_id = format!(
                 "hierarchy:{}:{}:{}:{}",
@@ -1528,6 +1600,17 @@ fn hierarchy_schema_and_identity_mutations_fail_closed() {
     mismatched_key["transactions"][0]["key"]["targetSiteCode"] = Value::String("SEC".to_owned());
     if identity_and_schema_failures("healthy-link", &healthy_manifest, &mismatched_key).is_empty() {
         accepted.push("transaction ID diverged from immutable topology key");
+    }
+
+    let mut undeclared_topology_key = healthy_expected.clone();
+    undeclared_topology_key["transactions"][0]["key"]["targetSiteCode"] =
+        Value::String("SEC".to_owned());
+    undeclared_topology_key["transactions"][0]["transactionId"] =
+        Value::String("hierarchy:MSG-HEALTHY-001:LAB:SEC:LINK-LAB-CHD".to_owned());
+    if identity_and_schema_failures("healthy-link", &healthy_manifest, &undeclared_topology_key)
+        .is_empty()
+    {
+        accepted.push("transaction key target is outside manifest topology");
     }
 
     let mut time_only_high = clock_expected.clone();
