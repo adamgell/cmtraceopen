@@ -326,6 +326,31 @@ fn path_fingerprint_is_safe(path_fingerprint: &str) -> bool {
         })
 }
 
+fn artifact_id_is_safe(artifact_id: &str) -> bool {
+    artifact_id.len() <= 128 && path_segment_is_safe(artifact_id)
+}
+
+fn request_id_is_safe(request_id: &str) -> bool {
+    request_id
+        .strip_prefix("client-request-")
+        .is_some_and(|suffix| suffix.len() <= 64 && path_segment_is_safe(suffix))
+}
+
+fn coverage_request_reason(artifact: &ParsedArtifact) -> Option<&'static str> {
+    match artifact.state.as_str() {
+        "absent" => Some("coverageAbsent"),
+        "accessDenied" => Some("coverageAccessDenied"),
+        "capped" => Some("coverageCapped"),
+        "parseFailed" => Some("coverageMalformed"),
+        _ if artifact.fragment_complete == Some(false) => Some("coverageRotationSplit"),
+        _ => None,
+    }
+}
+
+fn artifact_has_incomplete_coverage(artifact: &ParsedArtifact) -> bool {
+    artifact.state != "captured" || artifact.fragment_complete == Some(false)
+}
+
 fn validate_manifest(
     scenario_root: &std::path::Path,
     manifest: &Value,
@@ -485,13 +510,18 @@ fn validate_manifest(
     let mut physical_source_identities = BTreeSet::new();
     let mut path_fingerprints = BTreeSet::new();
     for artifact in artifacts {
-        let artifact_id = match required_string(artifact, "artifactId", "artifact") {
+        let artifact_id = match required_nonempty_string(artifact, "artifactId", "artifact") {
             Ok(value) => value,
             Err(error) => {
                 failures.push(error);
                 continue;
             }
         };
+        if !artifact_id_is_safe(artifact_id) {
+            failures.push(format!(
+                "artifact {artifact_id} does not use a bounded stable artifact ID"
+            ));
+        }
         let context = format!("artifact {artifact_id}");
         let source_id = match required_string(artifact, "sourceId", &context) {
             Ok(value) => value,
@@ -613,6 +643,31 @@ fn validate_manifest(
                 }
             };
         let physical_capture = matches!(state, "captured" | "capped" | "parseFailed");
+        let artifact_collected_utc = match required_string(artifact, "collectedUtc", &context)
+            .and_then(|value| {
+                DateTime::parse_from_rfc3339(value)
+                    .map(|parsed| parsed.timestamp_millis())
+                    .map_err(|error| format!("{context}.collectedUtc is RFC3339: {error}"))
+            }) {
+            Ok(value) => {
+                if value > captured_utc {
+                    failures.push(format!(
+                        "{artifact_id} was collected after the canonical bundle capture"
+                    ));
+                }
+                Some(value)
+            }
+            Err(error) => {
+                failures.push(error);
+                None
+            }
+        };
+        let encoding = artifact["encoding"].as_str();
+        if physical_capture && encoding.is_none_or(str::is_empty) {
+            failures.push(format!(
+                "{artifact_id} physical capture lacks encoding provenance"
+            ));
+        }
         let fragment_complete = if physical_capture {
             match required_bool(&artifact["rotation"], "fragmentComplete", &context) {
                 Ok(value) => Some(value),
@@ -778,7 +833,7 @@ fn validate_manifest(
                     ),
                     rotation: rotation_model.clone(),
                     coverage: coverage_model.clone(),
-                    encoding: artifact["encoding"].as_str().map(str::to_owned),
+                    encoding: encoding.map(str::to_owned),
                 };
                 let normalized = normalize_ccm_artifact(artifact_model, &content);
                 if fragment_complete == Some(false) && !normalized.is_empty() {
@@ -806,10 +861,6 @@ fn validate_manifest(
                             "{artifact_id} cites evidence later than the canonical bundle capture"
                         ));
                     }
-                    let artifact_collected_utc = artifact["collectedUtc"]
-                        .as_str()
-                        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                        .map(|value| value.timestamp_millis());
                     if artifact_collected_utc.is_none()
                         || artifact_collected_utc.is_some_and(|value| value > captured_utc)
                         || record
@@ -845,6 +896,25 @@ fn validate_manifest(
                             {
                                 failures.push(format!(
                                     "{artifact_id} record escapes its declared workflow-subject scope"
+                                ));
+                            }
+                            let identity_fields_are_safe = match role {
+                                "client" => {
+                                    fields.get("ClientHandle").map(String::as_str)
+                                        == Some(EXACT_CLIENT)
+                                        && fields
+                                            .get("RequestId")
+                                            .is_some_and(|value| request_id_is_safe(value))
+                                }
+                                "siteServer" | "distributionPoint" => {
+                                    !fields.contains_key("ClientHandle")
+                                        && !fields.contains_key("RequestId")
+                                }
+                                _ => false,
+                            };
+                            if !identity_fields_are_safe {
+                                failures.push(format!(
+                                    "{artifact_id} exposes identity-bearing fields outside the approved opaque role namespace"
                                 ));
                             }
                         }
@@ -1059,7 +1129,7 @@ fn validate_expected(
     }
     if expected["stateChain"]
         .as_array()
-        .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .and_then(|values| values.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
         .as_deref()
         != Some(STATE_CHAIN)
     {
@@ -1139,6 +1209,7 @@ fn validate_expected(
     let mut seen_transaction_ids = BTreeSet::new();
     let mut seen_observation_ids = BTreeSet::new();
     let mut consumed_evidence = BTreeSet::new();
+    let mut required_incomplete_requests = BTreeSet::new();
     for transaction in transactions {
         let transaction_id = match required_string(transaction, "transactionId", "transaction") {
             Ok(value) => value,
@@ -1219,6 +1290,11 @@ fn validate_expected(
                 continue;
             }
         };
+        if observations.is_empty() {
+            failures.push(format!(
+                "{transaction_id} has an exact correlation-eligible key without cited logical records"
+            ));
+        }
         let observation_order = observations
             .iter()
             .filter_map(|observation| observation["observationId"].as_str())
@@ -1233,8 +1309,10 @@ fn validate_expected(
 
         let mut latest_success: Option<usize> = None;
         let mut terminal_success = false;
+        let mut terminal_success_phase = None;
         let mut terminal_failure = false;
         let mut terminal_deferred = false;
+        let mut cites_capped_evidence = false;
         let mut previous_utc = i64::MIN;
         let mut previous_phase = 0usize;
         for observation in observations {
@@ -1313,7 +1391,10 @@ fn validate_expected(
                             && artifact
                                 .workflow_subject_handle
                                 .as_deref()
-                                .is_none_or(|handle| handle == key_fields["DpHandle"]) => {}
+                                .is_none_or(|handle| handle == key_fields["DpHandle"]) =>
+                    {
+                        cites_capped_evidence |= artifact.state == "capped";
+                    }
                     _ => failures.push(format!(
                         "{observation_id} cites an artifact that cannot own phase {phase}"
                     )),
@@ -1359,6 +1440,12 @@ fn validate_expected(
             match (disposition, terminal) {
                 ("succeeded", true) => {
                     latest_success = latest_success.max(phase_index);
+                    if terminal_success_phase.is_some() {
+                        failures.push(format!(
+                            "{transaction_id} contains more than one terminal success"
+                        ));
+                    }
+                    terminal_success_phase = phase_index;
                     terminal_success = true;
                 }
                 ("succeeded", false) => latest_success = latest_success.max(phase_index),
@@ -1388,19 +1475,26 @@ fn validate_expected(
         match (state, classification) {
             ("succeeded", "success")
                 if terminal_success
+                    && terminal_success_phase
+                        == STATE_CHAIN
+                            .iter()
+                            .position(|phase| *phase == "serveOrReport")
                     && computed_last_success == Some("serveOrReport")
                     && !terminal_failure
+                    && !cites_capped_evidence
                     && confidence == "high"
                     && confidence_ceiling == "high" => {}
             ("failed", "confirmedFailure")
                 if terminal_failure
                     && !terminal_success
+                    && !cites_capped_evidence
                     && confidence == "high"
                     && confidence_ceiling == "high" => {}
             ("deferred", "blockedOrDeferred")
                 if terminal_deferred
                     && !terminal_failure
                     && !terminal_success
+                    && !cites_capped_evidence
                     && confidence == "medium"
                     && confidence_ceiling == "medium" => {}
             ("incomplete", "insufficientEvidence")
@@ -1438,9 +1532,9 @@ fn validate_expected(
                 "{transaction_id} coverage gaps must be sorted and unique"
             ));
         }
-        for artifact_id in gap_ids {
-            match parsed.artifacts.get(artifact_id) {
-                Some(artifact) if artifact.state != "captured" => {}
+        for artifact_id in &gap_ids {
+            match parsed.artifacts.get(*artifact_id) {
+                Some(artifact) if artifact_has_incomplete_coverage(artifact) => {}
                 _ => failures.push(format!(
                     "{transaction_id} coverage gap {artifact_id} is absent or complete"
                 )),
@@ -1456,6 +1550,35 @@ fn validate_expected(
                 failures.push(format!(
                     "{transaction_id} incomplete state lacks a bounded noncomplete next source"
                 ));
+            }
+            let declared_gap_ids = gap_ids.iter().copied().collect::<BTreeSet<_>>();
+            let expected_gap_ids = parsed
+                .artifacts
+                .iter()
+                .filter(|(_, artifact)| {
+                    Some(artifact.source_id.as_str()) == next_source
+                        && artifact_has_incomplete_coverage(artifact)
+                })
+                .map(|(artifact_id, _)| artifact_id.as_str())
+                .collect::<BTreeSet<_>>();
+            if declared_gap_ids.is_empty() || declared_gap_ids != expected_gap_ids {
+                failures.push(format!(
+                    "{transaction_id} incomplete state lacks the exact physical coverage gaps"
+                ));
+            }
+            for artifact_id in declared_gap_ids {
+                let Some(artifact) = parsed.artifacts.get(artifact_id) else {
+                    continue;
+                };
+                match coverage_request_reason(artifact) {
+                    Some(reason_code) => {
+                        required_incomplete_requests
+                            .insert((artifact.source_id.clone(), reason_code.to_owned()));
+                    }
+                    None => failures.push(format!(
+                        "{transaction_id} gap {artifact_id} has no bounded artifact-request reason"
+                    )),
+                }
             }
         } else if !transaction["nextSourceId"].is_null() {
             failures.push(format!(
@@ -1575,6 +1698,7 @@ fn validate_expected(
             }
         };
         let mut cited_artifact_ids = BTreeSet::new();
+        let mut reference_order = Vec::new();
         for reference in references {
             reject_unknown_fields(
                 reference,
@@ -1594,16 +1718,24 @@ fn validate_expected(
                     ));
                 }
             }
-            if evidence_reference_key(reference, observation_id)
-                .is_ok_and(|key| !consumed_evidence.insert(key))
-            {
-                failures.push(format!(
-                    "{observation_id} consumes one physical evidence reference more than once"
-                ));
+            if let Ok(key) = evidence_reference_key(reference, observation_id) {
+                reference_order.push(key.clone());
+                if !consumed_evidence.insert(key) {
+                    failures.push(format!(
+                        "{observation_id} consumes one physical evidence reference more than once"
+                    ));
+                }
             }
             if let Err(error) = physical_evidence_for(parsed, reference, observation_id) {
                 failures.push(error);
             }
+        }
+        let mut sorted_reference_order = reference_order.clone();
+        sorted_reference_order.sort();
+        if reference_order != sorted_reference_order {
+            failures.push(format!(
+                "{observation_id} physical evidence is not canonically ordered"
+            ));
         }
         let artifacts = artifact_ids
             .iter()
@@ -1668,27 +1800,30 @@ fn validate_expected(
     };
     let mut request_order = Vec::new();
     for request in requests {
-        let source_id =
-            required_string(request, "sourceId", "artifactRequest").unwrap_or("invalid");
-        let reason_code =
-            required_string(request, "reasonCode", "artifactRequest").unwrap_or("invalid");
+        let source_id = required_string(request, "sourceId", "artifactRequest")
+            .unwrap_or("invalid")
+            .to_owned();
+        let reason_code = required_string(request, "reasonCode", "artifactRequest")
+            .unwrap_or("invalid")
+            .to_owned();
         reject_unknown_fields(
             request,
             &["sourceId", "reasonCode"],
             "artifactRequest",
             &mut failures,
         );
-        request_order.push((source_id, reason_code));
-        if !matches!(source_id, "server-dp-distribution" | "server-dp-serve")
-            || !matches!(
-                reason_code,
-                "coverageAbsent"
-                    | "coverageAccessDenied"
-                    | "coverageCapped"
-                    | "coverageMalformed"
-                    | "coverageRotationSplit"
-            )
-            || request.get("reason").is_some()
+        request_order.push((source_id.clone(), reason_code.clone()));
+        if !matches!(
+            source_id.as_str(),
+            "server-dp-distribution" | "server-dp-serve"
+        ) || !matches!(
+            reason_code.as_str(),
+            "coverageAbsent"
+                | "coverageAccessDenied"
+                | "coverageCapped"
+                | "coverageMalformed"
+                | "coverageRotationSplit"
+        ) || request.get("reason").is_some()
         {
             failures.push(format!(
                 "artifact request is not a bounded versioned source/reason code: {source_id}/{reason_code}"
@@ -1696,7 +1831,7 @@ fn validate_expected(
         }
         let matching_coverage = parsed.artifacts.values().any(|artifact| {
             artifact.source_id == source_id
-                && match reason_code {
+                && match reason_code.as_str() {
                     "coverageAbsent" => artifact.state == "absent",
                     "coverageAccessDenied" => artifact.state == "accessDenied",
                     "coverageCapped" => artifact.state == "capped",
@@ -1716,8 +1851,27 @@ fn validate_expected(
     }
     let mut sorted_request_order = request_order.clone();
     sorted_request_order.sort_unstable();
-    if request_order != sorted_request_order {
-        failures.push("artifact requests are not deterministically sorted".to_owned());
+    let declared_requests = request_order.iter().cloned().collect::<BTreeSet<_>>();
+    if request_order != sorted_request_order || declared_requests.len() != request_order.len() {
+        failures.push("artifact requests are not sorted and unique".to_owned());
+    }
+    let expected_requests = parsed
+        .artifacts
+        .values()
+        .filter_map(|artifact| {
+            coverage_request_reason(artifact)
+                .map(|reason| (artifact.source_id.clone(), reason.to_owned()))
+        })
+        .collect::<BTreeSet<_>>();
+    if declared_requests != expected_requests {
+        failures.push(format!(
+            "artifact requests are not the exact bounded coverage projection: {declared_requests:?} != {expected_requests:?}"
+        ));
+    }
+    if !required_incomplete_requests.is_subset(&declared_requests) {
+        failures.push(
+            "incomplete transactions lack requests matching their exact physical gaps".to_owned(),
+        );
     }
 
     if expected["clientCausalClaims"] != json!([])
@@ -1832,6 +1986,84 @@ fn distribution_point_scenario_matrix_is_complete_and_loadable() {
 
 fn mutation_was_accepted(scenario: &str, manifest: &Value, expected: &Value) -> bool {
     validate_scenario_values(scenario, manifest, expected).is_ok()
+}
+
+struct TemporaryScenario {
+    root: std::path::PathBuf,
+}
+
+impl Drop for TemporaryScenario {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn copy_fixture_tree(source: &std::path::Path, destination: &std::path::Path) {
+    std::fs::create_dir_all(destination).expect("temporary fixture directory is created");
+    for entry in std::fs::read_dir(source).expect("fixture directory is readable") {
+        let entry = entry.expect("fixture directory entry is readable");
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_fixture_tree(&source_path, &destination_path);
+        } else {
+            std::fs::copy(&source_path, &destination_path)
+                .expect("fixture file is copied into the temporary scenario");
+        }
+    }
+}
+
+fn temporary_scenario(scenario: &str) -> TemporaryScenario {
+    static NEXT_TEMP_SCENARIO: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT_TEMP_SCENARIO.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!(
+        "cmtraceopen-sccm-329-{}-{scenario}-{sequence}",
+        std::process::id()
+    ));
+    copy_fixture_tree(&corpus_root().join(scenario), &root);
+    TemporaryScenario { root }
+}
+
+fn mutation_at_root_was_accepted(
+    scenario: &str,
+    scenario_root: &std::path::Path,
+    manifest: &Value,
+    expected: &Value,
+) -> bool {
+    validate_manifest(scenario_root, manifest)
+        .and_then(|parsed| validate_expected(scenario, manifest, expected, &parsed))
+        .is_ok()
+}
+
+fn replace_fixture_text(
+    scenario_root: &std::path::Path,
+    relative_path: &str,
+    original: &str,
+    replacement: &str,
+) {
+    let path = scenario_root.join(relative_path);
+    let contents = std::fs::read_to_string(&path).expect("temporary fixture is readable");
+    assert_eq!(
+        contents.matches(original).count(),
+        1,
+        "fixture mutation must identify exactly one raw marker"
+    );
+    std::fs::write(&path, contents.replacen(original, replacement, 1))
+        .expect("temporary fixture mutation is written");
+}
+
+fn refresh_artifact_bytes(
+    manifest: &mut Value,
+    artifact_index: usize,
+    scenario_root: &std::path::Path,
+) {
+    let relative_path = manifest["artifacts"][artifact_index]["relativePath"]
+        .as_str()
+        .expect("physical artifact has a relative path");
+    let byte_count = std::fs::metadata(scenario_root.join(relative_path))
+        .expect("mutated physical artifact is readable")
+        .len();
+    manifest["artifacts"][artifact_index]["bytesCopied"] = json!(byte_count);
 }
 
 #[test]
@@ -2750,5 +2982,306 @@ fn coverage_gap_ids_are_typed_nonempty_unique_and_physical() {
     assert!(
         accepted.is_empty(),
         "malformed coverage-gap artifact IDs were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn capped_transaction_evidence_cannot_retain_high_confidence_terminal_health() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    for (label, artifact_index) in [("earlier phase", 0usize), ("terminal phase", 2usize)] {
+        let mut manifest = healthy_manifest.clone();
+        let mut expected = healthy_expected.clone();
+        let artifact_id = manifest["artifacts"][artifact_index]["artifactId"].clone();
+        let bytes_copied = manifest["artifacts"][artifact_index]["bytesCopied"].clone();
+        manifest["artifacts"][artifact_index]["captureState"] = json!("capped");
+        manifest["artifacts"][artifact_index]["collectionLimit"] =
+            json!({"byteLimit": bytes_copied, "limitApplied": true});
+        expected["coverage"][artifact_index]["state"] = json!("capped");
+        expected["transactions"][0]["coverageGapArtifactIds"] = json!([artifact_id]);
+        expected["artifactRequests"] = json!([{
+            "sourceId": "server-dp-distribution",
+            "reasonCode": "coverageCapped"
+        }]);
+
+        if mutation_was_accepted("healthy-package", &manifest, &expected) {
+            accepted.push(label);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "capped transaction evidence retained high-confidence success: {accepted:?}"
+    );
+}
+
+#[test]
+fn terminal_success_is_bound_to_the_cited_serve_or_report_record() {
+    let temporary = temporary_scenario("healthy-package");
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let mut expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+
+    replace_fixture_text(
+        &temporary.root,
+        &relative_path,
+        "Phase=validate; Disposition=succeeded; Terminal=false;",
+        "Phase=validate; Disposition=succeeded; Terminal=true;",
+    );
+    replace_fixture_text(
+        &temporary.root,
+        &relative_path,
+        "Phase=serveOrReport; Disposition=succeeded; Terminal=true;",
+        "Phase=serveOrReport; Disposition=succeeded; Terminal=false;",
+    );
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+    expected["transactions"][0]["observations"][3]["terminal"] = json!(true);
+    expected["transactions"][0]["observations"][5]["terminal"] = json!(false);
+
+    assert!(
+        !mutation_at_root_was_accepted("healthy-package", &temporary.root, &manifest, &expected,),
+        "an earlier terminal success survived later nonterminal ServeOrReport evidence"
+    );
+}
+
+#[test]
+fn correlation_eligible_incomplete_output_requires_evidence_gaps_and_requests() {
+    let manifest = read_json("incomplete", "manifest.json").expect("manifest loads");
+    let expected = read_json("incomplete", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut uncited_key = expected.clone();
+    uncited_key["transactions"][0]["observations"] = json!([]);
+    uncited_key["transactions"][0]["lastSuccessfulPhase"] = Value::Null;
+    if mutation_was_accepted("incomplete", &manifest, &uncited_key) {
+        accepted.push("correlation-eligible exact key with zero cited logical records");
+    }
+
+    let mut no_gaps = expected.clone();
+    no_gaps["transactions"][0]["coverageGapArtifactIds"] = json!([]);
+    if mutation_was_accepted("incomplete", &manifest, &no_gaps) {
+        accepted.push("insufficientEvidence transaction with no physical gaps");
+    }
+
+    let mut no_requests = expected.clone();
+    no_requests["artifactRequests"] = json!([]);
+    if mutation_was_accepted("incomplete", &manifest, &no_requests) {
+        accepted.push("insufficientEvidence transaction with no bounded request");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "incomplete output escaped evidence-first coverage requirements: {accepted:?}"
+    );
+}
+
+#[test]
+fn identity_bearing_fixture_fields_are_bounded_role_local_and_not_public() {
+    let client_expected =
+        read_json("client-only-looking-request", "expected.json").expect("expected loads");
+    let public_json = serde_json::to_string(&client_expected).expect("public output serializes");
+    for forbidden in ["ClientHandle", "RequestId", "RealUser", "RealRequest"] {
+        assert!(
+            !public_json.contains(forbidden),
+            "public expected JSON exposes raw identity marker {forbidden}"
+        );
+    }
+
+    let mut accepted = Vec::new();
+    for (label, original, replacement) in [
+        (
+            "unbounded client handle",
+            "ClientHandle=safe:client:lab-client-01",
+            "ClientHandle=RealUser",
+        ),
+        (
+            "unbounded request ID",
+            "RequestId=client-request-01",
+            "RequestId=RealRequest",
+        ),
+    ] {
+        let temporary = temporary_scenario("client-only-looking-request");
+        let mut manifest =
+            read_json("client-only-looking-request", "manifest.json").expect("manifest loads");
+        let relative_path = manifest["artifacts"][0]["relativePath"]
+            .as_str()
+            .expect("client artifact has a path")
+            .to_owned();
+        replace_fixture_text(&temporary.root, &relative_path, original, replacement);
+        refresh_artifact_bytes(&mut manifest, 0, &temporary.root);
+        if mutation_at_root_was_accepted(
+            "client-only-looking-request",
+            &temporary.root,
+            &manifest,
+            &client_expected,
+        ) {
+            accepted.push(label);
+        }
+    }
+
+    let temporary = temporary_scenario("healthy-package");
+    let mut manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let relative_path = manifest["artifacts"][2]["relativePath"]
+        .as_str()
+        .expect("provider artifact has a path")
+        .to_owned();
+    replace_fixture_text(
+        &temporary.root,
+        &relative_path,
+        "ProfileId=dp-server-5.00.test-v1]LOG]!><time=\"12:00:03",
+        "ProfileId=dp-server-5.00.test-v1; ClientHandle=safe:client:lab-client-01; RequestId=client-request-01]LOG]!><time=\"12:00:03",
+    );
+    refresh_artifact_bytes(&mut manifest, 2, &temporary.root);
+    if mutation_at_root_was_accepted("healthy-package", &temporary.root, &manifest, &expected) {
+        accepted.push("identity-bearing fields on a server transaction record");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "identity-bearing fixture fields escaped their safe role boundary: {accepted:?}"
+    );
+}
+
+#[test]
+fn state_chain_rejects_lossy_non_string_projection() {
+    let manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let invalid_entries = [
+        ("null", Value::Null),
+        ("boolean", json!(true)),
+        ("number", json!(7)),
+        ("object", json!({"unexpected": "value"})),
+    ];
+    let mut accepted = Vec::new();
+
+    for (shape, invalid) in &invalid_entries {
+        let mut mutated = expected.clone();
+        mutated["stateChain"]
+            .as_array_mut()
+            .expect("state chain is an array")
+            .push(invalid.clone());
+        if mutation_was_accepted("healthy-package", &manifest, &mutated) {
+            accepted.push(format!("{shape} state-chain entry"));
+        }
+    }
+
+    let mut mixed = expected.clone();
+    mixed["stateChain"]
+        .as_array_mut()
+        .expect("state chain is an array")
+        .extend(invalid_entries.iter().map(|(_, value)| value.clone()));
+    if mutation_was_accepted("healthy-package", &manifest, &mixed) {
+        accepted.push("mixed-type state-chain array".to_owned());
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "malformed state-chain entries were projected away: {accepted:?}"
+    );
+}
+
+#[test]
+fn artifact_identity_collection_time_and_encoding_are_mandatory() {
+    let absent_manifest = read_json("absent-dp", "manifest.json").expect("manifest loads");
+    let absent_expected = read_json("absent-dp", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut empty_artifact_id = absent_manifest.clone();
+    empty_artifact_id["artifacts"][0]["artifactId"] = json!("");
+    let mut empty_artifact_id_expected = absent_expected.clone();
+    empty_artifact_id_expected["coverage"][0]["artifactId"] = json!("");
+    if mutation_was_accepted("absent-dp", &empty_artifact_id, &empty_artifact_id_expected) {
+        accepted.push("empty stable artifact ID");
+    }
+
+    let mut absent_without_collection_time = absent_manifest.clone();
+    absent_without_collection_time["artifacts"][0]
+        .as_object_mut()
+        .expect("artifact is an object")
+        .remove("collectedUtc");
+    if mutation_was_accepted(
+        "absent-dp",
+        &absent_without_collection_time,
+        &absent_expected,
+    ) {
+        accepted.push("absent artifact without collectedUtc");
+    }
+
+    let mut malformed_without_collection_time = rotation_manifest.clone();
+    malformed_without_collection_time["artifacts"][2]
+        .as_object_mut()
+        .expect("artifact is an object")
+        .remove("collectedUtc");
+    if mutation_was_accepted(
+        "rotation-boundary",
+        &malformed_without_collection_time,
+        &rotation_expected,
+    ) {
+        accepted.push("parseFailed artifact without collectedUtc");
+    }
+
+    let mut captured_without_encoding = healthy_manifest.clone();
+    captured_without_encoding["artifacts"][0]
+        .as_object_mut()
+        .expect("artifact is an object")
+        .remove("encoding");
+    if mutation_was_accepted(
+        "healthy-package",
+        &captured_without_encoding,
+        &healthy_expected,
+    ) {
+        accepted.push("captured CCM artifact without encoding");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "mandatory artifact provenance was omitted: {accepted:?}"
+    );
+}
+
+#[test]
+fn source_local_evidence_and_artifact_requests_are_canonical_and_unique() {
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let incomplete_manifest = read_json("incomplete", "manifest.json").expect("manifest loads");
+    let incomplete_expected = read_json("incomplete", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut reversed_evidence = rotation_expected.clone();
+    reversed_evidence["sourceLocalObservations"][0]["evidence"]
+        .as_array_mut()
+        .expect("source-local evidence is an array")
+        .reverse();
+    if mutation_was_accepted("rotation-boundary", &rotation_manifest, &reversed_evidence) {
+        accepted.push("reordered source-local evidence");
+    }
+
+    let mut duplicate_request = incomplete_expected.clone();
+    let repeated = duplicate_request["artifactRequests"][0].clone();
+    duplicate_request["artifactRequests"]
+        .as_array_mut()
+        .expect("artifact requests are an array")
+        .insert(1, repeated);
+    if mutation_was_accepted("incomplete", &incomplete_manifest, &duplicate_request) {
+        accepted.push("duplicate sorted artifact request");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "nondeterministic source-local output was accepted: {accepted:?}"
     );
 }
