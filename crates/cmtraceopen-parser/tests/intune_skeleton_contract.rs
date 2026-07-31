@@ -244,6 +244,25 @@ fn privacy_scanner_flags_forbidden_material() {
 }
 
 #[test]
+fn privacy_scanner_flags_emails_joined_by_delimiters() {
+    // A semicolon-joined recipient list is the shape a pasted mail header has.
+    // Splitting only on whitespace made the whole run one token, whose domain
+    // then contained `;` and a second `@`, so both real addresses slipped through.
+    for sample in [
+        "user1@corp.com;user2@corp.com",
+        "to:person@corp.com",
+        "<person@corp.com>",
+        "owner=person@corp.com|next",
+        "[person@corp.com]",
+    ] {
+        assert!(
+            !privacy_problems("sample", sample).is_empty(),
+            "privacy scanner missed an email in {sample:?}"
+        );
+    }
+}
+
+#[test]
 fn privacy_scanner_allows_reserved_synthetic_domains() {
     assert!(
         privacy_problems("sample", "user synthetic.user@example.invalid signed in").is_empty(),

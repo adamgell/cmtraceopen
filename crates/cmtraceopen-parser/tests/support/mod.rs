@@ -505,8 +505,22 @@ fn find_windows_sid(contents: &str) -> Option<String> {
 
 /// Find an email address, ignoring the reserved `.invalid` and `.example` TLDs
 /// that fixtures are expected to use for synthetic identities.
+///
+/// The delimiter set has to be generous. Splitting only on whitespace and quotes
+/// lets `a@corp.com;b@corp.com` arrive as one token, whose domain then contains
+/// `;` and a second `@`; that fails the final character check and the token is
+/// skipped, so *both* real addresses slip through. Semicolon-joined recipient
+/// lists are exactly the shape a pasted mail header has, so this is the case the
+/// scanner most needs to catch.
 fn find_email(contents: &str) -> Option<String> {
-    for token in contents.split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',') {
+    for token in contents.split(|c: char| {
+        c.is_whitespace()
+            || matches!(
+                c,
+                '"' | '\'' | ',' | ';' | ':' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '='
+                    | '|'
+            )
+    }) {
         let Some((local, domain)) = token.split_once('@') else {
             continue;
         };
