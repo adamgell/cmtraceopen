@@ -21,7 +21,10 @@ pub struct RemediationSourceInput {
 
 const HEALTH_SCRIPTS_COMPONENTS: &[&str] = &["HealthScripts"];
 const AGENT_EXECUTOR_COMPONENTS: &[&str] = &["AgentExecutor"];
-const IME_COMPONENTS: &[&str] = &["IntuneManagementExtension", "PowerShell", "Win32App"];
+/// Components that confirm a *file* is the primary IME log. Wider than the
+/// record-scope list in `rules.rs` on purpose: any workload's component proves
+/// the file's identity, but only some may speak for this workload.
+const IME_FILE_COMPONENTS: &[&str] = &["IntuneManagementExtension", "PowerShell", "Win32App"];
 
 /// Strip a rotation suffix and the `.log` extension.
 ///
@@ -126,7 +129,7 @@ fn components_confirm(candidate: RemediationSourceKind, components: &[Option<Str
     let expected: &[&str] = match candidate {
         RemediationSourceKind::HealthScripts => HEALTH_SCRIPTS_COMPONENTS,
         RemediationSourceKind::AgentExecutor => AGENT_EXECUTOR_COMPONENTS,
-        RemediationSourceKind::IntuneManagementExtension => IME_COMPONENTS,
+        RemediationSourceKind::IntuneManagementExtension => IME_FILE_COMPONENTS,
         _ => return false,
     };
     components.iter().flatten().any(|component| {

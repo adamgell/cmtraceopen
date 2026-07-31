@@ -29,13 +29,24 @@ fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
 /// there must not speak for remediations.
 const HEALTH_SCRIPTS_COMPONENTS: &[&str] = &["HealthScripts"];
 const AGENT_EXECUTOR_COMPONENTS: &[&str] = &["AgentExecutor"];
-const IME_COMPONENTS: &[&str] = &["IntuneManagementExtension", "HealthScripts"];
+/// Components that let a record in the shared primary IME log speak for the
+/// remediation workload.
+///
+/// `PowerShell` is deliberately absent. In the primary IME log that component
+/// marks *platform-script* records, which `intune::apps::windows::scripts`
+/// owns. Accepting it here would let one workload's reporting records become
+/// the other's -- the same cross-workload contamination that gate exists to
+/// prevent. Remediation orchestration is logged under `HealthScripts`.
+///
+/// Named for record scope; `sources.rs` has its own, wider list for confirming
+/// that a *file* is the IME log at all.
+const IME_RECORD_SCOPE_COMPONENTS: &[&str] = &["IntuneManagementExtension", "HealthScripts"];
 
 fn component_is_in_scope(source_kind: RemediationSourceKind, component: Option<&str>) -> bool {
     let expected: &[&str] = match source_kind {
         RemediationSourceKind::HealthScripts => HEALTH_SCRIPTS_COMPONENTS,
         RemediationSourceKind::AgentExecutor => AGENT_EXECUTOR_COMPONENTS,
-        RemediationSourceKind::IntuneManagementExtension => IME_COMPONENTS,
+        RemediationSourceKind::IntuneManagementExtension => IME_RECORD_SCOPE_COMPONENTS,
         _ => return false,
     };
     component.is_some_and(|component| {
@@ -604,6 +615,41 @@ mod tests {
         let result = health("Detection script reached an unrecognised condition, exitCode = 7");
         assert_eq!(result.signal, RemediationSignal::Unclassified);
         assert!(result.stage_shaped_but_unmatched);
+    }
+
+    #[test]
+    fn a_powershell_component_record_cannot_report_for_remediations() {
+        // In the primary IME log `PowerShell` marks platform-script records,
+        // which `intune::apps::windows::scripts` owns. Accepting it here would
+        // make one workload's reporting record become the other's.
+        let result = classify_record(
+            RemediationSourceKind::IntuneManagementExtension,
+            Some("PowerShell"),
+            "Result has been sent to service successfully",
+        );
+        assert!(!result.in_scope);
+        assert_eq!(result.signal, RemediationSignal::Unclassified);
+    }
+
+    #[test]
+    fn health_scripts_component_can_report_in_the_primary_ime_log() {
+        let result = classify_record(
+            RemediationSourceKind::IntuneManagementExtension,
+            Some("HealthScripts"),
+            "Result has been sent to service successfully",
+        );
+        assert!(result.in_scope);
+        assert_eq!(result.signal, RemediationSignal::ReportSubmitted);
+    }
+
+    #[test]
+    fn a_completion_that_does_not_state_its_stage_yields_no_token() {
+        // Deliberate: a stage may be inherited for routing but never for
+        // interpreting a code. See the module docs.
+        let result = health("Script completed, exitCode = 0");
+        assert_eq!(result.signal, RemediationSignal::StageCompleted);
+        assert_eq!(result.stage, None);
+        assert!(result.exit_token.is_none());
     }
 
     #[test]

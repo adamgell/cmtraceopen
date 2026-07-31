@@ -86,14 +86,33 @@ fn resolve_blocks(records: &mut [PendingRecord]) {
     for indices in by_thread.into_values() {
         let mut block: Vec<usize> = Vec::new();
         for &index in &indices {
-            let starts_new_block = records[index].classification.signal
-                == RemediationSignal::StageLaunched
-                && !block.is_empty();
-            if starts_new_block {
+            let signal = records[index].classification.signal;
+
+            // A block opens at a policy receipt or a stage launch. Opening on
+            // policy receipt matters because the agent reuses thread numbers:
+            // without it, a later policy's records on the same thread would be
+            // absorbed into whatever block was still open.
+            let opens_block = matches!(
+                signal,
+                RemediationSignal::StageLaunched | RemediationSignal::PolicyReceived
+            );
+            if opens_block && !block.is_empty() {
                 apply_block(records, &block);
                 block.clear();
             }
+
             block.push(index);
+
+            // A report is the last thing a run says. Closing here means a
+            // stray later record cannot inherit this run's key and overwrite
+            // an outcome that was already terminal.
+            if matches!(
+                signal,
+                RemediationSignal::ReportSubmitted | RemediationSignal::ReportFailed
+            ) {
+                apply_block(records, &block);
+                block.clear();
+            }
         }
         apply_block(records, &block);
     }
@@ -139,11 +158,17 @@ fn apply_block(records: &mut [PendingRecord], block: &[usize]) {
         }
     }
 
-    // Two policies, or two stages, inside one block means our block boundary is
-    // wrong for this agent version. Refuse to key rather than merge.
+    // Two policies inside one block means the boundary is wrong for this agent
+    // version, and there is no safe way to split them here. Refuse to key.
     if conflicting_policy {
         return;
     }
+
+    // A stage conflict is handled differently and deliberately. The records
+    // still share a policy, so the key is safe to apply; what is not safe is
+    // the block's stage, because we cannot tell which record belongs to which
+    // half. The key is assigned and the stage override is skipped below, which
+    // leaves those records unstaged -- so their exit codes terminate nothing.
 
     for &index in block {
         if let Some(policy_id) = &policy_id {

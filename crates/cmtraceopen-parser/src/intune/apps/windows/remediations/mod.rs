@@ -22,7 +22,18 @@
 //! - join a detection to a remediation because they occurred near each other;
 //! - treat a missing output artifact as proof that a script produced no output;
 //! - repair a malformed embedded JSON payload, or concatenate payload fragments
-//!   across records to close a brace.
+//!   across records to close a brace;
+//! - interpret an exit code using a stage the record did not state itself.
+//!
+//! That last one is a deliberate asymmetry and is worth spelling out. A record
+//! may *inherit* its block's stage for routing, so a completion line is filed
+//! under the right half. It may not inherit a stage for *interpretation*: the
+//! exit token is only built when the record's own text named the stage. A
+//! block boundary is inferred, and an inferred boundary that is wrong would
+//! turn "compliant" into "succeeded" silently. Routing a record to the wrong
+//! stage costs an unresolved half; interpreting a code under the wrong stage
+//! costs an inverted diagnosis, so only the first is allowed to rest on
+//! inference.
 
 mod models;
 mod redaction;

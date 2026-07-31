@@ -311,6 +311,20 @@ fn privacy_fixture_redacts_deterministically() {
     assert_eq!(first, second, "redacted export must be deterministic");
 }
 
+/// The agent reuses CCM thread numbers. A record that arrives on a reused
+/// thread after a run has already reported must not inherit that run's key and
+/// overwrite an outcome that was already terminal.
+#[test]
+fn a_stray_record_on_a_reused_thread_cannot_overwrite_a_reported_run() {
+    let analysis = assert_scenario("thread-reuse-after-report");
+    assert_eq!(analysis.transactions.len(), 1);
+    assert_eq!(
+        analysis.unkeyed_observations,
+        vec!["hs:5".to_string()],
+        "the stray completion must stay visible and unkeyed"
+    );
+}
+
 // -- Cross-cutting contract -------------------------------------------------
 
 /// The property the whole module rests on: `0` means "compliant" from
