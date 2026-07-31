@@ -22,6 +22,58 @@ const GUARD_IDS: [&str; 13] = [
     "unrelated-terminal-error",
     "version-mismatch",
 ];
+/// Closed obligation vocabulary: each guard's requiredOutputs are pinned
+/// here and every token has an executable predicate over the scenario's
+/// expected contract in `output_obligation_holds`.
+const GUARD_REQUIRED_OUTPUTS: [(&str, &[&str]); 13] = [
+    (
+        "conflicting-exact-key",
+        &["incompatibilityReason", "sourceLocalResults"],
+    ),
+    (
+        "incompatible-topology",
+        &["incompatibilityReason", "sourceLocalResults"],
+    ),
+    (
+        "invalid-timestamp-offset",
+        &["orderingUnavailable", "sourceLocalResults"],
+    ),
+    (
+        "missing-client-counterpart",
+        &["clientArtifactRequest", "serverLocalResults"],
+    ),
+    (
+        "missing-server-counterpart",
+        &["clientLocalResults", "serverArtifactRequest"],
+    ),
+    ("partial-capture", &["coverageGap", "sourceLocalResults"]),
+    (
+        "redaction-boundary",
+        &["publicSafeHandles", "redactedProjection"],
+    ),
+    (
+        "reordered-input",
+        &["deterministicSerialization", "sourceLocalResults"],
+    ),
+    ("rotation-split", &["coverageGap", "sourceLocalResults"]),
+    (
+        "same-time-no-key",
+        &["candidateSymptom", "sourceLocalResults"],
+    ),
+    (
+        "unknown-extraction-profile",
+        &["profileGap", "sourceLocalResults"],
+    ),
+    (
+        "unrelated-terminal-error",
+        &["sourceLocalResults", "unlinkedTerminalEvidence"],
+    ),
+    (
+        "version-mismatch",
+        &["incompatibilityReason", "sourceLocalResults"],
+    ),
+];
+
 const POLICY_SCENARIOS: [&str; 14] = [
     "policy-client-only",
     "policy-conflicting-key",
@@ -589,7 +641,87 @@ fn check_scenario(scenario: &ScenarioContract, spec: &MatrixSpec) -> Result<(), 
             ));
         }
     }
+    for guard in &scenario.guard_ids {
+        let (_, outputs) = GUARD_REQUIRED_OUTPUTS
+            .iter()
+            .find(|(pinned_id, _)| pinned_id == guard)
+            .ok_or_else(|| {
+                format!("{scenario_id}: guard {guard} has no pinned output obligations")
+            })?;
+        for output in *outputs {
+            if !output_obligation_holds(output, scenario) {
+                return Err(format!(
+                    "{scenario_id}: guard {guard} obligation {output} is not satisfied by the expected contract"
+                ));
+            }
+        }
+    }
     Ok(())
+}
+
+/// Evaluates one required-output token against the scenario's expected
+/// results and public projection, so obligations are executable
+/// constraints instead of declarative strings.
+fn output_obligation_holds(output: &str, scenario: &ScenarioContract) -> bool {
+    let projection = &scenario.expected_public_projection;
+    match output {
+        "incompatibilityReason" => {
+            projection["outcome"] == "incompatible"
+                && scenario.expected.link_strength_ceiling == "incompatible"
+        }
+        "sourceLocalResults" => projection["sourceFindingsPreserved"] == true,
+        "clientLocalResults" => {
+            projection["sourceFindingsPreserved"] == true
+                && scenario.coverage == CoverageState::ClientOnly
+        }
+        "serverLocalResults" => {
+            projection["sourceFindingsPreserved"] == true
+                && scenario.coverage == CoverageState::ServerOnly
+        }
+        "clientArtifactRequest" => {
+            projection["outcome"] == "counterpartRequested"
+                && scenario
+                    .expected
+                    .artifact_requests
+                    .iter()
+                    .any(|request| request.starts_with("client-"))
+        }
+        "serverArtifactRequest" => {
+            projection["outcome"] == "counterpartRequested"
+                && scenario
+                    .expected
+                    .artifact_requests
+                    .iter()
+                    .any(|request| request.starts_with("server-"))
+        }
+        "orderingUnavailable" => projection["ordering"] == "unavailable",
+        "coverageGap" => projection["outcome"] == "coverageGap",
+        "candidateSymptom" => {
+            projection["outcome"] == "candidateOnly"
+                && scenario.expected.link_strength_ceiling == "candidate"
+        }
+        "profileGap" => projection["outcome"] == "profileGap",
+        "unlinkedTerminalEvidence" => scenario
+            .expected
+            .reason_codes
+            .iter()
+            .any(|code| code == "unrelated-server-terminal"),
+        "publicSafeHandles" => projection.as_object().is_some_and(|entries| {
+            entries
+                .iter()
+                .filter(|(key, value)| {
+                    key.ends_with("Handle") && value.as_str().is_some_and(is_synthetic_slug)
+                })
+                .count()
+                >= 2
+        }),
+        "redactedProjection" => !scenario.private_input_markers.is_empty(),
+        "deterministicSerialization" => {
+            !scenario.ordered_input_evidence.is_empty()
+                && !scenario.expected.deterministic_result_id.is_empty()
+        }
+        _ => false,
+    }
 }
 
 /// True when the scenario's own input state instantiates the guard's
@@ -764,9 +896,13 @@ fn check_guard_matrix(matrix: &GuardMatrix) -> Result<(), String> {
         if guard.forbidden_confidences != ["high"] {
             return Err(format!("{guard_id}: guard must forbid high confidence"));
         }
-        if guard.required_outputs.is_empty() || !is_sorted_unique(&guard.required_outputs) {
+        let (_, pinned_outputs) = GUARD_REQUIRED_OUTPUTS
+            .iter()
+            .find(|(pinned_id, _)| *pinned_id == guard_id)
+            .ok_or_else(|| format!("{guard_id}: guard has no pinned output obligations"))?;
+        if guard.required_outputs != *pinned_outputs {
             return Err(format!(
-                "{guard_id}: required outputs must be nonempty, sorted, and unique"
+                "{guard_id}: required outputs must stay the pinned executable obligations"
             ));
         }
     }
