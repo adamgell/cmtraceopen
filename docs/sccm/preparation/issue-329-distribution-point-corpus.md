@@ -112,7 +112,9 @@ The outcome rules are conservative:
   IDs and a bounded source ID;
 - rotation fragments and malformed evidence remain noncorrelatable
   source-local observations whose classification is bound to exact physical
-  role, capture state, lineage, rotation kind, and fragment completeness; and
+  role, capture state, lineage, rotation kind, and fragment completeness;
+  every source-local artifact ID is a nonempty typed string bound to that
+  physical manifest; and
 - a client-only download record cannot become a DP transaction or DP failure.
 
 ## Coverage and request contract

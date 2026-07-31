@@ -1492,10 +1492,25 @@ fn validate_expected(
                 "{observation_id} is not an explicitly noncorrelatable source-local observation"
             ));
         }
-        let artifact_ids = observation["artifactIds"]
-            .as_array()
-            .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-            .unwrap_or_default();
+        let mut artifact_ids = Vec::new();
+        match required_array(observation, "artifactIds", observation_id) {
+            Ok(values) => {
+                for value in values {
+                    match value.as_str() {
+                        Some(artifact_id) if !artifact_id.is_empty() => {
+                            artifact_ids.push(artifact_id);
+                        }
+                        Some(_) => {
+                            failures.push(format!("{observation_id} artifact ID must not be empty"))
+                        }
+                        None => {
+                            failures.push(format!("{observation_id} artifact IDs must be strings"))
+                        }
+                    }
+                }
+            }
+            Err(error) => failures.push(error),
+        }
         let mut sorted_artifact_ids = artifact_ids.clone();
         sorted_artifact_ids.sort_unstable();
         let unique_artifact_ids = artifact_ids.iter().copied().collect::<BTreeSet<_>>();
@@ -2443,6 +2458,81 @@ fn observation_ids_and_physical_evidence_are_unique_across_classes() {
     assert!(
         accepted.is_empty(),
         "observation identity or evidence single-use violations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn source_local_artifact_ids_are_strict_strings_across_classifications() {
+    let client_manifest =
+        read_json("client-only-looking-request", "manifest.json").expect("manifest loads");
+    let client_expected =
+        read_json("client-only-looking-request", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let surfaces = [
+        (
+            "ignoredClientEvidence",
+            "client-only-looking-request",
+            &client_manifest,
+            &client_expected,
+            0usize,
+        ),
+        (
+            "rotationSplit",
+            "rotation-boundary",
+            &rotation_manifest,
+            &rotation_expected,
+            0usize,
+        ),
+        (
+            "malformedEvidence",
+            "rotation-boundary",
+            &rotation_manifest,
+            &rotation_expected,
+            1usize,
+        ),
+    ];
+    let invalid_entries = [
+        ("numeric", json!(7)),
+        ("null", Value::Null),
+        ("boolean", json!(true)),
+        ("object", json!({"unexpected": "value"})),
+        ("empty string", json!("")),
+    ];
+    let mut accepted = Vec::new();
+
+    for (surface, scenario, manifest, expected, observation_index) in surfaces {
+        for (shape, invalid_entry) in &invalid_entries {
+            let mut mutated = expected.clone();
+            mutated["sourceLocalObservations"][observation_index]["artifactIds"]
+                .as_array_mut()
+                .expect("source-local artifact IDs are an array")
+                .push(invalid_entry.clone());
+            if mutation_was_accepted(scenario, manifest, &mutated) {
+                accepted.push(format!("{surface} accepted appended {shape} artifact ID"));
+            }
+        }
+
+        let mut mixed_array = expected.clone();
+        mixed_array["sourceLocalObservations"][observation_index]["artifactIds"]
+            .as_array_mut()
+            .expect("source-local artifact IDs are an array")
+            .extend([
+                json!(7),
+                Value::Null,
+                json!(true),
+                json!({"unexpected": "value"}),
+            ]);
+        if mutation_was_accepted(scenario, manifest, &mixed_array) {
+            accepted.push(format!("{surface} accepted a mixed-type artifact ID array"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "malformed source-local physical artifact IDs were accepted: {accepted:?}"
     );
 }
 
