@@ -2,7 +2,11 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button, Caption1, Subtitle2 } from "@fluentui/react-components";
 
-import { ProfileDrilldown } from "../macos-diag";
+// Imported from the module, not the ../macos-diag barrel: the barrel also
+// constructs macosDiagWorkspace, so going through it makes this workspace
+// re-enter macos-diag/index.ts mid-initialization and throws
+// "Cannot access 'macosDiagWorkspace' before initialization" at runtime.
+import { ProfileDrilldown } from "../macos-diag/ProfileDrilldown";
 import type { MacosMdmProfile } from "../macos-diag/types";
 import { useJamfStore } from "./jamf-store";
 import type { JamfProfilesResult } from "./types";
