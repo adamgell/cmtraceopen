@@ -702,12 +702,25 @@ fn is_bounded_request_reason(reason: &str) -> bool {
     let trimmed = reason.trim();
     if trimmed.is_empty()
         || trimmed.chars().count() > MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS
+        || contains_rooted_path(trimmed)
         || trimmed.contains(['*', '?', '[', ']'])
     {
         return false;
     }
 
     !has_unbounded_request_scope(&trimmed.to_ascii_lowercase())
+}
+
+fn contains_rooted_path(reason: &str) -> bool {
+    let bytes = reason.as_bytes();
+    bytes.iter().enumerate().any(|(index, byte)| {
+        matches!(byte, b'/' | b'\\')
+            && (index == 0
+                || !matches!(
+                    bytes[index - 1],
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' | b'.'
+                ))
+    })
 }
 
 fn has_unbounded_request_scope(reason: &str) -> bool {

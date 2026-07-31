@@ -117,6 +117,16 @@ fn finding_with_gap_and_request(finding_id: &str) -> SccmFinding {
         .unwrap()
 }
 
+const ROOTED_ARTIFACT_REQUEST_REASONS: [&str; 7] = [
+    r"Collect C:\ for related evidence.",
+    r"Collect C:\Windows\CCM\Logs\PolicyAgent.log.",
+    r"Collect C:/Windows/CCM/Logs/PolicyAgent.log.",
+    "Collect / for related evidence.",
+    "Collect /var/log/sccm/PolicyAgent.log.",
+    r"Collect \\server\share\PolicyAgent.log.",
+    "Collect //server/share/PolicyAgent.log.",
+];
+
 #[test]
 fn finding_confirmed_failure_requires_terminal_evidence() {
     let result = SccmFindingBuilder::new("app-enforcement-failed")
@@ -960,7 +970,7 @@ fn finding_artifact_requests_reject_structurally_unbounded_reasons() {
         r"Collect C:\Windows\CCM\Logs\*.log.",
     ];
 
-    for reason in reasons {
+    for reason in reasons.into_iter().chain(ROOTED_ARTIFACT_REQUEST_REASONS) {
         let result = SccmFindingBuilder::new("unbounded-structural-request")
             .class(SccmFindingClass::Symptom)
             .phase(SccmPhase::Policy)
@@ -971,7 +981,11 @@ fn finding_artifact_requests_reject_structurally_unbounded_reasons() {
             .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
             .build();
 
-        assert!(result.is_err(), "{reason}");
+        assert_eq!(
+            result.unwrap_err(),
+            SccmFindingValidationError::InvalidArtifactRequestReason,
+            "{reason}"
+        );
     }
 }
 
@@ -983,6 +997,8 @@ fn finding_artifact_requests_accept_specific_bounded_reasons() {
         "Confirm the root cause recorded by PolicyAgent.",
         "Confirm the disk status code recorded in PolicyAgent.log.",
         "Collect the disk imaging Task Sequence log.",
+        "Collect Logs/PolicyAgent.log from the bounded bundle.",
+        r"Collect Logs\PolicyAgent.log from the bounded bundle.",
     ] {
         SccmFindingBuilder::new("bounded-structural-request")
             .class(SccmFindingClass::Symptom)
@@ -1000,23 +1016,28 @@ fn finding_artifact_requests_accept_specific_bounded_reasons() {
 #[test]
 fn finding_artifact_request_bounds_apply_to_deserialization_and_serialization() {
     let finding = finding_with_gap_and_request("request-boundary-parity");
-    let mut json = serde_json::to_value(&finding).unwrap();
-    json["nextArtifacts"][0]["reason"] = serde_json::json!("Collect every file on the system.");
-    let deserialize_error = serde_json::from_value::<SccmFinding>(json)
-        .unwrap_err()
-        .to_string();
-    assert!(
-        deserialize_error.contains("InvalidArtifactRequestReason"),
-        "{deserialize_error}"
-    );
+    for reason in ROOTED_ARTIFACT_REQUEST_REASONS.into_iter().chain([
+        "Collect every file on the system.",
+        "Scan the full disk for related evidence.",
+    ]) {
+        let mut json = serde_json::to_value(&finding).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        let deserialize_error = serde_json::from_value::<SccmFinding>(json)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            deserialize_error.contains("InvalidArtifactRequestReason"),
+            "{reason}: {deserialize_error}"
+        );
 
-    let mut mutated = finding;
-    mutated.next_artifacts[0].reason = "Scan the full disk for related evidence.".into();
-    let serialize_error = serde_json::to_string(&mutated).unwrap_err().to_string();
-    assert!(
-        serialize_error.contains("InvalidArtifactRequestReason"),
-        "{serialize_error}"
-    );
+        let mut mutated = finding.clone();
+        mutated.next_artifacts[0].reason = reason.into();
+        let serialize_error = serde_json::to_string(&mutated).unwrap_err().to_string();
+        assert!(
+            serialize_error.contains("InvalidArtifactRequestReason"),
+            "{reason}: {serialize_error}"
+        );
+    }
 }
 
 #[test]
