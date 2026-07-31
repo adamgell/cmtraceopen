@@ -675,15 +675,20 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
             "{scenario}: selected synthetic profile identity drifted"
         ));
     }
-    if scenario == "invalid-offset"
-        && (transactions[0]["ordering"]["crossArtifactComparable"] != false
-            || transactions[0]["ordering"]["highConfidenceEligible"] != false
-            || transactions[0]["ordering"]["reason"] != "invalidOffset")
-    {
-        failures.push(
-            "invalid-offset: invalid provenance must disable cross-artifact high confidence"
-                .to_owned(),
-        );
+    if scenario == "invalid-offset" {
+        if let Some(transaction) = transactions.first() {
+            if transaction["ordering"]["crossArtifactComparable"] != false
+                || transaction["ordering"]["highConfidenceEligible"] != false
+                || transaction["ordering"]["reason"] != "invalidOffset"
+            {
+                failures.push(
+                    "invalid-offset: invalid provenance must disable cross-artifact high confidence"
+                        .to_owned(),
+                );
+            }
+        } else {
+            failures.push("invalid-offset: transaction is missing".to_owned());
+        }
     }
     if scenario == "same-minute-separate" {
         let update_ids = transactions
@@ -696,14 +701,21 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
             );
         }
     }
-    if scenario == "supplemental-conflict"
-        && (transactions[0]["state"] != "succeeded"
-            || observations[0]["keyConfidence"] != "none"
-            || observations[0]["confidenceCeiling"] != "low")
-    {
-        failures.push(
-            "supplemental-conflict: unkeyed CBS evidence cannot override client success".to_owned(),
-        );
+    if scenario == "supplemental-conflict" {
+        if let (Some(transaction), Some(observation)) = (transactions.first(), observations.first())
+        {
+            if transaction["state"] != "succeeded"
+                || observation["keyConfidence"] != "none"
+                || observation["confidenceCeiling"] != "low"
+            {
+                failures.push(
+                    "supplemental-conflict: unkeyed CBS evidence cannot override client success"
+                        .to_owned(),
+                );
+            }
+        } else {
+            failures.push("supplemental-conflict: subject is missing".to_owned());
+        }
     }
 
     failures
