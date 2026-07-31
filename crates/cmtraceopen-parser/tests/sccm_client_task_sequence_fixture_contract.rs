@@ -729,7 +729,7 @@ fn validate_manifest_and_storage(
                         "{scenario}/{artifact_id}: _SMSTSLogPath is not observed in this physical artifact"
                     ));
                 }
-                None if !fragment_complete && observed_paths.is_empty() => {}
+                None if observed_paths.is_empty() => {}
                 None => {
                     return Err(format!(
                         "{scenario}/{artifact_id}: physical _SMSTSLogPath presence/absence is not declared exactly"
@@ -986,10 +986,12 @@ fn validate_contract(
         ));
     }
 
-    let missing_physical_path_evidence = artifacts
+    let incomplete_fragments_missing_path_evidence = artifacts
         .iter()
         .filter(|artifact| {
-            artifact["captureState"] == "captured" && artifact["smstsLogPathEvidence"].is_null()
+            artifact["captureState"] == "captured"
+                && artifact["rotation"]["fragmentComplete"] == false
+                && artifact["smstsLogPathEvidence"].is_null()
         })
         .map(|artifact| {
             artifact["artifactId"]
@@ -1127,9 +1129,9 @@ fn validate_contract(
             ));
         }
     }
-    if reconstructed_missing_path_evidence != missing_physical_path_evidence {
+    if reconstructed_missing_path_evidence != incomplete_fragments_missing_path_evidence {
         return Err(format!(
-            "{scenario}: every missing per-artifact _SMSTSLogPath must have one explicit logical reconstruction"
+            "{scenario}: every incomplete fragment missing _SMSTSLogPath must have one explicit logical reconstruction"
         ));
     }
 
@@ -1562,9 +1564,11 @@ fn validate_contract(
     let observation_ids = sorted_ids(&expected["sourceLocalObservations"], "observationId");
     let mut sorted_observation_ids = observation_ids.clone();
     sorted_observation_ids.sort();
-    if observation_ids != sorted_observation_ids {
+    if observation_ids != sorted_observation_ids
+        || observation_ids.iter().collect::<BTreeSet<_>>().len() != observation_ids.len()
+    {
         return Err(format!(
-            "{scenario}: source-local observations are not sorted"
+            "{scenario}: source-local observation IDs must be unique and sorted"
         ));
     }
     for observation in observations {
@@ -1594,8 +1598,10 @@ fn validate_contract(
     let finding_ids = sorted_ids(&expected["findings"], "findingId");
     let mut sorted_finding_ids = finding_ids.clone();
     sorted_finding_ids.sort();
-    if finding_ids != sorted_finding_ids {
-        return Err(format!("{scenario}: finding IDs are not sorted"));
+    if finding_ids != sorted_finding_ids
+        || finding_ids.iter().collect::<BTreeSet<_>>().len() != finding_ids.len()
+    {
+        return Err(format!("{scenario}: finding IDs must be unique and sorted"));
     }
     for finding in expected["findings"]
         .as_array()

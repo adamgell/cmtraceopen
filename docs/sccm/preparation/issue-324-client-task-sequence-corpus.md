@@ -33,10 +33,12 @@ paths. Each captured artifact pins:
 - the original basename and rotation kind;
 - the sanitized capture source path;
 - either the `_SMSTSLogPath` value observed in that physical artifact or an
-  explicit null for an incomplete fragment that contains no such token;
+  explicit null whenever that artifact contains no such token, including a
+  complete WinPE record collected before a stable hard-drive path exists;
 - a path class and relocation ordinal;
 - the source version, capture timestamp, encoding, and exact byte count; and
-- whether that physical fragment is a complete logical CCM record.
+- independently, whether that physical fragment is a complete logical CCM
+  record.
 
 An observed `_SMSTSLogPath` is the authoritative in-record path observation.
 A sanitized capture source path remains capture provenance; it cannot
@@ -125,7 +127,8 @@ This requirement is pinned independently for:
 A reboot request with expected continuation is `blockedOrDeferred`, not
 failure. An in-progress record is not treated as a terminal record merely
 because no later fragment was collected. Each nonterminal scenario names the
-smallest bounded next `client-task-sequence-smsts` path class to collect.
+`client-task-sequence-smsts` logical artifact and the smallest bounded path
+class to collect: `winpe`, `setup`, `fullOs`, `client`, or `unknown`.
 
 ## Logical CCM records and rotation
 
@@ -159,11 +162,17 @@ low-confidence, non-correlatable source-local observations.
 
 ## Coverage semantics
 
-Capture state and execution state are independent:
+Physical capture, logical-record framing, logical coverage, and execution state
+are independent:
 
-- `captured` means the physical artifact was available and complete;
-- `partial` means only incomplete rotation fragments are available; and
-- `absent` means the logical artifact was not captured.
+- manifest `captureState: captured` means the physical artifact bytes are
+  available, whether or not those bytes form a complete logical CCM record;
+- `rotation.fragmentComplete` states whether that physical artifact contains a
+  complete logical CCM record;
+- logical coverage is `captured` when complete evidence is available,
+  `partial` when only incomplete rotation fragments are available, and
+  `absent` when no physical artifact was captured; and
+- execution state is derived only from cited, profile-recognized records.
 
 The `incomplete` scenario contains one absent logical artifact and no physical
 evidence. Its only conclusion is `insufficientEvidence` plus a bounded request
@@ -205,11 +214,19 @@ captured, one is partial, and one is absent. The
 path-and-artifact-qualified evidence content digest is SHA-256
 `917df82bdf96ae4debd3e02e669669a9b564e932d7052091fb39094305593c8b`.
 
-The Rust contract hashes every physical file, builds sorted rows as
-`scenario NUL artifactId NUL relativePath NUL fileSha256 LF`, and hashes the
-concatenated rows. This binds scenario, physical identity, safe path, and
-bytes. It also pins unique manifest references, exact byte counts, and the
-absence of orphaned or aliased evidence files.
+The Rust contract hashes every physical file, builds rows as
+`scenario NUL artifactId NUL relativePath NUL fileSha256 LF`, sorts the complete
+row byte sequences lexicographically, concatenates them without another
+separator, and hashes that byte stream. Scenario names, artifact IDs, and
+relative paths are UTF-8; repository-relative paths use `/` regardless of host
+path syntax. Each `fileSha256` is lowercase hexadecimal SHA-256 of the exact
+checked-in evidence bytes. Evidence files use LF line endings, and line endings
+are not normalized before hashing, so a CRLF rewrite changes the digest. Row
+fields and the final digest row stream are UTF-8 bytes, NUL is byte `0x00`, LF
+is byte `0x0a`, and the published aggregate digest is lowercase hexadecimal.
+This binds scenario, physical identity, safe path, and bytes. It also pins
+unique manifest references, exact byte counts, and the absence of orphaned or
+aliased evidence files.
 
 ## Determinism and fail-closed checks
 
