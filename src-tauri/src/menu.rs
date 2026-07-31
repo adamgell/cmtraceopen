@@ -1726,6 +1726,7 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
         MENU_ID_FILE_NEW_EMPTY_TIMELINE => ("timeline_new_empty", "file"),
         MENU_ID_FILE_SAVE_SESSION => ("save_session", "file"),
         MENU_ID_FILE_OPEN_SESSION => ("open_session", "file"),
+        MENU_ID_FILE_RESTART_AS_ADMINISTRATOR => ("restart_as_administrator", "file"),
         MENU_ID_EDIT_FIND => ("show_find", "edit"),
         MENU_ID_EDIT_FIND_NEXT => ("find_next", "edit"),
         MENU_ID_EDIT_FIND_PREVIOUS => ("find_previous", "edit"),
@@ -2198,6 +2199,11 @@ mod tests {
             (MENU_ID_WINDOW_SETTINGS, "show_settings", "window"),
             (MENU_ID_HELP_CHECK_FOR_UPDATES, "check_for_updates", "help"),
             (MENU_ID_HELP_ABOUT, "show_about", "help"),
+            (
+                MENU_ID_FILE_RESTART_AS_ADMINISTRATOR,
+                "restart_as_administrator",
+                "file",
+            ),
         ];
 
         for (menu_id, action, category) in cases {
@@ -2209,6 +2215,53 @@ mod tests {
             assert_eq!(payload.path, None);
             assert_eq!(payload.workspace, None);
             assert_eq!(payload.kind, None);
+        }
+    }
+
+    #[test]
+    fn every_ordered_menu_item_dispatches_an_action() {
+        // The case list above is maintained by hand, so it cannot prove an item
+        // was not forgotten — a new id can be appended to an ORDER constant,
+        // rendered as a real clickable item, and still fall through
+        // `payload_for_menu_id`'s `_ => return None` arm. That compiles, passes
+        // clippy, and ships a menu entry that silently does nothing.
+        //
+        // This walks the orders instead, so any future item is covered the
+        // moment it becomes reachable.
+        // Containers open a submenu rather than dispatching; their children are
+        // covered because the child orders are walked too.
+        const SUBMENU_CONTAINERS: &[&str] = &[
+            MENU_ID_FILE_KNOWN_SOURCES,
+            MENU_ID_FILE_RECENT,
+            MENU_ID_FILE_NEW_TIMELINE,
+            MENU_ID_VIEW_TEXT_SIZE,
+        ];
+
+        let orders: Vec<&[&str]> = vec![
+            FILE_ORDER,
+            FILE_ORDER_WINDOWS,
+            FILE_ORDER_MAC,
+            NEW_TIMELINE_ORDER,
+            EDIT_ORDER,
+            VIEW_ORDER,
+            TEXT_SIZE_ORDER,
+            HELP_ORDER,
+        ];
+
+        for order in orders {
+            for &menu_id in order {
+                if menu_id == MENU_SEPARATOR || SUBMENU_CONTAINERS.contains(&menu_id) {
+                    continue;
+                }
+                // Quit is handled before dispatch, so it has no payload.
+                if menu_id == MENU_ID_FILE_QUIT {
+                    continue;
+                }
+                assert!(
+                    payload_for_menu_id(menu_id).is_some(),
+                    "menu item {menu_id} is rendered but dispatches no action"
+                );
+            }
         }
     }
 

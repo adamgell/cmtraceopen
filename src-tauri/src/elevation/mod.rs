@@ -80,8 +80,16 @@ pub enum ElevationReason {
 ///
 /// `Workspace` restores navigation only. The remaining variants each carry one
 /// validated source reference and nothing else.
+// `rename_all` on an enum renames the VARIANTS only. Struct-variant fields need
+// `rename_all_fields`, without which `KnownSource { source_id }` crosses the IPC
+// boundary as `source_id` while the TypeScript contract says `sourceId` — and
+// neither clippy nor tsc can see across that boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum RestoreTarget {
     /// Restore the workspace with no source.
     Workspace,
@@ -308,6 +316,58 @@ mod tests {
         assert_eq!(json, "\"esp-diagnostics\"");
         let parsed: AppWorkspace = serde_json::from_str("\"dns-dhcp\"").expect("deserialize");
         assert_eq!(parsed, AppWorkspace::DnsDhcp);
+    }
+
+    #[test]
+    fn restore_targets_use_the_camel_case_wire_contract() {
+        // The frontend declares these field names in src/types/elevation.ts.
+        // A mismatch here is invisible to both clippy and tsc — it only shows
+        // up as a rejected IPC call at runtime — so assert the exact JSON.
+        let known = serde_json::to_value(RestoreTarget::KnownSource {
+            source_id: "ccm-client-logs".to_string(),
+        })
+        .expect("serialize");
+        assert_eq!(
+            known,
+            serde_json::json!({"kind": "knownSource", "sourceId": "ccm-client-logs"})
+        );
+
+        let folder = serde_json::to_value(RestoreTarget::Folder {
+            path: PathBuf::from(ABSOLUTE_FILE),
+            aggregate: true,
+        })
+        .expect("serialize");
+        assert_eq!(folder["kind"], "folder");
+        assert_eq!(folder["aggregate"], true);
+
+        assert_eq!(
+            serde_json::to_value(RestoreTarget::Workspace).expect("serialize"),
+            serde_json::json!({"kind": "workspace"})
+        );
+    }
+
+    #[test]
+    fn restore_targets_deserialize_from_the_frontend_payload() {
+        // The exact shape src/lib/elevation-context.ts emits.
+        let parsed: RestoreTarget =
+            serde_json::from_str(r#"{"kind":"knownSource","sourceId":"ccm-client-logs"}"#)
+                .expect("the frontend payload must deserialize");
+        assert_eq!(
+            parsed,
+            RestoreTarget::KnownSource {
+                source_id: "ccm-client-logs".to_string()
+            }
+        );
+
+        // The snake_case form must NOT be accepted: allowing both would let the
+        // contract drift without any test noticing.
+        assert!(
+            serde_json::from_str::<RestoreTarget>(
+                r#"{"kind":"knownSource","source_id":"ccm-client-logs"}"#
+            )
+            .is_err(),
+            "only the camelCase wire contract is accepted"
+        );
     }
 
     #[test]
