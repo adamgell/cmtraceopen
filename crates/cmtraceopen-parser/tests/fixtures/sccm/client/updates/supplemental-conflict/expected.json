@@ -104,7 +104,7 @@
       "confidence": "low",
       "confidenceCeiling": "low",
       "correlationEligible": false,
-      "lastSuccessfulPhase": "install",
+      "lastSuccessfulPhase": null,
       "nextArtifact": {
         "logicalArtifactId": "client-windows-update-supplemental",
         "reason": "Collect the smallest bounded client-windows-update-supplemental continuation for this exact update subject."
@@ -124,7 +124,7 @@
       "subjectId": "updates:source-local:supplemental-conflict",
       "class": "lowConfidenceSymptom",
       "phase": "install",
-      "lastSuccessfulPhase": "install",
+      "lastSuccessfulPhase": null,
       "confidence": "low",
       "confidenceCeiling": "low",
       "nextArtifact": {

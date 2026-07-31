@@ -340,7 +340,7 @@ const SCENARIOS: [ScenarioContract; 17] = [
         state: "contradictory",
         classification: "lowConfidenceSymptom",
         confidence_ceiling: "low",
-        last_successful_phase: Some("install"),
+        last_successful_phase: None,
         next_artifact: Some("client-windows-update-supplemental"),
         coverage: &[
             ("client-updates", "captured"),
@@ -530,6 +530,11 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
         {
             failures.push(format!(
                 "{scenario}: source-local observations must stay keyless and uncorrelatable"
+            ));
+        }
+        if !observation["lastSuccessfulPhase"].is_null() {
+            failures.push(format!(
+                "{scenario}: keyless observation cannot claim a lastSuccessfulPhase"
             ));
         }
     }
