@@ -427,6 +427,10 @@ struct ParsedArtifact {
     state: String,
     source_id: String,
     role: String,
+    producer_host: String,
+    workflow_subject_role: String,
+    workflow_subject_handle: String,
+    source_version: String,
     basename: String,
     rotation_kind: String,
     rotation_lineage: String,
@@ -595,17 +599,23 @@ fn validate_manifest(
 
         let source_id = required_string(artifact, "sourceId", &context).unwrap_or("invalid");
         let role = required_string(artifact, "producerRole", &context).unwrap_or("invalid");
+        let producer_host =
+            required_string(artifact, "producerHostHandle", &context).unwrap_or("invalid");
+        let workflow_subject_role =
+            required_string(artifact, "workflowSubjectRole", &context).unwrap_or("invalid");
+        let workflow_subject_handle =
+            required_string(artifact, "workflowSubjectHandle", &context).unwrap_or("invalid");
         let basename = required_string(artifact, "originalBasename", &context).unwrap_or("invalid");
         let source_kind = required_string(artifact, "sourceKind", &context).unwrap_or("invalid");
         let state = required_string(artifact, "captureState", &context).unwrap_or("invalid");
+        let source_version =
+            required_string(artifact, "sourceVersion", &context).unwrap_or("invalid");
         if !allowed_source(source_id, role, basename, source_kind) {
             failures.push(format!(
                 "{artifact_id} has an uncatalogued source/producer/basename/grammar tuple"
             ));
         }
-        if artifact["workflowSubjectRole"] != "softwareUpdatePoint"
-            || artifact["workflowSubjectHandle"] != EXACT_SUP
-        {
+        if workflow_subject_role != "softwareUpdatePoint" || workflow_subject_handle != EXACT_SUP {
             failures.push(format!(
                 "{artifact_id} loses the exact SUP workflow subject"
             ));
@@ -617,7 +627,7 @@ fn validate_manifest(
             "client" => Some(EXACT_CLIENT),
             _ => None,
         };
-        if artifact["producerHostHandle"].as_str() != expected_producer {
+        if Some(producer_host) != expected_producer {
             failures.push(format!(
                 "{artifact_id} producer handle is not exact for its declared role"
             ));
@@ -636,10 +646,7 @@ fn validate_manifest(
         {
             failures.push(format!("{artifact_id} reuses a physical path fingerprint"));
         }
-        if !artifact["sourceVersion"]
-            .as_str()
-            .is_some_and(|value| prefixed_token_is_nonempty(value, "5.00.TEST."))
-        {
+        if !prefixed_token_is_nonempty(source_version, "5.00.TEST.") {
             failures.push(format!(
                 "{artifact_id} is outside the synthetic version profile"
             ));
@@ -789,7 +796,7 @@ fn validate_manifest(
                 failures.push(format!("{artifact_id} lacks a synthetic fixture marker"));
             }
 
-            if matches!(state, "captured" | "capped") && source_kind == "ccmLog" {
+            if source_kind == "ccmLog" {
                 let content = String::from_utf8_lossy(&bytes);
                 let artifact_model = SccmArtifact {
                     artifact_id: artifact_id.to_owned(),
@@ -804,61 +811,70 @@ fn validate_manifest(
                     encoding: artifact["encoding"].as_str().map(str::to_owned),
                 };
                 let normalized = normalize_ccm_artifact(artifact_model, &content);
-                if artifact["rotation"]["fragmentComplete"] == false && !normalized.is_empty() {
-                    failures.push(format!(
-                        "{artifact_id} exposes a logical record from an incomplete fragment"
-                    ));
-                }
-                for record in normalized {
-                    if record.role != role_model {
-                        failures.push(format!("{artifact_id} loses producer-role provenance"));
-                    }
-                    if record.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
-                        || record.timestamp.offset_minutes != Some(0)
-                        || record.timestamp.utc_millis.is_none()
-                        || artifact_collected_utc.is_none()
-                        || record
-                            .timestamp
-                            .utc_millis
-                            .zip(artifact_collected_utc)
-                            .is_some_and(|(evidence_utc, collected_utc)| {
-                                evidence_utc > collected_utc
-                            })
-                    {
+                if state == "parseFailed" {
+                    if !normalized.is_empty() {
                         failures.push(format!(
-                            "{artifact_id} has unusable evidence/artifact/capture chronology"
+                            "{artifact_id} is parseFailed but contains usable normalized CCM evidence"
                         ));
                     }
-                    if record
-                        .ccm_source_file
-                        .as_deref()
-                        .is_none_or(|value| !value.contains(".cpp:"))
-                    {
+                } else {
+                    if artifact["rotation"]["fragmentComplete"] == false && !normalized.is_empty() {
                         failures.push(format!(
-                            "{artifact_id} loses distinct CCM code-origin provenance"
+                            "{artifact_id} exposes a logical record from an incomplete fragment"
                         ));
                     }
-                    match parse_fixture_fields(&record.message) {
-                        Ok(fields) => {
-                            if fields.get("SupHandle").map(String::as_str) != Some(EXACT_SUP) {
-                                failures.push(format!(
-                                    "{artifact_id} record escapes the exact SUP subject"
-                                ));
-                            }
+                    for record in normalized {
+                        if record.role != role_model {
+                            failures.push(format!("{artifact_id} loses producer-role provenance"));
                         }
-                        Err(error) => failures.push(format!("{artifact_id}: {error}")),
-                    }
-                    let Some(line_start) = record.reference.line_start else {
-                        failures.push(format!("{artifact_id} evidence lacks lineStart"));
-                        continue;
-                    };
-                    let Some(line_end) = record.reference.line_end else {
-                        failures.push(format!("{artifact_id} evidence lacks lineEnd"));
-                        continue;
-                    };
-                    let key = (artifact_id.to_owned(), line_start, line_end);
-                    if evidence_by_reference.insert(key, record).is_some() {
-                        failures.push(format!("{artifact_id} has duplicate line-range evidence"));
+                        if record.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
+                            || record.timestamp.offset_minutes != Some(0)
+                            || record.timestamp.utc_millis.is_none()
+                            || artifact_collected_utc.is_none()
+                            || record
+                                .timestamp
+                                .utc_millis
+                                .zip(artifact_collected_utc)
+                                .is_some_and(|(evidence_utc, collected_utc)| {
+                                    evidence_utc > collected_utc
+                                })
+                        {
+                            failures.push(format!(
+                                "{artifact_id} has unusable evidence/artifact/capture chronology"
+                            ));
+                        }
+                        if record
+                            .ccm_source_file
+                            .as_deref()
+                            .is_none_or(|value| !value.contains(".cpp:"))
+                        {
+                            failures.push(format!(
+                                "{artifact_id} loses distinct CCM code-origin provenance"
+                            ));
+                        }
+                        match parse_fixture_fields(&record.message) {
+                            Ok(fields) => {
+                                if fields.get("SupHandle").map(String::as_str) != Some(EXACT_SUP) {
+                                    failures.push(format!(
+                                        "{artifact_id} record escapes the exact SUP subject"
+                                    ));
+                                }
+                            }
+                            Err(error) => failures.push(format!("{artifact_id}: {error}")),
+                        }
+                        let Some(line_start) = record.reference.line_start else {
+                            failures.push(format!("{artifact_id} evidence lacks lineStart"));
+                            continue;
+                        };
+                        let Some(line_end) = record.reference.line_end else {
+                            failures.push(format!("{artifact_id} evidence lacks lineEnd"));
+                            continue;
+                        };
+                        let key = (artifact_id.to_owned(), line_start, line_end);
+                        if evidence_by_reference.insert(key, record).is_some() {
+                            failures
+                                .push(format!("{artifact_id} has duplicate line-range evidence"));
+                        }
                     }
                 }
             }
@@ -880,6 +896,10 @@ fn validate_manifest(
                     state: state.to_owned(),
                     source_id: source_id.to_owned(),
                     role: role.to_owned(),
+                    producer_host: producer_host.to_owned(),
+                    workflow_subject_role: workflow_subject_role.to_owned(),
+                    workflow_subject_handle: workflow_subject_handle.to_owned(),
+                    source_version: source_version.to_owned(),
                     basename: basename.to_owned(),
                     rotation_kind,
                     rotation_lineage,
@@ -1378,7 +1398,10 @@ fn validate_expected(
         let expected_gap_ids = parsed
             .artifacts
             .iter()
-            .filter(|(_, artifact)| artifact.role != "client" && artifact.state != "captured")
+            .filter(|(_, artifact)| {
+                artifact.role != "client"
+                    && (artifact.state != "captured" || artifact.fragment_complete != Some(true))
+            })
             .map(|(artifact_id, _)| artifact_id.as_str())
             .collect::<Vec<_>>();
         if gap_ids != expected_gap_ids {
@@ -1398,7 +1421,9 @@ fn validate_expected(
             });
         for artifact_id in &gap_ids {
             match parsed.artifacts.get(*artifact_id) {
-                Some(artifact) if artifact.state != "captured" => {}
+                Some(artifact)
+                    if artifact.state != "captured" || artifact.fragment_complete != Some(true) => {
+                }
                 _ => failures.push(format!(
                     "{transaction_id} coverage gap {artifact_id} is absent or complete"
                 )),
@@ -1637,6 +1662,30 @@ fn validate_expected(
                     .iter()
                     .map(|artifact| artifact.source_id.as_str())
                     .collect::<BTreeSet<_>>();
+                let roles = artifacts
+                    .iter()
+                    .map(|artifact| artifact.role.as_str())
+                    .collect::<BTreeSet<_>>();
+                let producer_hosts = artifacts
+                    .iter()
+                    .map(|artifact| artifact.producer_host.as_str())
+                    .collect::<BTreeSet<_>>();
+                let workflow_subject_roles = artifacts
+                    .iter()
+                    .map(|artifact| artifact.workflow_subject_role.as_str())
+                    .collect::<BTreeSet<_>>();
+                let workflow_subject_handles = artifacts
+                    .iter()
+                    .map(|artifact| artifact.workflow_subject_handle.as_str())
+                    .collect::<BTreeSet<_>>();
+                let source_versions = artifacts
+                    .iter()
+                    .map(|artifact| artifact.source_version.as_str())
+                    .collect::<BTreeSet<_>>();
+                let basenames = artifacts
+                    .iter()
+                    .map(|artifact| artifact.basename.to_ascii_lowercase())
+                    .collect::<BTreeSet<_>>();
                 let lineages = artifacts
                     .iter()
                     .map(|artifact| artifact.rotation_lineage.as_str())
@@ -1648,6 +1697,12 @@ fn validate_expected(
                 references.is_empty()
                     && artifacts.len() >= 2
                     && sources.len() == 1
+                    && roles.len() == 1
+                    && producer_hosts.len() == 1
+                    && workflow_subject_roles.len() == 1
+                    && workflow_subject_handles.len() == 1
+                    && source_versions.len() == 1
+                    && basenames.len() == 1
                     && lineages.len() == 1
                     && lineages.first().is_some_and(|lineage| !lineage.is_empty())
                     && rotations.len() >= 2
@@ -2370,6 +2425,102 @@ fn source_local_schema_identity_and_provenance_fail_closed() {
     assert!(
         accepted.is_empty(),
         "source-local schema/identity/provenance mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn partial_capture_malformed_bytes_and_rotation_family_fail_closed() {
+    let success_manifest = read_json("sync-success", "manifest.json").expect("manifest loads");
+    let success_expected = read_json("sync-success", "expected.json").expect("expected loads");
+    let rotation_manifest =
+        read_json("rotation-boundary", "manifest.json").expect("manifest loads");
+    let rotation_expected =
+        read_json("rotation-boundary", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut incomplete_required_rotation = success_manifest.clone();
+    incomplete_required_rotation["artifacts"]
+        .as_array_mut()
+        .expect("manifest artifacts are mutable")
+        .push(json!({
+            "artifactId": "sync-success-04-wsync-partial",
+            "sourceId": "server-sup-sync",
+            "producerRole": "siteServer",
+            "producerHostHandle": EXACT_SITE_SERVER,
+            "workflowSubjectRole": "softwareUpdatePoint",
+            "workflowSubjectHandle": EXACT_SUP,
+            "sourceKind": "ccmLog",
+            "originalBasename": "wsyncmgr.log",
+            "sanitizedSourcePath": "SYNTHETIC://configured-root/Site/Logs/wsyncmgr.log.1",
+            "pathFingerprint": "synthetic:sync-success-wsync-partial",
+            "rotation": {
+                "kind": "numbered",
+                "value": 1,
+                "lineageId": "sync-success-wsync",
+                "fragmentComplete": false
+            },
+            "captureState": "captured",
+            "sourceVersion": "5.00.TEST.0001",
+            "collectedUtc": "2026-07-30T18:00:00Z",
+            "encoding": "utf-8",
+            "collectionLimit": {
+                "byteLimit": 4096,
+                "limitApplied": false
+            },
+            "bytesCopied": 182,
+            "relativePath": "evidence/server-sup-sync/site/numbered/wsyncmgr.log"
+        }));
+    let mut incomplete_required_expected = success_expected.clone();
+    incomplete_required_expected["coverage"]
+        .as_array_mut()
+        .expect("coverage is mutable")
+        .push(json!({
+            "artifactId": "sync-success-04-wsync-partial",
+            "state": "captured"
+        }));
+    if mutation_was_accepted(
+        "sync-success",
+        &incomplete_required_rotation,
+        &incomplete_required_expected,
+    ) {
+        accepted.push("captured incomplete required rotation retained high-confidence success");
+    }
+
+    let malformed = artifact_index(&rotation_manifest, "rotation-03-malformed");
+    let mut parse_failed_valid_ccm = rotation_manifest.clone();
+    parse_failed_valid_ccm["artifacts"][malformed]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://configured-root/SUP/Logs/WSUSCtrl.log.1");
+    parse_failed_valid_ccm["artifacts"][malformed]["rotation"]["kind"] = json!("numbered");
+    parse_failed_valid_ccm["artifacts"][malformed]["rotation"]["value"] = json!(1);
+    parse_failed_valid_ccm["artifacts"][malformed]["bytesCopied"] = json!(326);
+    parse_failed_valid_ccm["artifacts"][malformed]["relativePath"] =
+        json!("evidence/server-sup-sync/sup/numbered/WSUSCtrl.log");
+    if mutation_was_accepted(
+        "rotation-boundary",
+        &parse_failed_valid_ccm,
+        &rotation_expected,
+    ) {
+        accepted.push("parse-failed artifact contained usable normalized CCM evidence");
+    }
+
+    let lo = artifact_index(&rotation_manifest, "rotation-02-lo");
+    let mut cross_family_rotation = rotation_manifest.clone();
+    cross_family_rotation["artifacts"][lo]["originalBasename"] = json!("WCM.log");
+    cross_family_rotation["artifacts"][lo]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://configured-root/Site/Logs/WCM.lo_");
+    cross_family_rotation["artifacts"][lo]["relativePath"] =
+        json!("evidence/server-sup-sync/site/lo_/WCM.log");
+    if mutation_was_accepted(
+        "rotation-boundary",
+        &cross_family_rotation,
+        &rotation_expected,
+    ) {
+        accepted.push("rotation split grouped different canonical log families");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "partial/malformed/rotation-family mutations were accepted: {accepted:?}"
     );
 }
 
