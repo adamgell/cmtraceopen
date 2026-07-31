@@ -86,11 +86,14 @@ fn extract_iso_date(raw: &str) -> String {
 /// `system_profiler SPConfigurationProfileDataType -xml`
 /// into a list of MDM profiles.
 ///
+/// Public so integration tests can run captured `system_profiler` output
+/// through the exact code path `list_profiles_impl` uses on a live host.
+///
 /// The plist structure is:
 ///   root array → first dict → `_items` array → first dict (section) →
 ///   `_items` array of profile dicts.  Each profile dict may contain a nested
 ///   `_items` array of payload dicts.
-fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
+pub fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
     let root: plist::Value = match plist::from_bytes(data) {
         Ok(v) => v,
         Err(e) => {

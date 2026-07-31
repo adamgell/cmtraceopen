@@ -12,7 +12,7 @@ use crate::jamf::models::{
 use crate::jamf::time::local_naive_to_utc;
 
 // Line shape (verified from real JAMF Pro 11 host):
-//   Wed Apr 29 13:23:04 LT-APLFVFHWEYHQ6L7 jamf[92532]: Executing Policy Google Chrome Installer
+//   Wed Apr 29 13:23:04 MAC-EXAMPLE0001 jamf[92532]: Executing Policy Google Chrome Installer
 //
 // Captures: month, day, time(HH:MM:SS), pid, message.
 // The year is not present; we infer it from the file's modified time and
@@ -252,6 +252,19 @@ fn classify(
             None,
             None,
             JamfPolicyResult::Failure(format!("Error running {rest}")),
+        );
+    }
+    // Real logs show this when a check-in fires off the corporate network:
+    // "Could not connect to the JSS. Looking for cached policies...". The
+    // check-in still proceeds from cache, but a run of these is exactly what
+    // "why is this Mac not getting policies" looks like, so it must not be
+    // buried as generic info.
+    if msg.starts_with("Could not connect to the JSS") {
+        return (
+            JamfPolicyTrigger::Other("connectivity".to_string()),
+            None,
+            None,
+            JamfPolicyResult::Failure(msg.to_string()),
         );
     }
     if msg.starts_with("No patch policies were found") {

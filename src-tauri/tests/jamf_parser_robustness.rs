@@ -87,18 +87,16 @@ fn self_service_does_not_truncate_after_invalid_utf8() {
     // Previously `map_while(Result::ok)` stopped at the bad line, returning 1 of
     // 4 events with no error.
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"2026-04-29 09:12:03 [INFO] Browse: viewed item \"First\"\n");
-    bytes.extend_from_slice(b"2026-04-29 09:12:04 [INFO] Install: started item \"Ba\xFFd\"\n");
-    bytes.extend_from_slice(
-        b"2026-04-29 09:12:05 [INFO] Install: completed item \"Third\" result=success\n",
-    );
-    bytes.extend_from_slice(b"2026-04-29 09:12:06 [INFO] Cancel: cancelled item \"Fourth\"\n");
+    bytes.extend_from_slice(b"[2026-04-29 09:12:03] Request: getPolicies\n");
+    bytes.extend_from_slice(b"[2026-04-29 09:12:04] Request: getBa\xFFdEndpoint\n");
+    bytes.extend_from_slice(b"[2026-04-29 09:12:05] Binary Request: triggerPolicy\n");
+    bytes.extend_from_slice(b"[2026-04-29 09:12:06] Binary Request: doRecon\n");
     let path = write_temp("self_service_bad_utf8.log", &bytes);
 
     let events = parse_self_service_log_impl(&path).expect("parse");
     assert_eq!(events.len(), 4, "must not stop at the malformed line");
-    assert_eq!(events[2].item_name.as_deref(), Some("Third"));
-    assert_eq!(events[3].item_name.as_deref(), Some("Fourth"));
+    assert_eq!(events[2].action, "triggerPolicy");
+    assert_eq!(events[3].action, "doRecon");
 
     let _ = std::fs::remove_file(&path);
 }

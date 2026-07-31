@@ -60,6 +60,21 @@ fn parses_recon_error() {
 }
 
 #[test]
+fn classifies_jss_connectivity_failure() {
+    let result = parse_policy_log_impl(Path::new(ERRORS)).expect("parse");
+    let ev = result
+        .events
+        .iter()
+        .find(|e| matches!(&e.trigger, JamfPolicyTrigger::Other(k) if k == "connectivity"))
+        .expect("expected a connectivity event");
+    assert!(
+        matches!(&ev.result, JamfPolicyResult::Failure(msg) if msg.contains("Could not connect to the JSS")),
+        "offline check-in must surface as a failure, got {:?}",
+        ev.result
+    );
+}
+
+#[test]
 fn unparsed_lines_counted() {
     let result = parse_policy_log_impl(Path::new(BASIC)).expect("parse");
     assert_eq!(result.total_lines, result.events.len() + result.unparsed_lines);
