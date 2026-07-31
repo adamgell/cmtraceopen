@@ -258,6 +258,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 fn corpus_inventory() -> CorpusInventory {
+    let mut scenario_count = 0;
     let mut artifacts = 0;
     let mut evidence_files = 0;
     let mut evidence_bytes = 0;
@@ -266,6 +267,7 @@ fn corpus_inventory() -> CorpusInventory {
     let mut digest_rows = Vec::new();
 
     for scenario in scenario_directories() {
+        scenario_count += 1;
         let scenario_root = task_sequence_root().join(&scenario);
         let manifest = read_json(&scenario_root.join("manifest.json"));
         for artifact in manifest["artifacts"]
@@ -301,7 +303,7 @@ fn corpus_inventory() -> CorpusInventory {
     digest_rows.sort();
 
     CorpusInventory {
-        scenarios: SCENARIOS.len(),
+        scenarios: scenario_count,
         artifacts,
         evidence_files,
         evidence_bytes,
@@ -1385,7 +1387,12 @@ fn validate_contract(
                         })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            derived_order.sort();
+            derived_order.sort_by_key(|(utc_millis, _)| *utc_millis);
+            if derived_order.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+                return Err(format!(
+                    "{transaction_id}: relocation order is ambiguous at equal cited timestamps"
+                ));
+            }
             let derived_artifact_order = derived_order
                 .iter()
                 .map(|(_, artifact_id)| artifact_id.as_str())
@@ -1439,7 +1446,7 @@ fn validate_contract(
         let parsed_utc = evidence.timestamp.utc_millis.map(|millis| {
             chrono::DateTime::from_timestamp_millis(millis)
                 .expect("fixture timestamp is representable")
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
         });
         if declared_utc != parsed_utc {
             return Err(format!(
