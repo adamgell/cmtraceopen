@@ -313,6 +313,12 @@ fn nonempty_sorted(values: &[String]) -> bool {
         && values.iter().all(|value| !value.trim().is_empty())
 }
 
+fn is_admitted(card: &SourceCard, issues: &[String]) -> bool {
+    issues.is_empty()
+        && matches!(card.promotion.state, PromotionState::RuleValidated)
+        && card.supersession.state == SupersessionState::Active
+}
+
 fn validate_card(card: &SourceCard) -> Validation {
     let mut issues = Vec::new();
 
@@ -557,9 +563,7 @@ fn validate_card(card: &SourceCard) -> Validation {
 
     issues.sort();
     issues.dedup();
-    let admitted_to_semantic_catalog = issues.is_empty()
-        && matches!(card.promotion.state, PromotionState::RuleValidated)
-        && card.supersession.state == SupersessionState::Active;
+    let admitted_to_semantic_catalog = is_admitted(card, &issues);
     Validation {
         valid: issues.is_empty(),
         admitted_to_semantic_catalog,
@@ -583,9 +587,7 @@ fn validate_card_with_inventory(card: &SourceCard, inventory: &BTreeSet<String>)
     validation.issues.sort();
     validation.issues.dedup();
     validation.valid = validation.issues.is_empty();
-    validation.admitted_to_semantic_catalog = validation.valid
-        && matches!(card.promotion.state, PromotionState::RuleValidated)
-        && card.supersession.state == SupersessionState::Active;
+    validation.admitted_to_semantic_catalog = is_admitted(card, &validation.issues);
     validation
 }
 
