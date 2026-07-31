@@ -313,6 +313,12 @@ const REVIEW_UNQUALIFIED_COLLECTION_ACTION_REASONS: [&str; 15] = [
     "Walk the directory tree.",
 ];
 
+const REVIEW_COORDINATED_UNQUALIFIED_ACTION_REASONS: [&str; 3] = [
+    "Collect PolicyAgent.log and archive.",
+    "Collect PolicyAgent.log then scan.",
+    "Collect PolicyAgent.log plus export.",
+];
+
 const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
     ("mpCliReg", "Collect the complete MP_CliReg.log file."),
     ("mpGetAuth", "Collect the complete MP_GetAuth.log file."),
@@ -1801,6 +1807,48 @@ fn finding_review_unqualified_collection_actions_fail_at_every_public_boundary()
     assert!(
         accepted.is_empty(),
         "accepted unqualified collection action boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_coordinated_unqualified_actions_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-coordinated-action-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_COORDINATED_UNQUALIFIED_ACTION_REASONS {
+        let builder = SccmFindingBuilder::new("review-coordinated-action-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted coordinated unqualified action boundaries: {accepted:#?}"
     );
 }
 

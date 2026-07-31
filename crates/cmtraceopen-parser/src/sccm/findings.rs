@@ -989,7 +989,9 @@ fn collection_clause_is_catalog_bounded(
     tokens: &[RequestReasonToken<'_>],
     identity_ranges: &[(usize, usize)],
 ) -> bool {
-    if identity_ranges.is_empty() {
+    if identity_ranges.is_empty()
+        || !collection_actions_have_local_catalog_identity(tokens, identity_ranges)
+    {
         return false;
     }
 
@@ -1007,6 +1009,28 @@ fn collection_clause_is_catalog_bounded(
         }
         true
     })
+}
+
+fn collection_actions_have_local_catalog_identity(
+    tokens: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    let mut action_indices = tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(index, token)| is_collection_action(token.text).then_some(index))
+        .peekable();
+
+    while let Some(action_index) = action_indices.next() {
+        let segment_end = action_indices.peek().copied().unwrap_or(tokens.len());
+        if !tokens[action_index..segment_end]
+            .iter()
+            .any(|token| token_is_covered_by_identity(token, identity_ranges))
+        {
+            return false;
+        }
+    }
+    true
 }
 
 fn confirmation_clause_is_non_authorizing(
