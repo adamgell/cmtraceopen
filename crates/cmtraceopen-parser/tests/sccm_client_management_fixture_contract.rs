@@ -3257,3 +3257,41 @@ fn stale_mixed_selection_state_mutations_fail_closed() {
         "removing the only unknown-version artifact must flip the derived selection state"
     );
 }
+
+#[test]
+fn sentence_final_hostname_privacy_mutations_fail_closed() {
+    let mut accepted = Vec::new();
+
+    let (observed_root, observed_manifest, mut hostname_claim) =
+        load_contract("software-center-observed");
+    hostname_claim["sourceLocalObservations"][0]["claim"] = Value::String(
+        "Observed records remain under lab-client-01.corp.local.".to_owned(),
+    );
+    if mutation_was_accepted(
+        "software-center-observed",
+        &observed_root,
+        &observed_manifest,
+        &hostname_claim,
+    ) {
+        accepted.push("sentence-final dotted hostname in a public observation claim");
+    }
+
+    let (deferred_root, deferred_manifest, mut hostname_reason) =
+        load_contract("notification-deferred");
+    hostname_reason["transactions"][0]["nextArtifact"]["reason"] = Value::String(
+        "Collect the bounded continuation from lab-client-01.corp.local.".to_owned(),
+    );
+    if mutation_was_accepted(
+        "notification-deferred",
+        &deferred_root,
+        &deferred_manifest,
+        &hostname_reason,
+    ) {
+        accepted.push("sentence-final dotted hostname in a next-artifact request reason");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "sentence-final hostname mutations were accepted: {accepted:?}"
+    );
+}
