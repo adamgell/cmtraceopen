@@ -433,6 +433,11 @@ fn identity_bearing_relative_paths_fail_before_public_projection() {
 #[test]
 fn unsafe_path_fingerprints_fail_before_public_projection() {
     let unsafe_fingerprints = [
+        "realuser",
+        "corp-example-test",
+        "domain-example-test",
+        "md5:0123456789abcdef",
+        "sha256:not-a-hex-handle",
         "synthetic\0raw-user",
         "synthetic\u{7f}raw-user",
         "synthetic-résumé-user",
