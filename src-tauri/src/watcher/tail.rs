@@ -2,7 +2,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use cmtraceopen_parser::intune::device::windows::inventory::{self, DeviceInventoryLogDialect};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
@@ -10,11 +12,15 @@ use crate::parser::{self, FileEncoding, ResolvedParser};
 
 const IME_RECORD_START: &str = "<![LOG[";
 const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
+const LOGICAL_RECORD_DEBOUNCE: Duration = Duration::from_millis(250);
+const MAX_PENDING_LOGICAL_RECORD_BYTES: usize = 1024 * 1024;
 
 /// The result of reading new content from a tailed file.
 pub struct TailBatch {
     /// Complete log records parsed since the last read.
     pub entries: Vec<LogEntry>,
+    /// Parse errors observed while producing this incremental batch.
+    pub parse_errors: u32,
     /// True when the file was detected as truncated/rotated during this read.
     ///
     /// On truncation the reader rewinds to the start of the file, so `entries`
@@ -26,6 +32,28 @@ pub struct TailBatch {
     pub reset: bool,
 }
 
+impl TailBatch {
+    fn empty(reset: bool) -> Self {
+        Self {
+            entries: Vec::new(),
+            parse_errors: 0,
+            reset,
+        }
+    }
+
+    fn append(&mut self, other: Self) {
+        self.entries.extend(other.entries);
+        self.parse_errors = self.parse_errors.saturating_add(other.parse_errors);
+        self.reset |= other.reset;
+    }
+}
+
+struct PendingLogicalRecord {
+    content: String,
+    last_updated: Instant,
+    parser_selection: ResolvedParser,
+}
+
 /// Manages incremental reading of a log file from a tracked byte offset.
 pub struct TailReader {
     path: PathBuf,
@@ -35,6 +63,10 @@ pub struct TailReader {
     next_line: u32,
     /// Leftover partial record fragment from the previous read.
     pending_fragment: String,
+    /// Selection and activity time for an unterminated Device Inventory line.
+    pending_fragment_selection: Option<(ResolvedParser, Instant)>,
+    /// Newest Device Inventory logical record held for continuation lines.
+    pending_logical_record: Option<PendingLogicalRecord>,
     /// File encoding detected from BOM during initial parse.
     encoding: FileEncoding,
     /// Leftover partial byte from a UTF-16 read boundary split.
@@ -62,6 +94,8 @@ impl TailReader {
             next_id,
             next_line,
             pending_fragment: String::new(),
+            pending_fragment_selection: None,
+            pending_logical_record: None,
             encoding,
             pending_byte: None,
         }
@@ -70,10 +104,9 @@ impl TailReader {
     /// Read new content from the file since last read, parse into entries.
     /// Returns the new entries plus a `reset` flag and updates internal byte_offset.
     pub fn read_new_entries(&mut self) -> Result<TailBatch, crate::error::AppError> {
+        let now = Instant::now();
         let mut file = std::fs::File::open(&self.path).map_err(crate::error::AppError::Io)?;
-
         let metadata = file.metadata().map_err(crate::error::AppError::Io)?;
-
         let file_size = metadata.len();
 
         // File was truncated (e.g. log rotation) — rewind to the beginning and
@@ -84,17 +117,21 @@ impl TailReader {
         if file_size < self.byte_offset {
             self.byte_offset = 0;
             self.pending_fragment.clear();
+            self.pending_fragment_selection = None;
+            self.pending_logical_record = None;
             self.pending_byte = None;
             self.next_line = 1;
             reset = true;
         }
 
+        let mut batch = TailBatch::empty(reset);
+        if !reset && self.pending_logical_record_needs_flush(now) {
+            batch.append(self.flush_pending_logical_record());
+        }
+
         // No new data
         if file_size == self.byte_offset {
-            return Ok(TailBatch {
-                entries: vec![],
-                reset,
-            });
+            return Ok(batch);
         }
 
         // Seek to our byte offset
@@ -129,6 +166,7 @@ impl TailReader {
         let new_text = crate::parser::decode_bytes(to_decode, self.encoding).map_err(|e| {
             crate::error::AppError::Internal(format!("Failed to decode tailed bytes: {}", e))
         })?;
+        let received_text = !new_text.is_empty();
 
         // Prepend any partial record fragment from the last read.
         let full_text = if self.pending_fragment.is_empty() {
@@ -136,9 +174,11 @@ impl TailReader {
         } else {
             let combined = format!("{}{}", self.pending_fragment, new_text);
             self.pending_fragment.clear();
+            self.pending_fragment_selection = None;
             combined
         };
 
+        let inventory_dialect = inventory_logical_dialect(&self.parser_selection);
         let lines = match self.parser_selection.record_framing {
             RecordFraming::PhysicalLine => {
                 collect_complete_lines(&full_text, &mut self.pending_fragment)
@@ -155,32 +195,229 @@ impl TailReader {
             }
         };
 
+        if let Some(dialect) = inventory_dialect {
+            let selection = self.parser_selection.clone();
+            if !self.pending_fragment.is_empty() {
+                self.pending_fragment_selection = Some((selection.clone(), now));
+            }
+
+            if received_text {
+                if let Some(pending) = self.pending_logical_record.as_mut() {
+                    pending.last_updated = now;
+                }
+            }
+
+            if !lines.is_empty() {
+                let prior = self
+                    .pending_logical_record
+                    .take()
+                    .map(|pending| pending.content);
+                let framed = inventory::frame_logical_records(
+                    dialect,
+                    prior,
+                    &lines,
+                    MAX_PENDING_LOGICAL_RECORD_BYTES,
+                );
+
+                if let Some(content) = framed.pending_record {
+                    self.pending_logical_record = Some(PendingLogicalRecord {
+                        content,
+                        last_updated: now,
+                        parser_selection: selection.clone(),
+                    });
+                }
+
+                batch.append(self.parse_logical_records(
+                    framed.completed_records,
+                    &selection,
+                    framed.overflow_count,
+                ));
+            }
+
+            batch.append(self.enforce_unterminated_logical_bound(dialect, &selection, now));
+            self.byte_offset = file_size;
+            return Ok(batch);
+        }
+
         if lines.is_empty() {
             self.byte_offset = file_size;
-            return Ok(TailBatch {
-                entries: vec![],
-                reset,
-            });
+            return Ok(batch);
         }
 
         // Parse the new complete records through the same dispatch path as initial parsing.
         let path_str = self.path.to_string_lossy().to_string();
-        let (mut entries, _) =
+        let (mut entries, parse_errors) =
             parser::parse_lines_with_selection(&lines, &path_str, &self.parser_selection);
 
-        // Update IDs and line numbers to be sequential from where we left off
-        for entry in &mut entries {
-            entry.id = self.next_id;
-            entry.line_number = self.next_line;
-            self.next_id += 1;
-            self.next_line += 1;
-        }
+        self.assign_entry_identity(&mut entries);
+        batch.append(TailBatch {
+            entries,
+            parse_errors,
+            reset: false,
+        });
 
         // We already keep incomplete text in pending_fragment. Advance to the
         // actual file size so the same bytes are not read and prepended again.
         self.byte_offset = file_size;
 
-        Ok(TailBatch { entries, reset })
+        Ok(batch)
+    }
+
+    fn pending_logical_record_needs_flush(&self, now: Instant) -> bool {
+        let parser_changed = self
+            .pending_logical_record
+            .as_ref()
+            .is_some_and(|pending| pending.parser_selection != self.parser_selection)
+            || self
+                .pending_fragment_selection
+                .as_ref()
+                .is_some_and(|(selection, _)| selection != &self.parser_selection);
+
+        let last_updated = self
+            .pending_logical_record
+            .as_ref()
+            .map(|pending| pending.last_updated)
+            .into_iter()
+            .chain(
+                self.pending_fragment_selection
+                    .as_ref()
+                    .map(|(_, updated)| *updated),
+            )
+            .max();
+
+        parser_changed
+            || last_updated.is_some_and(|updated| {
+                now.saturating_duration_since(updated) >= LOGICAL_RECORD_DEBOUNCE
+            })
+    }
+
+    fn flush_pending_logical_record(&mut self) -> TailBatch {
+        let pending = self.pending_logical_record.take();
+        let fragment = std::mem::take(&mut self.pending_fragment);
+        let fragment_selection = self.pending_fragment_selection.take();
+
+        let selection = pending
+            .as_ref()
+            .map(|record| record.parser_selection.clone())
+            .or_else(|| fragment_selection.map(|(selection, _)| selection));
+        let Some(selection) = selection else {
+            return TailBatch::empty(false);
+        };
+        let Some(dialect) = inventory_logical_dialect(&selection) else {
+            return TailBatch::empty(false);
+        };
+
+        let mut overflow_count = 0;
+        let mut records = if fragment.is_empty() {
+            pending
+                .map(|record| vec![record.content])
+                .unwrap_or_default()
+        } else {
+            let fragment_lines = [fragment.as_str()];
+            let framed = inventory::frame_logical_records(
+                dialect,
+                pending.map(|record| record.content),
+                &fragment_lines,
+                MAX_PENDING_LOGICAL_RECORD_BYTES,
+            );
+            overflow_count = framed.overflow_count;
+            let mut records = framed.completed_records;
+            records.extend(framed.pending_record);
+            records
+        };
+
+        records.retain(|record| !record.is_empty());
+        self.parse_logical_records(records, &selection, overflow_count)
+    }
+
+    fn enforce_unterminated_logical_bound(
+        &mut self,
+        dialect: DeviceInventoryLogDialect,
+        selection: &ResolvedParser,
+        now: Instant,
+    ) -> TailBatch {
+        let pending_len = self
+            .pending_logical_record
+            .as_ref()
+            .map_or(0, |record| record.content.len());
+        let pending_bytes = pending_len
+            .saturating_add(self.pending_fragment.len())
+            .saturating_add(usize::from(
+                pending_len > 0 && !self.pending_fragment.is_empty(),
+            ));
+        if pending_bytes <= MAX_PENDING_LOGICAL_RECORD_BYTES {
+            return TailBatch::empty(false);
+        }
+
+        let pending = self
+            .pending_logical_record
+            .take()
+            .map(|record| record.content);
+        let fragment = std::mem::take(&mut self.pending_fragment);
+        self.pending_fragment_selection = None;
+        let fragment_lines = [fragment.as_str()];
+        let framed = inventory::frame_logical_records(
+            dialect,
+            pending,
+            &fragment_lines,
+            MAX_PENDING_LOGICAL_RECORD_BYTES,
+        );
+
+        self.pending_fragment = framed.pending_record.unwrap_or_default();
+        if !self.pending_fragment.is_empty() {
+            self.pending_fragment_selection = Some((selection.clone(), now));
+        }
+
+        self.parse_logical_records(framed.completed_records, selection, framed.overflow_count)
+    }
+
+    fn parse_logical_records(
+        &mut self,
+        records: Vec<String>,
+        selection: &ResolvedParser,
+        framing_parse_errors: u32,
+    ) -> TailBatch {
+        let path_str = self.path.to_string_lossy().to_string();
+        let mut entries = Vec::new();
+        let mut parse_errors = framing_parse_errors;
+
+        for record in records {
+            let parsed = parser::parse_content_with_selection(&record, &path_str, selection);
+            entries.extend(parsed.entries);
+            parse_errors = parse_errors.saturating_add(parsed.parse_errors);
+        }
+
+        self.assign_entry_identity(&mut entries);
+        TailBatch {
+            entries,
+            parse_errors,
+            reset: false,
+        }
+    }
+
+    fn assign_entry_identity(&mut self, entries: &mut [LogEntry]) {
+        for entry in entries {
+            entry.id = self.next_id;
+            entry.line_number = self.next_line;
+            self.next_id += 1;
+            self.next_line += 1;
+        }
+    }
+}
+
+fn inventory_logical_dialect(selection: &ResolvedParser) -> Option<DeviceInventoryLogDialect> {
+    if selection.record_framing != RecordFraming::LogicalRecord {
+        return None;
+    }
+
+    match selection.specialization {
+        Some(ParserSpecialization::IntuneDeviceInventoryAdaptor) => {
+            Some(DeviceInventoryLogDialect::InventoryAdaptor)
+        }
+        Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure) => {
+            Some(DeviceInventoryLogDialect::RotationFailure)
+        }
+        _ => None,
     }
 }
 
@@ -310,10 +547,18 @@ where
 
         // Also do a periodic poll as a fallback (some editors/log writers
         // may not trigger filesystem events reliably)
-        let poll_interval = std::time::Duration::from_millis(500);
+        let poll_interval = if inventory_logical_dialect(&tail_reader.parser_selection).is_some() {
+            LOGICAL_RECORD_DEBOUNCE
+        } else {
+            Duration::from_millis(500)
+        };
 
         loop {
             if stop_flag_clone.load(Ordering::Relaxed) {
+                let batch = tail_reader.flush_pending_logical_record();
+                if !batch.entries.is_empty() || batch.parse_errors > 0 {
+                    on_new_entries(batch);
+                }
                 log::info!("Tail watcher stopped for {}", watch_path.display());
                 break;
             }
@@ -350,6 +595,10 @@ where
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    let batch = tail_reader.flush_pending_logical_record();
+                    if !batch.entries.is_empty() || batch.parse_errors > 0 {
+                        on_new_entries(batch);
+                    }
                     log::info!("Watcher channel disconnected");
                     break;
                 }
@@ -668,6 +917,326 @@ mod tests {
         assert!(repeat_entries.is_empty());
 
         fs::remove_dir_all(root).expect("should clean up temp IME fixture");
+    }
+
+    #[test]
+    fn test_tail_reader_preserves_split_inventory_adaptor_json_record() {
+        let path = unique_test_path("inventory-adaptor-split");
+        fs::write(&path, "").expect("should create empty adaptor log");
+
+        let selection = ResolvedParser::intune_device_inventory(
+            cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::InventoryAdaptor,
+        );
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "[Thu Jul 30 13:05:02 2026][8604] - Adapter result:")
+            .expect("should append adaptor header");
+        drop(file);
+
+        let header_batch = reader
+            .read_new_entries()
+            .expect("header tail read should succeed");
+        assert!(
+            header_batch.entries.is_empty(),
+            "the newest logical header must remain pending during the debounce"
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(
+            file,
+            r#"{{"Status":200,"HResult":"0x00000000","Data":{{"Example":"value"}}}}"#
+        )
+        .expect("should append adaptor JSON");
+        drop(file);
+
+        let continuation_batch = reader
+            .read_new_entries()
+            .expect("continuation tail read should succeed");
+        assert!(
+            continuation_batch.entries.is_empty(),
+            "continuation before the debounce expires must extend the pending record"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(275));
+        let flushed = reader
+            .read_new_entries()
+            .expect("quiescent tail read should flush");
+
+        assert_eq!(flushed.entries.len(), 1);
+        assert_eq!(
+            flushed.entries[0].message,
+            concat!(
+                "Adapter result:\n",
+                r#"{"Status":200,"HResult":"0x00000000","Data":{"Example":"value"}}"#
+            )
+        );
+        assert_eq!(flushed.entries[0].thread, Some(8604));
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_preserves_split_inventory_rotation_failure_stack() {
+        let path = unique_test_path("inventory-rotation-split");
+        fs::write(&path, "").expect("should create empty rotation log");
+
+        let selection = ResolvedParser::intune_device_inventory(
+            cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::RotationFailure,
+        );
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(
+            file,
+            "2026-07-30T13:05:01.1234567-04:00 Failed to rotate Device Inventory log."
+        )
+        .expect("should append rotation header");
+        drop(file);
+
+        let header_batch = reader
+            .read_new_entries()
+            .expect("header tail read should succeed");
+        assert!(header_batch.entries.is_empty());
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(
+            file,
+            "System.IO.IOException: The process cannot access the file.\n   at Synthetic.Inventory.Rotate()\n"
+        )
+        .expect("should append exception stack");
+        drop(file);
+
+        let continuation_batch = reader
+            .read_new_entries()
+            .expect("continuation tail read should succeed");
+        assert!(continuation_batch.entries.is_empty());
+
+        std::thread::sleep(std::time::Duration::from_millis(275));
+        let flushed = reader
+            .read_new_entries()
+            .expect("quiescent tail read should flush");
+
+        assert_eq!(flushed.entries.len(), 1);
+        assert_eq!(
+            flushed.entries[0].message,
+            concat!(
+                "Failed to rotate Device Inventory log.\n",
+                "System.IO.IOException: The process cannot access the file.\n",
+                "   at Synthetic.Inventory.Rotate()"
+            )
+        );
+        assert_eq!(
+            flushed.entries[0].severity,
+            crate::models::log_entry::Severity::Error
+        );
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_flushes_inventory_record_on_new_header() {
+        let path = unique_test_path("inventory-new-header");
+        fs::write(&path, "").expect("should create empty adaptor log");
+
+        let selection = ResolvedParser::intune_device_inventory(
+            cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::InventoryAdaptor,
+        );
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "[Thu Jul 30 13:05:02 2026][8604] - First action.")
+            .expect("should append first header");
+        drop(file);
+        assert!(reader
+            .read_new_entries()
+            .expect("first tail read should succeed")
+            .entries
+            .is_empty());
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "[Thu Jul 30 13:05:03 2026][8604] - Second action.")
+            .expect("should append second header");
+        drop(file);
+
+        let batch = reader
+            .read_new_entries()
+            .expect("new-header tail read should succeed");
+        assert_eq!(batch.entries.len(), 1);
+        assert_eq!(batch.entries[0].message, "First action.");
+        assert_eq!(batch.parse_errors, 0);
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_flushes_inventory_record_explicitly() {
+        let path = unique_test_path("inventory-explicit-flush");
+        fs::write(&path, "").expect("should create empty adaptor log");
+
+        let selection = ResolvedParser::intune_device_inventory(
+            cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::InventoryAdaptor,
+        );
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(file, "[Thu Jul 30 13:05:02 2026][8604] - Final action.")
+            .expect("should append unterminated final header");
+        drop(file);
+        assert!(reader
+            .read_new_entries()
+            .expect("tail read should succeed")
+            .entries
+            .is_empty());
+
+        let flushed = reader.flush_pending_logical_record();
+        assert_eq!(flushed.entries.len(), 1);
+        assert_eq!(flushed.entries[0].message, "Final action.");
+        assert_eq!(flushed.parse_errors, 0);
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_flushes_inventory_record_before_parser_change() {
+        let path = unique_test_path("inventory-parser-change");
+        fs::write(&path, "").expect("should create empty adaptor log");
+
+        let selection = ResolvedParser::intune_device_inventory(
+            cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::InventoryAdaptor,
+        );
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(
+            file,
+            "[Thu Jul 30 13:05:02 2026][8604] - Pending before parser change."
+        )
+        .expect("should append adaptor header");
+        drop(file);
+        assert!(reader
+            .read_new_entries()
+            .expect("tail read should succeed")
+            .entries
+            .is_empty());
+
+        reader.parser_selection = ResolvedParser::plain_text();
+        let flushed = reader
+            .read_new_entries()
+            .expect("parser change should flush pending record");
+        assert_eq!(flushed.entries.len(), 1);
+        assert_eq!(flushed.entries[0].message, "Pending before parser change.");
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_bounds_inventory_overflow_and_counts_parse_error() {
+        let path = unique_test_path("inventory-overflow");
+        fs::write(&path, "").expect("should create empty adaptor log");
+
+        let selection = ResolvedParser::intune_device_inventory(
+            cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::InventoryAdaptor,
+        );
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+        let continuation = "x".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(
+            file,
+            "[Thu Jul 30 13:05:02 2026][8604] - Oversized action.\n{continuation}"
+        )
+        .expect("should append oversized logical record");
+        drop(file);
+
+        let overflow = reader
+            .read_new_entries()
+            .expect("overflow tail read should succeed");
+        assert_eq!(overflow.entries.len(), 1);
+        assert_eq!(overflow.parse_errors, 1);
+        assert!(
+            overflow.entries[0].message.len() < MAX_PENDING_LOGICAL_RECORD_BYTES,
+            "emitted overflow record must honor the pending byte bound"
+        );
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_bounds_unterminated_inventory_continuation() {
+        let path = unique_test_path("inventory-unterminated-overflow");
+        fs::write(&path, "").expect("should create empty adaptor log");
+
+        let selection = ResolvedParser::intune_device_inventory(
+            cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::InventoryAdaptor,
+        );
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(
+            file,
+            "[Thu Jul 30 13:05:02 2026][8604] - Oversized partial action."
+        )
+        .expect("should append adaptor header");
+        drop(file);
+        assert!(reader
+            .read_new_entries()
+            .expect("header tail read should succeed")
+            .entries
+            .is_empty());
+
+        let continuation = "x".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES);
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(file, "{continuation}").expect("should append unterminated continuation");
+        drop(file);
+
+        let overflow = reader
+            .read_new_entries()
+            .expect("unterminated overflow tail read should succeed");
+        assert_eq!(overflow.entries.len(), 1);
+        assert_eq!(overflow.parse_errors, 1);
+
+        let pending_bytes = reader
+            .pending_logical_record
+            .as_ref()
+            .map_or(0, |record| record.content.len())
+            + reader.pending_fragment.len();
+        assert!(pending_bytes <= MAX_PENDING_LOGICAL_RECORD_BYTES);
+
+        fs::remove_file(path).expect("should clean up temp file");
     }
 
     #[test]

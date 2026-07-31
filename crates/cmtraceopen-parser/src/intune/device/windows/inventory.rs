@@ -14,6 +14,90 @@ pub enum DeviceInventoryLogDialect {
     RotationFailure,
 }
 
+/// Pure framing result for incrementally collected Device Inventory records.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct LogicalRecordFramingResult {
+    /// Records made complete by a later header or by the pending-size bound.
+    pub completed_records: Vec<String>,
+    /// The newest record, retained so a later append can add continuations.
+    pub pending_record: Option<String>,
+    /// Number of records force-completed because they reached the size bound.
+    pub overflow_count: u32,
+}
+
+/// Add complete physical lines to a pending Device Inventory logical record.
+///
+/// Header recognition intentionally stays in this pure parser module so tailing
+/// and whole-file parsing share the same dialect regexes. The caller owns
+/// time-based flushing of `pending_record`.
+pub fn frame_logical_records(
+    dialect: DeviceInventoryLogDialect,
+    mut pending_record: Option<String>,
+    new_lines: &[&str],
+    max_pending_bytes: usize,
+) -> LogicalRecordFramingResult {
+    assert!(
+        max_pending_bytes >= 4,
+        "logical record bound must fit one UTF-8 scalar"
+    );
+
+    let mut completed_records = Vec::new();
+    let mut overflow_count = 0u32;
+
+    for raw_line in new_lines {
+        let line = raw_line.trim_end_matches('\r');
+        if is_record_header(dialect, line) {
+            if let Some(record) = pending_record.take() {
+                completed_records.push(record);
+            }
+        }
+
+        match pending_record.as_mut() {
+            Some(record) => {
+                record.push('\n');
+                record.push_str(line);
+            }
+            None => pending_record = Some(line.to_string()),
+        }
+
+        while pending_record
+            .as_ref()
+            .is_some_and(|record| record.len() > max_pending_bytes)
+        {
+            let mut record = pending_record
+                .take()
+                .expect("oversized pending record must exist");
+            let split_at = previous_char_boundary(&record, max_pending_bytes);
+            let remainder = record.split_off(split_at);
+            completed_records.push(record);
+            overflow_count = overflow_count.saturating_add(1);
+            pending_record = (!remainder.is_empty()).then_some(remainder);
+        }
+    }
+
+    LogicalRecordFramingResult {
+        completed_records,
+        pending_record,
+        overflow_count,
+    }
+}
+
+fn is_record_header(dialect: DeviceInventoryLogDialect, line: &str) -> bool {
+    match dialect {
+        DeviceInventoryLogDialect::Harvester => harvester_re().is_match(line),
+        DeviceInventoryLogDialect::InventoryAdaptor => adaptor_re().is_match(line),
+        DeviceInventoryLogDialect::RotationFailure => rotation_re().is_match(line),
+    }
+}
+
+fn previous_char_boundary(text: &str, maximum: usize) -> usize {
+    let mut boundary = maximum.min(text.len());
+    while !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
+}
+
 #[derive(Default)]
 struct EntryMetadata {
     timestamp: Option<i64>,
@@ -315,5 +399,76 @@ fn log_entry(
         section_color: None,
         iteration: None,
         tags: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ADAPTOR_HEADER: &str = "[Thu Jul 30 13:05:02 2026][8604] - Adapter result:";
+    const NEXT_ADAPTOR_HEADER: &str = "[Thu Jul 30 13:05:03 2026][8604] - Completed action.";
+
+    #[test]
+    fn logical_framing_flushes_previous_record_on_new_valid_header() {
+        let first = frame_logical_records(
+            DeviceInventoryLogDialect::InventoryAdaptor,
+            None,
+            &[ADAPTOR_HEADER],
+            1024,
+        );
+        assert!(first.completed_records.is_empty());
+
+        let second = frame_logical_records(
+            DeviceInventoryLogDialect::InventoryAdaptor,
+            first.pending_record,
+            &[
+                r#"{"Status":200,"Data":{"Example":"value"}}"#,
+                NEXT_ADAPTOR_HEADER,
+            ],
+            1024,
+        );
+
+        assert_eq!(
+            second.completed_records,
+            vec![format!(
+                "{ADAPTOR_HEADER}\n{}",
+                r#"{"Status":200,"Data":{"Example":"value"}}"#
+            )]
+        );
+        assert_eq!(second.pending_record.as_deref(), Some(NEXT_ADAPTOR_HEADER));
+        assert_eq!(second.overflow_count, 0);
+    }
+
+    #[test]
+    fn logical_framing_overflow_is_bounded_counted_and_lossless() {
+        let max_pending_bytes = ADAPTOR_HEADER.len() + 8;
+        let continuation = "continuation-0123456789";
+        let expected = format!("{ADAPTOR_HEADER}\n{continuation}");
+
+        let framed = frame_logical_records(
+            DeviceInventoryLogDialect::InventoryAdaptor,
+            None,
+            &[ADAPTOR_HEADER, continuation],
+            max_pending_bytes,
+        );
+
+        assert_eq!(framed.overflow_count, 1);
+        assert!(framed
+            .completed_records
+            .iter()
+            .all(|record| record.len() <= max_pending_bytes));
+        assert!(framed
+            .pending_record
+            .as_ref()
+            .is_none_or(|record| record.len() <= max_pending_bytes));
+
+        let reconstructed = framed
+            .completed_records
+            .iter()
+            .chain(framed.pending_record.iter())
+            .cloned()
+            .collect::<String>();
+        assert_eq!(reconstructed, expected);
     }
 }
