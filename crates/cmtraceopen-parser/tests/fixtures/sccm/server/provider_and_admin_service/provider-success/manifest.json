@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "provider-success",
+  "bundle": {"bundleRole":"server","workflow":"providerAndAdminService","capturedUtc":"2026-07-30T21:00:00Z"},
+  "topology": {"siteCode":"LAB","rolesObserved":["provider"],"endpoints":[{"endpointId":"provider-local","layer":"provider","hostHandle":"safe:server:lab-provider-01","producerRole":"provider"}]},
+  "artifacts": [
+    {"artifactId":"provider-success-current","sourceId":"server-provider","producerRole":"provider","layer":"provider","producerHostHandle":"safe:server:lab-provider-01","endpointId":"provider-local","diagnosticUse":"primary","originalBasename":"Smsprov.log","sanitizedSourcePath":"SYNTHETIC://configured-root/LAB/Logs/Smsprov.log","pathFingerprint":"synthetic:provider-success-current","rotation":{"kind":"current","lineageId":"provider-success","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T21:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":2008,"relativePath":"evidence/server-provider/provider-local/current/Smsprov.log"}
+  ]
+}

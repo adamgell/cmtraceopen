@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion":1,
+  "proposalOnly":true,
+  "syntheticFixture":true,
+  "scenario":"incomplete",
+  "bundle":{"bundleRole":"server","workflow":"providerAndAdminService","capturedUtc":"2026-07-30T23:00:00Z"},
+  "topology":{"siteCode":"LAB","rolesObserved":["provider"],"endpoints":[{"endpointId":"admin-service-lab","layer":"adminService","hostHandle":"safe:server:lab-provider-01","producerRole":"provider"}]},
+  "artifacts":[
+    {"artifactId":"incomplete-admin-current","sourceId":"server-admin-service","producerRole":"provider","layer":"adminService","producerHostHandle":"safe:server:lab-provider-01","endpointId":"admin-service-lab","diagnosticUse":"primary","originalBasename":"AdminService.log","sanitizedSourcePath":"SYNTHETIC://configured-root/LAB/Logs/AdminService.log","pathFingerprint":"synthetic:incomplete-admin-current","rotation":{"kind":"current","lineageId":"admin-incomplete","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T23:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":830,"relativePath":"evidence/server-admin-service/admin-service-lab/current/AdminService.log"}
+  ]
+}

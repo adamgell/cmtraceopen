@@ -1,0 +1,26 @@
+{
+  "contractState":"proposedPendingReviewed318And335",
+  "workflow":"providerAndAdminService",
+  "scenario":"admin-service-backend-failure",
+  "profiles":[{"layer":"adminService","selectionState":"selectedSynthetic","profileId":"admin-service-server-5.00.test-v1"}],
+  "coverage":[{"artifactId":"admin-backend-current","state":"captured","sourceId":"server-admin-service","layer":"adminService"}],
+  "transactions":[
+    {
+      "transactionId":"adminService:77777777-7777-7777-7777-777777777777:safe-operation-admin-backend:admin-service-lab",
+      "layer":"adminService",
+      "key":{"requestId":"77777777-7777-7777-7777-777777777777","operationHandle":"safe-operation-admin-backend","endpointId":"admin-service-lab","confidence":"exact","extractionProfileId":"admin-service-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"failed","classification":"confirmedFailure","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
+      "publicSummary":"Admin Service recorded an explicit backend operation failure.",
+      "observations":[
+        {"observationId":"admin-backend-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-backend-current","startLine":1,"endLine":1}]},
+        {"observationId":"admin-backend-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-backend-current","startLine":2,"endLine":2}]},
+        {"observationId":"admin-backend-03-route","phase":"route","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-backend-current","startLine":3,"endLine":3}]},
+        {"observationId":"admin-backend-04-execute","phase":"executeBackendOperation","disposition":"failed","terminal":false,"evidence":[{"artifactId":"admin-backend-current","startLine":4,"endLine":4}]},
+        {"observationId":"admin-backend-05-outcome","phase":"recordOutcome","disposition":"failed","terminal":true,"evidence":[{"artifactId":"admin-backend-current","startLine":5,"endLine":5}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations":[],
+  "artifactRequests":[],
+  "crossSideCausalClaims":[]
+}

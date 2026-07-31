@@ -1,0 +1,12 @@
+{
+  "sccmManifestVersion":1,
+  "proposalOnly":true,
+  "syntheticFixture":true,
+  "scenario":"rotation-boundary",
+  "bundle":{"bundleRole":"server","workflow":"providerAndAdminService","capturedUtc":"2026-07-30T22:50:00Z"},
+  "topology":{"siteCode":"LAB","rolesObserved":["provider"],"endpoints":[{"endpointId":"provider-local","layer":"provider","hostHandle":"safe:server:lab-provider-01","producerRole":"provider"}]},
+  "artifacts":[
+    {"artifactId":"rotation-01-current","sourceId":"server-provider","producerRole":"provider","layer":"provider","producerHostHandle":"safe:server:lab-provider-01","endpointId":"provider-local","diagnosticUse":"primary","originalBasename":"Smsprov.log","sanitizedSourcePath":"SYNTHETIC://configured-root/LAB/Logs/Smsprov.log","pathFingerprint":"synthetic:rotation-current","rotation":{"kind":"current","lineageId":"provider-rotation","fragmentComplete":false},"captureState":"captured","sourceVersion":"9.99.UNKNOWN","collectedUtc":"2026-07-30T22:50:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":127,"relativePath":"evidence/server-provider/provider-local/current/Smsprov.log"},
+    {"artifactId":"rotation-02-lo","sourceId":"server-provider","producerRole":"provider","layer":"provider","producerHostHandle":"safe:server:lab-provider-01","endpointId":"provider-local","diagnosticUse":"primary","originalBasename":"Smsprov.log","sanitizedSourcePath":"SYNTHETIC://configured-root/LAB/Logs/Smsprov.lo_","pathFingerprint":"synthetic:rotation-lo","rotation":{"kind":"lo_","lineageId":"provider-rotation","fragmentComplete":false},"captureState":"captured","sourceVersion":"9.99.UNKNOWN","collectedUtc":"2026-07-30T22:50:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":295,"relativePath":"evidence/server-provider/provider-local/lo_/Smsprov.lo_"}
+  ]
+}

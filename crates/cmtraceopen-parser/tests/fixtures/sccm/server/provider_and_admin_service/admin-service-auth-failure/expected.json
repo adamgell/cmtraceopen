@@ -1,0 +1,24 @@
+{
+  "contractState":"proposedPendingReviewed318And335",
+  "workflow":"providerAndAdminService",
+  "scenario":"admin-service-auth-failure",
+  "profiles":[{"layer":"adminService","selectionState":"selectedSynthetic","profileId":"admin-service-server-5.00.test-v1"}],
+  "coverage":[{"artifactId":"admin-auth-current","state":"captured","sourceId":"server-admin-service","layer":"adminService"}],
+  "transactions":[
+    {
+      "transactionId":"adminService:66666666-6666-6666-6666-666666666666:safe-operation-admin-auth:admin-service-lab",
+      "layer":"adminService",
+      "key":{"requestId":"66666666-6666-6666-6666-666666666666","operationHandle":"safe-operation-admin-auth","endpointId":"admin-service-lab","confidence":"exact","extractionProfileId":"admin-service-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"failed","classification":"confirmedFailure","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
+      "publicSummary":"Admin Service authentication was explicitly rejected.",
+      "observations":[
+        {"observationId":"admin-auth-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-auth-current","startLine":1,"endLine":1}]},
+        {"observationId":"admin-auth-02-rejected","phase":"authenticateOrAuthorize","disposition":"failed","terminal":false,"evidence":[{"artifactId":"admin-auth-current","startLine":2,"endLine":2}]},
+        {"observationId":"admin-auth-03-outcome","phase":"recordOutcome","disposition":"failed","terminal":true,"evidence":[{"artifactId":"admin-auth-current","startLine":3,"endLine":3}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations":[],
+  "artifactRequests":[],
+  "crossSideCausalClaims":[]
+}

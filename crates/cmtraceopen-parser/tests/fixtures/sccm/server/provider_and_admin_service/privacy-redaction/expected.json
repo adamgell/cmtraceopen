@@ -1,0 +1,43 @@
+{
+  "contractState":"proposedPendingReviewed318And335",
+  "workflow":"providerAndAdminService",
+  "scenario":"privacy-redaction",
+  "profiles":[
+    {"layer":"adminService","selectionState":"selectedSynthetic","profileId":"admin-service-server-5.00.test-v1"},
+    {"layer":"provider","selectionState":"selectedSynthetic","profileId":"provider-server-5.00.test-v1"}
+  ],
+  "coverage":[
+    {"artifactId":"privacy-admin-current","state":"captured","sourceId":"server-admin-service","layer":"adminService"},
+    {"artifactId":"privacy-provider-current","state":"captured","sourceId":"server-provider","layer":"provider"}
+  ],
+  "transactions":[
+    {
+      "transactionId":"adminService:99999999-9999-9999-9999-999999999999:safe-operation-admin-privacy:admin-service-lab",
+      "layer":"adminService",
+      "key":{"requestId":"99999999-9999-9999-9999-999999999999","operationHandle":"safe-operation-admin-privacy","endpointId":"admin-service-lab","confidence":"exact","extractionProfileId":"admin-service-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"succeeded","classification":"success","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
+      "publicSummary":"Admin Service privacy fixture completed with redacted public evidence.",
+      "observations":[
+        {"observationId":"privacy-admin-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":1,"endLine":1}]},
+        {"observationId":"privacy-admin-02-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"privacy-admin-current","startLine":2,"endLine":2}]}
+      ]
+    },
+    {
+      "transactionId":"provider:99999999-9999-9999-9999-999999999999:safe-operation-provider-privacy:provider-local",
+      "layer":"provider",
+      "key":{"requestId":"99999999-9999-9999-9999-999999999999","operationHandle":"safe-operation-provider-privacy","endpointId":"provider-local","confidence":"exact","extractionProfileId":"provider-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"succeeded","classification":"success","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
+      "publicSummary":"Provider privacy fixture completed with redacted public evidence.",
+      "observations":[
+        {"observationId":"privacy-provider-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":1,"endLine":1}]},
+        {"observationId":"privacy-provider-02-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"privacy-provider-current","startLine":2,"endLine":2}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations":[
+    {"observationId":"privacy-redaction-admin","kind":"privacyRedacted","layer":"adminService","reason":"Caller and endpoint details remain outside public keys and summaries.","correlationEligible":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":1,"endLine":1}]},
+    {"observationId":"privacy-redaction-provider","kind":"privacyRedacted","layer":"provider","reason":"Caller, authorization, and query details remain outside public keys and summaries.","correlationEligible":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":1,"endLine":1}]}
+  ],
+  "artifactRequests":[],
+  "crossSideCausalClaims":[]
+}

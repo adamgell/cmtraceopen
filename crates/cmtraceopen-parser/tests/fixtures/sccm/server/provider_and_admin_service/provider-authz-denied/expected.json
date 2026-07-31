@@ -1,0 +1,24 @@
+{
+  "contractState":"proposedPendingReviewed318And335",
+  "workflow":"providerAndAdminService",
+  "scenario":"provider-authz-denied",
+  "profiles":[{"layer":"provider","selectionState":"selectedSynthetic","profileId":"provider-server-5.00.test-v1"}],
+  "coverage":[{"artifactId":"provider-authz-current","state":"captured","sourceId":"server-provider","layer":"provider"}],
+  "transactions":[
+    {
+      "transactionId":"provider:22222222-2222-2222-2222-222222222222:safe-operation-update-device:provider-local",
+      "layer":"provider",
+      "key":{"requestId":"22222222-2222-2222-2222-222222222222","operationHandle":"safe-operation-update-device","endpointId":"provider-local","confidence":"exact","extractionProfileId":"provider-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"failed","classification":"confirmedFailure","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
+      "publicSummary":"Provider authorization was explicitly denied.",
+      "observations":[
+        {"observationId":"provider-authz-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-authz-current","startLine":1,"endLine":1}]},
+        {"observationId":"provider-authz-02-denied","phase":"authenticateOrAuthorize","disposition":"failed","terminal":false,"evidence":[{"artifactId":"provider-authz-current","startLine":2,"endLine":2}]},
+        {"observationId":"provider-authz-03-outcome","phase":"recordOutcome","disposition":"failed","terminal":true,"evidence":[{"artifactId":"provider-authz-current","startLine":3,"endLine":3}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations":[],
+  "artifactRequests":[],
+  "crossSideCausalClaims":[]
+}

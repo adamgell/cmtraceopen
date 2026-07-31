@@ -1,0 +1,23 @@
+{
+  "contractState":"proposedPendingReviewed318And335",
+  "workflow":"providerAndAdminService",
+  "scenario":"incomplete",
+  "profiles":[{"layer":"adminService","selectionState":"selectedSynthetic","profileId":"admin-service-server-5.00.test-v1"}],
+  "coverage":[{"artifactId":"incomplete-admin-current","state":"captured","sourceId":"server-admin-service","layer":"adminService"}],
+  "transactions":[
+    {
+      "transactionId":"adminService:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:safe-operation-admin-incomplete:admin-service-lab",
+      "layer":"adminService",
+      "key":{"requestId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","operationHandle":"safe-operation-admin-incomplete","endpointId":"admin-service-lab","confidence":"exact","extractionProfileId":"admin-service-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low","terminalEvidence":false,"coverageGapArtifactIds":[],
+      "publicSummary":"Admin Service evidence stops before an explicit response or terminal outcome.",
+      "observations":[
+        {"observationId":"incomplete-admin-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"incomplete-admin-current","startLine":1,"endLine":1}]},
+        {"observationId":"incomplete-admin-02-route","phase":"route","disposition":"pending","terminal":false,"evidence":[{"artifactId":"incomplete-admin-current","startLine":2,"endLine":2}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations":[],
+  "artifactRequests":[{"logicalArtifactId":"server-admin-service","reason":"Capture the bounded Admin Service source lineage for the exact request key and terminal outcome."}],
+  "crossSideCausalClaims":[]
+}
