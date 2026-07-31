@@ -352,6 +352,50 @@ fn source_version_matches_selected_profile(value: &str) -> bool {
         .is_some_and(|suffix| suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+fn public_observation_claim_is_safe(value: &str) -> bool {
+    if value.len() > 512
+        || value.chars().any(char::is_control)
+        || value.contains(['\\', '@'])
+        || value.contains("://")
+    {
+        return false;
+    }
+
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("/users/")
+        || lower.contains("/home/")
+        || lower.contains("s-1-5-")
+        || lower.contains("c:/")
+    {
+        return false;
+    }
+
+    !value.split_ascii_whitespace().any(|token| {
+        let token = token.trim_matches(|character: char| {
+            matches!(
+                character,
+                ',' | ';' | ':' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\''
+            )
+        });
+        let mut labels = token.split('.');
+        let Some(first) = labels.next() else {
+            return false;
+        };
+        let remaining = labels.collect::<Vec<_>>();
+        !first.is_empty()
+            && !remaining.is_empty()
+            && remaining.iter().all(|label| {
+                !label.is_empty()
+                    && label
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+            && remaining.last().is_some_and(|suffix| {
+                suffix.len() >= 2 && suffix.bytes().all(|b| b.is_ascii_alphabetic())
+            })
+    })
+}
+
 fn string_array(value: &Value, context: &str) -> Result<Vec<String>, String> {
     value
         .as_array()
@@ -1142,7 +1186,11 @@ fn validate_contract(
 
     let required_profile_selection = match workflow {
         "softwareCenter" => "unsupportedCandidate",
-        "mixed" => "mixedUnknownAndInvalid",
+        "mixed"
+            if !unknown_version_artifacts.is_empty() && !invalid_offset_artifacts.is_empty() =>
+        {
+            "mixedUnknownAndInvalid"
+        }
         _ if !unknown_version_artifacts.is_empty() => "unknownProfile",
         _ => "selected",
     };
@@ -1240,8 +1288,12 @@ fn validate_contract(
     }
     let mut sorted_ownership_refs = ownership_ref_order.clone();
     sorted_ownership_refs.sort();
-    if ownership_ref_order != sorted_ownership_refs {
-        return Err("ownership evidence is not deterministically sorted".to_owned());
+    if ownership_ref_order != sorted_ownership_refs
+        || sorted_ownership_refs
+            .windows(2)
+            .any(|references| references[0] == references[1])
+    {
+        return Err("ownership evidence is duplicated or not deterministically sorted".to_owned());
     }
     if ownership_class != "UnknownOwnership" {
         let workload = required_string(ownership, "workload", "ownership")?;
@@ -1461,9 +1513,13 @@ fn validate_contract(
         }
         let mut sorted_transaction_refs = transaction_ref_order.clone();
         sorted_transaction_refs.sort();
-        if transaction_ref_order != sorted_transaction_refs {
+        if transaction_ref_order != sorted_transaction_refs
+            || sorted_transaction_refs
+                .windows(2)
+                .any(|references| references[0] == references[1])
+        {
             return Err(format!(
-                "{transaction_id} evidence references are not sorted"
+                "{transaction_id} evidence references are duplicated or not sorted"
             ));
         }
         let records = evidence_records(scenario_root, &artifacts_by_id, &transaction["evidence"])?;
@@ -1727,6 +1783,11 @@ fn validate_contract(
         {
             return Err(format!(
                 "{observation_id} makes an unsupported causal claim"
+            ));
+        }
+        if !public_observation_claim_is_safe(claim) {
+            return Err(format!(
+                "{observation_id} contains unsafe public identity or path data"
             ));
         }
         let artifact_ids = string_array(
