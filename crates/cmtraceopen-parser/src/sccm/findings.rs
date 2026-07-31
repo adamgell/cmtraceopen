@@ -829,7 +829,7 @@ fn reason_scope_is_within_catalog_artifact(
         if is_confirmation {
             confirmation_clause_is_non_authorizing(&tokens, &identity_ranges)
         } else if contains_collection_directive {
-            collection_clause_is_catalog_bounded(&tokens, &identity_ranges)
+            collection_clause_is_catalog_bounded(clause, &tokens, &identity_ranges)
         } else {
             narrative_clause_has_no_collection_scope(&tokens)
         }
@@ -986,11 +986,12 @@ fn is_identity_continuation(character: char) -> bool {
 }
 
 fn collection_clause_is_catalog_bounded(
+    clause: &str,
     tokens: &[RequestReasonToken<'_>],
     identity_ranges: &[(usize, usize)],
 ) -> bool {
     if identity_ranges.is_empty()
-        || !collection_actions_have_local_catalog_identity(tokens, identity_ranges)
+        || !collection_actions_have_exact_catalog_targets(clause, tokens, identity_ranges)
     {
         return false;
     }
@@ -1011,7 +1012,8 @@ fn collection_clause_is_catalog_bounded(
     })
 }
 
-fn collection_actions_have_local_catalog_identity(
+fn collection_actions_have_exact_catalog_targets(
+    clause: &str,
     tokens: &[RequestReasonToken<'_>],
     identity_ranges: &[(usize, usize)],
 ) -> bool {
@@ -1023,14 +1025,151 @@ fn collection_actions_have_local_catalog_identity(
 
     while let Some(action_index) = action_indices.next() {
         let segment_end = action_indices.peek().copied().unwrap_or(tokens.len());
-        if !tokens[action_index..segment_end]
-            .iter()
-            .any(|token| token_is_covered_by_identity(token, identity_ranges))
-        {
+        let has_following_action = action_indices.peek().is_some();
+        if !collection_action_has_exact_catalog_target(
+            clause,
+            &tokens[action_index..segment_end],
+            identity_ranges,
+            has_following_action,
+        ) {
             return false;
         }
     }
     true
+}
+
+fn collection_action_has_exact_catalog_target(
+    clause: &str,
+    segment: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+    has_following_action: bool,
+) -> bool {
+    // Fail closed around the target shape:
+    // action + bounded modifiers + exact catalog identity + optional narrative.
+    // A catalog mention reached only after arbitrary target words is evidence
+    // context, not authorization for those earlier words.
+    let Some(action) = segment.first() else {
+        return false;
+    };
+    let segment_end = segment.last().map_or(action.end, |token| token.end);
+    let Some((target_start, target_end)) = identity_ranges
+        .iter()
+        .filter(|(start, end)| *start >= action.end && *end <= segment_end)
+        .min_by_key(|(start, end)| (*start, std::cmp::Reverse(*end)))
+        .copied()
+    else {
+        return false;
+    };
+
+    let leading_is_target_grammar = segment
+        .iter()
+        .skip(1)
+        .take_while(|token| token.end <= target_start)
+        .all(|token| is_catalog_target_modifier(token.text));
+    if !leading_is_target_grammar || has_unbound_dotted_target(clause, segment, identity_ranges) {
+        return false;
+    }
+
+    let mut trailing = segment
+        .iter()
+        .filter(|token| token.start >= target_end)
+        .peekable();
+    while trailing
+        .peek()
+        .is_some_and(|token| is_catalog_target_suffix(token.text))
+    {
+        trailing.next();
+    }
+    let trailing = trailing.collect::<Vec<_>>();
+    if trailing.is_empty() {
+        return true;
+    }
+    if has_following_action
+        && trailing
+            .iter()
+            .all(|token| is_action_coordinator(token.text))
+    {
+        return true;
+    }
+    if !is_collection_narrative_introducer(trailing[0].text) {
+        return false;
+    }
+
+    trailing.iter().enumerate().all(|(index, token)| {
+        if !is_action_coordinator(token.text) {
+            return true;
+        }
+        trailing
+            .get(index + 1)
+            .is_some_and(|next| is_safe_narrative_continuation(next.text))
+    })
+}
+
+fn is_catalog_target_modifier(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "all"
+            | "an"
+            | "cited"
+            | "complete"
+            | "current"
+            | "entire"
+            | "every"
+            | "exact"
+            | "full"
+            | "named"
+            | "of"
+            | "requested"
+            | "rotation"
+            | "rotations"
+            | "the"
+            | "whole"
+    )
+}
+
+fn is_catalog_target_suffix(token: &str) -> bool {
+    matches!(token, "entry" | "file" | "record")
+}
+
+fn is_collection_narrative_introducer(token: &str) -> bool {
+    matches!(
+        token,
+        "after"
+            | "as"
+            | "because"
+            | "before"
+            | "cited"
+            | "for"
+            | "from"
+            | "recorded"
+            | "reported"
+            | "since"
+            | "with"
+    )
+}
+
+fn is_action_coordinator(token: &str) -> bool {
+    matches!(token, "and" | "plus" | "then")
+}
+
+fn is_safe_narrative_continuation(token: &str) -> bool {
+    matches!(
+        token,
+        "after" | "as" | "because" | "before" | "for" | "from" | "since" | "with"
+    )
+}
+
+fn has_unbound_dotted_target(
+    clause: &str,
+    segment: &[RequestReasonToken<'_>],
+    identity_ranges: &[(usize, usize)],
+) -> bool {
+    segment.windows(2).any(|pair| {
+        clause[pair[0].end..pair[1].start].contains('.')
+            && !identity_ranges
+                .iter()
+                .any(|(start, end)| pair[0].start >= *start && pair[1].end <= *end)
+    })
 }
 
 fn confirmation_clause_is_non_authorizing(

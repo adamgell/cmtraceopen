@@ -319,6 +319,25 @@ const REVIEW_COORDINATED_UNQUALIFIED_ACTION_REASONS: [&str; 3] = [
     "Collect PolicyAgent.log plus export.",
 ];
 
+const REVIEW_UNBOUND_COLLECTION_TARGET_REASONS: [&str; 10] = [
+    "Collect secrets.txt because PolicyAgent.log reported an error.",
+    "Collect PolicyAgent.log and retrieve secrets.txt.",
+    "Collect credentials.json since PolicyAgent.log recorded a failure.",
+    "Collect evidence.zip after PolicyAgent.log reported a failure.",
+    "Collect credentials because PolicyAgent.log reported an error.",
+    "Collect PolicyAgent.log then retrieve credentials.json.",
+    "Collect PolicyAgent.log plus fetch credentials.json.",
+    "Collect PolicyAgent.log and preserve secrets.txt.",
+    "Collect PolicyAgent.log, retrieve secrets.txt.",
+    "Collect PolicyAgent.log and retrieve credentials.",
+];
+
+const REVIEW_SAFE_COLLECTION_NARRATIVE_REASONS: [&str; 3] = [
+    "Collect PolicyAgent.log because the policy evaluation reported an error.",
+    "Collect PolicyAgent.log for review of the reported assignment error.",
+    "Collect PolicyAgent.log after the reported policy error.",
+];
+
 const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [
     ("mpCliReg", "Collect the complete MP_CliReg.log file."),
     ("mpGetAuth", "Collect the complete MP_GetAuth.log file."),
@@ -1849,6 +1868,89 @@ fn finding_review_coordinated_unqualified_actions_fail_at_every_public_boundary(
     assert!(
         accepted.is_empty(),
         "accepted coordinated unqualified action boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_unbound_collection_targets_fail_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-unbound-target-parity");
+    let mut accepted = Vec::new();
+
+    for reason in REVIEW_UNBOUND_COLLECTION_TARGET_REASONS {
+        let builder = SccmFindingBuilder::new("review-unbound-target-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+            accepted.push(format!("builder: {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason)
+        {
+            accepted.push(format!("direct validate: {reason}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted unbound collection target boundaries: {accepted:#?}"
+    );
+}
+
+#[test]
+fn finding_review_safe_collection_narratives_pass_at_every_public_boundary() {
+    let canonical = finding_with_gap_and_request("review-safe-narrative-parity");
+    let mut rejected = Vec::new();
+
+    for reason in REVIEW_SAFE_COLLECTION_NARRATIVE_REASONS {
+        let builder = SccmFindingBuilder::new("review-safe-narrative-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(finding_request("policyAgent", SccmRole::Client, reason))
+            .build();
+        if let Err(error) = builder {
+            rejected.push(format!("builder ({error:?}): {reason}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0].reason = reason.into();
+        if let Err(error) = direct.validate() {
+            rejected.push(format!("direct validate ({error:?}): {reason}"));
+        }
+        if serde_json::to_value(&direct).is_err() {
+            rejected.push(format!("serializer: {reason}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0]["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmFinding>(json).is_err() {
+            rejected.push(format!("deserializer: {reason}"));
+        }
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected safe collection narratives: {rejected:#?}"
     );
 }
 
