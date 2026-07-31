@@ -86,7 +86,17 @@ pub fn parse_capture_ndjson(input: &str) -> PortalUnifiedLogCaptureSet {
         // JSON encodings of the same capture report identical stats.
         match serde_json::from_str::<Value>(trimmed) {
             Ok(Value::Object(obj)) => {
-                if header.is_none() && obj.contains_key("schemaId") {
+                // The header is the leading object, and it must look like a
+                // header rather than merely mention `schemaId`. A record is free
+                // to carry `schemaId` among its unknown fields, and on the old
+                // test the first such record was lifted out of the stream and
+                // treated as capture metadata, silently changing both the record
+                // set and the reported stats. Requiring `schemaVersion` as well,
+                // and refusing to accept a header once records have been seen,
+                // means a stray field can no longer rewrite the capture.
+                let looks_like_header =
+                    obj.contains_key("schemaId") && obj.contains_key("schemaVersion");
+                if header.is_none() && pending.is_empty() && looks_like_header {
                     header = Some(obj);
                 } else {
                     builder.stats.stream_lines += 1;

@@ -1270,3 +1270,34 @@ fn cross_namespace_identifier_collisions_do_not_link_records() {
         "a traceId must not match an anchor's activityIdentifier: {selected:?}"
     );
 }
+
+/// The header is the leading object and must look like one. A record carrying a
+/// stray `schemaId` among its unknown fields used to be lifted out of the stream
+/// and treated as capture metadata, changing both the record set and the stats.
+#[test]
+fn a_record_mentioning_schema_id_is_not_mistaken_for_the_header() {
+    let header = format!(
+        r#"{{"captureId":"c","schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+    let sneaky = r#"{"schemaId":"attacker-supplied","category":"Enrollment","eventMessage":"still a record","messageType":"Default","process":"CompanyPortal","sourceSequence":1,"subsystem":"com.microsoft.CompanyPortalMac","timestamp":"2026-07-15 07:02:01.000000-0500"}"#;
+    let plain = r#"{"category":"Enrollment","eventMessage":"plain record","messageType":"Default","process":"CompanyPortal","sourceSequence":2,"subsystem":"com.microsoft.CompanyPortalMac","timestamp":"2026-07-15 07:02:02.000000-0500"}"#;
+
+    let capture = parse_capture_ndjson(&format!("{header}\n{sneaky}\n{plain}\n"));
+
+    assert!(capture.supported);
+    assert_eq!(capture.schema_id.as_deref(), Some(PORTAL_UNIFIED_LOG_SCHEMA_ID));
+    assert_eq!(
+        capture.stats.stream_lines, 2,
+        "both records must stay in the stream"
+    );
+    assert_eq!(capture.records.len(), 2);
+
+    // With no real header at all, a record that merely mentions schemaId is
+    // still a record, not a header.
+    let headerless = parse_capture_ndjson(&format!("{sneaky}\n"));
+    assert!(!headerless.supported);
+    assert_eq!(
+        headerless.stats.stream_lines, 1,
+        "the record must not be consumed as capture metadata"
+    );
+}
