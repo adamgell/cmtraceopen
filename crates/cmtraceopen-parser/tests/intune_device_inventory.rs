@@ -2,7 +2,10 @@ use cmtraceopen_parser::{
     intune::device::windows::inventory::{
         detect_dialect, parse_content, DeviceInventoryLogDialect,
     },
-    models::log_entry::{LogFormat, Severity},
+    models::log_entry::{
+        LogFormat, ParserImplementation, ParserKind, ParserSpecialization, RecordFraming, Severity,
+    },
+    parser::parse_content as parse_with_dispatcher,
 };
 
 const HARVESTER: &str = "7/30/2026 6:00:53 AM [Information] Completed harvesting signed policies: 118 succeeded, 0 failed to collect.\n7/30/2026 10:08:52 AM [Warning] Reporting dropped attribute error for ExampleField: ErrorCode=404.\n7/30/2026 10:08:53 AM [Error] Harvester error code: 404, Message: ExampleField result is null.";
@@ -175,4 +178,91 @@ fn preserves_unknown_levels_orphans_crlf_and_truncated_final_records() {
     assert!(entries
         .iter()
         .all(|entry| entry.format == LogFormat::Timestamped));
+}
+
+#[test]
+fn dispatcher_selects_each_device_inventory_dialect_with_stable_metadata() {
+    let cases = [
+        (
+            "IntuneInventoryHarvesterLog.log",
+            HARVESTER,
+            ParserSpecialization::IntuneDeviceInventoryHarvester,
+            RecordFraming::PhysicalLine,
+            3,
+        ),
+        (
+            "InventoryAdaptor.log",
+            ADAPTOR,
+            ParserSpecialization::IntuneDeviceInventoryAdaptor,
+            RecordFraming::LogicalRecord,
+            2,
+        ),
+        (
+            "IntuneDeviceInventory.log",
+            ROTATION_FAILURE,
+            ParserSpecialization::IntuneDeviceInventoryRotationFailure,
+            RecordFraming::LogicalRecord,
+            1,
+        ),
+    ];
+
+    for (path, content, specialization, framing, entry_count) in cases {
+        let (result, selection) = parse_with_dispatcher(content, path, content.len() as u64);
+
+        assert_eq!(selection.parser, ParserKind::IntuneDeviceInventory);
+        assert_eq!(
+            selection.implementation,
+            ParserImplementation::IntuneDeviceInventory
+        );
+        assert_eq!(selection.specialization, Some(specialization));
+        assert_eq!(selection.record_framing, framing);
+        assert_eq!(selection.compatibility_format(), LogFormat::Timestamped);
+        assert_eq!(result.format_detected, LogFormat::Timestamped);
+        assert_eq!(result.entries.len(), entry_count);
+        assert_eq!(result.parser_selection.specialization, Some(specialization));
+    }
+}
+
+#[test]
+fn dispatcher_preserves_logical_records_and_common_error_code_annotations() {
+    let (adaptor, _) = parse_with_dispatcher(ADAPTOR, "InventoryAdaptor.log", ADAPTOR.len() as u64);
+    assert_eq!(
+        adaptor.entries[0].message,
+        "Adapter result:\n{\"Status\":200,\"HResult\":\"0x00000000\",\"Data\":{\"Example\":\"value\"}}"
+    );
+
+    let error_harvester = "7/30/2026 10:08:53 AM [Error] Harvester failed with 0x80070005.";
+    let (harvester, _) = parse_with_dispatcher(
+        error_harvester,
+        "IntuneInventoryHarvesterLog.log",
+        error_harvester.len() as u64,
+    );
+    assert_eq!(
+        harvester.entries[0].error_code_spans[0].code_hex,
+        "0x80070005"
+    );
+}
+
+#[test]
+fn dispatcher_keeps_path_only_and_generic_timestamp_collisions_out_of_device_inventory() {
+    let (path_only, path_only_selection) = parse_with_dispatcher(
+        "ordinary text",
+        "IntuneInventoryHarvesterLog.log",
+        "ordinary text".len() as u64,
+    );
+    assert_eq!(path_only_selection.parser, ParserKind::Plain);
+    assert_eq!(path_only.parser_selection.specialization, None);
+
+    let generic_iso = "2026-07-30T13:05:01.1234567-04:00 Completed an unrelated service operation.\n2026-07-30T13:05:02.1234567-04:00 Completed another unrelated service operation.";
+    let (timestamped, timestamped_selection) = parse_with_dispatcher(
+        generic_iso,
+        "IntuneDeviceInventory.log",
+        generic_iso.len() as u64,
+    );
+    assert_eq!(timestamped_selection.parser, ParserKind::Timestamped);
+    assert_eq!(
+        timestamped_selection.implementation,
+        ParserImplementation::GenericTimestamped
+    );
+    assert_eq!(timestamped.parser_selection.specialization, None);
 }

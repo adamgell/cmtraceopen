@@ -369,6 +369,7 @@ const PARSER_COLUMN_MAP: Record<ParserKind, ColumnId[]> = {
   msi: ["severity", "dateTime", "message", "component", "thread"],
   psadtLegacy: ["severity", "dateTime", "message", "component", "sourceFile"],
   intuneMacOs: ["severity", "dateTime", "message", "component", "thread", "sourceFile"],
+  intuneDeviceInventory: ["severity", "dateTime", "message", "thread"],
   dhcp: ["severity", "dateTime", "message", "ipAddress", "hostName", "macAddress"],
   burn: ["severity", "dateTime", "message", "component", "thread"],
   patchMyPcDetection: ["severity", "dateTime", "message", "component", "hostName", "operationName"],

@@ -21,7 +21,10 @@ pub mod severity;
 pub mod simple;
 pub mod timestamped;
 
-use crate::models::log_entry::{LogEntry, ParseResult};
+use crate::{
+    intune::device::windows::inventory::{self, DeviceInventoryLogDialect},
+    models::log_entry::{LogEntry, ParseResult, ParserSpecialization},
+};
 use std::path::Path;
 
 /// Post-process parsed entries to detect error code spans in messages.
@@ -104,6 +107,14 @@ pub fn parse_lines_with_selection(
         crate::models::log_entry::ParserImplementation::IntuneMacOs => {
             intune_macos::parse_lines(lines, file_path)
         }
+        crate::models::log_entry::ParserImplementation::IntuneDeviceInventory => {
+            inventory::parse_content(
+                file_path,
+                &lines.join("\n"),
+                device_inventory_dialect(selection.specialization)
+                    .expect("Device Inventory selection carries a dialect"),
+            )
+        }
         crate::models::log_entry::ParserImplementation::Dhcp => dhcp::parse_lines(lines, file_path),
         crate::models::log_entry::ParserImplementation::Burn => burn::parse_lines(lines, file_path),
         crate::models::log_entry::ParserImplementation::PatchMyPcDetection => {
@@ -153,16 +164,25 @@ pub fn parse_content_with_selection(
         crate::models::log_entry::ParserImplementation::Ccm => {
             ccm::parse_content(content, file_path, selection.specialization)
         }
+        crate::models::log_entry::ParserImplementation::IntuneDeviceInventory => {
+            inventory::parse_content(
+                file_path,
+                content,
+                device_inventory_dialect(selection.specialization)
+                    .expect("Device Inventory selection carries a dialect"),
+            )
+        }
         _ => {
             let lines: Vec<&str> = content.lines().collect();
             parse_lines_with_selection(&lines, file_path, selection)
         }
     };
-    // For CCM content path (which doesn't go through parse_lines_with_selection),
+    // For whole-content parse paths (which don't go through parse_lines_with_selection),
     // ensure error code spans are annotated.
     if matches!(
         selection.implementation,
         crate::models::log_entry::ParserImplementation::Ccm
+            | crate::models::log_entry::ParserImplementation::IntuneDeviceInventory
     ) {
         annotate_error_code_spans(&mut entries);
     }
@@ -171,6 +191,23 @@ pub fn parse_content_with_selection(
         entries,
         total_lines,
         parse_errors,
+    }
+}
+
+fn device_inventory_dialect(
+    specialization: Option<ParserSpecialization>,
+) -> Option<DeviceInventoryLogDialect> {
+    match specialization {
+        Some(ParserSpecialization::IntuneDeviceInventoryHarvester) => {
+            Some(DeviceInventoryLogDialect::Harvester)
+        }
+        Some(ParserSpecialization::IntuneDeviceInventoryAdaptor) => {
+            Some(DeviceInventoryLogDialect::InventoryAdaptor)
+        }
+        Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure) => {
+            Some(DeviceInventoryLogDialect::RotationFailure)
+        }
+        _ => None,
     }
 }
 
