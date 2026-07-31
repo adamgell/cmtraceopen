@@ -382,11 +382,15 @@ const REVIEW_UNRECOGNIZED_CONFIRMATION_REQUEST_REASONS: [&str; 10] = [
     "Confirm PolicyAgent.log for fetching credentials.",
 ];
 
-const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 4] = [
+const REVIEW_PASSIVE_UNBOUNDED_CONFIRMATION_REASONS: [&str; 8] = [
     "Confirm all files are required for status in PolicyAgent.log.",
     "Confirm every file must be provided for download status in PolicyAgent.log.",
     "Confirm the whole disk is required for imaging status in Smsts.log.",
     "Confirm the full disk must be provided for imaging status in Smsts.log.",
+    "Confirm PolicyAgent.log status must include all files.",
+    "Confirm Smsts.log imaging status must provide the full disk.",
+    "Confirm PolicyAgent.log status must have all files provided.",
+    "Confirm Smsts.log imaging status must have the full disk provided.",
 ];
 
 const REVIEW_EXACT_MP_ARTIFACT_REQUESTS: [(&str, &str); 5] = [

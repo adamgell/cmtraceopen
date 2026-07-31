@@ -1274,9 +1274,9 @@ fn has_passive_unbounded_confirmation_request(
                 return false;
             }
 
-            let subject = &tokens[1..auxiliary_index];
-            let has_broad_target = subject.iter().any(|token| is_broad_quantifier(token.text))
-                && subject.iter().any(|token| {
+            let body = &tokens[1..];
+            let has_broad_target = body.iter().any(|token| is_broad_quantifier(token.text))
+                && body.iter().any(|token| {
                     is_collection_target(token.text)
                         && !token_is_covered_by_identity(token, identity_ranges)
                 });
