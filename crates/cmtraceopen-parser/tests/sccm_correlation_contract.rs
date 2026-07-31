@@ -201,11 +201,24 @@ enum PairState {
     Candidate,
 }
 
+/// Upstream acceptance state of one side of a correlation pair.
+///
+/// `Merged` sides may only cite already merged synthetic corpus directories
+/// under their own side prefix (or pair-local `synthetic:` inputs). `Pending`
+/// sides have no accepted corpus on the program baseline, so they must stay
+/// honestly marked with `issue:` refs until the upstream issue is accepted.
+enum SideCorpus {
+    Merged { repo_prefix: &'static str },
+    Pending { issue: &'static str },
+}
+
 struct MatrixSpec {
     workflow: &'static str,
     scenario_ids: &'static [&'static str],
     client_issue: &'static str,
     server_issue: &'static str,
+    client_side: SideCorpus,
+    server_side: SideCorpus,
 }
 
 const POLICY_SPEC: MatrixSpec = MatrixSpec {
@@ -213,6 +226,12 @@ const POLICY_SPEC: MatrixSpec = MatrixSpec {
     scenario_ids: &POLICY_SCENARIOS,
     client_issue: "#321",
     server_issue: "#328",
+    client_side: SideCorpus::Merged {
+        repo_prefix: "crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/",
+    },
+    server_side: SideCorpus::Merged {
+        repo_prefix: "crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/",
+    },
 };
 
 const CONTENT_SPEC: MatrixSpec = MatrixSpec {
@@ -220,7 +239,36 @@ const CONTENT_SPEC: MatrixSpec = MatrixSpec {
     scenario_ids: &CONTENT_SCENARIOS,
     client_issue: "#322",
     server_issue: "#329",
+    client_side: SideCorpus::Merged {
+        repo_prefix: "crates/cmtraceopen-parser/tests/fixtures/sccm/client/deployment/",
+    },
+    // #329 DP evidence is not independently accepted yet, so the server side
+    // may only name pending scenarios and must never cite a merged corpus.
+    server_side: SideCorpus::Pending { issue: "#329" },
 };
+
+const PAIR_OWNERSHIP: [(&str, &str, &str, &str); 3] = [
+    (
+        "content-distribution-point",
+        "contentDistributionPoint",
+        "#322",
+        "#329",
+    ),
+    (
+        "policy-management-point",
+        "policyManagementPoint",
+        "#321",
+        "#328",
+    ),
+    (
+        "updates-software-update-point",
+        "updatesSoftwareUpdatePoint",
+        "#323",
+        "#330",
+    ),
+];
+
+const CONTENT_PENDING_BLOCKER: &str = "#329 public fact interface not independently accepted";
 
 fn corpus_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/correlation")
@@ -256,31 +304,66 @@ fn validate_issue(value: &str) -> bool {
     })
 }
 
-fn validate_fixture_ref(value: &str, issue: &str) -> bool {
+fn is_synthetic_slug(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn check_fixture_ref(value: &str, side: &SideCorpus, side_name: &str) -> Result<(), String> {
     if value == "absent" {
-        return true;
+        return Ok(());
     }
     if let Some(path) = value.strip_prefix("repo:") {
-        return !path.contains("..") && repo_root().join(path).is_dir();
+        let SideCorpus::Merged { repo_prefix } = side else {
+            return Err(format!(
+                "{side_name} fixture ref {value} cites a merged corpus while the upstream side is pending"
+            ));
+        };
+        if !path.starts_with(repo_prefix) {
+            return Err(format!(
+                "{side_name} fixture ref {value} is outside the side corpus {repo_prefix}"
+            ));
+        }
+        if path.contains("..") || !repo_root().join(path).is_dir() {
+            return Err(format!(
+                "{side_name} fixture ref {value} does not name a merged corpus directory"
+            ));
+        }
+        return Ok(());
     }
     if let Some(synthetic_id) = value.strip_prefix("synthetic:") {
-        return !synthetic_id.is_empty()
-            && synthetic_id
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        if !matches!(side, SideCorpus::Merged { .. }) {
+            return Err(format!(
+                "{side_name} fixture ref {value} hides a pending upstream side behind a synthetic input"
+            ));
+        }
+        if !is_synthetic_slug(synthetic_id) {
+            return Err(format!(
+                "{side_name} fixture ref {value} has a malformed synthetic slug"
+            ));
+        }
+        return Ok(());
     }
     if let Some(pending) = value.strip_prefix("issue:") {
-        return pending
+        let SideCorpus::Pending { issue } = side else {
+            return Err(format!(
+                "{side_name} fixture ref {value} claims a pending upstream while the side corpus is merged"
+            ));
+        };
+        let valid = pending
             .strip_prefix(issue)
             .and_then(|rest| rest.strip_prefix(':'))
-            .is_some_and(|scenario| {
-                !scenario.is_empty()
-                    && scenario.bytes().all(|byte| {
-                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                    })
-            });
+            .is_some_and(is_synthetic_slug);
+        if !valid {
+            return Err(format!(
+                "{side_name} fixture ref {value} is not a pending {issue} scenario"
+            ));
+        }
+        return Ok(());
     }
-    false
+    Err(format!("{side_name} fixture ref {value} has no known form"))
 }
 
 fn collect_decoded_strings(value: &Value, sink: &mut Vec<String>) {
@@ -320,18 +403,10 @@ fn check_scenario(scenario: &ScenarioContract, spec: &MatrixSpec) -> Result<(), 
     if !validate_issue(&scenario.client_issue) || !validate_issue(&scenario.server_issue) {
         return Err(format!("{scenario_id}: malformed issue reference"));
     }
-    if !validate_fixture_ref(&scenario.client_fixture_ref, &scenario.client_issue) {
-        return Err(format!(
-            "{scenario_id}: invalid client fixture ref {}",
-            scenario.client_fixture_ref
-        ));
-    }
-    if !validate_fixture_ref(&scenario.server_fixture_ref, &scenario.server_issue) {
-        return Err(format!(
-            "{scenario_id}: invalid server fixture ref {}",
-            scenario.server_fixture_ref
-        ));
-    }
+    check_fixture_ref(&scenario.client_fixture_ref, &spec.client_side, "client")
+        .map_err(|error| format!("{scenario_id}: {error}"))?;
+    check_fixture_ref(&scenario.server_fixture_ref, &spec.server_side, "server")
+        .map_err(|error| format!("{scenario_id}: {error}"))?;
     if scenario.guard_ids.is_empty() || !is_sorted_unique(&scenario.guard_ids) {
         return Err(format!(
             "{scenario_id}: guard IDs must be nonempty, sorted, and unique"
@@ -611,6 +686,28 @@ fn check_pair_registry(registry: &PairRegistry) -> Result<(), String> {
         let pair_id = pair.pair_id.as_str();
         if !validate_issue(&pair.client_issue) || !validate_issue(&pair.server_issue) {
             return Err(format!("{pair_id}: malformed issue reference"));
+        }
+        let (_, workflow, client_issue, server_issue) = PAIR_OWNERSHIP
+            .iter()
+            .find(|(owner_id, _, _, _)| *owner_id == pair_id)
+            .ok_or_else(|| format!("{pair_id}: pair has no pinned ownership"))?;
+        if pair.workflow != *workflow {
+            return Err(format!("{pair_id}: workflow ownership changed"));
+        }
+        if pair.client_issue != *client_issue || pair.server_issue != *server_issue {
+            return Err(format!(
+                "{pair_id}: issue ownership must stay {client_issue} to {server_issue}"
+            ));
+        }
+        if pair_id == "content-distribution-point"
+            && !pair
+                .blockers
+                .iter()
+                .any(|blocker| blocker == CONTENT_PENDING_BLOCKER)
+        {
+            return Err(format!(
+                "{pair_id}: the #329 pending acceptance blocker must stay declared"
+            ));
         }
         if pair.production_enabled {
             return Err(format!("{pair_id}: production must stay disabled"));
