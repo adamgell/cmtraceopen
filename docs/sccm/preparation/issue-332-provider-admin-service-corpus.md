@@ -15,7 +15,7 @@ The existing pure Rust catalog already distinguishes:
 - `AdminService.log` as Admin-Service-family CCM from the `provider` producer
   role.
 
-#332 keeps producer role and workflow layer separate. The proposed
+Issue `#332` keeps producer role and workflow layer separate. The proposed
 `server-provider` and `server-admin-service` source IDs preserve the exact
 endpoint handle and sanitized configured-path provenance. An optional
 `server-admin-service-iis` source is scoped W3C context only. An unknown or
