@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::{
-    assess_client_intake, declared_client_source_groups, SccmArtifact,
-    SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmCoverageState, SccmRole, SccmRotation,
+    assess_client_intake, declared_client_source_groups, SccmArtifact, SccmClientIntakeArtifact,
+    SccmClientIntakeBundle, SccmCoverageState, SccmRole, SccmRotation,
 };
 use serde::Deserialize;
 
@@ -214,8 +214,7 @@ fn missing_access_denied_and_capped_sources_remain_exact_coverage_states() {
     assert_eq!(content.fragments.len(), 1);
     assert_eq!(content.fragments[0].fragment_complete, Some(false));
     assert!(capped.coverage_gaps.iter().any(|gap| {
-        gap.logical_artifact_id == "client-content"
-            && gap.coverage == SccmCoverageState::Capped
+        gap.logical_artifact_id == "client-content" && gap.coverage == SccmCoverageState::Capped
     }));
 }
 

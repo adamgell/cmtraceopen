@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod client;
 mod evidence;
 mod findings;
 mod ingest;
@@ -8,6 +9,7 @@ mod rotation;
 mod signals;
 
 pub use catalog::*;
+pub use client::*;
 pub use findings::*;
 pub use ingest::*;
 pub use keys::*;
