@@ -455,6 +455,217 @@ fn declared_target_site_codes(manifest: &Value) -> BTreeSet<&str> {
         .collect()
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct ArtifactRequestBasis {
+    source_id: String,
+    direction: String,
+    target_site_code: String,
+    basenames: Vec<String>,
+}
+
+fn request_direction_matches(request_direction: &str, artifact_direction: &str) -> bool {
+    request_direction == artifact_direction
+        || (request_direction == "both" && matches!(artifact_direction, "origin" | "target"))
+}
+
+fn invalid_offset_request_basis(scenario: &str, manifest: &Value) -> Option<ArtifactRequestBasis> {
+    let mut source_ids = BTreeSet::new();
+    let mut directions = BTreeSet::new();
+    let mut target_sites = BTreeSet::new();
+    let mut basenames = BTreeSet::new();
+
+    for artifact in manifest["artifacts"].as_array()? {
+        let state = artifact["captureState"].as_str()?;
+        if !matches!(state, "captured" | "capped") {
+            continue;
+        }
+        let artifact_id = artifact["artifactId"].as_str()?;
+        let source_id = artifact["sourceId"].as_str()?;
+        let direction = artifact["direction"].as_str()?;
+        let basename = artifact["originalBasename"].as_str()?;
+        let relative_path = artifact["relativePath"].as_str()?;
+        if !safe_segmented_path(relative_path, "evidence/") {
+            return None;
+        }
+        let content =
+            std::fs::read_to_string(corpus_root().join(scenario).join(relative_path)).ok()?;
+        let model = SccmArtifact {
+            artifact_id: artifact_id.to_owned(),
+            display_name: basename.to_owned(),
+            original_path: None,
+            host: artifact["producerHostHandle"].as_str().map(str::to_owned),
+            role: SccmRole::SiteServer,
+            configmgr_version: artifact["sourceVersion"].as_str().map(str::to_owned),
+            collected_at_utc: artifact["collectedUtc"].as_str().map(str::to_owned),
+            rotation: rotation(&artifact["rotation"])?,
+            coverage: coverage_state(state)?,
+            encoding: artifact["encoding"].as_str().map(str::to_owned),
+        };
+        for record in normalize_ccm_artifact(model, &content) {
+            if record.timestamp.ordering_state != SccmTimeOrderingState::OffsetInvalid {
+                continue;
+            }
+            let Ok(fields) = parse_fixture_fields(&record.message) else {
+                continue;
+            };
+            let target_site = fields.get("TargetSite")?;
+            source_ids.insert(source_id.to_owned());
+            directions.insert(direction.to_owned());
+            target_sites.insert(target_site.to_owned());
+            basenames.insert(basename.to_owned());
+        }
+    }
+
+    let direction_values = directions.iter().map(String::as_str).collect::<Vec<_>>();
+    let direction = match direction_values.as_slice() {
+        ["origin"] => "origin",
+        ["target"] => "target",
+        ["origin", "target"] => "both",
+        _ => return None,
+    };
+    if source_ids.len() != 1 || target_sites.len() != 1 {
+        return None;
+    }
+    Some(ArtifactRequestBasis {
+        source_id: source_ids.into_iter().next()?,
+        direction: direction.to_owned(),
+        target_site_code: target_sites.into_iter().next()?,
+        basenames: basenames.into_iter().collect(),
+    })
+}
+
+fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<String> {
+    let mut failures = Vec::new();
+    let Some(requests) = expected["artifactRequests"].as_array() else {
+        failures.push(format!("{scenario}: artifact requests are not an array"));
+        return failures;
+    };
+    let artifacts = manifest["artifacts"].as_array();
+    let target_sites = declared_target_site_codes(manifest);
+    let request_keys = requests
+        .iter()
+        .map(|request| {
+            (
+                request["sourceId"].as_str(),
+                request["direction"].as_str(),
+                request["targetSiteCode"].as_str(),
+                request["reasonCode"].as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut sorted_request_keys = request_keys.clone();
+    sorted_request_keys.sort_unstable();
+    sorted_request_keys.dedup();
+    if request_keys != sorted_request_keys {
+        failures.push(format!("{scenario}: requests are not sorted and unique"));
+    }
+
+    for request in requests {
+        if !object_has_only(
+            request,
+            &[
+                "sourceId",
+                "producerRole",
+                "direction",
+                "targetSiteCode",
+                "basenames",
+                "reasonCode",
+            ],
+        ) {
+            failures.push(format!(
+                "{scenario}: request has an unsupported field or shape"
+            ));
+        }
+        let source_id = request["sourceId"].as_str();
+        let direction = request["direction"].as_str();
+        let target_site = request["targetSiteCode"].as_str();
+        let reason = request["reasonCode"].as_str();
+        let basename_values = request["basenames"].as_array();
+        let basenames = basename_values
+            .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut sorted_basenames = basenames.clone();
+        sorted_basenames.sort_unstable();
+        sorted_basenames.dedup();
+        let source_owns_basenames = match source_id {
+            Some("server-hierarchy-control") => basenames
+                .iter()
+                .all(|basename| matches!(*basename, "replmgr.log")),
+            Some("server-hierarchy-transfer") => basenames
+                .iter()
+                .all(|basename| matches!(*basename, "sender.log" | "sender.lo_" | "despool.log")),
+            _ => false,
+        };
+        if request["producerRole"] != "siteServer"
+            || !matches!(direction, Some("origin" | "target" | "both"))
+            || target_site.is_none_or(|site| !target_sites.contains(site))
+            || basename_values.is_none_or(|values| values.len() != basenames.len())
+            || basenames.is_empty()
+            || basenames != sorted_basenames
+            || !source_owns_basenames
+        {
+            failures.push(format!("{scenario}: request is broad or malformed"));
+            continue;
+        }
+
+        let actual_basis = ArtifactRequestBasis {
+            source_id: source_id.unwrap_or_default().to_owned(),
+            direction: direction.unwrap_or_default().to_owned(),
+            target_site_code: target_site.unwrap_or_default().to_owned(),
+            basenames: basenames.iter().map(|value| (*value).to_owned()).collect(),
+        };
+        let backed = match reason {
+            Some("invalidOffset") => {
+                invalid_offset_request_basis(scenario, manifest).as_ref() == Some(&actual_basis)
+            }
+            Some(reason @ ("coverageAbsent" | "coverageCapped" | "coverageRotationSplit")) => {
+                let expected_state = match reason {
+                    "coverageAbsent" => Some("absent"),
+                    "coverageCapped" => Some("capped"),
+                    "coverageRotationSplit" => None,
+                    _ => unreachable!(),
+                };
+                let matching = artifacts
+                    .into_iter()
+                    .flatten()
+                    .filter(|artifact| {
+                        artifact["sourceId"].as_str() == source_id
+                            && artifact["direction"]
+                                .as_str()
+                                .is_some_and(|artifact_direction| {
+                                    request_direction_matches(
+                                        direction.unwrap_or_default(),
+                                        artifact_direction,
+                                    )
+                                })
+                            && expected_state.map_or_else(
+                                || artifact["rotation"]["fragmentComplete"] == false,
+                                |state| artifact["captureState"] == state,
+                            )
+                    })
+                    .collect::<Vec<_>>();
+                let matching_basenames = matching
+                    .iter()
+                    .filter_map(|artifact| artifact["originalBasename"].as_str())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                !matching.is_empty()
+                    && (reason != "coverageRotationSplit" || matching.len() >= 2)
+                    && matching_basenames == basenames
+            }
+            _ => false,
+        };
+        if !backed {
+            failures.push(format!(
+                "{scenario}: request is not backed by exact coverage/time evidence"
+            ));
+        }
+    }
+
+    failures
+}
+
 fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<String> {
     let mut failures = Vec::new();
     if !object_has_only(
@@ -956,6 +1167,8 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
     if source_local_ids != expected_source_local_ids(scenario) {
         failures.push("source-local identity/cardinality matrix changed".to_owned());
     }
+
+    failures.extend(artifact_request_failures(scenario, manifest, expected));
 
     failures
 }
@@ -1661,113 +1874,10 @@ fn hierarchy_gaps_requests_and_source_local_controls_are_bounded() {
         let expected = read_json(scenario, "expected.json")
             .unwrap_or_else(|error| panic!("{scenario}: {error}"));
         let records = normalized_records(scenario, &manifest);
-        let artifacts = manifest["artifacts"]
-            .as_array()
-            .expect("artifacts are an array")
-            .iter()
-            .filter_map(|artifact| {
-                Some((
-                    artifact["artifactId"].as_str()?.to_owned(),
-                    artifact.clone(),
-                ))
-            })
-            .collect::<BTreeMap<_, _>>();
-
+        failures.extend(artifact_request_failures(scenario, &manifest, &expected));
         let requests = expected["artifactRequests"]
             .as_array()
             .expect("artifact requests are an array");
-        let request_keys = requests
-            .iter()
-            .map(|request| {
-                (
-                    request["sourceId"].as_str(),
-                    request["direction"].as_str(),
-                    request["targetSiteCode"].as_str(),
-                    request["reasonCode"].as_str(),
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut sorted_request_keys = request_keys.clone();
-        sorted_request_keys.sort_unstable();
-        sorted_request_keys.dedup();
-        if request_keys != sorted_request_keys {
-            failures.push(format!("{scenario}: requests are not sorted and unique"));
-        }
-        for request in requests {
-            let source_id = request["sourceId"].as_str();
-            let direction = request["direction"].as_str();
-            let target_site = request["targetSiteCode"].as_str();
-            let reason = request["reasonCode"].as_str();
-            let basenames = request["basenames"]
-                .as_array()
-                .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-                .unwrap_or_default();
-            let mut sorted_basenames = basenames.clone();
-            sorted_basenames.sort_unstable();
-            sorted_basenames.dedup();
-            if !matches!(
-                source_id,
-                Some("server-hierarchy-control" | "server-hierarchy-transfer")
-            ) || request["producerRole"] != "siteServer"
-                || !matches!(direction, Some("origin" | "target" | "both"))
-                || target_site.is_none_or(|site| {
-                    site.len() != 3
-                        || !site
-                            .bytes()
-                            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
-                })
-                || !matches!(
-                    reason,
-                    Some(
-                        "coverageAbsent"
-                            | "coverageCapped"
-                            | "coverageRotationSplit"
-                            | "invalidOffset"
-                    )
-                )
-                || basenames != sorted_basenames
-                || basenames.iter().any(|basename| {
-                    !matches!(
-                        *basename,
-                        "replmgr.log" | "sender.log" | "sender.lo_" | "despool.log"
-                    )
-                })
-            {
-                failures.push(format!("{scenario}: request is broad or malformed"));
-            }
-            let backed = match reason {
-                Some("coverageAbsent") => artifacts.values().any(|artifact| {
-                    artifact["sourceId"] == request["sourceId"]
-                        && artifact["direction"] == request["direction"]
-                        && artifact["captureState"] == "absent"
-                }),
-                Some("coverageCapped") => artifacts.values().any(|artifact| {
-                    artifact["sourceId"] == request["sourceId"]
-                        && artifact["direction"] == request["direction"]
-                        && artifact["captureState"] == "capped"
-                }),
-                Some("coverageRotationSplit") => {
-                    artifacts
-                        .values()
-                        .filter(|artifact| {
-                            artifact["sourceId"] == request["sourceId"]
-                                && artifact["direction"] == request["direction"]
-                                && artifact["rotation"]["fragmentComplete"] == false
-                        })
-                        .count()
-                        >= 2
-                }
-                Some("invalidOffset") => records.values().any(|record| {
-                    record.timestamp.ordering_state == SccmTimeOrderingState::OffsetInvalid
-                }),
-                _ => false,
-            };
-            if !backed {
-                failures.push(format!(
-                    "{scenario}: request is not backed by exact coverage/time evidence"
-                ));
-            }
-        }
 
         let request_reason_codes = requests
             .iter()
@@ -1834,15 +1944,19 @@ fn hierarchy_gaps_requests_and_source_local_controls_are_bounded() {
     }
 
     let contract =
-        include_str!("../../../docs/sccm/preparation/issue-331-hierarchy-replication-corpus.md");
+        include_str!("../../../docs/sccm/preparation/issue-331-hierarchy-replication-corpus.md")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
     for required in [
         "Raw CCM remains the transport grammar",
-        "timestamp proximity\nalone cannot create a transaction",
-        "A missing remote artifact\nis a coverage state, not evidence that the remote role is absent or broken",
+        "timestamp proximity alone cannot create a transaction",
+        "A missing remote artifact is a coverage state, not evidence that the remote role is absent or broken",
         "time alone is never eligible",
-        "not an\nacceptance source",
+        "not an acceptance source",
     ] {
-        if !contract.contains(required) {
+        let required = required.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !contract.contains(&required) {
             failures.push(format!("preparation document lost boundary: {required}"));
         }
     }
@@ -2102,5 +2216,66 @@ fn hierarchy_schema_and_identity_mutations_fail_closed() {
     assert!(
         accepted.is_empty(),
         "hierarchy contract accepted adversarial mutations: {accepted:?}"
+    );
+}
+
+#[test]
+fn hierarchy_artifact_request_mutations_fail_closed() {
+    let manifest =
+        read_json("clock-offset-unknown", "manifest.json").expect("clock manifest loads");
+    let expected =
+        read_json("clock-offset-unknown", "expected.json").expect("clock expected loads");
+    assert!(
+        identity_and_schema_failures("clock-offset-unknown", &manifest, &expected).is_empty(),
+        "the committed invalid-offset request is the bounded control"
+    );
+    assert!(
+        artifact_request_failures("clock-offset-unknown", &manifest, &expected).is_empty(),
+        "the shared request loader accepts the bounded both-direction control"
+    );
+
+    let mutations = [
+        (
+            "wrong source ID",
+            "sourceId",
+            serde_json::json!("server-hierarchy-control"),
+        ),
+        ("wrong direction", "direction", serde_json::json!("origin")),
+        (
+            "undeclared target site",
+            "targetSiteCode",
+            serde_json::json!("XYZ"),
+        ),
+        (
+            "wrong source basename",
+            "basenames",
+            serde_json::json!(["replmgr.log"]),
+        ),
+        (
+            "missing origin companion",
+            "basenames",
+            serde_json::json!(["despool.log"]),
+        ),
+        (
+            "missing target companion",
+            "basenames",
+            serde_json::json!(["sender.log"]),
+        ),
+    ];
+
+    let mut accepted = Vec::new();
+    for (label, field, value) in mutations {
+        let mut mutated = expected.clone();
+        mutated["artifactRequests"][0][field] = value;
+        if artifact_request_failures("clock-offset-unknown", &manifest, &mutated).is_empty()
+            || identity_and_schema_failures("clock-offset-unknown", &manifest, &mutated).is_empty()
+        {
+            accepted.push(label);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "artifact request provenance mutations were accepted: {accepted:?}"
     );
 }
