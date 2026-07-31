@@ -4,7 +4,7 @@ import {
   ShieldArrowRightRegular,
   WarningShieldRegular,
 } from "@fluentui/react-icons";
-import { restartEspAsAdministrator } from "../../lib/commands";
+import { requestElevatedRestart } from "../../lib/elevation";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
@@ -22,19 +22,28 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
 
   if (elevation.isElevated) return null;
 
+  // The banner is a coverage recommendation, not a source retry: it restores
+  // the workspace and nothing else. All relaunch behaviour lives in the shared
+  // coordinator, which never throws and collapses concurrent requests.
   const restart = async () => {
     setActionState("requesting");
-    try {
-      const result = await restartEspAsAdministrator();
-      setActionState(
-        result.launched
-          ? "requested"
-          : result.reason === "elevationCancelled"
-            ? "cancelled"
-            : "failed",
-      );
-    } catch {
-      setActionState("failed");
+    const outcome = await requestElevatedRestart({
+      reason: "coverageRecommended",
+      workspace: "esp-diagnostics",
+      target: { kind: "workspace" },
+    });
+    switch (outcome.status) {
+      case "launched":
+        setActionState("requested");
+        break;
+      case "cancelled":
+        setActionState("cancelled");
+        break;
+      case "alreadyElevated":
+        setActionState("idle");
+        break;
+      default:
+        setActionState("failed");
     }
   };
 

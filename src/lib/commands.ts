@@ -14,6 +14,12 @@ import type {
   EvidenceArtifactIntakeKind,
 } from "../types/evidence";
 import type { RegistryParseResult } from "../types/registry";
+import type {
+  AppElevationState,
+  ElevationRequest,
+  RelaunchResult,
+  RestoreTicket,
+} from "../types/elevation";
 import type { IntuneAnalysisResult } from "../workspaces/intune/types";
 import type { SysmonAnalysisResult } from "../workspaces/sysmon/types";
 import type {
@@ -418,6 +424,30 @@ export async function getInitialFilePaths(): Promise<string[]> {
 
 export async function getInitialWorkspace(): Promise<WorkspaceId | null> {
   return invokeCommand<WorkspaceId | null>("get_initial_workspace");
+}
+
+// --- Application-wide elevation ---
+
+export async function getAppElevationState(): Promise<AppElevationState> {
+  return invokeCommand<AppElevationState>("get_app_elevation_state");
+}
+
+export async function restartAsAdministrator(
+  request: ElevationRequest,
+): Promise<RelaunchResult> {
+  return invokeCommand<RelaunchResult>("restart_as_administrator", {
+    request,
+  });
+}
+
+/**
+ * Claim the single-use restore ticket this process was started with.
+ *
+ * Returns null for every unusable case — no ticket, expired, malformed, or
+ * already consumed — because a failed restore must never stop the app starting.
+ */
+export async function getInitialElevationRestore(): Promise<RestoreTicket | null> {
+  return invokeCommand<RestoreTicket | null>("get_initial_elevation_restore");
 }
 
 export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
