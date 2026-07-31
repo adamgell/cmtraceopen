@@ -442,6 +442,8 @@ fn unsafe_path_fingerprints_fail_before_public_projection() {
         "synthetic:RealUser",
         "synthetic:corp-example-test",
         "synthetic-RealUser",
+        "synthetic:123:45:6789",
+        "synthetic-123-45-6789",
         "synthetic\0raw-user",
         "synthetic\u{7f}raw-user",
         "synthetic-résumé-user",
