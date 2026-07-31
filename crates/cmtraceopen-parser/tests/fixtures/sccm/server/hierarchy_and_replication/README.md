@@ -5,7 +5,7 @@ or lab capture. `manifest.json` records additive SCCM artifact coverage and
 physical provenance; `expected.json` records the proposed #331 evidence
 contract while production reducers remain dependency-blocked.
 
-Only raw CCM files from the existing hierarchy catalog are present:
+Only these raw CCM files are used as evidence:
 `replmgr.log`, `sender.log` and its rotated `sender.lo_` form, `despool.log`,
 and `rcmctrl.log`. Exact semantic records include the `SYNTHETIC FIXTURE`
 marker and synthetic message/link/site/profile fields. The generic-message

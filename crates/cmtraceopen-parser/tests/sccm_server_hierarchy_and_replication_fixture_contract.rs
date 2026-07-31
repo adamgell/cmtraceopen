@@ -33,6 +33,7 @@ const STATE_CHAIN: &[&str] = &[
 
 const EXACT_PROFILE: &str = "hierarchy-server-5.00.test-v1";
 const EXACT_SOURCE_VERSION: &str = "5.00.TEST.0001";
+const MAX_OPAQUE_ID_BYTES: usize = 128;
 
 fn corpus_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -69,6 +70,18 @@ fn required_string<'a>(value: &'a Value, field: &str, context: &str) -> Result<&
     value[field]
         .as_str()
         .ok_or_else(|| format!("{context}.{field} must be a string"))
+}
+
+fn safe_opaque_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_OPAQUE_ID_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn safe_prefixed_opaque_id(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(safe_opaque_id)
 }
 
 fn safe_segmented_path(value: &str, prefix: &str) -> bool {
@@ -202,11 +215,9 @@ fn artifact_has_exact_public_provenance(artifact: &Value) -> bool {
         .as_str()
         .is_some_and(safe_server_handle)
         && artifact_path_matches_basename(artifact, "sanitizedSourcePath", "SYNTHETIC://")
-        && artifact["pathFingerprint"].as_str().is_some_and(|value| {
-            value
-                .strip_prefix("synthetic:")
-                .is_some_and(|suffix| !suffix.is_empty())
-        })
+        && artifact["pathFingerprint"]
+            .as_str()
+            .is_some_and(|value| safe_prefixed_opaque_id(value, "synthetic:"))
         && artifact["sourceVersion"].as_str() == Some(EXACT_SOURCE_VERSION)
 }
 
@@ -296,7 +307,8 @@ fn record_matches_topology(
 }
 
 fn artifact_is_exact_candidate(manifest: &Value, artifact: &Value) -> bool {
-    artifact["captureState"] == "captured"
+    artifact["artifactId"].as_str().is_some_and(safe_opaque_id)
+        && artifact["captureState"] == "captured"
         && artifact_has_exact_public_provenance(artifact)
         && artifact["collectedUtc"]
             .as_str()
@@ -312,7 +324,7 @@ fn artifact_is_exact_candidate(manifest: &Value, artifact: &Value) -> bool {
         && artifact_has_canonical_basename_rotation(artifact)
         && artifact["rotation"]["lineageId"]
             .as_str()
-            .is_some_and(|value| !value.is_empty())
+            .is_some_and(safe_opaque_id)
         && artifact["rotation"]["fragmentComplete"] == true
         && artifact_has_exact_source_tuple(artifact)
         && artifact_matches_topology(manifest, artifact)
@@ -1221,9 +1233,9 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         }
         let Some(artifact_id) = artifact["artifactId"]
             .as_str()
-            .filter(|artifact_id| !artifact_id.is_empty())
+            .filter(|value| safe_opaque_id(value))
         else {
-            failures.push("artifactId is not a non-empty string".to_owned());
+            failures.push("artifactId is not a bounded safe opaque string".to_owned());
             continue;
         };
         artifact_ids.push(artifact_id);
@@ -1269,7 +1281,7 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         if rotation(&artifact["rotation"]).is_none()
             || artifact["rotation"]["lineageId"]
                 .as_str()
-                .is_none_or(str::is_empty)
+                .is_none_or(|value| !safe_opaque_id(value))
         {
             failures.push(format!("{artifact_id}: invalid rotation provenance"));
         }
@@ -1421,7 +1433,20 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
     {
         failures.push("state chain is not exact typed #331 grammar".to_owned());
     }
-    if expected["analysisContract"]["independentReducer"] != true
+    if !object_has_only(
+        &expected["analysisContract"],
+        &[
+            "independentReducer",
+            "crossSideCorrelationPerformed",
+            "nativeCollectionPerformed",
+        ],
+    ) || !object_has_only(
+        &expected["extractionProfile"],
+        &["selectionState", "profileId", "validatedRole"],
+    ) || !object_has_only(
+        &expected["correlationHandoff"],
+        &["issue", "performed", "timeOnlyEligible"],
+    ) || expected["analysisContract"]["independentReducer"] != true
         || expected["analysisContract"]["crossSideCorrelationPerformed"] != false
         || expected["analysisContract"]["nativeCollectionPerformed"] != false
         || expected["extractionProfile"]["selectionState"] != "selectedSynthetic"
@@ -1571,6 +1596,38 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                 failures
                     .push("coverage gap does not close against one non-captured row".to_owned());
             }
+        }
+        let has_retrying_fact =
+            transaction["observations"]
+                .as_array()
+                .is_some_and(|observations| {
+                    observations
+                        .iter()
+                        .any(|observation| observation["disposition"] == "retrying")
+                });
+        let derived_confidence = if transaction["topologyCompatibility"] == "exact"
+            && transaction["timestampOrdering"] == "usable"
+            && transaction["terminalEvidence"] == true
+            && gap_ids.is_empty()
+        {
+            "high"
+        } else if transaction["topologyCompatibility"] == "exact"
+            && transaction["timestampOrdering"] == "usable"
+            && transaction["terminalEvidence"] == false
+            && gap_ids.is_empty()
+            && has_retrying_fact
+        {
+            "medium"
+        } else {
+            "low"
+        };
+        if transaction["confidence"].as_str() != Some(derived_confidence)
+            || transaction["confidenceCeiling"].as_str() != Some(derived_confidence)
+        {
+            failures.push(
+                "transaction confidence and ceiling are not derived from facts/time/coverage"
+                    .to_owned(),
+            );
         }
         if transaction["confidence"] == "high"
             && (transaction["confidenceCeiling"] != "high"
