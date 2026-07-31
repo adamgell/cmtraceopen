@@ -1,3 +1,4 @@
+use serde::de::Error as _;
 use serde::ser::{Error as _, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -6,6 +7,8 @@ use super::catalog::SccmArtifactFamily;
 use super::rotation::{is_canonical_rotation_number, is_canonical_rotation_timestamp};
 
 pub const SCCM_DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
+const INVALID_SCCM_ROLE_MESSAGE: &str =
+    "InvalidRole: unknown SCCM role must be canonical and must not shadow a declared role";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +49,27 @@ impl SccmRole {
             Self::Unknown(value) => value,
         }
     }
+
+    pub(crate) fn has_canonical_serialized_form(&self) -> bool {
+        match self {
+            Self::Unknown(value) => {
+                !value.is_empty()
+                    && value.trim() == value
+                    && !matches!(
+                        value.as_str(),
+                        "client"
+                            | "siteServer"
+                            | "managementPoint"
+                            | "distributionPoint"
+                            | "softwareUpdatePoint"
+                            | "wsUs"
+                            | "provider"
+                            | "adminService"
+                    )
+            }
+            _ => true,
+        }
+    }
 }
 
 impl Serialize for SccmRole {
@@ -53,6 +77,9 @@ impl Serialize for SccmRole {
     where
         S: Serializer,
     {
+        if !self.has_canonical_serialized_form() {
+            return Err(S::Error::custom(INVALID_SCCM_ROLE_MESSAGE));
+        }
         serializer.serialize_str(self.serialized_name())
     }
 }
@@ -62,7 +89,7 @@ impl<'de> Deserialize<'de> for SccmRole {
     where
         D: Deserializer<'de>,
     {
-        Ok(match String::deserialize(deserializer)? {
+        let role = match String::deserialize(deserializer)? {
             value if value == "client" => Self::Client,
             value if value == "siteServer" => Self::SiteServer,
             value if value == "managementPoint" => Self::ManagementPoint,
@@ -72,7 +99,11 @@ impl<'de> Deserialize<'de> for SccmRole {
             value if value == "provider" => Self::Provider,
             value if value == "adminService" => Self::AdminService,
             value => Self::Unknown(value),
-        })
+        };
+        if !role.has_canonical_serialized_form() {
+            return Err(D::Error::custom(INVALID_SCCM_ROLE_MESSAGE));
+        }
+        Ok(role)
     }
 }
 
