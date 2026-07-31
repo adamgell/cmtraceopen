@@ -110,7 +110,7 @@ fn coverage_state(value: &str) -> Option<SccmCoverageState> {
 fn rotation(value: &Value) -> Option<SccmRotation> {
     match value["kind"].as_str()? {
         "current" if value.get("value").is_none() => Some(SccmRotation::Current),
-        "lo_" if value.get("value").is_none() => Some(SccmRotation::LoUnderscore),
+        "loUnderscore" if value.get("value").is_none() => Some(SccmRotation::LoUnderscore),
         "numbered" => value["value"]
             .as_u64()
             .and_then(|number| u32::try_from(number).ok())
@@ -832,7 +832,7 @@ fn coverage_request_basis(
                     artifact["rotation"].get("value"),
                 ),
                 (Some("sender.log"), Some("current"), None)
-                    | (Some("sender.lo_"), Some("lo_"), None)
+                    | (Some("sender.lo_"), Some("loUnderscore"), None)
             )
         });
         let canonical_basenames =
