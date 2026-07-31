@@ -24,6 +24,7 @@ mod appx_adapter_windows_tests {
         parse_package_state_capture, PackageCaptureCommandStatus, PackageCaptureSource,
         COMPANY_PORTAL_PACKAGE_STATE_SCHEMA_VERSION,
     };
+    use cmtraceopen_parser::parser::{decode_bytes, detect_encoding};
 
     use super::types::CollectionProfile;
 
@@ -40,16 +41,28 @@ mod appx_adapter_windows_tests {
             .args(&item.arguments)
             .output()
             .expect("AppX adapter command must run");
-        assert!(
-            output.status.success(),
-            "adapter exited with {:?}: {}",
-            output.status.code(),
-            String::from_utf8_lossy(&output.stderr)
-        );
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let capture = parse_package_state_capture(stdout.trim())
-            .expect("adapter output must parse as a package-state capture");
+        // PowerShell writes stdout in the active console code page, which is
+        // Windows-1252 on many hosts, so a publisher string or install path can
+        // carry non-UTF-8 bytes. from_utf8_lossy would turn those into U+FFFD
+        // and fail the parse or corrupt the values.
+        let stdout = decode_bytes(&output.stdout, detect_encoding(&output.stdout))
+            .expect("adapter stdout must decode");
+
+        // The exit code is deliberately not asserted first. The whole point of
+        // the contract is that a denied or failed query is reported inside the
+        // JSON, so a non-zero exit accompanied by a parseable capture is a
+        // correctly reported outcome. Only an unparseable capture is a failure,
+        // and then the exit code and stderr are the useful diagnostics.
+        let capture = parse_package_state_capture(stdout.trim()).unwrap_or_else(|error| {
+            panic!(
+                "adapter output must parse as a package-state capture \
+                 (exit {:?}, error {error:?}): {}",
+                output.status.code(),
+                decode_bytes(&output.stderr, detect_encoding(&output.stderr))
+                    .unwrap_or_else(|_| "<undecodable stderr>".to_string())
+            )
+        });
 
         assert_eq!(
             capture.schema_version,

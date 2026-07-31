@@ -177,7 +177,9 @@ mod tests {
             "scopeCoverage",
             "accessDenied",
             "-Compress",
-            "-Depth",
+            // Pin the depth, not just the flag. A lower value would silently
+            // truncate capture.scopeCoverage[] and packages[].installLocation.
+            "-Depth 6",
         ] {
             assert!(
                 command.contains(required),

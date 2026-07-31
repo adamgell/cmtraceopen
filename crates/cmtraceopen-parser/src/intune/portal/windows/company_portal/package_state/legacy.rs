@@ -134,12 +134,15 @@ pub fn import_legacy_format_list(
                 // A line that is neither blank nor a label/value pair is a
                 // wrapped continuation or a truncated value. Either way the
                 // original value cannot be reconstructed, so do not guess.
+                // Locate the line, never quote it. The refusal detail is
+                // free text that no redaction projection covers, and a
+                // Format-List line can carry an install path or an account.
                 return refuse(
                     LegacyRefusalReason::AmbiguousRecord,
                     &format!(
-                        "Line {line_number} is not a complete label/value pair, which indicates \
-                         wrapped or truncated Format-List output: {:?}",
-                        line.trim()
+                        "Line {line_number} is not a complete label/value pair ({} characters), \
+                         which indicates wrapped or truncated Format-List output.",
+                        line.trim().chars().count()
                     ),
                     &metadata,
                     Some(line_number),
@@ -266,6 +269,29 @@ impl LegacyRecord {
     }
 
     fn to_row(&self) -> Result<PackageRow, (LegacyRefusalReason, String, Option<usize>)> {
+        // `get` returns the first match and unknown labels overwrite in `raw`,
+        // so two records that lost their blank separator would silently
+        // collapse into one row carrying the first Name and a mixture of both
+        // records' fields. This module refuses wrapped and truncated input
+        // precisely so a bad read never looks like a good one; a repeated
+        // identifying label is the same class of problem.
+        let name_count = self
+            .fields
+            .iter()
+            .filter(|(label, _)| label.eq_ignore_ascii_case("Name"))
+            .count();
+        if name_count > 1 {
+            return Err((
+                LegacyRefusalReason::AmbiguousRecord,
+                format!(
+                    "Record starting at line {} repeats the 'Name' label {name_count} times, \
+                     which indicates two records merged by a missing blank separator.",
+                    self.first_line
+                ),
+                Some(self.first_line),
+            ));
+        }
+
         let name = self.get("Name").filter(|value| !value.is_empty()).ok_or((
             LegacyRefusalReason::IncompleteRecord,
             format!(

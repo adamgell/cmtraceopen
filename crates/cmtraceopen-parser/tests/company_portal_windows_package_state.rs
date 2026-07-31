@@ -878,6 +878,176 @@ fn package_state_redacted_export_stays_idempotent_beyond_nine_identifiers() {
     );
 }
 
+#[test]
+fn package_state_findings_never_carry_adapter_supplied_free_text() {
+    // Findings are a separate type that the redaction projection does not
+    // cover. Interpolating the adapter's error message or a scope-coverage
+    // detail into a finding message would carry a profile path or an account
+    // name straight past redaction. The access-denied fixture's error message
+    // contains a real-looking profile path, so it is the sharp case.
+    for source in [ACCESS_DENIED, COMMAND_FAILURE] {
+        let capture = parse(source);
+        let findings = derive_package_state_findings(&capture, &[]);
+        let messages = findings
+            .iter()
+            .map(|finding| finding.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if let Some(error) = capture.capture.error.as_ref() {
+            assert!(
+                !messages.contains(error.message.as_str()),
+                "finding messages leak the adapter error message: {messages}"
+            );
+        }
+        for coverage in &capture.capture.scope_coverage {
+            if let Some(detail) = coverage.detail.as_ref() {
+                assert!(
+                    !messages.contains(detail.as_str()),
+                    "finding messages leak scope-coverage detail: {messages}"
+                );
+            }
+        }
+        assert!(
+            !messages.contains("jrivera") && !messages.contains(r"C:\Users"),
+            "finding messages leak identity or a profile path: {messages}"
+        );
+    }
+}
+
+#[test]
+fn package_state_absent_status_field_is_not_a_health_problem() {
+    // PackageRow carries #[serde(default)], so a row that omits `status`
+    // deserializes to an empty Unknown. Reporting that as an Error would
+    // invent a package fault out of a field the adapter never sent.
+    let capture = parse(
+        r#"{
+            "schemaVersion": 1,
+            "capture": {
+                "capturedAtUtc": "2026-07-14T09:41:07.1000000Z",
+                "adapterVersion": "cmtraceopen-collector-appx/1",
+                "commandStatus": "completed",
+                "source": "json",
+                "scopeCoverage": [
+                    { "scope": "allUsers", "status": "complete", "detail": null }
+                ]
+            },
+            "packages": [
+                {
+                    "name": "Microsoft.CompanyPortal",
+                    "familyName": "Microsoft.CompanyPortal_8wekyb3d8bbwe",
+                    "fullName": "Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe",
+                    "version": "11.2.401.0",
+                    "architecture": "x64",
+                    "signatureKind": "store",
+                    "installState": "installed",
+                    "scopes": ["allUsers"],
+                    "app": "companyPortal"
+                }
+            ]
+        }"#,
+    );
+
+    assert_eq!(
+        capture.packages[0].status,
+        PackageStatus::Unknown(String::new()),
+        "an omitted status must round-trip as an empty Unknown"
+    );
+    assert!(
+        of_kind(
+            &derive_package_state_findings(&capture, &[]),
+            PackageStateFindingKind::PackageStatusProblem,
+        )
+        .is_empty(),
+        "an unreported status must not be reported as a package health problem"
+    );
+}
+
+#[test]
+fn package_state_version_mismatch_ids_stay_distinct_across_sources() {
+    // Two facts can name the same app and the same expected version but come
+    // from different sources. Both match the row, so the id must carry the
+    // source or the two findings collide on one key with different messages.
+    let capture = parse(INSTALLED_COMPANY_PORTAL);
+    let expected = [
+        ExpectedPackageFact {
+            app: PortalApp::CompanyPortal,
+            family_name: None,
+            expected_version: "11.9.999.0".to_string(),
+            source: "Intune app assignment".to_string(),
+        },
+        ExpectedPackageFact {
+            app: PortalApp::CompanyPortal,
+            family_name: None,
+            expected_version: "11.9.999.0".to_string(),
+            source: "Store catalog".to_string(),
+        },
+    ];
+
+    let findings = derive_package_state_findings(&capture, &expected);
+    let mismatches = of_kind(&findings, PackageStateFindingKind::VersionMismatch);
+    assert_eq!(mismatches.len(), 2);
+
+    let ids: BTreeSet<&str> = mismatches.iter().map(|f| f.id.as_str()).collect();
+    assert_eq!(
+        ids.len(),
+        2,
+        "version-mismatch ids must stay distinct per source: {ids:?}"
+    );
+}
+
+#[test]
+fn package_state_legacy_import_refuses_records_merged_by_a_missing_separator() {
+    // Without the blank line between records, both collapse into one
+    // LegacyRecord: `get` returns the first Name and unknown labels overwrite.
+    // That would report a single package built from two, and look successful.
+    let merged = "\
+Name            : Microsoft.CompanyPortal
+Version         : 11.2.401.0
+PackageFullName : Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe
+Status          : Ok
+SignatureKind   : Store
+Name            : Microsoft.AAD.BrokerPlugin.Authenticator
+Version         : 6.2408.1
+PackageFullName : Microsoft.AAD.BrokerPlugin.Authenticator_6.2408.1_neutral__8wekyb3d8bbwe
+Status          : Ok
+SignatureKind   : System
+";
+
+    let outcome = import_legacy_format_list(merged, english_legacy_metadata());
+    assert_eq!(
+        outcome.refusal().map(|refusal| refusal.reason),
+        Some(LegacyRefusalReason::AmbiguousRecord),
+        "a record repeating the Name label must refuse rather than merge"
+    );
+    assert!(outcome.imported().is_none());
+}
+
+#[test]
+fn package_state_legacy_refusal_detail_never_quotes_the_source_line() {
+    // The refusal detail is free text nothing redacts, and a Format-List line
+    // can carry an install path or an account. Locate the line, never quote it.
+    let outcome = import_legacy_format_list(LEGACY_WRAPPED, english_legacy_metadata());
+    let refusal = outcome.refusal().expect("wrapped sample must refuse");
+    let offending = LEGACY_WRAPPED
+        .lines()
+        .nth(refusal.line_number.expect("refusal must locate the line") - 1)
+        .expect("refusal must point at a real line")
+        .trim();
+
+    assert!(!offending.is_empty());
+    assert!(
+        !refusal.detail.contains(offending),
+        "refusal detail quotes the source line verbatim: {}",
+        refusal.detail
+    );
+    assert!(
+        refusal.detail.contains("characters"),
+        "refusal detail should describe the line by length: {}",
+        refusal.detail
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Fixture layout guard
 // ---------------------------------------------------------------------------

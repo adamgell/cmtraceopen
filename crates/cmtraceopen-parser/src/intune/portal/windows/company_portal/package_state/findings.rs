@@ -228,14 +228,18 @@ fn push_coverage_findings(capture: &PackageStateCapture, findings: &mut Vec<Pack
             }
             _ => PackageStateFindingSeverity::Warning,
         };
+        // The adapter's error message is classified sensitive: it can name a
+        // profile path or an account. Findings are a separate type that the
+        // redaction projection never sees, so interpolating that text here
+        // would smuggle it past redaction. The stable error code carries no
+        // identity and is enough to act on; the message stays in the capture,
+        // where redaction covers it.
         let detail = capture
             .capture
             .error
             .as_ref()
-            .map(|error| match &error.code {
-                Some(code) => format!(" ({code}: {})", error.message),
-                None => format!(" ({})", error.message),
-            })
+            .and_then(|error| error.code.as_ref())
+            .map(|code| format!(" ({code})"))
             .unwrap_or_default();
         findings.push(PackageStateFinding {
             id: format!(
@@ -266,11 +270,9 @@ fn push_coverage_findings(capture: &PackageStateCapture, findings: &mut Vec<Pack
             }
             _ => PackageStateFindingSeverity::Warning,
         };
-        let detail = coverage
-            .detail
-            .as_ref()
-            .map(|detail| format!(" ({detail})"))
-            .unwrap_or_default();
+        // Same reasoning as the command error above: adapter-supplied detail
+        // text is free-form and can carry a path or an account, so it stays in
+        // the capture rather than being copied into a finding.
         findings.push(PackageStateFinding {
             id: format!(
                 "package-state/incomplete-query/scope/{}/{}",
@@ -281,7 +283,7 @@ fn push_coverage_findings(capture: &PackageStateCapture, findings: &mut Vec<Pack
             severity,
             confidence: PackageStateFindingConfidence::High,
             message: format!(
-                "Scope '{}' coverage is '{}'{detail}. Missing rows in this scope are unknown, not absent.",
+                "Scope '{}' coverage is '{}'. Missing rows in this scope are unknown, not absent.",
                 wire(&coverage.scope),
                 wire(&coverage.status)
             ),
@@ -309,7 +311,12 @@ fn push_package_findings(capture: &PackageStateCapture, findings: &mut Vec<Packa
             });
         }
 
-        if row.status != PackageStatus::Ok {
+        // A row that omits `status` deserializes to an empty Unknown, because
+        // PackageRow carries #[serde(default)]. An unreported status is not a
+        // health problem, and reporting one as an Error would invent a fault
+        // out of a missing field.
+        let status_reported = !matches!(&row.status, PackageStatus::Unknown(raw) if raw.is_empty());
+        if status_reported && row.status != PackageStatus::Ok {
             findings.push(PackageStateFinding {
                 id: format!("package-state/status-problem/{index}/{}", row.full_name),
                 kind: PackageStateFindingKind::PackageStatusProblem,
@@ -384,9 +391,13 @@ fn push_version_mismatch_findings(
                 continue;
             }
             findings.push(PackageStateFinding {
+                // The source belongs in the id: two facts naming the same app
+                // and the same expected version but coming from different
+                // sources both match this row, and without the source they
+                // would collide on one id with two different messages.
                 id: format!(
-                    "package-state/version-mismatch/{index}/{}",
-                    fact.expected_version
+                    "package-state/version-mismatch/{index}/{}/{}",
+                    fact.expected_version, fact.source
                 ),
                 kind: PackageStateFindingKind::VersionMismatch,
                 severity: PackageStateFindingSeverity::Warning,
