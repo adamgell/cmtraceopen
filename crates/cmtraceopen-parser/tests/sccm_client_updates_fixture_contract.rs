@@ -599,7 +599,7 @@ fn expected_boundary_failures(expected: &Value, contract: &ScenarioContract) -> 
     }
     for fact in facts {
         if fact["keyConfidence"] != "exact"
-            || fact["correlationEligible"] != true
+            || fact["correlationEligible"] != false
             || fact["timeOnlyEligible"] != false
             || fact["extractionProfileId"] != "updates-client-5.00.test-v1"
             || fact["siteCode"] != "LAB"
@@ -1697,13 +1697,24 @@ fn counterpart_source_failures(
     ];
 
     for fact in facts {
+        if expected["correlationHandoff"]["topologyCompatibilityEvaluated"] == false
+            && (fact
+                .as_object()
+                .is_some_and(|fact| fact.contains_key("topologyCompatible"))
+                || fact["correlationEligible"] != false)
+        {
+            failures.push(
+                "counterpart fact cannot claim unevaluated topology compatibility or correlation eligibility"
+                    .to_owned(),
+            );
+        }
         if fact["topologyCompatible"] == false && fact["correlationEligible"] != false {
             failures.push(
                 "counterpart topology mismatch cannot remain correlation eligible".to_owned(),
             );
         }
         if fact["keyConfidence"] != "exact"
-            || fact["correlationEligible"] != true
+            || fact["correlationEligible"] != false
             || fact["timeOnlyEligible"] != false
             || fact["extractionProfileId"] != expected["extractionProfile"]["profileId"]
             || fact["phase"] != "locateSup"
@@ -1833,6 +1844,15 @@ fn manifest_artifact_failures(scenario_dir: &Path, artifact: &Value) -> Vec<Stri
     let fragment_complete = fragment_complete_field.and_then(Value::as_bool);
     let physical = matches!(state, "captured" | "capped");
 
+    if physical
+        && artifact["pathFingerprint"]
+            .as_str()
+            .is_none_or(|fingerprint| fingerprint.trim().is_empty())
+    {
+        failures.push(format!(
+            "{artifact_id}: physical artifact must have non-empty pathFingerprint"
+        ));
+    }
     if physical && fragment_complete.is_none() {
         failures.push(format!(
             "{artifact_id}: physical artifact must declare fragmentComplete"
@@ -2854,6 +2874,106 @@ fn software_update_fixture_rejects_manifest_aliases_and_identity_drift() {
 }
 
 #[test]
+fn software_update_fixture_rejects_missing_or_blank_physical_path_fingerprints() {
+    let scenario = "success";
+    let scenario_dir = updates_root().join(scenario);
+    let base_manifest = read_json(&scenario_dir.join("manifest.json"));
+    let expected = read_json(&scenario_dir.join("expected.json"));
+    let contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == scenario)
+        .expect("success contract exists");
+    let mut missing_rejections = Vec::new();
+
+    let mut missing = base_manifest.clone();
+    missing["artifacts"][0]
+        .as_object_mut()
+        .expect("artifact is an object")
+        .remove("pathFingerprint");
+    let mut mutations = vec![("missing", missing)];
+    for (label, value) in [
+        ("null", Value::Null),
+        ("empty", Value::String(String::new())),
+        ("blank", Value::String(" \t".to_owned())),
+    ] {
+        let mut manifest = base_manifest.clone();
+        manifest["artifacts"][0]["pathFingerprint"] = value;
+        mutations.push((label, manifest));
+    }
+
+    for (label, manifest) in mutations {
+        let failures = scenario_semantic_failures(&scenario_dir, &manifest, &expected, contract);
+        if !failures.iter().any(|failure| {
+            failure.contains("physical artifact must have non-empty pathFingerprint")
+        }) {
+            missing_rejections.push(format!("{label}: {}", failures.join(" | ")));
+        }
+    }
+
+    assert!(
+        missing_rejections.is_empty(),
+        "physical artifact fingerprint mutations were accepted:\n{}",
+        missing_rejections.join("\n")
+    );
+}
+
+#[test]
+fn software_update_fixture_rejects_unevaluated_topology_claims_and_eligibility() {
+    let scenario = "success";
+    let scenario_dir = updates_root().join(scenario);
+    let manifest = read_json(&scenario_dir.join("manifest.json"));
+    let base_expected = read_json(&scenario_dir.join("expected.json"));
+    let contract = SCENARIOS
+        .iter()
+        .find(|contract| contract.name == scenario)
+        .expect("success contract exists");
+    let mut missing_rejections = Vec::new();
+
+    for (label, value) in [
+        ("compatible", Value::Bool(true)),
+        ("incompatible", Value::Bool(false)),
+        ("malformed-string", Value::String("unknown".to_owned())),
+        ("malformed-null", Value::Null),
+    ] {
+        let mut expected = base_expected.clone();
+        expected["correlationHandoff"]["counterpartReadyFacts"][0]["correlationEligible"] =
+            Value::Bool(false);
+        expected["correlationHandoff"]["counterpartReadyFacts"][0]["topologyCompatible"] = value;
+        let failures = scenario_semantic_failures(&scenario_dir, &manifest, &expected, contract);
+        if !failures
+            .iter()
+            .any(|failure| failure.contains("unevaluated topology compatibility"))
+        {
+            missing_rejections.push(format!("{label}: {}", failures.join(" | ")));
+        }
+    }
+
+    let mut eligible = base_expected;
+    eligible["correlationHandoff"]["counterpartReadyFacts"][0]
+        .as_object_mut()
+        .expect("counterpart fact is an object")
+        .remove("topologyCompatible");
+    eligible["correlationHandoff"]["counterpartReadyFacts"][0]["correlationEligible"] =
+        Value::Bool(true);
+    let failures = scenario_semantic_failures(&scenario_dir, &manifest, &eligible, contract);
+    if !failures
+        .iter()
+        .any(|failure| failure.contains("unevaluated topology compatibility"))
+    {
+        missing_rejections.push(format!(
+            "correlation-eligible without topology evaluation: {}",
+            failures.join(" | ")
+        ));
+    }
+
+    assert!(
+        missing_rejections.is_empty(),
+        "unevaluated topology mutations were accepted:\n{}",
+        missing_rejections.join("\n")
+    );
+}
+
+#[test]
 fn software_update_fixture_rejects_topology_mismatch_as_correlation_eligible() {
     let scenario = "success";
     let scenario_dir = updates_root().join(scenario);
@@ -2861,6 +2981,8 @@ fn software_update_fixture_rejects_topology_mismatch_as_correlation_eligible() {
     let mut expected = read_json(&scenario_dir.join("expected.json"));
     expected["correlationHandoff"]["counterpartReadyFacts"][0]["topologyCompatible"] =
         Value::Bool(false);
+    expected["correlationHandoff"]["counterpartReadyFacts"][0]["correlationEligible"] =
+        Value::Bool(true);
     let failures = counterpart_source_failures(&scenario_dir, &manifest, &expected);
     assert!(
         failures

@@ -104,7 +104,11 @@ cannot yield an entry/key/terminal fact.
 Correlation-ready facts bind their normalized UTC instant, numeric offset, and
 ordering state to the cited complete CCM record. An unavailable SUP handle is
 represented as `null`; it is never inferred from the capture host, another
-transaction, or a timestamp.
+transaction, or a timestamp. These remain counterpart-ready client facts, but
+`correlationEligible` stays false while
+`topologyCompatibilityEvaluated` is false. A fact may not self-attest
+`topologyCompatible`, including an incompatible, null, or malformed value;
+issue #333 must evaluate topology before correlation can become eligible.
 
 ## Supplemental servicing boundary
 
@@ -159,7 +163,8 @@ The handoff explicitly records:
 - #333 owns any future pairwise correlation;
 - time alone is never eligible;
 - topology compatibility is not evaluated here;
-- an explicitly incompatible topology is never correlation-eligible;
+- no topology compatibility value or correlation eligibility is claimed before
+  #333 evaluates topology;
 - bundle capture host is not SUP evidence;
 - no server cause is claimed; and
 - missing/unvalidated client source evidence emits no counterpart-ready fact.
@@ -177,7 +182,9 @@ the manifest. Absent/skipped sources omit physical-fragment completeness, and
 validated profile families are derived only from compatible captured evidence.
 Client role, catalog entry, logical group, basename, rotation, and evidence path
 must remain coherent. Relative paths and path fingerprints cannot alias another
-artifact.
+artifact. Every captured or capped physical artifact must also carry a
+non-empty path fingerprint; missing, null, empty, and whitespace-only values
+are invalid provenance rather than collision-safe identity.
 
 The corpus contains:
 

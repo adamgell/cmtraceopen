@@ -200,7 +200,7 @@
         "siteCode": "LAB",
         "supHostHandle": "safe:sup:lab-sup-01",
         "keyConfidence": "exact",
-        "correlationEligible": true,
+        "correlationEligible": false,
         "timeOnlyEligible": false,
         "phase": "locateSup",
         "extractionProfileId": "updates-client-5.00.test-v1",

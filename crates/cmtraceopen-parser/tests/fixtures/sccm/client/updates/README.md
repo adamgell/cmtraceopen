@@ -47,8 +47,10 @@ Future counterpart-ready facts are emitted only when the synthetic
 `updates-client-5.00.test-v1` profile directly supplies exact update/CI/content
 and safe client/site/SUP handles. Their timestamp provenance must equal the
 normalized cited CCM record; an unavailable SUP handle remains `null`. They
-remain client facts for future #330/#333 work. Time alone is never eligible,
-topology is not evaluated here, and no server cause is claimed.
+remain client facts for future #330/#333 work, with `correlationEligible:
+false` while `topologyCompatibilityEvaluated: false`. Time alone is never
+eligible, no counterpart fact may claim any topology compatibility value
+before #333 evaluates it, and no server cause is claimed.
 
 All required exact transaction fields must co-occur in one cited complete CCM
 record. High success/failure outcomes also require an exact-key,
@@ -59,7 +61,8 @@ Expected coverage and artifact provenance are exact, one-to-one projections of
 the manifest. Absent/skipped sources do not claim physical-fragment
 completeness, and profile families are validated only from compatible captured
 evidence. Client role/catalog/group/basename/rotation/path identities are
-coherent, and physical paths/fingerprints cannot alias another artifact.
+coherent, physical paths/fingerprints cannot alias another artifact, and every
+captured or capped artifact has a non-empty path fingerprint.
 
 ## Replay
 
