@@ -30,6 +30,7 @@ const STATE_CHAIN: &[&str] = &[
 ];
 
 const EXACT_PROFILE: &str = "sup-server-5.00.test-v1";
+const EXACT_SOURCE_VERSION: &str = "5.00.TEST.0001";
 const EXACT_SITE: &str = "LAB";
 const EXACT_SUP: &str = "safe:sup:lab-sup-01";
 const EXACT_WSUS: &str = "safe:wsus:lab-wsus-01";
@@ -731,9 +732,9 @@ fn validate_manifest(
         {
             failures.push(format!("{artifact_id} reuses a physical path fingerprint"));
         }
-        if !prefixed_token_is_nonempty(source_version, "5.00.TEST.") {
+        if source_version != EXACT_SOURCE_VERSION {
             failures.push(format!(
-                "{artifact_id} is outside the synthetic version profile"
+                "{artifact_id} is outside the selected synthetic version profile"
             ));
         }
 
@@ -3017,6 +3018,38 @@ fn partial_capture_malformed_bytes_and_rotation_family_fail_closed() {
     assert!(
         accepted.is_empty(),
         "partial/malformed/rotation-family mutations were accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn source_versions_must_match_the_selected_extraction_profile() {
+    let manifest = read_json("sync-success", "manifest.json").expect("manifest loads");
+    let expected = read_json("sync-success", "expected.json").expect("expected loads");
+    validate_scenario_values("sync-success", &manifest, &expected)
+        .expect("the declared synthetic source version remains selected");
+
+    let mut accepted = Vec::new();
+    let mut unknown_profile = manifest.clone();
+    for artifact in unknown_profile["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are mutable")
+    {
+        artifact["sourceVersion"] = json!("5.00.TEST.UNKNOWN");
+    }
+    if mutation_was_accepted("sync-success", &unknown_profile, &expected) {
+        accepted.push("unknown source versions retained the selected profile");
+    }
+
+    let mut mixed_versions = manifest;
+    let wcm = artifact_index(&mixed_versions, "sync-success-01-wcm");
+    mixed_versions["artifacts"][wcm]["sourceVersion"] = json!("5.00.TEST.0002");
+    if mutation_was_accepted("sync-success", &mixed_versions, &expected) {
+        accepted.push("mixed source versions retained one exact transaction");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "source-version/profile mutations were accepted: {accepted:?}"
     );
 }
 

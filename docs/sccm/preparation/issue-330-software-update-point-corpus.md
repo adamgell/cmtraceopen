@@ -82,8 +82,10 @@ syncRunId
 + extractionProfileId
 ```
 
-The synthetic profile is `sup-server-5.00.test-v1`, bounded to
-`5.00.TEST.*` fixtures. It makes no claim about a real ConfigMgr build.
+The synthetic profile is `sup-server-5.00.test-v1`, bounded to the exact
+`5.00.TEST.0001` fixture version. Unknown or mixed source versions cannot
+retain this selected profile or an exact/high result. This makes no claim
+about a real ConfigMgr build.
 Structured fields are unique, closed `Name=Value` pairs. Duplicate fields,
 nested CCM-like text, aliases, unknown fields, partial update/KB pairs, or a
 key not repeated by every cited record fail closed.
