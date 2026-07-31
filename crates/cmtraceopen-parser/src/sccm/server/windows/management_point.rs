@@ -540,7 +540,8 @@ fn reduce_transaction(
 
     let finding =
         build_transaction_finding(&transaction, &decisive_facts, gap.as_ref(), &next_artifacts);
-    let counterpart_fact = build_counterpart_fact(&transaction, facts, &transaction_id, &key);
+    let counterpart_fact =
+        build_counterpart_fact(&transaction, &decisive_facts, &transaction_id, &key);
 
     Some(ReducedTransaction {
         transaction,
@@ -756,7 +757,7 @@ fn build_transaction_finding(
 
 fn build_counterpart_fact(
     transaction: &SccmManagementPointTransaction,
-    facts: &[ManagementPointFact],
+    decisive_facts: &[&ManagementPointFact],
     transaction_id: &str,
     key: &SccmManagementPointKey,
 ) -> Option<SccmManagementPointCounterpartReadyFact> {
@@ -771,15 +772,19 @@ fn build_counterpart_fact(
         return None;
     }
 
-    let fact = facts
+    let fact = decisive_facts
         .iter()
-        .filter(|fact| fact.policy_id.is_some())
-        .filter(|fact| fact.phase <= transaction.phase)
+        .copied()
+        .filter(|fact| fact.phase == transaction.phase)
         .filter(|fact| {
-            transaction.state != SccmManagementPointState::Failed
-                || (fact.phase == transaction.phase
-                    && fact.outcome == FactOutcome::Failed
-                    && fact.terminal)
+            matches!(
+                (transaction.state, fact.outcome, fact.terminal),
+                (
+                    SccmManagementPointState::Succeeded,
+                    FactOutcome::Succeeded,
+                    _
+                ) | (SccmManagementPointState::Failed, FactOutcome::Failed, true)
+            )
         })
         .filter(|fact| {
             matches!(
@@ -819,7 +824,10 @@ fn parse_fact(
     }
     let message = evidence.message.as_str();
     let (phase, outcome, terminal) = parse_phase_outcome(message, &source.producer)?;
-    if terminal && !has_nonzero_result(message) {
+    let result = validated_result_value(message)?;
+    if (terminal && result.is_none_or(|value| value == 0))
+        || (!terminal && result.is_some_and(|value| value != 0))
+    {
         return None;
     }
 
@@ -986,27 +994,23 @@ fn validated_token_value(message: &str, label: &str) -> Option<Option<String>> {
             || message[..label_start]
                 .chars()
                 .next_back()
-                .is_some_and(|character| !character.is_ascii_alphanumeric() && character != '_');
+                .is_some_and(is_key_token_boundary);
         if !exact_label_boundary {
-            continue;
+            return None;
         }
 
         let remainder = &message[label_start + needle.len()..];
         let parsed = if let Some(braced) = remainder.strip_prefix('{') {
             let end = braced.find('}')?;
             let suffix = &braced[end + 1..];
-            let exact_value_boundary = suffix.chars().next().is_none_or(|character| {
-                character.is_whitespace() || matches!(character, ',' | ';' | '&')
-            });
+            let exact_value_boundary = suffix.chars().next().is_none_or(is_key_token_boundary);
             if !exact_value_boundary || end == 0 {
                 return None;
             }
             braced[..end].to_owned()
         } else {
             let end = remainder
-                .find(|character: char| {
-                    character.is_whitespace() || matches!(character, ',' | ';' | '&')
-                })
+                .find(is_key_token_boundary)
                 .unwrap_or(remainder.len());
             if end == 0 {
                 return None;
@@ -1018,6 +1022,10 @@ fn validated_token_value(message: &str, label: &str) -> Option<Option<String>> {
         }
     }
     Some(value)
+}
+
+fn is_key_token_boundary(character: char) -> bool {
+    character.is_whitespace() || matches!(character, ',' | ';' | '&')
 }
 
 fn token_value(message: &str, label: &str) -> Option<String> {
@@ -1037,19 +1045,17 @@ fn normalize_uuid(value: &str) -> Option<String> {
     valid.then(|| value.to_ascii_lowercase())
 }
 
-fn has_nonzero_result(message: &str) -> bool {
-    let Some(value) = token_value(message, "Result") else {
-        return false;
+fn validated_result_value(message: &str) -> Option<Option<u32>> {
+    let Some(value) = validated_token_value(message, "Result")? else {
+        return Some(None);
     };
-    let Some(hex) = value
+    let hex = value
         .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-    else {
-        return false;
-    };
-    hex.len() == 8
-        && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
-        && u32::from_str_radix(hex, 16).is_ok_and(|value| value != 0)
+        .or_else(|| value.strip_prefix("0X"))?;
+    (hex.len() == 8 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| u32::from_str_radix(hex, 16).ok())
+        .flatten()
+        .map(Some)
 }
 
 fn normalize_site_code(value: &str) -> Option<String> {
@@ -1105,13 +1111,27 @@ fn evidence_identity_is_unique(
         .filter(|candidate| {
             candidate.evidence_id == evidence.evidence_id
                 || candidate.reference.entry_id == evidence.reference.entry_id
-                || (candidate.reference.artifact_id == evidence.reference.artifact_id
-                    && candidate.reference.line_start == evidence.reference.line_start
-                    && candidate.reference.line_end == evidence.reference.line_end)
+                || evidence_references_overlap(&candidate.reference, &evidence.reference)
         })
         .take(2)
         .count()
         == 1
+}
+
+fn evidence_references_overlap(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> bool {
+    if left.artifact_id != right.artifact_id {
+        return false;
+    }
+    matches!(
+        (
+            left.line_start,
+            left.line_end,
+            right.line_start,
+            right.line_end,
+        ),
+        (Some(left_start), Some(left_end), Some(right_start), Some(right_end))
+            if left_start <= right_end && right_start <= left_end
+    )
 }
 
 fn safe_evidence_reference(reference: &SccmEvidenceRef) -> bool {
@@ -1156,28 +1176,18 @@ fn compare_references(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> Orderi
 }
 
 fn merge_references(references: impl IntoIterator<Item = SccmEvidenceRef>) -> Vec<SccmEvidenceRef> {
-    let mut ranges: BTreeMap<String, (u32, u32)> = BTreeMap::new();
-    for reference in references {
-        let (Some(start), Some(end)) = (reference.line_start, reference.line_end) else {
-            continue;
-        };
-        ranges
-            .entry(reference.artifact_id)
-            .and_modify(|range| {
-                range.0 = range.0.min(start);
-                range.1 = range.1.max(end);
-            })
-            .or_insert((start, end));
-    }
-    ranges
+    let mut references = references
         .into_iter()
-        .map(|(artifact_id, (line_start, line_end))| SccmEvidenceRef {
-            entry_id: format!("{artifact_id}:{line_start}-{line_end}"),
-            artifact_id,
-            line_start: Some(line_start),
-            line_end: Some(line_end),
+        .filter(|reference| {
+            matches!(
+                (reference.line_start, reference.line_end),
+                (Some(start), Some(end)) if start > 0 && end >= start
+            )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    references.sort_by(compare_references);
+    references.dedup();
+    references
 }
 
 fn physical_reference(source: &SccmManagementPointSource) -> Option<SccmEvidenceRef> {
