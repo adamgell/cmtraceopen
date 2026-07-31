@@ -3052,3 +3052,205 @@ fn software_update_fixture_never_elevates_experimental_low_keys_to_causal_confid
         .iter()
         .any(|failure| failure.contains("experimental Low key profile")));
 }
+
+#[test]
+fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_mutations() {
+    fn validate_without_panicking(
+        scenario: &str,
+        manifest: &Value,
+        expected: &Value,
+    ) -> Result<Vec<String>, String> {
+        std::panic::catch_unwind(|| {
+            let contract = SCENARIOS
+                .iter()
+                .find(|contract| contract.name == scenario)
+                .expect("scenario contract exists");
+            scenario_semantic_failures(&updates_root().join(scenario), manifest, expected, contract)
+        })
+        .map_err(|_| "validator panicked on caller-controlled JSON".to_owned())
+    }
+
+    fn set_subject_evidence(expected: &mut Value, evidence: Value) {
+        expected["transactions"][0]["evidence"] = evidence.clone();
+        expected["findings"][0]["evidence"] = evidence;
+    }
+
+    let mut mutations = Vec::<(&str, String, Value, Value, &str)>::new();
+
+    for (scenario, evidence) in [
+        (
+            "maintenance-window",
+            serde_json::json!([
+                {"artifactId": "updates-maintenance-window-01-scan", "startLine": 1, "endLine": 2},
+                {"artifactId": "updates-maintenance-window-02-sup", "startLine": 1, "endLine": 1},
+                {"artifactId": "updates-maintenance-window-03-download", "startLine": 1, "endLine": 1}
+            ]),
+        ),
+        (
+            "reboot-pending",
+            serde_json::json!([
+                {"artifactId": "updates-reboot-pending-01-scan", "startLine": 1, "endLine": 2},
+                {"artifactId": "updates-reboot-pending-02-sup", "startLine": 1, "endLine": 1},
+                {"artifactId": "updates-reboot-pending-03-deployment", "startLine": 1, "endLine": 3}
+            ]),
+        ),
+    ] {
+        let scenario_dir = updates_root().join(scenario);
+        let manifest = read_json(&scenario_dir.join("manifest.json"));
+        let mut expected = read_json(&scenario_dir.join("expected.json"));
+        set_subject_evidence(&mut expected, evidence);
+        mutations.push((
+            "blocked/deferred current phase evidence",
+            scenario.to_owned(),
+            manifest,
+            expected,
+            "phase/state evidence is missing",
+        ));
+    }
+
+    let install_scenario = "install-failure";
+    let install_dir = updates_root().join(install_scenario);
+    let install_manifest = read_json(&install_dir.join("manifest.json"));
+    let mut install_expected = read_json(&install_dir.join("expected.json"));
+    set_subject_evidence(
+        &mut install_expected,
+        serde_json::json!([
+            {"artifactId": "updates-install-failure-01-scan", "startLine": 1, "endLine": 2},
+            {"artifactId": "updates-install-failure-02-sup", "startLine": 1, "endLine": 1},
+            {"artifactId": "updates-install-failure-03-download", "startLine": 1, "endLine": 1},
+            {"artifactId": "updates-install-failure-04-install", "startLine": 2, "endLine": 2}
+        ]),
+    );
+    mutations.push((
+        "lastSuccessfulPhase evidence",
+        install_scenario.to_owned(),
+        install_manifest,
+        install_expected,
+        "last successful phase evidence is missing",
+    ));
+
+    let success_scenario = "success";
+    let success_dir = updates_root().join(success_scenario);
+    let success_manifest = read_json(&success_dir.join("manifest.json"));
+    let success_expected = read_json(&success_dir.join("expected.json"));
+
+    let mut reporting_as_ccm = success_manifest.clone();
+    reporting_as_ccm["artifacts"][7]["kind"] = Value::String("ccmLog".to_owned());
+    reporting_as_ccm["artifacts"][7]["sourceVersion"] = Value::Null;
+    mutations.push((
+        "ReportingEvents kind",
+        success_scenario.to_owned(),
+        reporting_as_ccm,
+        success_expected.clone(),
+        "ReportingEvents.log must use supplementalLog",
+    ));
+
+    let mut reporting_with_ccm_version = success_manifest.clone();
+    reporting_with_ccm_version["artifacts"][7]["kind"] =
+        Value::String("supplementalLog".to_owned());
+    mutations.push((
+        "ReportingEvents source version",
+        success_scenario.to_owned(),
+        reporting_with_ccm_version,
+        success_expected.clone(),
+        "supplementalLog sourceVersion must be null",
+    ));
+
+    for fingerprint in [
+        r"C:\Users\RealUser\ScanAgent.log",
+        "synthetic:corp.example",
+        "synthetic:updates-success-01-scan\ncontrol",
+        "synthetic:updates-success-02-sup",
+    ] {
+        let mut manifest = success_manifest.clone();
+        manifest["artifacts"][0]["pathFingerprint"] = Value::String(fingerprint.to_owned());
+        mutations.push((
+            "private pathFingerprint",
+            success_scenario.to_owned(),
+            manifest,
+            success_expected.clone(),
+            "privacy-safe pathFingerprint",
+        ));
+    }
+
+    for source_path in [
+        "SYNTHETIC://C:/Users/RealUser/ScanAgent.log",
+        "SYNTHETIC://corp.example/CCM/Logs/ScanAgent.log",
+        "SYNTHETIC://root-a/CCM/Logs/control\nScanAgent.log",
+        "SYNTHETIC://root-a/CCM/Logs/UpdatesHandler.log",
+    ] {
+        let mut manifest = success_manifest.clone();
+        manifest["artifacts"][0]["sanitizedSourcePath"] = Value::String(source_path.to_owned());
+        mutations.push((
+            "private sanitizedSourcePath",
+            success_scenario.to_owned(),
+            manifest,
+            success_expected.clone(),
+            "privacy-safe sanitizedSourcePath",
+        ));
+    }
+
+    let shape_mutations: [(&str, fn(&mut Value), &str); 6] = [
+        (
+            "stateChain object",
+            |expected: &mut Value| expected["stateChain"] = serde_json::json!({}),
+            "stateChain must be an array",
+        ),
+        (
+            "transactions object",
+            |expected: &mut Value| expected["transactions"] = serde_json::json!({}),
+            "transactions must be an array",
+        ),
+        (
+            "transactions empty",
+            |expected: &mut Value| expected["transactions"] = serde_json::json!([]),
+            "primary subject is missing",
+        ),
+        (
+            "findings object",
+            |expected: &mut Value| expected["findings"] = serde_json::json!({}),
+            "findings must be an array",
+        ),
+        (
+            "coverage object",
+            |expected: &mut Value| expected["coverage"] = serde_json::json!({}),
+            "coverage must be an array",
+        ),
+        (
+            "validated families object",
+            |expected: &mut Value| {
+                expected["extractionProfile"]["validatedArtifactFamilies"] = serde_json::json!({})
+            },
+            "validatedArtifactFamilies must be an array",
+        ),
+    ];
+    for (label, mutate, marker) in shape_mutations {
+        let mut expected = success_expected.clone();
+        mutate(&mut expected);
+        mutations.push((
+            label,
+            success_scenario.to_owned(),
+            success_manifest.clone(),
+            expected,
+            marker,
+        ));
+    }
+
+    let mut missing_rejections = Vec::new();
+    for (label, scenario, manifest, expected, marker) in mutations {
+        match validate_without_panicking(&scenario, &manifest, &expected) {
+            Ok(failures) if failures.iter().any(|failure| failure.contains(marker)) => {}
+            Ok(failures) => missing_rejections.push(format!(
+                "{label} in {scenario} (wanted {marker:?}; got {})",
+                failures.join(" | ")
+            )),
+            Err(error) => missing_rejections.push(format!("{label} in {scenario}: {error}")),
+        }
+    }
+
+    assert!(
+        missing_rejections.is_empty(),
+        "semantic validator accepted or panicked on adversarial input:\n{}",
+        missing_rejections.join("\n")
+    );
+}
