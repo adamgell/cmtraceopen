@@ -85,7 +85,7 @@ The reducer contract is conservative:
 - success requires a cited terminal `HealthyOrTerminal` success;
 - confirmed failure requires cited source-specific terminal failure evidence;
 - `retrying` remains `blockedOrDeferred`, never inferred failure;
-- incomplete physical coverage remains `insufficientEvidence`, retains exact
+- incomplete manifest coverage remains `insufficientEvidence`, retains exact
   gap IDs, and requests only a bounded source ID/reason code;
 - skipped optional WSUS coverage lowers the confidence ceiling without
   converting a cited terminal success to failure;

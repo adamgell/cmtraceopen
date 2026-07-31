@@ -1066,7 +1066,7 @@ fn validate_expected(
     let mut sorted_coverage = coverage_order.clone();
     sorted_coverage.sort_unstable();
     if coverage_order != sorted_coverage || declared_coverage != expected_coverage {
-        failures.push("coverage is not the exact sorted physical manifest projection".to_owned());
+        failures.push("coverage is not the exact sorted manifest projection".to_owned());
     }
 
     let transactions = match required_array(expected, "transactions", "expected") {
@@ -2241,5 +2241,9 @@ fn bounded_request_documentation_includes_nonphysical_manifest_coverage() {
     assert!(
         !contract.contains("backed by matching noncomplete physical coverage"),
         "bounded request prose must not require physical evidence for nonphysical states"
+    );
+    assert!(
+        !contract.contains("incomplete physical coverage"),
+        "coverage prose must include nonphysical manifest states"
     );
 }
