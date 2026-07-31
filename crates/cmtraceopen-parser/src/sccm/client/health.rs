@@ -553,7 +553,11 @@ pub fn analyze_client_health(bundle: &SccmNormalizedBundle) -> SccmHealthAnalysi
 fn duplicate_artifact_scope(
     bundle: &SccmNormalizedBundle,
 ) -> Option<(SccmHealthPhase, &'static str)> {
-    let mut artifacts = bundle.artifacts.iter().collect::<Vec<_>>();
+    let mut artifacts = bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.role == SccmRole::Client)
+        .collect::<Vec<_>>();
     artifacts.sort_by(|left, right| {
         left.artifact_id
             .cmp(&right.artifact_id)
@@ -567,26 +571,10 @@ fn duplicate_artifact_scope(
     let phase = artifacts
         .iter()
         .filter(|artifact| artifact.artifact_id == duplicate_id)
-        .map(|artifact| {
-            match classify_artifact_name(&artifact.display_name, SccmRole::Client).family {
-                SccmArtifactFamily::ClientSetup => SccmHealthPhase::Setup,
-                SccmArtifactFamily::ClientHealth => SccmHealthPhase::Service,
-                SccmArtifactFamily::ClientIdentity => SccmHealthPhase::Identity,
-                SccmArtifactFamily::ClientLocation => SccmHealthPhase::SiteAssignment,
-                _ => SccmHealthPhase::Setup,
-            }
-        })
+        .map(|artifact| phase_for_display_name(&artifact.display_name))
         .min()
         .unwrap_or(SccmHealthPhase::Setup);
-    let source_group = match phase {
-        SccmHealthPhase::Setup => CLIENT_SETUP_GROUP,
-        SccmHealthPhase::Service => CLIENT_EVALUATION_GROUP,
-        SccmHealthPhase::Identity => CLIENT_IDENTITY_GROUP,
-        SccmHealthPhase::SiteAssignment
-        | SccmHealthPhase::ManagementPoint
-        | SccmHealthPhase::Transport => CLIENT_LOCATION_GROUP,
-    };
-    Some((phase, source_group))
+    Some((phase, source_group_for_phase(phase)))
 }
 
 fn duplicate_evidence_scope(
@@ -594,7 +582,11 @@ fn duplicate_evidence_scope(
 ) -> Option<(SccmHealthPhase, &'static str)> {
     let mut id_counts = BTreeMap::<&str, usize>::new();
     let mut reference_counts = BTreeMap::<(&str, &str, Option<u32>, Option<u32>), usize>::new();
-    for evidence in &bundle.evidence {
+    for evidence in bundle
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.role == SccmRole::Client)
+    {
         *id_counts.entry(evidence.evidence_id.as_str()).or_default() += 1;
         *reference_counts
             .entry((
@@ -609,6 +601,7 @@ fn duplicate_evidence_scope(
     let collision_artifact_ids = bundle
         .evidence
         .iter()
+        .filter(|evidence| evidence.role == SccmRole::Client)
         .filter(|evidence| {
             id_counts
                 .get(evidence.evidence_id.as_str())
@@ -631,27 +624,35 @@ fn duplicate_evidence_scope(
     let phase = bundle
         .artifacts
         .iter()
-        .filter(|artifact| collision_artifact_ids.contains(artifact.artifact_id.as_str()))
-        .map(|artifact| {
-            match classify_artifact_name(&artifact.display_name, SccmRole::Client).family {
-                SccmArtifactFamily::ClientSetup => SccmHealthPhase::Setup,
-                SccmArtifactFamily::ClientHealth => SccmHealthPhase::Service,
-                SccmArtifactFamily::ClientIdentity => SccmHealthPhase::Identity,
-                SccmArtifactFamily::ClientLocation => SccmHealthPhase::SiteAssignment,
-                _ => SccmHealthPhase::Setup,
-            }
+        .filter(|artifact| {
+            artifact.role == SccmRole::Client
+                && collision_artifact_ids.contains(artifact.artifact_id.as_str())
         })
+        .map(|artifact| phase_for_display_name(&artifact.display_name))
         .min()
         .unwrap_or(SccmHealthPhase::Setup);
-    let source_group = match phase {
+    Some((phase, source_group_for_phase(phase)))
+}
+
+fn phase_for_display_name(display_name: &str) -> SccmHealthPhase {
+    match classify_artifact_name(display_name, SccmRole::Client).family {
+        SccmArtifactFamily::ClientSetup => SccmHealthPhase::Setup,
+        SccmArtifactFamily::ClientHealth => SccmHealthPhase::Service,
+        SccmArtifactFamily::ClientIdentity => SccmHealthPhase::Identity,
+        SccmArtifactFamily::ClientLocation => SccmHealthPhase::SiteAssignment,
+        _ => SccmHealthPhase::Setup,
+    }
+}
+
+fn source_group_for_phase(phase: SccmHealthPhase) -> &'static str {
+    match phase {
         SccmHealthPhase::Setup => CLIENT_SETUP_GROUP,
         SccmHealthPhase::Service => CLIENT_EVALUATION_GROUP,
         SccmHealthPhase::Identity => CLIENT_IDENTITY_GROUP,
         SccmHealthPhase::SiteAssignment
         | SccmHealthPhase::ManagementPoint
         | SccmHealthPhase::Transport => CLIENT_LOCATION_GROUP,
-    };
-    Some((phase, source_group))
+    }
 }
 
 fn resolve_setup(facts: &[HealthFact]) -> SetupResolution<'_> {

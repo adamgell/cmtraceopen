@@ -166,13 +166,13 @@ fn expected_finding_projection(expected: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn source_group_for_request(logical_id: &str) -> Option<&'static str> {
+fn source_group_for_request(logical_id: &str) -> &'static str {
     match logical_id {
-        "ccmSetup" => Some("client-ccmsetup"),
-        "ccmEval" | "ccmExec" | "ccmRestart" => Some("client-evaluation"),
-        "clientIdManagerStartup" => Some("client-identity"),
-        "clientLocation" | "locationServices" | "ccmMessaging" => Some("client-location"),
-        _ => None,
+        "ccmSetup" => "client-ccmsetup",
+        "ccmEval" | "ccmExec" | "ccmRestart" => "client-evaluation",
+        "clientIdManagerStartup" => "client-identity",
+        "clientLocation" | "locationServices" | "ccmMessaging" => "client-location",
+        other => panic!("unmapped health request logical ID {other}"),
     }
 }
 
@@ -186,7 +186,7 @@ fn actual_finding_projection(analysis: &Value) -> Vec<Value> {
                 .as_array()
                 .and_then(|requests| requests.first())
                 .and_then(|request| request["logicalId"].as_str())
-                .and_then(source_group_for_request);
+                .map(source_group_for_request);
             let mut gap_ids = finding["coverageGaps"]
                 .as_array()
                 .expect("coverage gaps")
@@ -672,6 +672,15 @@ fn health_later_normalized_utc_identity_success_recovers_across_canonical_rotati
     current_artifact.rotation = SccmRotation::Current;
     bundle.artifacts.push(current_artifact);
 
+    let identity_record_count = bundle
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.reference.artifact_id == original_identity_id)
+        .count();
+    assert_eq!(
+        identity_record_count, 1,
+        "this rotation test assumes one identity evidence record"
+    );
     for evidence in &mut bundle.evidence {
         evidence.timestamp.ordering_state = SccmTimeOrderingState::NormalizedUtc;
         evidence.timestamp.utc_millis = Some(if evidence.message.contains("Bootstrap completed") {
@@ -1120,11 +1129,22 @@ fn health_same_key_setup_recovery_does_not_cross_bootstrap_identity() {
 fn health_public_output_rejects_unsafe_artifact_provenance() {
     let mut bundle = load_bundle("setup-failure");
     let unsafe_id = r"C:\Users\Person\ccmsetup.log";
-    bundle.artifacts[0].artifact_id = unsafe_id.to_owned();
-    bundle.artifacts[0].original_path = Some(r"C:\Users\Person\ccmsetup.log".to_owned());
-    bundle.artifacts[0].host = Some("private-host.example".to_owned());
-    bundle.evidence[0].reference.artifact_id = unsafe_id.to_owned();
-    bundle.evidence[0].reference.entry_id = "unsafe-provenance".to_owned();
+    let setup_artifact = bundle
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.display_name.eq_ignore_ascii_case("ccmsetup.log"))
+        .expect("setup failure ccmsetup artifact");
+    let original_artifact_id = setup_artifact.artifact_id.clone();
+    setup_artifact.artifact_id = unsafe_id.to_owned();
+    setup_artifact.original_path = Some(r"C:\Users\Person\ccmsetup.log".to_owned());
+    setup_artifact.host = Some("private-host.example".to_owned());
+    let setup_evidence = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.reference.artifact_id == original_artifact_id)
+        .expect("setup failure evidence");
+    setup_evidence.reference.artifact_id = unsafe_id.to_owned();
+    setup_evidence.reference.entry_id = "unsafe-provenance".to_owned();
 
     let serialized =
         serde_json::to_string(&analyze_client_health(&bundle)).expect("health analysis JSON");
@@ -1189,14 +1209,19 @@ fn health_terminal_error_field_requires_a_whitespace_delimiter() {
 #[test]
 fn health_same_bootstrap_setup_recovers_across_canonical_rotation() {
     let mut bundle = load_bundle("setup-failure");
-    let original_artifact_id = bundle.artifacts[0].artifact_id.clone();
     let rotated_artifact_id = "health-setup-failure-ccmsetup-lo";
     let current_artifact_id = "health-setup-recovery-ccmsetup-current";
 
-    bundle.artifacts[0].artifact_id = rotated_artifact_id.to_owned();
-    bundle.artifacts[0].display_name = "ccmsetup.lo_".to_owned();
-    bundle.artifacts[0].rotation = SccmRotation::LoUnderscore;
-    let mut current_artifact = bundle.artifacts[0].clone();
+    let rotated_artifact = bundle
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.display_name.eq_ignore_ascii_case("ccmsetup.log"))
+        .expect("setup failure ccmsetup artifact");
+    let original_artifact_id = rotated_artifact.artifact_id.clone();
+    rotated_artifact.artifact_id = rotated_artifact_id.to_owned();
+    rotated_artifact.display_name = "ccmsetup.lo_".to_owned();
+    rotated_artifact.rotation = SccmRotation::LoUnderscore;
+    let mut current_artifact = rotated_artifact.clone();
     current_artifact.artifact_id = current_artifact_id.to_owned();
     current_artifact.display_name = "ccmsetup.log".to_owned();
     current_artifact.rotation = SccmRotation::Current;
