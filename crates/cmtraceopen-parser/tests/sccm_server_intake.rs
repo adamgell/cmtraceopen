@@ -104,9 +104,20 @@ fn server_intake_normalizes_role_coverage_and_logical_records() {
     let (unsorted_manifest, unsorted_payloads) = load_bundle("unsorted-manifest");
     let unsorted =
         assess_server_intake(&unsorted_manifest, &unsorted_payloads).expect("bundle is assessed");
+    let mut reordered_manifest: Value =
+        serde_json::from_str(&unsorted_manifest).expect("manifest is valid JSON");
+    reordered_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .reverse();
+    let reordered = assess_server_intake(
+        &serde_json::to_string(&reordered_manifest).expect("manifest serializes"),
+        &unsorted_payloads,
+    )
+    .expect("reordered bundle is assessed");
     assert_eq!(
-        serde_json::to_vec(&complete).expect("assessment serializes"),
         serde_json::to_vec(&unsorted).expect("assessment serializes"),
+        serde_json::to_vec(&reordered).expect("assessment serializes"),
         "manifest order must not affect normalized output"
     );
 }
