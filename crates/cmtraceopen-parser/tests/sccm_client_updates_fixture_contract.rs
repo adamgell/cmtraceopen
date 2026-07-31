@@ -3400,6 +3400,33 @@ fn software_update_fixture_contract_rejects_phase_provenance_privacy_and_shape_m
         ));
     }
 
+    let invalid_offset_scenario = "invalid-offset";
+    let invalid_offset_dir = updates_root().join(invalid_offset_scenario);
+    let invalid_offset_manifest = read_json(&invalid_offset_dir.join("manifest.json"));
+    let mut missing_invalid_offset_transaction =
+        read_json(&invalid_offset_dir.join("expected.json"));
+    missing_invalid_offset_transaction["transactions"] = serde_json::json!([]);
+    mutations.push((
+        "invalid-offset empty transactions",
+        invalid_offset_scenario.to_owned(),
+        invalid_offset_manifest,
+        missing_invalid_offset_transaction,
+        "invalid-offset: transaction is missing",
+    ));
+
+    let supplemental_scenario = "supplemental-conflict";
+    let supplemental_dir = updates_root().join(supplemental_scenario);
+    let supplemental_manifest = read_json(&supplemental_dir.join("manifest.json"));
+    let mut missing_supplemental_observation = read_json(&supplemental_dir.join("expected.json"));
+    missing_supplemental_observation["sourceLocalObservations"] = serde_json::json!([]);
+    mutations.push((
+        "supplemental-conflict empty observations",
+        supplemental_scenario.to_owned(),
+        supplemental_manifest,
+        missing_supplemental_observation,
+        "supplemental-conflict: subject is missing",
+    ));
+
     let mut missing_rejections = Vec::new();
     for (label, scenario, manifest, expected, marker) in mutations {
         match validate_without_panicking(&scenario, &manifest, &expected) {
