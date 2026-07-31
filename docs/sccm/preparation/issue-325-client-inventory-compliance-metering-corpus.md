@@ -39,15 +39,16 @@ The profile identifiers in this corpus are deliberately test-only:
 - `sccm-client-compliance-5.00.test-v1`
 - `sccm-client-metering-5.00.test-v1`
 
-An unknown source version has no fallback profile. It remains a source-local,
-low-confidence observation and a coverage/profile gap.
+Source versions are bounded canonical tokens before any prefix-based profile
+selection. An unknown source version has no fallback profile. It remains a
+source-local, low-confidence observation and a coverage/profile gap.
 
 ## Fixture matrix
 
 The fixture root is
 `crates/cmtraceopen-parser/tests/fixtures/sccm/client/inventory-compliance-metering`.
 It contains 20 scenarios, 54 manifest artifacts, and 42 physical evidence files
-(16,820 bytes). The deterministic fixture digest is `409f976350ffbc05`.
+(16,814 bytes). The deterministic fixture digest is `26c8cf8aee0741a2`.
 
 | Family | Scenarios | Contract coverage |
 | --- | --- | --- |
@@ -68,7 +69,8 @@ The manifest is SCCM-specific preparation data and does not overload generic
 `ArtifactStatus` semantics. It preserves:
 
 - a synthetic bundle ID, client role, sanitized capture host, and site code;
-- exact physical artifact identity and logical workflow membership;
+- exact, bounded, control-free artifact identity scoped to its family/scenario
+  and logical workflow membership;
 - original basename, sanitized attempted source path, and path fingerprint;
 - current or `.lo` rotation identity and fragment completeness;
 - explicit `captured`, `absent`, `accessDenied`, `capped`, `skipped`,
@@ -112,7 +114,10 @@ The expected contract keeps output deterministic and preparation-only:
   invent next-artifact requests;
 - `findings` remains empty until production reducers are authorized;
 - source-local observations use a closed kind/artifact/claim schema, have a low
-  confidence ceiling, and are not correlation eligible;
+  confidence ceiling, are not correlation eligible, and cannot repeat one
+  `(kind, artifact)` membership under another observation ID;
+- `rotationSplit` requires `current` and `.lo` partial artifacts from one
+  synthetic root, canonical basename, source version, and exact family key;
 - next-artifact requests name one admitted logical group and basename, never an
   arbitrary path, drive, volume, wildcard, or recursive scan.
 
@@ -149,6 +154,12 @@ of:
 - duplicate/conflicting or unknown structured fields, nested CCM envelopes,
   source-to-phase violations, and compliance result types borrowed from another
   source record;
+- blank, control-bearing, overlong, or foreign-scope artifact, transaction, and
+  observation identities;
+- empty, control-bearing, whitespace-bearing, or malformed source-version
+  tokens before profile selection;
+- duplicate source-local `(kind, artifact)` memberships and rotation splits
+  whose root, canonical basename, version, or exact key differs;
 - overlapping or duplicate physical evidence-line identity;
 - uncited predecessor `lastSuccessfulPhase` claims on confirmed failures;
 - high-confidence output from an unknown source profile or invalid timestamp

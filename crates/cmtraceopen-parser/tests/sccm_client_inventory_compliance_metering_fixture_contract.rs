@@ -36,7 +36,7 @@ const METERING_SCENARIOS: [&str; 6] = [
     "terminal-failures",
 ];
 
-const DOCUMENTED_CORPUS_DIGEST: &str = "409f976350ffbc05";
+const DOCUMENTED_CORPUS_DIGEST: &str = "26c8cf8aee0741a2";
 
 #[derive(Debug, PartialEq, Eq)]
 struct CorpusInventory {
@@ -446,6 +446,37 @@ fn required_string<'a>(value: &'a Value, field: &str, context: &str) -> Result<&
     value[field]
         .as_str()
         .ok_or_else(|| format!("{context} {field} is not a string"))
+}
+
+fn validate_canonical_id(value: &str, field: &str, required_prefix: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.starts_with(required_prefix)
+        || value.ends_with('-')
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(format!("{field} is not canonical for {required_prefix}"));
+    }
+    Ok(())
+}
+
+fn validate_source_version(version: &str, artifact_id: &str) -> Result<(), String> {
+    if version.is_empty()
+        || version.len() > 64
+        || version.split('.').any(|segment| {
+            segment.is_empty()
+                || segment.starts_with('-')
+                || segment.ends_with('-')
+                || !segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(format!("{artifact_id} sourceVersion is not canonical"));
+    }
+    Ok(())
 }
 
 fn require_exact_object_fields(
@@ -908,6 +939,72 @@ fn strict_ccm_structured_fields(
     Ok(fields)
 }
 
+fn rotation_lineage_key(
+    family: &str,
+    scenario_root: &Path,
+    artifact: &Value,
+) -> Result<String, String> {
+    let artifact_id = required_string(artifact, "artifactId", "rotation artifact")?;
+    let basename = required_string(artifact, "originalBasename", artifact_id)?;
+    let source_basename = basename.strip_suffix(".lo").unwrap_or(basename);
+    let source_version = required_string(artifact, "sourceVersion", artifact_id)?;
+    let sanitized_path = required_string(artifact, "sanitizedSourcePath", artifact_id)?;
+    let synthetic_root = sanitized_path
+        .strip_prefix("SYNTHETIC://")
+        .and_then(|path| path.split('/').next())
+        .ok_or_else(|| format!("{artifact_id} rotation source has no synthetic root"))?;
+    let relative_path = required_string(artifact, "relativePath", artifact_id)?;
+    let contents = std::fs::read_to_string(scenario_root.join(relative_path))
+        .map_err(|error| format!("{artifact_id} rotation evidence is readable: {error}"))?;
+    let additive_artifact = additive_artifact(artifact)?;
+    let required_fields = required_key_fields(family)?;
+    let mut exact_keys = BTreeSet::new();
+
+    for (index, line) in contents.lines().enumerate() {
+        let context = format!("{artifact_id}:{}", index + 1);
+        let normalized = normalize_ccm_artifact(additive_artifact.clone(), line);
+        if normalized.len() != 1
+            || normalized[0].reference.line_start != Some(1)
+            || normalized[0].reference.line_end != Some(1)
+        {
+            return Err(format!("{context} is not one complete CCM record"));
+        }
+        let fields = strict_ccm_structured_fields(line, &context)?;
+        validate_structured_field_vocabulary(&fields, &context)?;
+        validate_cited_record_semantics(&fields, source_basename, &context)?;
+        if fields.get("Family").map(String::as_str) != Some(family) {
+            return Err(format!("{context} Family is not exact"));
+        }
+        let mut key_values = Vec::new();
+        for field in required_fields {
+            let value = fields
+                .get(*field)
+                .ok_or_else(|| format!("{context} has no exact key field {field}"))?;
+            if value.is_empty()
+                || value.contains(['\n', '\r'])
+                || (field.ends_with("Handle") && !value.starts_with("safe:"))
+            {
+                return Err(format!("{context} exact key field {field} is unsafe/empty"));
+            }
+            key_values.push(value.as_str());
+        }
+        exact_keys.insert(key_values.join("\0"));
+    }
+    if exact_keys.len() != 1 {
+        return Err(format!(
+            "{artifact_id} rotation evidence has no single exact key"
+        ));
+    }
+
+    Ok(format!(
+        "{synthetic_root}\0{source_basename}\0{source_version}\0{}",
+        exact_keys
+            .into_iter()
+            .next()
+            .expect("one exact rotation key was checked")
+    ))
+}
+
 fn record_field_is(record: &CitedEvidenceRecord, field: &str, value: &str) -> bool {
     record
         .fields
@@ -1148,9 +1245,11 @@ fn validate_contract(
     let mut expected_coverage = BTreeMap::new();
     let mut unknown_version_artifacts = BTreeSet::new();
     let mut invalid_offset_artifacts = BTreeSet::new();
+    let artifact_id_prefix = format!("{family}-{scenario}-");
 
     for artifact in artifacts {
         let artifact_id = required_string(artifact, "artifactId", "artifact")?;
+        validate_canonical_id(artifact_id, "artifactId", &artifact_id_prefix)?;
         if artifacts_by_id
             .insert(artifact_id.to_owned(), artifact)
             .is_some()
@@ -1273,8 +1372,11 @@ fn validate_contract(
                 ))
             }
         };
-        if source_version.is_some_and(|version| !version.starts_with("5.00.TEST.")) {
-            unknown_version_artifacts.insert(artifact_id.to_owned());
+        if let Some(source_version) = source_version {
+            validate_source_version(source_version, artifact_id)?;
+            if !source_version.starts_with("5.00.TEST.") {
+                unknown_version_artifacts.insert(artifact_id.to_owned());
+            }
         }
 
         if let Some(relative_path) = relative_path {
@@ -1522,6 +1624,7 @@ fn validate_contract(
         .ok_or_else(|| "sourceLocalObservations is not an array".to_owned())?;
     require_canonical_string_field_order(observations, "observationId", "observation")?;
     let mut observation_ids = BTreeSet::new();
+    let mut observation_memberships = BTreeSet::new();
     let mut observed_artifact_ids = BTreeSet::new();
     let mut unknown_profile_observations = BTreeSet::new();
     let mut invalid_offset_observations = BTreeSet::new();
@@ -1539,6 +1642,7 @@ fn validate_contract(
             "observation",
         )?;
         let observation_id = required_string(observation, "observationId", "observation")?;
+        validate_canonical_id(observation_id, "observationId", &format!("{family}-"))?;
         if !observation_ids.insert(observation_id.to_owned()) {
             return Err(format!("duplicate observationId {observation_id}"));
         }
@@ -1574,6 +1678,7 @@ fn validate_contract(
         let mut previous_artifact_id = None;
         let mut observed_states = Vec::new();
         let mut observed_rotations = BTreeSet::new();
+        let mut observed_rotation_artifacts = Vec::new();
         for artifact_id in artifact_ids {
             let artifact_id = artifact_id
                 .as_str()
@@ -1594,25 +1699,56 @@ fn validate_contract(
                 .expect("artifact existence checked");
             observed_states.push(effective_state(artifact)?);
             observed_rotations.insert(required_string(&artifact["rotation"], "kind", artifact_id)?);
+            if kind == "rotationSplit" {
+                observed_rotation_artifacts.push(*artifact);
+            }
             observed_artifact_ids.insert(artifact_id.to_owned());
-            if kind == "unknownProfile"
-                && !unknown_profile_observations.insert(artifact_id.to_owned())
-            {
+            if !observation_memberships.insert((kind.to_owned(), artifact_id.to_owned())) {
+                let kind_label = match kind {
+                    "coverageGap" => "coverage-gap",
+                    "rotationSplit" => "rotation-split",
+                    "malformedRecord" => "malformed-record",
+                    "unknownProfile" => "unknown-profile",
+                    "invalidOffset" => "invalid-offset",
+                    _ => "unsupported",
+                };
                 return Err(format!(
-                    "{observation_id} is a duplicate unknown-profile observation for {artifact_id}"
+                    "{observation_id} is a duplicate source-local observation; duplicate {kind_label} observation for {artifact_id}"
                 ));
+            }
+            if kind == "unknownProfile" {
+                unknown_profile_observations.insert(artifact_id.to_owned());
             }
             if kind == "invalidOffset" {
                 invalid_offset_observations.insert(artifact_id.to_owned());
             }
         }
+        if kind == "rotationSplit" {
+            if observed_states.len() < 2
+                || observed_states.iter().any(|state| state != "partial")
+                || observed_rotations != ["current", "lo"].into_iter().collect::<BTreeSet<_>>()
+            {
+                return Err(format!(
+                    "{observation_id} rotationSplit is incompatible with cited artifact coverage/provenance"
+                ));
+            }
+            let observed_rotation_lineages = observed_rotation_artifacts
+                .into_iter()
+                .map(|artifact| {
+                    rotation_lineage_key(family, scenario_root, artifact).map_err(|error| {
+                        format!("{observation_id} rotationSplit lineage/key is invalid: {error}")
+                    })
+                })
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            if observed_rotation_lineages.len() != 1 {
+                return Err(format!(
+                    "{observation_id} rotationSplit lineage/key is not common"
+                ));
+            }
+        }
         let incompatible = match kind {
             "coverageGap" => observed_states.iter().any(|state| state == "captured"),
-            "rotationSplit" => {
-                observed_states.len() < 2
-                    || observed_states.iter().any(|state| state != "partial")
-                    || observed_rotations != ["current", "lo"].into_iter().collect::<BTreeSet<_>>()
-            }
+            "rotationSplit" => false,
             "malformedRecord" => observed_states.iter().any(|state| state != "parseFailed"),
             "unknownProfile" => artifact_ids.iter().any(|artifact_id| {
                 !artifact_id
@@ -1677,6 +1813,7 @@ fn validate_contract(
             "transaction",
         )?;
         let transaction_id = required_string(transaction, "transactionId", "transaction")?;
+        validate_canonical_id(transaction_id, "transactionId", &format!("{family}-"))?;
         if !transaction_ids.insert(transaction_id.to_owned()) {
             return Err(format!("duplicate transactionId {transaction_id}"));
         }
@@ -2125,7 +2262,7 @@ fn corpus_inventory_is_deterministic_and_documented() {
             scenarios: 20,
             artifacts: 54,
             evidence_files: 42,
-            evidence_bytes: 16_820,
+            evidence_bytes: 16_814,
             capture_states: BTreeMap::from([
                 ("absent".to_owned(), 3),
                 ("accessDenied".to_owned(), 3),
@@ -3565,6 +3702,74 @@ fn review_blocker_bundle_identity_and_order_descriptors_are_closed() {
 }
 
 #[test]
+fn review_blocker_public_identities_are_nonempty_control_free_and_scoped() {
+    let mut failures = Vec::new();
+
+    for (label, replacement) in [
+        ("blank artifactId", ""),
+        ("control-bearing artifactId", "metering-success\nforeign"),
+        (
+            "foreign-family artifactId",
+            "inventory-success-report-current",
+        ),
+    ] {
+        let (scenario_root, mut manifest, mut expected) = load_contract("metering", "success");
+        manifest["artifacts"][0]["artifactId"] = json!(replacement);
+        manifest["artifacts"][0]["pathFingerprint"] =
+            json!(format!("synthetic-{replacement}-root-a"));
+        expected["coverage"][0]["artifactId"] = json!(replacement);
+        expected["transactions"][0]["evidence"][0]["artifactId"] = json!(replacement);
+        collect_contract_rejection(
+            &mut failures,
+            label,
+            validate_contract("metering", "success", &scenario_root, &manifest, &expected),
+            "artifactId is not canonical",
+        );
+    }
+
+    for (label, replacement) in [
+        ("blank transactionId", ""),
+        ("control-bearing transactionId", "metering-success\nforeign"),
+        ("foreign-family transactionId", "inventory-success"),
+    ] {
+        let (scenario_root, manifest, mut expected) = load_contract("metering", "success");
+        expected["transactions"][0]["transactionId"] = json!(replacement);
+        collect_contract_rejection(
+            &mut failures,
+            label,
+            validate_contract("metering", "success", &scenario_root, &manifest, &expected),
+            "transactionId is not canonical",
+        );
+    }
+
+    for (label, replacement) in [
+        ("blank observationId", ""),
+        (
+            "control-bearing observationId",
+            "metering-coverage-only\nforeign",
+        ),
+        ("foreign-family observationId", "inventory-coverage-only"),
+    ] {
+        let (scenario_root, manifest, mut expected) = load_contract("metering", "coverage-states");
+        expected["sourceLocalObservations"][0]["observationId"] = json!(replacement);
+        collect_contract_rejection(
+            &mut failures,
+            label,
+            validate_contract(
+                "metering",
+                "coverage-states",
+                &scenario_root,
+                &manifest,
+                &expected,
+            ),
+            "observationId is not canonical",
+        );
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn review_blocker_sources_own_exact_phases_and_workflow_semantics() {
     let (temporary, manifest, mut expected) = copied_contract_with_evidence_replacements(
         "inventory",
@@ -3811,6 +4016,33 @@ fn review_blocker_nonphysical_optional_field_json_types_are_closed() {
 }
 
 #[test]
+fn review_blocker_source_versions_are_canonical_before_profile_selection() {
+    let (scenario_root, manifest, expected) = load_contract("metering", "success");
+    let mut failures = Vec::new();
+
+    for (label, source_version) in [
+        ("blank sourceVersion", ""),
+        (
+            "control-bearing sourceVersion",
+            "5.00.TEST.325\n9.99.UNKNOWN",
+        ),
+        ("whitespace-bearing sourceVersion", "5.00.TEST.325 "),
+        ("empty sourceVersion segment", "5.00.TEST..325"),
+    ] {
+        let mut mutated = manifest.clone();
+        mutated["artifacts"][0]["sourceVersion"] = json!(source_version);
+        collect_contract_rejection(
+            &mut failures,
+            label,
+            validate_contract("metering", "success", &scenario_root, &mutated, &expected),
+            "sourceVersion is not canonical",
+        );
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
 fn review_blocker_unknown_versions_are_profile_gaps_for_every_coverage_state() {
     let (scenario_root, manifest, expected) = load_contract("inventory", "coverage-states");
     let mut failures = Vec::new();
@@ -3864,7 +4096,7 @@ fn review_blocker_unknown_versions_are_profile_gaps_for_every_coverage_state() {
             .expect("sourceLocalObservations are an array")
             .push(json!({
                 "observationId": format!(
-                    "inventory-coverage-unknown-profile-{capture_state}"
+                    "inventory-coverage-unknown-profile-{artifact_id}"
                 ),
                 "kind": "unknownProfile",
                 "artifactIds": [artifact_id],
@@ -3904,6 +4136,180 @@ fn review_blocker_unknown_versions_are_profile_gaps_for_every_coverage_state() {
             &expected,
         ),
         "absent source invents path/version identity",
+    );
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_source_local_observation_memberships_are_unique_by_kind() {
+    let mut failures = Vec::new();
+
+    for (family, scenario, kind) in [
+        ("metering", "coverage-states", "coverageGap"),
+        (
+            "compliance",
+            "malformed-unknown-profile-invalid-offset",
+            "malformedRecord",
+        ),
+        (
+            "compliance",
+            "malformed-unknown-profile-invalid-offset",
+            "invalidOffset",
+        ),
+        ("metering", "rotation-boundary", "rotationSplit"),
+    ] {
+        let (scenario_root, manifest, mut expected) = load_contract(family, scenario);
+        let observations = expected["sourceLocalObservations"]
+            .as_array_mut()
+            .expect("sourceLocalObservations are an array");
+        let mut duplicate = observations
+            .iter()
+            .find(|observation| observation["kind"] == kind)
+            .unwrap_or_else(|| panic!("{family}/{scenario} contains {kind}"))
+            .clone();
+        let observation_id = duplicate["observationId"]
+            .as_str()
+            .expect("observationId is a string");
+        duplicate["observationId"] = json!(format!("{observation_id}-z"));
+        observations.push(duplicate);
+        observations.sort_by(|left, right| {
+            left["observationId"]
+                .as_str()
+                .cmp(&right["observationId"].as_str())
+        });
+
+        collect_contract_rejection(
+            &mut failures,
+            &format!("duplicate {kind} membership"),
+            validate_contract(family, scenario, &scenario_root, &manifest, &expected),
+            "duplicate source-local observation",
+        );
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn review_blocker_rotation_split_requires_one_source_lineage_and_exact_key() {
+    let mut failures = Vec::new();
+
+    let (inventory_source_root, mut inventory_manifest, inventory_expected) =
+        load_contract("inventory", "rotation-boundary");
+    let inventory_temporary =
+        TemporaryScenario::copy_from(&inventory_source_root, "rotation-basename-mismatch");
+    let inventory_artifact = &mut inventory_manifest["artifacts"][0];
+    let old_relative_path = inventory_artifact["relativePath"]
+        .as_str()
+        .expect("current inventory artifact relativePath is a string")
+        .to_owned();
+    let new_relative_path =
+        "evidence/client-inventory/root-a/current/InventoryAgentProvider.log".to_owned();
+    let new_full_path = inventory_temporary.root.join(&new_relative_path);
+    let provider_contents = "<![LOG[SYNTHETIC FIXTURE Family=inventory InventoryCycleId=INV-CYCLE-025 ResourceHandle=safe:resource:inventory-025 ReportId=INV-REPORT-025 Phase=Report Disposition=Succeeded Terminal=true]LOG]!><time=\"01:25:01.000+000\" date=\"7-30-2026\" component=\"InventoryAgentProvider\" context=\"\" type=\"1\" thread=\"325\" file=\"\">\n";
+    std::fs::remove_file(inventory_temporary.root.join(old_relative_path))
+        .expect("current inventory evidence can be replaced");
+    std::fs::write(&new_full_path, provider_contents)
+        .expect("mismatched provider evidence can be written");
+    inventory_artifact["originalBasename"] = json!("InventoryAgentProvider.log");
+    inventory_artifact["sanitizedSourcePath"] =
+        json!("SYNTHETIC://root-a/CCM/Logs/InventoryAgentProvider.log");
+    inventory_artifact["relativePath"] = json!(new_relative_path);
+    inventory_artifact["bytesCopied"] = json!(provider_contents.len() as u64);
+    collect_contract_rejection(
+        &mut failures,
+        "different canonical basenames form one rotation split",
+        validate_contract(
+            "inventory",
+            "rotation-boundary",
+            &inventory_temporary.root,
+            &inventory_manifest,
+            &inventory_expected,
+        ),
+        "rotationSplit lineage/key",
+    );
+
+    let (metering_root, mut version_manifest, mut version_expected) =
+        load_contract("metering", "rotation-boundary");
+    let unknown_artifact_id = "metering-rotation-boundary-report-lo";
+    version_manifest["artifacts"][1]["sourceVersion"] = json!("9.99.UNKNOWN");
+    version_expected["extractionProfile"]["selectionState"] = json!("mixedKnownAndUnknown");
+    version_expected["sourceLocalObservations"]
+        .as_array_mut()
+        .expect("sourceLocalObservations are an array")
+        .push(json!({
+            "observationId": "metering-rotation-unknown-profile",
+            "kind": "unknownProfile",
+            "artifactIds": [unknown_artifact_id],
+            "confidenceCeiling": "low",
+            "correlationEligible": false,
+            "claim": "Unknown source version has no selected extraction profile."
+        }));
+    collect_contract_rejection(
+        &mut failures,
+        "different source versions form one rotation split",
+        validate_contract(
+            "metering",
+            "rotation-boundary",
+            &metering_root,
+            &version_manifest,
+            &version_expected,
+        ),
+        "rotationSplit lineage/key",
+    );
+
+    let (temporary, key_manifest, key_expected) = copied_contract_with_evidence_replacements(
+        "metering",
+        "rotation-boundary",
+        "metering-rotation-boundary-report-current",
+        "rotation-key-mismatch",
+        &[("RuleId=RULE-025", "RuleId=RULE-999")],
+    );
+    collect_contract_rejection(
+        &mut failures,
+        "different exact keys form one rotation split",
+        validate_contract(
+            "metering",
+            "rotation-boundary",
+            &temporary.root,
+            &key_manifest,
+            &key_expected,
+        ),
+        "rotationSplit lineage/key",
+    );
+
+    let (source_root, mut root_manifest, root_expected) =
+        load_contract("metering", "rotation-boundary");
+    let temporary = TemporaryScenario::copy_from(&source_root, "rotation-root-mismatch");
+    let artifact = &mut root_manifest["artifacts"][1];
+    let old_relative_path = artifact["relativePath"]
+        .as_str()
+        .expect("lo artifact relativePath is a string")
+        .to_owned();
+    let new_relative_path = "evidence/client-metering/root-b/lo/SWMTRReportGen.log.lo".to_owned();
+    let new_full_path = temporary.root.join(&new_relative_path);
+    std::fs::create_dir_all(
+        new_full_path
+            .parent()
+            .expect("root-mismatch destination has a parent"),
+    )
+    .expect("root-mismatch destination can be created");
+    std::fs::rename(temporary.root.join(old_relative_path), &new_full_path)
+        .expect("lo evidence can move to a distinct synthetic root");
+    artifact["sanitizedSourcePath"] = json!("SYNTHETIC://root-b/CCM/Logs/SWMTRReportGen.log.lo");
+    artifact["pathFingerprint"] = json!("synthetic-metering-rotation-boundary-report-lo-root-b");
+    artifact["relativePath"] = json!(new_relative_path);
+    collect_contract_rejection(
+        &mut failures,
+        "different synthetic roots form one rotation split",
+        validate_contract(
+            "metering",
+            "rotation-boundary",
+            &temporary.root,
+            &root_manifest,
+            &root_expected,
+        ),
+        "rotationSplit lineage/key",
     );
 
     assert!(failures.is_empty(), "{}", failures.join("\n"));
