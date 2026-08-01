@@ -21,11 +21,53 @@ pub enum DeviceInventoryLogDialect {
     RotationFailure,
 }
 
+/// A framed Device Inventory logical record and the file span it occupies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FramedLogicalRecord {
+    /// Record text: its physical lines joined with `\n`.
+    pub content: String,
+    /// Physical lines the file position advances by once this record is read.
+    ///
+    /// A record that ends at a real record boundary owns its last physical
+    /// line, so this is one more than its newline count. A record force-split
+    /// by the size bound ends mid-line and its remainder continues that same
+    /// physical line, so a split piece contributes only its newline count.
+    /// Summing this over the records of a file therefore always equals the
+    /// file's physical line count, which is what lets an incremental reader
+    /// number lines the way the whole-file parse does.
+    pub physical_lines: u32,
+}
+
+impl FramedLogicalRecord {
+    /// A record that ends at a real record boundary, so it owns its last line.
+    pub fn complete(content: String) -> Self {
+        let physical_lines = newline_count(&content).saturating_add(1);
+        Self {
+            content,
+            physical_lines,
+        }
+    }
+
+    /// A record piece force-completed mid-line by the size bound. Its
+    /// remainder continues the physical line it was cut from.
+    fn split(content: String) -> Self {
+        let physical_lines = newline_count(&content);
+        Self {
+            content,
+            physical_lines,
+        }
+    }
+}
+
+fn newline_count(text: &str) -> u32 {
+    u32::try_from(text.matches('\n').count()).unwrap_or(u32::MAX)
+}
+
 /// Pure framing result for incrementally collected Device Inventory records.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct LogicalRecordFramingResult {
     /// Records made complete by a later header or by the pending-size bound.
-    pub completed_records: Vec<String>,
+    pub completed_records: Vec<FramedLogicalRecord>,
     /// The newest record, retained so a later append can add continuations.
     pub pending_record: Option<String>,
     /// Number of records force-completed because they reached the size bound.
@@ -55,7 +97,7 @@ pub fn frame_logical_records(
         let line = raw_line.trim_end_matches('\r');
         if is_record_header(dialect, line) {
             if let Some(record) = pending_record.take() {
-                completed_records.push(record);
+                completed_records.push(FramedLogicalRecord::complete(record));
             }
         }
 
@@ -76,7 +118,7 @@ pub fn frame_logical_records(
                 .expect("oversized pending record must exist");
             let split_at = previous_char_boundary(&record, max_pending_bytes);
             let remainder = record.split_off(split_at);
-            completed_records.push(record);
+            completed_records.push(FramedLogicalRecord::split(record));
             overflow_count = overflow_count.saturating_add(1);
             pending_record = (!remainder.is_empty()).then_some(remainder);
         }
@@ -220,8 +262,11 @@ fn parse_records<'a>(
                 .map(|caps| parse_rotation(&caps, line_number)),
         };
 
-        if let Some((record, timestamp_valid)) = parsed {
-            if !timestamp_valid {
+        // The flag is "every header field was readable". A recognized header
+        // whose timestamp or PID could not be read still yields a record, so
+        // the degraded field is counted here instead of disappearing.
+        if let Some((record, header_fields_valid)) = parsed {
+            if !header_fields_valid {
                 parse_errors += 1;
             }
             records.push(record);
@@ -387,13 +432,17 @@ fn parse_harvester(caps: &Captures<'_>, line_number: u32) -> (LogEntry, bool) {
 fn parse_adaptor(caps: &Captures<'_>, line_number: u32) -> (LogEntry, bool) {
     let timestamp_text = caps.name("timestamp").expect("timestamp capture").as_str();
     let timestamp = NaiveDateTime::parse_from_str(timestamp_text, "%a %b %e %H:%M:%S %Y").ok();
-    let valid = timestamp.is_some();
+    // `(?P<pid>\d+)` bounds the character class but not the digit count, so a
+    // log line can carry a PID wider than u32. Log content is untrusted, and
+    // this same path runs inside the tail thread, so an unreadable PID degrades
+    // to no thread and is counted rather than aborting the parse of the file.
     let pid = caps
         .name("pid")
         .expect("pid capture")
         .as_str()
         .parse::<u32>()
-        .expect("regex-restricted PID must parse");
+        .ok();
+    let valid = timestamp.is_some() && pid.is_some();
     let message = caps.name("message").expect("message capture").as_str();
 
     (
@@ -405,8 +454,8 @@ fn parse_adaptor(caps: &Captures<'_>, line_number: u32) -> (LogEntry, bool) {
                 timestamp: timestamp.map(|value| value.and_utc().timestamp_millis()),
                 timestamp_display: timestamp
                     .map(|value| value.format("%Y-%m-%d %H:%M:%S.000").to_string()),
-                thread: Some(pid),
-                thread_display: Some(format!("{pid} (0x{pid:X})")),
+                thread: pid,
+                thread_display: pid.map(|pid| format!("{pid} (0x{pid:X})")),
                 ..EntryMetadata::default()
             },
         ),
@@ -538,13 +587,52 @@ mod tests {
 
         assert_eq!(
             second.completed_records,
-            vec![format!(
+            vec![FramedLogicalRecord::complete(format!(
                 "{ADAPTOR_HEADER}\n{}",
                 r#"{"Status":200,"Data":{"Example":"value"}}"#
-            )]
+            ))]
+        );
+        assert_eq!(
+            second.completed_records[0].physical_lines, 2,
+            "the header and its payload are two physical lines"
         );
         assert_eq!(second.pending_record.as_deref(), Some(NEXT_ADAPTOR_HEADER));
         assert_eq!(second.overflow_count, 0);
+    }
+
+    #[test]
+    fn adaptor_pid_too_wide_for_u32_degrades_instead_of_panicking() {
+        // `(?P<pid>\d+)` bounds nothing, so a log line can carry a PID wider
+        // than u32. Untrusted content must not abort the parse of the file, and
+        // the same path runs inside the tail thread.
+        let content = concat!(
+            "[Thu Jul 30 13:05:01 2026][99999999999] - oversized pid\n",
+            "[Thu Jul 30 13:05:02 2026][8604] - well-formed pid",
+        );
+
+        let (entries, parse_errors) = parse_content(
+            "InventoryAdaptor.log",
+            content,
+            DeviceInventoryLogDialect::InventoryAdaptor,
+        );
+
+        assert_eq!(entries.len(), 2, "the file must still parse in full");
+        assert_eq!(entries[0].message, "oversized pid");
+        assert_eq!(
+            entries[0].thread, None,
+            "a PID that does not fit u32 must degrade to None"
+        );
+        assert_eq!(entries[0].thread_display, None);
+        assert_eq!(
+            entries[1].thread,
+            Some(8604),
+            "a later well-formed record must be unaffected"
+        );
+        assert_eq!(entries[1].thread_display.as_deref(), Some("8604 (0x219C)"));
+        assert_eq!(
+            parse_errors, 1,
+            "the unreadable PID must be reported, not silently dropped"
+        );
     }
 
     #[test]
@@ -564,17 +652,35 @@ mod tests {
         assert!(framed
             .completed_records
             .iter()
-            .all(|record| record.len() <= max_pending_bytes));
+            .all(|record| record.content.len() <= max_pending_bytes));
         assert!(framed
             .pending_record
             .as_ref()
             .is_none_or(|record| record.len() <= max_pending_bytes));
 
+        // A force-split piece ends mid-line and its remainder continues that
+        // same physical line, so the pieces together must still account for
+        // exactly the two physical lines that went in. Any other total would
+        // drift an incremental reader's line numbers.
+        let spans: u32 = framed
+            .completed_records
+            .iter()
+            .map(|record| record.physical_lines)
+            .sum::<u32>()
+            + framed
+                .pending_record
+                .as_ref()
+                .map_or(0, |record| newline_count(record) + 1);
+        assert_eq!(
+            spans, 2,
+            "a split record must not invent an extra physical line"
+        );
+
         let reconstructed = framed
             .completed_records
             .iter()
-            .chain(framed.pending_record.iter())
-            .cloned()
+            .map(|record| record.content.clone())
+            .chain(framed.pending_record.iter().cloned())
             .collect::<String>();
         assert_eq!(reconstructed, expected);
     }

@@ -303,6 +303,7 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
     let incremental: Vec<(Severity, String)> = second
         .completed_records
         .iter()
+        .map(|record| &record.content)
         .chain(second.pending_record.iter())
         .flat_map(|record| {
             let (entries, _) = parse_content(

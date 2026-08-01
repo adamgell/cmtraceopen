@@ -4,7 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cmtraceopen_parser::intune::device::windows::inventory::{self, DeviceInventoryLogDialect};
+use cmtraceopen_parser::intune::device::windows::inventory::{
+    self, DeviceInventoryLogDialect, FramedLogicalRecord,
+};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
@@ -319,7 +321,7 @@ impl TailReader {
         let mut overflow_count = 0;
         let mut records = if fragment.is_empty() {
             pending
-                .map(|record| vec![record.content])
+                .map(|record| vec![FramedLogicalRecord::complete(record.content)])
                 .unwrap_or_default()
         } else {
             let fragment_lines = [fragment.as_str()];
@@ -331,11 +333,13 @@ impl TailReader {
             );
             overflow_count = framed.overflow_count;
             let mut records = framed.completed_records;
-            records.extend(framed.pending_record);
+            // The flush ends the record, so the retained pending text owns its
+            // last physical line the same way a header-terminated record does.
+            records.extend(framed.pending_record.map(FramedLogicalRecord::complete));
             records
         };
 
-        records.retain(|record| !record.is_empty());
+        records.retain(|record| !record.content.is_empty());
         self.parse_logical_records(records, &selection, overflow_count)
     }
 
@@ -382,7 +386,7 @@ impl TailReader {
 
     fn parse_logical_records(
         &mut self,
-        records: Vec<String>,
+        records: Vec<FramedLogicalRecord>,
         selection: &ResolvedParser,
         framing_parse_errors: u32,
     ) -> TailBatch {
@@ -391,17 +395,39 @@ impl TailReader {
         let mut parse_errors = framing_parse_errors;
 
         for record in records {
-            let parsed = parser::parse_content_with_selection(&record, &path_str, selection);
-            entries.extend(parsed.entries);
+            let parsed =
+                parser::parse_content_with_selection(&record.content, &path_str, selection);
+            let mut record_entries = parsed.entries;
+            self.assign_record_entry_identity(&mut record_entries, record.physical_lines);
+            entries.extend(record_entries);
             parse_errors = parse_errors.saturating_add(parsed.parse_errors);
         }
 
-        self.assign_entry_identity(&mut entries);
         TailBatch {
             entries,
             parse_errors,
             reset: false,
         }
+    }
+
+    /// Number the entries of one logical record, then advance past its lines.
+    ///
+    /// A logical record spans its header plus every continuation beneath it, so
+    /// the next record starts at this record's first line plus its physical
+    /// line count, not plus its entry count. Advancing per entry would drift
+    /// below the real file position on the first multi-line record and keep
+    /// drifting, which would make "go to line" disagree between a tailed file
+    /// and the same file opened. Entries arrive carrying the line they sit on
+    /// within the record, which is what the whole-file parse assigns, so they
+    /// rebase onto the record's own start line.
+    fn assign_record_entry_identity(&mut self, entries: &mut [LogEntry], physical_lines: u32) {
+        let record_start = self.next_line;
+        for entry in entries {
+            entry.id = self.next_id;
+            entry.line_number = record_start.saturating_add(entry.line_number.saturating_sub(1));
+            self.next_id += 1;
+        }
+        self.next_line = record_start.saturating_add(physical_lines);
     }
 
     fn assign_entry_identity(&mut self, entries: &mut [LogEntry]) {
@@ -1098,6 +1124,74 @@ mod tests {
         assert_eq!(batch.entries.len(), 1);
         assert_eq!(batch.entries[0].message, "First action.");
         assert_eq!(batch.parse_errors, 0);
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_numbers_logical_records_by_physical_span() {
+        // A Device Inventory logical record spans its header plus every
+        // continuation beneath it. Numbering one line per entry drifts below
+        // the real file position as soon as a record is multi-line, so the
+        // frontend would point "go to line" at the wrong place for a tailed
+        // file while pointing at the right one for the same file opened.
+        let path = unique_test_path("inventory-physical-line-span");
+        let content = concat!(
+            "7/30/2026 6:00:54 AM [Information] First record.\n", // physical line 1
+            "first continuation\n",                               // physical line 2
+            "7/30/2026 6:00:55 AM [Warning] Second record.\n",    // physical line 3
+            "second continuation\n",                              // physical line 4
+            "7/30/2026 6:00:56 AM [Error] Third record.\n",       // physical line 5
+        );
+        fs::write(&path, "").expect("should create empty harvester log");
+
+        let dialect = cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::Harvester;
+        let selection = ResolvedParser::intune_device_inventory(dialect);
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(file, "{content}").expect("should append harvester records");
+        drop(file);
+
+        let batch = reader.read_new_entries().expect("tail read should succeed");
+        assert_eq!(
+            batch.entries.len(),
+            2,
+            "the newest record stays pending during the debounce"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(275));
+        let flushed = reader
+            .read_new_entries()
+            .expect("quiescent tail read should flush");
+        assert_eq!(flushed.entries.len(), 1);
+
+        let tailed_lines: Vec<u32> = batch
+            .entries
+            .iter()
+            .chain(flushed.entries.iter())
+            .map(|entry| entry.line_number)
+            .collect();
+        assert_eq!(
+            tailed_lines,
+            vec![1, 3, 5],
+            "each record must be numbered at its own physical header line"
+        );
+
+        // The same reading the file gets when it is opened rather than tailed.
+        let (opened, _) = cmtraceopen_parser::intune::device::windows::inventory::parse_content(
+            &path.to_string_lossy(),
+            content,
+            dialect,
+        );
+        let opened_lines: Vec<u32> = opened.iter().map(|entry| entry.line_number).collect();
+        assert_eq!(
+            tailed_lines, opened_lines,
+            "tailing and opening must agree on line numbers"
+        );
 
         fs::remove_file(path).expect("should clean up temp file");
     }
