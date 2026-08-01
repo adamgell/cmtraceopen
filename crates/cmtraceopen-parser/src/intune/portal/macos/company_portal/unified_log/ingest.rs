@@ -169,8 +169,10 @@ fn parse_capture_json_object(mut root: Map<String, Value>) -> PortalUnifiedLogCa
         }
         Value::Null => {}
         other => {
+            // The envelope is wrong, not a record. No stream line was read, so
+            // charging this to `records_malformed` would invent a record.
             let excerpt = other.to_string();
-            builder.push_malformed(
+            builder.push_malformed_capture_metadata(
                 &excerpt,
                 format!(
                     "`records` is not an array (found {})",
@@ -221,6 +223,12 @@ impl CaptureSetBuilder {
         });
     }
 
+    /// Records a defect in one record-bearing stream line.
+    ///
+    /// Only for input that was read as a record. `records_malformed` is read
+    /// against `stream_lines` and `records_parsed` to answer how much of the
+    /// record stream survived, so a defect in the capture's own description must
+    /// use [`Self::push_malformed_capture_metadata`] instead.
     fn push_malformed(&mut self, raw: &str, detail: String) {
         self.stats.records_malformed += 1;
         self.push_coverage(
@@ -239,6 +247,18 @@ impl CaptureSetBuilder {
             detail,
             None,
             None,
+        );
+    }
+
+    /// Records a defect in the capture's own description, keeping the offending
+    /// value verbatim and leaving the record counters alone.
+    fn push_malformed_capture_metadata(&mut self, raw: &str, detail: String) {
+        self.push_coverage(
+            PortalCoverageStatus::UnknownSchema,
+            PortalCoverageScope::Capture,
+            detail,
+            None,
+            Some(PortalClassifiedString::sensitive(truncate_excerpt(raw))),
         );
     }
 
@@ -261,7 +281,8 @@ impl CaptureSetBuilder {
         // parsed as if it were v1. A value that does not fit is not version 1,
         // it is a version this build does not support, so it must stay `None`
         // and fall through to the unsupported path.
-        let schema_version = u64_field(&header, "schemaVersion").and_then(|v| u32::try_from(v).ok());
+        let schema_version =
+            u64_field(&header, "schemaVersion").and_then(|v| u32::try_from(v).ok());
 
         match schema_id.as_deref() {
             Some(id) if id == PORTAL_UNIFIED_LOG_SCHEMA_ID => {}
@@ -438,8 +459,11 @@ impl CaptureSetBuilder {
         };
         for entry in entries {
             let Value::Object(entry) = entry else {
+                // This value came from the capture header, not from a record
+                // line, so it is capture-scope coverage and must leave
+                // `records_malformed` untouched.
                 let excerpt = entry.to_string();
-                self.push_malformed(
+                self.push_malformed_capture_metadata(
                     &excerpt,
                     "capture coverage entry is not a JSON object".to_string(),
                 );

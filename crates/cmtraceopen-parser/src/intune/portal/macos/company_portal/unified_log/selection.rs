@@ -150,14 +150,23 @@ enum PortalIdentifierKind {
 fn explicit_ids(record: &PortalUnifiedLogRecord) -> Vec<(PortalIdentifierKind, &str)> {
     let activity = &record.activity;
     [
-        (PortalIdentifierKind::Activity, activity.activity_id.as_deref()),
+        (
+            PortalIdentifierKind::Activity,
+            activity.activity_id.as_deref(),
+        ),
         (
             PortalIdentifierKind::Activity,
             activity.parent_activity_id.as_deref(),
         ),
-        (PortalIdentifierKind::Signpost, activity.signpost_id.as_deref()),
+        (
+            PortalIdentifierKind::Signpost,
+            activity.signpost_id.as_deref(),
+        ),
         (PortalIdentifierKind::Trace, activity.trace_id.as_deref()),
-        (PortalIdentifierKind::Request, activity.request_id.as_deref()),
+        (
+            PortalIdentifierKind::Request,
+            activity.request_id.as_deref(),
+        ),
         (
             PortalIdentifierKind::Correlation,
             activity.correlation_id.as_deref(),

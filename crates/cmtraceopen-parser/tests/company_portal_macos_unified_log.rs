@@ -1096,7 +1096,10 @@ fn selection_and_category_tables_are_conservative() {
 #[test]
 fn non_ascii_identities_are_redacted() {
     let redacted = redact_text("signed in as jos\u{e9}.garc\u{ed}a@contoso.example");
-    assert!(!redacted.contains("garc"), "non-ASCII identity leaked: {redacted}");
+    assert!(
+        !redacted.contains("garc"),
+        "non-ASCII identity leaked: {redacted}"
+    );
     assert!(!redacted.contains("contoso.example"));
 }
 
@@ -1109,7 +1112,10 @@ fn json_shaped_labels_are_redacted() {
     let json = r#"{"process":"CompanyPortal","serialNumber":"C02XG2QQMD6M","access_token":"opaqueSessionValue123","tenantId":"4b2f9d61-1c53-4c58-8f1a-b0d3e1b5aa77"}"#;
     let redacted = redact_text(json);
 
-    assert!(!redacted.contains("C02XG2QQMD6M"), "serial leaked: {redacted}");
+    assert!(
+        !redacted.contains("C02XG2QQMD6M"),
+        "serial leaked: {redacted}"
+    );
     assert!(
         !redacted.contains("opaqueSessionValue123"),
         "token leaked: {redacted}"
@@ -1175,9 +1181,8 @@ fn out_of_range_schema_version_is_unsupported_not_wrapped() {
     // Build the header from the real constant. Hand-typing the schema id makes
     // the capture fail on the *id* branch before the version check ever runs,
     // so the test would still pass with the wrapping cast restored.
-    let header = format!(
-        r#"{{"schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":4294967297}}"#
-    );
+    let header =
+        format!(r#"{{"schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":4294967297}}"#);
     let capture = parse_capture_ndjson(&format!("{header}\n"));
 
     assert!(
@@ -1248,7 +1253,10 @@ fn user_path_redaction_stops_at_the_end_of_the_path() {
     let redacted = redact_text("opened /Users/bob/Library/Logs/x.log then continued");
     assert!(!redacted.contains("bob"));
     assert!(!redacted.contains("x.log"));
-    assert!(redacted.contains("then continued"), "over-captured: {redacted}");
+    assert!(
+        redacted.contains("then continued"),
+        "over-captured: {redacted}"
+    );
 }
 
 /// Rule 2 links a record to a selected one through an *explicit* identifier, not
@@ -1303,7 +1311,10 @@ fn a_record_mentioning_schema_id_is_not_mistaken_for_the_header() {
     let capture = parse_capture_ndjson(&format!("{header}\n{sneaky}\n{plain}\n"));
 
     assert!(capture.supported);
-    assert_eq!(capture.schema_id.as_deref(), Some(PORTAL_UNIFIED_LOG_SCHEMA_ID));
+    assert_eq!(
+        capture.schema_id.as_deref(),
+        Some(PORTAL_UNIFIED_LOG_SCHEMA_ID)
+    );
     assert_eq!(
         capture.stats.stream_lines, 2,
         "both records must stay in the stream"
@@ -1351,7 +1362,10 @@ fn a_malformed_capture_coverage_entry_is_not_a_malformed_record() {
     let entry = capture
         .coverage
         .iter()
-        .find(|c| c.detail.contains("capture coverage entry is not a JSON object"))
+        .find(|c| {
+            c.detail
+                .contains("capture coverage entry is not a JSON object")
+        })
         .expect("the unusable coverage entry is still reported, never dropped");
     assert_eq!(
         entry.scope,
@@ -1463,7 +1477,9 @@ fn fixture_capture_headers_cover_their_own_records() {
             };
             if let Some(start) = &start {
                 if stamp < *start {
-                    offenders.push(format!("{path}: record {stamp} precedes window.start {start}"));
+                    offenders.push(format!(
+                        "{path}: record {stamp} precedes window.start {start}"
+                    ));
                 }
             }
             if let Some(end) = &end {
