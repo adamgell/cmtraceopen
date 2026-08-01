@@ -153,9 +153,18 @@ fn synthetic_marker(
     artifact
 }
 
+/// Every assertion that a serialized projection did not leak an identity must
+/// casefold its input and route through this helper. A bare substring check
+/// against the original-case JSON has twice missed a form this covers: the
+/// JSON-escaped backslash root, and the forward-slash normalized root that
+/// carries no `RealUser` sentinel. Positive assertions may keep their exact
+/// case, since they pin what the projection must reproduce verbatim.
 fn serialized_json_contains_windows_user_root(serialized_casefolded: &str) -> bool {
-    // Match both the JSON-escaped backslash form and the forward-slash
-    // normalized form so a normalized leak without a sentinel is caught.
+    debug_assert_eq!(
+        serialized_casefolded,
+        serialized_casefolded.to_ascii_lowercase(),
+        "caller must casefold before probing for a Windows user root"
+    );
     serialized_casefolded.contains(r"c:\\users") || serialized_casefolded.contains("c:/users")
 }
 
@@ -1101,11 +1110,19 @@ fn unsupported_physical_artifacts_retain_safe_provenance_without_raw_host_or_pat
     })
     .expect("unknown physical artifact remains representable");
     let serialized = serde_json::to_string(&intake).expect("intake JSON");
+    let serialized_casefolded = serialized.to_ascii_lowercase();
 
+    // The positive assertions deliberately keep the original case: the
+    // projection must reproduce the declared basename exactly. Every leak
+    // assertion below is casefolded instead, so a projection that
+    // normalized case could not smuggle an identity past this site.
     assert!(serialized.contains("synthetic-custom"));
     assert!(serialized.contains("evidence/unknown/CustomVendorHook.log"));
-    assert!(!serialized.contains("RealUser"));
-    assert!(!serialized.contains("real-user-host"));
+    assert!(!serialized_casefolded.contains("realuser"));
+    assert!(!serialized_casefolded.contains("real-user-host"));
+    assert!(!serialized_json_contains_windows_user_root(
+        &serialized_casefolded
+    ));
 }
 
 #[test]
