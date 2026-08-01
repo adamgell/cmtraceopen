@@ -88,9 +88,11 @@ fi
 # bundle level, so a bundle-less build has nothing to sign and would
 # otherwise exit 0 having produced no distributable artifact.
 # --debug and --target/-t decide where Tauri writes the bundle, which the
-# post-build validation below needs in order to find it.
+# post-build validation below needs in order to find it. --bundles/-b decides
+# whether a DMG is among the expected deliverables.
 BUILD_PROFILE="release"
 BUILD_TARGET=""
+BUILD_BUNDLES=""
 PREV_ARG=""
 for arg in "$@"; do
     case "${arg}" in
@@ -105,14 +107,29 @@ for arg in "$@"; do
         --target=*)
             BUILD_TARGET="${arg#--target=}"
             ;;
+        --bundles=*)
+            BUILD_BUNDLES="${arg#--bundles=}"
+            ;;
         *)
             if [[ "${PREV_ARG}" == "--target" || "${PREV_ARG}" == "-t" ]]; then
                 BUILD_TARGET="${arg}"
+            elif [[ "${PREV_ARG}" == "--bundles" || "${PREV_ARG}" == "-b" ]]; then
+                BUILD_BUNDLES="${arg}"
             fi
             ;;
     esac
     PREV_ARG="${arg}"
 done
+
+# A DMG is expected unless the caller restricted --bundles to a list without
+# one. Tauri accepts the list space- or comma-separated.
+DMG_EXPECTED="true"
+if [[ -n "${BUILD_BUNDLES}" ]]; then
+    case ",${BUILD_BUNDLES//[[:space:]]/,}," in
+        *,dmg,*) DMG_EXPECTED="true" ;;
+        *) DMG_EXPECTED="false" ;;
+    esac
+fi
 
 # ── Build the --config overlay JSON ────────────────────────────────────────
 # Built with node rather than ad-hoc string concat so identity values
@@ -127,7 +144,12 @@ CONFIG_OVERLAY=$(
 
 # ── Write config overlay to a temp file ────────────────────────────────────
 # `tauri build --config` expects a file path, not an inline JSON string.
-CONFIG_FILE=$(mktemp "${TMPDIR:-/tmp}/cmtrace_tauri_conf_XXXXXX.json")
+# BSD mktemp only substitutes a *trailing* run of Xs, so a template ending in
+# `.json` was left completely literal: every run produced the same predictable
+# path instead of a unique one. A private temp directory keeps the .json
+# extension while actually being unique.
+CONFIG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cmtrace_tauri_conf_XXXXXX")
+CONFIG_FILE="${CONFIG_DIR}/config.json"
 printf '%s' "${CONFIG_OVERLAY}" > "${CONFIG_FILE}"
 
 # ── Echo plan ──────────────────────────────────────────────────────────────
@@ -152,7 +174,7 @@ echo "────────────────────────�
 # *which* failure it is looking at.
 BUILD_STAMP=$(mktemp "${TMPDIR:-/tmp}/cmtrace_build_stamp_XXXXXX")
 BUILD_LOG=$(mktemp "${TMPDIR:-/tmp}/cmtrace_build_log_XXXXXX")
-trap 'rm -f "${CONFIG_FILE}" "${BUILD_STAMP}" "${BUILD_LOG}"' EXIT
+trap 'rm -rf "${CONFIG_DIR}"; rm -f "${BUILD_STAMP}" "${BUILD_LOG}"' EXIT
 
 set +e
 npx tauri build --config "${CONFIG_FILE}" "$@" 2>&1 | tee "${BUILD_LOG}"
@@ -175,24 +197,43 @@ DMG_PATH=$(find "${BUNDLE_DIR}/dmg" -maxdepth 1 -name "*.dmg" \
 # This runs on the success path as well, because a zero exit from Tauri is
 # not by itself evidence that a *signed* .app was produced. Shipping an
 # unsigned or unnotarized build to direct download is the failure this
-# guards against. `codesign` alone is the right check when notarization was
-# not attempted, which is the documented signed-but-not-notarized fallback.
+# guards against.
+#
+# The DMG is checked as strictly as the .app, because it is the artifact
+# users actually download. Tauri's own DMG bundler signs it and staples the
+# notarization ticket to it (`codesign -s "${SIGNATURE}" "${DMG_DIR}/${DMG_NAME}"`
+# and `xcrun stapler staple "${DMG_DIR}/${DMG_NAME}"` in its bundle_dmg.sh),
+# so a DMG that fails these checks means that step did not happen.
+#
+# `stapler` is conditional on NOTARIZE_MODE because the documented
+# signed-but-not-notarized fallback has no ticket to validate.
+validate_one() {
+    local kind="$1" path="$2"
+    if ! codesign --verify --deep --strict "${path}" >/dev/null 2>&1; then
+        echo "error: ${kind} code signature missing or invalid: ${path}" >&2
+        return 1
+    fi
+    if [[ "${NOTARIZE_MODE}" != "none" ]] \
+        && ! xcrun stapler validate "${path}" >/dev/null 2>&1; then
+        echo "error: ${kind} notarization ticket missing or invalid: ${path}" >&2
+        return 1
+    fi
+    return 0
+}
+
 validate_deliverables() {
     if [[ -z "${APP_PATH}" ]]; then
         echo "error: no .app newer than the build stamp under ${BUNDLE_DIR}/macos." >&2
         return 1
     fi
-    if ! codesign --verify --deep --strict "${APP_PATH}" >/dev/null 2>&1; then
-        echo "error: code signature missing or invalid: ${APP_PATH}" >&2
-        return 1
-    fi
-    if [[ "${NOTARIZE_MODE}" != "none" ]] \
-        && ! xcrun stapler validate "${APP_PATH}" >/dev/null 2>&1; then
-        echo "error: notarization ticket missing or invalid: ${APP_PATH}" >&2
-        return 1
-    fi
-    if [[ -z "${DMG_PATH}" ]]; then
-        echo "warning: no .dmg newer than the build stamp under ${BUNDLE_DIR}/dmg." >&2
+    validate_one ".app" "${APP_PATH}" || return 1
+
+    if [[ "${DMG_EXPECTED}" == "true" ]]; then
+        if [[ -z "${DMG_PATH}" ]]; then
+            echo "error: no .dmg newer than the build stamp under ${BUNDLE_DIR}/dmg." >&2
+            return 1
+        fi
+        validate_one ".dmg" "${DMG_PATH}" || return 1
     fi
     return 0
 }
@@ -215,9 +256,9 @@ if [[ ${TAURI_EXIT} -ne 0 ]]; then
     validate_deliverables || exit "${TAURI_EXIT}"
 
     cat >&2 <<EOF
-warning: tauri build exited ${TAURI_EXIT}, but the signed .app is present and
-         its signature is valid. The exit code is from the updater-bundle
-         signing step (TAURI_SIGNING_PRIVATE_KEY is not set).
+warning: tauri build exited ${TAURI_EXIT}, but the expected deliverables are
+         present and their signatures validate. The exit code is from the
+         updater-bundle signing step (TAURI_SIGNING_PRIVATE_KEY is not set).
          Treating as success.
 EOF
 else
