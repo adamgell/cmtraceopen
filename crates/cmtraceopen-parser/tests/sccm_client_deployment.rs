@@ -12,8 +12,8 @@ use cmtraceopen_parser::sccm::{
     normalize_physical_lines, SccmArtifact, SccmConfidence, SccmCoverageState,
     SccmDeploymentClassification, SccmDeploymentConfidence, SccmDeploymentKeyConfidence,
     SccmDeploymentKeyProfileKind, SccmDeploymentObservationKeyConfidence, SccmDeploymentPhase,
-    SccmDeploymentState, SccmEvidence, SccmFindingClass, SccmNormalizedBundle, SccmRole,
-    SccmRotation, SCCM_DEPLOYMENT_TEST_PROFILE_ID,
+    SccmDeploymentProfileSelectionState, SccmDeploymentState, SccmEvidence, SccmFindingClass,
+    SccmNormalizedBundle, SccmRole, SccmRotation, SCCM_DEPLOYMENT_TEST_PROFILE_ID,
 };
 use serde_json::Value;
 
@@ -1803,4 +1803,35 @@ fn every_equally_terminal_record_is_cited_rather_than_one_elected() {
             "{label}: two conflicting exit codes cannot key the transaction"
         );
     }
+}
+
+fn selection_state_name(state: SccmDeploymentProfileSelectionState) -> &'static str {
+    match state {
+        SccmDeploymentProfileSelectionState::Selected => "selected",
+        SccmDeploymentProfileSelectionState::Unselected => "unselected",
+    }
+}
+
+#[test]
+fn the_extraction_profile_reports_its_selection_state() {
+    for scenario in SCENARIOS {
+        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let expected = expected(scenario);
+        assert_eq!(
+            selection_state_name(analysis.extraction_profile.selection_state),
+            expected["extractionProfile"]["selectionState"]
+                .as_str()
+                .expect("declared selection state"),
+            "{scenario}: extraction profile selection state"
+        );
+    }
+
+    let mut unprofiled = client_artifact("synthetic-intent", "AppIntentEval.log");
+    unprofiled.configmgr_version = Some("5.00.PROD.9128".to_owned());
+    let analysis = analyze_client_deployment(&bundle_from(vec![(unprofiled, intent_content())]));
+    assert_eq!(
+        selection_state_name(analysis.extraction_profile.selection_state),
+        "unselected",
+        "no client source declares the profiled version"
+    );
 }
