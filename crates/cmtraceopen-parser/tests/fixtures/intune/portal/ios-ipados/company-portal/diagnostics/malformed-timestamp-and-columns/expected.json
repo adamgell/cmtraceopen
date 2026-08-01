@@ -1,0 +1,361 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "console-malformed-rows",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 4,
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 2,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 4,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    },
+    {
+      "artifactId": "console-unreadable",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 2,
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 2,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 2,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "parseFailed",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    }
+  ],
+  "assertions": [
+    "a row with a date-shaped but unparsable timestamp is malformed, not continuation text",
+    "a row short of its own header's columns is malformed and keeps the values it did carry",
+    "a malformed row never becomes a failure finding, however its Type column reads",
+    "an export whose every row fails to parse reports parseFailed coverage"
+  ],
+  "coverage": [
+    {
+      "artifactId": "console-malformed-rows",
+      "detail": null,
+      "family": "companyPortalIosConsole",
+      "status": "available"
+    },
+    {
+      "artifactId": "console-unreadable",
+      "detail": "The layout resolved but no record could be read from it.",
+      "family": "companyPortalIosConsole",
+      "status": "parseFailed"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "console-unreadable"
+      ],
+      "evidence": [],
+      "findingId": "console-export-unreadable",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-malformed-rows:r3",
+          "sourceArtifactId": "console-malformed-rows"
+        },
+        {
+          "evidenceId": "console-malformed-rows:r4",
+          "sourceArtifactId": "console-malformed-rows"
+        },
+        {
+          "evidenceId": "console-unreadable:r1",
+          "sourceArtifactId": "console-unreadable"
+        },
+        {
+          "evidenceId": "console-unreadable:r2",
+          "sourceArtifactId": "console-unreadable"
+        }
+      ],
+      "findingId": "console-records-malformed",
+      "severity": "warning"
+    },
+    {
+      "confidence": "low",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-malformed-rows:r1",
+          "sourceArtifactId": "console-malformed-rows"
+        },
+        {
+          "evidenceId": "console-malformed-rows:r2",
+          "sourceArtifactId": "console-malformed-rows"
+        },
+        {
+          "evidenceId": "console-malformed-rows:r3",
+          "sourceArtifactId": "console-malformed-rows"
+        },
+        {
+          "evidenceId": "console-malformed-rows:r4",
+          "sourceArtifactId": "console-malformed-rows"
+        },
+        {
+          "evidenceId": "console-unreadable:r1",
+          "sourceArtifactId": "console-unreadable"
+        },
+        {
+          "evidenceId": "console-unreadable:r2",
+          "sourceArtifactId": "console-unreadable"
+        }
+      ],
+      "findingId": "console-app-version-unknown",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-malformed-rows:r1",
+          "sourceArtifactId": "console-malformed-rows"
+        },
+        {
+          "evidenceId": "console-malformed-rows:r4",
+          "sourceArtifactId": "console-malformed-rows"
+        },
+        {
+          "evidenceId": "console-unreadable:r1",
+          "sourceArtifactId": "console-unreadable"
+        },
+        {
+          "evidenceId": "console-unreadable:r2",
+          "sourceArtifactId": "console-unreadable"
+        }
+      ],
+      "findingId": "console-capture-window-is-partial",
+      "severity": "info"
+    }
+  ],
+  "records": [
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Sync",
+      "defects": [],
+      "evidenceId": "console-malformed-rows:r1",
+      "lineNumber": 3,
+      "message": "Device check-in started",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:50.481293Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 1,
+      "semantic": "syncCompliance",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:50.481293-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Apps",
+      "defects": [],
+      "evidenceId": "console-malformed-rows:r2",
+      "lineNumber": 4,
+      "message": "App catalog refreshed",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "normalizedUtc": "2026-03-12T17:15:51.100000Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 2,
+      "semantic": "appDeviceAction",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:51.100000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Sync",
+      "defects": [
+        "unparsableTimestamp"
+      ],
+      "evidenceId": "console-malformed-rows:r3",
+      "lineNumber": 5,
+      "message": "Row with an impossible calendar date",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": null,
+      "parseState": "malformed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 3,
+      "semantic": "syncCompliance",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "invalid",
+      "timestampRaw": "2026-13-45 99:99:99.000000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": null,
+      "defects": [
+        "missingColumns"
+      ],
+      "evidenceId": "console-malformed-rows:r4",
+      "lineNumber": 6,
+      "message": "",
+      "messageLineCount": 1,
+      "messageType": "error",
+      "normalizedUtc": "2026-03-12T17:15:52.200000Z",
+      "parseState": "malformed",
+      "process": "CompanyPortal",
+      "processId": null,
+      "recordNumber": 4,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process"
+      ],
+      "subsystem": null,
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:52.200000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "cat",
+      "defects": [
+        "unparsableTimestamp"
+      ],
+      "evidenceId": "console-unreadable:r1",
+      "lineNumber": 3,
+      "message": "one",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": null,
+      "parseState": "malformed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 1,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process"
+      ],
+      "subsystem": "sub",
+      "timestampKind": "invalid",
+      "timestampRaw": "2026-13-45 99:99:99.000000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "cat",
+      "defects": [
+        "unparsableTimestamp"
+      ],
+      "evidenceId": "console-unreadable:r2",
+      "lineNumber": 4,
+      "message": "two",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": null,
+      "parseState": "malformed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 2,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process"
+      ],
+      "subsystem": "sub",
+      "timestampKind": "invalid",
+      "timestampRaw": "2026-99-99 10:15:22.000000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    }
+  ],
+  "scenario": "malformed-timestamp-and-columns",
+  "totals": {
+    "artifactCount": 2,
+    "companyPortalRecordCount": 6,
+    "malformedRecordCount": 4,
+    "offsetlessRecordCount": 0,
+    "recordCount": 6
+  },
+  "workload": "portal/ios-ipados/company-portal/diagnostics"
+}

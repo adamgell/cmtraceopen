@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "supported-console-export",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "The documented Console-to-plain-text workflow: an English tab-delimited export with a header row, Company Portal records, and one unrelated process.",
+  "artifacts": [
+    {
+      "artifactId": "console-en-us",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal-console.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/CompanyPortal-console.log",
+      "relativePath": "evidence/console-en-us/current/CompanyPortal-console.log",
+      "bytesCopied": 1043,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

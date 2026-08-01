@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "truncated-first-and-last-record",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "A capped capture: the copied selection began inside one record and ended inside another. Both fragments are kept and flagged, and the leading fragment is attributed to no process at all.",
+  "artifacts": [
+    {
+      "artifactId": "console-capped",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "capped",
+      "encoding": "utf-8",
+      "originalBasename": "console-capped.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-capped.log",
+      "relativePath": "evidence/console-capped/current/console-capped.log",
+      "bytesCopied": 592,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      }
+    }
+  ]
+}

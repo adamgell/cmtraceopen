@@ -1,0 +1,194 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "console-no-offset",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 2,
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 3,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 1
+    }
+  ],
+  "assertions": [
+    "a bare wall-clock timestamp is reported as local and never normalized to UTC",
+    "the raw timestamp text is retained so the omission stays auditable",
+    "the missing offset is surfaced as a finding, because it bounds any ordering against service logs"
+  ],
+  "coverage": [
+    {
+      "artifactId": "console-no-offset",
+      "detail": null,
+      "family": "companyPortalIosConsole",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-no-offset:r1",
+          "sourceArtifactId": "console-no-offset"
+        },
+        {
+          "evidenceId": "console-no-offset:r2",
+          "sourceArtifactId": "console-no-offset"
+        },
+        {
+          "evidenceId": "console-no-offset:r3",
+          "sourceArtifactId": "console-no-offset"
+        }
+      ],
+      "findingId": "console-timestamps-have-no-offset",
+      "severity": "warning"
+    },
+    {
+      "confidence": "low",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-no-offset:r1",
+          "sourceArtifactId": "console-no-offset"
+        },
+        {
+          "evidenceId": "console-no-offset:r2",
+          "sourceArtifactId": "console-no-offset"
+        }
+      ],
+      "findingId": "console-app-version-unknown",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-no-offset:r1",
+          "sourceArtifactId": "console-no-offset"
+        },
+        {
+          "evidenceId": "console-no-offset:r3",
+          "sourceArtifactId": "console-no-offset"
+        }
+      ],
+      "findingId": "console-capture-window-is-partial",
+      "severity": "info"
+    }
+  ],
+  "records": [
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Sync",
+      "defects": [],
+      "evidenceId": "console-no-offset:r1",
+      "lineNumber": 3,
+      "message": "Device check-in started",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": null,
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 1,
+      "semantic": "syncCompliance",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "local",
+      "timestampRaw": "2026-03-12 10:15:22.481293",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Apps",
+      "defects": [],
+      "evidenceId": "console-no-offset:r2",
+      "lineNumber": 4,
+      "message": "App catalog refreshed",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "normalizedUtc": null,
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 2,
+      "semantic": "appDeviceAction",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "local",
+      "timestampRaw": "2026-03-12 10:15:23.100000",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Default",
+      "defects": [],
+      "evidenceId": "console-no-offset:r3",
+      "lineNumber": 5,
+      "message": "Scene activation",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": null,
+      "parseState": "parsed",
+      "process": "SpringBoard",
+      "processId": 60,
+      "recordNumber": 3,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "unrelated",
+      "sourceSignals": [],
+      "subsystem": "com.apple.springboard",
+      "timestampKind": "local",
+      "timestampRaw": "2026-03-12 10:15:24.200000",
+      "truncated": false,
+      "unmodeledColumns": []
+    }
+  ],
+  "scenario": "missing-timezone",
+  "totals": {
+    "artifactCount": 1,
+    "companyPortalRecordCount": 2,
+    "malformedRecordCount": 0,
+    "offsetlessRecordCount": 3,
+    "recordCount": 3
+  },
+  "workload": "portal/ios-ipados/company-portal/diagnostics"
+}

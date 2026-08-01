@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "locale-layout-variant",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "A German Console export: localized column labels, localized message-type labels, and day-first dates with a comma fraction. The layout binds all three, so 12.03.2026 is never read as a month-first date.",
+  "artifacts": [
+    {
+      "artifactId": "console-de-de",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal-console-de.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/CompanyPortal-console-de.log",
+      "relativePath": "evidence/console-de-de/current/CompanyPortal-console-de.log",
+      "bytesCopied": 741,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

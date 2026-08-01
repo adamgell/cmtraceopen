@@ -1,0 +1,6 @@
+# SYNTHETIC FIXTURE: generated macOS Console export. No real device, user, or tenant data.
+Timestamp	Type	Process	PID	TID	Activity	Subsystem	Category	Message
+2026-03-12 10:15:22.481293-0700	Default	CompanyPortal	418	0x1f4a	0x1a2b	com.microsoft.CompanyPortal	Enrollment	Enrollment session started
+2026-03-12 10:15:22.481293-0700	Default	CompanyPortal	418	0x2200	0x3c4d	com.microsoft.intune.mam.policy	Diagnostics	Policy evaluation started
+2026-03-12 10:15:22.481293-0700	Info	SpringBoard	60	0x220	0x5e6f	com.apple.springboard	Default	Scene lifecycle event
+2026-03-12 10:15:22.481293-0700	Default	mDNSResponder	120	0x310	0	com.apple.mDNSResponder	Default	Query started

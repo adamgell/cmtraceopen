@@ -1,0 +1,55 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "not-a-console-export",
+      "columns": [],
+      "companyPortalRecordCount": 0,
+      "layout": "unresolved",
+      "layoutConfidence": "none",
+      "layoutRefusal": "notAConsoleExport",
+      "malformedRecordCount": 0,
+      "preambleLineCount": 0,
+      "recordCapReached": false,
+      "recordCount": 0,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "unsupported",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    }
+  ],
+  "assertions": [
+    "a file with no Console column layout is refused as unsupported",
+    "refusal produces no records and no Company Portal conclusions at all"
+  ],
+  "coverage": [
+    {
+      "artifactId": "not-a-console-export",
+      "detail": "The file is not a macOS Console plain-text export.",
+      "family": "companyPortalIosConsole",
+      "status": "unsupported"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "not-a-console-export"
+      ],
+      "evidence": [],
+      "findingId": "console-layout-unsupported",
+      "severity": "info"
+    }
+  ],
+  "records": [],
+  "scenario": "arbitrary-plain-log-negative",
+  "totals": {
+    "artifactCount": 1,
+    "companyPortalRecordCount": 0,
+    "malformedRecordCount": 0,
+    "offsetlessRecordCount": 0,
+    "recordCount": 0
+  },
+  "workload": "portal/ios-ipados/company-portal/diagnostics"
+}

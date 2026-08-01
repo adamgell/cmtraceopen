@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "missing-timezone",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "A Console export whose timestamp column carries no UTC offset. The records keep their raw local wall-clock text and are never normalized, because assuming UTC would shift them by the capturing Mac's timezone with no trace of the guess.",
+  "artifacts": [
+    {
+      "artifactId": "console-no-offset",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console-no-offset.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-no-offset.log",
+      "relativePath": "evidence/console-no-offset/current/console-no-offset.log",
+      "bytesCopied": 496,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

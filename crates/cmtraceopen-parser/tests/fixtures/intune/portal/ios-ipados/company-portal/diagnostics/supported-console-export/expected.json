@@ -1,0 +1,245 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "console-en-us",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 5,
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 6,
+      "reportedAppVersion": "5.2026.1",
+      "reportedOsVersion": "18.4",
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 1
+    }
+  ],
+  "assertions": [
+    "a header row resolves the layout, and the synthetic-fixture marker above it frames no record",
+    "the Company Portal subset is selected by process and subsystem, never by message text",
+    "a clean capture still reports that its window is partial"
+  ],
+  "coverage": [
+    {
+      "artifactId": "console-en-us",
+      "detail": null,
+      "family": "companyPortalIosConsole",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-en-us:r1",
+          "sourceArtifactId": "console-en-us"
+        },
+        {
+          "evidenceId": "console-en-us:r6",
+          "sourceArtifactId": "console-en-us"
+        }
+      ],
+      "findingId": "console-capture-window-is-partial",
+      "severity": "info"
+    }
+  ],
+  "records": [
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Lifecycle",
+      "defects": [],
+      "evidenceId": "console-en-us:r1",
+      "lineNumber": 3,
+      "message": "Company Portal 5.2026.1 on iOS 18.4 did finish launching",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:22.481293Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 1,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:22.481293-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Enrollment",
+      "defects": [],
+      "evidenceId": "console-en-us:r2",
+      "lineNumber": 4,
+      "message": "Enrollment session state moved to awaitingProfile",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "normalizedUtc": "2026-03-12T17:15:23.112004Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 2,
+      "semantic": "enrollmentProfile",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:23.112004-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Diagnostics",
+      "defects": [],
+      "evidenceId": "console-en-us:r3",
+      "lineNumber": 5,
+      "message": "Policy cache refreshed with 4 entries",
+      "messageLineCount": 1,
+      "messageType": "debug",
+      "normalizedUtc": "2026-03-12T17:15:24.330871Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 3,
+      "semantic": "diagnostic",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.intune.mam.policy",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:24.330871-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Default",
+      "defects": [],
+      "evidenceId": "console-en-us:r4",
+      "lineNumber": 6,
+      "message": "Application state changed to background",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:25.440102Z",
+      "parseState": "parsed",
+      "process": "SpringBoard",
+      "processId": 60,
+      "recordNumber": 4,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "unrelated",
+      "sourceSignals": [],
+      "subsystem": "com.apple.springboard",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:25.440102-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Sync",
+      "defects": [],
+      "evidenceId": "console-en-us:r5",
+      "lineNumber": 7,
+      "message": "Device check-in completed",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "normalizedUtc": "2026-03-12T17:15:26.551900Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 5,
+      "semantic": "syncCompliance",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:26.551900-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Apps",
+      "defects": [],
+      "evidenceId": "console-en-us:r6",
+      "lineNumber": 8,
+      "message": "App install request accepted for bundle com.contoso.lineofbusiness",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:27.662001Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 6,
+      "semantic": "appDeviceAction",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:27.662001-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    }
+  ],
+  "scenario": "supported-console-export",
+  "totals": {
+    "artifactCount": 1,
+    "companyPortalRecordCount": 5,
+    "malformedRecordCount": 0,
+    "offsetlessRecordCount": 0,
+    "recordCount": 6
+  },
+  "workload": "portal/ios-ipados/company-portal/diagnostics"
+}

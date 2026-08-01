@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unknown-app-and-os-version",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "An export from an app and OS release this build predates: an unknown message type, an unknown subsystem beneath a known prefix, an unmodeled column, and a version string no rule understands. All are carried verbatim rather than rejected.",
+  "artifacts": [
+    {
+      "artifactId": "console-future",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console-future.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-future.log",
+      "relativePath": "evidence/console-future/current/console-future.log",
+      "bytesCopied": 669,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

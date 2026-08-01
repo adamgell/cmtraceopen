@@ -1,0 +1,9 @@
+# SYNTHETIC FIXTURE: generated macOS Console export. No real device, user, or tenant data.
+2026-03-12 10:15:01.481293-0700	Default	SpringBoard	60	0x220	0	com.apple.springboard	Default	Scene activation for com.apple.mobilesafari
+2026-03-12 10:15:02.100000-0700	Info	mDNSResponder	120	0x310	0	com.apple.mDNSResponder	Default	Interface en0 registered
+2026-03-12 10:15:03.200000-0700	Default	assistantd	210	0x410	0	com.apple.siri	Default	Suggestion source refreshed for Intune Company Portal
+2026-03-12 10:15:04.300000-0700	Default	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Sync	Device check-in started
+2026-03-12 10:15:05.400000-0700	Debug	dasd	95	0x510	0	com.apple.duetactivityscheduler	Default	Rescheduled activity com.microsoft.CompanyPortal.refresh
+2026-03-12 10:15:06.500000-0700	Info	symptomsd	88	0x610	0	com.apple.symptomsd	Default	Network quality nominal
+2026-03-12 10:15:07.600000-0700	Default	CompanyPortal	418	0x1f4a	0	com.microsoft.intune.mam.policy	Diagnostics	Policy cache refreshed with 2 entries
+2026-03-12 10:15:08.700000-0700	Default	backboardd	44	0x710	0	com.apple.backboardd	Default	Display state changed

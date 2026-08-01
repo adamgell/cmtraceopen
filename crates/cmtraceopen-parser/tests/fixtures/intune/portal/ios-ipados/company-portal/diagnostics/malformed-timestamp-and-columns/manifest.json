@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "malformed-timestamp-and-columns",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "One export mixing sound rows with an impossible calendar date and a row short of the columns its own header declares, beside a second export whose every row is unreadable.",
+  "artifacts": [
+    {
+      "artifactId": "console-malformed-rows",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console-mixed.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-mixed.log",
+      "relativePath": "evidence/console-malformed-rows/current/console-mixed.log",
+      "bytesCopied": 590,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "console-unreadable",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "originalBasename": "console-unreadable.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-unreadable.log",
+      "relativePath": "evidence/console-unreadable/current/console-unreadable.log",
+      "bytesCopied": 310,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

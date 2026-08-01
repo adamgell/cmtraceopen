@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "arbitrary-plain-log-negative",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "An ordinary bracketed application log that happens to mention the Company Portal. It carries no Console column layout, so it is refused as unsupported rather than read as a Console export with invented columns.",
+  "artifacts": [
+    {
+      "artifactId": "not-a-console-export",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "deployment.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/deployment.log",
+      "relativePath": "evidence/not-a-console-export/current/deployment.log",
+      "bytesCopied": 333,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

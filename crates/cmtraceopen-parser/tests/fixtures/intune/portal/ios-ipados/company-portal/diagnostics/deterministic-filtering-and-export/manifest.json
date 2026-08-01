@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "deterministic-filtering-and-export",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "Two rotations of one capture. Analyzing them twice must produce byte-identical output, and the Company Portal subset must be selected by source classification alone, in a stable order.",
+  "artifacts": [
+    {
+      "artifactId": "console-rotation-current",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console.log",
+      "relativePath": "evidence/console-rotation-current/current/console.log",
+      "bytesCopied": 553,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "console-rotation-archive",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console-1.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-1.log",
+      "relativePath": "evidence/console-rotation-archive/archive-1/console-1.log",
+      "bytesCopied": 400,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "archive-1",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

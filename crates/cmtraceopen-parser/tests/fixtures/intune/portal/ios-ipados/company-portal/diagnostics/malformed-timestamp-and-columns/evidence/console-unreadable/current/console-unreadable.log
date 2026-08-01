@@ -1,0 +1,4 @@
+# SYNTHETIC FIXTURE: generated macOS Console export. No real device, user, or tenant data.
+Timestamp	Type	Process	PID	TID	Activity	Subsystem	Category	Message
+2026-13-45 99:99:99.000000-0700	Default	CompanyPortal	418	0x1	0	sub	cat	one
+2026-99-99 10:15:22.000000-0700	Default	CompanyPortal	418	0x1	0	sub	cat	two

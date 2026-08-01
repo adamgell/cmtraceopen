@@ -1,0 +1,375 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "console-rotation-current",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 2,
+      "fileName": "console.log",
+      "filePath": "SYNTHETIC://console-export/console.log",
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 3,
+      "reportedAppVersion": "5.2026.1",
+      "reportedOsVersion": "18.4",
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 1
+    },
+    {
+      "artifactId": "console-rotation-archive",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 1,
+      "fileName": "console-1.log",
+      "filePath": "SYNTHETIC://console-export/console-1.log",
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 2,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 1
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "console-rotation-current",
+      "detail": null,
+      "evidence": [],
+      "family": "companyPortalIosConsole",
+      "observedAtUtc": "2026-07-31T00:00:00Z",
+      "status": "available"
+    },
+    {
+      "artifactId": "console-rotation-archive",
+      "detail": null,
+      "evidence": [],
+      "family": "companyPortalIosConsole",
+      "observedAtUtc": "2026-07-31T00:00:00Z",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "low",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-rotation-archive:r1",
+          "sourceArtifactId": "console-rotation-archive"
+        }
+      ],
+      "findingId": "console-app-version-unknown",
+      "recommendedChecks": [
+        "Read the installed Company Portal and iOS/iPadOS versions from the device and record them alongside this capture."
+      ],
+      "severity": "info",
+      "summary": "No record in the recorded window announced a Company Portal version, so nothing here can be read as version-specific behavior.",
+      "title": "The Company Portal version is not stated in the capture"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-rotation-current:r1",
+          "sourceArtifactId": "console-rotation-current"
+        },
+        {
+          "evidenceId": "console-rotation-current:r3",
+          "sourceArtifactId": "console-rotation-current"
+        },
+        {
+          "evidenceId": "console-rotation-archive:r1",
+          "sourceArtifactId": "console-rotation-archive"
+        },
+        {
+          "evidenceId": "console-rotation-archive:r2",
+          "sourceArtifactId": "console-rotation-archive"
+        }
+      ],
+      "findingId": "console-capture-window-is-partial",
+      "recommendedChecks": [
+        "Compare the window's first and last cited records against when the problem was reproduced."
+      ],
+      "severity": "info",
+      "summary": "5 record(s) were read, of which 3 are verified Company Portal records. The capture holds only what Console was showing while the operator recorded, so nothing missing from it is evidence of absence.",
+      "title": "This evidence covers only the recorded reproduction window"
+    }
+  ],
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "records": [
+    {
+      "activityId": null,
+      "category": "Lifecycle",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-rotation-current:r1",
+          "sourceArtifactId": "console-rotation-current"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console.log",
+          "lineNumber": 3,
+          "recordNumber": 1,
+          "registry": null,
+          "sourceArtifactId": "console-rotation-current",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "public",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:22.481293Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:22.481293-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "Company Portal 5.2026.1 on iOS 18.4 did finish launching",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "redactions": [],
+      "semantic": null,
+      "semanticSource": null,
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "threadId": "0x1f4a",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "activityId": null,
+      "category": "Default",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-rotation-current:r2",
+          "sourceArtifactId": "console-rotation-current"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console.log",
+          "lineNumber": 4,
+          "recordNumber": 2,
+          "registry": null,
+          "sourceArtifactId": "console-rotation-current",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "public",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:23.100000Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:23.100000-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "Scene activation",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "process": "SpringBoard",
+      "processId": 60,
+      "redactions": [],
+      "semantic": null,
+      "semanticSource": null,
+      "sourceClass": "unrelated",
+      "sourceSignals": [],
+      "subsystem": "com.apple.springboard",
+      "threadId": "0x220",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "activityId": null,
+      "category": "Sync",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-rotation-current:r3",
+          "sourceArtifactId": "console-rotation-current"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console.log",
+          "lineNumber": 5,
+          "recordNumber": 3,
+          "registry": null,
+          "sourceArtifactId": "console-rotation-current",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "public",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:24.200000Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:24.200000-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "Device check-in completed",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "redactions": [],
+      "semantic": "syncCompliance",
+      "semanticSource": "category",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "threadId": "0x1f4a",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "activityId": null,
+      "category": "Apps",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-rotation-archive:r1",
+          "sourceArtifactId": "console-rotation-archive"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console-1.log",
+          "lineNumber": 3,
+          "recordNumber": 1,
+          "registry": null,
+          "sourceArtifactId": "console-rotation-archive",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "public",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:02.300000Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:02.300000-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "App catalog refreshed",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "redactions": [],
+      "semantic": "appDeviceAction",
+      "semanticSource": "category",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "threadId": "0x1f4a",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "activityId": null,
+      "category": "Default",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-rotation-archive:r2",
+          "sourceArtifactId": "console-rotation-archive"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console-1.log",
+          "lineNumber": 4,
+          "recordNumber": 2,
+          "registry": null,
+          "sourceArtifactId": "console-rotation-archive",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "public",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:03.400000Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:03.400000-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "Interface en0 registered",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "process": "mDNSResponder",
+      "processId": 120,
+      "redactions": [],
+      "semantic": null,
+      "semanticSource": null,
+      "sourceClass": "unrelated",
+      "sourceSignals": [],
+      "subsystem": "com.apple.mDNSResponder",
+      "threadId": "0x310",
+      "truncated": false,
+      "unmodeledColumns": []
+    }
+  ],
+  "schemaVersion": 1,
+  "totals": {
+    "artifactCount": 2,
+    "companyPortalRecordCount": 3,
+    "malformedRecordCount": 0,
+    "offsetlessRecordCount": 0,
+    "recordCount": 5
+  }
+}

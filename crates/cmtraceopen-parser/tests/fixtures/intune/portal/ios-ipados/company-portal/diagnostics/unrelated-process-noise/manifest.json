@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unrelated-process-noise",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "A header-less Console copy dominated by unrelated processes. Two rows mention Intune or a Company Portal identifier in message text only, and must never be classified as Company Portal evidence.",
+  "artifacts": [
+    {
+      "artifactId": "console-noise",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console-copy.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-copy.log",
+      "relativePath": "evidence/console-noise/current/console-copy.log",
+      "bytesCopied": 1135,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

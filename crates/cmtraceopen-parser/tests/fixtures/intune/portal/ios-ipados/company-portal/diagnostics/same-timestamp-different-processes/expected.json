@@ -1,0 +1,200 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "console-collision",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 2,
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 4,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 2
+    }
+  ],
+  "assertions": [
+    "records sharing one instant are never merged",
+    "capture order survives normalization",
+    "Console's literal 0 in the activity column is absence, not an identity"
+  ],
+  "coverage": [
+    {
+      "artifactId": "console-collision",
+      "detail": null,
+      "family": "companyPortalIosConsole",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "low",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-collision:r1",
+          "sourceArtifactId": "console-collision"
+        },
+        {
+          "evidenceId": "console-collision:r2",
+          "sourceArtifactId": "console-collision"
+        }
+      ],
+      "findingId": "console-app-version-unknown",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-collision:r1",
+          "sourceArtifactId": "console-collision"
+        },
+        {
+          "evidenceId": "console-collision:r4",
+          "sourceArtifactId": "console-collision"
+        }
+      ],
+      "findingId": "console-capture-window-is-partial",
+      "severity": "info"
+    }
+  ],
+  "records": [
+    {
+      "accessState": "available",
+      "activityId": "0x1a2b",
+      "category": "Enrollment",
+      "defects": [],
+      "evidenceId": "console-collision:r1",
+      "lineNumber": 3,
+      "message": "Enrollment session started",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:22.481293Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 1,
+      "semantic": "enrollmentProfile",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:22.481293-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": "0x3c4d",
+      "category": "Diagnostics",
+      "defects": [],
+      "evidenceId": "console-collision:r2",
+      "lineNumber": 4,
+      "message": "Policy evaluation started",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:22.481293Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 2,
+      "semantic": "diagnostic",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.intune.mam.policy",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:22.481293-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": "0x5e6f",
+      "category": "Default",
+      "defects": [],
+      "evidenceId": "console-collision:r3",
+      "lineNumber": 5,
+      "message": "Scene lifecycle event",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "normalizedUtc": "2026-03-12T17:15:22.481293Z",
+      "parseState": "parsed",
+      "process": "SpringBoard",
+      "processId": 60,
+      "recordNumber": 3,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "unrelated",
+      "sourceSignals": [],
+      "subsystem": "com.apple.springboard",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:22.481293-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Default",
+      "defects": [],
+      "evidenceId": "console-collision:r4",
+      "lineNumber": 6,
+      "message": "Query started",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:22.481293Z",
+      "parseState": "parsed",
+      "process": "mDNSResponder",
+      "processId": 120,
+      "recordNumber": 4,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "unrelated",
+      "sourceSignals": [],
+      "subsystem": "com.apple.mDNSResponder",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:22.481293-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    }
+  ],
+  "scenario": "same-timestamp-different-processes",
+  "totals": {
+    "artifactCount": 1,
+    "companyPortalRecordCount": 2,
+    "malformedRecordCount": 0,
+    "offsetlessRecordCount": 0,
+    "recordCount": 4
+  },
+  "workload": "portal/ios-ipados/company-portal/diagnostics"
+}

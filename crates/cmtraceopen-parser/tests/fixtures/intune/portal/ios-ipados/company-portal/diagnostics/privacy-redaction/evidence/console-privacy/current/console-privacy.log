@@ -1,0 +1,7 @@
+# SYNTHETIC FIXTURE: generated macOS Console export. No real device, user, or tenant data.
+Timestamp	Type	Process	PID	TID	Activity	Subsystem	Category	Message
+2026-03-12 10:15:22.481293-0700	Info	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Authentication	Interactive sign-in completed for synthetic.user@contoso.invalid in tenant 11111111-2222-4333-8444-555555555555
+2026-03-12 10:15:23.100000-0700	Debug	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Network	GET https://example.invalid/deviceManagement/managedDevices?tenantId=11111111-2222-4333-8444-555555555555&select=id with access_token=eyJhbGciOiJIUzI1NiJ9.c3ludGhldGljLXBheWxvYWQ.c2lnbmF0dXJl
+2026-03-12 10:15:24.200000-0700	Default	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Enrollment	Device 00008030-001C2D8A0EF8802E presented certificate -----BEGIN CERTIFICATE-----U1lOVEhFVElDLUNFUlRJRklDQVRF-----END CERTIFICATE-----
+2026-03-12 10:15:25.300000-0700	Info	CompanyPortal	418	0x1f4a	0	com.microsoft.intune.mam.policy	Diagnostics	Wrote diagnostic report to /var/mobile/Containers/Data/Application/report.txt for bundle com.microsoft.CompanyPortal
+2026-03-12 10:15:26.400000-0700	Default	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Sync	Check-in for tenant 11111111-2222-4333-8444-555555555555 completed

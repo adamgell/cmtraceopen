@@ -1,0 +1,76 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "uncollected-companion-artifacts",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "One export that was collected beside three that were not. Each uncollected artifact still produces a coverage entry, so a later finding can cite the gap instead of overclaiming.",
+  "artifacts": [
+    {
+      "artifactId": "console-collected",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console.log",
+      "relativePath": "evidence/console-collected/current/console.log",
+      "bytesCopied": 401,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "console-second-window",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "console-second-window.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": "The operator captured only one reproduction window."
+    },
+    {
+      "artifactId": "console-restricted",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "accessDenied",
+      "encoding": null,
+      "originalBasename": "console-restricted.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": "The export could not be read from the supplied bundle."
+    },
+    {
+      "artifactId": "console-skipped",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "skipped",
+      "encoding": null,
+      "originalBasename": "console-oversized.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": "The export exceeded the caller's import size budget."
+    }
+  ]
+}

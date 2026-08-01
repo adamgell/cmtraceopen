@@ -1,0 +1,388 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "console-privacy",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 5,
+      "fileName": "console-privacy.log",
+      "filePath": "SYNTHETIC://console-export/console-privacy.log",
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 5,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "console-privacy",
+      "detail": null,
+      "evidence": [],
+      "family": "companyPortalIosConsole",
+      "observedAtUtc": "2026-07-31T00:00:00Z",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "low",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-privacy:r1",
+          "sourceArtifactId": "console-privacy"
+        },
+        {
+          "evidenceId": "console-privacy:r2",
+          "sourceArtifactId": "console-privacy"
+        },
+        {
+          "evidenceId": "console-privacy:r3",
+          "sourceArtifactId": "console-privacy"
+        },
+        {
+          "evidenceId": "console-privacy:r4",
+          "sourceArtifactId": "console-privacy"
+        },
+        {
+          "evidenceId": "console-privacy:r5",
+          "sourceArtifactId": "console-privacy"
+        }
+      ],
+      "findingId": "console-app-version-unknown",
+      "recommendedChecks": [
+        "Read the installed Company Portal and iOS/iPadOS versions from the device and record them alongside this capture."
+      ],
+      "severity": "info",
+      "summary": "No record in the recorded window announced a Company Portal version, so nothing here can be read as version-specific behavior.",
+      "title": "The Company Portal version is not stated in the capture"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-privacy:r1",
+          "sourceArtifactId": "console-privacy"
+        },
+        {
+          "evidenceId": "console-privacy:r5",
+          "sourceArtifactId": "console-privacy"
+        }
+      ],
+      "findingId": "console-capture-window-is-partial",
+      "recommendedChecks": [
+        "Compare the window's first and last cited records against when the problem was reproduced."
+      ],
+      "severity": "info",
+      "summary": "5 record(s) were read, of which 5 are verified Company Portal records. The capture holds only what Console was showing while the operator recorded, so nothing missing from it is evidence of absence.",
+      "title": "This evidence covers only the recorded reproduction window"
+    }
+  ],
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "records": [
+    {
+      "activityId": null,
+      "category": "Authentication",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-privacy:r1",
+          "sourceArtifactId": "console-privacy"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console-privacy.log",
+          "lineNumber": 3,
+          "recordNumber": 1,
+          "registry": null,
+          "sourceArtifactId": "console-privacy",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "sensitive",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:22.481293Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:22.481293-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "Interactive sign-in completed for [redacted:upn#1] in tenant [redacted:guid#1]",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "redactions": [
+        {
+          "count": 1,
+          "kind": "upn"
+        },
+        {
+          "count": 1,
+          "kind": "guid"
+        }
+      ],
+      "semantic": "signInAuth",
+      "semanticSource": "category",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "threadId": "0x1f4a",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "activityId": null,
+      "category": "Network",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-privacy:r2",
+          "sourceArtifactId": "console-privacy"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console-privacy.log",
+          "lineNumber": 4,
+          "recordNumber": 2,
+          "registry": null,
+          "sourceArtifactId": "console-privacy",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "restricted",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:23.100000Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:23.100000-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "GET https://example.invalid/deviceManagement/managedDevices?[redacted:query#1] with [redacted:secret#1]",
+      "messageLineCount": 1,
+      "messageType": "debug",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "redactions": [
+        {
+          "count": 1,
+          "kind": "secret"
+        },
+        {
+          "count": 1,
+          "kind": "url"
+        }
+      ],
+      "semantic": "networkService",
+      "semanticSource": "category",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "threadId": "0x1f4a",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "activityId": null,
+      "category": "Enrollment",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-privacy:r3",
+          "sourceArtifactId": "console-privacy"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console-privacy.log",
+          "lineNumber": 5,
+          "recordNumber": 3,
+          "registry": null,
+          "sourceArtifactId": "console-privacy",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "restricted",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:24.200000Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:24.200000-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "Device [redacted:deviceId#1] presented certificate [redacted:certificate#1]",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "redactions": [
+        {
+          "count": 1,
+          "kind": "deviceIdentifier"
+        },
+        {
+          "count": 1,
+          "kind": "certificate"
+        }
+      ],
+      "semantic": "enrollmentProfile",
+      "semanticSource": "category",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "threadId": "0x1f4a",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "activityId": null,
+      "category": "Diagnostics",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-privacy:r4",
+          "sourceArtifactId": "console-privacy"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console-privacy.log",
+          "lineNumber": 6,
+          "recordNumber": 4,
+          "registry": null,
+          "sourceArtifactId": "console-privacy",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "sensitive",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:25.300000Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:25.300000-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "Wrote diagnostic report to [redacted:path#1] for bundle com.microsoft.CompanyPortal",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "redactions": [
+        {
+          "count": 1,
+          "kind": "filePath"
+        }
+      ],
+      "semantic": "diagnostic",
+      "semanticSource": "category",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.intune.mam.policy",
+      "threadId": "0x1f4a",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "activityId": null,
+      "category": "Sync",
+      "context": {
+        "accessState": "available",
+        "evidenceRef": {
+          "evidenceId": "console-privacy:r5",
+          "sourceArtifactId": "console-privacy"
+        },
+        "observedAtUtc": "2026-07-31T00:00:00Z",
+        "parseState": "parsed",
+        "provenance": {
+          "event": null,
+          "filePath": "SYNTHETIC://console-export/console-privacy.log",
+          "lineNumber": 7,
+          "recordNumber": 5,
+          "registry": null,
+          "sourceArtifactId": "console-privacy",
+          "sourceKind": "plainTextLog"
+        },
+        "sensitivity": "sensitive",
+        "sourceTimestamp": {
+          "kind": "offset",
+          "normalizedUtc": "2026-03-12T17:15:26.400000Z",
+          "originalOffset": "-0700",
+          "rawText": "2026-03-12 10:15:26.400000-0700"
+        }
+      },
+      "defects": [],
+      "layout": "tabularEnUs",
+      "message": "Check-in for tenant [redacted:guid#1] completed",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "redactions": [
+        {
+          "count": 1,
+          "kind": "guid"
+        }
+      ],
+      "semantic": "syncCompliance",
+      "semanticSource": "category",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "threadId": "0x1f4a",
+      "truncated": false,
+      "unmodeledColumns": []
+    }
+  ],
+  "schemaVersion": 1,
+  "totals": {
+    "artifactCount": 1,
+    "companyPortalRecordCount": 5,
+    "malformedRecordCount": 0,
+    "offsetlessRecordCount": 0,
+    "recordCount": 5
+  }
+}

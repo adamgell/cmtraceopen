@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "privacy-redaction",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "Synthetic identity and secret material of every class the export projection must mask: a UPN, a tenant GUID repeated across records, an Apple device identifier, a certificate block, a token parameter, a URL query, and a device container path.",
+  "artifacts": [
+    {
+      "artifactId": "console-privacy",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console-privacy.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-privacy.log",
+      "relativePath": "evidence/console-privacy/current/console-privacy.log",
+      "bytesCopied": 1304,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

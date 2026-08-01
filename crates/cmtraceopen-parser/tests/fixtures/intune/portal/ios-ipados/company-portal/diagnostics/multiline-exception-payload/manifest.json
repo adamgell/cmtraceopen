@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "multiline-exception-payload",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "A multi-line Company Portal exception with a stack and a JSON payload. Continuation lines belong to the record above them, and the message ends at the next timestamped row.",
+  "artifacts": [
+    {
+      "artifactId": "console-multiline",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console-multiline.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-multiline.log",
+      "relativePath": "evidence/console-multiline/current/console-multiline.log",
+      "bytesCopied": 820,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

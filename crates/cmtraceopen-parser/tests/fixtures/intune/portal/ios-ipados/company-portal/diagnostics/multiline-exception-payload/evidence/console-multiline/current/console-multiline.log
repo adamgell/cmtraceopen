@@ -1,0 +1,12 @@
+# SYNTHETIC FIXTURE: generated macOS Console export. No real device, user, or tenant data.
+Timestamp	Type	Process	PID	TID	Activity	Subsystem	Category	Message
+2026-03-12 10:15:30.481293-0700	Default	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Sync	Device check-in started
+2026-03-12 10:15:31.100000-0700	Error	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Enrollment	Unhandled exception while applying the MDM profile
+    NSInvalidArgumentException: unexpected payload shape
+    0   CompanyPortal   0x0000000104ab12c0 -[EnrollmentSession apply:] + 128
+    1   CompanyPortal   0x0000000104ab0044 -[ProfileWorker run] + 64
+    payload = {
+      "profileState": "failed",
+      "attempt": 3
+    }
+2026-03-12 10:15:32.200000-0700	Info	SpringBoard	60	0x220	0	com.apple.springboard	Default	Scene activation

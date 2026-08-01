@@ -1,0 +1,231 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "console-collected",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 2,
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 2,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    },
+    {
+      "artifactId": "console-second-window",
+      "columns": [],
+      "companyPortalRecordCount": 0,
+      "layout": "unresolved",
+      "layoutConfidence": "none",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 0,
+      "recordCapReached": false,
+      "recordCount": 0,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "missing",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    },
+    {
+      "artifactId": "console-restricted",
+      "columns": [],
+      "companyPortalRecordCount": 0,
+      "layout": "unresolved",
+      "layoutConfidence": "none",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 0,
+      "recordCapReached": false,
+      "recordCount": 0,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "permissionDenied",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    },
+    {
+      "artifactId": "console-skipped",
+      "columns": [],
+      "companyPortalRecordCount": 0,
+      "layout": "unresolved",
+      "layoutConfidence": "none",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 0,
+      "recordCapReached": false,
+      "recordCount": 0,
+      "reportedAppVersion": null,
+      "reportedOsVersion": null,
+      "status": "skipped",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    }
+  ],
+  "assertions": [
+    "an uncollected artifact still produces a coverage entry",
+    "the coverage status mirrors why the artifact was not read",
+    "a finding may cite those gaps instead of overclaiming"
+  ],
+  "coverage": [
+    {
+      "artifactId": "console-collected",
+      "detail": null,
+      "family": "companyPortalIosConsole",
+      "status": "available"
+    },
+    {
+      "artifactId": "console-second-window",
+      "detail": "The operator captured only one reproduction window.",
+      "family": "companyPortalIosConsole",
+      "status": "missing"
+    },
+    {
+      "artifactId": "console-restricted",
+      "detail": "The export could not be read from the supplied bundle.",
+      "family": "companyPortalIosConsole",
+      "status": "permissionDenied"
+    },
+    {
+      "artifactId": "console-skipped",
+      "detail": "The export exceeded the caller's import size budget.",
+      "family": "companyPortalIosConsole",
+      "status": "skipped"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "console-second-window",
+        "console-restricted",
+        "console-skipped"
+      ],
+      "evidence": [],
+      "findingId": "console-artifact-not-collected",
+      "severity": "info"
+    },
+    {
+      "confidence": "low",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-collected:r1",
+          "sourceArtifactId": "console-collected"
+        },
+        {
+          "evidenceId": "console-collected:r2",
+          "sourceArtifactId": "console-collected"
+        }
+      ],
+      "findingId": "console-app-version-unknown",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-collected:r1",
+          "sourceArtifactId": "console-collected"
+        },
+        {
+          "evidenceId": "console-collected:r2",
+          "sourceArtifactId": "console-collected"
+        }
+      ],
+      "findingId": "console-capture-window-is-partial",
+      "severity": "info"
+    }
+  ],
+  "records": [
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Sync",
+      "defects": [],
+      "evidenceId": "console-collected:r1",
+      "lineNumber": 3,
+      "message": "Device check-in started",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:22.481293Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 1,
+      "semantic": "syncCompliance",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:22.481293-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Apps",
+      "defects": [],
+      "evidenceId": "console-collected:r2",
+      "lineNumber": 4,
+      "message": "App catalog refreshed",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "normalizedUtc": "2026-03-12T17:15:23.100000Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 2,
+      "semantic": "appDeviceAction",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:23.100000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    }
+  ],
+  "scenario": "uncollected-companion-artifacts",
+  "totals": {
+    "artifactCount": 4,
+    "companyPortalRecordCount": 2,
+    "malformedRecordCount": 0,
+    "offsetlessRecordCount": 0,
+    "recordCount": 2
+  },
+  "workload": "portal/ios-ipados/company-portal/diagnostics"
+}

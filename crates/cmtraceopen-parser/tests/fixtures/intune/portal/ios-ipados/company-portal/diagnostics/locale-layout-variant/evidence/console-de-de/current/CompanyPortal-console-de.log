@@ -1,0 +1,6 @@
+# SYNTHETIC FIXTURE: generated macOS Console export. No real device, user, or tenant data.
+Zeitpunkt	Typ	Prozess	PID	TID	Aktivität	Teilsystem	Kategorie	Nachricht
+12.03.2026 10:15:22,481293+0100	Standard	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Lifecycle	Company Portal 5.2026.1 on iOS 18.4 did finish launching
+12.03.2026 10:15:23,100000+0100	Fehlersuche	CompanyPortal	418	0x1f4a	0	com.microsoft.intune.mam.policy	Diagnostics	Richtlinien-Cache aktualisiert
+12.03.2026 10:15:24,200000+0100	Fehler	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Enrollment	MDM profile installation returned failure 0x80180014
+12.03.2026 10:15:25,300000+0100	Standard	SpringBoard	60	0x1f4a	0	com.apple.springboard	Default	Szene aktiviert

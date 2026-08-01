@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "same-timestamp-different-processes",
+  "workload": "portal/ios-ipados/company-portal/diagnostics",
+  "description": "Four records sharing one wall-clock instant across different processes and activities. Capture order and activity identity must both survive; nothing may be merged on timestamp.",
+  "artifacts": [
+    {
+      "artifactId": "console-collision",
+      "family": "companyPortalIosConsole",
+      "sourceKind": "plainTextLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "console-collision.log",
+      "sanitizedSourcePath": "SYNTHETIC://console-export/console-collision.log",
+      "relativePath": "evidence/console-collision/current/console-collision.log",
+      "bytesCopied": 667,
+      "capturedUtc": "2026-03-12T17:20:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

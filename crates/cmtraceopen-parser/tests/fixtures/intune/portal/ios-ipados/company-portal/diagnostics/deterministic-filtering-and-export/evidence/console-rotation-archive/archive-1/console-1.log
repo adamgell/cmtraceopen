@@ -1,0 +1,4 @@
+# SYNTHETIC FIXTURE: generated macOS Console export. No real device, user, or tenant data.
+Timestamp	Type	Process	PID	TID	Activity	Subsystem	Category	Message
+2026-03-12 10:15:02.300000-0700	Default	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Apps	App catalog refreshed
+2026-03-12 10:15:03.400000-0700	Info	mDNSResponder	120	0x310	0	com.apple.mDNSResponder	Default	Interface en0 registered

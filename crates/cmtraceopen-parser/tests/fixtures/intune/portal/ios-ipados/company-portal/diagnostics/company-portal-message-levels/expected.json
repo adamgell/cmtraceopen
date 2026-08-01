@@ -1,0 +1,264 @@
+{
+  "artifacts": [
+    {
+      "artifactId": "console-levels",
+      "columns": [
+        "timestamp",
+        "type",
+        "process",
+        "processId",
+        "threadId",
+        "activity",
+        "subsystem",
+        "category",
+        "message"
+      ],
+      "companyPortalRecordCount": 6,
+      "layout": "tabularEnUs",
+      "layoutConfidence": "headerDeclared",
+      "layoutRefusal": null,
+      "malformedRecordCount": 0,
+      "preambleLineCount": 1,
+      "recordCapReached": false,
+      "recordCount": 6,
+      "reportedAppVersion": "5.2026.1",
+      "reportedOsVersion": "18.4",
+      "status": "available",
+      "truncatedLeadingFragment": false,
+      "truncatedTrailingRecord": false,
+      "unrelatedRecordCount": 0
+    }
+  ],
+  "assertions": [
+    "every Apple message type maps to Apple's own vocabulary",
+    "a type label this build does not model round-trips verbatim instead of collapsing to a known severity",
+    "error and fault records raise one failure finding that cites each of them"
+  ],
+  "coverage": [
+    {
+      "artifactId": "console-levels",
+      "detail": null,
+      "family": "companyPortalIosConsole",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-levels:r5",
+          "sourceArtifactId": "console-levels"
+        },
+        {
+          "evidenceId": "console-levels:r6",
+          "sourceArtifactId": "console-levels"
+        }
+      ],
+      "findingId": "console-company-portal-failure",
+      "severity": "error"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "console-levels:r1",
+          "sourceArtifactId": "console-levels"
+        },
+        {
+          "evidenceId": "console-levels:r6",
+          "sourceArtifactId": "console-levels"
+        }
+      ],
+      "findingId": "console-capture-window-is-partial",
+      "severity": "info"
+    }
+  ],
+  "records": [
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Lifecycle",
+      "defects": [],
+      "evidenceId": "console-levels:r1",
+      "lineNumber": 3,
+      "message": "Company Portal 5.2026.1 on iPadOS 18.4 did finish launching",
+      "messageLineCount": 1,
+      "messageType": "default",
+      "normalizedUtc": "2026-03-12T17:15:10.481293Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 1,
+      "semantic": null,
+      "semanticSource": null,
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:10.481293-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Sync",
+      "defects": [],
+      "evidenceId": "console-levels:r2",
+      "lineNumber": 4,
+      "message": "Device check-in started",
+      "messageLineCount": 1,
+      "messageType": "info",
+      "normalizedUtc": "2026-03-12T17:15:11.100000Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 2,
+      "semantic": "syncCompliance",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:11.100000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Diagnostics",
+      "defects": [],
+      "evidenceId": "console-levels:r3",
+      "lineNumber": 5,
+      "message": "Policy evaluation took 34 ms",
+      "messageLineCount": 1,
+      "messageType": "debug",
+      "normalizedUtc": "2026-03-12T17:15:12.200000Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 3,
+      "semantic": "diagnostic",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.intune.mam.policy",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:12.200000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Apps",
+      "defects": [],
+      "evidenceId": "console-levels:r4",
+      "lineNumber": 6,
+      "message": "App install queued behind one other request",
+      "messageLineCount": 1,
+      "messageType": "Notice",
+      "normalizedUtc": "2026-03-12T17:15:13.300000Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 4,
+      "semantic": "appDeviceAction",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:13.300000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Enrollment",
+      "defects": [],
+      "evidenceId": "console-levels:r5",
+      "lineNumber": 7,
+      "message": "MDM profile installation returned failure 0x80180014",
+      "messageLineCount": 1,
+      "messageType": "error",
+      "normalizedUtc": "2026-03-12T17:15:14.400000Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 5,
+      "semantic": "enrollmentProfile",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:14.400000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    },
+    {
+      "accessState": "available",
+      "activityId": null,
+      "category": "Apps",
+      "defects": [],
+      "evidenceId": "console-levels:r6",
+      "lineNumber": 8,
+      "message": "App install request abandoned after 3 attempts",
+      "messageLineCount": 1,
+      "messageType": "fault",
+      "normalizedUtc": "2026-03-12T17:15:15.500000Z",
+      "parseState": "parsed",
+      "process": "CompanyPortal",
+      "processId": 418,
+      "recordNumber": 6,
+      "semantic": "appDeviceAction",
+      "semanticSource": "category",
+      "sensitivity": "public",
+      "sourceClass": "companyPortal",
+      "sourceSignals": [
+        "process",
+        "subsystem"
+      ],
+      "subsystem": "com.microsoft.CompanyPortal",
+      "timestampKind": "offset",
+      "timestampRaw": "2026-03-12 10:15:15.500000-0700",
+      "truncated": false,
+      "unmodeledColumns": []
+    }
+  ],
+  "scenario": "company-portal-message-levels",
+  "totals": {
+    "artifactCount": 1,
+    "companyPortalRecordCount": 6,
+    "malformedRecordCount": 0,
+    "offsetlessRecordCount": 0,
+    "recordCount": 6
+  },
+  "workload": "portal/ios-ipados/company-portal/diagnostics"
+}

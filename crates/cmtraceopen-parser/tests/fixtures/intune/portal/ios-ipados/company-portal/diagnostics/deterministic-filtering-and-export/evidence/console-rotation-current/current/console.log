@@ -1,0 +1,5 @@
+# SYNTHETIC FIXTURE: generated macOS Console export. No real device, user, or tenant data.
+Timestamp	Type	Process	PID	TID	Activity	Subsystem	Category	Message
+2026-03-12 10:15:22.481293-0700	Default	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Lifecycle	Company Portal 5.2026.1 on iOS 18.4 did finish launching
+2026-03-12 10:15:23.100000-0700	Default	SpringBoard	60	0x220	0	com.apple.springboard	Default	Scene activation
+2026-03-12 10:15:24.200000-0700	Info	CompanyPortal	418	0x1f4a	0	com.microsoft.CompanyPortal	Sync	Device check-in completed
