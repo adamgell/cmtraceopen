@@ -135,10 +135,12 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
           appearance="primary"
           size="small"
           icon={<ShieldArrowRightRegular />}
+          // Deliberately still enabled on "busy": the request in flight belongs
+          // to another entry point, and if it settles as cancelled or failed
+          // nothing would re-enable this button, stranding the user until a
+          // reload. The coordinator collapses the duplicate click anyway.
           disabled={
-            actionState === "requesting" ||
-            actionState === "requested" ||
-            actionState === "busy"
+            actionState === "requesting" || actionState === "requested"
           }
           onClick={restart}
         >

@@ -67,7 +67,14 @@ export interface KnownSourceCatalogActionIds {
 }
 
 
-function classifySourceError(error: unknown): {
+/**
+ * Sort a source failure into the category the status line reports.
+ *
+ * Exported for tests: the split between "missing" and "error" is the whole
+ * point of the Access Denied work, and it is far easier to pin here than
+ * through a full source load.
+ */
+export function classifySourceError(error: unknown): {
   kind: "missing" | "error";
   message: string;
   accessDenied: AccessDeniedClassification | null;
@@ -84,14 +91,9 @@ function classifySourceError(error: unknown): {
 
   const message = error instanceof Error ? error.message : String(error);
 
-  // Fallback for failures that never reached the classifier. The permission
-  // wording stays here on purpose: without a verdict these keep their existing
-  // behavior rather than silently changing category.
-  if (
-    /not found|cannot find|no such file|os error 2|os error 3|access is denied|permission denied|os error 5/i.test(
-      message
-    )
-  ) {
+  // Fallback for failures that never reached the classifier. Only genuine
+  // not-found wording counts as missing.
+  if (/not found|cannot find|no such file|os error 2|os error 3/i.test(message)) {
     return {
       kind: "missing",
       message,
@@ -99,6 +101,11 @@ function classifySourceError(error: unknown): {
     };
   }
 
+  // Everything else, including permission wording with no structured verdict,
+  // is a generic error. Calling a permission refusal "missing" is the exact
+  // misclassification this work exists to remove: it sends the user looking for
+  // a file that is sitting right where they left it. It still carries no
+  // verdict, so it never offers elevation off localized message text either.
   return {
     kind: "error",
     message,

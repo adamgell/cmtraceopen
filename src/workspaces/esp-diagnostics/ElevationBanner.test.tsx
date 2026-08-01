@@ -49,10 +49,12 @@ describe("ElevationBanner restart outcomes", () => {
         "Administrator restart could not be started; coverage remains partial.",
       ),
     ).toBeNull();
-    // Nothing more to request, so the button stops inviting another click.
+    // The in-flight request belongs to another entry point. If it settles as
+    // cancelled or failed nothing would re-enable this button, so "busy" must
+    // not strand the user on a dead control until a reload.
     expect(
       screen.getByRole("button", { name: "Restart as administrator" }),
-    ).toBeDisabled();
+    ).toBeEnabled();
   });
 
   it("still reports a genuine launch failure as a failure", async () => {

@@ -163,15 +163,23 @@ pub async fn restart_as_administrator(
         .map_err(|_| ElevationCommandError::TicketUnavailable)?;
 
     let launch_id = ticket_id.clone();
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
+    let joined = tauri::async_runtime::spawn_blocking(move || {
         restart_with_provider(&NativeRelaunchProvider, Some(&launch_id))
     })
-    .await
-    .map_err(|_| {
-        ElevationCommandError::from(RelaunchError::LaunchFailed {
-            message: "administrator restart task failed".to_string(),
-        })
-    })?;
+    .await;
+
+    let outcome = match joined {
+        Ok(outcome) => outcome,
+        // The task panicked or was cancelled, so no relaunch happened and the
+        // ticket was never read. Remove it here rather than leaving restore
+        // state on disk until the TTL sweep catches it.
+        Err(_) => {
+            discard_ticket(&directory, &ticket_id);
+            return Err(ElevationCommandError::from(RelaunchError::LaunchFailed {
+                message: "administrator restart task failed".to_string(),
+            }));
+        }
+    };
 
     match outcome {
         Ok(result) if result.launched => {
