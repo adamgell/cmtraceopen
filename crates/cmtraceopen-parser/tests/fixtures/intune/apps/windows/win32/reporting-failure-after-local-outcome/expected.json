@@ -1,0 +1,55 @@
+{
+  "scenario": "reporting-failure-after-local-outcome",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "reportingFailed",
+      "lastConfirmedPhase": "postEnforcementDetection",
+      "confidence": "high",
+      "returnCodeRaw": "0",
+      "returnCodeKind": "success",
+      "rebootRequired": false,
+      "localOutcome": "succeeded",
+      "nextEvidenceRequest": "IntuneManagementExtension.log records for the status upload attempt",
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "win32-reporting-failed:11111111-2222-4333-8444-555555555555",
+      "severity": "warning",
+      "evidence": [
+        {
+          "evidenceId": "ime-current:3",
+          "sourceArtifactId": "ime-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a reporting failure never hides the local outcome underneath it"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}

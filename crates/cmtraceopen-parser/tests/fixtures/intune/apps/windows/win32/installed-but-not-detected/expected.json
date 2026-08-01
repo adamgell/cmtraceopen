@@ -1,0 +1,56 @@
+{
+  "scenario": "installed-but-not-detected",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "installedNotDetected",
+      "lastConfirmedPhase": "enforcement",
+      "confidence": "high",
+      "returnCodeRaw": "0",
+      "returnCodeKind": "success",
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": "AppActionProcessor.log detection-rule evaluation for this app",
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "win32-installed-not-detected:11111111-2222-4333-8444-555555555555",
+      "severity": "error",
+      "evidence": [
+        {
+          "evidenceId": "app-action-processor-current:2",
+          "sourceArtifactId": "app-action-processor-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a zero return code is not by itself a successful deployment",
+    "post-enforcement detection outranks the installer's own claim"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}
