@@ -21,8 +21,8 @@ use crate::models::log_entry::Severity;
 use crate::sccm::{
     classify_artifact_name, SccmArtifact, SccmArtifactRequest, SccmConfidence, SccmCoverageState,
     SccmEvidence, SccmEvidenceRef, SccmFinding, SccmFindingBuilder, SccmFindingClass,
-    SccmFindingCoverageGap, SccmPhase, SccmRole, SccmRotation, SccmTerminalEvidence,
-    SccmTimeOrderingState,
+    SccmFindingCoverageGap, SccmPhase, SccmRecordCompleteness, SccmRole, SccmRotation,
+    SccmTerminalEvidence, SccmTimeOrderingState,
 };
 
 use super::SccmNormalizedBundle;
@@ -787,10 +787,15 @@ fn parse_deployment_facts(evidence: &SccmEvidence, artifact: &SccmArtifact) -> V
         .collect()
 }
 
-/// Version profile, role, coverage, rotation, and catalog identity must all
-/// agree before a record may become a fact.
+/// Record completeness, version profile, role, coverage, rotation, and catalog
+/// identity must all agree before a record may become a fact.
+///
+/// Completeness is read from the record, never inferred from the artifact: a
+/// fully collected file can still hold a physical line that no logical record
+/// covers, and that line is not evidence of anything.
 fn admitted_source(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option<DeploymentSource> {
-    if artifact.role != SccmRole::Client
+    if evidence.completeness != SccmRecordCompleteness::LogicalRecord
+        || artifact.role != SccmRole::Client
         || evidence.role != SccmRole::Client
         || artifact.coverage != SccmCoverageState::Captured
         || !valid_reference(&evidence.reference)
@@ -964,13 +969,18 @@ fn event_phrase(payload: &str) -> String {
 
 /// Exact-token lookup. A duplicated label, or a label that is only the tail of
 /// a longer token, yields nothing rather than a guess.
+///
+/// Every occurrence is counted before any boundary rule is applied. Filtering
+/// first would silently discard a punctuation-adjacent conflict such as
+/// `terminal=true (terminal=false)` and let the first value win.
 fn field_value<'a>(message: &'a str, key: &str) -> Option<&'a str> {
     let marker = format!("{key}=");
-    let mut matches = message
-        .match_indices(&marker)
-        .filter(|(index, _)| *index == 0 || message.as_bytes()[index - 1].is_ascii_whitespace());
-    let (first, _) = matches.next()?;
-    if matches.next().is_some() {
+    let mut occurrences = message.match_indices(&marker);
+    let (first, _) = occurrences.next()?;
+    if occurrences.next().is_some() {
+        return None;
+    }
+    if first != 0 && !message.as_bytes()[first - 1].is_ascii_whitespace() {
         return None;
     }
 
@@ -1184,7 +1194,7 @@ fn build_transaction(
     Some((
         SccmDeploymentTransaction {
             transaction_id: format!("deployment:assignment:{assignment_id}"),
-            counterpart_ready_fact: counterpart_ready_fact(facts),
+            counterpart_ready_fact: counterpart_ready_fact(facts, &key),
             key,
             phase: outcome.phase,
             state: outcome.state,
@@ -1309,9 +1319,44 @@ fn unrecovered_failure<'a>(
         })
 }
 
-fn counterpart_ready_fact(facts: &[&DeploymentFact]) -> Option<SccmDeploymentCounterpartFact> {
-    let fact = first_fact(facts, DeploymentFactKind::ContentLocated)
-        .or_else(|| first_fact(facts, DeploymentFactKind::ContentRequested))?;
+/// The one cross-side output, and the only place a client key value leaves this
+/// reducer. It republishes the transaction key that already survived the
+/// ambiguity guard, and only when exactly one complete content record carries
+/// it. Two differently keyed content records are a conflict, not a choice
+/// between them, so nothing is published.
+fn counterpart_ready_fact(
+    facts: &[&DeploymentFact],
+    key: &SccmDeploymentKey,
+) -> Option<SccmDeploymentCounterpartFact> {
+    let candidates = facts
+        .iter()
+        .copied()
+        .filter(|fact| {
+            matches!(
+                fact.kind,
+                DeploymentFactKind::ContentLocated | DeploymentFactKind::ContentRequested
+            )
+        })
+        .collect::<Vec<_>>();
+    let [fact] = candidates.as_slice() else {
+        return None;
+    };
+
+    let package_id = key.package_id.clone()?;
+    let content_id = key.content_id.clone()?;
+    let content_version = key.content_version?;
+    let distribution_point_host_handle = key.distribution_point_host_handle.clone()?;
+    let request_id = key.request_id.clone()?;
+    if fact.package_id.as_deref() != Some(package_id.as_str())
+        || fact.content_id.as_deref() != Some(content_id.as_str())
+        || fact.content_version != Some(content_version)
+        || fact.distribution_point_host_handle.as_deref()
+            != Some(distribution_point_host_handle.as_str())
+        || fact.request_id.as_deref() != Some(request_id.as_str())
+    {
+        return None;
+    }
+
     let offset_minutes = fact.offset_minutes?;
     if !fact.time_comparable {
         return None;
@@ -1321,11 +1366,11 @@ fn counterpart_ready_fact(facts: &[&DeploymentFact]) -> Option<SccmDeploymentCou
         fact_kind: SccmDeploymentCounterpartFactKind::ClientContentRequest,
         phase: SccmDeploymentPhase::LocateContent,
         extraction_profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
-        package_id: fact.package_id.clone()?,
-        content_id: fact.content_id.clone()?,
-        content_version: fact.content_version?,
-        distribution_point_host_handle: fact.distribution_point_host_handle.clone()?,
-        request_id: fact.request_id.clone()?,
+        package_id,
+        content_id,
+        content_version,
+        distribution_point_host_handle,
+        request_id,
         timestamp_provenance: SccmDeploymentTimestampProvenance {
             kind: SccmDeploymentTimestampProvenanceKind::ExplicitOffset,
             offset_minutes,
@@ -1622,10 +1667,12 @@ fn insufficient(
 // Source-local observations
 // ---------------------------------------------------------------------------
 
-/// Every client artifact that carried bytes but produced no admitted fact.
+/// Every client artifact holding bytes that no admitted fact represents.
 ///
-/// The observation exists so a reader can see the fragment; it can never be
-/// promoted, ordered, or correlated.
+/// This covers two shapes: an artifact that produced no admitted fact at all,
+/// and an artifact whose complete records were admitted but which still holds
+/// physical lines no record covers. The second shape is why the sweep keys on
+/// record completeness rather than on whether the artifact contributed facts.
 fn source_local_observations(
     bundle: &SccmNormalizedBundle,
     artifacts_by_id: &BTreeMap<&str, &SccmArtifact>,
@@ -1638,10 +1685,7 @@ fn source_local_observations(
         .filter(|evidence| evidence.role == SccmRole::Client)
     {
         let artifact_id = evidence.reference.artifact_id.as_str();
-        if admitted_artifact_ids.contains(artifact_id)
-            || !artifacts_by_id.contains_key(artifact_id)
-            || !valid_reference(&evidence.reference)
-        {
+        if !artifacts_by_id.contains_key(artifact_id) || !valid_reference(&evidence.reference) {
             continue;
         }
         evidence_by_artifact
@@ -1654,20 +1698,36 @@ fn source_local_observations(
         .into_iter()
         .filter_map(|(artifact_id, evidence)| {
             let artifact = artifacts_by_id.get(artifact_id)?;
-            let complete_logical_record = artifact.coverage == SccmCoverageState::Captured;
-            let start = evidence
+            let fragments = evidence
+                .iter()
+                .copied()
+                .filter(|item| item.completeness == SccmRecordCompleteness::PhysicalFragment)
+                .collect::<Vec<_>>();
+            if fragments.is_empty() && admitted_artifact_ids.contains(artifact_id) {
+                return None;
+            }
+
+            // Cite the fragments when there are any: they are what no fact
+            // represents. Otherwise the whole artifact went unrepresented.
+            let cited = if fragments.is_empty() {
+                &evidence
+            } else {
+                &fragments
+            };
+            let start = cited
                 .iter()
                 .filter_map(|item| item.reference.line_start)
                 .min()?;
-            let end = evidence
+            let end = cited
                 .iter()
                 .filter_map(|item| item.reference.line_end)
                 .max()?;
-            let key_confidence = if evidence.iter().any(|item| has_candidate_key(&item.message)) {
+            let key_confidence = if cited.iter().any(|item| has_candidate_key(&item.message)) {
                 SccmDeploymentObservationKeyConfidence::Candidate
             } else {
                 SccmDeploymentObservationKeyConfidence::None
             };
+            let complete_logical_record = observation_is_complete(artifact, &fragments);
 
             Some(SccmDeploymentObservation {
                 observation_id: format!(
@@ -1683,7 +1743,7 @@ fn source_local_observations(
                 key_confidence,
                 confidence_ceiling: SccmDeploymentConfidence::Low,
                 correlation_eligible: false,
-                reason: observation_reason(artifact).to_owned(),
+                reason: observation_reason(artifact, complete_logical_record).to_owned(),
                 evidence: SccmEvidenceRef {
                     artifact_id: artifact_id.to_owned(),
                     entry_id: format!("{artifact_id}:{start}-{end}"),
@@ -1695,7 +1755,25 @@ fn source_local_observations(
         .collect()
 }
 
-fn observation_reason(artifact: &SccmArtifact) -> &'static str {
+/// Completeness of what the observation cites, decided by the record and by the
+/// source's framing rather than by the artifact's coverage state.
+///
+/// A source that frames CCM records has no complete unit smaller than a record,
+/// so any fragment is incomplete. For an unframed text source the physical line
+/// is itself the unit, and it is complete unless the collected bytes were cut
+/// short.
+fn observation_is_complete(artifact: &SccmArtifact, fragments: &[&SccmEvidence]) -> bool {
+    if fragments.is_empty() {
+        return true;
+    }
+    let catalog = classify_artifact_name(&artifact.display_name, SccmRole::Client);
+    !catalog.uses_ccm_records && artifact.coverage == SccmCoverageState::Captured
+}
+
+fn observation_reason(artifact: &SccmArtifact, complete_logical_record: bool) -> &'static str {
+    if complete_logical_record {
+        return "unvalidated supplemental text cannot override an exact keyed client transaction";
+    }
     match (&artifact.coverage, &artifact.rotation) {
         (SccmCoverageState::Partial, SccmRotation::Current) => {
             "current-file fragment cannot complete the archived physical record"
@@ -1709,7 +1787,7 @@ fn observation_reason(artifact: &SccmArtifact) -> &'static str {
         (SccmCoverageState::Capped, _) => {
             "capped bytes do not form a logical record and cannot attach by time"
         }
-        _ => "unvalidated supplemental text cannot override an exact keyed client transaction",
+        _ => "an unframed physical line is not a logical record and cannot attach by time",
     }
 }
 
@@ -1744,6 +1822,16 @@ const FINDING_ENFORCE_TERMINAL: &str = "deployment-enforce-terminal";
 const FINDING_REPORT_TERMINAL: &str = "deployment-report-terminal";
 const FINDING_DETECTION_MISMATCH: &str = "deployment-detection-mismatch";
 const FINDING_CHRONOLOGY_UNCERTAIN: &str = "deployment-chronology-uncertain";
+
+/// Most causes can only occur at one phase, so their identity is already
+/// unique. An unusable chronology can occur at any of the eight, so its
+/// identity carries the phase and two of them never merge.
+fn emitted_finding_id(base_id: &str, phase: SccmDeploymentPhase) -> String {
+    if base_id == FINDING_CHRONOLOGY_UNCERTAIN {
+        return format!("{base_id}-{}", kebab_case(phase.as_str()));
+    }
+    base_id.to_owned()
+}
 
 fn coverage_gap_finding_id(phase: SccmDeploymentPhase) -> &'static str {
     match phase {
@@ -1854,16 +1942,28 @@ fn build_findings(
     seeds: &[FindingSeed],
     artifacts_by_id: &BTreeMap<&str, &SccmArtifact>,
 ) -> Vec<SccmDeploymentFinding> {
-    let mut grouped = BTreeMap::<&str, Vec<&FindingSeed>>::new();
+    let mut grouped = BTreeMap::<(&str, SccmDeploymentPhase), Vec<&FindingSeed>>::new();
     for seed in seeds {
-        grouped.entry(seed.finding_id).or_default().push(seed);
+        grouped
+            .entry((seed.finding_id, seed.phase))
+            .or_default()
+            .push(seed);
     }
 
     grouped
         .into_iter()
-        .filter_map(|(finding_id, seeds)| {
+        .filter_map(|((base_id, phase), seeds)| {
             let first = seeds.first()?;
-            let (title, summary) = finding_text(finding_id);
+            let (title, summary) = finding_text(base_id);
+            let finding_id = emitted_finding_id(base_id, phase);
+            // Every seed in this group shares the finding cause and the phase,
+            // so the representative can only speak for evidence it represents.
+            // The reported progress is still the least any of them reached.
+            let last_successful_phase = seeds
+                .iter()
+                .map(|seed| seed.last_successful_phase)
+                .min()
+                .unwrap_or(first.last_successful_phase);
 
             let evidence = if first.terminal_evidence.is_some() {
                 let mut references = seeds
@@ -1919,7 +2019,7 @@ fn build_findings(
 
             let mut builder = SccmFindingBuilder::new(finding_id)
                 .class(first.class.clone())
-                .phase(SccmPhase::Unknown(first.phase.as_str().to_owned()))
+                .phase(SccmPhase::Unknown(phase.as_str().to_owned()))
                 .role(SccmRole::Client)
                 .severity(match first.class {
                     SccmFindingClass::ConfirmedFailure => Severity::Error,
@@ -1931,7 +2031,7 @@ fn build_findings(
                 .evidence(evidence)
                 .terminal_evidence(terminal_evidence)
                 .coverage_gaps(coverage_gaps);
-            if let Some(phase) = first.request_phase {
+            if first.request_phase.is_some() {
                 builder = builder.next_artifact(phase_artifact_request(phase));
             }
 
@@ -1939,8 +2039,8 @@ fn build_findings(
                 finding: builder
                     .build()
                     .expect("deployment finding must satisfy the shared contract"),
-                deployment_phase: first.phase,
-                last_successful_phase: first.last_successful_phase,
+                deployment_phase: phase,
+                last_successful_phase,
             })
         })
         .collect()

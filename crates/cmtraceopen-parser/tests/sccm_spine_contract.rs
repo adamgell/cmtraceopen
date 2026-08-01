@@ -6,7 +6,8 @@ use cmtraceopen_parser::sccm::{
     SccmConfidence, SccmCorrelationKey, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence,
     SccmEvidenceRef, SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity,
     SccmFinding, SccmFindingBuilder, SccmFindingClass, SccmFindingCoverageGap,
-    SccmFindingValidationError, SccmKeyConfidence, SccmKeyExtractionResult, SccmPhase, SccmRole,
+    SccmFindingValidationError, SccmKeyConfidence, SccmKeyExtractionResult, SccmPhase,
+    SccmRecordCompleteness, SccmRole,
     SccmRotation, SccmSignal, SccmSignalKind, SccmTerminalEvidence, SccmTerminalEvidenceKind,
     SccmTimeOrderingState, SccmTimestamp, SccmUnknownRotation,
     MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS, MAX_SCCM_NEXT_ARTIFACT_REQUESTS,
@@ -31,6 +32,7 @@ fn client_policy_artifact() -> SccmArtifact {
 fn evidence_with_message(message: &str) -> SccmEvidence {
     SccmEvidence {
         evidence_id: "client-policy-agent:1-1".into(),
+        completeness: SccmRecordCompleteness::LogicalRecord,
         reference: SccmEvidenceRef {
             artifact_id: "client-policy-agent".into(),
             entry_id: "client-policy-agent:1-1".into(),

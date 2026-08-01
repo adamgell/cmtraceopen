@@ -168,10 +168,23 @@ pub struct SccmSensitiveHandle {
     pub value: String,
 }
 
+/// Whether a record framed completely, measured on the record itself.
+///
+/// An artifact's coverage state describes the file that was collected; it can
+/// never stand in for this. A complete file may still contain a physical line
+/// that no logical record covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmRecordCompleteness {
+    LogicalRecord,
+    PhysicalFragment,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmEvidence {
     pub evidence_id: String,
+    pub completeness: SccmRecordCompleteness,
     pub reference: SccmEvidenceRef,
     pub role: SccmRole,
     pub component: Option<String>,

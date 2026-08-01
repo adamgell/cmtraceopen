@@ -3,7 +3,8 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 use super::models::{
-    SccmArtifact, SccmEvidence, SccmEvidenceRef, SccmRole, SccmTimeOrderingState, SccmTimestamp,
+    SccmArtifact, SccmEvidence, SccmEvidenceRef, SccmRecordCompleteness, SccmRole,
+    SccmTimeOrderingState, SccmTimestamp,
 };
 
 const PUBLIC_MESSAGE_PROFILE: &str = "sccm-public-message-v1";
@@ -289,6 +290,7 @@ fn redact_email_identities(value: &str) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SccmRawEvidenceSnapshot {
     evidence_id: String,
+    completeness: SccmRecordCompleteness,
     reference: SccmEvidenceRef,
     role: SccmRole,
     component: Option<String>,
@@ -311,6 +313,7 @@ impl SccmRawEvidenceSnapshot {
 
         Self {
             evidence_id: entry_id.clone(),
+            completeness: SccmRecordCompleteness::LogicalRecord,
             reference: SccmEvidenceRef {
                 artifact_id: artifact.artifact_id.clone(),
                 entry_id,
@@ -339,6 +342,7 @@ impl SccmRawEvidenceSnapshot {
 
         Self {
             evidence_id: entry_id.clone(),
+            completeness: SccmRecordCompleteness::PhysicalFragment,
             reference: SccmEvidenceRef {
                 artifact_id: artifact.artifact_id.clone(),
                 entry_id,
@@ -362,6 +366,7 @@ impl SccmRawEvidenceSnapshot {
     pub(crate) fn export(&self) -> SccmEvidence {
         SccmEvidence {
             evidence_id: self.evidence_id.clone(),
+            completeness: self.completeness,
             reference: self.reference.clone(),
             role: self.role.clone(),
             component: self.component.as_deref().map(project_public_text_v1),
