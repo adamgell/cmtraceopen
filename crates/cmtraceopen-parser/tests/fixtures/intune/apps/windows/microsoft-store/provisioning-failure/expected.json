@@ -1,0 +1,58 @@
+{
+  "scenario": "provisioning-failure",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "uwpProvisioned",
+      "familyBasis": "declared",
+      "state": "provisioningFailure",
+      "action": "install",
+      "executionContext": "unknown",
+      "intent": "unknown",
+      "storeProductId": "9WZSYNTH0001",
+      "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+      "displayName": "Synthetic Store App",
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "lastConfirmedPhase": "provisioning",
+      "confidence": "high",
+      "errorHex": "0x80073CFB",
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "ime-log:2",
+        "appx-operational:1",
+        "appx-operational:2"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-provisioning-failed",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "appx-operational:1",
+        "appx-operational:2",
+        "ime-log:2"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "a provisioning failure is not a per-user registration failure"
+  ]
+}

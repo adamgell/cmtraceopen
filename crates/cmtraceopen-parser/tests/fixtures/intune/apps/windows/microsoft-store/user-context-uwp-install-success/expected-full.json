@@ -1,0 +1,428 @@
+{
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "identity": {
+        "storeProductId": "9WZSYNTH0001",
+        "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+        "packageFullName": "Contoso.SynthStoreApp_1.2.3.0_x64__9synth0abcd1h",
+        "displayName": "Synthetic Store App"
+      },
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "executionContext": "user",
+      "action": "install",
+      "intent": "unknown",
+      "lastConfirmedPhase": "registration",
+      "state": "installCompleted",
+      "error": null,
+      "confidence": "high",
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "observations": [
+        "ime-log:2",
+        "ime-log:3",
+        "appx-operational:1",
+        "appx-operational:2",
+        "appx-operational:3"
+      ],
+      "evidence": [
+        {
+          "evidenceId": "ime-log:2",
+          "sourceArtifactId": "ime-log"
+        },
+        {
+          "evidenceId": "ime-log:3",
+          "sourceArtifactId": "ime-log"
+        },
+        {
+          "evidenceId": "appx-operational:1",
+          "sourceArtifactId": "appx-operational"
+        },
+        {
+          "evidenceId": "appx-operational:2",
+          "sourceArtifactId": "appx-operational"
+        },
+        {
+          "evidenceId": "appx-operational:3",
+          "sourceArtifactId": "appx-operational"
+        }
+      ],
+      "nextEvidenceRequest": null
+    }
+  ],
+  "observations": [
+    {
+      "observationId": "ime-log:2",
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ime-log:2",
+          "sourceArtifactId": "ime-log"
+        },
+        "provenance": {
+          "sourceKind": "imeLog",
+          "sourceArtifactId": "ime-log",
+          "filePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+          "lineNumber": 2,
+          "recordNumber": 2,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "07-31-2026 10:15:22.100",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T10:15:22.100Z",
+          "kind": "offset"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "origin": "intuneManagementExtension",
+      "signal": "targetedByIntune",
+      "installerFamily": "unknown",
+      "familyBasis": "unvalidated",
+      "identity": {
+        "storeProductId": "9WZSYNTH0001",
+        "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+        "packageFullName": null,
+        "displayName": null
+      },
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "executionContext": "unknown",
+      "action": "install",
+      "error": null,
+      "unknownVersion": false,
+      "namedData": [],
+      "message": "Store app AppId=11111111-2222-4333-8444-555555555555 StoreProductId=9WZSYNTH0001 PackageFamilyName=Contoso.SynthStoreApp_9synth0abcd1h is targeted for this device"
+    },
+    {
+      "observationId": "ime-log:3",
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ime-log:3",
+          "sourceArtifactId": "ime-log"
+        },
+        "provenance": {
+          "sourceKind": "imeLog",
+          "sourceArtifactId": "ime-log",
+          "filePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+          "lineNumber": 3,
+          "recordNumber": 3,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "07-31-2026 10:15:23.100",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T10:15:23.100Z",
+          "kind": "offset"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "origin": "intuneManagementExtension",
+      "signal": "acquisitionRequested",
+      "installerFamily": "unknown",
+      "familyBasis": "unvalidated",
+      "identity": {
+        "storeProductId": "9WZSYNTH0001",
+        "packageFamilyName": null,
+        "packageFullName": null,
+        "displayName": null
+      },
+      "appId": null,
+      "executionContext": "unknown",
+      "action": "install",
+      "error": null,
+      "unknownVersion": false,
+      "namedData": [],
+      "message": "Requesting store acquisition for StoreProductId=9WZSYNTH0001"
+    },
+    {
+      "observationId": "appx-operational:1",
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "appx-operational:1",
+          "sourceArtifactId": "appx-operational"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "appx-operational",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-AppXDeploymentServer/Operational",
+            "provider": "Microsoft-Windows-AppXDeployment-Server",
+            "eventId": 400,
+            "recordId": 1
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:15:05.000Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:15:05.000Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "origin": "windowsEvent",
+      "signal": "deploymentStarted",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "identity": {
+        "storeProductId": null,
+        "packageFamilyName": null,
+        "packageFullName": "Contoso.SynthStoreApp_1.2.3.0_x64__9synth0abcd1h",
+        "displayName": null
+      },
+      "appId": null,
+      "executionContext": "user",
+      "action": "install",
+      "error": null,
+      "unknownVersion": false,
+      "namedData": [
+        {
+          "name": "DeploymentOperation",
+          "value": "Stage"
+        },
+        {
+          "name": "DeploymentScope",
+          "value": "User"
+        },
+        {
+          "name": "PackageFullName",
+          "value": "Contoso.SynthStoreApp_1.2.3.0_x64__9synth0abcd1h"
+        },
+        {
+          "name": "Version",
+          "value": "1"
+        }
+      ],
+      "message": null
+    },
+    {
+      "observationId": "appx-operational:2",
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "appx-operational:2",
+          "sourceArtifactId": "appx-operational"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "appx-operational",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 2,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-AppXDeploymentServer/Operational",
+            "provider": "Microsoft-Windows-AppXDeployment-Server",
+            "eventId": 603,
+            "recordId": 2
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:15:10.000Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:15:10.000Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "origin": "windowsEvent",
+      "signal": "stagingCompleted",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "identity": {
+        "storeProductId": null,
+        "packageFamilyName": null,
+        "packageFullName": "Contoso.SynthStoreApp_1.2.3.0_x64__9synth0abcd1h",
+        "displayName": null
+      },
+      "appId": null,
+      "executionContext": "user",
+      "action": "install",
+      "error": null,
+      "unknownVersion": false,
+      "namedData": [
+        {
+          "name": "DeploymentOperation",
+          "value": "Stage"
+        },
+        {
+          "name": "DeploymentScope",
+          "value": "User"
+        },
+        {
+          "name": "PackageFullName",
+          "value": "Contoso.SynthStoreApp_1.2.3.0_x64__9synth0abcd1h"
+        },
+        {
+          "name": "Version",
+          "value": "1"
+        }
+      ],
+      "message": null
+    },
+    {
+      "observationId": "appx-operational:3",
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "appx-operational:3",
+          "sourceArtifactId": "appx-operational"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "appx-operational",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 3,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-AppXDeploymentServer/Operational",
+            "provider": "Microsoft-Windows-AppXDeployment-Server",
+            "eventId": 603,
+            "recordId": 3
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:15:15.000Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:15:15.000Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "origin": "windowsEvent",
+      "signal": "registrationCompleted",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "identity": {
+        "storeProductId": null,
+        "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+        "packageFullName": null,
+        "displayName": "Synthetic Store App"
+      },
+      "appId": null,
+      "executionContext": "user",
+      "action": "install",
+      "error": null,
+      "unknownVersion": false,
+      "namedData": [
+        {
+          "name": "DeploymentOperation",
+          "value": "Register"
+        },
+        {
+          "name": "DeploymentScope",
+          "value": "User"
+        },
+        {
+          "name": "PackageFamilyName",
+          "value": "Contoso.SynthStoreApp_9synth0abcd1h"
+        },
+        {
+          "name": "PackageDisplayName",
+          "value": "Synthetic Store App"
+        },
+        {
+          "name": "Version",
+          "value": "1"
+        }
+      ],
+      "message": null
+    }
+  ],
+  "unkeyedObservations": [],
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "family": "ime",
+      "status": "available",
+      "detail": null,
+      "observedAtUtc": "2026-07-31T10:00:00Z",
+      "evidence": [
+        {
+          "evidenceId": "ime-log:2",
+          "sourceArtifactId": "ime-log"
+        },
+        {
+          "evidenceId": "ime-log:3",
+          "sourceArtifactId": "ime-log"
+        }
+      ]
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "status": "available",
+      "detail": null,
+      "observedAtUtc": "2026-07-31T10:00:00Z",
+      "evidence": [
+        {
+          "evidenceId": "appx-operational:1",
+          "sourceArtifactId": "appx-operational"
+        },
+        {
+          "evidenceId": "appx-operational:2",
+          "sourceArtifactId": "appx-operational"
+        },
+        {
+          "evidenceId": "appx-operational:3",
+          "sourceArtifactId": "appx-operational"
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-install-completed",
+      "severity": "info",
+      "confidence": "high",
+      "title": "A Store app install completed",
+      "summary": "Synthetic Store App (Contoso.SynthStoreApp_9synth0abcd1h) completed installation.",
+      "recommendedChecks": [],
+      "evidence": [
+        {
+          "evidenceId": "appx-operational:1",
+          "sourceArtifactId": "appx-operational"
+        },
+        {
+          "evidenceId": "appx-operational:2",
+          "sourceArtifactId": "appx-operational"
+        },
+        {
+          "evidenceId": "appx-operational:3",
+          "sourceArtifactId": "appx-operational"
+        },
+        {
+          "evidenceId": "ime-log:2",
+          "sourceArtifactId": "ime-log"
+        },
+        {
+          "evidenceId": "ime-log:3",
+          "sourceArtifactId": "ime-log"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ]
+}
