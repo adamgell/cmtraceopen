@@ -7,10 +7,9 @@ use cmtraceopen_parser::sccm::{
     SccmEvidenceRef, SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity,
     SccmFinding, SccmFindingBuilder, SccmFindingClass, SccmFindingCoverageGap,
     SccmFindingValidationError, SccmKeyConfidence, SccmKeyExtractionResult, SccmPhase,
-    SccmRecordCompleteness, SccmRole,
-    SccmRotation, SccmSignal, SccmSignalKind, SccmTerminalEvidence, SccmTerminalEvidenceKind,
-    SccmTimeOrderingState, SccmTimestamp, SccmUnknownRotation,
-    MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS, MAX_SCCM_NEXT_ARTIFACT_REQUESTS,
+    SccmRecordCompleteness, SccmRole, SccmRotation, SccmSignal, SccmSignalKind,
+    SccmTerminalEvidence, SccmTerminalEvidenceKind, SccmTimeOrderingState, SccmTimestamp,
+    SccmUnknownRotation, MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS, MAX_SCCM_NEXT_ARTIFACT_REQUESTS,
     SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
 

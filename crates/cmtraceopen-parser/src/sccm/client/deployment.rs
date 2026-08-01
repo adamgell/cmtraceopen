@@ -1138,7 +1138,7 @@ struct Outcome {
     next_artifact: Option<SccmDeploymentArtifactRequest>,
     coverage_gap_artifact_ids: Vec<String>,
     finding_id: Option<&'static str>,
-    terminal_evidence: Option<SccmEvidenceRef>,
+    terminal_evidence: Vec<SccmEvidenceRef>,
 }
 
 /// One transaction's contribution to a bundle-level finding.
@@ -1149,7 +1149,7 @@ struct FindingSeed {
     confidence: SccmConfidence,
     last_successful_phase: Option<SccmDeploymentPhase>,
     evidence: Vec<SccmEvidenceRef>,
-    terminal_evidence: Option<SccmEvidenceRef>,
+    terminal_evidence: Vec<SccmEvidenceRef>,
     coverage_gap_artifact_ids: Vec<String>,
     coverage_gap_group: Option<&'static str>,
     request_phase: Option<SccmDeploymentPhase>,
@@ -1179,9 +1179,10 @@ fn build_transaction(
             SccmDeploymentConfidence::Low => SccmConfidence::Low,
         },
         last_successful_phase: outcome.last_successful_phase,
-        evidence: match &outcome.terminal_evidence {
-            Some(reference) => vec![reference.clone()],
-            None => evidence.clone(),
+        evidence: if outcome.terminal_evidence.is_empty() {
+            evidence.clone()
+        } else {
+            outcome.terminal_evidence.clone()
         },
         terminal_evidence: outcome.terminal_evidence.clone(),
         coverage_gap_artifact_ids: outcome.coverage_gap_artifact_ids.clone(),
@@ -1301,22 +1302,37 @@ fn first_fact<'a>(
     facts.iter().copied().find(|fact| fact.kind == kind)
 }
 
-/// A failure is only unrecovered when no later success of the same phase can be
-/// ordered strictly after it.
-fn unrecovered_failure<'a>(
+/// Every failure that no later success of the same phase can be ordered after.
+///
+/// All of them are returned. Two records that are equally terminal for one key
+/// are both evidence; picking one would let sort order decide what the caller
+/// is shown.
+fn unrecovered_failures<'a>(
     facts: &[&'a DeploymentFact],
     failure_kind: DeploymentFactKind,
     success_kind: DeploymentFactKind,
-) -> Option<&'a DeploymentFact> {
+) -> Vec<&'a DeploymentFact> {
     facts
         .iter()
         .copied()
         .filter(|fact| fact.kind == failure_kind)
-        .find(|failure| {
+        .filter(|failure| {
             !facts.iter().any(|candidate| {
                 candidate.kind == success_kind && fact_is_strictly_before(failure, candidate)
             })
         })
+        .collect()
+}
+
+fn facts_of_kind<'a>(
+    facts: &[&'a DeploymentFact],
+    kind: DeploymentFactKind,
+) -> Vec<&'a DeploymentFact> {
+    facts
+        .iter()
+        .copied()
+        .filter(|fact| fact.kind == kind)
+        .collect()
 }
 
 /// The one cross-side output, and the only place a client key value leaves this
@@ -1401,7 +1417,7 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentClassification::NotTargeted,
             None,
             None,
-            None,
+            &[],
         );
     }
 
@@ -1411,15 +1427,16 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     chain.push(intent);
     last = Some(SccmDeploymentPhase::Intent);
 
-    if let Some(failure) = first_fact(facts, DeploymentFactKind::RequirementsFailed)
-        .or_else(|| first_fact(facts, DeploymentFactKind::DependencyFailed))
-    {
-        let finding_id = if failure.kind == DeploymentFactKind::RequirementsFailed {
-            FINDING_REQUIREMENTS_TERMINAL
+    let requirement_failures = facts_of_kind(facts, DeploymentFactKind::RequirementsFailed);
+    let dependency_failures = facts_of_kind(facts, DeploymentFactKind::DependencyFailed);
+    if !requirement_failures.is_empty() || !dependency_failures.is_empty() {
+        // A failed requirement gates the dependency check, so it names the
+        // cause when both are present; the citations stay per cause.
+        let (finding_id, terminals) = if requirement_failures.is_empty() {
+            (FINDING_DEPENDENCY_TERMINAL, dependency_failures)
         } else {
-            FINDING_DEPENDENCY_TERMINAL
+            (FINDING_REQUIREMENTS_TERMINAL, requirement_failures)
         };
-        chain.push(failure);
         return conclude(
             &chain,
             SccmDeploymentPhase::Requirements,
@@ -1427,7 +1444,7 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentClassification::ConfirmedFailure,
             last,
             Some(finding_id),
-            Some(failure),
+            &terminals,
         );
     }
     let Some(requirements) = first_fact(facts, DeploymentFactKind::RequirementsSatisfied) else {
@@ -1456,15 +1473,14 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     chain.push(located);
     last = Some(SccmDeploymentPhase::LocateContent);
 
-    if let Some(failure) = unrecovered_failure(
+    let transfer_failures = unrecovered_failures(
         facts,
         DeploymentFactKind::TransferFailed,
         DeploymentFactKind::TransferCompleted,
-    ) {
-        let started = first_fact(facts, DeploymentFactKind::TransferStarted);
+    );
+    if !transfer_failures.is_empty() {
         let mut failed_chain = chain.clone();
-        failed_chain.extend(started);
-        failed_chain.push(failure);
+        failed_chain.extend(first_fact(facts, DeploymentFactKind::TransferStarted));
         return conclude(
             &failed_chain,
             SccmDeploymentPhase::Transfer,
@@ -1472,7 +1488,7 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentClassification::ConfirmedFailure,
             last,
             Some(FINDING_TRANSFER_TERMINAL),
-            Some(failure),
+            &transfer_failures,
         );
     }
     let started = first_fact(facts, DeploymentFactKind::TransferStarted);
@@ -1489,21 +1505,20 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     chain.push(completed);
     last = Some(SccmDeploymentPhase::Transfer);
 
-    if let Some(failure) = unrecovered_failure(
+    let cache_failures = unrecovered_failures(
         facts,
         DeploymentFactKind::CacheFailed,
         DeploymentFactKind::CacheCommitted,
-    ) {
-        let mut failed_chain = chain.clone();
-        failed_chain.push(failure);
+    );
+    if !cache_failures.is_empty() {
         return conclude(
-            &failed_chain,
+            &chain,
             SccmDeploymentPhase::Cache,
             SccmDeploymentState::Failed,
             SccmDeploymentClassification::ConfirmedFailure,
             last,
             Some(FINDING_CACHE_TERMINAL),
-            Some(failure),
+            &cache_failures,
         );
     }
     let Some(cached) = first_fact(facts, DeploymentFactKind::CacheCommitted) else {
@@ -1512,21 +1527,20 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     chain.push(cached);
     last = Some(SccmDeploymentPhase::Cache);
 
-    if let Some(failure) = unrecovered_failure(
+    let enforce_failures = unrecovered_failures(
         facts,
         DeploymentFactKind::EnforceFailed,
         DeploymentFactKind::EnforceSucceeded,
-    ) {
-        let mut failed_chain = chain.clone();
-        failed_chain.push(failure);
+    );
+    if !enforce_failures.is_empty() {
         return conclude(
-            &failed_chain,
+            &chain,
             SccmDeploymentPhase::Enforce,
             SccmDeploymentState::Failed,
             SccmDeploymentClassification::ConfirmedFailure,
             last,
             Some(FINDING_ENFORCE_TERMINAL),
-            Some(failure),
+            &enforce_failures,
         );
     }
     let Some(enforced) = first_fact(facts, DeploymentFactKind::EnforceSucceeded) else {
@@ -1545,7 +1559,7 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentClassification::Symptom,
             last,
             Some(FINDING_DETECTION_MISMATCH),
-            None,
+            &[],
         );
     }
     let Some(detected) = first_fact(facts, DeploymentFactKind::Detected) else {
@@ -1554,21 +1568,20 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     chain.push(detected);
     last = Some(SccmDeploymentPhase::Detect);
 
-    if let Some(failure) = unrecovered_failure(
+    let report_failures = unrecovered_failures(
         facts,
         DeploymentFactKind::ReportFailed,
         DeploymentFactKind::ReportSucceeded,
-    ) {
-        let mut failed_chain = chain.clone();
-        failed_chain.push(failure);
+    );
+    if !report_failures.is_empty() {
         return conclude(
-            &failed_chain,
+            &chain,
             SccmDeploymentPhase::Report,
             SccmDeploymentState::Failed,
             SccmDeploymentClassification::ConfirmedFailure,
             last,
             Some(FINDING_REPORT_TERMINAL),
-            Some(failure),
+            &report_failures,
         );
     }
     let Some(reported) = first_fact(facts, DeploymentFactKind::ReportSucceeded) else {
@@ -1583,7 +1596,7 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
         SccmDeploymentClassification::Success,
         last,
         None,
-        None,
+        &[],
     )
 }
 
@@ -1598,9 +1611,18 @@ fn conclude(
     classification: SccmDeploymentClassification,
     last_successful_phase: Option<SccmDeploymentPhase>,
     finding_id: Option<&'static str>,
-    terminal: Option<&DeploymentFact>,
+    terminals: &[&DeploymentFact],
 ) -> Outcome {
-    if !chain_has_usable_order(chain) {
+    // Every cited terminal record must be orderable through the prerequisite
+    // chain. One that is not would be published on the strength of another.
+    let terminals_are_ordered = terminals.iter().all(|terminal| {
+        let mut candidate = chain.to_vec();
+        if !candidate.iter().any(|fact| std::ptr::eq(*fact, *terminal)) {
+            candidate.push(terminal);
+        }
+        chain_has_usable_order(&candidate)
+    });
+    if !chain_has_usable_order(chain) || !terminals_are_ordered {
         return Outcome {
             phase,
             state: SccmDeploymentState::InsufficientEvidence,
@@ -1613,7 +1635,7 @@ fn conclude(
             }),
             coverage_gap_artifact_ids: Vec::new(),
             finding_id: Some(FINDING_CHRONOLOGY_UNCERTAIN),
-            terminal_evidence: None,
+            terminal_evidence: Vec::new(),
         };
     }
 
@@ -1634,7 +1656,10 @@ fn conclude(
         next_artifact: None,
         coverage_gap_artifact_ids: Vec::new(),
         finding_id,
-        terminal_evidence: terminal.map(|fact| fact.reference.clone()),
+        terminal_evidence: terminals
+            .iter()
+            .map(|fact| fact.reference.clone())
+            .collect(),
     }
 }
 
@@ -1659,7 +1684,7 @@ fn insufficient(
             .map(|row| row.artifact_ids.clone())
             .unwrap_or_default(),
         finding_id: Some(coverage_gap_finding_id(phase)),
-        terminal_evidence: None,
+        terminal_evidence: Vec::new(),
     }
 }
 
@@ -1965,7 +1990,7 @@ fn build_findings(
                 .min()
                 .unwrap_or(first.last_successful_phase);
 
-            let evidence = if first.terminal_evidence.is_some() {
+            let evidence = if !first.terminal_evidence.is_empty() {
                 let mut references = seeds
                     .iter()
                     .flat_map(|seed| seed.evidence.iter().cloned())
@@ -1979,7 +2004,7 @@ fn build_findings(
 
             let mut terminal_evidence = seeds
                 .iter()
-                .filter_map(|seed| seed.terminal_evidence.clone())
+                .flat_map(|seed| seed.terminal_evidence.iter().cloned())
                 .map(SccmTerminalEvidence::observed_failure)
                 .collect::<Vec<_>>();
             terminal_evidence
