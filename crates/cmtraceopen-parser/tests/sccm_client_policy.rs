@@ -1461,9 +1461,10 @@ fn evaluate_failure_past_a_missing_download() -> SccmNormalizedBundle {
         .iter_mut()
         .find(|evidence| evidence.message.contains("Evaluate succeeded"))
         .expect("evaluate evidence");
-    evaluate.message = evaluate
-        .message
-        .replace("Evaluate succeeded", "Evaluate failed terminal Result=0x80070005");
+    evaluate.message = evaluate.message.replace(
+        "Evaluate succeeded",
+        "Evaluate failed terminal Result=0x80070005",
+    );
     bundle
 }
 
@@ -1502,7 +1503,8 @@ fn policy_terminal_failure_past_a_missing_phase_is_never_discarded() {
             .expect("findings")
             .iter()
             .any(|finding| {
-                finding["severity"] == "error"
+                finding["severity"] == "Error"
+                    && finding["class"] == "confirmedFailure"
                     && finding["terminalEvidence"]
                         .as_array()
                         .expect("terminal evidence")

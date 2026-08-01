@@ -206,10 +206,22 @@ struct ReductionContext<'a> {
     bundle: &'a SccmNormalizedBundle,
 }
 
+/// A confirmed terminal failure the proven chain could not reach.
+///
+/// The transaction stops at the first phase it cannot prove, so a failure
+/// recorded past that point is not transaction evidence. Discarding it would
+/// hide an Error-severity fact behind a moderate evidence gap, so it is carried
+/// out of the reduction and reported as a source-local observation instead.
+struct UnreachedFailure {
+    phase: SccmPolicyPhase,
+    evidence: Vec<SccmEvidenceRef>,
+}
+
 struct ReducedTransaction {
     transaction: SccmWorkflowTransaction,
     finding: Option<SccmFinding>,
     coverage_gaps: Vec<SccmFindingCoverageGap>,
+    unreached_failure: Option<UnreachedFailure>,
 }
 
 pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnalysis {
@@ -268,6 +280,32 @@ pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnaly
             coverage_gaps.extend(reduced.coverage_gaps);
             if let Some(finding) = reduced.finding {
                 findings.push(finding);
+            }
+            if let Some(unreached) = reduced.unreached_failure {
+                let requests = reduced.transaction.next_artifacts.clone();
+                source_local_observations.push(SccmSourceLocalObservation {
+                    observation_id: format!(
+                        "policy:source-local:unreached-failure:{}",
+                        reduced.transaction.key.assignment_id
+                    ),
+                    phase: Some(unreached.phase),
+                    state: SccmWorkflowState::Failed,
+                    classification: SccmWorkflowClassification::ConfirmedFailure,
+                    // The record is proven terminal, its place in the chain is
+                    // not, so it never carries the High of a proven chain.
+                    confidence: SccmWorkflowConfidence::Medium,
+                    correlation_eligible: false,
+                    evidence: unreached.evidence.clone(),
+                    next_artifacts: requests.clone(),
+                });
+                if let Some(finding) = build_unreached_failure_finding(
+                    &reduced.transaction.key.assignment_id,
+                    unreached.phase,
+                    unreached.evidence,
+                    specific_finding_requests(&requests),
+                ) {
+                    findings.push(finding);
+                }
             }
             transactions.push(reduced.transaction);
         } else {
@@ -489,6 +527,8 @@ fn reduce_policy_transaction(
         .collect::<Vec<_>>();
     sort_and_deduplicate_evidence(&mut evidence);
 
+    let unreached_failure = unreached_terminal_failure(facts, current_phase);
+
     let transaction_id = format!("policy:assignment:{}", request_key.assignment_id);
     let transaction = SccmWorkflowTransaction {
         transaction_id: transaction_id.clone(),
@@ -523,6 +563,7 @@ fn reduce_policy_transaction(
         transaction,
         finding,
         coverage_gaps: gaps,
+        unreached_failure,
     })
 }
 
@@ -1254,10 +1295,41 @@ fn coverage_gaps_for_group(
 /// This is the admission question, not the citation question: it asks whether
 /// the group can still contribute evidence, so a captured sibling does answer
 /// it. Citations use [`coverage_gaps_for_group`].
+///
+/// A group with no artifacts at all is the strongest form of "no captured
+/// source", not an exemption. Guarding on a non-empty group would let deleting
+/// the one record of an absence raise confidence above a bundle that recorded
+/// it, which is the one direction a fail-closed reducer must never move. Its
+/// citation twin agrees: [`coverage_gaps_for_group`] maps the same empty group
+/// to [`SccmCoverageState::Absent`].
 fn group_has_no_captured_source(context: &ReductionContext<'_>, logical_id: &str) -> bool {
-    let mut artifacts = client_group_artifacts(context, logical_id).peekable();
-    artifacts.peek().is_some()
-        && artifacts.all(|artifact| artifact.coverage != SccmCoverageState::Captured)
+    client_group_artifacts(context, logical_id)
+        .all(|artifact| artifact.coverage != SccmCoverageState::Captured)
+}
+
+/// The confirmed terminal failures recorded past the last proven phase.
+///
+/// The transaction cites only what it can place in the chain, so these records
+/// are outside its evidence. They are still proven terminal failures under a
+/// validated profile, so they leave the reduction rather than being dropped.
+/// Only the earliest unreached failing phase is reported, so one observation
+/// names one phase rather than merging unrelated failures.
+fn unreached_terminal_failure(
+    facts: &[PolicyFact],
+    current_phase: SccmPolicyPhase,
+) -> Option<UnreachedFailure> {
+    let phase = facts
+        .iter()
+        .filter(|fact| fact.phase > current_phase && fact.outcome == FactOutcome::Failed)
+        .map(|fact| fact.phase)
+        .min()?;
+    let mut evidence = facts
+        .iter()
+        .filter(|fact| fact.phase == phase && fact.outcome == FactOutcome::Failed)
+        .map(|fact| fact.reference.clone())
+        .collect::<Vec<_>>();
+    sort_and_deduplicate_evidence(&mut evidence);
+    Some(UnreachedFailure { phase, evidence })
 }
 
 /// The client-role artifacts belonging to one logical policy group.
@@ -1485,6 +1557,38 @@ fn build_rotation_partial_finding(
         })
         .build()
         .ok()
+}
+
+fn build_unreached_failure_finding(
+    assignment_id: &str,
+    phase: SccmPolicyPhase,
+    evidence: Vec<SccmEvidenceRef>,
+    next_artifacts: Vec<SccmArtifactRequest>,
+) -> Option<SccmFinding> {
+    let terminal_evidence = evidence
+        .iter()
+        .cloned()
+        .map(SccmTerminalEvidence::observed_failure)
+        .collect::<Vec<_>>();
+    SccmFindingBuilder::new(format!(
+        "finding:policy-unreached-failure:{assignment_id}"
+    ))
+    .class(SccmFindingClass::ConfirmedFailure)
+    .phase(SccmPhase::Policy)
+    .role(SccmRole::Client)
+    .severity(Severity::Error)
+    // The failure is proven; only its place in the chain is not.
+    .confidence(SccmConfidence::Moderate)
+    .title("Client policy failure is outside the proven chain")
+    .summary(format!(
+        "A terminal client policy failure was recorded at the {} phase, but the captured evidence cannot place it in the transaction.",
+        phase_name(phase)
+    ))
+    .evidence(evidence)
+    .terminal_evidence(terminal_evidence)
+    .next_artifacts(next_artifacts)
+    .build()
+    .ok()
 }
 
 fn build_malformed_finding(evidence: Vec<SccmEvidenceRef>) -> Option<SccmFinding> {
