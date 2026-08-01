@@ -890,6 +890,89 @@ fn policy_compound_phase_markers_are_never_exact_phase_evidence() {
     );
 }
 
+fn analysis_json(bundle: &SccmNormalizedBundle) -> Value {
+    serde_json::to_value(analyze_client_policy(bundle)).expect("analysis JSON")
+}
+
+fn reversed_bundle(bundle: &SccmNormalizedBundle) -> SccmNormalizedBundle {
+    let mut reversed = bundle.clone();
+    reversed.artifacts.reverse();
+    reversed.evidence.reverse();
+    reversed
+}
+
+#[test]
+fn policy_conflicting_facts_at_one_evidence_identity_are_quarantined() {
+    let mut bundle = load_bundle("complete");
+    let report = bundle
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("Report succeeded"))
+        .cloned()
+        .expect("report evidence");
+
+    let mut collision = report.clone();
+    collision.message = collision.message.replace(
+        "Report succeeded",
+        "Report failed terminal Result=0x80070005",
+    );
+    assert_eq!(
+        collision.reference, report.reference,
+        "the probe must reuse one logical evidence identity"
+    );
+    bundle.evidence.push(collision);
+
+    let forward = analysis_json(&bundle);
+    let reversed = analysis_json(&reversed_bundle(&bundle));
+    assert_eq!(
+        forward, reversed,
+        "opposite terminal facts at one evidence identity must not be resolved by input order"
+    );
+
+    let transaction = &forward["transactions"][0];
+    assert_ne!(transaction["state"], "succeeded");
+    assert_ne!(transaction["state"], "failed");
+    assert_ne!(transaction["confidence"], "high");
+}
+
+#[test]
+fn policy_later_same_artifact_success_recovers_a_deferred_phase() {
+    let mut bundle = load_bundle("complete");
+    let scheduled = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Schedule succeeded"))
+        .expect("schedule evidence");
+    let deferred_millis = scheduled
+        .timestamp
+        .utc_millis
+        .map(|millis| millis - 1_000)
+        .expect("schedule UTC");
+    scheduled.reference.line_start = Some(2);
+    scheduled.reference.line_end = Some(2);
+    let mut deferred = scheduled.clone();
+
+    deferred.message = deferred.message.replace("Schedule succeeded", "Schedule deferred");
+    deferred.evidence_id = format!("{}:deferred", deferred.evidence_id);
+    deferred.reference.entry_id = format!("{}:deferred", deferred.reference.entry_id);
+    deferred.reference.line_start = Some(1);
+    deferred.reference.line_end = Some(1);
+    deferred.timestamp.utc_millis = Some(deferred_millis);
+    bundle.evidence.push(deferred);
+
+    let forward = analysis_json(&bundle);
+    assert_eq!(
+        forward,
+        analysis_json(&reversed_bundle(&bundle)),
+        "same-artifact recovery must not depend on input order"
+    );
+
+    let transaction = &forward["transactions"][0];
+    assert_eq!(transaction["state"], "succeeded");
+    assert_eq!(transaction["lastSuccessfulPhase"], "report");
+    assert_eq!(transaction["confidence"], "high");
+}
+
 #[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
