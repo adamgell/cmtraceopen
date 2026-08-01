@@ -239,26 +239,23 @@ generic timestamp/path-only collisions.
 
 ```rust
 pub fn intune_device_inventory(dialect: DeviceInventoryLogDialect) -> Self {
-    let (framing, specialization) = match dialect {
-        DeviceInventoryLogDialect::Harvester => (
-            RecordFraming::PhysicalLine,
-            ParserSpecialization::IntuneDeviceInventoryHarvester,
-        ),
-        DeviceInventoryLogDialect::InventoryAdaptor => (
-            RecordFraming::LogicalRecord,
-            ParserSpecialization::IntuneDeviceInventoryAdaptor,
-        ),
-        DeviceInventoryLogDialect::RotationFailure => (
-            RecordFraming::LogicalRecord,
-            ParserSpecialization::IntuneDeviceInventoryRotationFailure,
-        ),
+    let specialization = match dialect {
+        DeviceInventoryLogDialect::Harvester => {
+            ParserSpecialization::IntuneDeviceInventoryHarvester
+        }
+        DeviceInventoryLogDialect::InventoryAdaptor => {
+            ParserSpecialization::IntuneDeviceInventoryAdaptor
+        }
+        DeviceInventoryLogDialect::RotationFailure => {
+            ParserSpecialization::IntuneDeviceInventoryRotationFailure
+        }
     };
     Self::new(
         ParserKind::IntuneDeviceInventory,
         ParserImplementation::IntuneDeviceInventory,
         ParserProvenance::Dedicated,
         ParseQuality::Structured,
-        framing,
+        RecordFraming::LogicalRecord,
         DateOrder::MonthFirst,
         Some(specialization),
     )
