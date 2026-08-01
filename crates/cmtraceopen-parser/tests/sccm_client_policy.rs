@@ -1191,6 +1191,56 @@ fn policy_cross_role_artifact_id_collision_never_admits_by_vector_order() {
     assert_eq!(transaction["confidence"], "high");
 }
 
+fn out_of_scope_sibling(basename: &str, coverage: SccmCoverageState) -> SccmArtifact {
+    SccmArtifact {
+        artifact_id: format!("out-of-scope-{basename}"),
+        display_name: basename.to_owned(),
+        original_path: None,
+        host: None,
+        role: SccmRole::ManagementPoint,
+        configmgr_version: Some("5.00.TEST.0000".to_owned()),
+        collected_at_utc: None,
+        rotation: SccmRotation::Current,
+        coverage,
+        encoding: Some("utf-8".to_owned()),
+    }
+}
+
+#[test]
+fn policy_out_of_scope_artifact_never_answers_a_client_coverage_question() {
+    let baseline = analysis_json(&load_bundle("request-auth-failure"));
+    let baseline_transaction = baseline["transactions"][0].clone();
+    let baseline_gaps = baseline["coverageGaps"].clone();
+    let baseline_requests = baseline["artifactRequests"].clone();
+    assert_eq!(
+        baseline_transaction["confidence"], "medium",
+        "the client-only bundle is capped by its own missing client-location"
+    );
+
+    // A captured out-of-scope sibling must not answer the question, and an
+    // unavailable one must not invent a gap the client bundle never had.
+    for coverage in [SccmCoverageState::Captured, SccmCoverageState::AccessDenied] {
+        let mut bundle = load_bundle("request-auth-failure");
+        bundle
+            .artifacts
+            .push(out_of_scope_sibling("LocationServices.log", coverage.clone()));
+
+        let analysis = analysis_json(&bundle);
+        assert_eq!(
+            analysis["transactions"][0], baseline_transaction,
+            "{coverage:?} out-of-scope sibling changed the client verdict"
+        );
+        assert_eq!(
+            analysis["coverageGaps"], baseline_gaps,
+            "{coverage:?} out-of-scope sibling changed the client coverage gaps"
+        );
+        assert_eq!(
+            analysis["artifactRequests"], baseline_requests,
+            "{coverage:?} out-of-scope sibling changed the client artifact requests"
+        );
+    }
+}
+
 #[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
