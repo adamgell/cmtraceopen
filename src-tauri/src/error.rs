@@ -39,6 +39,16 @@ impl SourceOperation {
 /// text: those strings are localized, so matching them would silently stop
 /// working on a non-English Windows install and offer elevation for the wrong
 /// failures.
+///
+/// # Callers must establish the path kind first
+///
+/// `ERROR_ACCESS_DENIED` (5) is not exclusively a permission verdict on Windows:
+/// `CreateFileW` without `FILE_FLAG_BACKUP_SEMANTICS` returns it for a
+/// *directory*, and std maps 5 to `ErrorKind::PermissionDenied`. Anything that
+/// opens a user-supplied path must therefore stat it (`fs::metadata`, which does
+/// pass `FILE_FLAG_BACKUP_SEMANTICS`) and reject a kind mismatch before asking
+/// this function anything. Skipping that step turns every folder into an
+/// elevation prompt that cannot succeed.
 fn is_os_access_denied(error: &std::io::Error) -> bool {
     if error.kind() == std::io::ErrorKind::PermissionDenied {
         return true;
