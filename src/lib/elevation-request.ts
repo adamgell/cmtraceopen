@@ -86,8 +86,10 @@ export function buildElevationRequest({
 /**
  * The sentence shown above the confirm/cancel buttons.
  *
- * The reason changes the framing but never the permissions: an Access Denied
- * recovery and an explicit menu restart perform the identical backend call.
+ * Driven by the restore target, deliberately not by `reason`. An Access Denied
+ * recovery and an explicit menu restart perform the identical backend call and
+ * restore the same thing, so wording them differently would imply a difference
+ * in what is about to happen when there is none.
  */
 export function describeElevationPrompt(request: ElevationRequest): string {
   const target = describeRestoreTarget(request.target);

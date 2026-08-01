@@ -18,8 +18,8 @@ import type { RestoreTicket } from "../types/elevation";
 /**
  * Hook that handles validated launch intent at app startup.
  *
- * Three launch intents can arrive together and they never blend into each
- * other. Precedence, highest first:
+ * Launch intents can arrive together and they never blend into each other.
+ * Precedence, highest first, ending in the ordinary no-intent case:
  *
  *   1. positional file paths from an OS file association;
  *   2. a valid, unconsumed elevation restore ticket;
