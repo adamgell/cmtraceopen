@@ -1150,15 +1150,7 @@ fn coverage_gaps_for_group(
     context: &ReductionContext<'_>,
     logical_id: &str,
 ) -> Vec<SccmFindingCoverageGap> {
-    let artifacts = context
-        .bundle
-        .artifacts
-        .iter()
-        .filter(|artifact| {
-            artifact.role == SccmRole::Client
-                && policy_group(&artifact.display_name) == Some(logical_id)
-        })
-        .collect::<Vec<_>>();
+    let artifacts = client_group_artifacts(context, logical_id).collect::<Vec<_>>();
     if artifacts.is_empty() {
         return vec![SccmFindingCoverageGap {
             artifact_id: logical_id.to_owned(),
@@ -1198,14 +1190,25 @@ fn coverage_gaps_for_group(
 /// the group can still contribute evidence, so a captured sibling does answer
 /// it. Citations use [`coverage_gaps_for_group`].
 fn group_has_no_captured_source(context: &ReductionContext<'_>, logical_id: &str) -> bool {
-    let mut artifacts = context
-        .bundle
-        .artifacts
-        .iter()
-        .filter(|artifact| policy_group(&artifact.display_name) == Some(logical_id))
-        .peekable();
+    let mut artifacts = client_group_artifacts(context, logical_id).peekable();
     artifacts.peek().is_some()
         && artifacts.all(|artifact| artifact.coverage != SccmCoverageState::Captured)
+}
+
+/// The client-role artifacts belonging to one logical policy group.
+///
+/// Every coverage question this reducer asks is a question about the client, so
+/// membership is decided by role and basename together. Routing all of them
+/// through one selector keeps a future group query from silently omitting the
+/// role and letting an out-of-scope artifact answer for the client.
+fn client_group_artifacts<'a>(
+    context: &'a ReductionContext<'_>,
+    logical_id: &'a str,
+) -> impl Iterator<Item = &'a SccmArtifact> {
+    context.bundle.artifacts.iter().filter(move |artifact| {
+        artifact.role == SccmRole::Client
+            && policy_group(&artifact.display_name) == Some(logical_id)
+    })
 }
 
 fn coverage_priority(state: &SccmCoverageState) -> u8 {
