@@ -241,9 +241,21 @@ pub struct SccmDeploymentCoverage {
     pub artifact_ids: Vec<String>,
 }
 
+/// Whether any collected client source declared the version this profile reads.
+///
+/// Selection is a statement about the sources, not about the diagnosis: a
+/// selected profile that read nothing still validates no family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentProfileSelectionState {
+    Selected,
+    Unselected,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmDeploymentExtractionProfile {
+    pub selection_state: SccmDeploymentProfileSelectionState,
     pub profile_id: String,
     pub source_version_prefix: String,
     pub content_version_required: bool,
@@ -317,7 +329,14 @@ pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymen
     let coverage = coverage_rows(bundle);
 
     if bundle_identity_collides(bundle) {
-        return finalize(coverage, Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        return finalize(
+            selection_state(bundle),
+            coverage,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
     }
 
     // Only client-role artifacts may participate. Building this map from the
@@ -383,6 +402,7 @@ pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymen
     let findings = build_findings(&seeds, &artifacts_by_id);
 
     finalize(
+        selection_state(bundle),
         coverage,
         transactions,
         observations,
@@ -391,7 +411,23 @@ pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymen
     )
 }
 
+fn selection_state(bundle: &SccmNormalizedBundle) -> SccmDeploymentProfileSelectionState {
+    let declared = bundle.artifacts.iter().any(|artifact| {
+        artifact.role == SccmRole::Client
+            && artifact
+                .configmgr_version
+                .as_deref()
+                .is_some_and(|version| version.starts_with(SCCM_DEPLOYMENT_TEST_VERSION_PREFIX))
+    });
+    if declared {
+        SccmDeploymentProfileSelectionState::Selected
+    } else {
+        SccmDeploymentProfileSelectionState::Unselected
+    }
+}
+
 fn finalize(
+    selection_state: SccmDeploymentProfileSelectionState,
     coverage: Vec<SccmDeploymentCoverage>,
     transactions: Vec<SccmDeploymentTransaction>,
     source_local_observations: Vec<SccmDeploymentObservation>,
@@ -427,7 +463,11 @@ fn finalize(
     SccmDeploymentAnalysis {
         schema_version: SCCM_DEPLOYMENT_ANALYSIS_SCHEMA_VERSION,
         workflow: SccmDeploymentWorkflow::Deployment,
-        extraction_profile: extraction_profile(validated_artifact_families, &transactions),
+        extraction_profile: extraction_profile(
+            selection_state,
+            validated_artifact_families,
+            &transactions,
+        ),
         coverage,
         transactions,
         source_local_observations,
@@ -450,6 +490,7 @@ fn finalize(
 }
 
 fn extraction_profile(
+    selection_state: SccmDeploymentProfileSelectionState,
     validated_artifact_families: Vec<String>,
     transactions: &[SccmDeploymentTransaction],
 ) -> SccmDeploymentExtractionProfile {
@@ -477,6 +518,7 @@ fn extraction_profile(
     }
 
     SccmDeploymentExtractionProfile {
+        selection_state,
         profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
         source_version_prefix: SCCM_DEPLOYMENT_TEST_VERSION_PREFIX.to_owned(),
         content_version_required: true,
