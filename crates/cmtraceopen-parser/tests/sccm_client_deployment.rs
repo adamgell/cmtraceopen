@@ -1835,3 +1835,100 @@ fn the_extraction_profile_reports_its_selection_state() {
         "no client source declares the profiled version"
     );
 }
+
+#[test]
+fn a_repeated_identical_content_request_publishes_the_earliest_record_only() {
+    let located = |time: &str| {
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment content located assignmentId={ASSIGNMENT} ciId={CI} packageId=LAB00021 contentId={CONTENT} contentVersion=21 distributionPointHostHandle=safe:dp:lab-dp-02 requestId={REQUEST} siteCode=LAB"
+            ),
+            time,
+            "CAS",
+        )
+    };
+
+    // The two records carry the same exact key, so the transaction key is not
+    // ambiguous. Only the citation is in question, and it must follow the
+    // records rather than the artifact names.
+    for (label, early_id, late_id) in [
+        (
+            "early sorts first",
+            "synthetic-content-a",
+            "synthetic-content-b",
+        ),
+        (
+            "early sorts last",
+            "synthetic-content-z",
+            "synthetic-content-a",
+        ),
+    ] {
+        let bundle = bundle_from(vec![
+            (
+                client_artifact("synthetic-intent", "AppIntentEval.log"),
+                intent_content(),
+            ),
+            (
+                client_artifact(early_id, "CAS.log"),
+                located("05:00:02.000+000"),
+            ),
+            (
+                rotated_artifact(late_id, "CAS.log.1", SccmRotation::Numbered(1)),
+                located("05:00:09.000+000"),
+            ),
+        ]);
+
+        let analysis = analyze_client_deployment(&bundle);
+        let transaction = only_transaction(&analysis);
+        let fact = transaction
+            .counterpart_ready_fact
+            .as_ref()
+            .unwrap_or_else(|| panic!("{label}: an unambiguous repeated request is publishable"));
+        assert_eq!(
+            fact.evidence.artifact_id, early_id,
+            "{label}: the citation must follow chronology, not the artifact name"
+        );
+        assert_eq!(
+            fact.timestamp_provenance.normalized_utc, "2026-07-30T05:00:02Z",
+            "{label}: published instant"
+        );
+    }
+}
+
+#[test]
+fn an_unorderable_repeated_content_request_is_never_published() {
+    let located = |time: &str| {
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment content located assignmentId={ASSIGNMENT} ciId={CI} packageId=LAB00021 contentId={CONTENT} contentVersion=21 distributionPointHostHandle=safe:dp:lab-dp-02 requestId={REQUEST} siteCode=LAB"
+            ),
+            time,
+            "CAS",
+        )
+    };
+    let bundle = bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            intent_content(),
+        ),
+        (
+            client_artifact("synthetic-content-a", "CAS.log"),
+            located("05:00:02.000+000"),
+        ),
+        (
+            rotated_artifact(
+                "synthetic-content-b",
+                "CAS.log.1",
+                SccmRotation::Numbered(1),
+            ),
+            located("05:00:09.000"),
+        ),
+    ]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert!(
+        transaction.counterpart_ready_fact.is_none(),
+        "two incomparable records cannot decide which instant is published"
+    );
+}
