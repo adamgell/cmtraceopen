@@ -1,0 +1,29 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {"bundleRole": "server", "workflow": "distributionPoint", "capturedUtc": "2026-07-30T12:30:00Z"},
+  "topology": {"siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "distributionPointHandles": ["safe:dp:lab-dp-01"], "rolesObserved": ["distributionPoint", "siteServer"]},
+  "artifacts": [
+    {
+      "artifactId": "dp-distribution-failure-01-distmgr",
+      "sourceId": "server-dp-distribution",
+      "producerRole": "siteServer",
+      "producerHostHandle": "safe:server:lab-pri-01",
+      "workflowSubjectRole": "distributionPoint",
+      "workflowSubjectHandle": "safe:dp:lab-dp-01",
+      "sourceKind": "ccmLog",
+      "originalBasename": "distmgr.log",
+      "sanitizedSourcePath": "SYNTHETIC://site-root/Logs/distmgr.log",
+      "pathFingerprint": "synthetic:distribution-failure",
+      "rotation": {"kind": "current", "lineageId": "distribution-failure", "fragmentComplete": true},
+      "captureState": "captured",
+      "sourceVersion": "5.00.TEST.0001",
+      "collectedUtc": "2026-07-30T12:20:00Z",
+      "encoding": "utf-8",
+      "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
+      "bytesCopied": 692,
+      "relativePath": "evidence/server-dp-distribution/site/current/distmgr.log"
+    }
+  ]
+}

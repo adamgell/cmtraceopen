@@ -1,0 +1,131 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "mixed-unrelated",
+  "workflowFamily": "mixed",
+  "bundle": {
+    "bundleId": "sccm-326-mixed-unrelated",
+    "captureHost": "LAB-CLIENT-01",
+    "role": "client",
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "mixed-notification-access",
+      "role": "client",
+      "logicalArtifactId": "client-notification",
+      "sourceName": "CcmNotificationAgent.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "accessDenied",
+      "relativePath": null,
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-notification/access/CcmNotificationAgent.log",
+      "pathFingerprint": "safe:path:326:mixed-notification-access",
+      "sourceVersion": null,
+      "encoding": null,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
+    },
+    {
+      "artifactId": "mixed-notification-invalid",
+      "role": "client",
+      "logicalArtifactId": "client-notification",
+      "sourceName": "CcmNotificationAgent.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-notification/current/CcmNotificationAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-notification/current/CcmNotificationAgent.log",
+      "pathFingerprint": "safe:path:326:mixed-notification-invalid",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
+    },
+    {
+      "artifactId": "mixed-owner-unknown",
+      "role": "client",
+      "logicalArtifactId": "client-co-management",
+      "sourceName": "CoManagementHandler.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-co-management/current/CoManagementHandler.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-co-management/CoManagementHandler.log",
+      "pathFingerprint": "safe:path:326:mixed-owner-unknown",
+      "sourceVersion": "5.99.UNKNOWN.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
+    },
+    {
+      "artifactId": "mixed-script-root-a",
+      "role": "client",
+      "logicalArtifactId": "client-scripts",
+      "sourceName": "Scripts.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-scripts/root-a/current/Scripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-scripts/root-a/Scripts.log",
+      "pathFingerprint": "safe:path:326:mixed-script-root-a",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
+    },
+    {
+      "artifactId": "mixed-script-root-b",
+      "role": "client",
+      "logicalArtifactId": "client-scripts",
+      "sourceName": "Scripts.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-scripts/root-b/current/Scripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/mixed-unrelated/client-scripts/root-b/Scripts.log",
+      "pathFingerprint": "safe:path:326:mixed-script-root-b",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
+    }
+  ]
+}

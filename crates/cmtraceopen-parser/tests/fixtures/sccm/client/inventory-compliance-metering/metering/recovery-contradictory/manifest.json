@@ -1,0 +1,46 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "recovery-contradictory",
+  "workflowFamily": "metering",
+  "bundle": {
+    "bundleId": "sccm-325-metering-recovery-contradictory",
+    "role": "client",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "metering-recovery-contradictory-report-current",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-recovery-contradictory-report-current-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 1370,
+      "relativePath": "evidence/client-metering/root-a/current/SWMTRReportGen.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    }
+  ]
+}

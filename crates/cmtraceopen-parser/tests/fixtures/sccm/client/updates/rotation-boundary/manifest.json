@@ -1,0 +1,73 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "role": "client",
+    "workflow": "updates",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "updates-rotation-boundary-01-current",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "ScanAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/ScanAgent.log",
+      "pathFingerprint": "synthetic:updates-rotation-boundary-01-current",
+      "rotation": {
+        "kind": "current",
+        "lineageId": "updates-rotation-split",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T12:59:59Z",
+      "bytesCopied": 88,
+      "relativePath": "evidence/client-updates/current/ScanAgent.log"
+    },
+    {
+      "artifactId": "updates-rotation-boundary-02-lo",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "ScanAgent.lo_",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/ScanAgent.lo_",
+      "pathFingerprint": "synthetic:updates-rotation-boundary-02-lo",
+      "rotation": {
+        "kind": "lo",
+        "lineageId": "updates-rotation-split",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T12:59:59Z",
+      "bytesCopied": 143,
+      "relativePath": "evidence/client-updates/lo/ScanAgent.lo_"
+    }
+  ]
+}

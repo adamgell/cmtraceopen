@@ -6,6 +6,7 @@ mod ingest;
 mod keys;
 pub mod models;
 mod rotation;
+pub mod server;
 mod signals;
 
 pub use catalog::*;

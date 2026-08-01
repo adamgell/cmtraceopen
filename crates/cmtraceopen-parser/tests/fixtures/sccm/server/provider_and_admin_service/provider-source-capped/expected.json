@@ -1,0 +1,29 @@
+{
+  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "workflow": "providerAndAdminService",
+  "scenario": "provider-source-capped",
+  "profiles": [
+    {
+      "layer": "provider",
+      "selectionState": "selectedSynthetic",
+      "profileId": "provider-server-5.00.test-v1"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "coverage-provider-capped",
+      "state": "capped",
+      "sourceId": "server-provider",
+      "layer": "provider"
+    }
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [],
+  "artifactRequests": [
+    {
+      "logicalArtifactId": "server-provider",
+      "reason": "Recapture the bounded Provider source without truncating the required transaction evidence."
+    }
+  ],
+  "crossSideCausalClaims": []
+}

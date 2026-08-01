@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE NotificationId=NOTIFY-326-INVALID ChannelId=CHANNEL-326-CLIENT ResourceHandle=safe:resource-326-notification-invalid Phase=Acknowledge Disposition=Acknowledged Terminal=true]LOG]!><time="14:00:00.000+2500" date="07-30-2026" component="CcmNotificationAgent" context="" type="1" thread="326" file="">

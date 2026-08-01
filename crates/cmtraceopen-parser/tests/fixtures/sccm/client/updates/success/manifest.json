@@ -1,0 +1,233 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "role": "client",
+    "workflow": "updates",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "updates-success-01-scan",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "ScanAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/ScanAgent.log",
+      "pathFingerprint": "synthetic:updates-success-01-scan",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T02:59:59Z",
+      "bytesCopied": 771,
+      "relativePath": "evidence/client-updates/current/ScanAgent.log"
+    },
+    {
+      "artifactId": "updates-success-02-sup",
+      "designOnlyCatalog": {
+        "entryId": "client-location-services-shared",
+        "groupMemberships": [
+          "client-location-services-shared"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "LocationServices.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/LocationServices.log",
+      "pathFingerprint": "synthetic:updates-success-02-sup",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T02:59:59Z",
+      "bytesCopied": 394,
+      "relativePath": "evidence/client-location-services-shared/current/LocationServices.log"
+    },
+    {
+      "artifactId": "updates-success-03-download",
+      "designOnlyCatalog": {
+        "entryId": "client-content",
+        "groupMemberships": [
+          "client-content"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "DataTransferService.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DataTransferService.log",
+      "pathFingerprint": "synthetic:updates-success-03-download",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T02:59:59Z",
+      "bytesCopied": 397,
+      "relativePath": "evidence/client-content/current/DataTransferService.log"
+    },
+    {
+      "artifactId": "updates-success-04-window",
+      "designOnlyCatalog": {
+        "entryId": "client-maintenance-window",
+        "groupMemberships": [
+          "client-maintenance-window"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "ServiceWindowManager.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/ServiceWindowManager.log",
+      "pathFingerprint": "synthetic:updates-success-04-window",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T02:59:59Z",
+      "bytesCopied": 402,
+      "relativePath": "evidence/client-maintenance-window/current/ServiceWindowManager.log"
+    },
+    {
+      "artifactId": "updates-success-05-install",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "UpdatesHandler.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/UpdatesHandler.log",
+      "pathFingerprint": "synthetic:updates-success-05-install",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T02:59:59Z",
+      "bytesCopied": 391,
+      "relativePath": "evidence/client-updates/current/UpdatesHandler.log"
+    },
+    {
+      "artifactId": "updates-success-06-reboot",
+      "designOnlyCatalog": {
+        "entryId": "client-reboot",
+        "groupMemberships": [
+          "client-reboot"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "RebootCoordinator.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/RebootCoordinator.log",
+      "pathFingerprint": "synthetic:updates-success-06-reboot",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T02:59:59Z",
+      "bytesCopied": 392,
+      "relativePath": "evidence/client-reboot/current/RebootCoordinator.log"
+    },
+    {
+      "artifactId": "updates-success-07-report",
+      "designOnlyCatalog": {
+        "entryId": "client-policy-state",
+        "groupMemberships": [
+          "client-policy-state"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "StateMessage.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/StateMessage.log",
+      "pathFingerprint": "synthetic:updates-success-07-report",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T02:59:59Z",
+      "bytesCopied": 388,
+      "relativePath": "evidence/client-policy-state/current/StateMessage.log"
+    },
+    {
+      "artifactId": "updates-success-08-supplemental-skipped",
+      "designOnlyCatalog": {
+        "entryId": "client-windows-update-supplemental",
+        "groupMemberships": [
+          "client-windows-update-supplemental"
+        ]
+      },
+      "role": "client",
+      "kind": "supplementalLog",
+      "captureState": "skipped",
+      "originalBasename": "ReportingEvents.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/WindowsUpdate/ReportingEvents.log",
+      "pathFingerprint": "synthetic:updates-success-08-supplemental-skipped",
+      "rotation": {
+        "kind": "current"
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T02:59:59Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    }
+  ]
+}

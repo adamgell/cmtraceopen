@@ -1,0 +1,17 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "topology-mismatch",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"mismatch-01-sender","state":"captured"},{"artifactId":"mismatch-02-despool","state":"captured"}],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {"observationId":"mismatch-01-origin","classification":"topologyMismatch","confidence":"low","correlationEligible":false,"artifactIds":["mismatch-01-sender"],"evidence":[{"artifactId":"mismatch-01-sender","startLine":1,"endLine":1}]},
+    {"observationId":"mismatch-02-target","classification":"topologyMismatch","confidence":"low","correlationEligible":false,"artifactIds":["mismatch-02-despool"],"evidence":[{"artifactId":"mismatch-02-despool","startLine":1,"endLine":1}]}
+  ],
+  "artifactRequests": [],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

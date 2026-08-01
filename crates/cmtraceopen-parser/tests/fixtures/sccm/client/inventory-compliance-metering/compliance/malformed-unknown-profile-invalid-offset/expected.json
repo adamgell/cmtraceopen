@@ -1,0 +1,67 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "malformed-unknown-profile-invalid-offset",
+  "workflow": "compliance",
+  "extractionProfile": {
+    "id": "sccm-client-compliance-5.00.test-v1",
+    "selectionState": "mixedKnownAndUnknown",
+    "versionPrefix": "5.00.TEST."
+  },
+  "transactions": [],
+  "sourceLocalObservations": [
+    {
+      "observationId": "compliance-invalid-offset",
+      "kind": "invalidOffset",
+      "artifactIds": [
+        "compliance-malformed-unknown-profile-invalid-offset-invalid-offset"
+      ],
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "claim": "Invalid timestamp offset cannot support ordered or high-confidence workflow claims."
+    },
+    {
+      "observationId": "compliance-malformed",
+      "kind": "malformedRecord",
+      "artifactIds": [
+        "compliance-malformed-unknown-profile-invalid-offset-malformed"
+      ],
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "claim": "Malformed CCM remains a parse coverage state."
+    },
+    {
+      "observationId": "compliance-unknown-profile",
+      "kind": "unknownProfile",
+      "artifactIds": [
+        "compliance-malformed-unknown-profile-invalid-offset-unknown-version"
+      ],
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "claim": "Unknown source version has no selected extraction profile."
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-invalid-offset",
+      "logicalArtifactId": "client-compliance",
+      "state": "captured"
+    },
+    {
+      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-malformed",
+      "logicalArtifactId": "client-compliance",
+      "state": "parseFailed"
+    },
+    {
+      "artifactId": "compliance-malformed-unknown-profile-invalid-offset-unknown-version",
+      "logicalArtifactId": "client-compliance",
+      "state": "captured"
+    }
+  ],
+  "findings": [],
+  "prohibitedClaims": [
+    "missing or unreadable evidence proves workflow success or failure",
+    "same-minute records are causally related without one exact validated key tuple",
+    "client evidence alone proves a server-side cause",
+    "this preparation corpus is live Windows acceptance"
+  ]
+}

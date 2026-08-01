@@ -1,0 +1,82 @@
+{
+  "cardSchemaVersion": "1.0.0",
+  "cardId": "reporting",
+  "cardVersion": "1.0.0",
+  "family": "Reporting services role diagnostics",
+  "roleScope": [
+    "reportingServicesPoint"
+  ],
+  "candidateBasenames": [
+    "srsrp.log"
+  ],
+  "pathClasses": [
+    "configuredRoleLogRoot",
+    "reportServerLogs",
+    "siteServerLogs"
+  ],
+  "rawParserFamily": "ccm",
+  "sourceVersionScope": {
+    "state": "unknown",
+    "allowedPrefixes": []
+  },
+  "capture": {
+    "classification": "optional",
+    "maxBytes": 4194304,
+    "accessPolicy": "leastPrivilegeNoEscalation",
+    "rotationPolicy": {
+      "kinds": [
+        "current",
+        "lo_"
+      ],
+      "maxFiles": 2
+    }
+  },
+  "privacy": {
+    "sensitivity": "high",
+    "classes": [
+      "dataSourceIdentity",
+      "reportIdentity",
+      "serviceAccountIdentity",
+      "userIdentity"
+    ],
+    "redactionRequired": true,
+    "publicProjection": [
+      "captureState",
+      "cardId",
+      "coverageState",
+      "roleScope"
+    ],
+    "rawSensitiveFieldProjection": []
+  },
+  "expectedHealthyEvidence": "A future validated rule must cite a reporting-role operation and explicit terminal configuration or service outcome from a compatible role instance.",
+  "terminalFailureEvidence": "A future terminal rule must cite an explicit reporting-role failure while keeping queries, report names, accounts, and data-source details private.",
+  "correlationPolicy": {
+    "keyState": "unvalidated",
+    "allowedKeyKinds": [],
+    "timeOnlyEligible": false,
+    "topologyRequired": true
+  },
+  "fixtureIds": [],
+  "ownerIssue": "#334",
+  "promotion": {
+    "state": "candidate",
+    "observedEvidenceIds": [],
+    "implementationIssue": null,
+    "productionReducer": null,
+    "deferredReason": null
+  },
+  "semanticPolicy": {
+    "captureGuidanceOnly": true,
+    "canCreateTransactions": false,
+    "canCreateFailureFindings": false
+  },
+  "nextEvidence": [
+    "Observe a configured reporting role and record sanitized source-version and configured-path provenance.",
+    "Define bounded redaction fixtures for report, query, account, endpoint, and data-source identity before any semantic rule."
+  ],
+  "supersession": {
+    "state": "active",
+    "supersedes": [],
+    "supersededBy": null
+  }
+}

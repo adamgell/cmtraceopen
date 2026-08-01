@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE Family=compliance CiId=CI-040 BaselineId=BASELINE-040 StateId=STATE-040 ResourceHandle=safe:resource:compliance-040 Phase=Evaluate Disposition=NonCompliant Terminal=true ResultType=Evaluation]LOG]!><time="02:40:00.000+000" date="7-30-2026" component="CITaskMgr" context="" type="1" thread="325" file="">

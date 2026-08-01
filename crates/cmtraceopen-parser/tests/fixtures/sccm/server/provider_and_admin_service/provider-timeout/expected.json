@@ -1,0 +1,24 @@
+{
+  "contractState":"preparationOnlyReviewedDependenciesAvailable",
+  "workflow":"providerAndAdminService",
+  "scenario":"provider-timeout",
+  "profiles":[{"layer":"provider","selectionState":"selectedSynthetic","profileId":"provider-server-5.00.test-v1"}],
+  "coverage":[{"artifactId":"provider-timeout-current","state":"captured","sourceId":"server-provider","layer":"provider"}],
+  "transactions":[
+    {
+      "transactionId":"provider:44444444-4444-4444-4444-444444444444:safe-operation-provider-timeout:provider-local",
+      "layer":"provider",
+      "key":{"requestId":"44444444-4444-4444-4444-444444444444","operationHandle":"safe-operation-provider-timeout","endpointId":"provider-local","confidence":"exact","extractionProfileId":"provider-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"unusableInvalidOffset","state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low","terminalEvidence":false,"coverageGapArtifactIds":[],
+      "publicSummary":"Provider evidence stops before an explicit terminal outcome.",
+      "observations":[
+        {"observationId":"provider-timeout-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-timeout-current","startLine":1,"endLine":1}]},
+        {"observationId":"provider-timeout-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-timeout-current","startLine":2,"endLine":2}]},
+        {"observationId":"provider-timeout-03-execute","phase":"executeProviderOperation","disposition":"pending","terminal":false,"evidence":[{"artifactId":"provider-timeout-current","startLine":3,"endLine":3}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations":[],
+  "artifactRequests":[{"logicalArtifactId":"server-provider","reason":"Capture the bounded Provider source lineage for the exact request key and terminal outcome."}],
+  "crossSideCausalClaims":[]
+}

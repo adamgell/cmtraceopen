@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE Family=compliance CiId=CI-011 BaselineId=BASELINE-011 StateId=STATE-011 ResourceHandle=safe:resource:compliance-011 Phase=Remediate Disposition=Failed Terminal=true ErrorCode=0x80070005]LOG]!><time="01:10:01.000+000" date="7-30-2026" component="DCMAgent" context="" type="3" thread="325" file="">

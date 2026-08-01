@@ -96,7 +96,8 @@
     {
       "artifactId": "mp-iis-control-current",
       "designOnlyCatalog": {"entryId":"server-mp-policy","groupMemberships":["server-mp-policy"]},
-      "role": "managementPoint",
+      "role": "siteServer",
+      "workflowSubject": {"role":"managementPoint"},
       "producer": "SMS_MP_CONTROL_MANAGER",
       "sourceKind": "ccmLog",
       "captureState": "captured",
