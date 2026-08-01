@@ -65,4 +65,6 @@ Report the PR URL, final commit, review-cycle count, resolved threads, verificat
 
 ## Provenance
 
-Adapted from `gh-copilot-review-loop` in https://github.com/jorgeasaurus/agent-skills (upstream states no license). The only change is the state-script path, which upstream resolves under `$CODEX_HOME`.
+Adapted from [`gh-copilot-review-loop`](https://github.com/jorgeasaurus/agent-skills/tree/72ef3d3322ee0ac8db02cf324c2030f13d3bb68d/gh-copilot-review-loop) by Jorge Suarez (`jorgeasaurus`). The upstream repository declares the work under the MIT License in its README. This copy pins upstream commit `72ef3d3322ee0ac8db02cf324c2030f13d3bb68d`; see `LICENSE.txt` in this directory for the preserved license and attribution.
+
+Local changes use the repository-relative state-script path, add the explicit `--repo`/`--pr` example, and format the reviewer-request command on one line. `scripts/review_state.py` is byte-identical to the pinned upstream version.
