@@ -2063,7 +2063,7 @@ git commit -m "test(dns): add DNS debug log corpus fixtures and regression tests
 Search for the TypeScript definition of LogEntry or ParseResult that mirrors the Rust struct. This is the frontend type that needs the nine new DNS fields.
 
 ```bash
-cd /Users/Adam.Gell/repo/cmtraceopen && grep -r "query_name\|queryName\|LogEntry\|logEntry" src/types/ --include="*.ts" --include="*.tsx" -l
+grep -r "query_name\|queryName\|LogEntry\|logEntry" src/types/ --include="*.ts" --include="*.tsx" -l
 ```
 
 - [ ] **Step 2: Add DNS fields to the TypeScript type**
