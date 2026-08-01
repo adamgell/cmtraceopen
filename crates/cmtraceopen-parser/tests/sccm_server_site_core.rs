@@ -836,6 +836,78 @@ fn synthesized_fragment_references_never_collide_with_parsed_records() {
     }
 }
 
+/// A request names what the profile could read if it were collected. Naming a
+/// family the profile has no validated producer for asks the operator for
+/// bytes that could never change the answer, and it displaces the family that
+/// could.
+#[test]
+fn a_status_request_never_names_a_family_it_cannot_read() {
+    let mut bundle = load_bundle("inbox-backlog");
+    for source in &mut bundle.sources {
+        if source.source_group == "server-status" {
+            source.artifact.display_name = "statesys.log".to_owned();
+            source.rotation_lineage = "statesys.log".to_owned();
+        }
+    }
+
+    let analysis = analyze_site_core(&bundle);
+    let requests = analysis
+        .results
+        .iter()
+        .flat_map(|result| result.next_artifacts.iter())
+        .filter(|request| request.logical_name == "server-status")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests.len(),
+        1,
+        "a deferred transaction still asks for the missing status terminal record"
+    );
+    assert!(
+        !requests[0]
+            .basenames
+            .iter()
+            .any(|basename| basename == "statesys.log"),
+        "a request must not name a source family the profile cannot read"
+    );
+    assert!(
+        requests[0]
+            .basenames
+            .iter()
+            .any(|basename| basename == "statmgr.log"),
+        "a request must name the status family the profile is validated for"
+    );
+}
+
+/// `capture_limit_bytes` is caller supplied. Doubling and rounding it up must
+/// stay arithmetic, not a panic in debug and a silently empty bound in release.
+#[test]
+fn an_extreme_capture_limit_still_produces_a_bounded_request() {
+    let mut bundle = load_bundle("incomplete");
+    for source in &mut bundle.sources {
+        if source.capture_limit_bytes.is_some() {
+            source.capture_limit_bytes = Some(u64::MAX);
+        }
+    }
+
+    let analysis = analyze_site_core(&bundle);
+    let bounds = analysis
+        .results
+        .iter()
+        .flat_map(|result| result.next_artifacts.iter())
+        .filter_map(|request| request.max_bytes_per_artifact)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bounds.len(),
+        1,
+        "the capped source still drives one bounded recapture request"
+    );
+    assert!(
+        bounds[0] >= 4096 && bounds[0].is_power_of_two(),
+        "a recapture bound must stay a declared power of two, not {}",
+        bounds[0]
+    );
+}
+
 /// One captured sitecomp source carrying `records` distinct, well-formed,
 /// non-overlapping component records. Nothing collides, which is the ordinary
 /// case and the one a per-record rescan of the bundle cannot short-circuit.
