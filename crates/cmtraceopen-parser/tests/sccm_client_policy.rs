@@ -1360,6 +1360,60 @@ fn policy_fully_captured_bundle_reports_no_coverage_gap() {
     );
 }
 
+fn request_reasons(analysis: &Value) -> Vec<String> {
+    analysis["artifactRequests"]
+        .as_array()
+        .expect("artifact requests")
+        .iter()
+        .map(|request| {
+            request["reason"]
+                .as_str()
+                .expect("request reason")
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn policy_missing_phase_is_never_requested_as_a_deferred_retry() {
+    let mut bundle = load_bundle("complete");
+    bundle
+        .evidence
+        .retain(|evidence| !evidence.message.contains("Schedule succeeded"));
+
+    let analysis = analysis_json(&bundle);
+    assert_eq!(analysis["transactions"][0]["state"], "incomplete");
+    let reasons = request_reasons(&analysis);
+    assert!(
+        !reasons.is_empty(),
+        "a missing phase must still ask for the source"
+    );
+    assert!(
+        reasons.iter().all(|reason| !reason.contains("deferred")),
+        "nothing is deferred when the phase is absent, got {reasons:?}"
+    );
+}
+
+#[test]
+fn policy_deferred_phase_still_asks_for_the_deferred_retry() {
+    let reasons = request_reasons(&analysis_json(&load_bundle("scheduler-deferred")));
+    assert!(
+        reasons.iter().any(|reason| reason.contains("deferred")),
+        "a genuinely deferred phase keeps its own wording, got {reasons:?}"
+    );
+}
+
+#[test]
+fn policy_time_contradiction_asks_for_usable_timestamps() {
+    let reasons = request_reasons(&analysis_json(&load_bundle("contradictory-offset")));
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| reason.contains("timestamp offset")),
+        "a contradiction caused by unusable time must ask for usable time, got {reasons:?}"
+    );
+}
+
 #[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
