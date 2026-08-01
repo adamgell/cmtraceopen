@@ -1,0 +1,48 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "relocated-fragments",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":"task-sequence-client-5.00.test-v1","status":"matched"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"captured","pathClasses":["client","fullOs","setup","winpe"]}],
+  "artifactProvenance": [
+    {"artifactId":"task-sequence-relocated-01-winpe","bytesCopied":411,"pathClass":"winpe","sanitizedSourcePath":"SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":0},
+    {"artifactId":"task-sequence-relocated-02-setup","bytesCopied":400,"pathClass":"setup","sanitizedSourcePath":"SYNTHETIC://setup/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://setup/smstslog/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":1},
+    {"artifactId":"task-sequence-relocated-03-full-os","bytesCopied":427,"pathClass":"fullOs","sanitizedSourcePath":"SYNTHETIC://full-os/_SMSTaskSequence/Logs/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://full-os/_SMSTaskSequence/Logs/smstslog/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":2},
+    {"artifactId":"task-sequence-relocated-04-client","bytesCopied":398,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":3}
+  ],
+  "transactions": [
+    {
+      "transactionId": "task-sequence-006",
+      "key": {"keyProfileKind":"executionPackageAdvertisementContext","executionId":"72400000-0000-0000-0000-000000000006","taskSequencePackageId":"LAB00324","advertisementId":"LAB20306","runContext":"osd","confidence":"exact","extractionProfileId":"task-sequence-client-5.00.test-v1"},
+      "evidence": [
+        {"artifactId":"task-sequence-relocated-01-winpe","startLine":1,"endLine":1},
+        {"artifactId":"task-sequence-relocated-02-setup","startLine":1,"endLine":1},
+        {"artifactId":"task-sequence-relocated-03-full-os","startLine":1,"endLine":1},
+        {"artifactId":"task-sequence-relocated-04-client","startLine":1,"endLine":1}
+      ],
+      "pathSequence": [
+        {"artifactId":"task-sequence-relocated-01-winpe","pathClass":"winpe","relocationOrdinal":0},
+        {"artifactId":"task-sequence-relocated-02-setup","pathClass":"setup","relocationOrdinal":1},
+        {"artifactId":"task-sequence-relocated-03-full-os","pathClass":"fullOs","relocationOrdinal":2},
+        {"artifactId":"task-sequence-relocated-04-client","pathClass":"client","relocationOrdinal":3}
+      ],
+      "timestampProvenance": {"orderingState":"normalizedUtc","offsetMinutes":0,"normalizedUtc":"2026-07-30T01:10:03Z"},
+      "orderingEvidence": {"artifactId":"task-sequence-relocated-04-client","startLine":1,"endLine":1},
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null,
+      "phase": "complete",
+      "state": "succeeded",
+      "lastSuccessfulPhase": "complete",
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "terminalEvidence": {"artifactId":"task-sequence-relocated-04-client","startLine":1,"endLine":1}
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [],
+  "correlationBoundary": {"scope":"clientRelocationOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"],"pathOrderSource":"_SMSTSLogPath plus explicit relocationOrdinal"}
+}
