@@ -786,7 +786,7 @@ fn reduce_transaction(
                 && success.ordering_millis() > failure.ordering_millis()
     );
 
-    let (state, finding_class, base_confidence, decisive) = if conflicting {
+    let (state, candidate_class, base_confidence, decisive) = if conflicting {
         (
             SccmSiteCoreState::Incomplete,
             Some(SccmFindingClass::InsufficientEvidence),
@@ -842,7 +842,7 @@ fn reduce_transaction(
         "site-core/{}/{}/{}",
         key.site_code, key.component_id, key.work_item_id
     );
-    let finding = finding_class.clone().and_then(|class| {
+    let finding = candidate_class.and_then(|class| {
         build_finding(
             context,
             TransactionFinding {
@@ -862,6 +862,14 @@ fn reduce_transaction(
             },
         )
     });
+    // The class a consumer reads is a projection of the finding that was
+    // actually emitted, never a parallel claim about one. A class the shared
+    // contract refused to validate is withdrawn with its finding: the state,
+    // the cited evidence and the next-artifact request still say what is known
+    // and what is missing, which is the whole of what the reducer can prove.
+    let finding_class = finding
+        .as_ref()
+        .map(|emitted| emitted.finding.class.clone());
 
     ReducedTransaction {
         result: SccmSiteCoreResult {
@@ -1175,31 +1183,38 @@ fn append_fragment_observations(
     }
 
     if !rotation_boundary.is_empty() {
-        let (observation, finding) = build_observation(
+        if let Some((observation, finding)) = build_observation(
             "rotation-boundary-fragments",
             SiteCoreGroup::Component,
             SccmFindingClass::InsufficientEvidence,
             SccmSiteCoreConfidence::None,
             rotation_boundary,
             rotation_boundary_requests,
-        );
-        observations.push(observation);
-        findings.extend(finding);
+        ) {
+            observations.push(observation);
+            findings.push(finding);
+        }
     }
     for (group, (group_fragments, requests)) in malformed {
-        let (observation, finding) = build_observation(
+        if let Some((observation, finding)) = build_observation(
             &format!("malformed-{}-record", group.slug()),
             group,
             SccmFindingClass::Symptom,
             SccmSiteCoreConfidence::Low,
             group_fragments,
             requests,
-        );
-        observations.push(observation);
-        findings.extend(finding);
+        ) {
+            observations.push(observation);
+            findings.push(finding);
+        }
     }
 }
 
+/// An observation always names a finding class, so it is published only
+/// together with the finding that carries it. If the shared contract refuses
+/// the finding, the fragment is still reported as a coverage gap by
+/// `collect_coverage_gaps`; what is withheld is the classification, not the
+/// artifact.
 fn build_observation(
     observation_id: &str,
     group: SiteCoreGroup,
@@ -1207,7 +1222,7 @@ fn build_observation(
     confidence: SccmSiteCoreConfidence,
     fragments: Vec<&FragmentArtifact>,
     mut next_artifacts: Vec<SccmSiteCoreArtifactRequest>,
-) -> (SccmSiteCoreObservation, Option<SccmSiteCoreFinding>) {
+) -> Option<(SccmSiteCoreObservation, SccmSiteCoreFinding)> {
     let mut evidence = fragments
         .iter()
         .map(|fragment| fragment.evidence.clone())
@@ -1239,20 +1254,20 @@ fn build_observation(
         &evidence,
         gaps,
         &next_artifacts,
-    );
+    )?;
 
     let observation = SccmSiteCoreObservation {
         observation_id: observation_id.to_owned(),
         state: SccmSiteCoreState::ParseGap,
         last_successful_phase: None,
-        finding_class: class,
+        finding_class: finding.finding.class.clone(),
         confidence,
         confidence_ceiling: confidence,
         evidence,
         coverage_gap_artifact_ids,
         next_artifacts,
     };
-    (observation, finding)
+    Some((observation, finding))
 }
 
 fn fragment_request(
