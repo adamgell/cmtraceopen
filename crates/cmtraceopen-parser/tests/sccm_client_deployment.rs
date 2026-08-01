@@ -1116,10 +1116,10 @@ fn an_unorderable_terminal_record_downgrades_to_a_low_confidence_symptom() {
     assert_eq!(classification_name(transaction.classification), "symptom");
     assert_eq!(confidence_name(transaction.confidence), "low");
     assert!(
-        analysis
-            .findings
-            .iter()
-            .any(|finding| finding.finding.finding_id == "deployment-chronology-uncertain"),
+        analysis.findings.iter().any(|finding| finding
+            .finding
+            .finding_id
+            .starts_with("deployment-chronology-uncertain")),
         "an unorderable chain must name the missing ordering evidence"
     );
 }
@@ -1435,6 +1435,303 @@ fn the_selected_extraction_profile_reports_what_the_bundle_validated() {
                     .iter()
                     .any(|row| &row.logical_artifact_id == family),
                 "{scenario}: validated family {family} has no coverage row"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Review defects: a fragment is not a record, ambiguity is not a choice, a
+// boundary miss is not a discard, and a group representative may not speak for
+// evidence it does not represent.
+// ---------------------------------------------------------------------------
+
+const OTHER_ASSIGNMENT: &str = "10000000-0000-0000-0000-0000000000c1";
+const OTHER_CONTENT: &str = "30000000-0000-0000-0000-0000000000c3";
+const OTHER_REQUEST: &str = "40000000-0000-0000-0000-0000000000c4";
+
+fn rotated_artifact(artifact_id: &str, basename: &str, rotation: SccmRotation) -> SccmArtifact {
+    let mut artifact = client_artifact(artifact_id, basename);
+    artifact.rotation = rotation;
+    artifact
+}
+
+fn intent_record() -> String {
+    record(
+        &format!(
+            "SYNTHETIC FIXTURE deployment targeted assignmentId={ASSIGNMENT} ciId={CI} state=targeted"
+        ),
+        "05:00:00.000+000",
+        "AppIntentEval",
+    )
+}
+
+#[test]
+fn a_physical_fragment_inside_a_captured_artifact_never_becomes_a_fact() {
+    let content = format!(
+        "{}Requirements satisfied assignmentId={ASSIGNMENT} ciId={CI}\n",
+        intent_record()
+    );
+    let bundle = bundle_from(vec![(
+        client_artifact("synthetic-intent", "AppIntentEval.log"),
+        content,
+    )]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(
+        phase_name(transaction.phase),
+        "requirements",
+        "an unframed line cannot satisfy requirements"
+    );
+    assert_eq!(
+        transaction.last_successful_phase.map(phase_name),
+        Some("intent"),
+        "a fragment cannot promote the last successful phase"
+    );
+    assert!(
+        analysis
+            .source_local_observations
+            .iter()
+            .any(|observation| observation.artifact_id == "synthetic-intent"
+                && !observation.complete_logical_record),
+        "the fragment must still be visible as a source-local observation"
+    );
+}
+
+#[test]
+fn a_physical_fragment_never_confirms_a_terminal_failure() {
+    let content = format!(
+        "{}Requirements terminal failure assignmentId={ASSIGNMENT} ciId={CI} requirementId=REQ-TEST-901 terminal=true\n",
+        intent_record()
+    );
+    let bundle = bundle_from(vec![(
+        client_artifact("synthetic-intent", "AppIntentEval.log"),
+        content,
+    )]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_ne!(
+        classification_name(transaction.classification),
+        "confirmedFailure",
+        "an unframed line cannot confirm a terminal failure"
+    );
+    assert_ne!(confidence_name(transaction.confidence), "high");
+}
+
+#[test]
+fn an_ambiguous_content_request_is_never_published_cross_side() {
+    let located = |content_id: &str, request_id: &str, package: &str| {
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment content located assignmentId={ASSIGNMENT} ciId={CI} packageId={package} contentId={content_id} contentVersion=21 distributionPointHostHandle=safe:dp:lab-dp-02 requestId={request_id} siteCode=LAB"
+            ),
+            "05:00:02.000+000",
+            "CAS",
+        )
+    };
+
+    for (label, first_id, second_id) in [
+        ("alphabetical", "synthetic-content-a", "synthetic-content-b"),
+        ("renamed", "synthetic-content-z", "synthetic-content-y"),
+    ] {
+        let bundle = bundle_from(vec![
+            (
+                client_artifact("synthetic-intent", "AppIntentEval.log"),
+                intent_content(),
+            ),
+            (
+                client_artifact(first_id, "CAS.log"),
+                located(CONTENT, REQUEST, "LAB00021"),
+            ),
+            (
+                rotated_artifact(second_id, "CAS.log.1", SccmRotation::Numbered(1)),
+                located(OTHER_CONTENT, OTHER_REQUEST, "LAB00022"),
+            ),
+        ]);
+
+        let analysis = analyze_client_deployment(&bundle);
+        let transaction = only_transaction(&analysis);
+        assert_eq!(
+            key_profile_name(transaction.key.key_profile_kind),
+            "assignmentCi",
+            "{label}: an ambiguous topology cannot key a transaction"
+        );
+        assert!(transaction.key.content_id.is_none(), "{label}: content id");
+        assert!(
+            transaction.counterpart_ready_fact.is_none(),
+            "{label}: an ambiguous content request must never be published cross-side"
+        );
+        assert!(
+            !analysis.correlation_handoff.emitted_counterpart_ready_fact,
+            "{label}: correlation handoff flag"
+        );
+    }
+}
+
+#[test]
+fn a_punctuation_adjacent_duplicate_label_is_ambiguity_not_a_first_win() {
+    let cases = [
+        (
+            "terminal",
+            format!(
+                "SYNTHETIC FIXTURE deployment enforcement terminal failure assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} exitCode=1603 terminal=true (terminal=false)"
+            ),
+        ),
+        (
+            "exit code",
+            format!(
+                "SYNTHETIC FIXTURE deployment enforcement terminal failure assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} exitCode=1603 (exitCode=0) terminal=true"
+            ),
+        ),
+    ];
+
+    for (label, message) in cases {
+        let bundle = bundle_from(vec![
+            (
+                client_artifact("synthetic-intent", "AppIntentEval.log"),
+                intent_content(),
+            ),
+            (
+                client_artifact("synthetic-content", "CAS.log"),
+                content_content(),
+            ),
+            (
+                client_artifact("synthetic-transfer", "DataTransferService.log"),
+                transfer_content("05:00:03.000+000", "05:00:04.000+000"),
+            ),
+            (
+                client_artifact("synthetic-enforce", "AppEnforce.log"),
+                record(&message, "05:00:06.000+000", "AppEnforce"),
+            ),
+        ]);
+
+        let analysis = analyze_client_deployment(&bundle);
+        let transaction = only_transaction(&analysis);
+        assert_ne!(
+            classification_name(transaction.classification),
+            "confirmedFailure",
+            "{label}: a conflicting duplicate label cannot confirm a failure"
+        );
+        assert_ne!(
+            confidence_name(transaction.confidence),
+            "high",
+            "{label}: confidence"
+        );
+    }
+}
+
+#[test]
+fn a_chronology_finding_never_speaks_for_another_phase() {
+    let unorderable_requirements = record(
+        &format!(
+            "Requirements terminal failure assignmentId={OTHER_ASSIGNMENT} ciId={CI} requirementId=REQ-TEST-902 terminal=true"
+        ),
+        "05:00:01.000",
+        "AppIntentEval",
+    );
+    let other_intent = record(
+        &format!(
+            "SYNTHETIC FIXTURE deployment targeted assignmentId={OTHER_ASSIGNMENT} ciId={CI} state=targeted"
+        ),
+        "05:00:00.000+000",
+        "AppIntentEval",
+    );
+    let unorderable_enforce = record(
+        &format!(
+            "SYNTHETIC FIXTURE deployment enforcement terminal failure assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} exitCode=1603 terminal=true"
+        ),
+        "05:00:06.000",
+        "AppEnforce",
+    );
+
+    let bundle = bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            format!("{}{other_intent}", intent_content()),
+        ),
+        (
+            rotated_artifact(
+                "synthetic-intent-rotated",
+                "AppIntentEval.log.1",
+                SccmRotation::Numbered(1),
+            ),
+            unorderable_requirements,
+        ),
+        (
+            client_artifact("synthetic-content", "CAS.log"),
+            content_content(),
+        ),
+        (
+            client_artifact("synthetic-transfer", "DataTransferService.log"),
+            transfer_content("05:00:03.000+000", "05:00:04.000+000"),
+        ),
+        (
+            client_artifact("synthetic-enforce", "AppEnforce.log"),
+            unorderable_enforce,
+        ),
+    ]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    assert_eq!(analysis.transactions.len(), 2, "two keyed transactions");
+
+    let mut identifiers = analysis
+        .findings
+        .iter()
+        .map(|finding| finding.finding.finding_id.clone())
+        .collect::<Vec<_>>();
+    let total = identifiers.len();
+    identifiers.sort();
+    identifiers.dedup();
+    assert_eq!(
+        identifiers.len(),
+        total,
+        "finding identities must be unique"
+    );
+
+    let mut chronology = analysis
+        .findings
+        .iter()
+        .filter(|finding| {
+            finding
+                .finding
+                .finding_id
+                .starts_with("deployment-chronology-uncertain")
+        })
+        .map(|finding| {
+            (
+                phase_name(finding.deployment_phase),
+                finding
+                    .finding
+                    .next_artifacts
+                    .first()
+                    .map(|request| request.logical_id.as_str())
+                    .unwrap_or("none"),
+            )
+        })
+        .collect::<Vec<_>>();
+    chronology.sort();
+    assert_eq!(
+        chronology,
+        vec![("enforce", "appEnforce"), ("requirements", "appIntentEval")],
+        "each unorderable phase must request its own artifact"
+    );
+
+    for finding in &analysis.findings {
+        let phase = finding.deployment_phase;
+        for reference in &finding.finding.evidence {
+            let cited_by_this_phase = analysis.transactions.iter().any(|transaction| {
+                transaction.phase == phase
+                    && transaction
+                        .evidence
+                        .iter()
+                        .any(|cited| cited.artifact_id == reference.artifact_id)
+            });
+            assert!(
+                cited_by_this_phase,
+                "{}: cites {} from a transaction at another phase",
+                finding.finding.finding_id, reference.artifact_id
             );
         }
     }
