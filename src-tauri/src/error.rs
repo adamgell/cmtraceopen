@@ -106,7 +106,10 @@ pub enum AppError {
     /// Carried separately from `Io` because this is the one failure the
     /// frontend may answer with an elevation offer, and it must be able to tell
     /// without reading message text.
-    #[error("Access to this {} was denied by Windows.", operation.subject())]
+    // Named after no particular OS: `is_os_access_denied` classifies
+    // `ErrorKind::PermissionDenied` everywhere, so a root-owned log on macOS or
+    // Linux reaches this variant too and "denied by Windows" would be a lie.
+    #[error("Access to this {} was denied by the operating system.", operation.subject())]
     AccessDenied {
         operation: SourceOperation,
         path: Option<String>,
@@ -319,6 +322,27 @@ mod tests {
             ));
             let path = value["path"].as_str().expect("path present");
             assert!(path.len() <= MAX_ERROR_PATH_LEN, "pad {pad} overshot");
+        }
+    }
+
+    #[test]
+    fn the_access_denied_message_does_not_claim_a_particular_os() {
+        // This variant is reachable on every platform: is_os_access_denied
+        // classifies ErrorKind::PermissionDenied regardless of OS, so a
+        // root-owned log on macOS or Linux lands here too.
+        for operation in [
+            SourceOperation::ReadFile,
+            SourceOperation::ListFolder,
+            SourceOperation::OpenKnownSource,
+            SourceOperation::WorkspaceAction,
+        ] {
+            let message = AppError::access_denied(operation, None).to_string();
+            for os in ["Windows", "macOS", "Linux"] {
+                assert!(
+                    !message.contains(os),
+                    "{operation:?} names {os}: {message}"
+                );
+            }
         }
     }
 
