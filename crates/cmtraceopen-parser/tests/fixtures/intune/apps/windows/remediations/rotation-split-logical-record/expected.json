@@ -1,0 +1,106 @@
+{
+  "scenario": "rotation-split-logical-record",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "agent-executor-rotation-1",
+      "status": "available"
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 4,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "agent-executor-rotation-1",
+      "framedRecords": 3,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 1
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "framedRecords": 1,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 2
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "agent-executor-current",
+        "agent-executor-rotation-1"
+      ],
+      "evidence": [],
+      "findingId": "remediation-record-split-across-rotation",
+      "severity": "info"
+    },
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-rotation-1:2",
+        "agent-executor-rotation-1:3",
+        "health-scripts-current:2",
+        "health-scripts-current:3",
+        "health-scripts-current:4"
+      ],
+      "findingId": "remediation-run-incomplete",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "low",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "remediationLaunched",
+      "nextEvidenceRequest": "the AgentExecutor.log record stating the remediation script exit code for this run",
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:4",
+          "agent-executor-rotation-1:2"
+        ],
+        "exitRaw": null,
+        "outcome": "launched"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [],
+        "state": "notStarted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "an unterminated record is never completed by the next file",
+    "the run reports what was proven and asks for the missing exit record"
+  ]
+}

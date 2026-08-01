@@ -1,0 +1,145 @@
+{
+  "scenario": "scheduled-and-on-demand-same-policy",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "policy-metadata",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 11,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "policy-metadata",
+      "framedRecords": 0,
+      "sourceKind": "policyMetadata",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:3"
+      ],
+      "findingId": "remediation-not-required",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:10",
+        "health-scripts-current:9"
+      ],
+      "findingId": "remediation-succeeded",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3"
+        ],
+        "exitRaw": "0",
+        "outcome": "compliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": null,
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 0,
+        "evidence": [
+          "health-scripts-current:4"
+        ],
+        "exitRaw": null,
+        "outcome": "skipped"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [
+          "health-scripts-current:5"
+        ],
+        "state": "submitted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    },
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:7",
+          "health-scripts-current:8"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "onDemand",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": "the post-remediation detection record for this run",
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:9",
+          "health-scripts-current:10"
+        ],
+        "exitRaw": "0",
+        "outcome": "succeeded"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [
+          "health-scripts-current:11"
+        ],
+        "state": "submitted"
+      },
+      "retainedFacts": [
+        {
+          "name": "cadence",
+          "value": "onDemand"
+        },
+        {
+          "name": "displayName",
+          "value": "Synthetic disk hygiene remediation"
+        },
+        {
+          "name": "syntheticFixture",
+          "value": "SYNTHETIC FIXTURE: supplied policy fact, synthetic only"
+        }
+      ],
+      "runId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbb2"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "a scheduled run and an on-demand run of one policy are two runs",
+    "a supplied fact annotates a run and never creates one"
+  ]
+}

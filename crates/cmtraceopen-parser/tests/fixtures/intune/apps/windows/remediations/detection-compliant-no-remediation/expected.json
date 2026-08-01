@@ -1,0 +1,89 @@
+{
+  "scenario": "detection-compliant-no-remediation",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 6,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "framedRecords": 4,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:2",
+        "agent-executor-current:4",
+        "health-scripts-current:3",
+        "health-scripts-current:4"
+      ],
+      "findingId": "remediation-not-required",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3",
+          "agent-executor-current:2",
+          "agent-executor-current:4",
+          "health-scripts-current:4"
+        ],
+        "exitRaw": "0",
+        "outcome": "compliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": null,
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 0,
+        "evidence": [
+          "health-scripts-current:5"
+        ],
+        "exitRaw": null,
+        "outcome": "skipped"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [
+          "health-scripts-current:6"
+        ],
+        "state": "submitted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "a compliant detection never yields a remediation outcome",
+    "the explicit skip record is what proves remediation was not required"
+  ]
+}

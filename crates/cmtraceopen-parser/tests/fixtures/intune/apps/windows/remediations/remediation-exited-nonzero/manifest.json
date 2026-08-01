@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "remediation-exited-nonzero",
+  "workload": "apps/windows/remediations",
+  "description": "Remediation exits 5 and the upload is deferred. Pins that a nonzero remediation exit is an execution outcome and that the deferred upload is a separate answer.",
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "HealthScripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/HealthScripts.log",
+      "relativePath": "evidence/health-scripts-current/current/HealthScripts.log",
+      "bytesCopied": 1299,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "family": "ime",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "AgentExecutor.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AgentExecutor.log",
+      "relativePath": "evidence/agent-executor-current/current/AgentExecutor.log",
+      "bytesCopied": 774,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "scenario": "remediation-timeout",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 5,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "framedRecords": 4,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:2",
+        "agent-executor-current:3",
+        "agent-executor-current:4",
+        "health-scripts-current:2",
+        "health-scripts-current:3",
+        "health-scripts-current:4",
+        "health-scripts-current:5"
+      ],
+      "findingId": "remediation-reporting-not-observed",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:2",
+        "agent-executor-current:4",
+        "health-scripts-current:4",
+        "health-scripts-current:5"
+      ],
+      "findingId": "remediation-script-failed",
+      "severity": "error"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "remediationCompleted",
+      "nextEvidenceRequest": "the retained remediation output artifact for this policy and run",
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:4",
+          "agent-executor-current:2",
+          "health-scripts-current:5",
+          "agent-executor-current:4"
+        ],
+        "exitRaw": null,
+        "outcome": "timedOut"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [],
+        "state": "notStarted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "a remediation timeout is its own outcome, distinct from a nonzero exit"
+  ]
+}

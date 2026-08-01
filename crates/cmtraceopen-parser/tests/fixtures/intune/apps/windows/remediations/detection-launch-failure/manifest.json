@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "detection-launch-failure",
+  "workload": "apps/windows/remediations",
+  "description": "The detection process never starts. Pins that a launch failure is distinct from a nonzero exit and that the analyzer asks for launch context rather than output that cannot exist.",
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "HealthScripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/HealthScripts.log",
+      "relativePath": "evidence/health-scripts-current/current/HealthScripts.log",
+      "bytesCopied": 910,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "family": "ime",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "AgentExecutor.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AgentExecutor.log",
+      "relativePath": "evidence/agent-executor-current/current/AgentExecutor.log",
+      "bytesCopied": 768,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

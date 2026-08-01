@@ -1,0 +1,96 @@
+{
+  "scenario": "missing-agent-executor-log",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "status": "missing"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 7,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "framedRecords": 0,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "agent-executor-current"
+      ],
+      "evidence": [],
+      "findingId": "remediation-source-not-collected",
+      "severity": "info"
+    },
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:4",
+        "health-scripts-current:5"
+      ],
+      "findingId": "remediation-succeeded",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "medium",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": null,
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [
+          "health-scripts-current:6"
+        ],
+        "exitRaw": "0",
+        "state": "compliant"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:4",
+          "health-scripts-current:5"
+        ],
+        "exitRaw": "0",
+        "outcome": "succeeded"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [
+          "health-scripts-current:7"
+        ],
+        "state": "submitted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "a missing expected source lowers confidence to medium",
+    "the coverage gap is the artifact the caller declared, never an invented one"
+  ]
+}

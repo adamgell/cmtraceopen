@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "execution-complete-report-failed",
+  "workload": "apps/windows/remediations",
+  "description": "Both scripts finish and the upload to Intune fails. Pins that the local outcome and the reporting outcome are separate answers.",
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "HealthScripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/HealthScripts.log",
+      "relativePath": "evidence/health-scripts-current/current/HealthScripts.log",
+      "bytesCopied": 1356,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

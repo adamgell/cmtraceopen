@@ -1,0 +1,7 @@
+<![LOG[# SYNTHETIC FIXTURE: Intune remediation evidence, synthetic only]LOG]!><time="09:59:59.000+000" date="03-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Starting Powershell Execution]LOG]!><time="10:00:01.200+000" date="03-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell script is: C:\Windows\IMECache\HealthScripts\11111111-2222-3333-4444-555555555555_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1\detect.ps1]LOG]!><time="10:00:01.205+000" date="03-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell execution is done, exitCode = 1]LOG]!><time="10:00:05.900+000" date="03-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Starting Powershell Execution]LOG]!><time="10:00:07.200+000" date="03-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell script is: C:\Windows\IMECache\HealthScripts\11111111-2222-3333-4444-555555555555_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1\remediate.ps1]LOG]!><time="10:00:07.205+000" date="03-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell execution is done, exitCode = 0]LOG]!><time="10:00:11.900+000" date="03-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">

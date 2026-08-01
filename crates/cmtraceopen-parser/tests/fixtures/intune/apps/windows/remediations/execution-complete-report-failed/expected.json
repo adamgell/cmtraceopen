@@ -1,0 +1,84 @@
+{
+  "scenario": "execution-complete-report-failed",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 6,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:6"
+      ],
+      "findingId": "remediation-result-not-reported",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:4"
+      ],
+      "findingId": "remediation-succeeded",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": null,
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [
+          "health-scripts-current:5"
+        ],
+        "exitRaw": "0",
+        "state": "compliant"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:4"
+        ],
+        "exitRaw": "0",
+        "outcome": "succeeded"
+      },
+      "reporting": {
+        "errorRaw": "0x80072EE2",
+        "evidence": [
+          "health-scripts-current:6"
+        ],
+        "state": "failed"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "a failed upload never downgrades the local execution outcome",
+    "the reporting error code is retained in every form it was written"
+  ]
+}

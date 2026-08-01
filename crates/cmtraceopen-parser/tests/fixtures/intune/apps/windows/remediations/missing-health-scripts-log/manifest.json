@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "missing-health-scripts-log",
+  "workload": "apps/windows/remediations",
+  "description": "Only the executor log was collected. Pins that the script path still keys both stages and that nothing is claimed about reporting.",
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "HealthScripts.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "family": "ime",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "AgentExecutor.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AgentExecutor.log",
+      "relativePath": "evidence/agent-executor-current/current/AgentExecutor.log",
+      "bytesCopied": 1357,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

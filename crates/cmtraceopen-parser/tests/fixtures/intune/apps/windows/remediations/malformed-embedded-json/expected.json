@@ -1,0 +1,107 @@
+{
+  "scenario": "malformed-embedded-json",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "remediation-output",
+      "status": "parseFailed"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 6,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "remediation-output",
+      "framedRecords": 0,
+      "sourceKind": "remediationOutput",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "low",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:5"
+      ],
+      "findingId": "remediation-payload-malformed",
+      "severity": "warning"
+    },
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:2",
+        "health-scripts-current:3",
+        "health-scripts-current:4",
+        "health-scripts-current:6"
+      ],
+      "findingId": "remediation-reporting-not-observed",
+      "severity": "info"
+    },
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:4"
+      ],
+      "findingId": "remediation-succeeded",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "medium",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "postRemediationCompleted",
+      "nextEvidenceRequest": "HealthScripts.log or IntuneManagementExtension.log records reporting this run to the service",
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [
+          "health-scripts-current:6"
+        ],
+        "exitRaw": "0",
+        "state": "compliant"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:4"
+        ],
+        "exitRaw": "0",
+        "outcome": "succeeded"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [],
+        "state": "notStarted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [
+    "health-scripts-current:5"
+  ],
+  "assertions": [
+    "a truncated payload contributes no policy, no stage, and no outcome",
+    "unknown payload fields are retained verbatim",
+    "a retained output artifact is registered by name and never parsed"
+  ]
+}

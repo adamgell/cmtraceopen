@@ -1,0 +1,99 @@
+{
+  "scenario": "detection-timeout",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 4,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "framedRecords": 4,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:2",
+        "agent-executor-current:4",
+        "health-scripts-current:3",
+        "health-scripts-current:4"
+      ],
+      "findingId": "remediation-detection-failed",
+      "severity": "error"
+    },
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:2",
+        "agent-executor-current:3",
+        "agent-executor-current:4",
+        "health-scripts-current:2",
+        "health-scripts-current:3",
+        "health-scripts-current:4"
+      ],
+      "findingId": "remediation-reporting-not-observed",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3",
+          "agent-executor-current:2",
+          "health-scripts-current:4",
+          "agent-executor-current:4"
+        ],
+        "exitRaw": null,
+        "outcome": "timedOut"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "detectionCompleted",
+      "nextEvidenceRequest": "the retained detection output artifact for this policy and run",
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 0,
+        "evidence": [],
+        "exitRaw": null,
+        "outcome": "notStarted"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [],
+        "state": "notStarted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "a timeout is not a compliance answer",
+    "the trailing exit code of a killed process does not become a detection result"
+  ]
+}

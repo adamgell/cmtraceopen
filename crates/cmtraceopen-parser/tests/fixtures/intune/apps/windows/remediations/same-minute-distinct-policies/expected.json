@@ -1,0 +1,121 @@
+{
+  "scenario": "same-minute-distinct-policies",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 10,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:4"
+      ],
+      "findingId": "remediation-not-required",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:7",
+        "health-scripts-current:9"
+      ],
+      "findingId": "remediation-succeeded",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:4"
+        ],
+        "exitRaw": "0",
+        "outcome": "compliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": null,
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 0,
+        "evidence": [
+          "health-scripts-current:6"
+        ],
+        "exitRaw": null,
+        "outcome": "skipped"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [
+          "health-scripts-current:8"
+        ],
+        "state": "submitted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    },
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:5"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": "the post-remediation detection record for this run",
+      "policyId": "22222222-3333-4444-5555-666666666666",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:7",
+          "health-scripts-current:9"
+        ],
+        "exitRaw": "0",
+        "outcome": "succeeded"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [
+          "health-scripts-current:10"
+        ],
+        "state": "submitted"
+      },
+      "retainedFacts": [],
+      "runId": "cccccccc-3333-4333-8333-ccccccccccc3"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "records carried forward inside one thread never leak into another thread",
+    "two policies in the same second stay two runs"
+  ]
+}

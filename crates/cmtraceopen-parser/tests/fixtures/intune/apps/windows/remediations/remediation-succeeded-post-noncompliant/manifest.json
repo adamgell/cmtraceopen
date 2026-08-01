@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "remediation-succeeded-post-noncompliant",
+  "workload": "apps/windows/remediations",
+  "description": "Remediation exits 0 and the post-remediation detection still reports non-compliant. Pins that a successful exit code is not proof the condition was fixed.",
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "HealthScripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/HealthScripts.log",
+      "relativePath": "evidence/health-scripts-current/current/HealthScripts.log",
+      "bytesCopied": 1573,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "family": "ime",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "AgentExecutor.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AgentExecutor.log",
+      "relativePath": "evidence/agent-executor-current/current/AgentExecutor.log",
+      "bytesCopied": 1940,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+<![LOG[# SYNTHETIC FIXTURE: Intune remediation evidence, synthetic only]LOG]!><time="09:59:59.000+000" date="03-12-2026" component="HealthScripts" context="" type="1" thread="7" file="">
+<![LOG[[HealthScripts] Processing health script policy with id = 11111111-2222-3333-4444-555555555555, RunId = aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1, Invocation = Scheduled]LOG]!><time="10:00:00.000+000" date="03-12-2026" component="HealthScripts" context="" type="1" thread="7" file="">
+<![LOG[[HealthScripts] Detection script completed, exit code = 1, compliance result = NonCompliant]LOG]!><time="10:00:06.000+000" date="03-12-2026" component="HealthScripts" context="" type="1" thread="7" file="">
+<![LOG[[HealthScripts] Start to execute the remediation script for policy 11111111-2222-3333-4444-555555555555]LOG]!><time="10:00:07.000+000" date="03-12-2026" component="HealthScripts" context="" type="1" thread="7" file="">
+<![LOG[[HealthScripts] Remediation script completed, exit code = 0]LOG]!><time="10:00:12.000+000" date="03-12-2026" component="HealthScripts" context="" type="1" thread="7" file="">
+<![LOG[[HealthScripts] Post-remediation detection script completed, exit code = 1, compliance result = NonCompliant]LOG]!><time="10:00:17.000+000" date="03-12-2026" component="HealthScripts" context="" type="1" thread="7" file="">
+<![LOG[[HealthScripts] Health script result has been sent to service successfully, PolicyId = 11111111-2222-3333-4444-555555555555]LOG]!><time="10:00:18.000+000" date="03-12-2026" component="HealthScripts" context="" type="1" thread="7" file="">

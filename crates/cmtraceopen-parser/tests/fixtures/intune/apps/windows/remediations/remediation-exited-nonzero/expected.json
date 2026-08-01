@@ -1,0 +1,98 @@
+{
+  "scenario": "remediation-exited-nonzero",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 6,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "framedRecords": 4,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "health-scripts-current:6"
+      ],
+      "findingId": "remediation-result-not-reported",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:2",
+        "agent-executor-current:4",
+        "health-scripts-current:4",
+        "health-scripts-current:5"
+      ],
+      "findingId": "remediation-script-failed",
+      "severity": "error"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": "the retained remediation output artifact for this policy and run",
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:4",
+          "agent-executor-current:2",
+          "agent-executor-current:4",
+          "health-scripts-current:5"
+        ],
+        "exitRaw": "5",
+        "outcome": "exitedNonZero"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [
+          "health-scripts-current:6"
+        ],
+        "state": "retryDeferred"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "a nonzero remediation exit is an execution outcome, not a root cause",
+    "a deferred upload is a reporting state, not an execution state"
+  ]
+}

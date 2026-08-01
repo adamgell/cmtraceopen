@@ -1,0 +1,97 @@
+{
+  "scenario": "remediation-succeeded-post-compliant",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 9,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "framedRecords": 10,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:5",
+        "agent-executor-current:7",
+        "health-scripts-current:5",
+        "health-scripts-current:6"
+      ],
+      "findingId": "remediation-succeeded",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "high",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:3",
+          "agent-executor-current:2",
+          "agent-executor-current:4",
+          "health-scripts-current:4"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "scheduled",
+      "lastConfirmedPhase": "reported",
+      "nextEvidenceRequest": null,
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [
+          "health-scripts-current:7",
+          "agent-executor-current:8",
+          "agent-executor-current:10",
+          "health-scripts-current:8"
+        ],
+        "exitRaw": "0",
+        "state": "compliant"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "health-scripts-current:5",
+          "agent-executor-current:5",
+          "agent-executor-current:7",
+          "health-scripts-current:6"
+        ],
+        "exitRaw": "0",
+        "outcome": "succeeded"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [
+          "health-scripts-current:9"
+        ],
+        "state": "submitted"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "the detection that required remediation keeps its answer after the post check",
+    "a second executor detection block after a completed remediation is the post-remediation check"
+  ]
+}

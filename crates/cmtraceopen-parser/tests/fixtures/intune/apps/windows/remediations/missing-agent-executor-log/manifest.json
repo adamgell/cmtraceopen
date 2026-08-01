@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "missing-agent-executor-log",
+  "workload": "apps/windows/remediations",
+  "description": "The orchestration log is complete and the executor log was not collected. Pins that a missing expected source lowers confidence and produces a coverage gap rather than a guess.",
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "HealthScripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/HealthScripts.log",
+      "relativePath": "evidence/health-scripts-current/current/HealthScripts.log",
+      "bytesCopied": 1570,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "AgentExecutor.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "scenario": "missing-health-scripts-log",
+  "workload": "apps/windows/remediations",
+  "coverage": [
+    {
+      "artifactId": "health-scripts-current",
+      "status": "missing"
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "status": "available"
+    }
+  ],
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "framedRecords": 0,
+      "sourceKind": "healthScripts",
+      "unframedRecords": 0
+    },
+    {
+      "artifactId": "agent-executor-current",
+      "framedRecords": 7,
+      "sourceKind": "agentExecutor",
+      "unframedRecords": 0
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:2",
+        "agent-executor-current:3",
+        "agent-executor-current:4",
+        "agent-executor-current:5",
+        "agent-executor-current:6",
+        "agent-executor-current:7"
+      ],
+      "findingId": "remediation-reporting-not-observed",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "health-scripts-current"
+      ],
+      "evidence": [],
+      "findingId": "remediation-source-not-collected",
+      "severity": "info"
+    },
+    {
+      "confidence": "medium",
+      "coverageGapIds": [],
+      "evidence": [
+        "agent-executor-current:5",
+        "agent-executor-current:7"
+      ],
+      "findingId": "remediation-succeeded",
+      "severity": "info"
+    }
+  ],
+  "runs": [
+    {
+      "confidence": "medium",
+      "detection": {
+        "attempts": 1,
+        "evidence": [
+          "agent-executor-current:2",
+          "agent-executor-current:4"
+        ],
+        "exitRaw": "1",
+        "outcome": "nonCompliant"
+      },
+      "invocation": "unknown",
+      "lastConfirmedPhase": "remediationCompleted",
+      "nextEvidenceRequest": "HealthScripts.log covering this policy and run identifier",
+      "policyId": "11111111-2222-3333-4444-555555555555",
+      "postRemediation": {
+        "evidence": [],
+        "exitRaw": null,
+        "state": "notEvaluated"
+      },
+      "remediation": {
+        "attempts": 1,
+        "evidence": [
+          "agent-executor-current:5",
+          "agent-executor-current:7"
+        ],
+        "exitRaw": "0",
+        "outcome": "succeeded"
+      },
+      "reporting": {
+        "errorRaw": null,
+        "evidence": [],
+        "state": "insufficientEvidence"
+      },
+      "retainedFacts": [],
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1"
+    }
+  ],
+  "unkeyedObservations": [],
+  "assertions": [
+    "the executor script path is enough to key a stage without the orchestration log",
+    "reporting is insufficient evidence, never a reporting failure"
+  ]
+}

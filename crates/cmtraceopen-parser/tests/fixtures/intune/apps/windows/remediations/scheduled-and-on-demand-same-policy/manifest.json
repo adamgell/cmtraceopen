@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "scheduled-and-on-demand-same-policy",
+  "workload": "apps/windows/remediations",
+  "description": "One policy, one scheduled run and one on-demand run. Pins that the two never merge and that a caller-supplied fact annotates a run without creating one.",
+  "artifacts": [
+    {
+      "artifactId": "health-scripts-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "HealthScripts.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/HealthScripts.log",
+      "relativePath": "evidence/health-scripts-current/current/HealthScripts.log",
+      "bytesCopied": 2489,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "policy-metadata",
+      "family": "ime",
+      "sourceKind": "suppliedFact",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "remediation-policy.json",
+      "sanitizedSourcePath": "SYNTHETIC://ime/remediation-policy.json",
+      "relativePath": "evidence/policy-metadata/current/remediation-policy.json",
+      "bytesCopied": 283,
+      "capturedUtc": "2026-03-12T10:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}
