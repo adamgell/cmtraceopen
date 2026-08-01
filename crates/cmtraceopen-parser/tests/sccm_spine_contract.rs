@@ -5707,7 +5707,7 @@ type ExpectedCatalogTuple = (
 fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
     vec![
         (
-            "CCMSetup.log",
+            "ccmsetup.log",
             SccmRole::Client,
             "ccmSetup",
             SccmArtifactFamily::ClientSetup,

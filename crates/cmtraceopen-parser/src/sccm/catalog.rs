@@ -246,7 +246,7 @@ pub(crate) fn declared_client_source_memberships() -> &'static [SccmClientSource
 
 const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
-        basename: "CCMSetup",
+        basename: "ccmsetup",
         logical_name: "ccmSetup",
         role: SccmRole::Client,
         family: SccmArtifactFamily::ClientSetup,

@@ -212,6 +212,11 @@ fn every_declared_client_basename_is_supported_by_the_authoritative_catalog() {
                 group.logical_artifact_id
             );
             assert_eq!(
+                classified.basename, basename,
+                "{basename} in {} must use the shared catalog's exact canonical basename",
+                group.logical_artifact_id
+            );
+            assert_eq!(
                 classified.uses_ccm_records,
                 !matches!(basename.as_str(), "client.msi.log" | "ReportingEvents.log"),
                 "the shared catalog must not route a non-CCM supplement through raw CCM"
