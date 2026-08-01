@@ -170,12 +170,50 @@ pub(crate) fn truncate_subsecond_to_millis(value: &str) -> Option<u32> {
     }
 }
 
+/// Longest offset any real timezone uses, in minutes (UTC-14:00..UTC+14:00).
+const MAX_UTC_OFFSET_MINUTES: u32 = 14 * 60;
+
+/// Every timezone offset in current use is a whole number of quarter hours.
+const UTC_OFFSET_STEP_MINUTES: u32 = 15;
+
+/// Decide whether a signless digit run can be a source timezone offset.
+///
+/// The legacy grammar prints the offset with `%d`, so it never zero-pads and
+/// never emits a sign for a positive value. A run that survives that shape
+/// check still has to name an offset a machine can actually be configured
+/// with; anything else is fractional-second text that happens to be numeric.
+fn signless_offset_is_real(text: &str) -> bool {
+    if text.starts_with('0') {
+        return false;
+    }
+
+    text.parse::<u32>().is_ok_and(|minutes| {
+        minutes <= MAX_UTC_OFFSET_MINUTES && minutes % UTC_OFFSET_STEP_MINUTES == 0
+    })
+}
+
 /// Split CCM's fractional-second field from its optional timezone offset.
 ///
-/// A signed offset is self-delimiting. The documented legacy `%03u%d`
-/// grammar also permits a signless three-digit offset after exactly three
-/// millisecond digits. Other digit-only tails are fractional seconds with no
-/// source offset, including the seven-digit precision emitted by IME logs.
+/// A signed offset is self-delimiting and is always taken at face value: the
+/// sign is the source stating its own provenance, so an out-of-range signed
+/// offset is reported as invalid rather than reinterpreted.
+///
+/// A signless tail is genuinely ambiguous. The documented legacy `%03u%d`
+/// grammar emits three millisecond digits followed by an unsigned positive
+/// offset, so `.000240` really is 0 ms at UTC+4; .NET writers instead emit
+/// six- or seven-digit fractional seconds, so `.123456` is 123456
+/// microseconds and carries no offset. Both shapes are six digits wide, and
+/// digit width alone cannot tell them apart.
+///
+/// Two shipped implementations tried to tell them apart positionally and both
+/// were wrong. The original greedy regex `(?P<ms>\d+)(?P<tz>[+-]*\d+)` gave
+/// the last digit to the offset, so `.123456` became 123 ms at UTC+6 minutes.
+/// Its replacement gave the last three digits to the offset whenever the tail
+/// was exactly six wide, so `.123456` became 123 ms at UTC+456 minutes, a
+/// silent 7h36m shift stamped `NormalizedUtc`. Do not add a third rule of
+/// that kind: the split is decided by whether the candidate offset is a real
+/// timezone offset, and a tail that fails that check keeps all of its digits
+/// as fractional seconds and is reported as having no source offset.
 fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
     if let Some(index) = value
         .as_bytes()
@@ -185,7 +223,9 @@ fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
         return (&value[..index], Some(&value[index..]));
     }
 
-    if value.len() == 6 {
+    // `%03u%d` with a three-digit offset is the only signless shape the
+    // legacy grammar can produce that is not also plain fractional text.
+    if value.len() == 6 && signless_offset_is_real(&value[3..]) {
         return (&value[..3], Some(&value[3..]));
     }
 
