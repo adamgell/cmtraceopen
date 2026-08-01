@@ -807,6 +807,89 @@ fn policy_phase_from_the_wrong_source_is_only_a_local_observation() {
         .all(|observation| observation["correlationEligible"] == false));
 }
 
+fn request_message_mutation(scenario: &str, mutate: impl Fn(&str) -> String) -> Value {
+    let mut bundle = load_bundle(scenario);
+    let request = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Request succeeded"))
+        .expect("request evidence");
+    request.message = mutate(&request.message);
+    serde_json::to_value(analyze_client_policy(&bundle)).expect("analysis JSON")
+}
+
+#[test]
+fn policy_duplicate_required_key_labels_never_emit_an_exact_transaction() {
+    for (label, equivalent, conflicting) in [
+        (
+            "AssignmentId",
+            "AssignmentId={11111111-1111-1111-1111-111111111111}",
+            "AssignmentId={99999999-9999-9999-9999-999999999999}",
+        ),
+        (
+            "PolicyId",
+            "PolicyId={aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}",
+            "PolicyId={99999999-9999-9999-9999-999999999999}",
+        ),
+        (
+            "RequestId",
+            "RequestId={27111111-1111-1111-1111-111111111111}",
+            "RequestId={99999999-9999-9999-9999-999999999999}",
+        ),
+        (
+            "ClientHandle",
+            "ClientHandle=safe:client:policy-11",
+            "ClientHandle=safe:client:policy-99",
+        ),
+        ("SiteCode", "SiteCode=LAB", "SiteCode=ZZZ"),
+        (
+            "SelectedManagementPointHostHandle",
+            "SelectedManagementPointHostHandle=safe:mp:lab-mp-01",
+            "SelectedManagementPointHostHandle=safe:mp:lab-mp-99",
+        ),
+    ] {
+        for duplicate in [equivalent, conflicting] {
+            let analysis =
+                request_message_mutation("complete", |message| format!("{message} {duplicate}"));
+            assert!(
+                analysis["transactions"]
+                    .as_array()
+                    .expect("transactions")
+                    .is_empty(),
+                "a duplicated {label} label must fail closed, not resolve by first match"
+            );
+        }
+    }
+}
+
+#[test]
+fn policy_embedded_key_labels_are_never_admitted_as_required_keys() {
+    let analysis = request_message_mutation("complete", |message| {
+        message.replace("RequestId=", "NotRequestId=")
+    });
+    assert!(
+        analysis["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "NotRequestId must not satisfy the required RequestId key"
+    );
+}
+
+#[test]
+fn policy_compound_phase_markers_are_never_exact_phase_evidence() {
+    let analysis = request_message_mutation("complete", |message| {
+        message.replace("Request succeeded", "not-Request succeeded-ish")
+    });
+    assert!(
+        analysis["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "a compound marker must not be admitted as an exact phase outcome"
+    );
+}
+
 #[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
