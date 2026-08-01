@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "capture": {
+    "capturedAtUtc": "2026-07-14T09:20:11.5550000Z",
+    "adapterVersion": "cmtraceopen-collector-appx/1",
+    "commandStatus": "completed",
+    "windowsBuild": "10.0.26100.0",
+    "powerShellVersion": "5.1.26100.2161",
+    "locale": "en-US",
+    "source": "json",
+    "scopeCoverage": [
+      {
+        "scope": "allUsers",
+        "status": "complete",
+        "detail": "Elevated enumeration returned zero matching registrations."
+      }
+    ],
+    "error": null
+  },
+  "packages": []
+}

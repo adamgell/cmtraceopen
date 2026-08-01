@@ -1,0 +1,17 @@
+{
+  "description": "Synthetic UPN, command line, and user path are masked while correlation keys survive.",
+  "artifacts": [
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\Users\\adele.vance\\AppData\\Local\\Temp\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    },
+    {
+      "artifactId": "ime",
+      "fileName": "IntuneManagementExtension.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+      "contentFile": "IntuneManagementExtension.log"
+    }
+  ]
+}

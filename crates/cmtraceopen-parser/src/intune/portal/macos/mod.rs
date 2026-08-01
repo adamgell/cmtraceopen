@@ -1,3 +1,3 @@
-//! macOS Company Portal sources.
+//! macOS Company Portal evidence.
 
 pub mod company_portal;
