@@ -970,4 +970,150 @@ mod tests {
         );
         assert!(records[0].timestamp.utc_millis.is_some());
     }
+
+    fn logical_record_for_time_tail(tail: &str) -> CcmLogicalRecord {
+        let text = format!(
+            concat!(
+                r#"<![LOG[Tail {tail}]LOG]!><time="10:00:00.{tail}" date="07-30-2026" "#,
+                r#"component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+            ),
+            tail = tail
+        );
+        let mut records = scan_logical_records(&text, "PolicyAgent.log");
+        assert_eq!(records.len(), 1, "tail {tail}: expected one logical record");
+        records.remove(0)
+    }
+
+    /// Frozen answers for every shape of CCM fractional-second tail.
+    ///
+    /// Two shipped implementations resolved this ambiguity by counting digits
+    /// and both were wrong (see `split_ccm_time_tail`). This table is the
+    /// regression barrier: it pins the fractional text, the millisecond value,
+    /// the source offset, and the ordering confidence for unsigned tails of
+    /// one to eight digits and for their signed counterparts. Change a row
+    /// only with a documented grammar reason, never to let a new heuristic
+    /// pass.
+    #[test]
+    fn ccm_time_tail_ambiguity_table_is_frozen() {
+        use CcmTimestampParseState::{NormalizedUtc, OffsetInvalid, OffsetMissing};
+
+        // (time tail, fractional text, milliseconds, source offset, ordering state)
+        let cases: [(&str, &str, u32, Option<i32>, CcmTimestampParseState); 26] = [
+            // Unsigned tails that cannot be `%03u%d`: no trailing run of
+            // digits reads as a real UTC offset, so they stay fractional and
+            // the record is never promoted to UTC-normalized ordering.
+            ("1", "1", 1, None, OffsetMissing),
+            ("12", "12", 12, None, OffsetMissing),
+            ("123", "123", 123, None, OffsetMissing),
+            // `%d` prints a zero offset as "0", so a four-digit tail is not
+            // evidence of one; downgrade instead of guessing.
+            ("1234", "1234", 123, None, OffsetMissing),
+            ("12345", "12345", 123, None, OffsetMissing),
+            // Microsecond precision. 456 is not a UTC offset.
+            ("123456", "123456", 123, None, OffsetMissing),
+            // `%d` never zero-pads, so "045" is fractional text and not +45.
+            ("123045", "123045", 123, None, OffsetMissing),
+            // Same rule: a padded zero offset always arrives signed ("+000").
+            ("123000", "123000", 123, None, OffsetMissing),
+            // 481 minutes is not a whole quarter hour.
+            ("123481", "123481", 123, None, OffsetMissing),
+            // 900 minutes exceeds UTC+14:00.
+            ("123900", "123900", 123, None, OffsetMissing),
+            // Unsigned tails that are genuine `%03u%d` records: three
+            // millisecond digits followed by a positive offset.
+            ("000240", "000", 0, Some(240), NormalizedUtc),
+            ("123480", "123", 123, Some(480), NormalizedUtc),
+            ("123840", "123", 123, Some(840), NormalizedUtc),
+            ("123105", "123", 123, Some(105), NormalizedUtc),
+            // IME writes seven fractional digits, never an offset.
+            ("1234567", "1234567", 123, None, OffsetMissing),
+            ("12345678", "12345678", 123, None, OffsetMissing),
+            // Signed tails are self-delimiting: the sign is the source's own
+            // statement of provenance and is never screened for plausibility.
+            ("123+480", "123", 123, Some(480), NormalizedUtc),
+            ("123-240", "123", 123, Some(-240), NormalizedUtc),
+            ("000+000", "000", 0, Some(0), NormalizedUtc),
+            ("123+481", "123", 123, Some(481), NormalizedUtc),
+            ("123+0", "123", 123, Some(0), NormalizedUtc),
+            ("1+2", "1", 1, Some(2), NormalizedUtc),
+            ("123456+480", "123456", 123, Some(480), NormalizedUtc),
+            ("1234567-060", "1234567", 123, Some(-60), NormalizedUtc),
+            // Out-of-range signed offsets stay reported and stay uncomparable.
+            ("123+99999", "123", 123, Some(99999), OffsetInvalid),
+            ("123-99999", "123", 123, Some(-99999), OffsetInvalid),
+        ];
+
+        for (tail, fraction_text, millis, offset_minutes, ordering_state) in cases {
+            let (split_fraction, split_offset) = split_ccm_time_tail(tail);
+            assert_eq!(
+                split_fraction, fraction_text,
+                "tail {tail}: fractional text"
+            );
+            assert_eq!(
+                split_offset.is_some(),
+                offset_minutes.is_some(),
+                "tail {tail}: offset presence"
+            );
+            assert_eq!(
+                truncate_subsecond_to_millis(split_fraction),
+                Some(millis),
+                "tail {tail}: milliseconds"
+            );
+
+            let record = logical_record_for_time_tail(tail);
+            let timestamp = &record.timestamp;
+            assert_eq!(
+                timestamp.original_display,
+                Some(format!("07-30-2026 10:00:00.{fraction_text}")),
+                "tail {tail}: original display"
+            );
+            assert_eq!(
+                timestamp.offset_minutes, offset_minutes,
+                "tail {tail}: source offset"
+            );
+            assert_eq!(
+                timestamp.ordering_state, ordering_state,
+                "tail {tail}: ordering state"
+            );
+
+            let naive = chrono::NaiveDate::from_ymd_opt(2026, 7, 30)
+                .unwrap()
+                .and_hms_milli_opt(10, 0, 0, millis)
+                .unwrap();
+            let expected_utc =
+                offset_minutes.and_then(|minutes| normalized_utc_millis(naive, minutes));
+            assert_eq!(
+                timestamp.utc_millis, expected_utc,
+                "tail {tail}: normalized utc"
+            );
+            assert_eq!(
+                timestamp.utc_millis.is_some(),
+                ordering_state == NormalizedUtc,
+                "tail {tail}: utc millis must exist exactly when ordering is normalized"
+            );
+        }
+    }
+
+    /// Both shipped attempts fabricated an offset from a microsecond tail.
+    #[test]
+    fn ccm_time_tail_rejects_both_historical_offset_bugs() {
+        let timestamp = logical_record_for_time_tail("123456").timestamp;
+
+        assert_ne!(
+            timestamp.offset_minutes,
+            Some(6),
+            "greedy-regex attempt read the final digit as the offset"
+        );
+        assert_ne!(
+            timestamp.offset_minutes,
+            Some(456),
+            "digit-count attempt read the final three digits as the offset"
+        );
+        assert_eq!(timestamp.offset_minutes, None);
+        assert_eq!(
+            timestamp.ordering_state,
+            CcmTimestampParseState::OffsetMissing
+        );
+        assert_eq!(timestamp.utc_millis, None);
+    }
 }
