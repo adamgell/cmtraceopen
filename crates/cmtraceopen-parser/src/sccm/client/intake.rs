@@ -830,7 +830,7 @@ fn is_safe_artifact_id(value: &str) -> bool {
 
     value
         .strip_prefix(NATIVE_ARTIFACT_ID_PREFIX_V1)
-        .is_some_and(|digest| digest.len() == 64 && is_lowercase_hex_handle(digest))
+        .is_some_and(is_sha256_digest)
 }
 
 fn is_safe_basename(value: &str, rotation: &SccmRotation) -> bool {
@@ -866,7 +866,7 @@ fn is_opaque_unsupported_basename(value: &str) -> bool {
     value
         .strip_prefix(OPAQUE_UNSUPPORTED_BASENAME_PREFIX_V1)
         .and_then(|value| value.strip_suffix(".log"))
-        .is_some_and(|digest| digest.len() == 64 && is_lowercase_hex_handle(digest))
+        .is_some_and(is_sha256_digest)
 }
 
 fn is_safe_collected_at(value: &str) -> bool {
@@ -883,11 +883,9 @@ fn is_safe_unknown_rotation(rotation: &SccmRotation) -> bool {
 
     unknown.kind == OPAQUE_ROTATION_KIND_V1
         && unknown.value.as_ref().is_some_and(|value| {
-            value.as_str().is_some_and(|value| {
-                value
-                    .strip_prefix("sha256:")
-                    .is_some_and(|digest| digest.len() == 64 && is_lowercase_hex_handle(digest))
-            })
+            value
+                .as_str()
+                .is_some_and(|value| value.strip_prefix("sha256:").is_some_and(is_sha256_digest))
         })
 }
 
@@ -923,7 +921,7 @@ fn is_safe_path_identity(value: &str) -> bool {
 
     match value.split_once(':') {
         Some(("synthetic", payload)) => is_safe_synthetic_fingerprint(payload),
-        Some(("sha256", digest)) => digest.len() == 64 && is_lowercase_hex_handle(digest),
+        Some(("sha256", digest)) => is_sha256_digest(digest),
         _ => false,
     }
 }
@@ -1032,9 +1030,20 @@ fn is_safe_root_path_segment(value: &str) -> bool {
     })
 }
 
+/// Opaque root handle emitted by a native adapter, in either accepted width.
 fn is_lowercase_hex_handle(value: &str) -> bool {
-    matches!(value.len(), 16 | 64)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    matches!(value.len(), 16 | 64) && is_lowercase_hex(value)
+}
+
+/// A SHA-256 digest is exactly 64 lowercase hexadecimal characters. Owning
+/// that width here keeps every digest caller from restating it, so a new
+/// caller cannot silently admit a shorter handle.
+fn is_sha256_digest(value: &str) -> bool {
+    value.len() == 64 && is_lowercase_hex(value)
+}
+
+fn is_lowercase_hex(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
