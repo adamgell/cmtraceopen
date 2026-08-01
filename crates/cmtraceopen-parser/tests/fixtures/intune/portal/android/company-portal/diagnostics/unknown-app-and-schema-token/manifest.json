@@ -1,0 +1,46 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unknown-app-and-schema-token",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "An artifact whose collecting app and declared schema token are both unknown to this build. Both values round-trip verbatim so a later build can recognize them without a re-import.",
+  "bundleId": "android-cp-unknown-app-and-schema-token",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": null
+  },
+  "supplied": {
+    "app": "companyPortalNextGen",
+    "appVersion": "99.0.0-synthetic",
+    "managementMode": "workProfile",
+    "collectionFlow": "savedLogs",
+    "verboseLogging": "on",
+    "incidentId": null,
+    "uploadOutcome": "notAttempted",
+    "collectedAtText": "2026-07-31T09:14:02+10:00",
+    "deviceTimeZone": null,
+    "declaredSchemaToken": "androidDiagnostics/v99",
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "future-summary",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "diagnostic_summary.txt",
+      "originalBasename": "diagnostic_summary.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/future-summary/current/diagnostic_summary.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "deterministic-redaction",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "A member carrying a synthetic identity, tenant and device GUIDs, a compact token, a service URL, a package name, and a hardware identifier. The redacted export projection masks all of them, deterministically.",
+  "bundleId": "android-cp-deterministic-redaction",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": null
+  },
+  "supplied": {
+    "app": "companyPortal",
+    "appVersion": "5.0.0-synthetic",
+    "managementMode": "workProfile",
+    "collectionFlow": "savedLogs",
+    "verboseLogging": "on",
+    "incidentId": "SYNTHETIC-INCIDENT-0000-0003",
+    "uploadOutcome": null,
+    "collectedAtText": "2026-07-31T09:14:02+10:00",
+    "deviceTimeZone": null,
+    "declaredSchemaToken": null,
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "redaction-source",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "com.synthetic.fixture.portal.log",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://com.synthetic.fixture.portal/files/diagnostic.log",
+      "relativePath": "evidence/redaction-source/current/portal.log",
+      "bytesCopied": 565,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    }
+  ]
+}

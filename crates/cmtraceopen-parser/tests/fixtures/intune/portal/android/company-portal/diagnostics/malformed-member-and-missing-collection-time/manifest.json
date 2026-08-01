@@ -1,0 +1,64 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "malformed-member-and-missing-collection-time",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "One member the importer could not decode, alongside an import that supplied no collection time at all. Neither is inferred around.",
+  "bundleId": "android-cp-malformed-member-and-missing-collection-time",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": null
+  },
+  "supplied": {
+    "app": "companyPortal",
+    "appVersion": "5.0.0-synthetic",
+    "managementMode": "fullyManaged",
+    "collectionFlow": "savedLogs",
+    "verboseLogging": "on",
+    "incidentId": null,
+    "uploadOutcome": "notAttempted",
+    "collectedAtText": null,
+    "deviceTimeZone": null,
+    "declaredSchemaToken": null,
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "malformed-record",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "entryName": "portal_log.txt",
+      "originalBasename": "portal_log.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/malformed-record/current/portal_log.txt",
+      "bytesCopied": 183,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "malformed-summary",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "diagnostic_summary.txt",
+      "originalBasename": "diagnostic_summary.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/malformed-summary/current/diagnostic_summary.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    }
+  ]
+}

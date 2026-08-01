@@ -1,0 +1,58 @@
+{
+  "scenario": "incident-id-without-upload-confirmation",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "incident-summary",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "incident-summary": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "incident-summary/diagnostic_summary.txt",
+          "sourceArtifactId": "incident-summary"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/work-profile-collection-scope",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-incident-id-without-upload-confirmation#suppliedFacts",
+          "sourceArtifactId": "android-cp-incident-id-without-upload-confirmation#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/incident-id-without-upload-confirmation",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-incident-id-without-upload-confirmation#suppliedFacts",
+          "sourceArtifactId": "android-cp-incident-id-without-upload-confirmation#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an incident ID never implies a successful upload",
+    "no finding text repeats the incident ID itself"
+  ]
+}

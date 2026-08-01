@@ -1,0 +1,66 @@
+{
+  "scenario": "malformed-member-and-missing-collection-time",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "malformed-record",
+      "status": "parseFailed"
+    },
+    {
+      "artifactId": "malformed-summary",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "malformed-record": "enumerated",
+    "malformed-summary": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "malformed-record/portal_log.txt",
+          "sourceArtifactId": "malformed-record"
+        },
+        {
+          "evidenceId": "malformed-summary/diagnostic_summary.txt",
+          "sourceArtifactId": "malformed-summary"
+        }
+      ],
+      "coverageGapIds": [
+        "malformed-record"
+      ]
+    },
+    {
+      "findingId": "android-diagnostics/incomplete-member-coverage",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "malformed-record"
+      ]
+    },
+    {
+      "findingId": "android-diagnostics/unusable-collection-time",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-malformed-member-and-missing-collection-time#suppliedFacts",
+          "sourceArtifactId": "android-cp-malformed-member-and-missing-collection-time#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a member the importer could not decode is malformed, never merely missing",
+    "a bundle with no supplied collection time is not placed on a UTC timeline by guesswork"
+  ]
+}

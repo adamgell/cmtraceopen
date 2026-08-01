@@ -1,0 +1,15 @@
+SYNTHETIC FIXTURE: placeholder archive member. Not a reproduction of any real Android Company Portal or Microsoft Intune app artifact format.
+collector = synthetic-fixture-generator
+note = contents are structurally meaningless on purpose
+filler_000 = padding to exceed the per-member byte limit
+filler_001 = padding to exceed the per-member byte limit
+filler_002 = padding to exceed the per-member byte limit
+filler_003 = padding to exceed the per-member byte limit
+filler_004 = padding to exceed the per-member byte limit
+filler_005 = padding to exceed the per-member byte limit
+filler_006 = padding to exceed the per-member byte limit
+filler_007 = padding to exceed the per-member byte limit
+filler_008 = padding to exceed the per-member byte limit
+filler_009 = padding to exceed the per-member byte limit
+filler_010 = padding to exceed the per-member byte limit
+filler_011 = padding to exceed the per-member byte limit

@@ -1,0 +1,64 @@
+{
+  "scenario": "company-portal-saved-logs",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "cp-diagnostic-summary",
+      "status": "available"
+    },
+    {
+      "artifactId": "cp-portal-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "cp-portal-log-previous",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "cp-diagnostic-summary": "enumerated",
+    "cp-portal-log": "enumerated",
+    "cp-portal-log-previous": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "cp-diagnostic-summary/diagnostic_summary.txt",
+          "sourceArtifactId": "cp-diagnostic-summary"
+        },
+        {
+          "evidenceId": "cp-portal-log/portal_log.txt",
+          "sourceArtifactId": "cp-portal-log"
+        },
+        {
+          "evidenceId": "cp-portal-log-previous/portal_log_1.txt",
+          "sourceArtifactId": "cp-portal-log-previous"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/work-profile-collection-scope",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-company-portal-saved-logs#suppliedFacts",
+          "sourceArtifactId": "android-cp-company-portal-saved-logs#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a structurally complete bundle is still reported unsupported while no contract is verified",
+    "work-profile collection scope is preserved as a finding rather than generalized to the device"
+  ]
+}

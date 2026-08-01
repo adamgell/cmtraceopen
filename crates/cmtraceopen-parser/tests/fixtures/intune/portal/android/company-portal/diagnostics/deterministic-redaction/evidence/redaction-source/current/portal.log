@@ -1,0 +1,9 @@
+SYNTHETIC FIXTURE: placeholder archive member. Not a reproduction of any real Android Company Portal or Microsoft Intune app artifact format.
+signed_in_user = synthetic.user@fixture.example
+tenant_id = 11111111-2222-4333-8444-555555555555
+device_id = 66666666-7777-4888-8999-000000000000
+service_endpoint = https://synthetic-endpoint.invalid/DeviceService?tenant=synthetic
+access_token = eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c3ludGhldGlj
+package = com.synthetic.fixture.portal
+imei = 356938035643809
+note = every value above is invented for this fixture

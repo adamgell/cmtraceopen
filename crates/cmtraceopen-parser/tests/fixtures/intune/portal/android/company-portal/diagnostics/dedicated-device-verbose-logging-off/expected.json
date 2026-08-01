@@ -1,0 +1,45 @@
+{
+  "scenario": "dedicated-device-verbose-logging-off",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "dedicated-summary",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "dedicated-summary": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "dedicated-summary/diagnostic_summary.txt",
+          "sourceArtifactId": "dedicated-summary"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/verbose-logging-disabled",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-dedicated-device-verbose-logging-off#suppliedFacts",
+          "sourceArtifactId": "android-cp-dedicated-device-verbose-logging-off#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "verbose logging off is reported so a missing signal is not read as an absent event"
+  ]
+}

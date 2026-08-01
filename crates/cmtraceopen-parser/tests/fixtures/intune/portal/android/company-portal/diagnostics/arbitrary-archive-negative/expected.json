@@ -1,0 +1,43 @@
+{
+  "scenario": "arbitrary-archive-negative",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "notCompanyPortalDiagnostics",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "arbitrary-notes",
+      "status": "available"
+    },
+    {
+      "artifactId": "arbitrary-readme",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "arbitrary-notes": "enumerated",
+    "arbitrary-readme": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/not-company-portal",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "arbitrary-notes/notes.txt",
+          "sourceArtifactId": "arbitrary-notes"
+        },
+        {
+          "evidenceId": "arbitrary-readme/readme.txt",
+          "sourceArtifactId": "arbitrary-readme"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an arbitrary archive is never treated as a diagnostic report",
+    "envelope findings are suppressed for a bundle that was declined"
+  ]
+}

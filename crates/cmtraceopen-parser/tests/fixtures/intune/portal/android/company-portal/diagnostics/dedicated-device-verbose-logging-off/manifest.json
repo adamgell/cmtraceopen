@@ -1,0 +1,46 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "dedicated-device-verbose-logging-off",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "Company Portal saved logs from a dedicated device with verbose logging turned off. Less was recorded than a default collection would record, which is a coverage fact rather than a fault.",
+  "bundleId": "android-cp-dedicated-device-verbose-logging-off",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": null
+  },
+  "supplied": {
+    "app": "companyPortal",
+    "appVersion": "5.0.0-synthetic",
+    "managementMode": "dedicatedDevice",
+    "collectionFlow": "savedLogs",
+    "verboseLogging": "off",
+    "incidentId": null,
+    "uploadOutcome": "notAttempted",
+    "collectedAtText": "2026-07-31T11:02:44+10:00",
+    "deviceTimeZone": null,
+    "declaredSchemaToken": null,
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "dedicated-summary",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "diagnostic_summary.txt",
+      "originalBasename": "diagnostic_summary.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/dedicated-summary/current/diagnostic_summary.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    }
+  ]
+}

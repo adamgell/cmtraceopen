@@ -1,0 +1,43 @@
+{
+  "scenario": "admin-center-download-corporate-owned-work-profile",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "admin-download-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "admin-download-summary",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "admin-download-log": "enumerated",
+    "admin-download-summary": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "admin-download-log/portal_log.txt",
+          "sourceArtifactId": "admin-download-log"
+        },
+        {
+          "evidenceId": "admin-download-summary/diagnostic_summary.txt",
+          "sourceArtifactId": "admin-download-summary"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an admin-center download is a distinct collection flow from a user-saved artifact",
+    "a corporate-owned work profile is recorded without inheriting the work-profile scope caveat"
+  ]
+}

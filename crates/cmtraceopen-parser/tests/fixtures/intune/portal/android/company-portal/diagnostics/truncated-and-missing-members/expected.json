@@ -1,0 +1,79 @@
+{
+  "scenario": "truncated-and-missing-members",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "partial-absent-log",
+      "status": "missing"
+    },
+    {
+      "artifactId": "partial-portal-log",
+      "status": "capped"
+    },
+    {
+      "artifactId": "partial-skipped-log",
+      "status": "skipped"
+    },
+    {
+      "artifactId": "partial-summary",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "partial-absent-log": "notCollected",
+    "partial-portal-log": "enumerated",
+    "partial-skipped-log": "notCollected",
+    "partial-summary": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "partial-portal-log/portal_log.txt",
+          "sourceArtifactId": "partial-portal-log"
+        },
+        {
+          "evidenceId": "partial-summary/diagnostic_summary.txt",
+          "sourceArtifactId": "partial-summary"
+        }
+      ],
+      "coverageGapIds": [
+        "partial-absent-log",
+        "partial-portal-log",
+        "partial-skipped-log"
+      ]
+    },
+    {
+      "findingId": "android-diagnostics/incomplete-member-coverage",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "partial-absent-log",
+        "partial-portal-log",
+        "partial-skipped-log"
+      ]
+    },
+    {
+      "findingId": "android-diagnostics/work-profile-collection-scope",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-truncated-and-missing-members#suppliedFacts",
+          "sourceArtifactId": "android-cp-truncated-and-missing-members#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "capped, absent, and skipped are distinct coverage states, never collapsed into missing"
+  ]
+}

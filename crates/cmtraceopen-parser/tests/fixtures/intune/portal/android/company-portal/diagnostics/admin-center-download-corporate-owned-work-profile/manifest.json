@@ -1,0 +1,64 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "admin-center-download-corporate-owned-work-profile",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "An administrator-initiated download for a corporate-owned work profile device. The origin is recorded as an importer-supplied fact; nothing about it is read from the artifact.",
+  "bundleId": "android-cp-admin-center-download-corporate-owned-work-profile",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": null
+  },
+  "supplied": {
+    "app": "companyPortal",
+    "appVersion": "5.0.0-synthetic",
+    "managementMode": "corporateOwnedWorkProfile",
+    "collectionFlow": "adminCenterDownload",
+    "verboseLogging": "unreported",
+    "incidentId": null,
+    "uploadOutcome": "notAttempted",
+    "collectedAtText": "2026-07-31T09:14:02Z",
+    "deviceTimeZone": null,
+    "declaredSchemaToken": null,
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "admin-download-log",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "portal_log.txt",
+      "originalBasename": "portal_log.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/admin-download-log/current/portal_log.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "admin-download-summary",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "diagnostic_summary.txt",
+      "originalBasename": "diagnostic_summary.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/admin-download-summary/current/diagnostic_summary.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    }
+  ]
+}

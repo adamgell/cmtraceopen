@@ -1,0 +1,80 @@
+{
+  "scenario": "deterministic-redaction",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "redaction-source",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "redaction-source": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "redaction-source/com.synthetic.fixture.portal.log",
+          "sourceArtifactId": "redaction-source"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/work-profile-collection-scope",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-deterministic-redaction#suppliedFacts",
+          "sourceArtifactId": "android-cp-deterministic-redaction#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/incident-id-without-upload-confirmation",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-deterministic-redaction#suppliedFacts",
+          "sourceArtifactId": "android-cp-deterministic-redaction#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "every sensitive shape is masked with a fixed marker so exports are byte-stable",
+    "an entry name that embeds a package name is masked along with the content"
+  ],
+  "redaction": {
+    "memberEntryName": {
+      "redaction-source": "[redacted:package]"
+    },
+    "memberSanitizedPath": {
+      "redaction-source": "[redacted:url]"
+    },
+    "incidentId": "[redacted:incidentId]",
+    "memberText": {
+      "redaction-source": [
+        "SYNTHETIC FIXTURE: placeholder archive member. Not a reproduction of any real Android Company Portal or Microsoft Intune app artifact format.",
+        "signed_in_user = [redacted:email]",
+        "tenant_id = [redacted:guid]",
+        "device_id = [redacted:guid]",
+        "service_endpoint = [redacted:url]",
+        "access_token = [redacted:token]",
+        "package = [redacted:package]",
+        "imei = [redacted:deviceId]",
+        "note = every value above is invented for this fixture"
+      ]
+    }
+  }
+}

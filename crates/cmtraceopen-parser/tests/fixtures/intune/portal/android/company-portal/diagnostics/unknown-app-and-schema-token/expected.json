@@ -1,0 +1,58 @@
+{
+  "scenario": "unknown-app-and-schema-token",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "future-summary",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "future-summary": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "future-summary/diagnostic_summary.txt",
+          "sourceArtifactId": "future-summary"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/unknown-app-or-schema",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-unknown-app-and-schema-token#suppliedFacts",
+          "sourceArtifactId": "android-cp-unknown-app-and-schema-token#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/work-profile-collection-scope",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-unknown-app-and-schema-token#suppliedFacts",
+          "sourceArtifactId": "android-cp-unknown-app-and-schema-token#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an unrecognized app name is preserved verbatim rather than collapsed to a default",
+    "a declared schema token that matches no verified contract lowers confidence explicitly"
+  ]
+}

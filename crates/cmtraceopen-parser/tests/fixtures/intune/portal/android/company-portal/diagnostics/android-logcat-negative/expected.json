@@ -1,0 +1,34 @@
+{
+  "scenario": "android-logcat-negative",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "notCompanyPortalDiagnostics",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "logcat-capture",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "logcat-capture": "recognizedForeignLogcat"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/not-company-portal",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "logcat-capture/logcat.txt",
+          "sourceArtifactId": "logcat-capture"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a path or importer hint may nominate a candidate but content overrides it downward",
+    "recognizing logcat is a refusal, not the start of a logcat parser"
+  ]
+}

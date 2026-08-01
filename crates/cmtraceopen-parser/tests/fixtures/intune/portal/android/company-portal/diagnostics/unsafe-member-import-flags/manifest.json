@@ -1,0 +1,158 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unsafe-member-import-flags",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "Duplicate, traversal, absolute, oversized, truncated, and symlinked members. Every one is enumerated and excluded from evidence; none of their contents are read.",
+  "bundleId": "android-cp-unsafe-member-import-flags",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": 512
+  },
+  "supplied": {
+    "app": "companyPortal",
+    "appVersion": "5.0.0-synthetic",
+    "managementMode": "fullyManaged",
+    "collectionFlow": "savedLogs",
+    "verboseLogging": "on",
+    "incidentId": null,
+    "uploadOutcome": "notAttempted",
+    "collectedAtText": "2026-07-31T09:14:02+10:00",
+    "deviceTimeZone": null,
+    "declaredSchemaToken": null,
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "unsafe-absolute",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "/data/data/synthetic/escape.txt",
+      "originalBasename": "escape.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/unsafe-absolute/current/escape.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "unsafe-duplicate-a",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "portal_log.txt",
+      "originalBasename": "portal_log_copy_a.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/unsafe-duplicate-a/current/portal_log_copy_a.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "unsafe-duplicate-b",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "portal_log.txt",
+      "originalBasename": "portal_log_copy_b.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/unsafe-duplicate-b/current/portal_log_copy_b.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "unsafe-oversized",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "oversized.txt",
+      "originalBasename": "oversized.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/unsafe-oversized/current/oversized.txt",
+      "bytesCopied": 922,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "unsafe-symlink",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "linked.txt",
+      "originalBasename": "linked.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/unsafe-symlink/current/linked.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": [
+        "symlinkEntry"
+      ]
+    },
+    {
+      "artifactId": "unsafe-traversal",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "logs/../../escape.txt",
+      "originalBasename": "traversal_escape.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/unsafe-traversal/current/traversal_escape.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "unsafe-truncated",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "truncated.txt",
+      "originalBasename": "truncated.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/unsafe-truncated/current/truncated.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": [
+        "truncatedEntry"
+      ]
+    }
+  ]
+}

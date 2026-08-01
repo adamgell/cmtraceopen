@@ -1,0 +1,46 @@
+{
+  "scenario": "invalid-collection-timestamp",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "invalid-time-summary",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "invalid-time-summary": "enumerated"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "invalid-time-summary/diagnostic_summary.txt",
+          "sourceArtifactId": "invalid-time-summary"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/unusable-collection-time",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-invalid-collection-timestamp#suppliedFacts",
+          "sourceArtifactId": "android-cp-invalid-collection-timestamp#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an unreadable collection time is reported invalid and keeps its original text",
+    "a named time zone is never resolved to an offset by this crate"
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "scenario": "unsafe-member-import-flags",
+  "workload": "portal/android/company-portal/diagnostics",
+  "classification": "candidateUnverifiedContract",
+  "verifiedContractCount": 0,
+  "parsedRecordCount": 0,
+  "coverage": [
+    {
+      "artifactId": "unsafe-absolute",
+      "status": "available"
+    },
+    {
+      "artifactId": "unsafe-duplicate-a",
+      "status": "available"
+    },
+    {
+      "artifactId": "unsafe-duplicate-b",
+      "status": "available"
+    },
+    {
+      "artifactId": "unsafe-oversized",
+      "status": "available"
+    },
+    {
+      "artifactId": "unsafe-symlink",
+      "status": "available"
+    },
+    {
+      "artifactId": "unsafe-traversal",
+      "status": "available"
+    },
+    {
+      "artifactId": "unsafe-truncated",
+      "status": "available"
+    }
+  ],
+  "memberClassifications": {
+    "unsafe-absolute": "rejectedUnsafe",
+    "unsafe-duplicate-a": "rejectedUnsafe",
+    "unsafe-duplicate-b": "rejectedUnsafe",
+    "unsafe-oversized": "rejectedUnsafe",
+    "unsafe-symlink": "rejectedUnsafe",
+    "unsafe-traversal": "rejectedUnsafe",
+    "unsafe-truncated": "rejectedUnsafe"
+  },
+  "findings": [
+    {
+      "findingId": "android-diagnostics/unverified-artifact-contract",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "android-cp-unsafe-member-import-flags#suppliedFacts",
+          "sourceArtifactId": "android-cp-unsafe-member-import-flags#suppliedFacts"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "android-diagnostics/unsafe-members",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "unsafe-absolute//data/data/synthetic/escape.txt",
+          "sourceArtifactId": "unsafe-absolute"
+        },
+        {
+          "evidenceId": "unsafe-duplicate-a/portal_log.txt",
+          "sourceArtifactId": "unsafe-duplicate-a"
+        },
+        {
+          "evidenceId": "unsafe-duplicate-b/portal_log.txt",
+          "sourceArtifactId": "unsafe-duplicate-b"
+        },
+        {
+          "evidenceId": "unsafe-oversized/oversized.txt",
+          "sourceArtifactId": "unsafe-oversized"
+        },
+        {
+          "evidenceId": "unsafe-symlink/linked.txt",
+          "sourceArtifactId": "unsafe-symlink"
+        },
+        {
+          "evidenceId": "unsafe-traversal/logs/../../escape.txt",
+          "sourceArtifactId": "unsafe-traversal"
+        },
+        {
+          "evidenceId": "unsafe-truncated/truncated.txt",
+          "sourceArtifactId": "unsafe-truncated"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "traversal and absolute entry names are flagged from the name alone, without the importer reporting them",
+    "an oversized member is refused against the caller's own byte limit",
+    "no unsafe member's contents are classified, so an unsafe logcat cannot steer the bundle"
+  ]
+}

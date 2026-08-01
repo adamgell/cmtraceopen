@@ -1,0 +1,64 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "arbitrary-archive-negative",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "An unrelated archive imported through this path. Nothing nominated it as Android diagnostics, so it is declined rather than parsed optimistically.",
+  "bundleId": "android-cp-arbitrary-archive-negative",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": null
+  },
+  "supplied": {
+    "app": null,
+    "appVersion": null,
+    "managementMode": null,
+    "collectionFlow": null,
+    "verboseLogging": null,
+    "incidentId": null,
+    "uploadOutcome": null,
+    "collectedAtText": null,
+    "deviceTimeZone": null,
+    "declaredSchemaToken": null,
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "arbitrary-notes",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "notes.txt",
+      "originalBasename": "notes.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/arbitrary-notes/current/notes.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "arbitrary-readme",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "readme.txt",
+      "originalBasename": "readme.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/arbitrary-readme/current/readme.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    }
+  ]
+}

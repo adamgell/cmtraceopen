@@ -1,0 +1,64 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "microsoft-intune-app-uploaded-logs",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "Microsoft Intune app 'Help > Get Support' then 'UPLOAD LOGS' on a fully managed device, imported with the upload outcome confirmed out of band. The incident-ID caveat is suppressed precisely because an outcome was reported.",
+  "bundleId": "android-cp-microsoft-intune-app-uploaded-logs",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": null
+  },
+  "supplied": {
+    "app": "microsoftIntuneApp",
+    "appVersion": "2026.7-synthetic",
+    "managementMode": "fullyManaged",
+    "collectionFlow": "uploadLogs",
+    "verboseLogging": "on",
+    "incidentId": "SYNTHETIC-INCIDENT-0000-0002",
+    "uploadOutcome": "confirmed",
+    "collectedAtText": "2026-07-31T09:20:11+10:00",
+    "deviceTimeZone": null,
+    "declaredSchemaToken": null,
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "intune-app-summary",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "support_summary.txt",
+      "originalBasename": "support_summary.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/intune-app-summary/current/support_summary.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    },
+    {
+      "artifactId": "intune-app-log",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "app_log.txt",
+      "originalBasename": "app_log.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/intune-app-log/current/app_log.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    }
+  ]
+}

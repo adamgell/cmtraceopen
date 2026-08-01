@@ -1,0 +1,46 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "invalid-collection-timestamp",
+  "workload": "portal/android/company-portal/diagnostics",
+  "description": "The importer supplied a collection time this crate cannot read and no resolvable offset. The original text is preserved and no offset is borrowed from the host.",
+  "bundleId": "android-cp-invalid-collection-timestamp",
+  "observedAtUtc": "2026-07-31T00:00:00Z",
+  "limits": {
+    "maxMemberBytes": null
+  },
+  "supplied": {
+    "app": "companyPortal",
+    "appVersion": "5.0.0-synthetic",
+    "managementMode": "fullyManaged",
+    "collectionFlow": "savedLogs",
+    "verboseLogging": "on",
+    "incidentId": null,
+    "uploadOutcome": "notAttempted",
+    "collectedAtText": "31 July 2026, 9:14 am device local",
+    "deviceTimeZone": "Etc/Unknown-Synthetic",
+    "declaredSchemaToken": null,
+    "containerKind": "extractedDirectory",
+    "extra": []
+  },
+  "artifacts": [
+    {
+      "artifactId": "invalid-time-summary",
+      "family": "androidCompanyPortalDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "entryName": "diagnostic_summary.txt",
+      "originalBasename": "diagnostic_summary.txt",
+      "sanitizedSourcePath": null,
+      "relativePath": "evidence/invalid-time-summary/current/diagnostic_summary.txt",
+      "bytesCopied": 238,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "safetyFlags": []
+    }
+  ]
+}

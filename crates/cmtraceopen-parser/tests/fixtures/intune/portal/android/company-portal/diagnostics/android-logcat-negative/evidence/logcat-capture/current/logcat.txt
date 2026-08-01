@@ -1,0 +1,6 @@
+SYNTHETIC FIXTURE: placeholder archive member. Not a reproduction of any real Android Company Portal or Microsoft Intune app artifact format.
+07-31 09:14:02.113  4120  4120 I SynthTag: synthetic activity resumed
+07-31 09:14:02.114  4120  4155 D SynthTag: synthetic worker started
+07-31 09:14:02.220  4120  4155 W SynthTag: synthetic retry scheduled
+07-31 09:14:03.001  4120  4120 E SynthTag: synthetic operation failed
+07-31 09:14:03.400  4120  4155 I SynthTag: synthetic worker finished
