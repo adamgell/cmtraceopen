@@ -469,6 +469,49 @@ fn every_classified_outcome_carries_a_validated_shared_finding() {
     }
 }
 
+/// `statesys.log` and `hman.log` belong to the declared site-core groups but no
+/// fixture validates their producer records, so the profile must not reduce
+/// them into facts. They still have to stay visible as explicit coverage rather
+/// than being silently dropped.
+#[test]
+fn a_source_family_without_a_validated_producer_is_coverage_not_silence() {
+    let mut bundle = load_bundle("healthy");
+    let mut relabelled = String::new();
+    for source in &mut bundle.sources {
+        if source.source_group == "server-status" {
+            source.artifact.display_name = "statesys.log".to_owned();
+            source.rotation_lineage = "statesys.log".to_owned();
+            relabelled = source.artifact.artifact_id.clone();
+        }
+    }
+    assert!(
+        !relabelled.is_empty(),
+        "healthy bundle declares a status source"
+    );
+
+    let analysis = analyze_site_core(&bundle);
+    assert!(
+        analysis.results.iter().all(|result| result
+            .evidence
+            .iter()
+            .all(|evidence| evidence.artifact_id != relabelled)),
+        "an unvalidated source family must never contribute facts"
+    );
+    assert!(
+        analysis.coverage_gaps.iter().any(|gap| gap.artifact_id
+            == relabelled
+            && gap.state == SccmCoverageState::Unsupported),
+        "an unvalidated source family must be reported as unsupported coverage"
+    );
+    assert!(
+        analysis
+            .results
+            .iter()
+            .all(|result| result.coverage_gap_artifact_ids.contains(&relabelled)),
+        "every transaction must cite the unsupported source it could not read"
+    );
+}
+
 #[test]
 fn analysis_is_independent_of_source_and_evidence_order() {
     for scenario in SCENARIOS {
