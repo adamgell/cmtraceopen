@@ -1,0 +1,17 @@
+{
+  "description": "An execution split across a rotation leaves an unkeyed tail rather than a guessed join.",
+  "artifacts": [
+    {
+      "artifactId": "agent-rot",
+      "fileName": "AgentExecutor-1.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor-1.log",
+      "contentFile": "AgentExecutor-1.log"
+    },
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "description": "A nonzero exit with no retained output: absence of output is coverage, not proof of silence.",
+  "artifacts": [
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

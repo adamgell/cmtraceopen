@@ -1,0 +1,11 @@
+{
+  "description": "A multiline record is one logical record and its inner lines are preserved verbatim.",
+  "artifacts": [
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

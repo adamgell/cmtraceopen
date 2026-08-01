@@ -1,0 +1,35 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "reference-scenario",
+  "workload": "_skeleton",
+  "description": "Reference layout for epic #356 corpora. Shows one captured artifact and one absent artifact, so a leaf can see how a coverage gap is expressed rather than omitted.",
+  "artifacts": [
+    {
+      "artifactId": "skeleton-ime-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension.log",
+      "sanitizedSourcePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+      "relativePath": "evidence/skeleton-ime/current/IntuneManagementExtension.log",
+      "bytesCopied": 220,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": { "kind": "current", "fragmentComplete": true }
+    },
+    {
+      "artifactId": "skeleton-appworkload-absent",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "AppWorkload.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:01Z",
+      "rotation": { "kind": "current", "fragmentComplete": true }
+    }
+  ]
+}

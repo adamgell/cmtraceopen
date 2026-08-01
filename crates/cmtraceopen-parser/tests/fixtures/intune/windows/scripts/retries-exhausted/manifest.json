@@ -1,0 +1,17 @@
+{
+  "description": "Retries exhausted: a later retry notice does not outrank the execution outcome.",
+  "artifacts": [
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    },
+    {
+      "artifactId": "ime",
+      "fileName": "IntuneManagementExtension.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+      "contentFile": "IntuneManagementExtension.log"
+    }
+  ]
+}

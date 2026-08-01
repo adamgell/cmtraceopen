@@ -1,0 +1,17 @@
+{
+  "description": "A nonzero remediation exit is an outcome, not a diagnosis; detection's 1 and remediation's 3 keep separate meanings.",
+  "artifacts": [
+    {
+      "artifactId": "hs",
+      "fileName": "HealthScripts.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\HealthScripts.log",
+      "contentFile": "HealthScripts.log"
+    },
+    {
+      "artifactId": "ae",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

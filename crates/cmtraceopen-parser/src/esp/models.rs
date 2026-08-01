@@ -1,47 +1,6 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
-macro_rules! raw_preserving_string_enum {
-    (
-        $(#[$meta:meta])*
-        pub enum $name:ident {
-            $($variant:ident => $wire_value:literal),+ $(,)?
-        }
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq)]
-        pub enum $name {
-            $($variant,)+
-            Unknown(String),
-        }
-
-        impl Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: Serializer,
-            {
-                let value = match self {
-                    $(Self::$variant => $wire_value,)+
-                    Self::Unknown(raw) => raw.as_str(),
-                };
-
-                serializer.serialize_str(value)
-            }
-        }
-
-        impl<'de> Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                let raw = String::deserialize(deserializer)?;
-                Ok(match raw.as_str() {
-                    $($wire_value => Self::$variant,)+
-                    _ => Self::Unknown(raw),
-                })
-            }
-        }
-    };
-}
+use crate::wire::raw_preserving_string_enum;
 
 pub const ESP_DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 
