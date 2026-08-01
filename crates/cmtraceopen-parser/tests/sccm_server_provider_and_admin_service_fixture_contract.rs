@@ -977,17 +977,16 @@ fn schema_failures(scenario: &str, manifest: &Value, expected: &Value) -> Vec<St
                     physical_line_counts.insert(artifact_id.to_owned(), line_count);
                 }
             }
-            Some("absent" | "accessDenied" | "skipped" | "unsupported") => {
+            Some("absent" | "accessDenied" | "skipped" | "unsupported")
                 if artifact.get("relativePath").is_some()
                     || artifact.get("bytesCopied").is_some()
                     || artifact.get("encoding").is_some()
                     || artifact.get("collectionLimit").is_some()
-                    || artifact["rotation"].get("fragmentComplete").is_some()
-                {
-                    failures.push(format!(
-                        "{artifact_id}: nonphysical coverage invents file provenance"
-                    ));
-                }
+                    || artifact["rotation"].get("fragmentComplete").is_some() =>
+            {
+                failures.push(format!(
+                    "{artifact_id}: nonphysical coverage invents file provenance"
+                ));
             }
             _ => {}
         }
