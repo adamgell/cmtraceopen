@@ -1266,6 +1266,9 @@ fn append_rotation_fragment_observation(
     consumed_gap_groups.insert(MP_AUTH_GROUP.to_owned());
 }
 
+/// Rejected records surface one observation per owning source group so
+/// each remediation hint requests the group the rejected record actually
+/// belongs to instead of defaulting to the authentication family.
 fn append_rejected_observations(
     bundle: &SccmManagementPointBundle,
     rejected: &mut Vec<SccmEvidenceRef>,
@@ -1278,71 +1281,145 @@ fn append_rejected_observations(
         return;
     }
 
-    let unrelated = rejected.iter().any(|reference| {
-        bundle
-            .evidence
-            .iter()
-            .filter(|evidence| evidence.reference == *reference)
-            .any(|evidence| {
-                token_value(&evidence.message, "RequestId").is_none()
-                    && (token_value(&evidence.message, "AssignmentId").is_some()
-                        || token_value(&evidence.message, "ClientId").is_some())
-            })
-    });
     let rotation = bundle
         .sources
         .iter()
         .any(|source| source.fragment_complete == Some(false));
-    let (observation_id, finding_id, phase, classification, group, reason) = if unrelated {
-        (
-            "observation:unrelated-client-like-key",
-            "finding:mp-unrelated-client-like-key",
-            SccmManagementPointPhase::ResolveLocationOrPolicy,
-            SccmManagementPointClassification::IncompatibleKey,
-            MP_AUTH_GROUP,
-            "Capture bounded MP_GetAuth.log evidence with the exact versioned request key.",
-        )
-    } else if rotation {
-        (
-            "observation:rotation-malformed",
-            "finding:mp-rotation-malformed",
-            SccmManagementPointPhase::ReceiveRequest,
-            SccmManagementPointClassification::LowConfidenceSymptom,
-            MP_AUTH_GROUP,
-            "Collect a supported-version MP_GetAuth.log record containing a complete exact request key.",
-        )
-    } else {
-        (
-            "observation:mp-malformed",
-            "finding:mp-malformed",
-            SccmManagementPointPhase::ReceiveRequest,
-            SccmManagementPointClassification::LowConfidenceSymptom,
-            MP_AUTH_GROUP,
-            "Collect bounded MP_GetAuth.log evidence under the validated extraction profile.",
-        )
-    };
-    let request = workflow_request_for_group(group, reason);
-    let evidence = merge_references(rejected.clone());
-    observations.push(SccmManagementPointSourceLocalObservation {
-        observation_id: observation_id.to_owned(),
-        phase,
-        state: SccmManagementPointState::Observed,
-        classification,
-        confidence: SccmManagementPointConfidence::Low,
-        correlation_eligible: false,
-        evidence: evidence.clone(),
-        next_artifacts: vec![request.clone()],
+    let mut references_by_group: BTreeMap<&'static str, Vec<SccmEvidenceRef>> = BTreeMap::new();
+    for reference in rejected.iter() {
+        references_by_group
+            .entry(owning_group_for_reference(bundle, reference))
+            .or_default()
+            .push(reference.clone());
+    }
+
+    for (group, references) in references_by_group {
+        let unrelated = references.iter().any(|reference| {
+            bundle
+                .evidence
+                .iter()
+                .filter(|evidence| evidence.reference == *reference)
+                .any(|evidence| {
+                    token_value(&evidence.message, "RequestId").is_none()
+                        && (token_value(&evidence.message, "AssignmentId").is_some()
+                            || token_value(&evidence.message, "ClientId").is_some())
+                })
+        });
+        let rejection = if unrelated {
+            MpRejection::UnrelatedClientLikeKey
+        } else if rotation {
+            MpRejection::RotationMalformed
+        } else {
+            MpRejection::Malformed
+        };
+        let phase = entry_phase_for_group(group);
+        let classification = rejection.classification();
+        let observation_id = format!("observation:{}:{group}", rejection.id_stem());
+        let request = workflow_request_for_group(group, &rejection.reason(group));
+        let evidence = merge_references(references);
+        observations.push(SccmManagementPointSourceLocalObservation {
+            observation_id: observation_id.clone(),
+            phase,
+            state: SccmManagementPointState::Observed,
+            classification,
+            confidence: SccmManagementPointConfidence::Low,
+            correlation_eligible: false,
+            evidence: evidence.clone(),
+            next_artifacts: vec![request.clone()],
+        });
+        if let Some(finding) = build_source_local_finding(
+            &format!("finding:{}:{group}", rejection.id_stem()),
+            &observation_id,
+            phase,
+            classification,
+            evidence,
+            None,
+            &[request],
+        ) {
+            findings.push(finding);
+        }
+    }
+}
+
+/// Why a Management Point record was rejected. The variant fixes the
+/// observation identity and classification; the owning source group fixes
+/// the phase and the artifact the remediation hint requests.
+#[derive(Clone, Copy)]
+enum MpRejection {
+    UnrelatedClientLikeKey,
+    RotationMalformed,
+    Malformed,
+}
+
+impl MpRejection {
+    fn id_stem(self) -> &'static str {
+        match self {
+            Self::UnrelatedClientLikeKey => "unrelated-client-like-key",
+            Self::RotationMalformed => "rotation-malformed",
+            Self::Malformed => "mp-malformed",
+        }
+    }
+
+    fn classification(self) -> SccmManagementPointClassification {
+        match self {
+            Self::UnrelatedClientLikeKey => SccmManagementPointClassification::IncompatibleKey,
+            Self::RotationMalformed | Self::Malformed => {
+                SccmManagementPointClassification::LowConfidenceSymptom
+            }
+        }
+    }
+
+    fn reason(self, group: &str) -> String {
+        let log = workflow_log_for_group(group);
+        match self {
+            Self::UnrelatedClientLikeKey => {
+                format!("Capture bounded {log} evidence with the exact versioned request key.")
+            }
+            Self::RotationMalformed => format!(
+                "Collect a supported-version {log} record containing a complete exact request key."
+            ),
+            Self::Malformed => {
+                format!("Collect bounded {log} evidence under the validated extraction profile.")
+            }
+        }
+    }
+}
+
+/// The source group that owns a rejected reference. Supplemental and
+/// unknown owners keep the authentication-family default because that is
+/// the only remaining group able to carry the request key the rejected
+/// record failed to produce. `any` rather than `find` keeps the answer
+/// independent of source ordering when an artifact id is duplicated.
+fn owning_group_for_reference(
+    bundle: &SccmManagementPointBundle,
+    reference: &SccmEvidenceRef,
+) -> &'static str {
+    let policy_owned = bundle.sources.iter().any(|source| {
+        source.artifact.artifact_id == reference.artifact_id
+            && source.source_group == MP_POLICY_GROUP
     });
-    if let Some(finding) = build_source_local_finding(
-        finding_id,
-        observation_id,
-        phase,
-        classification,
-        evidence,
-        None,
-        &[request],
-    ) {
-        findings.push(finding);
+    if policy_owned {
+        MP_POLICY_GROUP
+    } else {
+        MP_AUTH_GROUP
+    }
+}
+
+/// The phase a source group answers for: the inverse of [`group_for_phase`],
+/// so an observation never cites a phase that maps back to another group.
+fn entry_phase_for_group(group: &str) -> SccmManagementPointPhase {
+    if group == MP_POLICY_GROUP {
+        SccmManagementPointPhase::ResolveLocationOrPolicy
+    } else {
+        SccmManagementPointPhase::ReceiveRequest
+    }
+}
+
+fn workflow_log_for_group(group: &str) -> &'static str {
+    if group == MP_POLICY_GROUP {
+        "MP_GetPolicy.log"
+    } else {
+        "MP_GetAuth.log"
     }
 }
 
@@ -1396,11 +1473,7 @@ fn append_unconsumed_explicit_coverage(
         let observation_id = format!("observation:coverage:{group}");
         observations.push(SccmManagementPointSourceLocalObservation {
             observation_id: observation_id.clone(),
-            phase: if group == MP_AUTH_GROUP {
-                SccmManagementPointPhase::ReceiveRequest
-            } else {
-                SccmManagementPointPhase::ResolveLocationOrPolicy
-            },
+            phase: entry_phase_for_group(group),
             state: SccmManagementPointState::Incomplete,
             classification: SccmManagementPointClassification::InsufficientEvidence,
             confidence: SccmManagementPointConfidence::Low,
@@ -1416,11 +1489,7 @@ fn append_unconsumed_explicit_coverage(
         if let Some(finding) = build_source_local_finding(
             &format!("finding:mp-coverage:{group}"),
             &observation_id,
-            if group == MP_AUTH_GROUP {
-                SccmManagementPointPhase::ReceiveRequest
-            } else {
-                SccmManagementPointPhase::ResolveLocationOrPolicy
-            },
+            entry_phase_for_group(group),
             SccmManagementPointClassification::InsufficientEvidence,
             Vec::new(),
             Some(&gap),
