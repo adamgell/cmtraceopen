@@ -205,7 +205,7 @@ pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnaly
         .collect::<BTreeMap<_, _>>();
     let context = ReductionContext { bundle };
 
-    let mut facts_by_assignment: BTreeMap<String, Vec<PolicyFact>> = BTreeMap::new();
+    let mut parsed_facts = Vec::new();
     let mut rejected_policy_evidence = Vec::new();
     let mut normalized_evidence_ids = BTreeSet::new();
 
@@ -226,12 +226,17 @@ pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnaly
         }
 
         match parse_policy_fact(evidence, artifact) {
-            Some(fact) => facts_by_assignment
-                .entry(fact.assignment_id.clone())
-                .or_default()
-                .push(fact),
+            Some(fact) => parsed_facts.push(fact),
             None => rejected_policy_evidence.push(evidence.reference.clone()),
         }
+    }
+
+    let mut facts_by_assignment: BTreeMap<String, Vec<PolicyFact>> = BTreeMap::new();
+    for fact in quarantine_identity_collisions(parsed_facts, &mut rejected_policy_evidence) {
+        facts_by_assignment
+            .entry(fact.assignment_id.clone())
+            .or_default()
+            .push(fact);
     }
 
     let mut transactions = Vec::new();
@@ -492,28 +497,70 @@ fn reduce_policy_transaction(
 }
 
 fn resolve_phase(facts: &[&PolicyFact]) -> PhaseResolution {
-    let has_deferred = facts
+    let mut outcomes = facts
         .iter()
-        .any(|fact| fact.outcome == FactOutcome::Deferred);
-    let has_success = facts
-        .iter()
-        .any(|fact| fact.outcome == FactOutcome::Succeeded);
-    let has_failure = facts.iter().any(|fact| fact.outcome == FactOutcome::Failed);
-
-    if has_deferred && (has_success || has_failure) {
+        .map(|fact| fact.outcome)
+        .collect::<BTreeSet<_>>()
+        .into_iter();
+    let Some(only) = outcomes.next() else {
         return PhaseResolution::Contradictory;
+    };
+    if outcomes.next().is_none() {
+        return resolution_for_outcome(only);
     }
-    if has_deferred {
-        return PhaseResolution::Deferred;
+
+    // Every mixed phase, including a deferred one, is decided by the latest
+    // usable state. That is what lets a later same-artifact success recover an
+    // earlier Deferred instead of freezing the phase as contradictory.
+    latest_comparable_outcome(facts).unwrap_or(PhaseResolution::Contradictory)
+}
+
+/// Identity of one logical record: artifact, entry, and line range.
+type EvidenceIdentity = (String, String, Option<u32>, Option<u32>);
+
+fn evidence_identity(reference: &SccmEvidenceRef) -> EvidenceIdentity {
+    (
+        reference.artifact_id.clone(),
+        reference.entry_id.clone(),
+        reference.line_start,
+        reference.line_end,
+    )
+}
+
+/// Drops every fact whose logical evidence identity carries more than one claim.
+///
+/// One artifact, entry, and line range is one logical record, so two facts that
+/// share that identity but disagree cannot both be true. Reference comparison
+/// rates them equal, which would let the latest-state search pick by input
+/// order, so the whole identity is quarantined into the rejected set and proves
+/// nothing rather than proving whichever claim was parsed last.
+fn quarantine_identity_collisions(
+    facts: Vec<PolicyFact>,
+    rejected: &mut Vec<SccmEvidenceRef>,
+) -> Vec<PolicyFact> {
+    let mut claims: BTreeMap<EvidenceIdentity, BTreeSet<(SccmPolicyPhase, FactOutcome)>> =
+        BTreeMap::new();
+    for fact in &facts {
+        claims
+            .entry(evidence_identity(&fact.reference))
+            .or_default()
+            .insert((fact.phase, fact.outcome));
     }
-    if has_success && has_failure {
-        return latest_comparable_outcome(facts).unwrap_or(PhaseResolution::Contradictory);
+
+    let collisions = claims
+        .into_iter()
+        .filter(|(_, claims)| claims.len() > 1)
+        .map(|(identity, _)| identity)
+        .collect::<BTreeSet<_>>();
+    if collisions.is_empty() {
+        return facts;
     }
-    if has_failure {
-        PhaseResolution::Failed
-    } else {
-        PhaseResolution::Succeeded
-    }
+
+    let (collided, kept) = facts
+        .into_iter()
+        .partition::<Vec<_>, _>(|fact| collisions.contains(&evidence_identity(&fact.reference)));
+    rejected.extend(collided.into_iter().map(|fact| fact.reference));
+    kept
 }
 
 fn latest_comparable_outcome(facts: &[&PolicyFact]) -> Option<PhaseResolution> {
