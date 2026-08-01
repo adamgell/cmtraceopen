@@ -115,20 +115,14 @@ for arg in "$@"; do
 done
 
 # ── Build the --config overlay JSON ────────────────────────────────────────
-# Use python rather than ad-hoc string concat so identity values containing
-# parentheses, spaces, or quotes survive the round-trip safely.
+# Built with node rather than ad-hoc string concat so identity values
+# containing parentheses, spaces, or quotes survive the round-trip safely.
+# node is used in preference to python3 because this script already requires
+# it for `npx tauri`, so the overlay adds no new runtime dependency.
 CONFIG_OVERLAY=$(
-    python3 -c '
-import json, os, sys
-overlay = {
-    "bundle": {
-        "macOS": {
-            "signingIdentity": os.environ["APPLE_SIGNING_IDENTITY"]
-        }
-    }
-}
-json.dump(overlay, sys.stdout)
-'
+    node -e 'process.stdout.write(JSON.stringify({
+        bundle: { macOS: { signingIdentity: process.env.APPLE_SIGNING_IDENTITY } }
+    }))'
 )
 
 # ── Write config overlay to a temp file ────────────────────────────────────
