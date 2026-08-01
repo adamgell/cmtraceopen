@@ -1298,6 +1298,69 @@ fn policy_identical_duplicate_client_artifact_entries_are_harmless() {
     assert_eq!(analysis["transactions"][0]["confidence"], "high");
 }
 
+fn unavailable_client_sibling(basename: &str, coverage: SccmCoverageState) -> SccmArtifact {
+    SccmArtifact {
+        artifact_id: format!("policy-complete-sibling-{basename}"),
+        display_name: basename.to_owned(),
+        original_path: None,
+        host: None,
+        role: SccmRole::Client,
+        configmgr_version: Some("5.00.TEST.0000".to_owned()),
+        collected_at_utc: None,
+        rotation: SccmRotation::Current,
+        coverage,
+        encoding: Some("utf-8".to_owned()),
+    }
+}
+
+#[test]
+fn policy_unavailable_sibling_stays_observable_when_the_chain_succeeds() {
+    for (coverage, expected) in [
+        (SccmCoverageState::AccessDenied, "accessDenied"),
+        (SccmCoverageState::Capped, "capped"),
+        (SccmCoverageState::Skipped, "skipped"),
+        (SccmCoverageState::Unsupported, "unsupported"),
+        (SccmCoverageState::ParseFailed, "parseFailed"),
+        (SccmCoverageState::Partial, "partial"),
+        (SccmCoverageState::Absent, "absent"),
+    ] {
+        let mut bundle = load_bundle("complete");
+        let sibling = unavailable_client_sibling("StatusAgent.log", coverage.clone());
+        let sibling_id = sibling.artifact_id.clone();
+        bundle.artifacts.push(sibling);
+
+        let analysis = analysis_json(&bundle);
+        // The transaction still succeeds; the gap is a non-outcome, not a veto.
+        assert_eq!(
+            analysis["transactions"][0]["state"], "succeeded",
+            "{coverage:?} sibling must not veto a proven chain"
+        );
+        let gaps = analysis["coverageGaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .clone();
+        assert!(
+            gaps.iter().any(
+                |gap| gap["artifactId"] == sibling_id.as_str() && gap["coverage"] == expected
+            ),
+            "{coverage:?} must remain observable even when nothing failed, got {gaps:?}"
+        );
+    }
+}
+
+#[test]
+fn policy_fully_captured_bundle_reports_no_coverage_gap() {
+    let analysis = analysis_json(&load_bundle("complete"));
+    assert_eq!(analysis["transactions"][0]["state"], "succeeded");
+    assert!(
+        analysis["coverageGaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .is_empty(),
+        "a fully captured bundle must not invent a gap"
+    );
+}
+
 #[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
