@@ -6739,6 +6739,7 @@ fn artifact_round_trip_preserves_capture_and_rotation_provenance() {
 fn coverage_json_names_are_exact_and_never_collapse_to_captured() {
     for (state, expected) in [
         (SccmCoverageState::Captured, r#""captured""#),
+        (SccmCoverageState::Partial, r#""partial""#),
         (SccmCoverageState::Absent, r#""absent""#),
         (SccmCoverageState::AccessDenied, r#""accessDenied""#),
         (SccmCoverageState::Capped, r#""capped""#),
