@@ -21,7 +21,7 @@ Turn a set of GitHub issues into separate, independently reviewable PRs, each dr
 Establish a green baseline and keep the output:
 
 ```bash
-npx tsc --noEmit
+npm exec --offline --yes=false -- tsc --noEmit
 cargo check --locked --manifest-path src-tauri/Cargo.toml --all-targets
 ```
 
