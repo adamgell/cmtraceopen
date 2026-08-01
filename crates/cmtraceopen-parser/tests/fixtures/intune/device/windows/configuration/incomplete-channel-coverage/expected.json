@@ -1,0 +1,52 @@
+{
+  "scenario": "incomplete-channel-coverage",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "status": "capped"
+    },
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "status": "permissionDenied"
+    },
+    {
+      "artifactId": "policy-manager-registry",
+      "status": "missing"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/update/allowautoupdate",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
+      "displayName": null,
+      "receipt": "cspProcessed",
+      "local": "applied",
+      "service": "noEvidence",
+      "resolution": "applied",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": "1",
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "evidenceIds": [
+        "evt-applied"
+      ]
+    }
+  ],
+  "findingIds": [
+    "configuration-device-only-evidence",
+    "configuration-uncollected-artifacts",
+    "configuration-truncated-artifacts",
+    "configuration-applied"
+  ],
+  "assertions": [
+    "capped, permission-denied, and missing coverage produce distinct requests",
+    "a capped channel means absence of a setting proves nothing"
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "deterministic-redaction",
+  "workload": "device/windows/configuration",
+  "description": "Identity and arbitrary values in the default export become stable tokens.",
+  "generatedAtUtc": "2026-07-31T10:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "family": "eventLog",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "payload": "events",
+      "originalBasename": "Admin.evtx",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "relativePath": "evidence/mdm-admin-channel/current/records.json",
+      "bytesCopied": 4163,
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://mdm-admin-channel/Admin.evtx",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

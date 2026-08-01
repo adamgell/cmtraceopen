@@ -1,0 +1,75 @@
+{
+  "scenario": "report-only-evidence",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "status": "available"
+    },
+    {
+      "artifactId": "intune-setting-report",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-admin-channel",
+      "status": "missing"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/deliveryoptimization/dodownloadmode",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/DeliveryOptimization/DODownloadMode",
+      "displayName": null,
+      "receipt": "intended",
+      "local": "noEvidence",
+      "service": "reportedSuccess",
+      "resolution": "insufficientEvidence",
+      "sourceIds": [
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": null,
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "evidenceIds": [
+        "rpt-service-only"
+      ]
+    },
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/update/allowautoupdate",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
+      "displayName": null,
+      "receipt": "cspProcessed",
+      "local": "applied",
+      "service": "noEvidence",
+      "resolution": "applied",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": "1",
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "evidenceIds": [
+        "rpt-local-applied"
+      ]
+    }
+  ],
+  "findingIds": [
+    "configuration-service-only-evidence",
+    "configuration-device-only-evidence",
+    "configuration-uncollected-artifacts",
+    "configuration-applied"
+  ],
+  "assertions": [
+    "an imported Intune row alone never resolves to applied",
+    "a local diagnostic report row is device evidence and does resolve",
+    "the absent event channel is an explicit next-artifact request"
+  ]
+}

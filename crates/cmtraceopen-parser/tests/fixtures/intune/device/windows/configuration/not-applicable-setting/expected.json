@@ -1,0 +1,42 @@
+{
+  "scenario": "not-applicable-setting",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "status": "available"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/bitlocker/requiredeviceencryption",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/BitLocker/RequireDeviceEncryption",
+      "displayName": "Require device encryption",
+      "receipt": "cspProcessed",
+      "local": "notApplicable",
+      "service": "noEvidence",
+      "resolution": "notApplicable",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": null,
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "evidenceIds": [
+        "rpt-na"
+      ]
+    }
+  ],
+  "findingIds": [
+    "configuration-not-applicable",
+    "configuration-device-only-evidence"
+  ],
+  "assertions": [
+    "notApplicable is a terminal disposition, not missing evidence",
+    "no reason for inapplicability is inferred from the node name"
+  ]
+}
