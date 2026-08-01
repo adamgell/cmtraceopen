@@ -1,0 +1,17 @@
+{
+  "description": "Detection found nothing wrong, so remediation was correctly skipped rather than merely absent.",
+  "artifacts": [
+    {
+      "artifactId": "hs",
+      "fileName": "HealthScripts.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\HealthScripts.log",
+      "contentFile": "HealthScripts.log"
+    },
+    {
+      "artifactId": "ae",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

@@ -2,6 +2,9 @@
 import { lazy } from "react";
 import type { WorkspaceDefinition } from "../types";
 
+export { ProfileDrilldown } from "./ProfileDrilldown";
+export type { ProfileDrilldownProps } from "./ProfileDrilldown";
+
 export const macosDiagWorkspace: WorkspaceDefinition = {
   id: "macos-diag",
   label: "macOS Diagnostics",

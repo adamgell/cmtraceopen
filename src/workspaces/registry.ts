@@ -6,6 +6,7 @@ import { intuneWorkspace } from "./intune";
 import { newIntuneWorkspace } from "./new-intune";
 import { dsregcmdWorkspace } from "./dsregcmd";
 import { macosDiagWorkspace } from "./macos-diag";
+import { jamfWorkspace } from "./macos-jamf";
 import { deploymentWorkspace } from "./deployment";
 import { eventLogWorkspace } from "./event-log";
 import { espDiagnosticsWorkspace } from "./esp-diagnostics";
@@ -20,6 +21,7 @@ const ALL_WORKSPACES: WorkspaceDefinition[] = [
   newIntuneWorkspace,
   dsregcmdWorkspace,
   macosDiagWorkspace,
+  jamfWorkspace,
   deploymentWorkspace,
   eventLogWorkspace,
   espDiagnosticsWorkspace,

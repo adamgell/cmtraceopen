@@ -1,0 +1,11 @@
+{
+  "description": "A trailing completion with no readable exit code must not erase the result an earlier readable code proved.",
+  "artifacts": [
+    {
+      "artifactId": "hs",
+      "fileName": "HealthScripts.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\HealthScripts.log",
+      "contentFile": "HealthScripts.log"
+    }
+  ]
+}

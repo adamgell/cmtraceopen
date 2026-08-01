@@ -1,9 +1,11 @@
-//! Company Portal parser surfaces, grouped by platform.
+//! Company Portal evidence surfaces.
 //!
-//! Company Portal is a first-class `intune::portal` surface rather than a
-//! variant of the IME or ESP pipelines: it spans sign-in, enrollment, the app
-//! catalog, compliance, sync, device actions, and support, and those artifacts
-//! must keep their own identity instead of being folded into a neighbouring
-//! workflow.
+//! Company Portal spans sign-in, enrollment, the app catalog, compliance, sync,
+//! device actions, and support, so it is a first-class surface rather than a
+//! sub-case of IME or ESP. Platform-specific contracts live under the matching
+//! platform module.
 
+pub mod android;
+pub mod ios_ipados;
 pub mod macos;
+pub mod windows;
