@@ -740,9 +740,7 @@ fn contains_token_sequence(message: &str, marker: &str) -> bool {
     while let Some(relative_start) = message[search_from..].find(marker) {
         let start = search_from + relative_start;
         let end = start + marker.len();
-        let left_ok = start == 0 || is_marker_boundary(message.as_bytes()[start - 1]);
-        let right_ok = end == message.len() || is_marker_boundary(message.as_bytes()[end]);
-        if left_ok && right_ok {
+        if starts_on_word_boundary(message, start) && ends_on_word_boundary(message, end) {
             return true;
         }
         search_from = end;
@@ -750,13 +748,33 @@ fn contains_token_sequence(message: &str, marker: &str) -> bool {
     false
 }
 
-/// A phase marker only matches when both of its edges sit on a real separator.
+/// Whether a token starting at `start` is not welded onto a preceding word.
+fn starts_on_word_boundary(message: &str, start: usize) -> bool {
+    !message[..start]
+        .chars()
+        .next_back()
+        .is_some_and(is_policy_word_character)
+}
+
+/// Whether a token ending at `end` is not welded onto a following word.
+fn ends_on_word_boundary(message: &str, end: usize) -> bool {
+    !message[end..]
+        .chars()
+        .next()
+        .is_some_and(is_policy_word_character)
+}
+
+/// Characters that can be part of a policy marker or label token.
 ///
-/// Word-joining bytes stay inside the token so compound text such as
-/// `not-Request succeeded-ish` is never read as the exact `Request succeeded`
-/// marker.
-fn is_marker_boundary(byte: u8) -> bool {
-    !byte.is_ascii_alphanumeric() && !matches!(byte, b'-' | b'_')
+/// This is deliberately expressed as what belongs *inside* a word rather than
+/// as a list of separators: an enumerated separator set silently admits every
+/// punctuation mark nobody thought to list. Matching is by character, not raw
+/// byte, so a multibyte letter cannot masquerade as a separator.
+///
+/// A period is excluded because a trailing period ends a sentence far more
+/// often than it continues an identifier.
+fn is_policy_word_character(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '-' | '_')
 }
 
 fn extract_uuid_label(message: &str, label: &str) -> Option<String> {
@@ -912,7 +930,7 @@ fn extract_exactly_one_label_token<'a>(message: &'a str, label: &str) -> Option<
         let start = search_from + relative_start;
         let value_start = start + marker.len();
         search_from = value_start;
-        if !is_label_boundary_start(message, start) {
+        if !starts_on_word_boundary(message, start) {
             continue;
         }
         if token.is_some() {
@@ -924,14 +942,6 @@ fn extract_exactly_one_label_token<'a>(message: &'a str, label: &str) -> Option<
     token.flatten()
 }
 
-fn is_label_boundary_start(message: &str, start: usize) -> bool {
-    start == 0
-        || message[..start]
-            .chars()
-            .next_back()
-            .is_some_and(is_label_token_boundary)
-}
-
 fn label_value_token(message: &str, value_start: usize) -> Option<&str> {
     let remainder = &message[value_start..];
     let end = remainder
@@ -941,6 +951,11 @@ fn label_value_token(message: &str, value_start: usize) -> Option<&str> {
     (!token.is_empty()).then_some(token)
 }
 
+/// Characters that end a label's value token.
+///
+/// This is a terminator set, not a word boundary. The two are different
+/// questions: a value stops at the delimiters that surround it, while a label
+/// starts wherever the preceding character cannot belong to a word.
 fn is_label_token_boundary(character: char) -> bool {
     character.is_ascii_whitespace() || matches!(character, ',' | ';' | ']' | '<' | '"' | '\'')
 }
