@@ -1415,6 +1415,123 @@ fn policy_time_contradiction_asks_for_usable_timestamps() {
 }
 
 #[test]
+fn policy_uncollected_client_location_never_outranks_a_recorded_absence() {
+    let recorded = analysis_json(&load_bundle("request-auth-failure"));
+    assert_eq!(recorded["transactions"][0]["confidence"], "medium");
+
+    // Same capture, minus the one artifact that records the absence. Deleting
+    // information can only widen what is unknown, never narrow it.
+    let mut bundle = load_bundle("request-auth-failure");
+    bundle
+        .artifacts
+        .retain(|artifact| artifact.display_name != "ClientLocation.log");
+    let uncollected = analysis_json(&bundle);
+
+    let transaction = &uncollected["transactions"][0];
+    assert_eq!(
+        transaction["confidence"], "medium",
+        "an entirely uncollected client-location group cannot beat a recorded absence"
+    );
+    assert_eq!(
+        transaction["coverageGapArtifactIds"],
+        json!(["client-location"]),
+        "a group nobody collected is still a coverage gap"
+    );
+    assert!(
+        transaction["nextArtifacts"]
+            .as_array()
+            .expect("transaction requests")
+            .iter()
+            .any(|request| request["logicalId"] == "client-location"),
+        "the only actionable repair must survive the missing placeholder"
+    );
+    assert_eq!(
+        uncollected["findings"][0]["confidence"], "moderate",
+        "the finding cannot be more certain than the transaction"
+    );
+}
+
+fn evaluate_failure_past_a_missing_download() -> SccmNormalizedBundle {
+    let mut bundle = load_bundle("complete");
+    bundle.evidence.retain(|evidence| {
+        evidence.message.contains("Request succeeded") || evidence.message.contains("Evaluate")
+    });
+    let evaluate = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Evaluate succeeded"))
+        .expect("evaluate evidence");
+    evaluate.message = evaluate
+        .message
+        .replace("Evaluate succeeded", "Evaluate failed terminal Result=0x80070005");
+    bundle
+}
+
+#[test]
+fn policy_terminal_failure_past_a_missing_phase_is_never_discarded() {
+    let bundle = evaluate_failure_past_a_missing_download();
+    let failure_artifact = bundle
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("Evaluate failed terminal"))
+        .map(|evidence| evidence.reference.artifact_id.clone())
+        .expect("evaluate failure artifact");
+
+    let analysis = analysis_json(&bundle);
+    assert_eq!(
+        analysis["transactions"][0]["phase"], "request",
+        "the chain still stops at the first missing phase"
+    );
+
+    let observations = analysis["sourceLocalObservations"]
+        .as_array()
+        .expect("source-local observations");
+    assert!(
+        observations.iter().any(|observation| {
+            observation["evidence"]
+                .as_array()
+                .expect("observation evidence")
+                .iter()
+                .any(|reference| reference["artifactId"] == failure_artifact.as_str())
+        }),
+        "a confirmed terminal failure the chain could not reach must stay observable, got {observations:?}"
+    );
+    assert!(
+        analysis["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| {
+                finding["severity"] == "error"
+                    && finding["terminalEvidence"]
+                        .as_array()
+                        .expect("terminal evidence")
+                        .iter()
+                        .any(|terminal| {
+                            terminal["reference"]["artifactId"] == failure_artifact.as_str()
+                        })
+            }),
+        "an unreached terminal failure must not be reported only as an evidence gap"
+    );
+    assert!(
+        observations
+            .iter()
+            .all(|observation| observation["correlationEligible"] == false),
+        "a record the chain could not reach is never correlation eligible"
+    );
+}
+
+#[test]
+fn policy_unreached_terminal_failure_is_order_independent() {
+    let bundle = evaluate_failure_past_a_missing_download();
+    assert_eq!(
+        analysis_json(&bundle),
+        analysis_json(&reversed_bundle(&bundle)),
+        "an unreached terminal failure must not depend on input order"
+    );
+}
+
+#[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
     let later_success = bundle
