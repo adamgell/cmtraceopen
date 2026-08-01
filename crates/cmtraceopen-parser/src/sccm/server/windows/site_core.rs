@@ -309,10 +309,13 @@ pub struct SccmSiteCoreAnalysis {
 /// source-local observations, coverage gaps and bounded next-artifact requests.
 pub fn analyze_site_core(bundle: &SccmSiteCoreBundle) -> SccmSiteCoreAnalysis {
     let site_code = normalize_site_code(&bundle.topology.site_code);
-    let admitted_sources = admitted_sources(bundle);
-    let facts = collect_facts(bundle, &admitted_sources, site_code.as_deref());
-    let fragments = collect_fragments(bundle, &admitted_sources);
-    let coverage_gaps = collect_coverage_gaps(bundle, &admitted_sources, &fragments);
+    let context = SiteCoreContext {
+        bundle,
+        sources: admitted_sources(bundle),
+    };
+    let facts = collect_facts(&context, site_code.as_deref());
+    let fragments = collect_fragments(&context);
+    let coverage_gaps = collect_coverage_gaps(&context, &fragments);
 
     let fragment_artifact_ids = fragments
         .iter()
@@ -327,7 +330,7 @@ pub fn analyze_site_core(bundle: &SccmSiteCoreBundle) -> SccmSiteCoreAnalysis {
     let mut results = Vec::new();
     let mut findings = Vec::new();
     for (key, facts) in group_facts(facts) {
-        let reduced = reduce_transaction(bundle, key, &facts, &transaction_gap_ids);
+        let reduced = reduce_transaction(&context, key, &facts, &transaction_gap_ids);
         if let Some(finding) = reduced.finding {
             findings.push(finding);
         }
@@ -369,6 +372,13 @@ pub fn analyze_site_core(bundle: &SccmSiteCoreBundle) -> SccmSiteCoreAnalysis {
 // ---------------------------------------------------------------------------
 // Source admission
 // ---------------------------------------------------------------------------
+
+/// The admitted view of one bundle. Shape admission runs once so no later
+/// stage can silently re-derive a different source set.
+struct SiteCoreContext<'a> {
+    bundle: &'a SccmSiteCoreBundle,
+    sources: BTreeMap<&'a str, AdmittedSource<'a>>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum SiteCoreGroup {
@@ -615,24 +625,23 @@ impl SiteCoreFact {
     }
 }
 
-fn collect_facts(
-    bundle: &SccmSiteCoreBundle,
-    sources: &BTreeMap<&str, AdmittedSource<'_>>,
-    site_code: Option<&str>,
-) -> Vec<SiteCoreFact> {
+fn collect_facts(context: &SiteCoreContext<'_>, site_code: Option<&str>) -> Vec<SiteCoreFact> {
     let Some(site_code) = site_code else {
         return Vec::new();
     };
 
-    bundle
+    context
+        .bundle
         .evidence
         .iter()
         .filter_map(|evidence| {
-            let admitted = sources.get(evidence.reference.artifact_id.as_str())?;
+            let admitted = context
+                .sources
+                .get(evidence.reference.artifact_id.as_str())?;
             if !source_carries_facts(admitted)
                 || evidence.role != SccmRole::SiteServer
                 || !evidence_reference_fits_source(evidence, admitted)
-                || !evidence_identity_is_unique(bundle, evidence)
+                || !evidence_identity_is_unique(context.bundle, evidence)
             {
                 return None;
             }
@@ -740,7 +749,7 @@ struct ReducedTransaction {
 }
 
 fn reduce_transaction(
-    bundle: &SccmSiteCoreBundle,
+    context: &SiteCoreContext<'_>,
     key: SccmSiteCoreTransactionKey,
     facts: &[SiteCoreFact],
     coverage_gap_artifact_ids: &[String],
@@ -815,7 +824,7 @@ fn reduce_transaction(
 
     let confidence_ceiling = confidence_ceiling(facts, state, chronology_usable, conflicting);
     let confidence = base_confidence.min(confidence_ceiling);
-    let next_artifacts = next_artifacts_for_state(bundle, &key, facts, state);
+    let next_artifacts = next_artifacts_for_state(context, &key, facts, state);
 
     let mut evidence = facts.iter().map(SiteCoreFact::evidence).collect::<Vec<_>>();
     evidence.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
@@ -827,21 +836,22 @@ fn reduce_transaction(
     );
     let finding = finding_class.clone().and_then(|class| {
         build_finding(
-            &format!("finding:site-core:{result_id}"),
-            &result_id,
-            class,
-            decisive
-                .map(|fact| fact.marker.phase)
-                .or(last_successful_phase)
-                .unwrap_or(SccmSiteCorePhase::ComponentStart),
-            last_successful_phase,
-            confidence,
-            state,
-            &evidence,
-            decisive,
-            coverage_gap_artifact_ids,
-            bundle,
-            &next_artifacts,
+            context,
+            TransactionFinding {
+                subject_id: &result_id,
+                class,
+                phase: decisive
+                    .map(|fact| fact.marker.phase)
+                    .or(last_successful_phase)
+                    .unwrap_or(SccmSiteCorePhase::ComponentStart),
+                last_successful_phase,
+                confidence,
+                state,
+                evidence: &evidence,
+                decisive,
+                coverage_gap_artifact_ids,
+                next_artifacts: &next_artifacts,
+            },
         )
     });
 
@@ -900,7 +910,7 @@ fn confidence_ceiling(
 /// The smallest next artifact bundle when evidence stops. A confirmed terminal
 /// outcome and a healthy or recovered completion need nothing further.
 fn next_artifacts_for_state(
-    bundle: &SccmSiteCoreBundle,
+    context: &SiteCoreContext<'_>,
     key: &SccmSiteCoreTransactionKey,
     facts: &[SiteCoreFact],
     state: SccmSiteCoreState,
@@ -924,11 +934,11 @@ fn next_artifacts_for_state(
     // A capture limit that truncated the family which carried the last
     // evidence is the nearest boundary: request that one source again under a
     // larger bounded limit.
-    if let Some(request) = capped_recapture_request(bundle, facts, &scope) {
+    if let Some(request) = capped_recapture_request(context, facts, &scope) {
         return vec![request];
     }
 
-    let statuses = status_group_candidates(bundle);
+    let statuses = status_group_candidates(context);
     let basenames = if statuses.is_empty() {
         vec!["statmgr.log".to_owned()]
     } else {
@@ -948,7 +958,7 @@ fn next_artifacts_for_state(
 }
 
 fn capped_recapture_request(
-    bundle: &SccmSiteCoreBundle,
+    context: &SiteCoreContext<'_>,
     facts: &[SiteCoreFact],
     scope: &SccmSiteCoreRequestScope,
 ) -> Option<SccmSiteCoreArtifactRequest> {
@@ -956,11 +966,10 @@ fn capped_recapture_request(
         .iter()
         .map(|fact| fact.reference.artifact_id.as_str())
         .collect::<BTreeSet<_>>();
-    let sources = admitted_sources(bundle);
-    let (_, admitted) = sources.iter().find(|(artifact_id, admitted)| {
+    let (_, admitted) = context.sources.iter().find(|(artifact_id, admitted)| {
         cited.contains(*artifact_id)
             && admitted.source.artifact.coverage == SccmCoverageState::Capped
-            && truncated_tail(bundle, admitted).is_some()
+            && truncated_tail(context.bundle, admitted).is_some()
     })?;
 
     let limit = admitted.source.capture_limit_bytes.unwrap_or_default();
@@ -977,11 +986,12 @@ fn capped_recapture_request(
     })
 }
 
-fn status_group_candidates(bundle: &SccmSiteCoreBundle) -> Vec<String> {
-    let mut basenames = admitted_sources(bundle)
-        .into_values()
+fn status_group_candidates(context: &SiteCoreContext<'_>) -> Vec<String> {
+    let mut basenames = context
+        .sources
+        .values()
         .filter(|admitted| admitted.group == SiteCoreGroup::Status)
-        .map(|admitted| admitted.basename)
+        .map(|admitted| admitted.basename.clone())
         .collect::<Vec<_>>();
     basenames.sort();
     basenames.dedup();
@@ -1005,15 +1015,13 @@ struct FragmentArtifact {
 /// its physical range. The unparsed tail is cited by its physical line range;
 /// the reference can never collide with a parsed record because it starts
 /// after the last complete record.
-fn collect_fragments(
-    bundle: &SccmSiteCoreBundle,
-    sources: &BTreeMap<&str, AdmittedSource<'_>>,
-) -> Vec<FragmentArtifact> {
-    let mut fragments = sources
+fn collect_fragments(context: &SiteCoreContext<'_>) -> Vec<FragmentArtifact> {
+    let mut fragments = context
+        .sources
         .values()
         .filter(|admitted| admitted.source.artifact.coverage == SccmCoverageState::Captured)
         .filter_map(|admitted| {
-            let tail = truncated_tail(bundle, admitted)?;
+            let tail = truncated_tail(context.bundle, admitted)?;
             Some(FragmentArtifact {
                 group: admitted.group,
                 lineage: admitted.source.rotation_lineage.clone(),
@@ -1057,8 +1065,7 @@ fn truncated_tail(
 }
 
 fn collect_coverage_gaps(
-    bundle: &SccmSiteCoreBundle,
-    sources: &BTreeMap<&str, AdmittedSource<'_>>,
+    context: &SiteCoreContext<'_>,
     fragments: &[FragmentArtifact],
 ) -> Vec<SccmSiteCoreCoverageGap> {
     let fragment_by_artifact = fragments
@@ -1072,14 +1079,14 @@ fn collect_coverage_gaps(
         .collect::<BTreeMap<_, _>>();
 
     let mut gaps: BTreeMap<String, SccmSiteCoreCoverageGap> = BTreeMap::new();
-    for source in &bundle.sources {
+    for source in &context.bundle.sources {
         if SiteCoreGroup::from_id(&source.source_group).is_none()
             || source.artifact.role != SccmRole::SiteServer
         {
             continue;
         }
         let artifact_id = source.artifact.artifact_id.as_str();
-        let admitted = sources.get(artifact_id);
+        let admitted = context.sources.get(artifact_id);
         let (state, evidence) = match (admitted, &source.artifact.coverage) {
             // An interpretable source that produced no complete record for
             // part of its range.
@@ -1089,7 +1096,7 @@ fn collect_coverage_gaps(
             },
             (Some(admitted), SccmCoverageState::Capped) => (
                 SccmCoverageState::Capped,
-                truncated_tail(bundle, admitted).or(None),
+                truncated_tail(context.bundle, admitted),
             ),
             (Some(_), state) => (state.clone(), None),
             // A source this profile cannot interpret, or whose identity is
@@ -1135,15 +1142,14 @@ fn append_fragment_observations(
     let mut malformed: BTreeMap<SiteCoreGroup, (Vec<&FragmentArtifact>, Vec<_>)> = BTreeMap::new();
 
     for ((group, lineage), lineage_fragments) in by_lineage {
-        let distinct_rotations = lineage_fragments
+        let spans_rotations = lineage_fragments
             .iter()
-            .map(|fragment| &fragment.rotation)
-            .collect::<Vec<_>>()
-            .windows(2)
-            .any(|pair| pair[0] != pair[1])
-            || lineage_fragments.len() > 1;
-        let request = fragment_request(group, lineage, &lineage_fragments, distinct_rotations);
-        if distinct_rotations {
+            .map(|fragment| fragment.rotation_rank)
+            .collect::<BTreeSet<_>>()
+            .len()
+            > 1;
+        let request = fragment_request(group, lineage, &lineage_fragments, spans_rotations);
+        if spans_rotations {
             rotation_boundary.extend(lineage_fragments);
             rotation_boundary_requests.push(request);
         } else {
@@ -1154,42 +1160,39 @@ fn append_fragment_observations(
     }
 
     if !rotation_boundary.is_empty() {
-        push_observation(
+        let (observation, finding) = build_observation(
             "rotation-boundary-fragments",
             SiteCoreGroup::Component,
             SccmFindingClass::InsufficientEvidence,
             SccmSiteCoreConfidence::None,
             rotation_boundary,
             rotation_boundary_requests,
-            observations,
-            findings,
         );
+        observations.push(observation);
+        findings.extend(finding);
     }
     for (group, (group_fragments, requests)) in malformed {
-        push_observation(
+        let (observation, finding) = build_observation(
             &format!("malformed-{}-record", group.slug()),
             group,
             SccmFindingClass::Symptom,
             SccmSiteCoreConfidence::Low,
             group_fragments,
             requests,
-            observations,
-            findings,
         );
+        observations.push(observation);
+        findings.extend(finding);
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_observation(
+fn build_observation(
     observation_id: &str,
     group: SiteCoreGroup,
     class: SccmFindingClass,
     confidence: SccmSiteCoreConfidence,
     fragments: Vec<&FragmentArtifact>,
     mut next_artifacts: Vec<SccmSiteCoreArtifactRequest>,
-    observations: &mut Vec<SccmSiteCoreObservation>,
-    findings: &mut Vec<SccmSiteCoreFinding>,
-) {
+) -> (SccmSiteCoreObservation, Option<SccmSiteCoreFinding>) {
     let mut evidence = fragments
         .iter()
         .map(|fragment| fragment.evidence.clone())
@@ -1213,8 +1216,7 @@ fn push_observation(
             coverage: SccmCoverageState::ParseFailed,
         })
         .collect::<Vec<_>>();
-    if let Some(finding) = build_observation_finding(
-        &format!("finding:site-core:{observation_id}"),
+    let finding = build_observation_finding(
         observation_id,
         class.clone(),
         group.entry_phase(),
@@ -1222,11 +1224,9 @@ fn push_observation(
         &evidence,
         gaps,
         &next_artifacts,
-    ) {
-        findings.push(finding);
-    }
+    );
 
-    observations.push(SccmSiteCoreObservation {
+    let observation = SccmSiteCoreObservation {
         observation_id: observation_id.to_owned(),
         state: SccmSiteCoreState::ParseGap,
         last_successful_phase: None,
@@ -1236,7 +1236,8 @@ fn push_observation(
         evidence,
         coverage_gap_artifact_ids,
         next_artifacts,
-    });
+    };
+    (observation, finding)
 }
 
 fn fragment_request(
@@ -1293,26 +1294,32 @@ fn fragment_request(
 // Shared findings
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
-fn build_finding(
-    finding_id: &str,
-    subject_id: &str,
+/// Everything a transaction finding cites. Grouping the inputs keeps the
+/// finding a projection of one reduced transaction rather than a loose
+/// argument list that could drift out of step with it.
+struct TransactionFinding<'a> {
+    subject_id: &'a str,
     class: SccmFindingClass,
     phase: SccmSiteCorePhase,
     last_successful_phase: Option<SccmSiteCorePhase>,
     confidence: SccmSiteCoreConfidence,
     state: SccmSiteCoreState,
-    evidence: &[SccmSiteCoreEvidence],
-    decisive: Option<&SiteCoreFact>,
-    coverage_gap_artifact_ids: &[String],
-    bundle: &SccmSiteCoreBundle,
-    next_artifacts: &[SccmSiteCoreArtifactRequest],
+    evidence: &'a [SccmSiteCoreEvidence],
+    decisive: Option<&'a SiteCoreFact>,
+    coverage_gap_artifact_ids: &'a [String],
+    next_artifacts: &'a [SccmSiteCoreArtifactRequest],
+}
+
+fn build_finding(
+    context: &SiteCoreContext<'_>,
+    subject: TransactionFinding<'_>,
 ) -> Option<SccmSiteCoreFinding> {
-    let cited = evidence
+    let cited = subject
+        .evidence
         .iter()
         .map(SccmSiteCoreEvidence::reference)
         .collect::<Vec<_>>();
-    let terminal_evidence = match (class.clone(), decisive) {
+    let terminal_evidence = match (&subject.class, subject.decisive) {
         (SccmFindingClass::ConfirmedFailure, Some(fact)) => {
             vec![SccmTerminalEvidence::observed_failure(
                 fact.reference.clone(),
@@ -1320,43 +1327,47 @@ fn build_finding(
         }
         _ => Vec::new(),
     };
-    let gaps = coverage_gap_artifact_ids
+    let gaps = subject
+        .coverage_gap_artifact_ids
         .iter()
-        .filter_map(|artifact_id| finding_gap(bundle, artifact_id))
+        .filter_map(|artifact_id| finding_gap(context.bundle, artifact_id))
         .collect::<Vec<_>>();
+    let summary = match subject.last_successful_phase {
+        Some(phase) => format!(
+            "The last confirmed successful phase is {}; later phases are bounded to cited evidence.",
+            phase.serialized_name()
+        ),
+        None => "No site component phase is confirmed by the cited evidence.".to_owned(),
+    };
 
-    let mut builder = SccmFindingBuilder::new(finding_id)
-        .class(class)
-        .phase(SccmPhase::Unknown(phase.serialized_name().to_owned()))
+    let finding = SccmFindingBuilder::new(format!("finding:site-core:{}", subject.subject_id))
+        .class(subject.class)
+        .phase(SccmPhase::Unknown(
+            subject.phase.serialized_name().to_owned(),
+        ))
         .role(SccmRole::SiteServer)
-        .severity(match state {
+        .severity(match subject.state {
             SccmSiteCoreState::TerminalFailure => Severity::Error,
             _ => Severity::Warning,
         })
-        .confidence(shared_confidence(confidence))
+        .confidence(shared_confidence(subject.confidence))
         .title("Site component and status evidence")
-        .summary("The site component outcome is bounded to the cited site-server evidence.")
+        .summary(summary)
         .evidence(cited)
         .terminal_evidence(terminal_evidence)
         .coverage_gaps(gaps)
-        .next_artifacts(shared_requests(next_artifacts));
-    if let Some(phase) = last_successful_phase {
-        builder = builder.summary(format!(
-            "The last confirmed successful phase is {}; later phases are bounded to cited evidence.",
-            phase.serialized_name()
-        ));
-    }
+        .next_artifacts(shared_requests(subject.next_artifacts))
+        .build()
+        .ok()?;
 
     Some(SccmSiteCoreFinding {
-        finding: builder.build().ok()?,
-        subject_id: subject_id.to_owned(),
-        last_successful_phase,
+        finding,
+        subject_id: subject.subject_id.to_owned(),
+        last_successful_phase: subject.last_successful_phase,
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_observation_finding(
-    finding_id: &str,
     subject_id: &str,
     class: SccmFindingClass,
     phase: SccmSiteCorePhase,
@@ -1365,7 +1376,7 @@ fn build_observation_finding(
     gaps: Vec<SccmFindingCoverageGap>,
     next_artifacts: &[SccmSiteCoreArtifactRequest],
 ) -> Option<SccmSiteCoreFinding> {
-    let finding = SccmFindingBuilder::new(finding_id)
+    let finding = SccmFindingBuilder::new(format!("finding:site-core:{subject_id}"))
         .class(class)
         .phase(SccmPhase::Unknown(phase.serialized_name().to_owned()))
         .role(SccmRole::SiteServer)
