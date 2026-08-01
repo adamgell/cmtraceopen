@@ -63,6 +63,128 @@ fn assert_unsafe_mutation_is_rejected(
     }
 }
 
+/// Identity-bearing shapes that must never reach a public synthetic surface: a
+/// bare account name, a hyphenated account name, a second account name, an
+/// FQDN, a down-level logon name, a UPN, a SID, a braced GUID, a UNC share, a
+/// drive-letter path, an IPv4 address, and a NetBIOS-style server name.
+const IDENTITY_SHAPES: &[&str] = &[
+    "realuser",
+    "real-user",
+    "adamgell",
+    "dc01.contoso.com",
+    "contoso\\adminuser",
+    "administrator@contoso.com",
+    "s-1-5-21-1004336348-1177238915-682003330-512",
+    "{3f2504e0-4f89-11d3-9a0c-0305e82c3301}",
+    "\\\\fileserver\\share",
+    "d:/program files/sms_ccm",
+    "10.0.0.5",
+    "srv-prd-01",
+];
+
+/// The same shapes cast the way a ConfigMgr capture host would be written.
+const IDENTITY_HOST_SHAPES: &[&str] = &[
+    "REALUSER",
+    "LAB-REALUSER",
+    "LAB-ADAMGELL01",
+    "CONTOSO-DC01",
+    "DC01.CONTOSO.COM",
+    "SRV-PRD-01",
+    "CM01",
+    "LAB-CM01-CONTOSO",
+];
+
+/// Every public string surface that a synthetic manifest supplies verbatim.
+#[derive(Clone, Copy)]
+enum SyntheticSurface {
+    ArtifactId,
+    LineageId,
+    PathFingerprint,
+    ProducerHostHandle,
+    WorkflowSubjectHandle,
+}
+
+impl SyntheticSurface {
+    const ALL: [Self; 5] = [
+        Self::ArtifactId,
+        Self::LineageId,
+        Self::PathFingerprint,
+        Self::ProducerHostHandle,
+        Self::WorkflowSubjectHandle,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::ArtifactId => "artifactId",
+            Self::LineageId => "rotation.lineageId",
+            Self::PathFingerprint => "configuredPathProvenance.pathFingerprint",
+            Self::ProducerHostHandle => "producerHostHandle",
+            Self::WorkflowSubjectHandle => "workflowSubject.instanceHandle",
+        }
+    }
+
+    fn namespace(self) -> &'static str {
+        match self {
+            Self::ArtifactId | Self::LineageId => "",
+            Self::PathFingerprint => "synthetic:path:",
+            Self::ProducerHostHandle => "synthetic:host:",
+            Self::WorkflowSubjectHandle => "synthetic:subject:",
+        }
+    }
+
+    /// The only committed artifact carrying a workflow subject handle is the
+    /// distribution-point control record; every other surface is exercised on
+    /// the first artifact.
+    fn artifact_index(self) -> usize {
+        match self {
+            Self::WorkflowSubjectHandle => 2,
+            _ => 0,
+        }
+    }
+
+    /// A novel value drawn from the vocabulary the committed corpus uses.
+    fn conforming_label(self) -> &'static str {
+        match self {
+            Self::ArtifactId | Self::LineageId => "sitecomp-capped-b",
+            Self::PathFingerprint => "site-capped-b",
+            Self::ProducerHostHandle => "site-03",
+            Self::WorkflowSubjectHandle => "dp-03",
+        }
+    }
+
+    fn apply(
+        self,
+        manifest: &mut Value,
+        payloads: &mut [SccmServerArtifactPayload],
+        label: &str,
+    ) {
+        let written = format!("{}{label}", self.namespace());
+        let artifact = &mut manifest["artifacts"][self.artifact_index()];
+        match self {
+            Self::ArtifactId => {
+                let committed = artifact["artifactId"]
+                    .as_str()
+                    .expect("artifactId is a string")
+                    .to_owned();
+                artifact["artifactId"] = Value::String(written.clone());
+                for payload in payloads {
+                    if payload.manifest_artifact_id == committed {
+                        payload.manifest_artifact_id = written.clone();
+                    }
+                }
+            }
+            Self::LineageId => artifact["rotation"]["lineageId"] = Value::String(written),
+            Self::PathFingerprint => {
+                artifact["configuredPathProvenance"]["pathFingerprint"] = Value::String(written);
+            }
+            Self::ProducerHostHandle => artifact["producerHostHandle"] = Value::String(written),
+            Self::WorkflowSubjectHandle => {
+                artifact["workflowSubject"]["instanceHandle"] = Value::String(written);
+            }
+        }
+    }
+}
+
 fn artifact_json<'a>(assessment: &'a Value, artifact_id: &str) -> &'a Value {
     assessment["artifacts"]
         .as_array()
@@ -591,5 +713,52 @@ fn server_intake_admits_conforming_new_synthetic_identifiers() {
             serialized.contains(projected),
             "{projected} is not projected: {serialized}"
         );
+    }
+}
+
+/// The gate on synthetic identifiers has to discriminate, not merely reject.
+/// Asserting only that identity-bearing values fail can be satisfied by
+/// refusing everything, and asserting only that new values pass can be
+/// satisfied by accepting everything, so each surface is exercised both ways in
+/// one test.
+#[test]
+fn server_intake_discriminates_conforming_labels_from_identity_shapes() {
+    for surface in SyntheticSurface::ALL {
+        let (manifest_json, mut payloads) = load_bundle("complete-multi-role");
+        let mut manifest = manifest_value(&manifest_json);
+        surface.apply(&mut manifest, &mut payloads, surface.conforming_label());
+        assert!(
+            assess_server_intake(&serialize_manifest(&manifest), &payloads).is_ok(),
+            "{} must admit a conforming novel label",
+            surface.label()
+        );
+
+        for shape in IDENTITY_SHAPES {
+            assert_unsafe_mutation_is_rejected("complete-multi-role", shape, |manifest, payloads| {
+                surface.apply(manifest, payloads.as_mut_slice(), shape);
+            });
+        }
+    }
+
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["topology"]["captureHost"] = Value::String("LAB-SUP01".to_owned());
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_ok(),
+        "topology.captureHost must admit a conforming novel synthetic host"
+    );
+    for shape in IDENTITY_HOST_SHAPES {
+        assert_unsafe_mutation_is_rejected("complete-multi-role", shape, |manifest, _payloads| {
+            manifest["topology"]["captureHost"] = Value::String((*shape).to_owned());
+        });
+    }
+
+    // The synthetic site code stays a single reserved token on purpose. Every
+    // three-character code is shaped exactly like a real ConfigMgr site code,
+    // so no grammar can widen this surface without admitting a real one.
+    for shape in ["CTS", "PRD", "HQ1", "S01", "CONTOSO"] {
+        assert_unsafe_mutation_is_rejected("complete-multi-role", shape, |manifest, _payloads| {
+            manifest["topology"]["siteCode"] = Value::String(shape.to_owned());
+        });
     }
 }
