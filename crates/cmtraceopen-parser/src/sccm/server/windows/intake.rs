@@ -12,8 +12,25 @@ use crate::sccm::{
 
 use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
 
-type PathFingerprintKey = (String, String, String, String);
-type CanonicalArtifactIdentity = (String, String, String, String, String, String, String);
+type PathFingerprintKey = (
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    String,
+);
+type CanonicalArtifactIdentity = (
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SccmServerArtifactPayload {
@@ -293,10 +310,23 @@ struct PreparedArtifact {
 }
 
 impl PreparedArtifact {
-    fn sort_key(&self) -> (&str, &str, &str, String, &str, &str) {
+    fn sort_key(&self) -> (&str, &str, &str, &str, &str, &str, String, &str, &str) {
         (
             role_sort_key(&self.assessment.producer_role),
+            self.assessment
+                .producer_host_handle
+                .as_deref()
+                .unwrap_or_default(),
             self.assessment.source_id.as_str(),
+            self.assessment
+                .workflow_subject_role
+                .as_ref()
+                .map(role_sort_key)
+                .unwrap_or_default(),
+            self.assessment
+                .workflow_subject_handle
+                .as_deref()
+                .unwrap_or_default(),
             self.assessment.path_fingerprint.as_str(),
             rotation_sort_key(self.assessment.rotation.as_ref()),
             self.assessment
@@ -463,12 +493,17 @@ fn normalize_artifact(
 
     let path_fingerprint_key = (
         role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.producer_host_handle.clone(),
         artifact.source_id.clone(),
         workflow_subject_role
             .as_ref()
             .map(role_sort_key)
             .unwrap_or_default()
             .to_owned(),
+        artifact
+            .workflow_subject
+            .as_ref()
+            .and_then(|subject| subject.instance_handle.clone()),
         artifact
             .configured_path_provenance
             .path_fingerprint
@@ -487,12 +522,17 @@ fn normalize_artifact(
 
     let canonical_identity = (
         role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.producer_host_handle.clone(),
         artifact.source_id.clone(),
         workflow_subject_role
             .as_ref()
             .map(role_sort_key)
             .unwrap_or_default()
             .to_owned(),
+        artifact
+            .workflow_subject
+            .as_ref()
+            .and_then(|subject| subject.instance_handle.clone()),
         artifact
             .configured_path_provenance
             .path_fingerprint
@@ -1028,7 +1068,9 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
             "subject" => {
                 matches!(
                     value,
-                    "synthetic:subject:dp-01" | "synthetic:subject:sup-01"
+                    "synthetic:subject:dp-01"
+                        | "synthetic:subject:dp-02"
+                        | "synthetic:subject:sup-01"
                 )
             }
             _ => false,
