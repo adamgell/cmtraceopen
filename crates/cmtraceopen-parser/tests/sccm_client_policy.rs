@@ -1928,3 +1928,45 @@ fn policy_recovery_requires_the_same_validated_assignment_key() {
     assert_eq!(failed["state"], "failed");
     assert_eq!(failed["classification"], "confirmedFailure");
 }
+
+#[test]
+fn policy_rotation_split_is_never_claimed_across_unrelated_basenames() {
+    let mut bundle = load_bundle("complete");
+    // Scheduler.log stays captured but contributes no admitted record, and an
+    // unrelated agent-group basename arrives on a rotation with no evidence.
+    // Neither is a fragment of the other.
+    bundle
+        .evidence
+        .retain(|evidence| !evidence.message.contains("Schedule succeeded"));
+    bundle.artifacts.push(SccmArtifact {
+        artifact_id: "policy-complete-evaluator-lo".to_owned(),
+        display_name: "PolicyEvaluator.lo_".to_owned(),
+        original_path: None,
+        host: None,
+        role: SccmRole::Client,
+        configmgr_version: Some("5.00.TEST.0000".to_owned()),
+        collected_at_utc: None,
+        rotation: SccmRotation::LoUnderscore,
+        coverage: SccmCoverageState::Captured,
+        encoding: Some("utf-8".to_owned()),
+    });
+
+    let analysis = analysis_json(&bundle);
+    assert!(
+        !analysis["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["findingId"] == "finding:policy-rotation-split"),
+        "a rotation split is a property of one basename, not of a logical group, got {}",
+        analysis["findings"]
+    );
+    assert!(
+        !analysis["sourceLocalObservations"]
+            .as_array()
+            .expect("observations")
+            .iter()
+            .any(|observation| observation["observationId"] == "policy:source-local:rotation-split"),
+        "two unrelated files cannot be fragments of one record"
+    );
+}
