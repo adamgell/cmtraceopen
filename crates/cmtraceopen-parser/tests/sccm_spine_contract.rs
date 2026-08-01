@@ -1636,6 +1636,114 @@ fn finding_rejects_overlong_correlation_key_values() {
 }
 
 #[test]
+fn coverage_gap_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let gap = finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied);
+    let canonical = serde_json::to_value(&gap).unwrap();
+    if serde_json::from_value::<SccmFindingCoverageGap>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&gap)
+    {
+        mismatches.push("a canonical coverage gap did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmFindingCoverageGap>(unknown_field).is_ok() {
+        mismatches.push("coverage gap deserializer accepted an unknown field".into());
+    }
+
+    let captured = serde_json::to_value(finding_client_gap(
+        "client-policy-agent",
+        SccmCoverageState::Captured,
+    ))
+    .unwrap();
+    if serde_json::from_value::<SccmFindingCoverageGap>(captured).is_ok() {
+        mismatches.push("coverage gap deserializer accepted captured coverage".into());
+    }
+
+    for (label, artifact_id) in [
+        ("an empty artifact ID", String::new()),
+        (
+            "an untrimmed artifact ID",
+            " client-policy-agent ".to_owned(),
+        ),
+        ("an overlong artifact ID", "a".repeat(257)),
+    ] {
+        let mut json = canonical.clone();
+        json["artifactId"] = serde_json::json!(artifact_id);
+        if serde_json::from_value::<SccmFindingCoverageGap>(json).is_ok() {
+            mismatches.push(format!("coverage gap deserializer accepted {label}"));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn artifact_request_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let request = finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        "Confirm the bounded policy request outcome.",
+    );
+    let canonical = serde_json::to_value(&request).unwrap();
+    if serde_json::from_value::<SccmArtifactRequest>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&request)
+    {
+        mismatches.push("a canonical artifact request did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmArtifactRequest>(unknown_field).is_ok() {
+        mismatches.push("artifact request deserializer accepted an unknown field".into());
+    }
+
+    for (label, logical_id) in [
+        ("an empty logical ID", String::new()),
+        ("an untrimmed logical ID", " policyAgent ".to_owned()),
+        ("an overlong logical ID", "a".repeat(257)),
+        (
+            "an undeclared logical ID",
+            "not-a-declared-source".to_owned(),
+        ),
+    ] {
+        let mut json = canonical.clone();
+        json["logicalId"] = serde_json::json!(logical_id);
+        if serde_json::from_value::<SccmArtifactRequest>(json).is_ok() {
+            mismatches.push(format!("artifact request deserializer accepted {label}"));
+        }
+    }
+
+    for (label, reason) in [
+        ("an empty reason", String::new()),
+        (
+            "a rooted-path reason",
+            ROOTED_ARTIFACT_REQUEST_REASONS[1].to_owned(),
+        ),
+        (
+            "an overlong reason",
+            "a".repeat(MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS + 1),
+        ),
+    ] {
+        let mut json = canonical.clone();
+        json["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmArtifactRequest>(json).is_ok() {
+            mismatches.push(format!("artifact request deserializer accepted {label}"));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
 fn finding_rejects_whitespace_wrapped_declared_phase_shadow() {
     let result = SccmFindingBuilder::new("wrapped-phase-shadow")
         .class(SccmFindingClass::Symptom)
