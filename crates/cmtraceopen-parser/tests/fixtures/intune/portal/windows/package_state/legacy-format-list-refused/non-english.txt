@@ -1,0 +1,6 @@
+
+Name              : Microsoft.CompanyPortal
+Version           : 11.2.401.0
+PaketVollstName   : Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe
+Status            : Ok
+Signaturart       : Store

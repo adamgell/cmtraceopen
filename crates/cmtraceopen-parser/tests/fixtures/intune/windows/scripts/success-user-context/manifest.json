@@ -1,0 +1,17 @@
+{
+  "description": "A user-context script, proving context comes from the record and not from a default.",
+  "artifacts": [
+    {
+      "artifactId": "ime",
+      "fileName": "IntuneManagementExtension.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+      "contentFile": "IntuneManagementExtension.log"
+    },
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

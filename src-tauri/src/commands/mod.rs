@@ -24,6 +24,8 @@ pub mod intune_bundle;
 pub mod intune_diagnostics;
 pub mod known_sources;
 #[cfg(feature = "macos-diag")]
+pub mod jamf;
+#[cfg(feature = "macos-diag")]
 pub mod macos_diag;
 pub mod markers;
 pub mod parsing;

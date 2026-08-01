@@ -1,4 +1,11 @@
-//! Parsers for the Windows Device Inventory log dialects.
+//! Intune Device Inventory agent log family.
+//!
+//! Owner: issue #354 of epic #356. This fills the slot the parser-family
+//! skeleton reserved for the Device Inventory agent.
+//!
+//! Parsers for the Windows Device Inventory log dialects. Header recognition
+//! lives here so that whole-file parsing and incremental tailing share exactly
+//! one set of dialect regexes.
 
 use chrono::{DateTime, NaiveDateTime};
 use regex::{Captures, Regex};

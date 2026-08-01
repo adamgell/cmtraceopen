@@ -1,0 +1,13 @@
+
+Name            : Microsoft.CompanyPortal
+Version         : 11.2.401.0
+PackageFullName : Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe
+Status          : Ok
+SignatureKind   : Store
+
+Name            : Microsoft.AAD.BrokerPlugin.Authenticator
+Version         : 6.2408.1
+PackageFullName : Microsoft.AAD.BrokerPlugin.Authenticator_6.2408.1_neutral__8wekyb3d8bbwe
+Status          : Ok
+SignatureKind   : System
+IsBundle        : False
