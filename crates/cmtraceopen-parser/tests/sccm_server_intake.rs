@@ -107,8 +107,12 @@ fn assert_request_passes_finding_boundaries(
 
     let serialized = serde_json::to_value(&finding)
         .unwrap_or_else(|error| panic!("{scenario} finding must serialize: {error}"));
-    serde_json::from_value::<SccmFinding>(serialized)
+    let deserialized = serde_json::from_value::<SccmFinding>(serialized)
         .unwrap_or_else(|error| panic!("{scenario} finding must deserialize: {error}"));
+    assert_eq!(
+        deserialized, finding,
+        "{scenario} request and coverage data must survive the JSON boundary"
+    );
 }
 
 #[test]
