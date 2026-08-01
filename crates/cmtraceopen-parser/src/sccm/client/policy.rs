@@ -1630,28 +1630,42 @@ fn coverage_priority(state: &SccmCoverageState) -> u8 {
     }
 }
 
+/// The captured agent-group files that look like fragments of one record.
+///
+/// A rotation split is a property of one basename across its rotations, never
+/// of a logical group. Grouping the candidates by group would let two unrelated
+/// files, say `Scheduler.log` and `PolicyEvaluator.lo_`, be reported as one
+/// record torn in half, so fragments are only ever compared against their own
+/// declared source.
 fn partial_policy_artifacts<'a>(
     bundle: &'a SccmNormalizedBundle,
     normalized_evidence_ids: &BTreeSet<&str>,
 ) -> Vec<&'a SccmArtifact> {
-    let candidates = bundle
-        .artifacts
-        .iter()
-        .filter(|artifact| {
-            artifact.role == SccmRole::Client
-                && artifact.coverage == SccmCoverageState::Captured
-                && policy_group(&artifact.display_name) == Some(POLICY_AGENT_GROUP)
-                && !normalized_evidence_ids.contains(artifact.artifact_id.as_str())
-        })
-        .collect::<Vec<_>>();
-    let has_rotation = candidates
-        .iter()
-        .any(|artifact| !matches!(artifact.rotation, SccmRotation::Current));
-    if candidates.len() >= 2 && has_rotation {
-        candidates
-    } else {
-        Vec::new()
+    let mut by_source: BTreeMap<&str, Vec<&SccmArtifact>> = BTreeMap::new();
+    for artifact in bundle.artifacts.iter().filter(|artifact| {
+        artifact.role == SccmRole::Client
+            && artifact.coverage == SccmCoverageState::Captured
+            && !normalized_evidence_ids.contains(artifact.artifact_id.as_str())
+    }) {
+        let Some(source) = policy_source(&artifact.display_name) else {
+            continue;
+        };
+        if source.group != POLICY_AGENT_GROUP {
+            continue;
+        }
+        by_source.entry(source.basename).or_default().push(artifact);
     }
+
+    by_source
+        .into_values()
+        .filter(|fragments| {
+            fragments.len() >= 2
+                && fragments
+                    .iter()
+                    .any(|artifact| !matches!(artifact.rotation, SccmRotation::Current))
+        })
+        .flatten()
+        .collect()
 }
 
 fn physical_fragment_references(artifacts: &[&SccmArtifact]) -> Vec<SccmEvidenceRef> {
