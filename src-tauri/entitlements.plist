@@ -14,9 +14,10 @@
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 
-    <!-- The app reads user-selected log files; do not sandbox arbitrary file access. -->
-    <key>com.apple.security.app-sandbox</key>
-    <false/>
+    <!-- Deliberately NOT sandboxed: the app reads user-selected log files from
+         arbitrary paths. Entitlements are expressed by presence, so the
+         sandbox is disabled by omitting com.apple.security.app-sandbox
+         entirely rather than by setting it to false. -->
 
     <!-- Allow outbound network for the auto-updater and JAMF JSS connectivity probes. -->
     <key>com.apple.security.network.client</key>
