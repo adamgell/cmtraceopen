@@ -309,6 +309,7 @@ pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnaly
         }
     }
 
+    coverage_gaps.extend(unavailable_client_policy_sources(bundle));
     normalize_analysis(
         &mut transactions,
         &mut source_local_observations,
@@ -1246,6 +1247,31 @@ fn client_group_artifacts<'a>(
         artifact.role == SccmRole::Client
             && policy_group(&artifact.display_name) == Some(logical_id)
     })
+}
+
+/// Every client policy source that is not fully captured.
+///
+/// Coverage is a property of the capture, not of the verdict. Reporting these
+/// only when a phase went missing would hide an AccessDenied, Capped, Skipped,
+/// Unsupported, ParseFailed, or Partial source behind a chain that happened to
+/// succeed through its siblings, so the non-outcome is cited whatever the
+/// transaction concluded.
+fn unavailable_client_policy_sources(bundle: &SccmNormalizedBundle) -> Vec<SccmFindingCoverageGap> {
+    bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact.role == SccmRole::Client
+                && artifact.coverage != SccmCoverageState::Captured
+                && policy_group(&artifact.display_name).is_some()
+                && is_safe_opaque_id(&artifact.artifact_id)
+        })
+        .map(|artifact| SccmFindingCoverageGap {
+            artifact_id: artifact.artifact_id.clone(),
+            role: SccmRole::Client,
+            coverage: artifact.coverage.clone(),
+        })
+        .collect()
 }
 
 fn coverage_priority(state: &SccmCoverageState) -> u8 {
