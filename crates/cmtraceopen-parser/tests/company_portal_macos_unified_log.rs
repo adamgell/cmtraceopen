@@ -1149,6 +1149,24 @@ fn opaque_authorization_credentials_are_redacted() {
     }
 }
 
+/// Asserts every meaningful hextet of an address is gone.
+///
+/// `!redacted.contains(address)` alone is too weak: a partial redaction leaving
+/// `fd12:3456:[redacted:host]` satisfies it while still exporting a stable
+/// network prefix, which is the identifying part.
+fn assert_no_ipv6_component_survives(address: &str, redacted: &str) {
+    for hextet in address.split(':').filter(|part| !part.is_empty()) {
+        assert!(
+            !redacted.contains(hextet),
+            "hextet `{hextet}` of {address} survived: {redacted}"
+        );
+    }
+    assert!(
+        !redacted.contains(address),
+        "{address} survived redaction: {redacted}"
+    );
+}
+
 /// `\b` is a word-boundary assertion and `:` is not a word character, so it
 /// cannot anchor an address that begins or ends with a colon. Every
 /// `::`-compressed form does one or both, and the address exports verbatim.
@@ -1162,10 +1180,7 @@ fn compressed_ipv6_forms_are_fully_redacted() {
         "2001:db8::8a2e:370:7334",
     ] {
         let redacted = redact_text(&format!("peer {address} connected"));
-        assert!(
-            !redacted.contains(address),
-            "{address} survived redaction: {redacted}"
-        );
+        assert_no_ipv6_component_survives(address, &redacted);
         assert!(
             redacted.starts_with("peer ") && redacted.ends_with(" connected"),
             "delimiters must survive: {redacted}"
@@ -1179,12 +1194,12 @@ fn compressed_ipv6_forms_are_fully_redacted() {
 #[test]
 fn adjacent_ipv6_addresses_are_both_redacted() {
     let redacted = redact_text("peers fd12:3456:789a:: fd12:3456:789b:: done");
-    assert!(!redacted.contains("789a"), "first survived: {redacted}");
-    assert!(!redacted.contains("789b"), "second survived: {redacted}");
+    assert_no_ipv6_component_survives("fd12:3456:789a::", &redacted);
+    assert_no_ipv6_component_survives("fd12:3456:789b::", &redacted);
 
     let redacted = redact_text("::1,::2");
-    assert!(!redacted.contains("::1"), "first survived: {redacted}");
-    assert!(!redacted.contains("::2"), "second survived: {redacted}");
+    assert_no_ipv6_component_survives("::1", &redacted);
+    assert_no_ipv6_component_survives("::2", &redacted);
 }
 
 /// The IPv6 matcher must not claim text that merely contains hex and colons.
@@ -1538,6 +1553,107 @@ fn coverage_ids_are_one_dense_sequence_across_ingest_and_reduction() {
         unique.len(),
         reduction.coverage.len(),
         "coverage ids must be unique"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// An empty identifier is not an identifier
+// ---------------------------------------------------------------------------
+
+/// Ingest normalises a blank identifier to `None`, but a record can also reach
+/// the reducer by deserialization or direct construction carrying `Some("")`.
+///
+/// An empty identifier names nothing. Treating it as a value makes every record
+/// carrying one share an identifier with every other, which links records that
+/// have no relationship and collapses them into one empty-keyed activity group.
+#[test]
+fn empty_identifiers_never_link_group_or_merge_records() {
+    let header = format!(
+        r#"{{"captureId":"c","schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+    // Verified subsystem, so selected on its own merits and used as an anchor.
+    let anchor_line = r#"{"category":"Enrollment","eventMessage":"anchor","messageType":"Default","process":"CompanyPortal","sourceSequence":0,"subsystem":"com.microsoft.CompanyPortalMac","timestamp":"2026-07-15 07:02:00.000000-0500"}"#;
+    // Capture process only, unverified subsystem: reachable only through rule 2.
+    let candidate = r#"{"category":"Misc","eventMessage":"unrelated","messageType":"Default","process":"CompanyPortal","sourceSequence":1,"subsystem":"com.example.unrelated","timestamp":"2026-07-15 07:02:01.000000-0500"}"#;
+
+    let mut capture = parse_capture(&format!("{header}\n{anchor_line}\n{candidate}\n"));
+    assert_eq!(capture.records.len(), 2);
+    for record in &mut capture.records {
+        record.activity.activity_id = Some(String::new());
+        record.activity.parent_activity_id = Some("   ".to_string());
+        record.activity.signpost_id = Some(String::new());
+        record.activity.correlation_id = Some("  ".to_string());
+    }
+
+    let reduction = reduce_capture_set(capture);
+    let selected: Vec<&str> = reduction
+        .evidence
+        .iter()
+        .map(|item| item.summary.value.as_str())
+        .collect();
+
+    assert!(selected.contains(&"anchor"));
+    assert!(
+        !selected.contains(&"unrelated"),
+        "two blank identifiers are not a shared identifier: {selected:?}"
+    );
+    assert!(
+        reduction.activities.is_empty(),
+        "a blank activity id must not open a group: {:?}",
+        reduction.activities
+    );
+
+    // The same rule on the correlation side: a blank anchor key merges nothing.
+    let blank = PortalDirectLogAnchor {
+        activity_id: Some(String::new()),
+        correlation_id: Some("   ".to_string()),
+        ..anchor("direct-blank")
+    };
+    let result = correlate_with_direct_logs(&reduction, &[blank]);
+    assert!(
+        result.links.is_empty(),
+        "a blank identifier must never justify a merge: {:?}",
+        result.links
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Encoding detection
+// ---------------------------------------------------------------------------
+
+/// A whole-payload JSON object that declares a capture header is the JSON
+/// encoding, whether or not it carries a `records` key.
+///
+/// `parse_capture_json_object` already treats an absent `records` key as an
+/// empty capture. Routing on `records` alone sent a pretty-printed capture with
+/// no records down the NDJSON path, where every physical line of the pretty
+/// printing failed to parse and became a `MalformedRecord`. A well-formed empty
+/// capture was reported as a stream of broken records.
+#[test]
+fn a_records_free_json_capture_is_not_a_stream_of_malformed_lines() {
+    let payload = format!(
+        "{{\n  \"captureId\": \"c\",\n  \"collectedAtUtc\": \"2026-07-15T12:05:10Z\",\n  \
+         \"schemaId\": \"{PORTAL_UNIFIED_LOG_SCHEMA_ID}\",\n  \
+         \"schemaVersion\": {PORTAL_UNIFIED_LOG_SCHEMA_VERSION}\n}}"
+    );
+
+    let capture = parse_capture(&payload);
+
+    assert!(
+        capture.supported,
+        "the capture is well formed and simply empty: {:?}",
+        capture.coverage
+    );
+    assert!(capture.records.is_empty());
+    assert_eq!(
+        capture.stats.records_malformed, 0,
+        "a capture with no records has no malformed records"
+    );
+    assert_eq!(capture.stats.stream_lines, 0);
+    assert_eq!(
+        capture,
+        parse_capture_json(&payload),
+        "auto-detection must agree with the explicit JSON entry point"
     );
 }
 
