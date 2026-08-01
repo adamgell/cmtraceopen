@@ -7,10 +7,9 @@ use crate::models::log_entry::Severity;
 use crate::sccm::{
     classify_artifact_name, SccmArtifact, SccmArtifactFamily, SccmArtifactRequest, SccmConfidence,
     SccmCoverageState, SccmEvidence, SccmEvidenceRef, SccmFinding, SccmFindingBuilder,
-    SccmFindingClass, SccmFindingCoverageGap, SccmPhase, SccmRole, SccmTerminalEvidence,
+    SccmFindingClass, SccmFindingCoverageGap, SccmNormalizedBundle, SccmPhase, SccmRole,
+    SccmTerminalEvidence,
 };
-
-use super::SccmNormalizedBundle;
 
 pub const SCCM_HEALTH_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_HEALTH_TEST_PROFILE_ID: &str = "health-client-5.00.test-v1";
