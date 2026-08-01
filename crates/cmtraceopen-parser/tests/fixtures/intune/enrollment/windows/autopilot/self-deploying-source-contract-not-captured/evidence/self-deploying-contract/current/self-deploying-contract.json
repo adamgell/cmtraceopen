@@ -1,0 +1,5 @@
+{"_comment": "SYNTHETIC FIXTURE: a self-deploying source contract this build has not validated",
+  "autopilotDocument": "autopilot.selfDeployingContract",
+  "documentVersion": 1,
+  "deploymentProfileType": "selfDeploying"
+}

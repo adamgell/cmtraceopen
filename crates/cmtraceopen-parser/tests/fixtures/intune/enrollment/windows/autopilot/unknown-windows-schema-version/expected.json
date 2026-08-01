@@ -1,0 +1,81 @@
+{
+  "assertions": [
+    "evidence that would otherwise read as completed is refused a terminal outcome",
+    "the phase still reports how far the evidence got, because that is observed fact"
+  ],
+  "confidence": "low",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "status": "available"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "mdm-diagnostics-report": "parsed"
+  },
+  "espLinkConfidence": "high",
+  "espLinkState": "evidenceMissing",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-unknown-schema",
+    "autopilot-esp-evidence-missing"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "autopilot-channel",
+        "mdm-diagnostics-report"
+      ],
+      "evidence": [],
+      "findingId": "autopilot-unknown-schema",
+      "recommendedChecks": [
+        "Confirm the Windows build and Autopilot diagnostics schema of the source device.",
+        "Re-collect on a build with validated rules, or upgrade CMTrace Open."
+      ],
+      "severity": "warning",
+      "summary": "Windows build 10.0.99999.1 has no validated Autopilot rules in this build, so terminal semantics are withheld and the evidence is retained raw.",
+      "title": "Autopilot evidence uses a schema or build this release cannot interpret"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "rp-s2",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        {
+          "evidenceId": "rp-s3",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        }
+      ],
+      "findingId": "autopilot-esp-evidence-missing",
+      "recommendedChecks": [
+        "Collect the ESP diagnostics bundle for the same enrollment and analyze it with the ESP workspace.",
+        "Carry the enrollment or correlation identifier across so the two analyses bind explicitly."
+      ],
+      "severity": "warning",
+      "summary": "The local Autopilot phase reached the Enrollment Status Page handoff. What happened after that point is owned by the ESP reducer, and this bundle contains none of its evidence, so the deployment cannot be called complete or failed.",
+      "title": "Autopilot handed off to ESP but no ESP evidence was supplied"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "unknownSchema",
+  "phase": "espHandoff",
+  "profileApplied": true,
+  "profileCandidateState": "available",
+  "profileRetrieved": true,
+  "registrationState": "registered",
+  "scenario": "unknown-windows-schema-version",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}

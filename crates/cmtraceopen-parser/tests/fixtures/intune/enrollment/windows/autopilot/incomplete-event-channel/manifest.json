@@ -1,0 +1,32 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "incomplete-event-channel",
+  "workload": "enrollment/windows/autopilot",
+  "description": "A truncated Autopilot channel. Acquisition is visible and still retrying; the absence of a later success proves nothing because the channel is capped.",
+  "generatedAtUtc": "2026-07-31T09:30:00Z",
+  "capture": {
+    "collectedAtUtc": "2026-07-31T09:30:00Z",
+    "windowsBuild": "10.0.26100.2314",
+    "autopilotSchemaVersion": "1",
+    "timezone": "UTC"
+  },
+  "artifacts": [
+    {
+      "artifactId": "autopilot-channel",
+      "family": "autopilotEvents",
+      "sourceKind": "eventLog",
+      "captureState": "capped",
+      "encoding": "utf-8",
+      "originalBasename": "autopilot-events.json",
+      "sanitizedSourcePath": "SYNTHETIC://autopilot/autopilot-events.json",
+      "relativePath": "evidence/autopilot-channel/current/autopilot-events.json",
+      "bytesCopied": 4420,
+      "capturedUtc": "2026-07-31T09:30:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

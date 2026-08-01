@@ -1,0 +1,71 @@
+{
+  "assertions": [
+    "retrieval succeeding and application failing are separately reported states"
+  ],
+  "confidence": "high",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "status": "available"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "mdm-diagnostics-report": "parsed"
+  },
+  "espLinkConfidence": "low",
+  "espLinkState": "notObserved",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-profile-application-failed"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e4",
+          "sourceArtifactId": "autopilot-channel"
+        }
+      ],
+      "findingId": "autopilot-profile-application-failed",
+      "recommendedChecks": [
+        "Read Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot events 172 and 153 for the HRESULT.",
+        "TpmHliInfo_Output.txt from the same bundle shows whether TPM attestation is the underlying constraint."
+      ],
+      "severity": "blocker",
+      "summary": "A cited record reports that the retrieved profile could not be made available to the device, so its OOBE settings were never applied. The reported code was 0x801C03EA.",
+      "title": "The Autopilot deployment profile could not be applied"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "profileApplicationFailure",
+  "phase": "profileRetrieved",
+  "profileApplied": false,
+  "profileCandidateState": "available",
+  "profileRetrieved": true,
+  "registrationState": "registered",
+  "scenario": "profile-application-failure",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}
