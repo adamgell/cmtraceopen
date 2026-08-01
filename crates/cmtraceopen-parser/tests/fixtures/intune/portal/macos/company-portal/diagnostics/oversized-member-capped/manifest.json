@@ -1,0 +1,74 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "oversized-member-capped",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "A member hit the import boundary's decompression limit and arrived truncated. Absence of a signal in a capped member proves nothing.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-oversized",
+      "declaredProduct": "companyPortalMacos",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "complete",
+      "extractionDetail": null,
+      "sanitizedSourcePath": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "portal-log",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "capped",
+      "encoding": "utf-8",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/portal.log",
+      "relativePath": "evidence/portal-log/current/portal.log",
+      "bytesCopied": 192,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 192,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "oversized",
+        "importDetail": "member exceeded the decompression limit and was truncated"
+      }
+    },
+    {
+      "artifactId": "settings-json",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "settings.json",
+      "sanitizedSourcePath": "SYNTHETIC://container/config/settings.json",
+      "relativePath": "evidence/settings-json/current/settings.json",
+      "bytesCopied": 97,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "config/settings.json",
+        "declaredRole": "configurationFact",
+        "declaredBytes": 97,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    }
+  ]
+}

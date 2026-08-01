@@ -1,0 +1,74 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "malformed-manifest",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "A member that begins as JSON and does not parse. The bytes are present, so this is corruption or a format change rather than a collection gap, and it is reported as parse-failed coverage.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-malformed-manifest",
+      "declaredProduct": "companyPortalMacos",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "complete",
+      "extractionDetail": null,
+      "sanitizedSourcePath": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "report-manifest",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "originalBasename": "report-manifest.json",
+      "sanitizedSourcePath": "SYNTHETIC://container/manifest/report-manifest.json",
+      "relativePath": "evidence/report-manifest/current/report-manifest.json",
+      "bytesCopied": 84,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "manifest/report-manifest.json",
+        "declaredRole": "configurationFact",
+        "declaredBytes": 84,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    },
+    {
+      "artifactId": "portal-log",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/portal.log",
+      "relativePath": "evidence/portal-log/current/portal.log",
+      "bytesCopied": 241,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 241,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    }
+  ]
+}

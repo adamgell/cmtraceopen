@@ -1,0 +1,124 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "mixed-encodings",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Four members whose declared encodings differ, including a UTF-8 BOM and two the importer transcoded. The parser records the declared encoding as provenance and never re-decodes.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-mixed-encodings",
+      "declaredProduct": "companyPortalMacos",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "complete",
+      "extractionDetail": null,
+      "sanitizedSourcePath": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "utf8-log",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/portal.log",
+      "relativePath": "evidence/utf8-log/current/portal.log",
+      "bytesCopied": 241,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 241,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    },
+    {
+      "artifactId": "bom-json",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8-bom",
+      "originalBasename": "settings.json",
+      "sanitizedSourcePath": "SYNTHETIC://container/config/settings.json",
+      "relativePath": "evidence/bom-json/current/settings.json",
+      "bytesCopied": 100,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "config/settings.json",
+        "declaredRole": "configurationFact",
+        "declaredBytes": 100,
+        "declaredEncoding": "utf-8-bom",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    },
+    {
+      "artifactId": "legacy-log",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "windows-1252",
+      "originalBasename": "legacy.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/legacy.log",
+      "relativePath": "evidence/legacy-log/current/legacy.log",
+      "bytesCopied": 241,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/legacy.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 241,
+        "declaredEncoding": "windows-1252",
+        "transcodedFrom": "windows-1252",
+        "importState": "decoded",
+        "importDetail": null
+      }
+    },
+    {
+      "artifactId": "utf16-note",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-16le",
+      "originalBasename": "handoff.txt",
+      "sanitizedSourcePath": "SYNTHETIC://container/notes/handoff.txt",
+      "relativePath": "evidence/utf16-note/current/handoff.txt",
+      "bytesCopied": 96,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "notes/handoff.txt",
+        "declaredRole": "unsupportedSupplemental",
+        "declaredBytes": 96,
+        "declaredEncoding": "utf-16le",
+        "transcodedFrom": "utf-16le",
+        "importState": "decoded",
+        "importDetail": null
+      }
+    }
+  ]
+}

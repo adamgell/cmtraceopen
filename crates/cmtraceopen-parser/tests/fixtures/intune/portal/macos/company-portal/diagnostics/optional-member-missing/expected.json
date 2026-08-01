@@ -1,0 +1,99 @@
+{
+  "scenario": "optional-member-missing",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "An expected member is not in the container. It stays visible as missing coverage; whether Company Portal writes it at all is unknown.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-missing-member",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "optional-json",
+      "status": "missing"
+    },
+    {
+      "artifactId": "portal-log",
+      "status": "available"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "undecoded",
+      "delegated": false,
+      "importState": "absent",
+      "memberId": "optional-json",
+      "memberPath": "config/optional.json",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "optional-json"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-absent-member",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-missing-member"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "an absent member is missing coverage, not a silently shorter member list",
+    "the absence is reported as informational: whether Company Portal writes the member at all is unknown"
+  ]
+}

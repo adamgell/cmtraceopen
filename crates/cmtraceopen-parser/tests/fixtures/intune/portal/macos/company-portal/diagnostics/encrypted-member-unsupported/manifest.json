@@ -1,0 +1,99 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "encrypted-member-unsupported",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "An encrypted member and a member using an unrecognized compression method. Neither is dropped; both remain visible as unsupported coverage.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-encrypted",
+      "declaredProduct": "companyPortalMacos",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "complete",
+      "extractionDetail": null,
+      "sanitizedSourcePath": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "secure-member",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "unsupported",
+      "encoding": null,
+      "originalBasename": "secure.bin",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "config/secure.bin",
+        "declaredRole": "authEvidence",
+        "declaredBytes": 0,
+        "declaredEncoding": null,
+        "transcodedFrom": null,
+        "importState": "encrypted",
+        "importDetail": "member is password protected and was not decrypted"
+      }
+    },
+    {
+      "artifactId": "opaque-member",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "unsupported",
+      "encoding": null,
+      "originalBasename": "opaque.dat",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "misc/opaque.dat",
+        "declaredRole": "unsupportedSupplemental",
+        "declaredBytes": 0,
+        "declaredEncoding": null,
+        "transcodedFrom": null,
+        "importState": "unknownCompression",
+        "importDetail": "member uses a compression method the import boundary does not support"
+      }
+    },
+    {
+      "artifactId": "portal-log",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/portal.log",
+      "relativePath": "evidence/portal-log/current/portal.log",
+      "bytesCopied": 241,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 241,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    }
+  ]
+}

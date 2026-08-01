@@ -1,0 +1,74 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "foreign-archive-negative",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "An arbitrary archive the importer did not declare as a Company Portal report. It must not be detected as one, and it yields no facts.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-foreign",
+      "declaredProduct": "other",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "complete",
+      "extractionDetail": null,
+      "sanitizedSourcePath": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "readme",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "readme.txt",
+      "sanitizedSourcePath": "SYNTHETIC://container/readme.txt",
+      "relativePath": "evidence/readme/current/readme.txt",
+      "bytesCopied": 145,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "readme.txt",
+        "declaredRole": null,
+        "declaredBytes": 145,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    },
+    {
+      "artifactId": "notes-json",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "notes.json",
+      "sanitizedSourcePath": "SYNTHETIC://container/data/notes.json",
+      "relativePath": "evidence/notes-json/current/notes.json",
+      "bytesCopied": 72,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "data/notes.json",
+        "declaredRole": null,
+        "declaredBytes": 72,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    }
+  ]
+}

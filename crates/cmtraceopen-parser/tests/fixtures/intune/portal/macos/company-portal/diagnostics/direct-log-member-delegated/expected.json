@@ -1,0 +1,76 @@
+{
+  "scenario": "direct-log-member-delegated",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "A single log-framed member. Its records are parsed by the direct app-log parser (#368); this module classifies and delegates rather than duplicating the record grammar.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-delegation",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "portal-log",
+      "status": "available"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-delegation"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "a log-framed member is classified and delegated, not re-parsed here",
+    "the delegation target is the direct app-log parser owned by issue #368"
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "scenario": "duplicate-member-names",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Two members whose container paths collide once case is normalized. macOS ships case-insensitive APFS, so they extract over each other and the survivor depends on extraction order. Both are refused.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-duplicate-members",
+    "status": "unsupported"
+  },
+  "coverage": [
+    {
+      "artifactId": "portal-log-lower",
+      "status": "unsupported"
+    },
+    {
+      "artifactId": "portal-log-upper",
+      "status": "unsupported"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "undecoded",
+      "delegated": false,
+      "importState": "rejected",
+      "memberId": "portal-log-upper",
+      "memberPath": "logs/Portal.log",
+      "rejection": "duplicatePath",
+      "roleConfirmation": "notDeclared"
+    },
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "undecoded",
+      "delegated": false,
+      "importState": "rejected",
+      "memberId": "portal-log-lower",
+      "memberPath": "logs/portal.log",
+      "rejection": "duplicatePath",
+      "roleConfirmation": "notDeclared"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "portal-log-lower",
+        "portal-log-upper"
+      ],
+      "evidence": [
+        "member:portal-log-lower",
+        "member:portal-log-upper"
+      ],
+      "findingId": "cp-macos-diagnostics-member-path-refused",
+      "severity": "error"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-duplicate-members"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "colliding member paths refuse every side, because neither can be shown to be authoritative",
+    "the collision is detected case-insensitively, matching case-insensitive APFS",
+    "a container whose every member is refused reports unsupported container coverage, not success"
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "optional-member-missing",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "An expected member is not in the container. It stays visible as missing coverage; whether Company Portal writes it at all is unknown.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-missing-member",
+      "declaredProduct": "companyPortalMacos",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "complete",
+      "extractionDetail": null,
+      "sanitizedSourcePath": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "portal-log",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/portal.log",
+      "relativePath": "evidence/portal-log/current/portal.log",
+      "bytesCopied": 241,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 241,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    },
+    {
+      "artifactId": "optional-json",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "optional.json",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "config/optional.json",
+        "declaredRole": "configurationFact",
+        "declaredBytes": 0,
+        "declaredEncoding": null,
+        "transcodedFrom": null,
+        "importState": "absent",
+        "importDetail": "member was not present in the container"
+      }
+    }
+  ]
+}

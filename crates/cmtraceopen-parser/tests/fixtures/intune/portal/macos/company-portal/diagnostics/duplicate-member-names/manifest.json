@@ -1,0 +1,74 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "duplicate-member-names",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Two members whose container paths collide once case is normalized. macOS ships case-insensitive APFS, so they extract over each other and the survivor depends on extraction order. Both are refused.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-duplicate-members",
+      "declaredProduct": "companyPortalMacos",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "complete",
+      "extractionDetail": null,
+      "sanitizedSourcePath": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "portal-log-lower",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/portal.log",
+      "relativePath": "evidence/portal-log-lower/current/portal.log",
+      "bytesCopied": 241,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 241,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    },
+    {
+      "artifactId": "portal-log-upper",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "Portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/Portal.log",
+      "relativePath": "evidence/portal-log-upper/current/Portal.log",
+      "bytesCopied": 241,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/Portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 241,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    }
+  ]
+}

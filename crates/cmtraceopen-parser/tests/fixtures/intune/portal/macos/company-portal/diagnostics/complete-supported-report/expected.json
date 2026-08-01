@@ -1,0 +1,105 @@
+{
+  "scenario": "complete-supported-report",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Every member decoded: a log-framed member, a JSON member, and a property list. Only the log is role-confirmed; the other two stay declared and unconfirmed because no report schema is fixture-backed.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-complete",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "hardware-plist",
+      "status": "available"
+    },
+    {
+      "artifactId": "portal-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "settings-json",
+      "status": "available"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "json",
+      "delegated": false,
+      "importState": "decoded",
+      "memberId": "settings-json",
+      "memberPath": "config/settings.json",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    },
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "propertyList",
+      "delegated": false,
+      "importState": "decoded",
+      "memberId": "hardware-plist",
+      "memberPath": "system/hardware.plist",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-complete"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "the log member is the only one whose role the content can confirm",
+    "the JSON and property-list members stay declared and unconfirmed, because confirming their role would need the undocumented report schema",
+    "container facts come only from what the importer declared, never from a member field"
+  ]
+}

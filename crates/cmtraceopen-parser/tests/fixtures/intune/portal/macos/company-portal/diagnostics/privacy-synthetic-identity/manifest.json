@@ -1,0 +1,74 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "privacy-synthetic-identity",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Synthetic identity, tenant, certificate, network, and filesystem values in a member path, an importer detail string, and the excerpt kept from a member that failed to parse. None of them may survive the export.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-privacy",
+      "declaredProduct": "companyPortalMacos",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "complete",
+      "extractionDetail": "fetched from https://storage.example.invalid/reports?sas=abc",
+      "sanitizedSourcePath": "SYNTHETIC://reports/11111111-2222-3333-4444-555555555555/diagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "identity-cache",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "originalBasename": "msal-cache.json",
+      "sanitizedSourcePath": "SYNTHETIC://container/identity/synthetic.user@example.invalid/msal-cache.json",
+      "relativePath": "evidence/identity-cache/current/msal-cache.json",
+      "bytesCopied": 406,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "identity/synthetic.user@example.invalid/msal-cache.json",
+        "declaredRole": "authEvidence",
+        "declaredBytes": 406,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": "member copied from /Library/Application Support/CompanyPortal/msal-cache.json for synthetic.user@example.invalid on device serialNumber=SYNTHSERIALX1 signed by thumbprint 0123456789abcdef0123456789abcdef01234567"
+      }
+    },
+    {
+      "artifactId": "portal-log",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/portal.log",
+      "relativePath": "evidence/portal-log/current/portal.log",
+      "bytesCopied": 241,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 241,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "decoded",
+        "importDetail": null
+      }
+    }
+  ]
+}

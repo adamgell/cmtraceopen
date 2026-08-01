@@ -1,0 +1,104 @@
+{
+  "scenario": "deterministic-ordering",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Members are supplied in an order that is neither path nor id sorted. The analysis sorts by normalized path, so the serialized bytes do not depend on how the importer enumerated the container.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-ordering",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "alpha",
+      "status": "available"
+    },
+    {
+      "artifactId": "mid",
+      "status": "available"
+    },
+    {
+      "artifactId": "zeta",
+      "status": "available"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "json",
+      "delegated": false,
+      "importState": "decoded",
+      "memberId": "mid",
+      "memberPath": "config/settings.json",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "alpha",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    },
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "propertyList",
+      "delegated": false,
+      "importState": "decoded",
+      "memberId": "zeta",
+      "memberPath": "system/hardware.plist",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:alpha"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-ordering"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "members are sorted by normalized path, so output order does not depend on how the importer enumerated the container",
+    "the same input serializes to the same bytes on every run"
+  ]
+}

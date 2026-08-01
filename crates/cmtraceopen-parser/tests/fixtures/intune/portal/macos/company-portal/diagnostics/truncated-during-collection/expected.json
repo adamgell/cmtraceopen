@@ -1,0 +1,120 @@
+{
+  "scenario": "truncated-during-collection",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Collection stopped before the archive was finalized. The report coverage is capped, and the absent member proves nothing about the device.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-truncated",
+    "status": "capped"
+  },
+  "coverage": [
+    {
+      "artifactId": "portal-log",
+      "status": "capped"
+    },
+    {
+      "artifactId": "settings-json",
+      "status": "missing"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "undecoded",
+      "delegated": false,
+      "importState": "absent",
+      "memberId": "settings-json",
+      "memberPath": "config/settings.json",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "capped",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "truncated"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-truncated"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-extraction-incomplete",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "portal-log"
+      ],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-capped-member",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "settings-json"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-absent-member",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-truncated"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "an interrupted collection caps the container coverage",
+    "a member missing from a truncated collection is not evidence that it was never written",
+    "the partially collected log is still capped coverage, so absence of a signal in it proves nothing"
+  ]
+}

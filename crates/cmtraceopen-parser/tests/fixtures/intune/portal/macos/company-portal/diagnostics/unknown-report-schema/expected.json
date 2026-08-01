@@ -1,0 +1,83 @@
+{
+  "scenario": "unknown-report-schema",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "The import envelope declares a schema version newer than this build reads. Nothing is guessed: every member is reported unsupported and no fact is claimed. The report's own declared schema is carried but not acted on, because no report schema is fixture-backed on any build.",
+  "envelopeState": "unsupportedSchemaVersion",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-future-schema",
+    "status": "unsupported"
+  },
+  "coverage": [
+    {
+      "artifactId": "portal-log",
+      "status": "unsupported"
+    },
+    {
+      "artifactId": "settings-json",
+      "status": "unsupported"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "json",
+      "delegated": false,
+      "importState": "notClaimed",
+      "memberId": "settings-json",
+      "memberPath": "config/settings.json",
+      "rejection": null,
+      "roleConfirmation": "notDeclared"
+    },
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "plainTextLog",
+      "delegated": false,
+      "importState": "notClaimed",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "notDeclared"
+    }
+  ],
+  "facts": [],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-future-schema"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-unsupported-envelope-schema",
+      "severity": "error"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "portal-log",
+        "settings-json"
+      ],
+      "evidence": [
+        "member:portal-log",
+        "member:settings-json"
+      ],
+      "findingId": "cp-macos-diagnostics-unsupported-member",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-future-schema"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "an envelope newer than this build claims no facts at all",
+    "every member is reported unsupported rather than parsed on a guess",
+    "the detection is not downgraded to contradicted: an unreadable envelope proves nothing about the container"
+  ]
+}

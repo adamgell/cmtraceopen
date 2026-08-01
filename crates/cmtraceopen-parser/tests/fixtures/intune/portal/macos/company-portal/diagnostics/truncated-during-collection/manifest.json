@@ -1,0 +1,74 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "truncated-during-collection",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Collection stopped before the archive was finalized. The report coverage is capped, and the absent member proves nothing about the device.",
+  "import": {
+    "schemaVersion": 1,
+    "report": {
+      "reportId": "report-truncated",
+      "declaredProduct": "companyPortalMacos",
+      "containerKind": "zip",
+      "declaredReportSchema": null,
+      "declaredAppVersion": "5.2404.0",
+      "collectedAt": "2026-07-30T09:05:00Z",
+      "extraction": "truncated",
+      "extractionDetail": "collection stopped before the archive was finalized",
+      "sanitizedSourcePath": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip",
+      "observedAtUtc": "2026-07-31T00:00:00Z"
+    }
+  },
+  "artifacts": [
+    {
+      "artifactId": "portal-log",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "capped",
+      "encoding": "utf-8",
+      "originalBasename": "portal.log",
+      "sanitizedSourcePath": "SYNTHETIC://container/logs/portal.log",
+      "relativePath": "evidence/portal-log/current/portal.log",
+      "bytesCopied": 192,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "logs/portal.log",
+        "declaredRole": "directLog",
+        "declaredBytes": 192,
+        "declaredEncoding": "utf-8",
+        "transcodedFrom": null,
+        "importState": "capped",
+        "importDetail": "member ends mid-line; collection was interrupted"
+      }
+    },
+    {
+      "artifactId": "settings-json",
+      "family": "companyPortalMacosDiagnostics",
+      "sourceKind": "diagnosticReport",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "settings.json",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "member": {
+        "memberPath": "config/settings.json",
+        "declaredRole": "configurationFact",
+        "declaredBytes": 0,
+        "declaredEncoding": null,
+        "transcodedFrom": null,
+        "importState": "absent",
+        "importDetail": null
+      }
+    }
+  ]
+}

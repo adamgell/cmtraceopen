@@ -1,0 +1,120 @@
+{
+  "scenario": "mixed-encodings",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Four members whose declared encodings differ, including a UTF-8 BOM and two the importer transcoded. The parser records the declared encoding as provenance and never re-decodes.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-mixed-encodings",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "bom-json",
+      "status": "available"
+    },
+    {
+      "artifactId": "legacy-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "utf16-note",
+      "status": "available"
+    },
+    {
+      "artifactId": "utf8-log",
+      "status": "available"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "json",
+      "delegated": false,
+      "importState": "decoded",
+      "memberId": "bom-json",
+      "memberPath": "config/settings.json",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "legacy-log",
+      "memberPath": "logs/legacy.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "utf8-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    },
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "plainText",
+      "delegated": false,
+      "importState": "decoded",
+      "memberId": "utf16-note",
+      "memberPath": "notes/handoff.txt",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:legacy-log",
+        "member:utf8-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-mixed-encodings"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "the declared encoding and any transcoding source are kept as provenance",
+    "the parser never re-decodes: bytes were already text by the time they arrived",
+    "a UTF-8 BOM does not stop a JSON member from being recognized as JSON"
+  ]
+}

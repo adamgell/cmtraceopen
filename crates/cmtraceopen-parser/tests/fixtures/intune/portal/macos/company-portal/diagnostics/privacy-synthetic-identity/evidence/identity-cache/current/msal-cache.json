@@ -1,0 +1,4 @@
+{"syntheticFixture":"SYNTHETIC FIXTURE","upn":"synthetic.user@example.invalid","tenantId":"11111111-2222-3333-4444-555555555555","peer":"203.0.113.7",
+"endpoint":"https://login.example.invalid/common?client_id=00000000-1111-2222-3333-444444444444",
+"thumbprint":"0123456789abcdef0123456789abcdef01234567","serialNumber":"SYNTHSERIALX1",
+"statePath":"/Library/Application Support/CompanyPortal/state.json",

@@ -1,0 +1,102 @@
+{
+  "scenario": "traversal-member-path",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "The importer claimed a traversal member decoded cleanly. The parser refuses it anyway: a public API that trusts its caller's path hygiene is one careless importer away from a filesystem escape.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-traversal",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "escaping-member",
+      "status": "unsupported"
+    },
+    {
+      "artifactId": "portal-log",
+      "status": "available"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "undecoded",
+      "delegated": false,
+      "importState": "rejected",
+      "memberId": "escaping-member",
+      "memberPath": "../../../../etc/passwd",
+      "rejection": "parentTraversal",
+      "roleConfirmation": "notDeclared"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "escaping-member"
+      ],
+      "evidence": [
+        "member:escaping-member"
+      ],
+      "findingId": "cp-macos-diagnostics-member-path-refused",
+      "severity": "error"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-traversal"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "the parser refuses a traversal path even though the importer claimed it decoded cleanly",
+    "the refused path is preserved verbatim rather than normalized into something safe-looking",
+    "a refused member contributes no content and is never delegated"
+  ]
+}

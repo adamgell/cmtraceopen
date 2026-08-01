@@ -1,0 +1,102 @@
+{
+  "scenario": "privacy-synthetic-identity",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "Synthetic identity, tenant, certificate, network, and filesystem values in a member path, an importer detail string, and the excerpt kept from a member that failed to parse. None of them may survive the export.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-privacy",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "identity-cache",
+      "status": "parseFailed"
+    },
+    {
+      "artifactId": "portal-log",
+      "status": "available"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "plainText",
+      "delegated": false,
+      "importState": "undecodable",
+      "memberId": "identity-cache",
+      "memberPath": "identity/synthetic.user@example.invalid/msal-cache.json",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/11111111-2222-3333-4444-555555555555/diagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "identity-cache"
+      ],
+      "evidence": [
+        "member:identity-cache"
+      ],
+      "findingId": "cp-macos-diagnostics-malformed-member",
+      "severity": "error"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-privacy"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "identity, tenant, certificate, network, and filesystem values reach the analysis",
+    "none of them survive the redacted export projection",
+    "the excerpt kept from a member that failed to parse is dropped outright rather than scrubbed"
+  ]
+}

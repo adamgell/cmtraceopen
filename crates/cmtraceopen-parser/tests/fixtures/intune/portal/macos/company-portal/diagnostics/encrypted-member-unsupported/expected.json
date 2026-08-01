@@ -1,0 +1,117 @@
+{
+  "scenario": "encrypted-member-unsupported",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "An encrypted member and a member using an unrecognized compression method. Neither is dropped; both remain visible as unsupported coverage.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-encrypted",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "opaque-member",
+      "status": "unsupported"
+    },
+    {
+      "artifactId": "portal-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "secure-member",
+      "status": "unsupported"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "undecoded",
+      "delegated": false,
+      "importState": "encrypted",
+      "memberId": "secure-member",
+      "memberPath": "config/secure.bin",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    },
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    },
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "undecoded",
+      "delegated": false,
+      "importState": "unknownCompression",
+      "memberId": "opaque-member",
+      "memberPath": "misc/opaque.dat",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "opaque-member",
+        "secure-member"
+      ],
+      "evidence": [
+        "member:opaque-member",
+        "member:secure-member"
+      ],
+      "findingId": "cp-macos-diagnostics-unsupported-member",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-encrypted"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "encrypted and unknown-compression members stay visible as unsupported coverage",
+    "neither is dropped, and neither is treated as absent"
+  ]
+}

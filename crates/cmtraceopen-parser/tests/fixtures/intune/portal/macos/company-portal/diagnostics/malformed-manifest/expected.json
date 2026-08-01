@@ -1,0 +1,101 @@
+{
+  "scenario": "malformed-manifest",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "A member that begins as JSON and does not parse. The bytes are present, so this is corruption or a format change rather than a collection gap, and it is reported as parse-failed coverage.",
+  "envelopeState": "supported",
+  "detection": "declaredUnconfirmed",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-malformed-manifest",
+    "status": "available"
+  },
+  "coverage": [
+    {
+      "artifactId": "portal-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "report-manifest",
+      "status": "parseFailed"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "directLog",
+      "contentKind": "plainTextLog",
+      "delegated": true,
+      "importState": "decoded",
+      "memberId": "portal-log",
+      "memberPath": "logs/portal.log",
+      "rejection": null,
+      "roleConfirmation": "contentConfirmed"
+    },
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "plainText",
+      "delegated": false,
+      "importState": "undecodable",
+      "memberId": "report-manifest",
+      "memberPath": "manifest/report-manifest.json",
+      "rejection": null,
+      "roleConfirmation": "declaredUnconfirmed"
+    }
+  ],
+  "facts": [
+    {
+      "name": "collectedAt",
+      "value": "2026-07-30T09:05:00Z"
+    },
+    {
+      "name": "containerKind",
+      "value": "zip"
+    },
+    {
+      "name": "declaredAppVersion",
+      "value": "5.2404.0"
+    },
+    {
+      "name": "extraction",
+      "value": "complete"
+    },
+    {
+      "name": "sanitizedSourcePath",
+      "value": "SYNTHETIC://reports/CompanyPortalDiagnostics.zip"
+    }
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-manifest"
+      ],
+      "evidence": [
+        "member:report-manifest"
+      ],
+      "findingId": "cp-macos-diagnostics-malformed-member",
+      "severity": "error"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        "member:portal-log"
+      ],
+      "findingId": "cp-macos-diagnostics-direct-log-delegated",
+      "severity": "info"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-malformed-manifest"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "a member that begins as JSON and does not parse is parse-failed coverage, not an unknown supplemental artifact",
+    "the surrounding members are still analyzed; one malformed member does not void the report"
+  ]
+}

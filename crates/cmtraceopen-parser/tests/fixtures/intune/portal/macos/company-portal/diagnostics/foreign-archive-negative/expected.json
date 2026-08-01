@@ -1,0 +1,83 @@
+{
+  "scenario": "foreign-archive-negative",
+  "workload": "portal/macos/company-portal/diagnostics",
+  "description": "An arbitrary archive the importer did not declare as a Company Portal report. It must not be detected as one, and it yields no facts.",
+  "envelopeState": "supported",
+  "detection": "refused",
+  "supportState": "sourceContract",
+  "reportCoverage": {
+    "artifactId": "report-foreign",
+    "status": "unsupported"
+  },
+  "coverage": [
+    {
+      "artifactId": "notes-json",
+      "status": "unsupported"
+    },
+    {
+      "artifactId": "readme",
+      "status": "unsupported"
+    }
+  ],
+  "members": [
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "json",
+      "delegated": false,
+      "importState": "notClaimed",
+      "memberId": "notes-json",
+      "memberPath": "data/notes.json",
+      "rejection": null,
+      "roleConfirmation": "notDeclared"
+    },
+    {
+      "confirmedRole": "unclassified",
+      "contentKind": "plainText",
+      "delegated": false,
+      "importState": "notClaimed",
+      "memberId": "readme",
+      "memberPath": "readme.txt",
+      "rejection": null,
+      "roleConfirmation": "notDeclared"
+    }
+  ],
+  "facts": [],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-foreign"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-not-a-company-portal-report",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "notes-json",
+        "readme"
+      ],
+      "evidence": [
+        "member:notes-json",
+        "member:readme"
+      ],
+      "findingId": "cp-macos-diagnostics-unsupported-member",
+      "severity": "warning"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "report-foreign"
+      ],
+      "evidence": [],
+      "findingId": "cp-macos-diagnostics-report-schema-not-fixture-backed",
+      "severity": "info"
+    }
+  ],
+  "assertions": [
+    "an archive the importer did not declare as a Company Portal report is refused",
+    "a refused container yields no facts and delegates nothing",
+    "its members are still enumerated as unsupported coverage, so the refusal is auditable"
+  ]
+}
