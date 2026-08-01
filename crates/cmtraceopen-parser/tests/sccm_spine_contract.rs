@@ -1744,6 +1744,201 @@ fn artifact_request_deserializes_through_the_same_wire_contract_as_a_finding() {
 }
 
 #[test]
+fn evidence_ref_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let reference = finding_evidence_ref("artifact-a", "entry-a");
+    let canonical = serde_json::to_value(&reference).unwrap();
+    if serde_json::from_value::<SccmEvidenceRef>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&reference)
+    {
+        mismatches.push("a canonical evidence ref did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmEvidenceRef>(unknown_field).is_ok() {
+        mismatches.push("evidence ref deserializer accepted an unknown field".into());
+    }
+
+    for (label, field, value) in [
+        ("a 5000-char artifact ID", "artifactId", "a".repeat(5000)),
+        ("an empty artifact ID", "artifactId", String::new()),
+        ("an untrimmed entry ID", "entryId", " entry-a ".to_owned()),
+        ("an empty entry ID", "entryId", String::new()),
+    ] {
+        let mut json = canonical.clone();
+        json[field] = serde_json::json!(value);
+        if serde_json::from_value::<SccmEvidenceRef>(json).is_ok() {
+            mismatches.push(format!("evidence ref deserializer accepted {label}"));
+        }
+    }
+
+    for (label, start, end) in [
+        (
+            "a reversed line range",
+            serde_json::json!(5),
+            serde_json::json!(1),
+        ),
+        (
+            "a zero line start",
+            serde_json::json!(0),
+            serde_json::json!(1),
+        ),
+        (
+            "a start without an end",
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ),
+    ] {
+        let mut json = canonical.clone();
+        json["lineStart"] = start;
+        json["lineEnd"] = end;
+        if serde_json::from_value::<SccmEvidenceRef>(json).is_ok() {
+            mismatches.push(format!("evidence ref deserializer accepted {label}"));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn terminal_evidence_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let terminal =
+        SccmTerminalEvidence::observed_failure(finding_evidence_ref("artifact-a", "entry-a"));
+    let canonical = serde_json::to_value(&terminal).unwrap();
+    if serde_json::from_value::<SccmTerminalEvidence>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&terminal)
+    {
+        mismatches.push("a canonical terminal evidence did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmTerminalEvidence>(unknown_field).is_ok() {
+        mismatches.push("terminal evidence deserializer accepted an unknown field".into());
+    }
+
+    let mut nested_unknown = canonical.clone();
+    nested_unknown["reference"]["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmTerminalEvidence>(nested_unknown).is_ok() {
+        mismatches.push("terminal evidence deserializer accepted a nested unknown field".into());
+    }
+
+    for (label, field, value) in [
+        (
+            "a 5000-char nested artifact ID",
+            "artifactId",
+            "a".repeat(5000),
+        ),
+        (
+            "an untrimmed nested entry ID",
+            "entryId",
+            " entry-a ".to_owned(),
+        ),
+    ] {
+        let mut json = canonical.clone();
+        json["reference"][field] = serde_json::json!(value);
+        if serde_json::from_value::<SccmTerminalEvidence>(json).is_ok() {
+            mismatches.push(format!("terminal evidence deserializer accepted {label}"));
+        }
+    }
+
+    let mut non_terminal_kind = canonical.clone();
+    non_terminal_kind["kind"] = serde_json::json!("observedRecovery");
+    if serde_json::from_value::<SccmTerminalEvidence>(non_terminal_kind).is_ok() {
+        mismatches.push("terminal evidence deserializer accepted a non-failure kind".into());
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn correlation_key_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let key = finding_key(
+        SccmCorrelationKeyKind::CiId,
+        "71",
+        "71",
+        SccmKeyConfidence::Low,
+        Some("sccm-keys-experimental-v1"),
+        finding_evidence_ref("artifact-a", "entry-a"),
+    );
+    let canonical = serde_json::to_value(&key).unwrap();
+    if serde_json::from_value::<SccmCorrelationKey>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&key)
+    {
+        mismatches.push("a canonical correlation key did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmCorrelationKey>(unknown_field).is_ok() {
+        mismatches.push("correlation key deserializer accepted an unknown field".into());
+    }
+
+    // The trust-signal bypass. REGISTERED_STABLE_CORRELATION_PROFILE_IDS is
+    // deliberately empty, so validate_correlation_key_evidence holds every key
+    // at Low; standalone deserialization must not let a payload forge a
+    // stronger confidence than any registered profile can authorize.
+    for forged in ["exact", "strong"] {
+        let mut json = canonical.clone();
+        json["confidence"] = serde_json::json!(forged);
+        if serde_json::from_value::<SccmCorrelationKey>(json).is_ok() {
+            mismatches.push(format!(
+                "correlation key deserializer accepted forged {forged} confidence"
+            ));
+        }
+    }
+
+    for (label, field, value) in [
+        ("a 5000-char raw value", "raw", "1".repeat(5000)),
+        (
+            "a 5000-char normalized value",
+            "normalized",
+            "1".repeat(5000),
+        ),
+        ("an empty raw value", "raw", String::new()),
+    ] {
+        let mut json = canonical.clone();
+        json[field] = serde_json::json!(value);
+        if serde_json::from_value::<SccmCorrelationKey>(json).is_ok() {
+            mismatches.push(format!("correlation key deserializer accepted {label}"));
+        }
+    }
+
+    let mut incoherent_span = canonical.clone();
+    incoherent_span["start"] = serde_json::json!(99999);
+    incoherent_span["end"] = serde_json::json!(1);
+    if serde_json::from_value::<SccmCorrelationKey>(incoherent_span).is_ok() {
+        mismatches.push("correlation key deserializer accepted an incoherent span".into());
+    }
+
+    let mut overlong_profile = canonical.clone();
+    overlong_profile["extractionProfileId"] = serde_json::json!("p".repeat(257));
+    if serde_json::from_value::<SccmCorrelationKey>(overlong_profile).is_ok() {
+        mismatches.push("correlation key deserializer accepted an overlong profile ID".into());
+    }
+
+    let mut no_evidence = canonical.clone();
+    no_evidence["evidence"] = serde_json::Value::Null;
+    if serde_json::from_value::<SccmCorrelationKey>(no_evidence).is_ok() {
+        mismatches.push("correlation key deserializer accepted a key with no evidence".into());
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
 fn finding_rejects_whitespace_wrapped_declared_phase_shadow() {
     let result = SccmFindingBuilder::new("wrapped-phase-shadow")
         .class(SccmFindingClass::Symptom)
