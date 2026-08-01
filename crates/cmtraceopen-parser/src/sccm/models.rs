@@ -14,6 +14,7 @@ const INVALID_SCCM_ROLE_MESSAGE: &str =
 #[serde(rename_all = "camelCase")]
 pub enum SccmCoverageState {
     Captured,
+    Partial,
     Absent,
     AccessDenied,
     Capped,
