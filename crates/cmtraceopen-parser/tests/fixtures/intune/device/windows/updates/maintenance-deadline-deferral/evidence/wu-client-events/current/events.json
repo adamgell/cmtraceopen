@@ -1,0 +1,118 @@
+{"_comment": "SYNTHETIC FIXTURE: install held by deadline policy",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-41",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 201,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 41,
+            "recordId": 201
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:05:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:05:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 41,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 201,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "updateGuid",
+          "value": "{aaaaaaaa-0000-0000-0000-000000000004}"
+        },
+        {
+          "name": "updateRevisionNumber",
+          "value": "1"
+        },
+        {
+          "name": "updateTitle",
+          "value": "2026-07 Cumulative Update for Windows 11 (KB5000004)"
+        }
+      ],
+      "message": null
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-43-held",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 202,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 43,
+            "recordId": 202
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:06:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:06:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 43,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 202,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "updateGuid",
+          "value": "{aaaaaaaa-0000-0000-0000-000000000004}"
+        },
+        {
+          "name": "updateRevisionNumber",
+          "value": "1"
+        },
+        {
+          "name": "updateTitle",
+          "value": "2026-07 Cumulative Update for Windows 11 (KB5000004)"
+        },
+        {
+          "name": "cmtraceDeferralReason",
+          "value": "ActiveHoursHold"
+        }
+      ],
+      "message": null
+    }
+  ]
+}

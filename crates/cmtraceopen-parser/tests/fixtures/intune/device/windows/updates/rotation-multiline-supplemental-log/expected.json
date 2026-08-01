@@ -1,0 +1,120 @@
+{
+  "scenario": "rotation-multiline-supplemental-log",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "reporting-events-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "reporting-events-archive",
+      "status": "available"
+    },
+    {
+      "artifactId": "cbs-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "windows-update-log",
+      "status": "capped"
+    }
+  ],
+  "policyChain": {
+    "state": "notObserved",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": null,
+      "scanned": null,
+      "matchesExpectation": null
+    }
+  },
+  "updateChain": {
+    "state": "installFailed",
+    "rebootPending": false,
+    "unkeyedObservationCount": 0,
+    "transactions": [
+      {
+        "key": "KB5000010.1",
+        "state": "installFailed",
+        "confidence": "high",
+        "orderContradiction": false,
+        "serviceState": null,
+        "corroborated": true
+      }
+    ]
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/not-observed",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [],
+      "coverageGapIds": [
+        "windows-update-log"
+      ]
+    },
+    {
+      "findingId": "intune/windows/updates/update/install-failed/KB5000010.1",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "cbs-log#2",
+          "sourceArtifactId": "cbs-log"
+        },
+        {
+          "evidenceId": "reporting-events-archive#2",
+          "sourceArtifactId": "reporting-events-archive"
+        },
+        {
+          "evidenceId": "reporting-events-current#2",
+          "sourceArtifactId": "reporting-events-current"
+        },
+        {
+          "evidenceId": "windows-update-log#2",
+          "sourceArtifactId": "windows-update-log"
+        },
+        {
+          "evidenceId": "wu-20",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-43",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/coverage-gap/windows-update-log",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "windows-update-log"
+      ]
+    }
+  ],
+  "assertions": [
+    "a corroborating line is cited by file and line, not by file alone",
+    "only the KB is read out of supplemental free text; a bare GUID is not an update identity",
+    "a capped supplemental artifact still reports capped coverage"
+  ]
+}

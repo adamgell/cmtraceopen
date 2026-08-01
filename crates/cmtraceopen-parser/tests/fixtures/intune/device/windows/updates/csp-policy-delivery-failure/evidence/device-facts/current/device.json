@@ -1,0 +1,33 @@
+{"_comment": "SYNTHETIC FIXTURE: device facts",
+  "device": {
+    "context": {
+      "evidenceRef": {
+        "evidenceId": "device-facts",
+        "sourceArtifactId": "device-facts"
+      },
+      "provenance": {
+        "sourceKind": "suppliedFact",
+        "sourceArtifactId": "device-facts",
+        "filePath": null,
+        "lineNumber": null,
+        "recordNumber": null,
+        "registry": null,
+        "event": null
+      },
+      "sourceTimestamp": {
+        "rawText": "2026-07-31T03:00:00Z",
+        "originalOffset": null,
+        "normalizedUtc": "2026-07-31T03:00:00Z",
+        "kind": "utc"
+      },
+      "observedAtUtc": "2026-07-31T03:00:00Z",
+      "sensitivity": "public",
+      "parseState": "parsed",
+      "accessState": "available"
+    },
+    "windowsBuild": "26100.1742",
+    "edition": "Enterprise",
+    "expectedUpdateSource": "windowsUpdateForBusiness",
+    "updateWorkloadOwner": "intune"
+  }
+}

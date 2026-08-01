@@ -1,0 +1,101 @@
+{
+  "scenario": "event-only-partial-bundle",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "mdm-setting-reports",
+      "status": "permissionDenied"
+    },
+    {
+      "artifactId": "policy-registry",
+      "status": "missing"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    }
+  ],
+  "policyChain": {
+    "state": "notObserved",
+    "workloadOwner": "unknown",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": null,
+      "configured": null,
+      "scanned": "windowsUpdate",
+      "matchesExpectation": null
+    }
+  },
+  "updateChain": {
+    "state": "installed",
+    "rebootPending": false,
+    "unkeyedObservationCount": 1,
+    "transactions": [
+      {
+        "key": "KB5000007.1",
+        "state": "installed",
+        "confidence": "high",
+        "orderContradiction": false,
+        "serviceState": null,
+        "corroborated": false
+      }
+    ]
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/not-observed",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [],
+      "coverageGapIds": [
+        "mdm-setting-reports",
+        "policy-registry"
+      ]
+    },
+    {
+      "findingId": "intune/windows/updates/update/installed/KB5000007.1",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "wu-19",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-43",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/coverage-gap/mdm-setting-reports",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "mdm-setting-reports"
+      ]
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/coverage-gap/policy-registry",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "policy-registry"
+      ]
+    }
+  ],
+  "assertions": [
+    "a successful install never implies that Intune policy was delivered",
+    "permissionDenied and missing are distinct coverage states"
+  ]
+}

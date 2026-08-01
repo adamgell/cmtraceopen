@@ -1,0 +1,68 @@
+{
+  "scenario": "effective-wsus-source-when-wufb-expected",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "policy-registry",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    }
+  ],
+  "policyChain": {
+    "state": "insufficientEvidence",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": "wsus",
+      "scanned": "wsus",
+      "matchesExpectation": false
+    }
+  },
+  "updateChain": {
+    "state": "insufficientEvidence",
+    "rebootPending": false,
+    "unkeyedObservationCount": 1,
+    "transactions": []
+  },
+  "linkage": {
+    "state": "sharedUpdateSource"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/effective-source-mismatch",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "reg-usewuserver",
+          "sourceArtifactId": "policy-registry"
+        },
+        {
+          "evidenceId": "reg-wuserver",
+          "sourceArtifactId": "policy-registry"
+        },
+        {
+          "evidenceId": "wu-26",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "the update service id is the one identifier that may bridge the two chains",
+    "registry evidence that only points at a source is not evidence that policy applied"
+  ]
+}
