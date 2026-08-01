@@ -184,7 +184,22 @@ enum PhaseResolution {
     Succeeded,
     Failed,
     Deferred,
-    Contradictory,
+    Contradictory(RequestCause),
+}
+
+/// Why the reducer needs another artifact.
+///
+/// Request wording is keyed on this rather than on the phase, so a reason can
+/// never assert a state the evidence does not have. A missing phase and a
+/// deferred phase can both land on the scheduler, and only one of them is a
+/// retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestCause {
+    MissingPhase,
+    Deferred,
+    ConflictingOutcomes,
+    UnusableTime,
+    LocationContext,
 }
 
 struct ReductionContext<'a> {
@@ -376,7 +391,7 @@ fn reduce_policy_transaction(
             current_phase = last_successful_phase.unwrap_or(SccmPolicyPhase::Request);
             let logical_id = required_group_for_phase(phase);
             coverage_gap_artifact_ids.push(logical_id.to_owned());
-            next_artifacts.push(request_for_group(logical_id, phase));
+            next_artifacts.push(request_for_cause(logical_id, RequestCause::MissingPhase));
             break;
         }
 
@@ -405,9 +420,9 @@ fn reduce_policy_transaction(
                 {
                     confidence = SccmWorkflowConfidence::Medium;
                     coverage_gap_artifact_ids.push(CLIENT_LOCATION_GROUP.to_owned());
-                    next_artifacts.push(request_for_group(
+                    next_artifacts.push(request_for_cause(
                         CLIENT_LOCATION_GROUP,
-                        SccmPolicyPhase::Request,
+                        RequestCause::LocationContext,
                     ));
                 }
                 break;
@@ -416,14 +431,17 @@ fn reduce_policy_transaction(
                 state = SccmWorkflowState::Deferred;
                 classification = SccmWorkflowClassification::BlockedOrDeferred;
                 confidence = SccmWorkflowConfidence::High;
-                next_artifacts.push(request_for_group(POLICY_AGENT_GROUP, phase));
+                next_artifacts.push(request_for_cause(
+                    POLICY_AGENT_GROUP,
+                    RequestCause::Deferred,
+                ));
                 break;
             }
-            PhaseResolution::Contradictory => {
+            PhaseResolution::Contradictory(cause) => {
                 state = SccmWorkflowState::Contradictory;
                 classification = SccmWorkflowClassification::ContradictoryEvidence;
                 confidence = SccmWorkflowConfidence::Low;
-                next_artifacts.push(request_for_group(required_group_for_phase(phase), phase));
+                next_artifacts.push(request_for_cause(required_group_for_phase(phase), cause));
                 break;
             }
         }
@@ -437,7 +455,7 @@ fn reduce_policy_transaction(
         last_successful_phase = None;
         terminal_failure_references.clear();
         for logical_id in inverted_groups {
-            next_artifacts.push(request_for_group(logical_id, current_phase));
+            next_artifacts.push(request_for_cause(logical_id, RequestCause::UnusableTime));
         }
     } else if state != SccmWorkflowState::Contradictory {
         // Two sources can only be placed in sequence by comparable time. A
@@ -451,7 +469,7 @@ fn reduce_policy_transaction(
             confidence = SccmWorkflowConfidence::Low;
             last_successful_phase = None;
             coverage_gap_artifact_ids.push(logical_id.to_owned());
-            next_artifacts.push(chronology_request_for_group(logical_id));
+            next_artifacts.push(request_for_cause(logical_id, RequestCause::UnusableTime));
         }
     }
 
@@ -515,7 +533,7 @@ fn resolve_phase(facts: &[&PolicyFact]) -> PhaseResolution {
         .collect::<BTreeSet<_>>()
         .into_iter();
     let Some(only) = outcomes.next() else {
-        return PhaseResolution::Contradictory;
+        return PhaseResolution::Contradictory(RequestCause::ConflictingOutcomes);
     };
     if outcomes.next().is_none() {
         return resolution_for_outcome(only);
@@ -524,7 +542,16 @@ fn resolve_phase(facts: &[&PolicyFact]) -> PhaseResolution {
     // Every mixed phase, including a deferred one, is decided by the latest
     // usable state. That is what lets a later same-artifact success recover an
     // earlier Deferred instead of freezing the phase as contradictory.
-    latest_comparable_outcome(facts).unwrap_or(PhaseResolution::Contradictory)
+    latest_comparable_outcome(facts).unwrap_or_else(|| {
+        // An unresolvable phase is either a genuine disagreement or a phase
+        // whose records cannot be ordered at all. The remedies differ, so the
+        // cause is carried into the request rather than flattened.
+        PhaseResolution::Contradictory(if facts.iter().all(|fact| is_time_comparable(fact)) {
+            RequestCause::ConflictingOutcomes
+        } else {
+            RequestCause::UnusableTime
+        })
+    })
 }
 
 /// The client artifacts that may authorize admission, keyed by artifact id.
@@ -1141,37 +1168,37 @@ fn workflow_request(logical_id: &str, reason: &str) -> SccmWorkflowArtifactReque
     }
 }
 
-fn request_for_group(logical_id: &str, phase: SccmPolicyPhase) -> SccmWorkflowArtifactRequest {
-    let reason = match logical_id {
-        CLIENT_LOCATION_GROUP => {
+/// Builds the artifact request for a group from the state that caused it.
+///
+/// Every reason is selected by cause first, so no wording can assert a state
+/// the evidence does not have. The group only refines which sources to name.
+fn request_for_cause(logical_id: &str, cause: RequestCause) -> SccmWorkflowArtifactRequest {
+    let reason = match (cause, logical_id) {
+        (RequestCause::LocationContext, _) => {
             "Capture bounded client-side location and transport context; do not infer a management-point cause."
         }
-        POLICY_AGENT_GROUP if phase == SccmPolicyPhase::Schedule => {
+        (RequestCause::Deferred, _) => {
             "Recapture bounded scheduler evidence for the deferred policy retry."
         }
-        POLICY_AGENT_GROUP => {
-            "Capture bounded policy-agent evidence for the missing client policy phase."
-        }
-        POLICY_STATE_GROUP => {
-            "Capture bounded CIAgent and StateMessage evidence for Evaluate and Report."
-        }
-        _ => "Capture the bounded named SCCM client artifact.",
-    };
-    workflow_request(logical_id, reason)
-}
-
-/// Asks for a recapture of a source whose records exist but cannot be ordered.
-///
-/// The phase evidence is present here, so the reason must name the unusable
-/// time provenance rather than a missing phase.
-fn chronology_request_for_group(logical_id: &str) -> SccmWorkflowArtifactRequest {
-    let reason = match logical_id {
-        POLICY_STATE_GROUP => {
+        (RequestCause::UnusableTime, POLICY_STATE_GROUP) => {
             "Recapture bounded policy-state evidence with a valid timestamp offset; do not order by display time."
         }
-        _ => {
+        (RequestCause::UnusableTime, _) => {
             "Recapture bounded policy-agent evidence with a valid timestamp offset; do not order by display time."
         }
+        (RequestCause::ConflictingOutcomes, POLICY_STATE_GROUP) => {
+            "Recapture bounded policy-state evidence to resolve the conflicting client policy outcome."
+        }
+        (RequestCause::ConflictingOutcomes, _) => {
+            "Recapture bounded policy-agent evidence to resolve the conflicting client policy outcome."
+        }
+        (RequestCause::MissingPhase, POLICY_STATE_GROUP) => {
+            "Capture bounded CIAgent and StateMessage evidence for Evaluate and Report."
+        }
+        (RequestCause::MissingPhase, POLICY_AGENT_GROUP) => {
+            "Capture bounded policy-agent evidence for the missing client policy phase."
+        }
+        (RequestCause::MissingPhase, _) => "Capture the bounded named SCCM client artifact.",
     };
     workflow_request(logical_id, reason)
 }
