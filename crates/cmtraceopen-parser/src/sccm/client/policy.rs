@@ -435,6 +435,23 @@ fn reduce_policy_transaction(
         for logical_id in inverted_groups {
             next_artifacts.push(request_for_group(logical_id, current_phase));
         }
+    } else if state != SccmWorkflowState::Contradictory {
+        // Two sources can only be placed in sequence by comparable time. A
+        // contradiction already carries the most conservative answer, so only a
+        // transaction still claiming an order is capped here.
+        let unordered_groups = unprovable_chronology_groups(facts, current_phase);
+        if !unordered_groups.is_empty() {
+            if state == SccmWorkflowState::Succeeded {
+                state = SccmWorkflowState::Incomplete;
+                classification = SccmWorkflowClassification::InsufficientEvidence;
+            }
+            confidence = SccmWorkflowConfidence::Low;
+            last_successful_phase = None;
+            for logical_id in unordered_groups {
+                coverage_gap_artifact_ids.push(logical_id.to_owned());
+                next_artifacts.push(request_for_group(logical_id, current_phase));
+            }
+        }
     }
 
     coverage_gap_artifact_ids.sort();
@@ -836,6 +853,44 @@ fn cross_phase_time_inversion_groups(
 ///
 /// Returns `None` for any label outside [`POLICY_PROFILE_LABELS`], so the
 /// profile, not the call site, decides what may be keyed.
+/// Groups whose cross-artifact phase order cannot be established.
+///
+/// Ordering two artifacts requires comparable time on both sides. Skipping the
+/// pair would silently drop the only chronology guard the reducer has, so an
+/// unusable pair is reported and the ordered claim is capped instead. Phases
+/// inside one artifact keep their source-local order and are never listed here.
+fn unprovable_chronology_groups(
+    facts: &[PolicyFact],
+    current_phase: SccmPolicyPhase,
+) -> BTreeSet<&'static str> {
+    let mut groups = BTreeSet::new();
+    let observed = facts
+        .iter()
+        .filter(|fact| fact.phase <= current_phase)
+        .collect::<Vec<_>>();
+
+    for earlier in &observed {
+        for later in &observed {
+            if earlier.phase >= later.phase
+                || earlier.reference.artifact_id == later.reference.artifact_id
+            {
+                continue;
+            }
+            if is_time_comparable(earlier) && is_time_comparable(later) {
+                continue;
+            }
+            groups.insert(required_group_for_phase(earlier.phase));
+            groups.insert(required_group_for_phase(later.phase));
+        }
+    }
+
+    groups
+}
+
+fn is_time_comparable(fact: &PolicyFact) -> bool {
+    fact.time_comparable && fact.utc_millis.is_some()
+}
+
 fn extract_label_token<'a>(message: &'a str, label: &str) -> Option<&'a str> {
     if !POLICY_PROFILE_LABELS.contains(&label) {
         return None;
