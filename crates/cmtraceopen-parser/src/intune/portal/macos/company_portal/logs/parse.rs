@@ -250,8 +250,11 @@ fn parse_with_notes(
         PortalVersionSupport::Unknown => notes.push(PortalCoverageNote {
             kind: PortalCoverageKind::UnknownAppVersion,
             line_number: app_version.source_line,
+            // Names the confidence this parse was actually given. `Low` means
+            // the record structure is mostly unusable, which is a different
+            // finding and sends the reader after the wrong problem.
             detail: format!(
-                "app version {} is outside the fixture-validated families {:?}; records parsed but reported as low confidence",
+                "app version {} is outside the fixture-validated families {:?}; records parsed and detection is probable rather than confirmed",
                 app_version.raw_text.clone().unwrap_or_default(),
                 VALIDATED_APP_VERSION_FAMILIES
             ),
