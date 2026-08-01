@@ -1,0 +1,57 @@
+{
+  "scenario": "unrelated-process-negative",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "unified-log-no-company-portal-records",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unified-log"
+      ]
+    }
+  ],
+  "analysis": {
+    "observationCount": 4,
+    "relevantCount": 0,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 4,
+        "recordsRelevant": 0,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "activities": [],
+    "sequenceAnomalies": [],
+    "observations": {
+      "cp-unified-log:0": {
+        "relevance": "unrelated",
+        "activityKind": "unclassified"
+      },
+      "cp-unified-log:1": {
+        "relevance": "unrelated"
+      },
+      "cp-unified-log:2": {
+        "relevance": "unrelated"
+      },
+      "cp-unified-log:3": {
+        "relevance": "unrelated"
+      }
+    }
+  },
+  "assertions": [
+    "a process name alone is not evidence, and neither is the word CompanyPortal in a message",
+    "a bundle path only corroborates when the process agrees with it",
+    "an unverified lookalike subsystem is rejected rather than accepted by prefix, and its process name does not rescue it without a bundle path",
+    "unrelated records are retained so that filtered-to-nothing stays distinguishable from never-filtered"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "all-message-levels",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "One record at each Apple message type, including a type this build does not model. Error and fault are the only levels a rule may act on; the unmodelled type round-trips verbatim and is never promoted to a level it might not be.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "levels.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/levels.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/levels.ndjson",
+      "bytesCopied": 3151,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

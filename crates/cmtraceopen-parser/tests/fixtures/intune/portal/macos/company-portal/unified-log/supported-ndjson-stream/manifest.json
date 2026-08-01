@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "supported-ndjson-stream",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "The same capture as supported-json-document in the NDJSON streaming wire form. Reducing to the same observations, activities, and findings is the contract.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "company-portal-unified-log.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/company-portal-unified-log.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/company-portal-unified-log.ndjson",
+      "bytesCopied": 2077,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "scenario": "capped-skipped-permission-denied-coverage",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log-capped",
+      "status": "capped"
+    },
+    {
+      "artifactId": "cp-unified-log-absent",
+      "status": "missing"
+    },
+    {
+      "artifactId": "cp-unified-log-denied",
+      "status": "permissionDenied"
+    },
+    {
+      "artifactId": "cp-unified-log-skipped",
+      "status": "skipped"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "unified-log-capture-not-collected",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unified-log-absent",
+        "cp-unified-log-denied",
+        "cp-unified-log-skipped"
+      ]
+    },
+    {
+      "findingId": "unified-log-capture-truncated",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unified-log-capped"
+      ]
+    }
+  ],
+  "analysis": {
+    "observationCount": 2,
+    "relevantCount": 2,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log-capped",
+        "recordsRead": 2,
+        "recordsRelevant": 2,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      },
+      {
+        "artifactId": "cp-unified-log-absent",
+        "recordsRead": 0,
+        "recordsRelevant": 0,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      },
+      {
+        "artifactId": "cp-unified-log-denied",
+        "recordsRead": 0,
+        "recordsRelevant": 0,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      },
+      {
+        "artifactId": "cp-unified-log-skipped",
+        "recordsRead": 0,
+        "recordsRelevant": 0,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "sequenceAnomalies": [],
+    "observations": {
+      "cp-unified-log-capped:0": {
+        "accessState": "capped",
+        "relevance": "direct"
+      }
+    }
+  },
+  "assertions": [
+    "an artifact that produced no bytes still produces a coverage entry",
+    "a capture that hit its cap yields evidence whose silences prove nothing",
+    "the not-collected finding cites gaps and no evidence; the truncation finding cites the capped artifact",
+    "an artifact that was never read produces no capture rejection either: nothing was attempted"
+  ]
+}

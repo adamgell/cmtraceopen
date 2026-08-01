@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "deterministic-redacted-export",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "The export projection over records that mention the same identity three times. The same input must produce byte-identical output, the same identity must produce the same token everywhere, and re-projecting an export must change nothing.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "export.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/export.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/export.ndjson",
+      "bytesCopied": 2192,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

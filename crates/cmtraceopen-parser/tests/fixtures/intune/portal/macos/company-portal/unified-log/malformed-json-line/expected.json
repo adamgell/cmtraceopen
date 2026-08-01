@@ -1,0 +1,54 @@
+{
+  "scenario": "malformed-json-line",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "parseFailed"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "unified-log-malformed-records",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unified-log"
+      ]
+    },
+    {
+      "findingId": "unified-log-capture-truncated",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unified-log"
+      ]
+    }
+  ],
+  "analysis": {
+    "observationCount": 2,
+    "relevantCount": 2,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 2,
+        "recordsRelevant": 2,
+        "predicateMismatch": false,
+        "rejectedReasons": [
+          "malformedJson"
+        ],
+        "rejectedLineNumbers": [
+          3
+        ]
+      }
+    ],
+    "sequenceAnomalies": []
+  },
+  "assertions": [
+    "a parseFailed artifact still carries evidence; that is what makes the malformed case expressible",
+    "the surviving records are kept and the lost line is reported as a coverage gap",
+    "the collector's own partial-completeness flag independently marks the capture truncated"
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "scenario": "missing-timezone-boot-relative",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "unified-log-unanchored-timestamps",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "cp-unified-log:0",
+          "sourceArtifactId": "cp-unified-log"
+        },
+        {
+          "evidenceId": "cp-unified-log:1",
+          "sourceArtifactId": "cp-unified-log"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "analysis": {
+    "observationCount": 4,
+    "relevantCount": 4,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 4,
+        "recordsRelevant": 4,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "sequenceAnomalies": [],
+    "observations": {
+      "cp-unified-log:0": {
+        "bootRelativeOnly": true,
+        "normalizedUtc": null,
+        "originalOffset": null,
+        "timestampKind": "unspecified",
+        "rawTimestamp": "2026-07-14 09:15:01.100000"
+      },
+      "cp-unified-log:1": {
+        "bootRelativeOnly": true,
+        "hasSourceTimestamp": false
+      },
+      "cp-unified-log:2": {
+        "bootRelativeOnly": false,
+        "normalizedUtc": "2026-07-14T16:15:03.100000Z",
+        "originalOffset": "-07:00"
+      },
+      "cp-unified-log:3": {
+        "bootRelativeOnly": false,
+        "normalizedUtc": "2026-07-14T16:15:04.100000Z"
+      }
+    }
+  },
+  "assertions": [
+    "an offset-free timestamp keeps its raw text and gets no UTC value: the only offset available belongs to the parsing machine",
+    "a boot-relative record has no source timestamp at all, and is never given one",
+    "an offset the capture supplied is source-accurate, so that record is anchored"
+  ]
+}

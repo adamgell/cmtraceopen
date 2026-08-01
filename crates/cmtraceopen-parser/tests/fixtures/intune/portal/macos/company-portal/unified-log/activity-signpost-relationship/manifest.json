@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "activity-signpost-relationship",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "A parent activity, a signpost interval inside it whose end reports a failure, and a child activity naming its parent. Grouping is by identifier alone, and the signpost begin/end pair keeps its identity across records.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "activities.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/activities.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/activities.ndjson",
+      "bytesCopied": 2694,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

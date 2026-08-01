@@ -1,0 +1,59 @@
+{
+  "scenario": "same-time-unrelated-activity",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [],
+  "analysis": {
+    "observationCount": 2,
+    "relevantCount": 2,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 2,
+        "recordsRelevant": 2,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "activities": [
+      {
+        "activityIdentifier": 8402315,
+        "parentActivityIdentifier": null,
+        "kind": "authentication",
+        "observationIds": [
+          "cp-unified-log:0"
+        ],
+        "signpostIds": [],
+        "highestLevel": "default"
+      },
+      {
+        "activityIdentifier": 8402999,
+        "parentActivityIdentifier": null,
+        "kind": "appAction",
+        "observationIds": [
+          "cp-unified-log:1"
+        ],
+        "signpostIds": [],
+        "highestLevel": "default"
+      }
+    ],
+    "sequenceAnomalies": []
+  },
+  "sameNormalizedUtc": [
+    "cp-unified-log:0",
+    "cp-unified-log:1"
+  ],
+  "disjointCorrelationKeys": [
+    "cp-unified-log:0",
+    "cp-unified-log:1"
+  ],
+  "assertions": [
+    "both records normalize to the same instant, which is what makes the negative meaningful",
+    "they land in separate activities and share no correlation key"
+  ]
+}

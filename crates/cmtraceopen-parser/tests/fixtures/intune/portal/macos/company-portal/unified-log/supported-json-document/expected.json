@@ -1,0 +1,66 @@
+{
+  "scenario": "supported-json-document",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [],
+  "analysis": {
+    "observationCount": 3,
+    "relevantCount": 3,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 3,
+        "recordsRelevant": 3,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "activities": [
+      {
+        "activityIdentifier": 8402315,
+        "parentActivityIdentifier": null,
+        "kind": "processStartup",
+        "observationIds": [
+          "cp-unified-log:0",
+          "cp-unified-log:1"
+        ],
+        "signpostIds": [],
+        "highestLevel": "default"
+      },
+      {
+        "activityIdentifier": 8402316,
+        "parentActivityIdentifier": null,
+        "kind": "syncCompliance",
+        "observationIds": [
+          "cp-unified-log:2"
+        ],
+        "signpostIds": [],
+        "highestLevel": "default"
+      }
+    ],
+    "sequenceAnomalies": [],
+    "observations": {
+      "cp-unified-log:0": {
+        "relevance": "direct",
+        "level": "default",
+        "activityKind": "processStartup",
+        "normalizedUtc": "2026-07-14T16:15:01.100000Z",
+        "originalOffset": "-07:00",
+        "timestampKind": "offset",
+        "bootRelativeOnly": false,
+        "lineNumber": null,
+        "recordNumber": 1
+      }
+    }
+  },
+  "assertions": [
+    "both wire forms reduce identically; this is the JSON-document half of that pair",
+    "a clean capture emits no findings, so a finding in any other scenario is caused by that scenario",
+    "a JSON document has no line numbers, so provenance carries the record number only"
+  ]
+}

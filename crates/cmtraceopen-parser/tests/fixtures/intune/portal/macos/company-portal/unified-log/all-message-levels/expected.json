@@ -1,0 +1,75 @@
+{
+  "scenario": "all-message-levels",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "unified-log-failures-observed",
+      "severity": "error",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "evidenceId": "cp-unified-log:3",
+          "sourceArtifactId": "cp-unified-log"
+        },
+        {
+          "evidenceId": "cp-unified-log:4",
+          "sourceArtifactId": "cp-unified-log"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "analysis": {
+    "observationCount": 6,
+    "relevantCount": 6,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 6,
+        "recordsRelevant": 6,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "activities": [],
+    "sequenceAnomalies": [],
+    "observations": {
+      "cp-unified-log:0": {
+        "level": "debug"
+      },
+      "cp-unified-log:1": {
+        "level": "info"
+      },
+      "cp-unified-log:2": {
+        "level": "default"
+      },
+      "cp-unified-log:3": {
+        "level": "error",
+        "errorRaw": "-1009",
+        "errorDecimal": -1009,
+        "errorHex": "0xFFFFFC0F"
+      },
+      "cp-unified-log:4": {
+        "level": "fault",
+        "errorRaw": "0x80070005",
+        "errorHex": "0x80070005"
+      },
+      "cp-unified-log:5": {
+        "level": "unknown",
+        "messageType": "notice"
+      }
+    }
+  },
+  "assertions": [
+    "an unrecognized Apple message type maps to the unknown level, never to a real one",
+    "a fault present anywhere raises the finding to error severity",
+    "unified-log failures cap at medium confidence: they corroborate a direct log, they do not replace it",
+    "a labelled status token is retained raw and in every derived form"
+  ]
+}

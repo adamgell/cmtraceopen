@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "duplicate-sequence-ordering",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "A collector that emitted a duplicate sequence number and one record out of order. Every record is kept in the order it was written; the declared sequence is reported as unreliable rather than used to re-sort.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "sequences.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/sequences.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/sequences.ndjson",
+      "bytesCopied": 2699,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

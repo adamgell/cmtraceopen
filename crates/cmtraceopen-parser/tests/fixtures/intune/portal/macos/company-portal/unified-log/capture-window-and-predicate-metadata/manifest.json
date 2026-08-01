@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "capture-window-and-predicate-metadata",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "Two captures of the same device: one produced by the selection rule this build implements, one by an older rule. Predicate identity and version are part of provenance, so the mismatch is reported rather than silently accepted.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log-current",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "current-predicate.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/current-predicate.ndjson",
+      "relativePath": "evidence/cp-unified-log-current/current/current-predicate.ndjson",
+      "bytesCopied": 1656,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "cp-unified-log-legacy",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "legacy-predicate.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/legacy-predicate.ndjson",
+      "relativePath": "evidence/cp-unified-log-legacy/current/legacy-predicate.ndjson",
+      "bytesCopied": 1576,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "missing-timezone-boot-relative",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "Records with no offset, with only a boot-relative mach value, with an offset supplied by the capture, and with their own offset. A UTC value is derived only where the evidence actually supports one.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "timestamps.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/timestamps.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/timestamps.ndjson",
+      "bytesCopied": 2465,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

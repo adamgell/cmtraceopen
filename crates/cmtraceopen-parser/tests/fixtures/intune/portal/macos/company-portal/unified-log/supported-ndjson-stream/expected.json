@@ -1,0 +1,61 @@
+{
+  "scenario": "supported-ndjson-stream",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [],
+  "analysis": {
+    "observationCount": 3,
+    "relevantCount": 3,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 3,
+        "recordsRelevant": 3,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "activities": [
+      {
+        "activityIdentifier": 8402315,
+        "parentActivityIdentifier": null,
+        "kind": "processStartup",
+        "observationIds": [
+          "cp-unified-log:0",
+          "cp-unified-log:1"
+        ],
+        "signpostIds": [],
+        "highestLevel": "default"
+      },
+      {
+        "activityIdentifier": 8402316,
+        "parentActivityIdentifier": null,
+        "kind": "syncCompliance",
+        "observationIds": [
+          "cp-unified-log:2"
+        ],
+        "signpostIds": [],
+        "highestLevel": "default"
+      }
+    ],
+    "sequenceAnomalies": [],
+    "observations": {
+      "cp-unified-log:1": {
+        "relevance": "direct",
+        "level": "info",
+        "activityKind": "authentication",
+        "lineNumber": 3,
+        "recordNumber": 2
+      }
+    }
+  },
+  "assertions": [
+    "an NDJSON stream carries its line numbers into provenance; the JSON document form has none",
+    "the wire form changes provenance detail only, never the reduction"
+  ]
+}

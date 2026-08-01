@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "malformed-json-line",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "A stream with one truncated line between two good records. The good records survive and the loss is reported, because discarding a whole capture over one bad line throws away evidence the operator already has.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "originalBasename": "malformed.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/malformed.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/malformed.ndjson",
+      "bytesCopied": 1592,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

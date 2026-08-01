@@ -1,0 +1,40 @@
+{
+  "scenario": "deterministic-redacted-export",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [],
+  "analysis": {
+    "observationCount": 3,
+    "relevantCount": 3,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 3,
+        "recordsRelevant": 3,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "sequenceAnomalies": []
+  },
+  "redactionMustNotContain": [
+    "adele.vance",
+    "upn="
+  ],
+  "redactionMustContain": [
+    "9f2c1c8a-0001-4f2b-9a11-aabbccddeeff",
+    "https://manage.microsoft.example/checkin?"
+  ],
+  "redactionStableIdentityCount": 2,
+  "assertions": [
+    "the same identity yields the same token in both records that spell it out, so the correlation a reader needs survives",
+    "the third mention is percent-encoded inside a URL query and is removed by the query rule instead, which is why the stable-token count is two and not three",
+    "the export is deterministic and idempotent",
+    "explicit correlation identifiers are never masked: they are what a join depends on"
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "scenario": "unknown-schema-version",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unknown-schema",
+      "status": "unsupported"
+    },
+    {
+      "artifactId": "cp-unknown-version",
+      "status": "unsupported"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "unified-log-unsupported-schema",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unknown-schema",
+        "cp-unknown-version"
+      ]
+    }
+  ],
+  "analysis": {
+    "observationCount": 0,
+    "relevantCount": 0,
+    "captures": [
+      {
+        "artifactId": "cp-unknown-schema",
+        "recordsRead": 0,
+        "recordsRelevant": 0,
+        "predicateMismatch": false,
+        "rejectedReasons": [
+          "unknownSchema"
+        ]
+      },
+      {
+        "artifactId": "cp-unknown-version",
+        "recordsRead": 0,
+        "recordsRelevant": 0,
+        "predicateMismatch": false,
+        "rejectedReasons": [
+          "unsupportedVersion"
+        ]
+      }
+    ],
+    "sequenceAnomalies": []
+  },
+  "assertions": [
+    "an unreadable payload produces coverage, not silence",
+    "no record is parsed from a payload whose field semantics are unknown",
+    "an unsupported artifact may legitimately carry bytes: the bytes are what proves the schema was foreign"
+  ]
+}

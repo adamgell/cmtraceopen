@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "privacy-sensitive-formatted-values",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "Records mixing values Apple's privacy filter already masked with values this crate must mask on export: a UPN, a service URL query string, an inline access token, and a device serial.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "privacy.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/privacy.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/privacy.ndjson",
+      "bytesCopied": 2171,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

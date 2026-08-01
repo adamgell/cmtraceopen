@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "same-time-unrelated-activity",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "Two unrelated operations logged at the identical instant. They share a timestamp and nothing else, and must never be merged: a time-only join is exactly the inference this leaf refuses to make.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "same-instant.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/same-instant.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/same-instant.ndjson",
+      "bytesCopied": 1726,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

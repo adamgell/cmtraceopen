@@ -1,0 +1,65 @@
+{
+  "scenario": "capture-window-and-predicate-metadata",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "cp-unified-log-legacy",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "unified-log-predicate-mismatch",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unified-log-legacy"
+      ]
+    }
+  ],
+  "analysis": {
+    "observationCount": 4,
+    "relevantCount": 4,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log-current",
+        "recordsRead": 2,
+        "recordsRelevant": 2,
+        "predicateMismatch": false,
+        "rejectedReasons": [],
+        "declaredPredicateId": "companyPortalMacosV1",
+        "declaredPredicateVersion": 1,
+        "windowStart": "2026-07-14 09:00:00-0700",
+        "windowEnd": "2026-07-14 10:00:00-0700",
+        "windowLast": null,
+        "hostOsVersion": "macOS 15.5 (24F74)",
+        "companyPortalVersion": "5.2506.1",
+        "captureId": "cap-0001"
+      },
+      {
+        "artifactId": "cp-unified-log-legacy",
+        "recordsRead": 2,
+        "recordsRelevant": 2,
+        "predicateMismatch": true,
+        "rejectedReasons": [],
+        "declaredPredicateId": "companyPortalMacosV0",
+        "declaredPredicateVersion": 0,
+        "windowStart": null,
+        "windowEnd": null,
+        "windowLast": "1h",
+        "captureId": "cap-0002"
+      }
+    ],
+    "sequenceAnomalies": []
+  },
+  "assertions": [
+    "the literal predicate string and its identifier/version are both retained so a capture is reproducible",
+    "a relative window (--last 1h) is recorded as such rather than invented into absolute endpoints",
+    "a capture from an older selection rule still yields evidence; only its silences are discounted"
+  ]
+}

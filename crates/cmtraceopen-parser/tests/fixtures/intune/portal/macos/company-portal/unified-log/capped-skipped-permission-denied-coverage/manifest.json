@@ -1,0 +1,73 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "capped-skipped-permission-denied-coverage",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "One truncated capture alongside three that produced no bytes at all. Capped, absent, refused, and skipped are four different facts, and collapsing them into no-data would let a missing signal read as a proven absence.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log-capped",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "capped",
+      "encoding": "utf-8",
+      "originalBasename": "capped.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/capped.ndjson",
+      "relativePath": "evidence/cp-unified-log-capped/current/capped.ndjson",
+      "bytesCopied": 1697,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "cp-unified-log-absent",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "absent.ndjson",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "cp-unified-log-denied",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "accessDenied",
+      "encoding": null,
+      "originalBasename": "denied.ndjson",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "cp-unified-log-skipped",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "skipped",
+      "encoding": null,
+      "originalBasename": "skipped.ndjson",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

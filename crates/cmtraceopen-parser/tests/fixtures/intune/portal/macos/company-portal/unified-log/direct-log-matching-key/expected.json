@@ -1,0 +1,85 @@
+{
+  "scenario": "direct-log-matching-key",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [],
+  "analysis": {
+    "observationCount": 3,
+    "relevantCount": 3,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 3,
+        "recordsRelevant": 3,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "sequenceAnomalies": [],
+    "observations": {
+      "cp-unified-log:0": {
+        "correlationKeys": [
+          {
+            "kind": "activity",
+            "value": "8402315"
+          },
+          {
+            "kind": "clientRequestId",
+            "value": "9f2c1c8a-0001-4f2b-9a11-aabbccddeeff"
+          }
+        ]
+      },
+      "cp-unified-log:1": {
+        "correlationKeys": [
+          {
+            "kind": "activity",
+            "value": "8402315"
+          },
+          {
+            "kind": "correlationId",
+            "value": "7d1e5b40-0002-4aa1-8c33-112233445566"
+          }
+        ]
+      },
+      "cp-unified-log:2": {
+        "correlationKeys": [
+          {
+            "kind": "activity",
+            "value": "8402317"
+          }
+        ]
+      }
+    }
+  },
+  "matchingKeyLookups": [
+    {
+      "kind": "clientRequestId",
+      "value": "9f2c1c8a-0001-4f2b-9a11-aabbccddeeff",
+      "observationIds": [
+        "cp-unified-log:0"
+      ]
+    },
+    {
+      "kind": "activity",
+      "value": "8402315",
+      "observationIds": [
+        "cp-unified-log:0",
+        "cp-unified-log:1"
+      ]
+    },
+    {
+      "kind": "correlationId",
+      "value": "11111111-2222-3333-4444-555555555555",
+      "observationIds": []
+    }
+  ],
+  "assertions": [
+    "a labelled request identifier in a message is a join key; the bare policy GUID in record three is not",
+    "structured named data supplies join keys without any message parsing at all"
+  ]
+}

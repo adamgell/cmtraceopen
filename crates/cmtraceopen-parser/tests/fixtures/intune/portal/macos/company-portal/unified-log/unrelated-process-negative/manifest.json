@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unrelated-process-negative",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "Four records that each look like Company Portal evidence from one angle and are none of them: a matching process under an Apple subsystem, the words CompanyPortal inside another process's message, a Company Portal bundle path under an unrelated process, and a lookalike subsystem.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "negatives.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/negatives.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/negatives.ndjson",
+      "bytesCopied": 2238,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

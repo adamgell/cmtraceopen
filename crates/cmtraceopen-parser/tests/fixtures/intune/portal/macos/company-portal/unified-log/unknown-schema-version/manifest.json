@@ -1,0 +1,41 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unknown-schema-version",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "One capture from an unknown collector and one from a future version of this schema. Neither is parsed on a guess: unknown field semantics would fabricate evidence.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unknown-schema",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "foreign-schema.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/foreign-schema.ndjson",
+      "relativePath": "evidence/cp-unknown-schema/current/foreign-schema.ndjson",
+      "bytesCopied": 1117,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "cp-unknown-version",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "future-version.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/future-version.ndjson",
+      "relativePath": "evidence/cp-unknown-version/current/future-version.ndjson",
+      "bytesCopied": 1148,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

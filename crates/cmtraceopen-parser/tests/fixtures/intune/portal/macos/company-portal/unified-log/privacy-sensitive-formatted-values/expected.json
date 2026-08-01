@@ -1,0 +1,72 @@
+{
+  "scenario": "privacy-sensitive-formatted-values",
+  "workload": "portal/macos/company-portal/unified-log",
+  "coverage": [
+    {
+      "artifactId": "cp-unified-log",
+      "status": "available"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "unified-log-privacy-masked-values",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "cp-unified-log:0",
+          "sourceArtifactId": "cp-unified-log"
+        },
+        {
+          "evidenceId": "cp-unified-log:2",
+          "sourceArtifactId": "cp-unified-log"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "analysis": {
+    "observationCount": 3,
+    "relevantCount": 3,
+    "captures": [
+      {
+        "artifactId": "cp-unified-log",
+        "recordsRead": 3,
+        "recordsRelevant": 3,
+        "predicateMismatch": false,
+        "rejectedReasons": []
+      }
+    ],
+    "sequenceAnomalies": [],
+    "observations": {
+      "cp-unified-log:0": {
+        "appleRedactedValues": 2,
+        "sensitivity": "sensitive"
+      },
+      "cp-unified-log:1": {
+        "appleRedactedValues": 0,
+        "activityKind": "networkRequest"
+      },
+      "cp-unified-log:2": {
+        "appleRedactedValues": 1,
+        "activityKind": "deviceAction"
+      }
+    }
+  },
+  "redactionMustNotContain": [
+    "adele.vance",
+    "C02SYNTH0001",
+    "ZXhhbXBsZS10b2tlbg",
+    "tid=aaaabbbb"
+  ],
+  "redactionMustContain": [
+    "<private>",
+    "https://manage.microsoft.example/StatelessDeviceCheckinService?",
+    "serialNumber="
+  ],
+  "assertions": [
+    "values Apple masked stay masked and are counted, not re-masked",
+    "the export masks the UPN, the query string, the inline token, and the serial while the endpoint survives",
+    "the POSIX home-directory rule is exercised by the module's own unit tests: the corpus forbids that literal path prefix"
+  ]
+}

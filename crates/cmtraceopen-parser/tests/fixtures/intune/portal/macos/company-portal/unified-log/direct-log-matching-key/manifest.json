@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "direct-log-matching-key",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "Records carrying the explicit identifiers a direct Company Portal log record can be joined on: a labelled client-request-id in the message, a correlation id supplied as structured data, and an activity identifier. A bare GUID is deliberately not one.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "keys.ndjson",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/keys.ndjson",
+      "relativePath": "evidence/cp-unified-log/current/keys.ndjson",
+      "bytesCopied": 2206,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "supported-json-document",
+  "workload": "portal/macos/company-portal/unified-log",
+  "description": "A complete capture in the single-document JSON wire form. The baseline every other scenario deviates from: nothing is truncated, malformed, or unanchored, so no finding is emitted at all.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified-log",
+      "family": "companyPortalMacosUnifiedLog",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "company-portal-unified-log.json",
+      "sanitizedSourcePath": "SYNTHETIC://unified-log/company-portal-unified-log.json",
+      "relativePath": "evidence/cp-unified-log/current/company-portal-unified-log.json",
+      "bytesCopied": 2471,
+      "capturedUtc": "2026-07-14T17:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}
