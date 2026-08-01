@@ -1201,9 +1201,11 @@ fn ipv6_redaction_does_not_claim_timestamps_macs_or_prose() {
     assert_eq!(redacted, "called std::process::exit");
 
     // An address embedded in a word is not an address, and must not be
-    // half-matched into a partial redaction that hides the leak.
-    let redacted = redact_text("token x2001:db8::y");
-    assert_eq!(redacted, "token x2001:db8::y");
+    // half-matched into a partial redaction that hides the leak. The lead-in
+    // word avoids `token`, `secret` and friends, which the labelled-secret rule
+    // legitimately claims along with whatever follows them.
+    let redacted = redact_text("opaque x2001:db8::y");
+    assert_eq!(redacted, "opaque x2001:db8::y");
 }
 
 /// Unified-log evidence carries a `NetworkRequest` kind, so bare addresses are

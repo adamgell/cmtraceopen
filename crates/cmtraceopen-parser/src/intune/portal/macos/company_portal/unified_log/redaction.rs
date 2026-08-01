@@ -115,12 +115,35 @@ fn mac_address_pattern() -> &'static Regex {
     compiled(&CELL, r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
 }
 
-/// Fully expanded eight-group IPv6 or any `::`-compressed form.
+/// Fully expanded eight-group IPv6 or any `::`-compressed form, preceded by a
+/// captured delimiter in group 1 that the replacement must write back out.
+///
+/// The address is **not** wrapped in `\b`. `\b` is a word-boundary assertion and
+/// `:` is not a word character, so it fails in both directions here: it cannot
+/// anchor an address that begins or ends with a colon, which every
+/// `::`-compressed form does at one end or both, and it happily anchors a bare
+/// `::` sitting between two word characters, which turned `std::process::exit`
+/// in prose into two host placeholders.
+///
+/// This engine has no look-around, so the left edge is a *consumed* guard group
+/// and the right edge has no assertion at all. That asymmetry is deliberate:
+///
+/// * Consuming only the left delimiter keeps two addresses separated by a single
+///   character both matchable. A guard on both sides would eat the delimiter the
+///   following address needs, and `^` cannot stand in for it because it anchors
+///   to the start of the text, not to where scanning resumed.
+/// * No right-edge assertion is needed because the alternatives are already
+///   self-limiting: they consume only hex and colons, and each requires either
+///   eight groups or a `::` run. A MAC (`00:11:22:33:44:55`) and a wall-clock
+///   timestamp (`08:18:00:104`) have neither, so neither can be claimed.
+///
+/// A bare `::` carrying no group is excluded on purpose: it is the all-zeros
+/// address, it identifies nothing, and matching it damages prose.
 fn ipv6_address_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     compiled(
         &CELL,
-        r"(?i)\b(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)\b",
+        r"(?i)(^|[^0-9A-Za-z:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)",
     )
 }
 
@@ -219,8 +242,10 @@ pub fn redact_text(input: &str) -> String {
     // MAC between the two so it is not mistaken for a compressed IPv6 run.
     let step12 = ipv4_address_pattern().replace_all(&step11, HOST);
     let step13 = mac_address_pattern().replace_all(&step12, HOST);
+    // `${1}` is the delimiter the IPv6 pattern had to consume on the left; it is
+    // evidence framing, not part of the address, so it is written back out.
     ipv6_address_pattern()
-        .replace_all(&step13, HOST)
+        .replace_all(&step13, format!("${{1}}{HOST}"))
         .into_owned()
 }
 
