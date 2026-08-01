@@ -1228,6 +1228,13 @@ fn an_unprofiled_source_version_stays_a_source_local_observation() {
         "low",
         "an unprofiled record stays capped at low confidence"
     );
+    assert!(
+        analysis
+            .extraction_profile
+            .validated_artifact_families
+            .is_empty(),
+        "a captured source the profile could not read is not a validated family"
+    );
 }
 
 #[test]
@@ -1345,5 +1352,90 @@ fn collect_object_keys(value: &Value, keys: &mut Vec<String>) {
             }
         }
         _ => {}
+    }
+}
+
+/// Scenarios whose declared `extractionProfile` states what the bundle
+/// actually produced rather than the profile's full capability list.
+const OBSERVED_KEY_KIND_SCENARIOS: [&str; 8] = [
+    "bits-transfer-failure",
+    "cache-failure",
+    "detection-false-negative",
+    "dp-content-missing",
+    "enforcement-exit",
+    "incomplete",
+    "rotation-boundary",
+    "success",
+];
+
+/// `rotation-boundary` additionally declares `client-content` as a validated
+/// family even though none of its rotation fragments ever formed a record, so
+/// its family list is not observation derived.
+const OBSERVED_FAMILY_SCENARIOS: [&str; 7] = [
+    "bits-transfer-failure",
+    "cache-failure",
+    "detection-false-negative",
+    "dp-content-missing",
+    "enforcement-exit",
+    "incomplete",
+    "success",
+];
+
+#[test]
+fn the_selected_extraction_profile_reports_what_the_bundle_validated() {
+    for scenario in SCENARIOS {
+        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let expected = expected(scenario);
+        let declared = &expected["extractionProfile"];
+        let profile = &analysis.extraction_profile;
+
+        assert_eq!(
+            Some(profile.profile_id.as_str()),
+            declared["profileId"].as_str(),
+            "{scenario}: profile id"
+        );
+        assert_eq!(
+            Some(profile.source_version_prefix.as_str()),
+            declared["sourceVersionPrefix"].as_str(),
+            "{scenario}: source version prefix"
+        );
+        assert_eq!(
+            Some(profile.content_version_required),
+            declared["contentVersionRequired"].as_bool(),
+            "{scenario}: content version requirement"
+        );
+
+        if OBSERVED_KEY_KIND_SCENARIOS.contains(&scenario) {
+            let declared_kinds = declared["keyKinds"]
+                .as_array()
+                .expect("declared key kinds")
+                .iter()
+                .map(|kind| kind.as_str().expect("declared key kind").to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(profile.key_kinds, declared_kinds, "{scenario}: key kinds");
+        }
+
+        if OBSERVED_FAMILY_SCENARIOS.contains(&scenario) {
+            let declared_families = declared["validatedArtifactFamilies"]
+                .as_array()
+                .expect("declared validated families")
+                .iter()
+                .map(|family| family.as_str().expect("declared family").to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                profile.validated_artifact_families, declared_families,
+                "{scenario}: validated artifact families"
+            );
+        }
+
+        for family in &profile.validated_artifact_families {
+            assert!(
+                analysis
+                    .coverage
+                    .iter()
+                    .any(|row| &row.logical_artifact_id == family),
+                "{scenario}: validated family {family} has no coverage row"
+            );
+        }
     }
 }
