@@ -1,0 +1,69 @@
+{
+  "scenario": "csp-policy-delivery-failure",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "missing"
+    }
+  ],
+  "policyChain": {
+    "state": "deliveryFailed",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": null,
+      "scanned": null,
+      "matchesExpectation": null
+    }
+  },
+  "updateChain": {
+    "state": "notObserved",
+    "rebootPending": null,
+    "unkeyedObservationCount": 0,
+    "transactions": []
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/delivery-failed",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "mdm-404",
+          "sourceArtifactId": "mdm-admin-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/coverage-gap/wu-client-events",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "wu-client-events"
+      ]
+    }
+  ],
+  "assertions": [
+    "a policy delivery failure produces no update-execution finding of any kind",
+    "the absent update-client artifact stays an explicit coverage gap"
+  ]
+}

@@ -1,0 +1,70 @@
+{"_comment": "SYNTHETIC FIXTURE: WSUS redirection",
+  "registryFacts": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "reg-usewuserver",
+          "sourceArtifactId": "policy-registry"
+        },
+        "provenance": {
+          "sourceKind": "registry",
+          "sourceArtifactId": "policy-registry",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": null,
+          "registry": {
+            "hive": "HKEY_LOCAL_MACHINE",
+            "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU",
+            "valueName": "UseWUServer"
+          },
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T00:40:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T00:40:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "value": "1",
+      "namedData": []
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "reg-wuserver",
+          "sourceArtifactId": "policy-registry"
+        },
+        "provenance": {
+          "sourceKind": "registry",
+          "sourceArtifactId": "policy-registry",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": null,
+          "registry": {
+            "hive": "HKEY_LOCAL_MACHINE",
+            "key": "SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate",
+            "valueName": "WUServer"
+          },
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T00:40:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T00:40:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "value": "http://wsus.example.invalid:8530",
+      "namedData": []
+    }
+  ]
+}

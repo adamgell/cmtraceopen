@@ -1,0 +1,44 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unknown-windows-event-schema",
+  "workload": "device/windows/updates",
+  "description": "Records this build cannot classify are counted, not dropped. An absent signal here means unknown, not that nothing happened.",
+  "generatedAtUtc": "2026-07-31T03:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "wu-client-events",
+      "family": "windowsUpdateClient",
+      "sourceKind": "eventLog",
+      "payloadKind": "events",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "events.json",
+      "sanitizedSourcePath": "SYNTHETIC://windowsUpdateClient/events.json",
+      "relativePath": "evidence/wu-client-events/current/events.json",
+      "bytesCopied": 3967,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "wu-etl-trace",
+      "family": "windowsUpdateClient",
+      "sourceKind": "eventLog",
+      "payloadKind": null,
+      "captureState": "unsupported",
+      "encoding": null,
+      "originalBasename": null,
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T03:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

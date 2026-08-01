@@ -1,0 +1,82 @@
+{
+  "scenario": "unknown-windows-event-schema",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-etl-trace",
+      "status": "unsupported"
+    }
+  ],
+  "policyChain": {
+    "state": "notObserved",
+    "workloadOwner": "unknown",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": null,
+      "configured": null,
+      "scanned": null,
+      "matchesExpectation": null
+    }
+  },
+  "updateChain": {
+    "state": "notObserved",
+    "rebootPending": null,
+    "unkeyedObservationCount": 0,
+    "transactions": []
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 2,
+    "unknownProviderEvents": 1
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/not-observed",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [],
+      "coverageGapIds": [
+        "wu-etl-trace"
+      ]
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/unknown-schema",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "other-12",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-27",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-9999",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/coverage-gap/wu-etl-trace",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "wu-etl-trace"
+      ]
+    }
+  ],
+  "assertions": [
+    "event id 27 has no documented meaning and is therefore left unmapped",
+    "an unmodeled provider never lands in either chain"
+  ]
+}

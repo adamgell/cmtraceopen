@@ -1,0 +1,109 @@
+{
+  "scenario": "same-time-unrelated-kbs-kept-separate",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    }
+  ],
+  "policyChain": {
+    "state": "applied",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": null,
+      "scanned": null,
+      "matchesExpectation": null
+    }
+  },
+  "updateChain": {
+    "state": "installFailed",
+    "rebootPending": false,
+    "unkeyedObservationCount": 0,
+    "transactions": [
+      {
+        "key": "KB5000008.1",
+        "state": "installed",
+        "confidence": "high",
+        "orderContradiction": false,
+        "serviceState": null,
+        "corroborated": false
+      },
+      {
+        "key": "KB5000009.1",
+        "state": "installFailed",
+        "confidence": "high",
+        "orderContradiction": false,
+        "serviceState": null,
+        "corroborated": false
+      }
+    ]
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/applied",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "mdm-814",
+          "sourceArtifactId": "mdm-admin-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/update/install-failed/KB5000009.1",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "wu-20-kb9",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-43-kb9",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/update/installed/KB5000008.1",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "wu-19-kb8",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-43-kb8",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "two updates sharing a timestamp remain two transactions",
+    "the chain state is the most actionable of the per-update states"
+  ]
+}

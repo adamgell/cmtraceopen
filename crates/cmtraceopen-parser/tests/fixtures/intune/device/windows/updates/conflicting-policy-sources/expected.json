@@ -1,0 +1,72 @@
+{
+  "scenario": "conflicting-policy-sources",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-setting-reports",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "missing"
+    }
+  ],
+  "policyChain": {
+    "state": "conflicted",
+    "workloadOwner": "intune",
+    "conflictCount": 1,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": null,
+      "scanned": null,
+      "matchesExpectation": null
+    }
+  },
+  "updateChain": {
+    "state": "notObserved",
+    "rebootPending": null,
+    "unkeyedObservationCount": 0,
+    "transactions": []
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/conflict/./Device/Vendor/MSFT/Policy/Config/Update/DeferQualityUpdatesPeriodInDays",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "report-conflict-a",
+          "sourceArtifactId": "mdm-setting-reports"
+        },
+        {
+          "evidenceId": "report-conflict-b",
+          "sourceArtifactId": "mdm-setting-reports"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/coverage-gap/wu-client-events",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "wu-client-events"
+      ]
+    }
+  ],
+  "assertions": [
+    "a conflict is reported only when two policy sources are actually named"
+  ]
+}
