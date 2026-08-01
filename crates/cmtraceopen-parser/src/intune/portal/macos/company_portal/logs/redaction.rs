@@ -357,6 +357,42 @@ mod tests {
         assert!(redacted.starts_with("/Users/[redacted:user:001]/"));
     }
 
+    /// Removes `[redacted:...]` spans so a hextet is only ever matched against
+    /// text that actually survived. Placeholder tokens carry digits of their own,
+    /// and `[redacted:ip:001]` contains the `1` of `::1`.
+    fn strip_placeholder_tokens(redacted: &str) -> String {
+        let mut out = String::with_capacity(redacted.len());
+        let mut rest = redacted;
+        while let Some(start) = rest.find("[redacted:") {
+            out.push_str(&rest[..start]);
+            let Some(end) = rest[start..].find(']') else {
+                return out;
+            };
+            rest = &rest[start + end + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Asserts every meaningful hextet of an address is gone.
+    ///
+    /// `!redacted.contains(address)` alone is too weak: a partial redaction
+    /// leaving `fd12:3456:[redacted:ip:001]` satisfies it while still exporting
+    /// a stable network prefix, which is the identifying part.
+    fn assert_no_ipv6_component_survives(address: &str, redacted: &str) {
+        let remaining = strip_placeholder_tokens(redacted);
+        for hextet in address.split(':').filter(|part| !part.is_empty()) {
+            assert!(
+                !remaining.contains(hextet),
+                "hextet `{hextet}` of {address} survived: {redacted}"
+            );
+        }
+        assert!(
+            !redacted.contains(address),
+            "{address} survived redaction: {redacted}"
+        );
+    }
+
     /// `\b` is a word-boundary assertion, and `:` is not a word character, so it
     /// cannot anchor an address that begins or ends with a colon. Every
     /// `::`-compressed form does one or both.
@@ -371,10 +407,7 @@ mod tests {
             "2001:db8::8a2e:370:7334",
         ] {
             let redacted = redact(&format!("peer {address} connected"));
-            assert!(
-                !redacted.contains(address),
-                "{address} survived redaction: {redacted}"
-            );
+            assert_no_ipv6_component_survives(address, &redacted);
             assert!(
                 redacted.starts_with("peer ") && redacted.ends_with(" connected"),
                 "delimiters must survive: {redacted}"
@@ -388,12 +421,12 @@ mod tests {
     #[test]
     fn adjacent_ipv6_addresses_are_both_redacted() {
         let redacted = redact("peers fd12:3456:789a:: fd12:3456:789b:: done");
-        assert!(!redacted.contains("789a"), "first survived: {redacted}");
-        assert!(!redacted.contains("789b"), "second survived: {redacted}");
+        assert_no_ipv6_component_survives("fd12:3456:789a::", &redacted);
+        assert_no_ipv6_component_survives("fd12:3456:789b::", &redacted);
 
         let redacted = redact("::1,::2");
-        assert!(!redacted.contains("::1"), "first survived: {redacted}");
-        assert!(!redacted.contains("::2"), "second survived: {redacted}");
+        assert_no_ipv6_component_survives("::1", &redacted);
+        assert_no_ipv6_component_survives("::2", &redacted);
     }
 
     /// The IPv6 matcher must not claim things that merely contain hex and

@@ -479,6 +479,27 @@ fn unknown_app_version_downgrades_confidence_without_losing_records() {
     assert_eq!(parse.app_version.source_line, Some(1));
     assert!(has_note(&parse, PortalCoverageKind::UnknownAppVersion));
 
+    // The note a support engineer actually reads must name the confidence the
+    // parse was actually given. `Low` means the records mostly did not parse,
+    // which is a different problem and sends the reader looking for the wrong
+    // thing.
+    let note = parse
+        .coverage
+        .notes
+        .iter()
+        .find(|note| note.kind == PortalCoverageKind::UnknownAppVersion)
+        .expect("the unknown-version note exists");
+    assert!(
+        !note.detail.contains("low confidence"),
+        "the note claims a confidence this parse was never given: {}",
+        note.detail
+    );
+    assert!(
+        note.detail.contains("probable"),
+        "the note must name the confidence actually assigned: {}",
+        note.detail
+    );
+
     // Records are still parsed losslessly, and unknown components stay generic.
     assert_eq!(parse.coverage.parsed_record_count, 3);
     assert_full_line_coverage(&parse);
