@@ -327,6 +327,55 @@ fn corpus_inventory() -> CorpusInventory {
     }
 }
 
+/// An evidence reference is exactly the identity triple. Only these three
+/// fields are read when a citation is resolved, so any extra key would let two
+/// references that name one physical record compare as different citations.
+fn evidence_reference_identity(value: &Value) -> Option<(&str, u64, u64)> {
+    let object = value.as_object()?;
+    Some((
+        object.get("artifactId")?.as_str()?,
+        object.get("startLine")?.as_u64()?,
+        object.get("endLine")?.as_u64()?,
+    ))
+}
+
+fn same_evidence_reference(left: &Value, right: &Value) -> bool {
+    match (
+        evidence_reference_identity(left),
+        evidence_reference_identity(right),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn validate_evidence_reference_shapes(scenario: &str, value: &Value) -> Result<(), String> {
+    match value {
+        Value::Object(object) => {
+            if evidence_reference_identity(value).is_some() && object.len() != 3 {
+                let unmodeled = object
+                    .keys()
+                    .filter(|field| {
+                        !matches!(field.as_str(), "artifactId" | "startLine" | "endLine")
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                return Err(format!(
+                    "{scenario}: evidence reference declares unmodeled fields {unmodeled:?}"
+                ));
+            }
+            for child in object.values() {
+                validate_evidence_reference_shapes(scenario, child)?;
+            }
+            Ok(())
+        }
+        Value::Array(array) => array
+            .iter()
+            .try_for_each(|child| validate_evidence_reference_shapes(scenario, child)),
+        _ => Ok(()),
+    }
+}
+
 fn collect_evidence_refs(value: &Value, refs: &mut Vec<(String, u64, u64)>) {
     match value {
         Value::Object(object) => {
@@ -411,19 +460,15 @@ fn smsts_log_paths(contents: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn complete_field_tokens(record_text: &str) -> BTreeSet<&str> {
-    // Only whitespace and the record body edges bound a token: inside a CCM
-    // body a bare bracket is a legal value character, and only the full
-    // ]LOG]!> sequence terminates the body.
-    let body = record_text
-        .strip_prefix("<![LOG[")
-        .and_then(|after_prefix| {
-            after_prefix
-                .find("]LOG]!>")
-                .map(|terminator| &after_prefix[..terminator])
-        })
-        .unwrap_or(record_text);
-    body.split_whitespace().collect()
+/// Only whitespace and the record body edges bound a token: inside a CCM body a
+/// bare bracket is a legal value character, and only the full `]LOG]!>`
+/// sequence terminates the body. Returns `None` when the body cannot be
+/// delimited, so an undelimitable citation fails closed instead of widening
+/// admission to the `<time=... context=...>` trailer.
+fn complete_field_tokens(record_text: &str) -> Option<BTreeSet<&str>> {
+    let after_prefix = record_text.strip_prefix("<![LOG[")?;
+    let terminator = after_prefix.find("]LOG]!>")?;
+    Some(after_prefix[..terminator].split_whitespace().collect())
 }
 
 fn sanitized_basename(path: &str) -> &str {
@@ -834,6 +879,7 @@ fn validate_contract(
     expected: &Value,
 ) -> Result<(), String> {
     let derived_coverage = validate_manifest_and_storage(scenario, scenario_root, manifest)?;
+    validate_evidence_reference_shapes(scenario, expected)?;
     if expected["contractState"] != "proposedPending318And319"
         || expected["workflow"] != "taskSequence"
         || expected["scenario"] != scenario
@@ -1327,7 +1373,9 @@ fn validate_contract(
             }
 
             let record_text = evidence_text(scenario_root, &artifacts_by_id, evidence_ref)?;
-            let record_tokens = complete_field_tokens(&record_text);
+            let record_tokens = complete_field_tokens(&record_text).ok_or_else(|| {
+                format!("{transaction_id}: cited record body is not delimited by the CCM framing")
+            })?;
             if let Some(missing_needle) = key_needles
                 .iter()
                 .find(|needle| !record_tokens.contains(needle.as_str()))
@@ -1503,7 +1551,7 @@ fn validate_contract(
         let ordering_ref = &transaction["orderingEvidence"];
         if !evidence_refs
             .iter()
-            .any(|evidence_ref| evidence_ref == ordering_ref)
+            .any(|evidence_ref| same_evidence_reference(evidence_ref, ordering_ref))
         {
             return Err(format!(
                 "{transaction_id}: ordering evidence is not key-bound transaction evidence"
@@ -1636,10 +1684,9 @@ fn validate_contract(
                     "{transaction_id}: terminal outcome lacks terminal evidence"
                 ));
             }
-            if !evidence_refs
-                .iter()
-                .any(|evidence_ref| evidence_ref == &transaction["terminalEvidence"])
-            {
+            if !evidence_refs.iter().any(|evidence_ref| {
+                same_evidence_reference(evidence_ref, &transaction["terminalEvidence"])
+            }) {
                 return Err(format!(
                     "{transaction_id}: terminal evidence is not key-bound transaction evidence"
                 ));
@@ -1694,16 +1741,25 @@ fn validate_contract(
         if observation["evidence"]["artifactId"] != artifact_id {
             return Err(format!("{observation_id}: citation changed artifact"));
         }
+        // The ordering and terminal disjuncts are redundant today, because both
+        // must already be members of their transaction's evidence, but they are
+        // kept so this rule stays correct if that membership requirement moves.
         let cites_keyed_transaction_evidence = transactions.iter().any(|transaction| {
             transaction["evidence"]
                 .as_array()
                 .is_some_and(|transaction_evidence| {
-                    transaction_evidence
-                        .iter()
-                        .any(|transaction_ref| transaction_ref == &observation["evidence"])
+                    transaction_evidence.iter().any(|transaction_ref| {
+                        same_evidence_reference(transaction_ref, &observation["evidence"])
+                    })
                 })
-                || transaction["orderingEvidence"] == observation["evidence"]
-                || transaction["terminalEvidence"] == observation["evidence"]
+                || same_evidence_reference(
+                    &transaction["orderingEvidence"],
+                    &observation["evidence"],
+                )
+                || same_evidence_reference(
+                    &transaction["terminalEvidence"],
+                    &observation["evidence"],
+                )
         });
         if cites_keyed_transaction_evidence {
             return Err(format!(
@@ -1790,18 +1846,18 @@ fn validate_contract(
                         .as_array()
                         .is_some_and(|transaction_evidence| {
                             evidence.iter().all(|evidence_ref| {
-                                transaction_evidence
-                                    .iter()
-                                    .any(|transaction_ref| transaction_ref == evidence_ref)
+                                transaction_evidence.iter().any(|transaction_ref| {
+                                    same_evidence_reference(transaction_ref, evidence_ref)
+                                })
                             })
                         })
             })
             .collect::<Vec<_>>();
         let cited_refs_are_source_local = !evidence.is_empty()
             && evidence.iter().all(|evidence_ref| {
-                observations
-                    .iter()
-                    .any(|observation| &observation["evidence"] == evidence_ref)
+                observations.iter().any(|observation| {
+                    same_evidence_reference(&observation["evidence"], evidence_ref)
+                })
             });
         let outcome_is_transaction_bound = match classification {
             "success" | "confirmedFailure" => {
@@ -1809,7 +1865,7 @@ fn validate_contract(
                     !transaction["terminalEvidence"].is_null()
                         && evidence
                             .iter()
-                            .any(|evidence_ref| evidence_ref == &transaction["terminalEvidence"])
+                            .any(|evidence_ref| same_evidence_reference(evidence_ref, &transaction["terminalEvidence"]))
                 })
             }
             "blockedOrDeferred" => binding_transactions.len() == 1,
