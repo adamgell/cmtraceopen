@@ -34,7 +34,10 @@ const MAX_SCCM_FINDING_SUMMARY_CHARS: usize = 2048;
 // a worst-case ServerHost key normalizes to 254 with a trailing-dot source
 // against this 256 limit, roughly 99% of the bound and the tightest headroom
 // any bound in this module carries.
-const MAX_SCCM_CORRELATION_KEY_VALUE_CHARS: usize = 256;
+// Shared with the extraction producer in keys.rs so extract_keys cannot emit a
+// key this validator would reject. Crate-visible rather than public: it is an
+// internal agreement between the producer and the validator, not wire surface.
+pub(crate) const MAX_SCCM_CORRELATION_KEY_VALUE_CHARS: usize = 256;
 // Intentionally empty: no extraction profile is verified as stable enough to
 // authorize key-only High confidence. Adding one requires contract review.
 const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] = &[];

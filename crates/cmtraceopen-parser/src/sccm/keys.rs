@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use super::findings::MAX_SCCM_CORRELATION_KEY_VALUE_CHARS;
 use super::models::{
     SccmCorrelationKey, SccmCorrelationKeyKind, SccmEvidence, SccmExtractionGap,
     SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmKeyConfidence,
@@ -179,7 +180,12 @@ pub fn extract_keys(
 
     for candidate in candidates {
         let mut key = normalize_key(candidate.kind.clone(), candidate.raw);
-        if key.confidence != SccmKeyConfidence::Exact {
+        // A candidate that normalizes cleanly but carries an out-of-bound value
+        // is as unusable as one that fails to normalize: the crate's own
+        // validator rejects it, so emitting it as a key would let the producer
+        // hand out keys that no longer round trip. Both weigh the same way, and
+        // both stay visible as a recorded gap.
+        if key.confidence != SccmKeyConfidence::Exact || !is_bounded_key_value(&key) {
             result.gaps.push(gap_for(
                 SccmExtractionGapKind::MalformedCandidate,
                 profile,
@@ -198,6 +204,14 @@ pub fn extract_keys(
     }
 
     result
+}
+
+// The normalized value can outgrow the raw one: normalize_kb_id prepends "KB",
+// so a raw that fits the bound can still normalize past it. Both are on the
+// wire, so both have to clear the bound the validator applies to both.
+fn is_bounded_key_value(key: &SccmCorrelationKey) -> bool {
+    key.raw.chars().count() <= MAX_SCCM_CORRELATION_KEY_VALUE_CHARS
+        && key.normalized.chars().count() <= MAX_SCCM_CORRELATION_KEY_VALUE_CHARS
 }
 
 fn profile_gap_kind(profile: &SccmExtractionProfile) -> Option<SccmExtractionGapKind> {
