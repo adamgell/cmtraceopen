@@ -6,8 +6,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::sccm::{
-    normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily, SccmArtifactRequest,
-    SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
+    classify_artifact_name, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
+    SccmArtifactRequest, SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
 };
 
 use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
@@ -896,22 +896,31 @@ fn request_for_gap(
     {
         return None;
     }
-    let reason = match artifact.state {
-        SccmCoverageState::Absent => "source was absent; role outcome remains unknown",
-        SccmCoverageState::AccessDenied => "source access was denied; role outcome remains unknown",
-        SccmCoverageState::Capped => "source was capped; terminal role evidence is incomplete",
-        SccmCoverageState::ParseFailed => {
-            "source parsing failed; terminal role evidence is unavailable"
-        }
-        _ => return None,
-    };
+    if !matches!(
+        artifact.state,
+        SccmCoverageState::Absent
+            | SccmCoverageState::AccessDenied
+            | SccmCoverageState::Capped
+            | SccmCoverageState::ParseFailed
+    ) {
+        return None;
+    }
+
+    let classified = classify_artifact_name(
+        artifact.original_basename.as_deref()?,
+        artifact.producer_role.clone(),
+    );
+    if !classified.uses_ccm_records
+        || !classified.supported_for_diagnosis
+        || classified.family != artifact.family
+    {
+        return None;
+    }
+
     Some(SccmArtifactRequest {
-        logical_id: artifact.source_id.clone(),
-        role: artifact
-            .workflow_subject_role
-            .clone()
-            .unwrap_or_else(|| artifact.producer_role.clone()),
-        reason: reason.to_owned(),
+        logical_id: classified.logical_name,
+        role: classified.role,
+        reason: format!("Collect the complete {} file.", classified.basename),
     })
 }
 
