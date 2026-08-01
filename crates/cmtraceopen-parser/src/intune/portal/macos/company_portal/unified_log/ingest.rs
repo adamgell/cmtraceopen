@@ -114,17 +114,26 @@ pub fn parse_capture_ndjson(input: &str) -> PortalUnifiedLogCaptureSet {
             }
             Ok(other) => {
                 builder.stats.stream_lines += 1;
+                // The position is named in the detail rather than in
+                // `stream_index`, which identifies a *parsed record* and has no
+                // value here because no record was produced. See the field's
+                // documentation for why the two are not the same number.
+                let position = builder.stats.stream_lines;
                 builder.push_malformed(
                     trimmed,
                     format!(
-                        "stream line is valid JSON but not an object (found {})",
+                        "stream line {position} is valid JSON but not an object (found {})",
                         json_type_name(&other)
                     ),
                 );
             }
             Err(err) => {
                 builder.stats.stream_lines += 1;
-                builder.push_malformed(trimmed, format!("stream line is not valid JSON: {err}"));
+                let position = builder.stats.stream_lines;
+                builder.push_malformed(
+                    trimmed,
+                    format!("stream line {position} is not valid JSON: {err}"),
+                );
             }
         }
     }

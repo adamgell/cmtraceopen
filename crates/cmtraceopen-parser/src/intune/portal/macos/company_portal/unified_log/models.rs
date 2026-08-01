@@ -347,6 +347,15 @@ pub struct PortalCoverageEntry {
     pub status: PortalCoverageStatus,
     pub scope: PortalCoverageScope,
     pub detail: String,
+    /// The **parsed record** this entry is about, not a physical stream
+    /// position.
+    ///
+    /// `None` when no record was produced, which is the case for every
+    /// capture-scope entry and for a malformed stream line. A malformed line has
+    /// no record to point at, so its position in the stream is named in
+    /// [`Self::detail`] instead of being written here: a record's index counts
+    /// records, and conflating the two would make the same field mean different
+    /// things in different entries.
     pub stream_index: Option<u64>,
     /// Verbatim input for malformed or unsupported content, so nothing is lost.
     pub raw_excerpt: Option<PortalClassifiedString>,

@@ -301,10 +301,30 @@ fn placeholder_for_member(key: &str) -> Option<&'static str> {
         | "apikey" => TOKEN,
         "url" | "uri" | "endpoint" | "requesturl" | "reporturl" | "serviceurl" => URL,
         "thumbprint" | "fingerprint" | "certhash" | "certificate" => CERTIFICATE,
-        "path" | "filepath" | "imagepath" | "directory" => PATH,
+        // Every value the record and capture redactors replace *wholesale* needs
+        // an arm here, because "wholesale" is precisely what they do when no text
+        // pattern can recognise the value. A bare host name has no `@`, no
+        // scheme and no dotted quad; only paths under `/Users` match a path
+        // pattern, so `/Applications/Company Portal.app/...` survives one.
+        "host" | "hostname" | "computername" | "machinename" | "devicename" | "nodename" => HOST,
+        "path" | "filepath" | "imagepath" | "directory" | "processimagepath"
+        | "senderimagepath" | "executablepath" | "bundlepath" => PATH,
         _ => return None,
     };
     Some(placeholder)
+}
+
+/// Redacts one named member, by its name when the name is recognised.
+///
+/// This is the single point where a member name decides the outcome. It used to
+/// live only inside the object arm of `redact_json`, so the table applied to
+/// members nested one level down but never to the top level of a record's
+/// `unknownFields`, which is where a collector actually puts them.
+fn redact_member(key: &str, value: &Value) -> Value {
+    match placeholder_for_member(key) {
+        Some(placeholder) => Value::String(placeholder.to_string()),
+        None => redact_json(value),
+    }
 }
 
 fn redact_json(value: &Value) -> Value {
@@ -313,13 +333,7 @@ fn redact_json(value: &Value) -> Value {
         Value::Array(items) => Value::Array(items.iter().map(redact_json).collect()),
         Value::Object(map) => Value::Object(
             map.iter()
-                .map(|(key, item)| {
-                    let redacted = match placeholder_for_member(key) {
-                        Some(placeholder) => Value::String(placeholder.to_string()),
-                        None => redact_json(item),
-                    };
-                    (key.clone(), redacted)
-                })
+                .map(|(key, item)| (key.clone(), redact_member(key, item)))
                 .collect(),
         ),
         other => other.clone(),
@@ -358,7 +372,7 @@ fn redact_record(record: &PortalUnifiedLogRecord) -> PortalUnifiedLogRecord {
     let unknown_fields: BTreeMap<String, Value> = record
         .unknown_fields
         .iter()
-        .map(|(key, value)| (key.clone(), redact_json(value)))
+        .map(|(key, value)| (key.clone(), redact_member(key, value)))
         .collect();
 
     let mut redaction = record.redaction.clone();
