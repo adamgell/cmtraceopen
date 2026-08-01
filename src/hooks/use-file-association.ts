@@ -85,9 +85,10 @@ export function useFileAssociation() {
         }
       })
       .catch((error) => {
-        console.error("[file-association] failed to open initial file paths", {
-          error,
-        });
+        // Covers all three launch intents, not just file association: a restore
+        // ticket that failed to reopen is exactly the case someone is
+        // troubleshooting when they read this line.
+        console.error("[startup] failed to handle launch intent", { error });
       });
   }, [clearFilter]);
 }
@@ -105,14 +106,17 @@ async function restoreElevatedSource(
 ): Promise<void> {
   const { target, workspace } = ticket;
 
-  if (target.kind === "workspace") {
-    useUiStore
-      .getState()
-      .ensureWorkspaceVisible(workspace, "startup.elevation-restore");
-    return;
-  }
+  // Honour the ticket's workspace whether or not a source rides along. An
+  // Access Denied raised inside ESP or Intune carries that workspace with a
+  // file target, so forcing the log view here would reopen the right source on
+  // the wrong screen. `ensureLogViewVisible` is only
+  // `ensureWorkspaceVisible("log", ...)`, so the log case is unchanged.
+  useUiStore
+    .getState()
+    .ensureWorkspaceVisible(workspace, "startup.elevation-restore");
 
-  useUiStore.getState().ensureLogViewVisible("startup.elevation-restore");
+  if (target.kind === "workspace") return;
+
   clearFilter();
 
   switch (target.kind) {

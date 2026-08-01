@@ -159,6 +159,28 @@ describe("useFileAssociation startup routing", () => {
     );
   });
 
+  it("restores a source ticket into the workspace that asked for elevation", async () => {
+    // An Access Denied raised inside ESP carries that workspace alongside the
+    // file that failed. Forcing the log view would reopen the right source on
+    // the wrong screen.
+    getInitialElevationRestoreMock.mockResolvedValue(
+      ticket({
+        workspace: "esp-diagnostics",
+        target: { kind: "file", path: "C:\\Windows\\protected.log" },
+      }),
+    );
+
+    renderHook(() => useFileAssociation());
+
+    await waitFor(() =>
+      expect(loadPathAsLogSourceMock).toHaveBeenCalledWith(
+        "C:\\Windows\\protected.log",
+        { fallbackToFolder: false },
+      ),
+    );
+    expect(useUiStore.getState().activeView).toBe("esp-diagnostics");
+  });
+
   it("reopens a folder ticket through the folder source path", async () => {
     getInitialElevationRestoreMock.mockResolvedValue(
       ticket({ target: { kind: "folder", path: "C:\\Windows\\Logs" } }),
