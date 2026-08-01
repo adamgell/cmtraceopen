@@ -3,26 +3,23 @@
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use tempfile::TempDir;
 
 pub struct TempBenchFile {
-    dir: PathBuf,
+    /// Held so the directory outlives the fixture; `TempDir` removes it on drop.
+    _dir: TempDir,
     path: PathBuf,
 }
 
 impl TempBenchFile {
     pub fn new(file_name: &str, content: String) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("cmtrace-open-bench-{unique}"));
-        fs::create_dir_all(&dir).expect("create temp benchmark dir");
+        let dir = TempDir::with_prefix("cmtrace-open-bench-").expect("create temp benchmark dir");
 
-        let path = dir.join(file_name);
+        let path = dir.path().join(file_name);
         fs::write(&path, content).expect("write benchmark fixture");
 
-        Self { dir, path }
+        Self { _dir: dir, path }
     }
 
     pub fn path(&self) -> &Path {
@@ -31,12 +28,6 @@ impl TempBenchFile {
 
     pub fn path_string(&self) -> String {
         self.path.to_string_lossy().to_string()
-    }
-}
-
-impl Drop for TempBenchFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 
