@@ -1,0 +1,1614 @@
+//! Server-local site-core and status-system analysis for issue #327.
+//!
+//! The reducer owns evidence produced by the site server itself: the site
+//! component manager family (`server-sitecomp`) and the status/state system
+//! family (`server-status`). It reduces complete logical records into
+//! component-keyed transactions along
+//! `ComponentStart -> ComponentWork -> InboxOrQueue -> StatusOrStateProcessing
+//! -> HealthyOrTerminal`.
+//!
+//! Scope boundaries this module never crosses:
+//!
+//! * Management Point, Distribution Point, Software Update Point, hierarchy
+//!   transport and Provider/Admin Service evidence belongs to other lanes.
+//!   `mpcontrol.log` is site-server produced but carries a Management Point
+//!   workflow subject, so it stays with the `server-mp-policy` source and is
+//!   never admitted here.
+//! * No client impact, downstream-role availability or cross-side causal
+//!   statement is derivable from this analyzer; those claims are declared
+//!   prohibited on every result.
+//!
+//! Only the `sccm-site-core` v1 extraction profile is selected, and only for
+//! the synthetic `5.00.TEST` corpus version. A fact requires a complete logical
+//! record, an exact profile-validated component and work-item key, the
+//! declared producer component for its source family, and a source whose
+//! catalogued basename, family and rotation all agree with its manifest
+//! declaration.
+
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Serialize;
+
+use crate::models::log_entry::Severity;
+use crate::sccm::{
+    classify_artifact_name, SccmArtifact, SccmArtifactFamily, SccmArtifactRequest, SccmConfidence,
+    SccmCoverageState, SccmEvidence, SccmEvidenceRef, SccmFinding, SccmFindingBuilder,
+    SccmFindingClass, SccmFindingCoverageGap, SccmPhase, SccmRole, SccmRotation,
+    SccmTerminalEvidence, SccmTimeOrderingState, SccmTimestamp,
+};
+
+pub const SCCM_SITE_CORE_ANALYSIS_SCHEMA_VERSION: u32 = 1;
+pub const SCCM_SITE_CORE_PROFILE_ID: &str = "sccm-site-core";
+pub const SCCM_SITE_CORE_PROFILE_VERSION: u32 = 1;
+pub const SCCM_SITE_CORE_PROFILE_STABILITY: &str = "experimental";
+pub const SCCM_SITE_CORE_COMPONENT_GROUP: &str = "server-sitecomp";
+pub const SCCM_SITE_CORE_STATUS_GROUP: &str = "server-status";
+
+/// The only ConfigMgr build this profile is validated against.
+const SITE_CORE_PROFILE_VERSION_TOKEN: &str = "5.00.TEST";
+/// Producer component recorded by each admitted source family.
+const COMPONENT_PRODUCER: &str = "SMS_SITE_COMPONENT_MANAGER";
+const STATUS_PRODUCER: &str = "SMS_STATUS_MANAGER";
+/// Floor for a bounded recapture request after a capture limit truncated a
+/// source. Requests never ask for an unbounded file.
+const RECAPTURE_FLOOR_BYTES: u64 = 4096;
+
+const STATE_CHAIN: [SccmSiteCorePhase; 5] = [
+    SccmSiteCorePhase::ComponentStart,
+    SccmSiteCorePhase::ComponentWork,
+    SccmSiteCorePhase::InboxOrQueue,
+    SccmSiteCorePhase::StatusOrStateProcessing,
+    SccmSiteCorePhase::HealthyOrTerminal,
+];
+
+const PROHIBITED_CLAIMS: [SccmSiteCoreProhibitedClaim; 3] = [
+    SccmSiteCoreProhibitedClaim::AbsentDownstreamRole,
+    SccmSiteCoreProhibitedClaim::ClientImpact,
+    SccmSiteCoreProhibitedClaim::CrossSideCausality,
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SccmSiteCoreTopology {
+    pub site_code: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SccmSiteCoreSource {
+    pub artifact: SccmArtifact,
+    pub source_group: String,
+    pub rotation_lineage: String,
+    pub fragment_complete: Option<bool>,
+    pub physical_line_end: Option<u32>,
+    pub capture_limit_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SccmSiteCoreBundle {
+    pub topology: SccmSiteCoreTopology,
+    pub sources: Vec<SccmSiteCoreSource>,
+    pub evidence: Vec<SccmEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmSiteCoreWorkflow {
+    SiteCore,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmSiteCorePhase {
+    ComponentStart,
+    ComponentWork,
+    InboxOrQueue,
+    StatusOrStateProcessing,
+    HealthyOrTerminal,
+}
+
+impl SccmSiteCorePhase {
+    fn serialized_name(self) -> &'static str {
+        match self {
+            Self::ComponentStart => "componentStart",
+            Self::ComponentWork => "componentWork",
+            Self::InboxOrQueue => "inboxOrQueue",
+            Self::StatusOrStateProcessing => "statusOrStateProcessing",
+            Self::HealthyOrTerminal => "healthyOrTerminal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmSiteCoreState {
+    Healthy,
+    TerminalFailure,
+    BlockedOrDeferred,
+    Recovered,
+    Incomplete,
+    ParseGap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmSiteCoreConfidence {
+    None,
+    Low,
+    Moderate,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmSiteCoreDiagnosticMeaning {
+    CoverageOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmSiteCoreProhibitedClaim {
+    AbsentDownstreamRole,
+    ClientImpact,
+    CrossSideCausality,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreProfile {
+    pub id: String,
+    pub version: u32,
+    pub stability: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreTransactionKey {
+    pub profile_id: String,
+    pub profile_version: u32,
+    pub site_code: String,
+    pub component_id: String,
+    pub work_item_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreEvidence {
+    pub artifact_id: String,
+    pub entry_id: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub complete_logical_record: Option<bool>,
+}
+
+impl SccmSiteCoreEvidence {
+    fn reference(&self) -> SccmEvidenceRef {
+        SccmEvidenceRef {
+            artifact_id: self.artifact_id.clone(),
+            entry_id: self.entry_id.clone(),
+            line_start: Some(self.line_start),
+            line_end: Some(self.line_end),
+        }
+    }
+
+    fn sort_key(&self) -> (&str, u32, u32, &str) {
+        (
+            self.artifact_id.as_str(),
+            self.line_start,
+            self.line_end,
+            self.entry_id.as_str(),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreRequestScope {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_item_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation_lineage: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreArtifactRequest {
+    pub logical_name: String,
+    pub role: SccmRole,
+    pub reason_code: String,
+    pub basenames: Vec<String>,
+    pub rotations: Vec<String>,
+    pub max_artifacts: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bytes_per_artifact: Option<u64>,
+    pub scope: SccmSiteCoreRequestScope,
+}
+
+impl SccmSiteCoreArtifactRequest {
+    fn sort_key(&self) -> (&str, &str, &str, &SccmSiteCoreRequestScope) {
+        (
+            self.logical_name.as_str(),
+            role_sort_key(&self.role),
+            self.reason_code.as_str(),
+            &self.scope,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreResult {
+    pub result_id: String,
+    pub transaction_key: SccmSiteCoreTransactionKey,
+    pub state: SccmSiteCoreState,
+    pub last_successful_phase: Option<SccmSiteCorePhase>,
+    pub finding_class: Option<SccmFindingClass>,
+    pub confidence: SccmSiteCoreConfidence,
+    pub confidence_ceiling: SccmSiteCoreConfidence,
+    pub evidence: Vec<SccmSiteCoreEvidence>,
+    pub coverage_gap_artifact_ids: Vec<String>,
+    pub next_artifacts: Vec<SccmSiteCoreArtifactRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreObservation {
+    pub observation_id: String,
+    pub state: SccmSiteCoreState,
+    pub last_successful_phase: Option<SccmSiteCorePhase>,
+    pub finding_class: SccmFindingClass,
+    pub confidence: SccmSiteCoreConfidence,
+    pub confidence_ceiling: SccmSiteCoreConfidence,
+    pub evidence: Vec<SccmSiteCoreEvidence>,
+    pub coverage_gap_artifact_ids: Vec<String>,
+    pub next_artifacts: Vec<SccmSiteCoreArtifactRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreCoverageGap {
+    pub artifact_id: String,
+    pub state: SccmCoverageState,
+    pub diagnostic_meaning: SccmSiteCoreDiagnosticMeaning,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<SccmSiteCoreEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreFinding {
+    #[serde(flatten)]
+    pub finding: SccmFinding,
+    pub subject_id: String,
+    pub last_successful_phase: Option<SccmSiteCorePhase>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmSiteCoreAnalysis {
+    pub schema_version: u32,
+    pub workflow: SccmSiteCoreWorkflow,
+    pub profile: SccmSiteCoreProfile,
+    pub state_chain: Vec<SccmSiteCorePhase>,
+    pub results: Vec<SccmSiteCoreResult>,
+    pub unlinked_observations: Vec<SccmSiteCoreObservation>,
+    pub coverage_gaps: Vec<SccmSiteCoreCoverageGap>,
+    pub findings: Vec<SccmSiteCoreFinding>,
+    pub artifact_requests: Vec<SccmSiteCoreArtifactRequest>,
+    pub prohibited_claims: Vec<SccmSiteCoreProhibitedClaim>,
+    pub cross_side_correlation_performed: bool,
+}
+
+/// Reduce a site-core evidence bundle into component-keyed transactions,
+/// source-local observations, coverage gaps and bounded next-artifact requests.
+pub fn analyze_site_core(bundle: &SccmSiteCoreBundle) -> SccmSiteCoreAnalysis {
+    let site_code = normalize_site_code(&bundle.topology.site_code);
+    let admitted_sources = admitted_sources(bundle);
+    let facts = collect_facts(bundle, &admitted_sources, site_code.as_deref());
+    let fragments = collect_fragments(bundle, &admitted_sources);
+    let coverage_gaps = collect_coverage_gaps(bundle, &admitted_sources, &fragments);
+
+    let fragment_artifact_ids = fragments
+        .iter()
+        .map(|fragment| fragment.evidence.artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let transaction_gap_ids = coverage_gaps
+        .iter()
+        .map(|gap| gap.artifact_id.clone())
+        .filter(|artifact_id| !fragment_artifact_ids.contains(artifact_id.as_str()))
+        .collect::<Vec<_>>();
+
+    let mut results = Vec::new();
+    let mut findings = Vec::new();
+    for (key, facts) in group_facts(facts) {
+        let reduced = reduce_transaction(bundle, key, &facts, &transaction_gap_ids);
+        if let Some(finding) = reduced.finding {
+            findings.push(finding);
+        }
+        results.push(reduced.result);
+    }
+
+    let mut unlinked_observations = Vec::new();
+    append_fragment_observations(&fragments, &mut unlinked_observations, &mut findings);
+
+    results.sort_by(|left, right| left.result_id.cmp(&right.result_id));
+    unlinked_observations.sort_by(|left, right| left.observation_id.cmp(&right.observation_id));
+    findings.sort_by(|left, right| {
+        left.subject_id
+            .cmp(&right.subject_id)
+            .then_with(|| left.finding.finding_id.cmp(&right.finding.finding_id))
+    });
+
+    let artifact_requests = collect_artifact_requests(&results, &unlinked_observations);
+
+    SccmSiteCoreAnalysis {
+        schema_version: SCCM_SITE_CORE_ANALYSIS_SCHEMA_VERSION,
+        workflow: SccmSiteCoreWorkflow::SiteCore,
+        profile: SccmSiteCoreProfile {
+            id: SCCM_SITE_CORE_PROFILE_ID.to_owned(),
+            version: SCCM_SITE_CORE_PROFILE_VERSION,
+            stability: SCCM_SITE_CORE_PROFILE_STABILITY.to_owned(),
+        },
+        state_chain: STATE_CHAIN.to_vec(),
+        results,
+        unlinked_observations,
+        coverage_gaps,
+        findings,
+        artifact_requests,
+        prohibited_claims: PROHIBITED_CLAIMS.to_vec(),
+        cross_side_correlation_performed: false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Source admission
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SiteCoreGroup {
+    Component,
+    Status,
+}
+
+impl SiteCoreGroup {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Component => SCCM_SITE_CORE_COMPONENT_GROUP,
+            Self::Status => SCCM_SITE_CORE_STATUS_GROUP,
+        }
+    }
+
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Component => "component",
+            Self::Status => "status",
+        }
+    }
+
+    fn producer(self) -> &'static str {
+        match self {
+            Self::Component => COMPONENT_PRODUCER,
+            Self::Status => STATUS_PRODUCER,
+        }
+    }
+
+    fn family(self) -> SccmArtifactFamily {
+        match self {
+            Self::Component => SccmArtifactFamily::SiteComponent,
+            Self::Status => SccmArtifactFamily::SiteStatus,
+        }
+    }
+
+    fn logical_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Component => &["sitecomp", "hman"],
+            Self::Status => &["statmgr", "statesys"],
+        }
+    }
+
+    fn entry_phase(self) -> SccmSiteCorePhase {
+        match self {
+            Self::Component => SccmSiteCorePhase::ComponentStart,
+            Self::Status => SccmSiteCorePhase::StatusOrStateProcessing,
+        }
+    }
+
+    fn from_id(value: &str) -> Option<Self> {
+        match value {
+            SCCM_SITE_CORE_COMPONENT_GROUP => Some(Self::Component),
+            SCCM_SITE_CORE_STATUS_GROUP => Some(Self::Status),
+            _ => None,
+        }
+    }
+}
+
+/// A source that passed shape admission: role, group, catalogued basename,
+/// family, rotation, lineage and profile version all agree.
+struct AdmittedSource<'a> {
+    source: &'a SccmSiteCoreSource,
+    group: SiteCoreGroup,
+    basename: String,
+}
+
+/// Sources are filtered to the site-server role and the two declared site-core
+/// groups *before* being collected by artifact id, so an artifact belonging to
+/// another role can never shadow a site-core source. An artifact id that
+/// appears more than once anywhere in the bundle is ambiguous and is dropped
+/// outright rather than resolved by vector order.
+fn admitted_sources<'a>(bundle: &'a SccmSiteCoreBundle) -> BTreeMap<&'a str, AdmittedSource<'a>> {
+    let mut occurrences: BTreeMap<&str, usize> = BTreeMap::new();
+    for source in &bundle.sources {
+        *occurrences
+            .entry(source.artifact.artifact_id.as_str())
+            .or_default() += 1;
+    }
+
+    bundle
+        .sources
+        .iter()
+        .filter_map(|source| {
+            let group = SiteCoreGroup::from_id(&source.source_group)?;
+            if source.artifact.role != SccmRole::SiteServer {
+                return None;
+            }
+            let admitted = admit_source(source, group)?;
+            let artifact_id = source.artifact.artifact_id.as_str();
+            (safe_opaque_id(artifact_id) && occurrences.get(artifact_id) == Some(&1))
+                .then_some((artifact_id, admitted))
+        })
+        .collect()
+}
+
+fn admit_source<'a>(
+    source: &'a SccmSiteCoreSource,
+    group: SiteCoreGroup,
+) -> Option<AdmittedSource<'a>> {
+    if source.artifact.configmgr_version.as_deref() != Some(SITE_CORE_PROFILE_VERSION_TOKEN) {
+        return None;
+    }
+    let classified = classify_artifact_name(&source.artifact.display_name, SccmRole::SiteServer);
+    let matches_group = classified.supported_for_diagnosis
+        && classified.family == group.family()
+        && group
+            .logical_names()
+            .iter()
+            .any(|logical_name| *logical_name == classified.logical_name)
+        && classified.rotation == source.artifact.rotation
+        && classified.basename == source.rotation_lineage;
+    matches_group.then_some(AdmittedSource {
+        source,
+        group,
+        basename: source.artifact.display_name.clone(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Fact extraction
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FactOutcome {
+    Succeeded,
+    Failed,
+    Deferred,
+}
+
+/// Declared site-core status vocabulary. Each marker fixes the phase it
+/// answers for, its outcome, whether it is a terminal statement, whether it is
+/// a recovery statement, and the source family entitled to record it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StatusMarker {
+    phase: SccmSiteCorePhase,
+    outcome: FactOutcome,
+    terminal: bool,
+    recovery: bool,
+    group: SiteCoreGroup,
+}
+
+fn status_marker(status_id: &str) -> Option<StatusMarker> {
+    let marker = match status_id {
+        "SC_COMPONENT_START_OK" => StatusMarker {
+            phase: SccmSiteCorePhase::ComponentStart,
+            outcome: FactOutcome::Succeeded,
+            terminal: false,
+            recovery: false,
+            group: SiteCoreGroup::Component,
+        },
+        "SC_COMPONENT_WORK_OK" => StatusMarker {
+            phase: SccmSiteCorePhase::ComponentWork,
+            outcome: FactOutcome::Succeeded,
+            terminal: false,
+            recovery: false,
+            group: SiteCoreGroup::Component,
+        },
+        "SC_INBOX_ACCEPTED" => StatusMarker {
+            phase: SccmSiteCorePhase::InboxOrQueue,
+            outcome: FactOutcome::Succeeded,
+            terminal: false,
+            recovery: false,
+            group: SiteCoreGroup::Component,
+        },
+        "SC_INBOX_BACKLOG" => StatusMarker {
+            phase: SccmSiteCorePhase::InboxOrQueue,
+            outcome: FactOutcome::Deferred,
+            terminal: false,
+            recovery: false,
+            group: SiteCoreGroup::Component,
+        },
+        "SC_COMPONENT_TERMINAL_FAILURE" => StatusMarker {
+            phase: SccmSiteCorePhase::HealthyOrTerminal,
+            outcome: FactOutcome::Failed,
+            terminal: true,
+            recovery: false,
+            group: SiteCoreGroup::Component,
+        },
+        "SC_STATUS_PROCESSING_OK" => StatusMarker {
+            phase: SccmSiteCorePhase::StatusOrStateProcessing,
+            outcome: FactOutcome::Succeeded,
+            terminal: false,
+            recovery: false,
+            group: SiteCoreGroup::Status,
+        },
+        "SC_STATUS_TERMINAL_FAILURE" => StatusMarker {
+            phase: SccmSiteCorePhase::HealthyOrTerminal,
+            outcome: FactOutcome::Failed,
+            terminal: true,
+            recovery: false,
+            group: SiteCoreGroup::Status,
+        },
+        "SC_COMPONENT_HEALTHY" => StatusMarker {
+            phase: SccmSiteCorePhase::HealthyOrTerminal,
+            outcome: FactOutcome::Succeeded,
+            terminal: true,
+            recovery: false,
+            group: SiteCoreGroup::Status,
+        },
+        "SC_COMPONENT_RECOVERED" => StatusMarker {
+            phase: SccmSiteCorePhase::HealthyOrTerminal,
+            outcome: FactOutcome::Succeeded,
+            terminal: true,
+            recovery: true,
+            group: SiteCoreGroup::Status,
+        },
+        _ => return None,
+    };
+    Some(marker)
+}
+
+#[derive(Debug, Clone)]
+struct SiteCoreFact {
+    key: SccmSiteCoreTransactionKey,
+    marker: StatusMarker,
+    reference: SccmEvidenceRef,
+    timestamp: SccmTimestamp,
+}
+
+impl SiteCoreFact {
+    fn ordering_millis(&self) -> Option<i64> {
+        (self.timestamp.ordering_state == SccmTimeOrderingState::NormalizedUtc)
+            .then_some(self.timestamp.utc_millis)
+            .flatten()
+    }
+
+    fn evidence(&self) -> SccmSiteCoreEvidence {
+        let (terminal, recovery) = match (self.marker.outcome, self.marker.recovery) {
+            (_, true) => (Some(true), Some(true)),
+            (FactOutcome::Failed, _) if self.marker.terminal => (Some(true), None),
+            (FactOutcome::Deferred, _) => (Some(false), None),
+            _ => (None, None),
+        };
+        SccmSiteCoreEvidence {
+            artifact_id: self.reference.artifact_id.clone(),
+            entry_id: self.reference.entry_id.clone(),
+            line_start: self.reference.line_start.unwrap_or_default(),
+            line_end: self.reference.line_end.unwrap_or_default(),
+            terminal,
+            recovery,
+            complete_logical_record: None,
+        }
+    }
+}
+
+fn collect_facts(
+    bundle: &SccmSiteCoreBundle,
+    sources: &BTreeMap<&str, AdmittedSource<'_>>,
+    site_code: Option<&str>,
+) -> Vec<SiteCoreFact> {
+    let Some(site_code) = site_code else {
+        return Vec::new();
+    };
+
+    bundle
+        .evidence
+        .iter()
+        .filter_map(|evidence| {
+            let admitted = sources.get(evidence.reference.artifact_id.as_str())?;
+            if !source_carries_facts(admitted)
+                || evidence.role != SccmRole::SiteServer
+                || !evidence_reference_fits_source(evidence, admitted)
+                || !evidence_identity_is_unique(bundle, evidence)
+            {
+                return None;
+            }
+            parse_fact(evidence, admitted, site_code)
+        })
+        .collect()
+}
+
+/// Bytes retained beside a manifest state that is neither `captured` nor
+/// `capped` are coverage-only. A captured source that still carries an
+/// incomplete region is a fragment, not a fact source.
+fn source_carries_facts(admitted: &AdmittedSource<'_>) -> bool {
+    match admitted.source.artifact.coverage {
+        SccmCoverageState::Captured => admitted.source.fragment_complete != Some(false),
+        SccmCoverageState::Capped => true,
+        _ => false,
+    }
+}
+
+fn parse_fact(
+    evidence: &SccmEvidence,
+    admitted: &AdmittedSource<'_>,
+    site_code: &str,
+) -> Option<SiteCoreFact> {
+    if evidence.component.as_deref() != Some(admitted.group.producer()) {
+        return None;
+    }
+    let message = evidence.message.as_str();
+    if token_value(message, "profileId")? != SCCM_SITE_CORE_PROFILE_ID
+        || token_value(message, "profileVersion")? != SCCM_SITE_CORE_PROFILE_VERSION.to_string()
+    {
+        return None;
+    }
+    let record_site_code = normalize_site_code(&token_value(message, "site")?)?;
+    if record_site_code != site_code {
+        return None;
+    }
+
+    let marker = status_marker(&token_value(message, "statusId")?)?;
+    if marker.group != admitted.group {
+        return None;
+    }
+    let declared_outcome = match token_value(message, "outcome")?.as_str() {
+        "success" => FactOutcome::Succeeded,
+        "failure" => FactOutcome::Failed,
+        "deferred" => FactOutcome::Deferred,
+        _ => return None,
+    };
+    let declared_terminal = match token_value(message, "terminal")?.as_str() {
+        "true" => true,
+        "false" => false,
+        _ => return None,
+    };
+    if declared_outcome != marker.outcome || declared_terminal != marker.terminal {
+        return None;
+    }
+
+    let component_id = validated_identifier(&token_value(message, "componentId")?)?;
+    let work_item_id = validated_identifier(&token_value(message, "workItemId")?)?;
+
+    Some(SiteCoreFact {
+        key: SccmSiteCoreTransactionKey {
+            profile_id: SCCM_SITE_CORE_PROFILE_ID.to_owned(),
+            profile_version: SCCM_SITE_CORE_PROFILE_VERSION,
+            site_code: record_site_code,
+            component_id,
+            work_item_id,
+        },
+        marker,
+        reference: evidence.reference.clone(),
+        timestamp: evidence.timestamp.clone(),
+    })
+}
+
+fn group_facts(
+    facts: Vec<SiteCoreFact>,
+) -> BTreeMap<SccmSiteCoreTransactionKey, Vec<SiteCoreFact>> {
+    let mut grouped: BTreeMap<SccmSiteCoreTransactionKey, Vec<SiteCoreFact>> = BTreeMap::new();
+    for fact in facts {
+        grouped.entry(fact.key.clone()).or_default().push(fact);
+    }
+    for facts in grouped.values_mut() {
+        facts.sort_by(compare_facts);
+    }
+    grouped
+}
+
+/// Facts are ordered by usable UTC instant first so that recency decisions are
+/// chronological when — and only when — chronology is comparable. Records
+/// without usable ordering fall back to their stable evidence identity so the
+/// result never depends on input order.
+fn compare_facts(left: &SiteCoreFact, right: &SiteCoreFact) -> Ordering {
+    left.ordering_millis()
+        .cmp(&right.ordering_millis())
+        .then_with(|| compare_references(&left.reference, &right.reference))
+}
+
+// ---------------------------------------------------------------------------
+// Transaction reduction
+// ---------------------------------------------------------------------------
+
+struct ReducedTransaction {
+    result: SccmSiteCoreResult,
+    finding: Option<SccmSiteCoreFinding>,
+}
+
+fn reduce_transaction(
+    bundle: &SccmSiteCoreBundle,
+    key: SccmSiteCoreTransactionKey,
+    facts: &[SiteCoreFact],
+    coverage_gap_artifact_ids: &[String],
+) -> ReducedTransaction {
+    let chronology_usable = facts.iter().all(|fact| fact.ordering_millis().is_some());
+    let conflicting = has_same_instant_conflict(facts);
+
+    let last_success = facts
+        .iter()
+        .rfind(|fact| fact.marker.outcome == FactOutcome::Succeeded);
+    let last_successful_phase = last_success.map(|fact| fact.marker.phase);
+    let terminal_failure = facts
+        .iter()
+        .rfind(|fact| fact.marker.outcome == FactOutcome::Failed && fact.marker.terminal);
+    let terminal_success = facts
+        .iter()
+        .rfind(|fact| fact.marker.outcome == FactOutcome::Succeeded && fact.marker.terminal);
+    let deferred = facts
+        .iter()
+        .rfind(|fact| fact.marker.outcome == FactOutcome::Deferred);
+
+    let recovered = matches!(
+        (terminal_success, terminal_failure),
+        (Some(success), Some(failure))
+            if chronology_usable
+                && success.ordering_millis() > failure.ordering_millis()
+    );
+
+    let (state, finding_class, base_confidence, decisive) = if conflicting {
+        (
+            SccmSiteCoreState::Incomplete,
+            Some(SccmFindingClass::InsufficientEvidence),
+            SccmSiteCoreConfidence::None,
+            None,
+        )
+    } else if recovered {
+        (
+            SccmSiteCoreState::Recovered,
+            Some(SccmFindingClass::Symptom),
+            SccmSiteCoreConfidence::High,
+            terminal_success,
+        )
+    } else if terminal_failure.is_some() {
+        (
+            SccmSiteCoreState::TerminalFailure,
+            Some(SccmFindingClass::ConfirmedFailure),
+            SccmSiteCoreConfidence::High,
+            terminal_failure,
+        )
+    } else if terminal_success.is_some() {
+        (
+            SccmSiteCoreState::Healthy,
+            None,
+            SccmSiteCoreConfidence::High,
+            terminal_success,
+        )
+    } else if deferred.is_some() {
+        (
+            SccmSiteCoreState::BlockedOrDeferred,
+            Some(SccmFindingClass::BlockedOrDeferred),
+            SccmSiteCoreConfidence::Low,
+            deferred,
+        )
+    } else {
+        (
+            SccmSiteCoreState::Incomplete,
+            Some(SccmFindingClass::InsufficientEvidence),
+            SccmSiteCoreConfidence::None,
+            None,
+        )
+    };
+
+    let confidence_ceiling = confidence_ceiling(facts, state, chronology_usable, conflicting);
+    let confidence = base_confidence.min(confidence_ceiling);
+    let next_artifacts = next_artifacts_for_state(bundle, &key, facts, state);
+
+    let mut evidence = facts.iter().map(SiteCoreFact::evidence).collect::<Vec<_>>();
+    evidence.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
+    evidence.dedup();
+
+    let result_id = format!(
+        "site-core/{}/{}/{}",
+        key.site_code, key.component_id, key.work_item_id
+    );
+    let finding = finding_class.clone().and_then(|class| {
+        build_finding(
+            &format!("finding:site-core:{result_id}"),
+            &result_id,
+            class,
+            decisive
+                .map(|fact| fact.marker.phase)
+                .or(last_successful_phase)
+                .unwrap_or(SccmSiteCorePhase::ComponentStart),
+            last_successful_phase,
+            confidence,
+            state,
+            &evidence,
+            decisive,
+            coverage_gap_artifact_ids,
+            bundle,
+            &next_artifacts,
+        )
+    });
+
+    ReducedTransaction {
+        result: SccmSiteCoreResult {
+            result_id,
+            transaction_key: key,
+            state,
+            last_successful_phase,
+            finding_class,
+            confidence,
+            confidence_ceiling,
+            evidence,
+            coverage_gap_artifact_ids: coverage_gap_artifact_ids.to_vec(),
+            next_artifacts,
+        },
+        finding,
+    }
+}
+
+/// Two facts at the same instant, in the same phase, disagreeing about the
+/// outcome cannot select a winner without letting vector order decide.
+fn has_same_instant_conflict(facts: &[SiteCoreFact]) -> bool {
+    facts.iter().enumerate().any(|(index, left)| {
+        facts[index + 1..].iter().any(|right| {
+            left.marker.phase == right.marker.phase
+                && left.ordering_millis().is_some()
+                && left.ordering_millis() == right.ordering_millis()
+                && left.marker.outcome != right.marker.outcome
+        })
+    })
+}
+
+fn confidence_ceiling(
+    facts: &[SiteCoreFact],
+    state: SccmSiteCoreState,
+    chronology_usable: bool,
+    conflicting: bool,
+) -> SccmSiteCoreConfidence {
+    if conflicting || facts.is_empty() || state == SccmSiteCoreState::Incomplete {
+        return SccmSiteCoreConfidence::None;
+    }
+    if !chronology_usable || state == SccmSiteCoreState::BlockedOrDeferred {
+        return SccmSiteCoreConfidence::Low;
+    }
+    let has_entry_evidence = facts
+        .iter()
+        .any(|fact| fact.marker.phase == SccmSiteCorePhase::ComponentStart);
+    if has_entry_evidence {
+        SccmSiteCoreConfidence::High
+    } else {
+        SccmSiteCoreConfidence::Moderate
+    }
+}
+
+/// The smallest next artifact bundle when evidence stops. A confirmed terminal
+/// outcome and a healthy or recovered completion need nothing further.
+fn next_artifacts_for_state(
+    bundle: &SccmSiteCoreBundle,
+    key: &SccmSiteCoreTransactionKey,
+    facts: &[SiteCoreFact],
+    state: SccmSiteCoreState,
+) -> Vec<SccmSiteCoreArtifactRequest> {
+    if matches!(
+        state,
+        SccmSiteCoreState::Healthy
+            | SccmSiteCoreState::TerminalFailure
+            | SccmSiteCoreState::Recovered
+            | SccmSiteCoreState::ParseGap
+    ) {
+        return Vec::new();
+    }
+
+    let scope = SccmSiteCoreRequestScope {
+        component_id: Some(key.component_id.clone()),
+        work_item_id: Some(key.work_item_id.clone()),
+        rotation_lineage: None,
+    };
+
+    // A capture limit that truncated the family which carried the last
+    // evidence is the nearest boundary: request that one source again under a
+    // larger bounded limit.
+    if let Some(request) = capped_recapture_request(bundle, facts, &scope) {
+        return vec![request];
+    }
+
+    let statuses = status_group_candidates(bundle);
+    let basenames = if statuses.is_empty() {
+        vec!["statmgr.log".to_owned()]
+    } else {
+        statuses
+    };
+    let rotations = vec!["current".to_owned(), "loUnderscore".to_owned()];
+    vec![SccmSiteCoreArtifactRequest {
+        logical_name: SCCM_SITE_CORE_STATUS_GROUP.to_owned(),
+        role: SccmRole::SiteServer,
+        reason_code: "matching-status-terminal-evidence-missing".to_owned(),
+        max_artifacts: basenames.len() * rotations.len(),
+        basenames,
+        rotations,
+        max_bytes_per_artifact: None,
+        scope,
+    }]
+}
+
+fn capped_recapture_request(
+    bundle: &SccmSiteCoreBundle,
+    facts: &[SiteCoreFact],
+    scope: &SccmSiteCoreRequestScope,
+) -> Option<SccmSiteCoreArtifactRequest> {
+    let cited = facts
+        .iter()
+        .map(|fact| fact.reference.artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let sources = admitted_sources(bundle);
+    let (_, admitted) = sources.iter().find(|(artifact_id, admitted)| {
+        cited.contains(*artifact_id)
+            && admitted.source.artifact.coverage == SccmCoverageState::Capped
+            && truncated_tail(bundle, admitted).is_some()
+    })?;
+
+    let limit = admitted.source.capture_limit_bytes.unwrap_or_default();
+    let requested = RECAPTURE_FLOOR_BYTES.max(limit.saturating_mul(2).next_power_of_two());
+    Some(SccmSiteCoreArtifactRequest {
+        logical_name: admitted.group.id().to_owned(),
+        role: SccmRole::SiteServer,
+        reason_code: "capped-before-next-phase".to_owned(),
+        basenames: vec![admitted.basename.clone()],
+        rotations: vec![rotation_name(&admitted.source.artifact.rotation)?],
+        max_artifacts: 1,
+        max_bytes_per_artifact: Some(requested),
+        scope: scope.clone(),
+    })
+}
+
+fn status_group_candidates(bundle: &SccmSiteCoreBundle) -> Vec<String> {
+    let mut basenames = admitted_sources(bundle)
+        .into_values()
+        .filter(|admitted| admitted.group == SiteCoreGroup::Status)
+        .map(|admitted| admitted.basename)
+        .collect::<Vec<_>>();
+    basenames.sort();
+    basenames.dedup();
+    basenames
+}
+
+// ---------------------------------------------------------------------------
+// Fragments and coverage
+// ---------------------------------------------------------------------------
+
+struct FragmentArtifact {
+    group: SiteCoreGroup,
+    lineage: String,
+    basename: String,
+    rotation: SccmRotation,
+    rotation_rank: u8,
+    evidence: SccmSiteCoreEvidence,
+}
+
+/// A captured source that cannot yield a complete logical record for part of
+/// its physical range. The unparsed tail is cited by its physical line range;
+/// the reference can never collide with a parsed record because it starts
+/// after the last complete record.
+fn collect_fragments(
+    bundle: &SccmSiteCoreBundle,
+    sources: &BTreeMap<&str, AdmittedSource<'_>>,
+) -> Vec<FragmentArtifact> {
+    let mut fragments = sources
+        .values()
+        .filter(|admitted| admitted.source.artifact.coverage == SccmCoverageState::Captured)
+        .filter_map(|admitted| {
+            let tail = truncated_tail(bundle, admitted)?;
+            Some(FragmentArtifact {
+                group: admitted.group,
+                lineage: admitted.source.rotation_lineage.clone(),
+                basename: admitted.basename.clone(),
+                rotation: admitted.source.artifact.rotation.clone(),
+                rotation_rank: rotation_rank(&admitted.source.artifact.rotation),
+                evidence: tail,
+            })
+        })
+        .collect::<Vec<_>>();
+    fragments.sort_by(|left, right| left.evidence.sort_key().cmp(&right.evidence.sort_key()));
+    fragments
+}
+
+fn truncated_tail(
+    bundle: &SccmSiteCoreBundle,
+    admitted: &AdmittedSource<'_>,
+) -> Option<SccmSiteCoreEvidence> {
+    let artifact_id = admitted.source.artifact.artifact_id.as_str();
+    let physical_line_end = admitted.source.physical_line_end?;
+    let parsed_line_end = bundle
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.reference.artifact_id == artifact_id)
+        .filter_map(|evidence| evidence.reference.line_end)
+        .max()
+        .unwrap_or_default();
+    let tail_start = parsed_line_end.checked_add(1)?;
+    if tail_start > physical_line_end {
+        return None;
+    }
+    Some(SccmSiteCoreEvidence {
+        artifact_id: artifact_id.to_owned(),
+        entry_id: format!("{artifact_id}:{tail_start}-{physical_line_end}"),
+        line_start: tail_start,
+        line_end: physical_line_end,
+        terminal: None,
+        recovery: None,
+        complete_logical_record: Some(false),
+    })
+}
+
+fn collect_coverage_gaps(
+    bundle: &SccmSiteCoreBundle,
+    sources: &BTreeMap<&str, AdmittedSource<'_>>,
+    fragments: &[FragmentArtifact],
+) -> Vec<SccmSiteCoreCoverageGap> {
+    let fragment_by_artifact = fragments
+        .iter()
+        .map(|fragment| {
+            (
+                fragment.evidence.artifact_id.as_str(),
+                fragment.evidence.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut gaps: BTreeMap<String, SccmSiteCoreCoverageGap> = BTreeMap::new();
+    for source in &bundle.sources {
+        if SiteCoreGroup::from_id(&source.source_group).is_none()
+            || source.artifact.role != SccmRole::SiteServer
+        {
+            continue;
+        }
+        let artifact_id = source.artifact.artifact_id.as_str();
+        let admitted = sources.get(artifact_id);
+        let (state, evidence) = match (admitted, &source.artifact.coverage) {
+            // An interpretable source that produced no complete record for
+            // part of its range.
+            (Some(_), SccmCoverageState::Captured) => match fragment_by_artifact.get(artifact_id) {
+                Some(evidence) => (SccmCoverageState::ParseFailed, Some(evidence.clone())),
+                None => continue,
+            },
+            (Some(admitted), SccmCoverageState::Capped) => (
+                SccmCoverageState::Capped,
+                truncated_tail(bundle, admitted).or(None),
+            ),
+            (Some(_), state) => (state.clone(), None),
+            // A source this profile cannot interpret, or whose identity is
+            // ambiguous, is coverage-only and never a diagnosis.
+            (None, _) => (SccmCoverageState::Unsupported, None),
+        };
+        if state == SccmCoverageState::Captured {
+            continue;
+        }
+        gaps.entry(artifact_id.to_owned())
+            .or_insert(SccmSiteCoreCoverageGap {
+                artifact_id: artifact_id.to_owned(),
+                state,
+                diagnostic_meaning: SccmSiteCoreDiagnosticMeaning::CoverageOnly,
+                evidence,
+            });
+    }
+    gaps.into_values().collect()
+}
+
+/// Fragment observations are source-local: they never advance a phase, join a
+/// record across a rotation boundary, or infer a terminal outcome.
+///
+/// A lineage whose fragments span more than one rotation lost its records to a
+/// rollover, which is a pure coverage loss and can only be insufficient
+/// evidence. A single-rotation fragment is an anomaly in the source itself, so
+/// it is reported as a low-confidence symptom and never as a fact.
+fn append_fragment_observations(
+    fragments: &[FragmentArtifact],
+    observations: &mut Vec<SccmSiteCoreObservation>,
+    findings: &mut Vec<SccmSiteCoreFinding>,
+) {
+    let mut by_lineage: BTreeMap<(SiteCoreGroup, &str), Vec<&FragmentArtifact>> = BTreeMap::new();
+    for fragment in fragments {
+        by_lineage
+            .entry((fragment.group, fragment.lineage.as_str()))
+            .or_default()
+            .push(fragment);
+    }
+
+    let mut rotation_boundary: Vec<&FragmentArtifact> = Vec::new();
+    let mut rotation_boundary_requests = Vec::new();
+    let mut malformed: BTreeMap<SiteCoreGroup, (Vec<&FragmentArtifact>, Vec<_>)> = BTreeMap::new();
+
+    for ((group, lineage), lineage_fragments) in by_lineage {
+        let distinct_rotations = lineage_fragments
+            .iter()
+            .map(|fragment| &fragment.rotation)
+            .collect::<Vec<_>>()
+            .windows(2)
+            .any(|pair| pair[0] != pair[1])
+            || lineage_fragments.len() > 1;
+        let request = fragment_request(group, lineage, &lineage_fragments, distinct_rotations);
+        if distinct_rotations {
+            rotation_boundary.extend(lineage_fragments);
+            rotation_boundary_requests.push(request);
+        } else {
+            let entry = malformed.entry(group).or_default();
+            entry.0.extend(lineage_fragments);
+            entry.1.push(request);
+        }
+    }
+
+    if !rotation_boundary.is_empty() {
+        push_observation(
+            "rotation-boundary-fragments",
+            SiteCoreGroup::Component,
+            SccmFindingClass::InsufficientEvidence,
+            SccmSiteCoreConfidence::None,
+            rotation_boundary,
+            rotation_boundary_requests,
+            observations,
+            findings,
+        );
+    }
+    for (group, (group_fragments, requests)) in malformed {
+        push_observation(
+            &format!("malformed-{}-record", group.slug()),
+            group,
+            SccmFindingClass::Symptom,
+            SccmSiteCoreConfidence::Low,
+            group_fragments,
+            requests,
+            observations,
+            findings,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_observation(
+    observation_id: &str,
+    group: SiteCoreGroup,
+    class: SccmFindingClass,
+    confidence: SccmSiteCoreConfidence,
+    fragments: Vec<&FragmentArtifact>,
+    mut next_artifacts: Vec<SccmSiteCoreArtifactRequest>,
+    observations: &mut Vec<SccmSiteCoreObservation>,
+    findings: &mut Vec<SccmSiteCoreFinding>,
+) {
+    let mut evidence = fragments
+        .iter()
+        .map(|fragment| fragment.evidence.clone())
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
+    evidence.dedup();
+    let mut coverage_gap_artifact_ids = evidence
+        .iter()
+        .map(|item| item.artifact_id.clone())
+        .collect::<Vec<_>>();
+    coverage_gap_artifact_ids.sort();
+    coverage_gap_artifact_ids.dedup();
+    next_artifacts.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
+    next_artifacts.dedup();
+
+    let gaps = coverage_gap_artifact_ids
+        .iter()
+        .map(|artifact_id| SccmFindingCoverageGap {
+            artifact_id: artifact_id.clone(),
+            role: SccmRole::SiteServer,
+            coverage: SccmCoverageState::ParseFailed,
+        })
+        .collect::<Vec<_>>();
+    if let Some(finding) = build_observation_finding(
+        &format!("finding:site-core:{observation_id}"),
+        observation_id,
+        class.clone(),
+        group.entry_phase(),
+        confidence,
+        &evidence,
+        gaps,
+        &next_artifacts,
+    ) {
+        findings.push(finding);
+    }
+
+    observations.push(SccmSiteCoreObservation {
+        observation_id: observation_id.to_owned(),
+        state: SccmSiteCoreState::ParseGap,
+        last_successful_phase: None,
+        finding_class: class,
+        confidence,
+        confidence_ceiling: confidence,
+        evidence,
+        coverage_gap_artifact_ids,
+        next_artifacts,
+    });
+}
+
+fn fragment_request(
+    group: SiteCoreGroup,
+    lineage: &str,
+    fragments: &[&FragmentArtifact],
+    rotation_boundary: bool,
+) -> SccmSiteCoreArtifactRequest {
+    let mut ordered = fragments.to_vec();
+    ordered.sort_by(|left, right| {
+        left.rotation_rank
+            .cmp(&right.rotation_rank)
+            .then_with(|| left.basename.cmp(&right.basename))
+    });
+    let mut basenames = Vec::new();
+    let mut rotations = Vec::new();
+    let mut pairs = BTreeSet::new();
+    for fragment in &ordered {
+        let Some(rotation) = rotation_name(&fragment.rotation) else {
+            continue;
+        };
+        if !pairs.insert((fragment.basename.clone(), rotation.clone())) {
+            continue;
+        }
+        if !basenames.contains(&fragment.basename) {
+            basenames.push(fragment.basename.clone());
+        }
+        if !rotations.contains(&rotation) {
+            rotations.push(rotation);
+        }
+    }
+
+    SccmSiteCoreArtifactRequest {
+        logical_name: group.id().to_owned(),
+        role: SccmRole::SiteServer,
+        reason_code: if rotation_boundary {
+            "complete-logical-record-required".to_owned()
+        } else {
+            format!("complete-{}-record-required", group.slug())
+        },
+        basenames,
+        rotations,
+        max_artifacts: pairs.len(),
+        max_bytes_per_artifact: None,
+        scope: SccmSiteCoreRequestScope {
+            component_id: None,
+            work_item_id: None,
+            rotation_lineage: Some(lineage.to_owned()),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared findings
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn build_finding(
+    finding_id: &str,
+    subject_id: &str,
+    class: SccmFindingClass,
+    phase: SccmSiteCorePhase,
+    last_successful_phase: Option<SccmSiteCorePhase>,
+    confidence: SccmSiteCoreConfidence,
+    state: SccmSiteCoreState,
+    evidence: &[SccmSiteCoreEvidence],
+    decisive: Option<&SiteCoreFact>,
+    coverage_gap_artifact_ids: &[String],
+    bundle: &SccmSiteCoreBundle,
+    next_artifacts: &[SccmSiteCoreArtifactRequest],
+) -> Option<SccmSiteCoreFinding> {
+    let cited = evidence
+        .iter()
+        .map(SccmSiteCoreEvidence::reference)
+        .collect::<Vec<_>>();
+    let terminal_evidence = match (class.clone(), decisive) {
+        (SccmFindingClass::ConfirmedFailure, Some(fact)) => {
+            vec![SccmTerminalEvidence::observed_failure(
+                fact.reference.clone(),
+            )]
+        }
+        _ => Vec::new(),
+    };
+    let gaps = coverage_gap_artifact_ids
+        .iter()
+        .filter_map(|artifact_id| finding_gap(bundle, artifact_id))
+        .collect::<Vec<_>>();
+
+    let mut builder = SccmFindingBuilder::new(finding_id)
+        .class(class)
+        .phase(SccmPhase::Unknown(phase.serialized_name().to_owned()))
+        .role(SccmRole::SiteServer)
+        .severity(match state {
+            SccmSiteCoreState::TerminalFailure => Severity::Error,
+            _ => Severity::Warning,
+        })
+        .confidence(shared_confidence(confidence))
+        .title("Site component and status evidence")
+        .summary("The site component outcome is bounded to the cited site-server evidence.")
+        .evidence(cited)
+        .terminal_evidence(terminal_evidence)
+        .coverage_gaps(gaps)
+        .next_artifacts(shared_requests(next_artifacts));
+    if let Some(phase) = last_successful_phase {
+        builder = builder.summary(format!(
+            "The last confirmed successful phase is {}; later phases are bounded to cited evidence.",
+            phase.serialized_name()
+        ));
+    }
+
+    Some(SccmSiteCoreFinding {
+        finding: builder.build().ok()?,
+        subject_id: subject_id.to_owned(),
+        last_successful_phase,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_observation_finding(
+    finding_id: &str,
+    subject_id: &str,
+    class: SccmFindingClass,
+    phase: SccmSiteCorePhase,
+    confidence: SccmSiteCoreConfidence,
+    evidence: &[SccmSiteCoreEvidence],
+    gaps: Vec<SccmFindingCoverageGap>,
+    next_artifacts: &[SccmSiteCoreArtifactRequest],
+) -> Option<SccmSiteCoreFinding> {
+    let finding = SccmFindingBuilder::new(finding_id)
+        .class(class)
+        .phase(SccmPhase::Unknown(phase.serialized_name().to_owned()))
+        .role(SccmRole::SiteServer)
+        .severity(Severity::Warning)
+        .confidence(shared_confidence(confidence))
+        .title("Site core source-local evidence")
+        .summary("The observation is source-local and cannot establish a component outcome.")
+        .evidence(
+            evidence
+                .iter()
+                .map(SccmSiteCoreEvidence::reference)
+                .collect(),
+        )
+        .coverage_gaps(gaps)
+        .next_artifacts(shared_requests(next_artifacts))
+        .build()
+        .ok()?;
+    Some(SccmSiteCoreFinding {
+        finding,
+        subject_id: subject_id.to_owned(),
+        last_successful_phase: None,
+    })
+}
+
+fn finding_gap(bundle: &SccmSiteCoreBundle, artifact_id: &str) -> Option<SccmFindingCoverageGap> {
+    let source = bundle
+        .sources
+        .iter()
+        .find(|source| source.artifact.artifact_id == artifact_id)?;
+    let coverage = match source.artifact.coverage {
+        SccmCoverageState::Captured => SccmCoverageState::ParseFailed,
+        ref state => state.clone(),
+    };
+    Some(SccmFindingCoverageGap {
+        artifact_id: artifact_id.to_owned(),
+        role: SccmRole::SiteServer,
+        coverage,
+    })
+}
+
+fn shared_confidence(confidence: SccmSiteCoreConfidence) -> SccmConfidence {
+    match confidence {
+        SccmSiteCoreConfidence::None => SccmConfidence::None,
+        SccmSiteCoreConfidence::Low => SccmConfidence::Low,
+        SccmSiteCoreConfidence::Moderate => SccmConfidence::Moderate,
+        SccmSiteCoreConfidence::High => SccmConfidence::High,
+    }
+}
+
+/// Project the bounded site-core request onto the shared catalogued request
+/// contract. Each requested basename becomes one catalogued logical source, so
+/// the shared reason can never widen beyond the artifact it names.
+fn shared_requests(requests: &[SccmSiteCoreArtifactRequest]) -> Vec<SccmArtifactRequest> {
+    let mut shared = requests
+        .iter()
+        .flat_map(|request| request.basenames.iter())
+        .filter_map(|basename| {
+            let classified = classify_artifact_name(basename, SccmRole::SiteServer);
+            classified
+                .supported_for_diagnosis
+                .then(|| SccmArtifactRequest {
+                    logical_id: classified.logical_name.clone(),
+                    role: SccmRole::SiteServer,
+                    reason: format!("Collect the complete {} file.", classified.basename),
+                })
+        })
+        .collect::<Vec<_>>();
+    shared.sort_by(|left, right| left.logical_id.cmp(&right.logical_id));
+    shared.dedup();
+    shared
+}
+
+fn collect_artifact_requests(
+    results: &[SccmSiteCoreResult],
+    observations: &[SccmSiteCoreObservation],
+) -> Vec<SccmSiteCoreArtifactRequest> {
+    let mut requests = results
+        .iter()
+        .flat_map(|result| result.next_artifacts.iter())
+        .chain(
+            observations
+                .iter()
+                .flat_map(|observation| observation.next_artifacts.iter()),
+        )
+        .cloned()
+        .collect::<Vec<_>>();
+    requests.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
+    requests.dedup();
+    requests
+}
+
+// ---------------------------------------------------------------------------
+// Exact-token extraction and identity guards
+// ---------------------------------------------------------------------------
+
+/// Exact-token extraction that fails closed. A label preceded by anything other
+/// than a token boundary is an embedded label, and a label that appears twice
+/// is ambiguous; both yield no value rather than a guess.
+fn validated_token_value(message: &str, label: &str) -> Option<Option<String>> {
+    let lowercase = message.to_ascii_lowercase();
+    let needle = format!("{}=", label.to_ascii_lowercase());
+    let mut value = None;
+    for (label_start, _) in lowercase.match_indices(&needle) {
+        let exact_label_boundary = label_start == 0
+            || message[..label_start]
+                .chars()
+                .next_back()
+                .is_some_and(is_token_boundary);
+        if !exact_label_boundary {
+            return None;
+        }
+        let remainder = &message[label_start + needle.len()..];
+        let end = remainder.find(is_token_boundary).unwrap_or(remainder.len());
+        if end == 0 {
+            return None;
+        }
+        if value.replace(remainder[..end].to_owned()).is_some() {
+            return None;
+        }
+    }
+    Some(value)
+}
+
+fn token_value(message: &str, label: &str) -> Option<String> {
+    validated_token_value(message, label)?
+}
+
+fn is_token_boundary(character: char) -> bool {
+    character.is_whitespace() || matches!(character, ',' | ';' | '&')
+}
+
+fn validated_identifier(value: &str) -> Option<String> {
+    (!value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
+    .then(|| value.to_owned())
+}
+
+fn normalize_site_code(value: &str) -> Option<String> {
+    (value.len() == 3
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit()))
+    .then(|| value.to_owned())
+}
+
+fn safe_opaque_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+}
+
+fn evidence_reference_fits_source(evidence: &SccmEvidence, admitted: &AdmittedSource<'_>) -> bool {
+    let reference = &evidence.reference;
+    safe_opaque_id(&reference.artifact_id)
+        && safe_opaque_id(&reference.entry_id)
+        && evidence.evidence_id == reference.entry_id
+        && matches!(
+            (reference.line_start, reference.line_end),
+            (Some(start), Some(end)) if start > 0 && end >= start
+        )
+        && admitted
+            .source
+            .physical_line_end
+            .zip(reference.line_end)
+            .is_some_and(|(physical_end, line_end)| physical_end > 0 && line_end <= physical_end)
+}
+
+/// Two evidence records that share an identity, or whose physical ranges
+/// overlap within one artifact, cannot both be authoritative. Neither is
+/// admitted.
+fn evidence_identity_is_unique(bundle: &SccmSiteCoreBundle, evidence: &SccmEvidence) -> bool {
+    bundle
+        .evidence
+        .iter()
+        .filter(|candidate| {
+            candidate.evidence_id == evidence.evidence_id
+                || candidate.reference.entry_id == evidence.reference.entry_id
+                || references_overlap(&candidate.reference, &evidence.reference)
+        })
+        .take(2)
+        .count()
+        == 1
+}
+
+fn references_overlap(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> bool {
+    if left.artifact_id != right.artifact_id {
+        return false;
+    }
+    matches!(
+        (
+            left.line_start,
+            left.line_end,
+            right.line_start,
+            right.line_end,
+        ),
+        (Some(left_start), Some(left_end), Some(right_start), Some(right_end))
+            if left_start <= right_end && right_start <= left_end
+    )
+}
+
+fn compare_references(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> Ordering {
+    left.artifact_id
+        .cmp(&right.artifact_id)
+        .then_with(|| left.line_start.cmp(&right.line_start))
+        .then_with(|| left.line_end.cmp(&right.line_end))
+        .then_with(|| left.entry_id.cmp(&right.entry_id))
+}
+
+fn rotation_name(rotation: &SccmRotation) -> Option<String> {
+    Some(match rotation {
+        SccmRotation::Current => "current".to_owned(),
+        SccmRotation::LoUnderscore => "loUnderscore".to_owned(),
+        SccmRotation::Numbered(value) => format!("numbered-{value}"),
+        SccmRotation::Timestamped(value) => format!("timestamped-{value}"),
+        SccmRotation::Unknown(_) => return None,
+    })
+}
+
+fn rotation_rank(rotation: &SccmRotation) -> u8 {
+    match rotation {
+        SccmRotation::Current => 0,
+        SccmRotation::LoUnderscore => 1,
+        SccmRotation::Numbered(_) => 2,
+        SccmRotation::Timestamped(_) => 3,
+        SccmRotation::Unknown(_) => 4,
+    }
+}
+
+fn role_sort_key(role: &SccmRole) -> &str {
+    match role {
+        SccmRole::Client => "client",
+        SccmRole::SiteServer => "siteServer",
+        SccmRole::ManagementPoint => "managementPoint",
+        SccmRole::DistributionPoint => "distributionPoint",
+        SccmRole::SoftwareUpdatePoint => "softwareUpdatePoint",
+        SccmRole::WsUs => "wsUs",
+        SccmRole::Provider => "provider",
+        SccmRole::AdminService => "adminService",
+        SccmRole::Unknown(value) => value,
+    }
+}

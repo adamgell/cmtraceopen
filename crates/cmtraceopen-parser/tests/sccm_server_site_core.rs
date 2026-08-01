@@ -376,8 +376,11 @@ fn declared_adversarial_assertions_hold() {
                         "{scenario}: transactions merged across component keys"
                     );
                 }
-                "phaseMayAdvance" | "terminalMayBeInferred" | "confirmedFailure"
-                | "componentKeyAdmitted" | "crossRotationFragmentJoin" => {
+                "phaseMayAdvance"
+                | "terminalMayBeInferred"
+                | "confirmedFailure"
+                | "componentKeyAdmitted"
+                | "crossRotationFragmentJoin" => {
                     assert_eq!(*value, Value::Bool(false), "{scenario}: {assertion}");
                     assert!(results.is_empty(), "{scenario}: {assertion}");
                 }
@@ -484,6 +487,17 @@ fn analysis_is_independent_of_source_and_evidence_order() {
 
 #[test]
 fn duplicate_artifact_identity_is_rejected_rather_than_selected_by_order() {
+    let baseline = analyze_site_core(&load_bundle("healthy"));
+    assert_eq!(
+        baseline
+            .results
+            .iter()
+            .map(|result| result.confidence)
+            .collect::<Vec<_>>(),
+        vec![cmtraceopen_parser::sccm::server::windows::SccmSiteCoreConfidence::High],
+        "the healthy baseline must be a high-confidence result"
+    );
+
     let mut bundle = load_bundle("healthy");
     let duplicate = bundle
         .sources
@@ -491,12 +505,28 @@ fn duplicate_artifact_identity_is_rejected_rather_than_selected_by_order() {
         .find(|source| source.source_group == "server-sitecomp")
         .expect("healthy bundle declares a sitecomp source")
         .clone();
+    let duplicated_id = duplicate.artifact.artifact_id.clone();
     bundle.sources.push(duplicate);
 
     let analysis = analyze_site_core(&bundle);
     assert!(
-        analysis.results.is_empty(),
-        "a duplicated artifact identity must fail closed instead of selecting by vector order"
+        analysis.results.iter().all(|result| result
+            .evidence
+            .iter()
+            .all(|evidence| evidence.artifact_id != duplicated_id)),
+        "an ambiguous artifact identity must never be resolved by vector order"
+    );
+    assert!(
+        analysis.results.iter().all(|result| result.confidence
+            != cmtraceopen_parser::sccm::server::windows::SccmSiteCoreConfidence::High),
+        "losing the ambiguous source must lower confidence rather than keep the prior claim"
+    );
+    assert!(
+        analysis
+            .coverage_gaps
+            .iter()
+            .any(|gap| gap.artifact_id == duplicated_id),
+        "the ambiguous source must be surfaced as an explicit coverage gap"
     );
 }
 
@@ -512,11 +542,10 @@ fn colliding_evidence_identity_is_rejected() {
 
     let analysis = analyze_site_core(&bundle);
     assert!(
-        analysis
-            .results
+        analysis.results.iter().all(|result| result
+            .evidence
             .iter()
-            .all(|result| result.evidence.iter().all(|evidence| evidence.entry_id
-                != bundle.evidence[0].reference.entry_id)),
+            .all(|evidence| evidence.entry_id != bundle.evidence[0].reference.entry_id)),
         "a colliding evidence identity must never be admitted as a fact"
     );
 }
