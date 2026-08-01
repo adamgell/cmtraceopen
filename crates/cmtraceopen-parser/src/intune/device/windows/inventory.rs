@@ -163,10 +163,35 @@ pub fn parse_content(
     content: &str,
     dialect: DeviceInventoryLogDialect,
 ) -> (Vec<LogEntry>, u32) {
+    parse_records(file_path, content.lines(), dialect)
+}
+
+/// Parse already-split Device Inventory physical lines.
+///
+/// Incremental callers already hold the lines, so this spares them the
+/// whole-batch rejoin that `parse_content` would otherwise require. The two
+/// entry points are the same parse and must stay observationally identical.
+pub fn parse_lines(
+    file_path: &str,
+    lines: &[&str],
+    dialect: DeviceInventoryLogDialect,
+) -> (Vec<LogEntry>, u32) {
+    parse_records(file_path, lines.iter().copied(), dialect)
+}
+
+/// Every dialect attaches a non-header line to the record above it, so a
+/// Device Inventory record is a logical record for all three dialects. Callers
+/// that frame input themselves must use [`frame_logical_records`] to keep
+/// incremental framing identical to this whole-input reading.
+fn parse_records<'a>(
+    file_path: &str,
+    lines: impl Iterator<Item = &'a str>,
+    dialect: DeviceInventoryLogDialect,
+) -> (Vec<LogEntry>, u32) {
     let mut records: Vec<LogEntry> = Vec::new();
     let mut parse_errors = 0;
 
-    for (index, raw_line) in content.lines().enumerate() {
+    for (index, raw_line) in lines.enumerate() {
         let line_number = (index + 1) as u32;
         let line = raw_line.trim_end_matches('\r');
         if line.is_empty() {

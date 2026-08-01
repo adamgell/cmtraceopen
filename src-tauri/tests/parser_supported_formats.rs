@@ -324,7 +324,7 @@ fn text_contract_intune_device_inventory_harvester() {
         &selection,
         ParserKind::IntuneDeviceInventory,
         ParserImplementation::IntuneDeviceInventory,
-        RecordFraming::PhysicalLine,
+        RecordFraming::LogicalRecord,
     );
     assert_eq!(
         selection.specialization,

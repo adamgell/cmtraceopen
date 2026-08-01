@@ -1,9 +1,10 @@
 use cmtraceopen_parser::{
     intune::device::windows::inventory::{
-        detect_dialect, parse_content, DeviceInventoryLogDialect,
+        detect_dialect, frame_logical_records, parse_content, parse_lines,
+        DeviceInventoryLogDialect,
     },
     models::log_entry::{
-        LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
+        LogEntry, LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
         ParserSpecialization, RecordFraming, Severity,
     },
     parser::{
@@ -255,13 +256,100 @@ fn preserves_unknown_levels_orphans_crlf_and_truncated_final_records() {
 }
 
 #[test]
+fn parse_lines_is_observationally_identical_to_parse_content() {
+    // Incremental callers already hold physical lines, so they parse them
+    // directly instead of rejoining them into one buffer. The two entry points
+    // must not drift.
+    for (content, dialect) in [
+        (HARVESTER, DeviceInventoryLogDialect::Harvester),
+        (ADAPTOR, DeviceInventoryLogDialect::InventoryAdaptor),
+        (ROTATION_FAILURE, DeviceInventoryLogDialect::RotationFailure),
+    ] {
+        let (from_content, content_errors) = parse_content("Device.log", content, dialect);
+        let lines: Vec<&str> = content.lines().collect();
+        let (from_lines, line_errors) = parse_lines("Device.log", &lines, dialect);
+
+        assert_eq!(content_errors, line_errors);
+        assert_eq!(projection(&from_content), projection(&from_lines));
+        assert!(!from_lines.is_empty());
+    }
+}
+
+#[test]
+fn harvester_continuations_frame_incrementally_the_way_they_parse() {
+    // Harvester reports LogicalRecord framing because a non-header line
+    // attaches to the record above it. A continuation that arrives in a later
+    // append must therefore reproduce the whole-file reading rather than
+    // becoming a detached record.
+    let header = "7/30/2026 6:00:54 AM [Information] First recognized record.";
+    let continuation = "trailing continuation";
+    let next_header = "7/30/2026 6:00:55 AM [Warning] Second record.";
+    let whole_file_content = format!("{header}\n{continuation}\n{next_header}");
+
+    let first = frame_logical_records(DeviceInventoryLogDialect::Harvester, None, &[header], 1024);
+    assert!(
+        first.completed_records.is_empty(),
+        "a harvester header must stay pending until its continuations are known"
+    );
+
+    let second = frame_logical_records(
+        DeviceInventoryLogDialect::Harvester,
+        first.pending_record,
+        &[continuation, next_header],
+        1024,
+    );
+
+    // Each framed record is parsed on its own, exactly as tailing parses it.
+    let incremental: Vec<(Severity, String)> = second
+        .completed_records
+        .iter()
+        .chain(second.pending_record.iter())
+        .flat_map(|record| {
+            let (entries, _) = parse_content(
+                "IntuneInventoryHarvesterLog.log",
+                record,
+                DeviceInventoryLogDialect::Harvester,
+            );
+            entries
+                .into_iter()
+                .map(|entry| (entry.severity, entry.message))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    let (whole_file, _) = parse_content(
+        "IntuneInventoryHarvesterLog.log",
+        &whole_file_content,
+        DeviceInventoryLogDialect::Harvester,
+    );
+    let expected: Vec<(Severity, String)> = whole_file
+        .into_iter()
+        .map(|entry| (entry.severity, entry.message))
+        .collect();
+
+    assert_eq!(incremental, expected);
+    assert_eq!(
+        incremental[0].1,
+        "First recognized record.\ntrailing continuation"
+    );
+}
+
+/// Compare entries by the fields the parse contract owns.
+fn projection(entries: &[LogEntry]) -> Vec<(u32, Severity, String)> {
+    entries
+        .iter()
+        .map(|entry| (entry.line_number, entry.severity, entry.message.clone()))
+        .collect()
+}
+
+#[test]
 fn dispatcher_selects_each_device_inventory_dialect_with_stable_metadata() {
     let cases = [
         (
             "IntuneInventoryHarvesterLog.log",
             HARVESTER,
             ParserSpecialization::IntuneDeviceInventoryHarvester,
-            RecordFraming::PhysicalLine,
+            RecordFraming::LogicalRecord,
             3,
         ),
         (

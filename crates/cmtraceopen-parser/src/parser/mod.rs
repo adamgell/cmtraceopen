@@ -116,7 +116,7 @@ pub fn parse_lines_with_selection(
             // the whole parse. All three dialects are timestamp-led, so the
             // fallback still produces usable records.
             match device_inventory_dialect(selection.specialization) {
-                Some(dialect) => inventory::parse_content(file_path, &lines.join("\n"), dialect),
+                Some(dialect) => inventory::parse_lines(file_path, lines, dialect),
                 None => timestamped::parse_lines(lines, file_path, selection.date_order),
             }
         }

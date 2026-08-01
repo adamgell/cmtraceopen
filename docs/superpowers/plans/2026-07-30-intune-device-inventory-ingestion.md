@@ -82,9 +82,14 @@ ParserSpecialization::IntuneDeviceInventoryAdaptor
 ParserSpecialization::IntuneDeviceInventoryRotationFailure
 ```
 
-All three use `LogFormat::Timestamped`. Harvester selects
-`RecordFraming::PhysicalLine`; Inventory Adaptor and Rotation Failure select
-`RecordFraming::LogicalRecord`.
+All three use `LogFormat::Timestamped` and `RecordFraming::LogicalRecord`.
+
+Harvester was planned as `RecordFraming::PhysicalLine` because one header
+normally frames one physical line. Implementation review corrected that: the
+parser attaches a non-header line to the record above it in every dialect, so
+reporting `PhysicalLine` would have both misdescribed the parse for consumers
+and let tailing emit a harvester continuation as a detached record while the
+initial parse attached it.
 
 ---
 

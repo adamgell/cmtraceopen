@@ -736,7 +736,7 @@ fn intune_device_inventory_corpus_selects_and_frames_harvester_and_adaptor_recor
         "IntuneDeviceInventory",
         "Dedicated",
         "Structured",
-        "PhysicalLine",
+        "LogicalRecord",
         "Timestamped",
     );
     assert_specialization(&harvester.selection, Some("IntuneDeviceInventoryHarvester"));

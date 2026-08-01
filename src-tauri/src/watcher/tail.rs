@@ -46,6 +46,15 @@ impl TailBatch {
         self.parse_errors = self.parse_errors.saturating_add(other.parse_errors);
         self.reset |= other.reset;
     }
+
+    /// Whether the batch carries something a consumer must see.
+    ///
+    /// Parse errors count on their own: a batch that only reports malformed
+    /// incremental input or a framing overflow still has to reach the session,
+    /// otherwise those failures stay invisible until the tail stops.
+    fn is_reportable(&self) -> bool {
+        self.reset || !self.entries.is_empty() || self.parse_errors > 0
+    }
 }
 
 struct PendingLogicalRecord {
@@ -411,6 +420,12 @@ fn inventory_logical_dialect(selection: &ResolvedParser) -> Option<DeviceInvento
     }
 
     match selection.specialization {
+        // Harvester headers usually frame a single line, but the parser still
+        // attaches a non-header line to the record above it, so tailing has to
+        // frame it the same way the initial parse does.
+        Some(ParserSpecialization::IntuneDeviceInventoryHarvester) => {
+            Some(DeviceInventoryLogDialect::Harvester)
+        }
         Some(ParserSpecialization::IntuneDeviceInventoryAdaptor) => {
             Some(DeviceInventoryLogDialect::InventoryAdaptor)
         }
@@ -556,7 +571,7 @@ where
         loop {
             if stop_flag_clone.load(Ordering::Relaxed) {
                 let batch = tail_reader.flush_pending_logical_record();
-                if !batch.entries.is_empty() || batch.parse_errors > 0 {
+                if batch.is_reportable() {
                     on_new_entries(batch);
                 }
                 log::info!("Tail watcher stopped for {}", watch_path.display());
@@ -573,7 +588,7 @@ where
                                 && !paused_clone.load(Ordering::Relaxed) =>
                         {
                             if let Ok(batch) = tail_reader.read_new_entries() {
-                                if batch.reset || !batch.entries.is_empty() {
+                                if batch.is_reportable() {
                                     on_new_entries(batch);
                                 }
                             }
@@ -588,7 +603,7 @@ where
                     // Periodic poll — check for changes even without FS event
                     if !paused_clone.load(Ordering::Relaxed) {
                         if let Ok(batch) = tail_reader.read_new_entries() {
-                            if batch.reset || !batch.entries.is_empty() {
+                            if batch.is_reportable() {
                                 on_new_entries(batch);
                             }
                         }
@@ -596,7 +611,7 @@ where
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     let batch = tail_reader.flush_pending_logical_record();
-                    if !batch.entries.is_empty() || batch.parse_errors > 0 {
+                    if batch.is_reportable() {
                         on_new_entries(batch);
                     }
                     log::info!("Watcher channel disconnected");
@@ -612,7 +627,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::log_entry::{LogFormat, ParserSpecialization};
+    use crate::models::log_entry::{LogFormat, ParserSpecialization, Severity};
     use crate::parser;
     use crate::parser::detect::ResolvedParser;
     use crate::parser::timestamped::DateOrder;
@@ -1085,6 +1100,85 @@ mod tests {
         assert_eq!(batch.parse_errors, 0);
 
         fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_attaches_split_harvester_continuation() {
+        // The harvester dialect reports LogicalRecord framing because the
+        // initial parse attaches a non-header line to the record above it.
+        // Tailing must reach the same reading when the continuation lands in a
+        // later append instead of emitting a detached record.
+        let path = unique_test_path("inventory-harvester-continuation");
+        fs::write(&path, "").expect("should create empty harvester log");
+
+        let selection = ResolvedParser::intune_device_inventory(
+            cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::Harvester,
+        );
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(
+            file,
+            "7/30/2026 6:00:54 AM [Information] First recognized record."
+        )
+        .expect("should append harvester header");
+        drop(file);
+
+        let header_batch = reader
+            .read_new_entries()
+            .expect("header tail read should succeed");
+        assert!(
+            header_batch.entries.is_empty(),
+            "the newest harvester record must stay pending during the debounce"
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "trailing continuation").expect("should append continuation");
+        writeln!(file, "7/30/2026 6:00:55 AM [Warning] Second record.")
+            .expect("should append the next harvester header");
+        drop(file);
+
+        let continuation_batch = reader
+            .read_new_entries()
+            .expect("continuation tail read should succeed");
+        assert_eq!(continuation_batch.entries.len(), 1);
+        assert_eq!(
+            continuation_batch.entries[0].message,
+            "First recognized record.\ntrailing continuation"
+        );
+        assert_eq!(continuation_batch.entries[0].severity, Severity::Info);
+
+        std::thread::sleep(std::time::Duration::from_millis(275));
+        let flushed = reader
+            .read_new_entries()
+            .expect("quiescent tail read should flush");
+        assert_eq!(flushed.entries.len(), 1);
+        assert_eq!(flushed.entries[0].message, "Second record.");
+        assert_eq!(flushed.entries[0].severity, Severity::Warning);
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_batch_reports_parse_errors_even_without_entries() {
+        // Every emission site in the watcher loop shares this predicate, so a
+        // batch that only carries parse errors still reaches the session
+        // instead of being dropped until the tail stops.
+        assert!(!TailBatch::empty(false).is_reportable());
+        assert!(TailBatch::empty(true).is_reportable());
+
+        let parse_errors_only = TailBatch {
+            entries: Vec::new(),
+            parse_errors: 1,
+            reset: false,
+        };
+        assert!(parse_errors_only.is_reportable());
     }
 
     #[test]

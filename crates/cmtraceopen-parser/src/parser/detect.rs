@@ -239,20 +239,23 @@ impl ResolvedParser {
         )
     }
 
+    /// All three Device Inventory dialects report `RecordFraming::LogicalRecord`.
+    ///
+    /// Harvester headers usually frame one physical line, but the parser
+    /// attaches a non-header line to the record above it in every dialect, so
+    /// reporting `PhysicalLine` would both misdescribe the parse and let
+    /// tailing emit a continuation as a detached record.
     pub fn intune_device_inventory(dialect: DeviceInventoryLogDialect) -> Self {
-        let (framing, specialization) = match dialect {
-            DeviceInventoryLogDialect::Harvester => (
-                RecordFraming::PhysicalLine,
-                ParserSpecialization::IntuneDeviceInventoryHarvester,
-            ),
-            DeviceInventoryLogDialect::InventoryAdaptor => (
-                RecordFraming::LogicalRecord,
-                ParserSpecialization::IntuneDeviceInventoryAdaptor,
-            ),
-            DeviceInventoryLogDialect::RotationFailure => (
-                RecordFraming::LogicalRecord,
-                ParserSpecialization::IntuneDeviceInventoryRotationFailure,
-            ),
+        let specialization = match dialect {
+            DeviceInventoryLogDialect::Harvester => {
+                ParserSpecialization::IntuneDeviceInventoryHarvester
+            }
+            DeviceInventoryLogDialect::InventoryAdaptor => {
+                ParserSpecialization::IntuneDeviceInventoryAdaptor
+            }
+            DeviceInventoryLogDialect::RotationFailure => {
+                ParserSpecialization::IntuneDeviceInventoryRotationFailure
+            }
         };
 
         Self::new(
@@ -260,7 +263,7 @@ impl ResolvedParser {
             ParserImplementation::IntuneDeviceInventory,
             ParserProvenance::Dedicated,
             ParseQuality::Structured,
-            framing,
+            RecordFraming::LogicalRecord,
             DateOrder::MonthFirst,
             Some(specialization),
         )
