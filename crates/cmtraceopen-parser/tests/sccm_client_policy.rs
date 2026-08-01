@@ -417,6 +417,31 @@ fn finding_signature(class: &str, confidence: &str, next_group: Option<&str>) ->
     format!("{class}|{confidence}|{}", next_group.unwrap_or("<none>"))
 }
 
+/// The logical group a finding-level request belongs to.
+///
+/// Every declared client policy source is listed, so a request naming a source
+/// the frozen expectations never spelled out still projects back to its group
+/// instead of silently reading as "no group requested".
+fn finding_request_group(logical_id: &str) -> Option<&'static str> {
+    match logical_id {
+        "clientLocation" | "locationServices" | "ccmMessaging" => Some("client-location"),
+        "policyAgent" | "policyAgentProvider" | "policyEvaluator" | "scheduler" => {
+            Some("client-policy-agent")
+        }
+        "ciAgent" | "ciDownloader" | "stateMessage" | "statusAgent" => Some("client-policy-state"),
+        _ => None,
+    }
+}
+
+fn finding_request_groups(finding: &Value) -> BTreeSet<&'static str> {
+    finding["nextArtifacts"]
+        .as_array()
+        .expect("finding requests")
+        .iter()
+        .filter_map(|request| finding_request_group(request["logicalId"].as_str()?))
+        .collect()
+}
+
 fn expected_finding_signatures(expected: &Value) -> Vec<String> {
     let mut signatures = expected["findings"]
         .as_array()
@@ -450,17 +475,7 @@ fn actual_finding_signatures(analysis: &Value) -> Vec<String> {
         .map(|finding| {
             assert_eq!(finding["phase"], "policy");
             assert_eq!(finding["role"], "client");
-            let mut groups = finding["nextArtifacts"]
-                .as_array()
-                .expect("finding requests")
-                .iter()
-                .filter_map(|request| match request["logicalId"].as_str()? {
-                    "clientLocation" => Some("client-location"),
-                    "policyAgent" => Some("client-policy-agent"),
-                    "ciAgent" | "stateMessage" => Some("client-policy-state"),
-                    _ => None,
-                })
-                .collect::<BTreeSet<_>>();
+            let mut groups = finding_request_groups(finding);
             assert!(groups.len() <= 1, "one finding requested unrelated groups");
             finding_signature(
                 finding["class"].as_str().expect("finding class"),
@@ -1088,23 +1103,7 @@ fn policy_unusable_cross_artifact_time_never_proves_an_ordered_sequence() {
         );
 
         // A finding never mixes unrelated logical groups.
-        for finding in analysis["findings"].as_array().expect("findings") {
-            let groups = finding["nextArtifacts"]
-                .as_array()
-                .expect("finding requests")
-                .iter()
-                .filter_map(|request| match request["logicalId"].as_str()? {
-                    "clientLocation" => Some("client-location"),
-                    "policyAgent" => Some("client-policy-agent"),
-                    "ciAgent" | "stateMessage" => Some("client-policy-state"),
-                    _ => None,
-                })
-                .collect::<BTreeSet<_>>();
-            assert!(
-                groups.len() <= 1,
-                "{ordering_state:?}: one finding requested unrelated groups {groups:?}"
-            );
-        }
+        assert_findings_request_one_group(&analysis, &format!("{ordering_state:?}"));
     }
 }
 
@@ -1425,21 +1424,7 @@ fn finding_request_ids(analysis: &Value) -> Vec<String> {
 
 fn assert_findings_request_one_group(analysis: &Value, context: &str) {
     for finding in analysis["findings"].as_array().expect("findings") {
-        let groups = finding["nextArtifacts"]
-            .as_array()
-            .expect("finding requests")
-            .iter()
-            .filter_map(|request| match request["logicalId"].as_str()? {
-                "clientLocation" | "locationServices" | "ccmMessaging" => Some("client-location"),
-                "policyAgent" | "policyAgentProvider" | "policyEvaluator" | "scheduler" => {
-                    Some("client-policy-agent")
-                }
-                "ciAgent" | "ciDownloader" | "stateMessage" | "statusAgent" => {
-                    Some("client-policy-state")
-                }
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
+        let groups = finding_request_groups(finding);
         assert!(
             groups.len() <= 1,
             "{context}: one finding requested unrelated groups {groups:?}"
@@ -1467,6 +1452,33 @@ fn policy_missing_schedule_phase_requests_the_scheduler_source() {
         !requests.contains(&"policyAgent".to_owned()),
         "PolicyAgent.log is fully captured, asking for it cannot close the gap, got {requests:?}"
     );
+}
+
+#[test]
+fn policy_every_missing_phase_names_a_declared_source() {
+    // A request naming an undeclared logical id fails finding validation and
+    // the whole finding disappears, so an empty request list here is also the
+    // catalog guard for every source the reducer can name.
+    for (marker, expected_source) in [
+        ("Download succeeded", "policyAgent"),
+        ("Persist succeeded", "policyAgent"),
+        ("Schedule succeeded", "scheduler"),
+        ("Evaluate succeeded", "ciAgent"),
+        ("Report succeeded", "stateMessage"),
+    ] {
+        let mut bundle = load_bundle("complete");
+        bundle
+            .evidence
+            .retain(|evidence| !evidence.message.contains(marker));
+
+        let analysis = analysis_json(&bundle);
+        let requests = finding_request_ids(&analysis);
+        assert!(
+            requests.contains(&expected_source.to_owned()),
+            "a missing {marker} must ask for {expected_source}, got {requests:?}"
+        );
+        assert_findings_request_one_group(&analysis, marker);
+    }
 }
 
 #[test]

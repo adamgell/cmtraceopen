@@ -173,6 +173,12 @@ struct PolicyFact {
     policy_id: String,
     phase: SccmPolicyPhase,
     outcome: FactOutcome,
+    /// The declared source that recorded this fact.
+    ///
+    /// Carried on the fact so a repair request can name the file that holds the
+    /// evidence. Without it the reducer can only guess from the phase, and the
+    /// guess is wrong whenever a phase has more than one admissible source.
+    source: &'static PolicySource,
     reference: SccmEvidenceRef,
     utc_millis: Option<i64>,
     time_comparable: bool,
@@ -192,15 +198,101 @@ enum PhaseResolution {
 /// Request wording is keyed on this rather than on the phase, so a reason can
 /// never assert a state the evidence does not have. A missing phase and a
 /// deferred phase can both land on the scheduler, and only one of them is a
-/// retry.
+/// retry. [`RequestCause::UnusableTime`] and [`RequestCause::InvertedTime`] are
+/// separated for the same reason: an unreadable offset and two valid offsets in
+/// the wrong order need different wording and different remedies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RequestCause {
     MissingPhase,
     Deferred,
     ConflictingOutcomes,
     UnusableTime,
+    InvertedTime,
     LocationContext,
 }
+
+/// One repair, named by the sources that would actually supply it.
+///
+/// The group answers the coverage question and the sources answer the collection
+/// question, and both are read off the artifact holding the evidence rather than
+/// off the phase. Deriving them from the phase is what let `Scheduler.log` and
+/// `PolicyEvaluator.log` be undeliverable: no phase maps to them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PolicyRepair {
+    group: &'static str,
+    sources: Vec<&'static PolicySource>,
+    cause: RequestCause,
+}
+
+/// One declared client policy source: its file basename, its catalog logical
+/// name, and the logical group whose coverage it answers for.
+///
+/// Group membership and request naming read the same row, so a source can never
+/// be citable for coverage yet unnameable in a request.
+#[derive(Debug, PartialEq, Eq)]
+struct PolicySource {
+    basename: &'static str,
+    logical_name: &'static str,
+    group: &'static str,
+}
+
+static POLICY_SOURCES: [PolicySource; 11] = [
+    PolicySource {
+        basename: "PolicyAgent",
+        logical_name: "policyAgent",
+        group: POLICY_AGENT_GROUP,
+    },
+    PolicySource {
+        basename: "PolicyAgentProvider",
+        logical_name: "policyAgentProvider",
+        group: POLICY_AGENT_GROUP,
+    },
+    PolicySource {
+        basename: "PolicyEvaluator",
+        logical_name: "policyEvaluator",
+        group: POLICY_AGENT_GROUP,
+    },
+    PolicySource {
+        basename: "Scheduler",
+        logical_name: "scheduler",
+        group: POLICY_AGENT_GROUP,
+    },
+    PolicySource {
+        basename: "CIAgent",
+        logical_name: "ciAgent",
+        group: POLICY_STATE_GROUP,
+    },
+    PolicySource {
+        basename: "CIDownloader",
+        logical_name: "ciDownloader",
+        group: POLICY_STATE_GROUP,
+    },
+    PolicySource {
+        basename: "StateMessage",
+        logical_name: "stateMessage",
+        group: POLICY_STATE_GROUP,
+    },
+    PolicySource {
+        basename: "StatusAgent",
+        logical_name: "statusAgent",
+        group: POLICY_STATE_GROUP,
+    },
+    PolicySource {
+        basename: "ClientLocation",
+        logical_name: "clientLocation",
+        group: CLIENT_LOCATION_GROUP,
+    },
+    PolicySource {
+        basename: "LocationServices",
+        logical_name: "locationServices",
+        group: CLIENT_LOCATION_GROUP,
+    },
+    PolicySource {
+        basename: "CcmMessaging",
+        logical_name: "ccmMessaging",
+        group: CLIENT_LOCATION_GROUP,
+    },
+];
 
 struct ReductionContext<'a> {
     bundle: &'a SccmNormalizedBundle,
@@ -222,6 +314,9 @@ struct ReducedTransaction {
     finding: Option<SccmFinding>,
     coverage_gaps: Vec<SccmFindingCoverageGap>,
     unreached_failure: Option<UnreachedFailure>,
+    /// The repairs behind `transaction.next_artifacts`, kept so the caller can
+    /// name the same sources without re-deriving them from a group.
+    repairs: Vec<PolicyRepair>,
 }
 
 pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnalysis {
@@ -302,7 +397,7 @@ pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnaly
                     &reduced.transaction.key.assignment_id,
                     unreached.phase,
                     unreached.evidence,
-                    specific_finding_requests(&requests),
+                    finding_requests(&reduced.repairs),
                 ) {
                     findings.push(finding);
                 }
@@ -417,7 +512,7 @@ fn reduce_policy_transaction(
     let mut classification = SccmWorkflowClassification::InsufficientEvidence;
     let mut confidence = SccmWorkflowConfidence::Medium;
     let mut coverage_gap_artifact_ids = Vec::new();
-    let mut next_artifacts = Vec::new();
+    let mut repairs: Vec<PolicyRepair> = Vec::new();
     let mut terminal_failure_references = Vec::new();
 
     for phase in POLICY_PHASES {
@@ -427,9 +522,9 @@ fn reduce_policy_transaction(
             .collect::<Vec<_>>();
         if phase_facts.is_empty() {
             current_phase = last_successful_phase.unwrap_or(SccmPolicyPhase::Request);
-            let logical_id = required_group_for_phase(phase);
-            coverage_gap_artifact_ids.push(logical_id.to_owned());
-            next_artifacts.push(request_for_cause(logical_id, RequestCause::MissingPhase));
+            let repair = repair_for_missing_phase(phase);
+            coverage_gap_artifact_ids.push(repair.group.to_owned());
+            repairs.push(repair);
             break;
         }
 
@@ -458,10 +553,7 @@ fn reduce_policy_transaction(
                 {
                     confidence = SccmWorkflowConfidence::Medium;
                     coverage_gap_artifact_ids.push(CLIENT_LOCATION_GROUP.to_owned());
-                    next_artifacts.push(request_for_cause(
-                        CLIENT_LOCATION_GROUP,
-                        RequestCause::LocationContext,
-                    ));
+                    repairs.push(client_location_repair());
                 }
                 break;
             }
@@ -469,50 +561,57 @@ fn reduce_policy_transaction(
                 state = SccmWorkflowState::Deferred;
                 classification = SccmWorkflowClassification::BlockedOrDeferred;
                 confidence = SccmWorkflowConfidence::High;
-                next_artifacts.push(request_for_cause(
-                    POLICY_AGENT_GROUP,
-                    RequestCause::Deferred,
-                ));
+                let deferred = phase_facts
+                    .iter()
+                    .filter(|fact| fact.outcome == FactOutcome::Deferred)
+                    .copied()
+                    .collect::<Vec<_>>();
+                repairs.extend(repair_from_facts(&deferred, RequestCause::Deferred));
                 break;
             }
             PhaseResolution::Contradictory(cause) => {
                 state = SccmWorkflowState::Contradictory;
                 classification = SccmWorkflowClassification::ContradictoryEvidence;
                 confidence = SccmWorkflowConfidence::Low;
-                next_artifacts.push(request_for_cause(required_group_for_phase(phase), cause));
+                repairs.extend(repair_from_facts(&phase_facts, cause));
                 break;
             }
         }
     }
 
-    let inverted_groups = cross_phase_time_inversion_groups(facts, current_phase);
-    if !inverted_groups.is_empty() {
+    // A chronology break disowns the order the loop's request presupposes: a
+    // phase can only be called missing once the surrounding phases can be
+    // sequenced. The break replaces the request rather than joining it, so one
+    // finding asks for one repair. The coverage gap the loop recorded stays,
+    // because an absent source is absent whatever the clocks say.
+    if let Some(repair) = cross_phase_time_inversion_repair(facts, current_phase) {
         state = SccmWorkflowState::Contradictory;
         classification = SccmWorkflowClassification::ContradictoryEvidence;
         confidence = SccmWorkflowConfidence::Low;
         last_successful_phase = None;
         terminal_failure_references.clear();
-        for logical_id in inverted_groups {
-            next_artifacts.push(request_for_cause(logical_id, RequestCause::UnusableTime));
-        }
+        repairs.clear();
+        repairs.push(repair);
     } else if state != SccmWorkflowState::Contradictory {
         // Two sources can only be placed in sequence by comparable time. A
         // contradiction already carries the most conservative answer, so only a
         // transaction still claiming an order is capped here.
-        if let Some(logical_id) = unprovable_chronology_group(facts, current_phase) {
+        if let Some(repair) = unprovable_chronology_repair(facts, current_phase) {
             if state == SccmWorkflowState::Succeeded {
                 state = SccmWorkflowState::Incomplete;
                 classification = SccmWorkflowClassification::InsufficientEvidence;
             }
             confidence = SccmWorkflowConfidence::Low;
             last_successful_phase = None;
-            coverage_gap_artifact_ids.push(logical_id.to_owned());
-            next_artifacts.push(request_for_cause(logical_id, RequestCause::UnusableTime));
+            coverage_gap_artifact_ids.push(repair.group.to_owned());
+            repairs.clear();
+            repairs.push(repair);
         }
     }
 
     coverage_gap_artifact_ids.sort();
     coverage_gap_artifact_ids.dedup();
+    let mut next_artifacts = repairs.iter().map(workflow_request_for).collect::<Vec<_>>();
     next_artifacts.sort_by(|left, right| {
         left.logical_id
             .cmp(&right.logical_id)
@@ -557,6 +656,7 @@ fn reduce_policy_transaction(
         evidence,
         terminal_failure_references,
         gaps.clone(),
+        &repairs,
     );
 
     Some(ReducedTransaction {
@@ -564,6 +664,7 @@ fn reduce_policy_transaction(
         finding,
         coverage_gaps: gaps,
         unreached_failure,
+        repairs,
     })
 }
 
@@ -602,34 +703,45 @@ fn resolve_phase(facts: &[&PolicyFact]) -> PhaseResolution {
 /// artifact vector order the admission authority. Role scoping alone is not
 /// enough: two client artifacts can carry the same id and disagree about
 /// basename or coverage. This is the artifact-level twin of
-/// [`quarantine_identity_collisions`]: an id that cannot be resolved is
+/// [`quarantine_overlapping_evidence`]: an id that cannot be resolved is
 /// withheld rather than guessed. An exactly repeated entry is not a conflict,
 /// because every copy would answer identically.
+///
+/// The reported ambiguity is scoped, not global. An id is only reported when
+/// one of the colliding artifacts would otherwise have been admitted as policy
+/// evidence, because that is the only case where the clash costs this reducer a
+/// source. A duplicated `AppEnforce.log` id is a real intake defect but not a
+/// policy symptom, and escalating it would fabricate a policy finding and a
+/// `PolicyAgent.log` request out of a log this reducer never reads.
 fn admissible_client_artifacts(
     bundle: &SccmNormalizedBundle,
 ) -> (BTreeMap<&str, &SccmArtifact>, BTreeSet<&str>) {
-    let mut by_id: BTreeMap<&str, &SccmArtifact> = BTreeMap::new();
-    let mut ambiguous = BTreeSet::new();
-
+    let mut candidates: BTreeMap<&str, Vec<&SccmArtifact>> = BTreeMap::new();
     for artifact in bundle
         .artifacts
         .iter()
         .filter(|artifact| artifact.role == SccmRole::Client)
     {
-        let id = artifact.artifact_id.as_str();
-        match by_id.get(id) {
-            Some(seen) if *seen == artifact => {}
-            Some(_) => {
-                ambiguous.insert(id);
-            }
-            None => {
-                by_id.insert(id, artifact);
-            }
-        }
+        candidates
+            .entry(artifact.artifact_id.as_str())
+            .or_default()
+            .push(artifact);
     }
 
-    for id in &ambiguous {
-        by_id.remove(id);
+    let mut by_id = BTreeMap::new();
+    let mut ambiguous = BTreeSet::new();
+    for (id, artifacts) in candidates {
+        let Some(first) = artifacts.first().copied() else {
+            continue;
+        };
+        if artifacts.iter().all(|artifact| *artifact == first) {
+            by_id.insert(id, first);
+        } else if artifacts
+            .iter()
+            .any(|artifact| is_admitted_policy_artifact(artifact))
+        {
+            ambiguous.insert(id);
+        }
     }
     (by_id, ambiguous)
 }
@@ -750,6 +862,7 @@ fn resolution_for_outcome(outcome: FactOutcome) -> PhaseResolution {
 
 fn parse_policy_fact(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option<PolicyFact> {
     let (phase, outcome) = classify_policy_record(&evidence.message)?;
+    let source = policy_source(&artifact.display_name)?;
     if !source_allows_phase(&artifact.display_name, phase) {
         return None;
     }
@@ -786,6 +899,7 @@ fn parse_policy_fact(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option
         policy_id,
         phase,
         outcome,
+        source,
         reference: evidence.reference.clone(),
         utc_millis: evidence.timestamp.utc_millis,
         time_comparable: matches!(
@@ -972,11 +1086,18 @@ fn has_terminal_failure_signal(message: &str) -> bool {
         && u32::from_str_radix(hex, 16).is_ok_and(|numeric| numeric != 0)
 }
 
-fn cross_phase_time_inversion_groups(
+/// The repair named by the earliest source in a cross-artifact time inversion.
+///
+/// Both sides of an inversion are normalized UTC by construction, so this is
+/// never an offset problem and the cause says so. Only the earliest record
+/// taking part is named: fanning out to every group involved would put two
+/// unrelated log families in one finding, and neither of the two clocks can be
+/// singled out as the wrong one anyway.
+fn cross_phase_time_inversion_repair(
     facts: &[PolicyFact],
     current_phase: SccmPolicyPhase,
-) -> BTreeSet<&'static str> {
-    let mut groups = BTreeSet::new();
+) -> Option<PolicyRepair> {
+    let mut inverted: Vec<&PolicyFact> = Vec::new();
     for earlier in facts.iter().filter(|fact| fact.phase <= current_phase) {
         for later in facts.iter().filter(|fact| fact.phase <= current_phase) {
             if earlier.phase >= later.phase
@@ -991,15 +1112,17 @@ fn cross_phase_time_inversion_groups(
                 continue;
             };
             if earlier_utc > later_utc {
-                groups.insert(required_group_for_phase(earlier.phase));
-                groups.insert(required_group_for_phase(later.phase));
+                inverted.push(earlier);
+                inverted.push(later);
             }
         }
     }
-    groups
+
+    let earliest = earliest_link(&inverted)?;
+    repair_from_facts(&[earliest], RequestCause::InvertedTime)
 }
 
-/// The group holding the earliest source whose time provenance breaks the chain.
+/// The repair named by the earliest source whose time provenance breaks the chain.
 ///
 /// Ordering two artifacts requires comparable time on both sides. Skipping such
 /// a pair would silently drop the only chronology guard the reducer has, so the
@@ -1007,10 +1130,10 @@ fn cross_phase_time_inversion_groups(
 /// artifact keep their source-local order and never break the chain. Only the
 /// earliest broken link is named, so the caller asks for one repair rather than
 /// mixing unrelated groups into a single finding.
-fn unprovable_chronology_group(
+fn unprovable_chronology_repair(
     facts: &[PolicyFact],
     current_phase: SccmPolicyPhase,
-) -> Option<&'static str> {
+) -> Option<PolicyRepair> {
     let observed = facts
         .iter()
         .filter(|fact| fact.phase <= current_phase)
@@ -1027,12 +1150,27 @@ fn unprovable_chronology_group(
         return None;
     }
 
-    observed
-        .iter()
+    let unusable = observed
+        .into_iter()
         .filter(|fact| !is_time_comparable(fact))
-        .map(|fact| fact.phase)
-        .min()
-        .map(required_group_for_phase)
+        .collect::<Vec<_>>();
+    let earliest = earliest_link(&unusable)?;
+    repair_from_facts(&[earliest], RequestCause::UnusableTime)
+}
+
+/// The earliest record in a broken chain, by phase then by reference.
+///
+/// The reference tie-break keeps the answer independent of input order when two
+/// sources record the same phase.
+fn earliest_link<'a>(facts: &[&'a PolicyFact]) -> Option<&'a PolicyFact> {
+    facts
+        .iter()
+        .min_by(|left, right| {
+            left.phase
+                .cmp(&right.phase)
+                .then_with(|| compare_evidence_refs(&left.reference, &right.reference))
+        })
+        .copied()
 }
 
 fn is_time_comparable(fact: &PolicyFact) -> bool {
@@ -1139,15 +1277,16 @@ fn canonical_basename(display_name: &str) -> &str {
     }
 }
 
+/// The declared policy source a captured file belongs to.
+fn policy_source(display_name: &str) -> Option<&'static PolicySource> {
+    let basename = canonical_basename(display_name);
+    POLICY_SOURCES
+        .iter()
+        .find(|source| source.basename == basename)
+}
+
 fn policy_group(display_name: &str) -> Option<&'static str> {
-    match canonical_basename(display_name) {
-        "PolicyAgent" | "PolicyAgentProvider" | "PolicyEvaluator" | "Scheduler" => {
-            Some(POLICY_AGENT_GROUP)
-        }
-        "CIAgent" | "CIDownloader" | "StateMessage" | "StatusAgent" => Some(POLICY_STATE_GROUP),
-        "ClientLocation" | "LocationServices" | "CcmMessaging" => Some(CLIENT_LOCATION_GROUP),
-        _ => None,
-    }
+    policy_source(display_name).map(|source| source.group)
 }
 
 fn is_admitted_policy_artifact(artifact: &SccmArtifact) -> bool {
@@ -1232,6 +1371,72 @@ fn required_group_for_phase(phase: SccmPolicyPhase) -> &'static str {
     }
 }
 
+/// The basename that would supply a phase nobody recorded.
+///
+/// A missing phase has no fact, so there is no artifact to read the answer off.
+/// The phase's own canonical source is named instead, which is the one case
+/// where deriving from the phase is the only thing the evidence allows. It must
+/// stay inside [`required_group_for_phase`] so a finding keeps one group.
+fn required_source_for_phase(phase: SccmPolicyPhase) -> &'static str {
+    match phase {
+        SccmPolicyPhase::Request | SccmPolicyPhase::Download | SccmPolicyPhase::Persist => {
+            "PolicyAgent"
+        }
+        SccmPolicyPhase::Schedule => "Scheduler",
+        SccmPolicyPhase::Evaluate => "CIAgent",
+        SccmPolicyPhase::Report => "StateMessage",
+    }
+}
+
+/// The repair for the client-location context a request failure needs.
+///
+/// No policy fact carries this group, so there is no artifact to read it off.
+/// The declared source is named directly.
+fn client_location_repair() -> PolicyRepair {
+    PolicyRepair {
+        group: CLIENT_LOCATION_GROUP,
+        sources: policy_source("ClientLocation").into_iter().collect(),
+        cause: RequestCause::LocationContext,
+    }
+}
+
+fn repair_for_missing_phase(phase: SccmPolicyPhase) -> PolicyRepair {
+    PolicyRepair {
+        group: required_group_for_phase(phase),
+        sources: policy_source(required_source_for_phase(phase))
+            .into_iter()
+            .collect(),
+        cause: RequestCause::MissingPhase,
+    }
+}
+
+/// The repair named by a set of facts that share one cause.
+///
+/// One finding carries one logical group, so the group of the earliest record
+/// decides, and every source of that group among the same facts is named. The
+/// group is read off the artifact, never off the phase: `CIDownloader.log`
+/// carries Download but answers for the policy-state family, and
+/// `PolicyEvaluator.log` carries Evaluate but answers for the policy-agent one.
+fn repair_from_facts(facts: &[&PolicyFact], cause: RequestCause) -> Option<PolicyRepair> {
+    let group = facts
+        .iter()
+        .min_by(|left, right| compare_evidence_refs(&left.reference, &right.reference))?
+        .source
+        .group;
+    let mut sources = facts
+        .iter()
+        .filter(|fact| fact.source.group == group)
+        .map(|fact| fact.source)
+        .collect::<Vec<_>>();
+    sources.sort_by_key(|source| source.logical_name);
+    sources.dedup();
+    Some(PolicyRepair {
+        group,
+        sources,
+        cause,
+    })
+}
+
 fn workflow_request(logical_id: &str, reason: &str) -> SccmWorkflowArtifactRequest {
     SccmWorkflowArtifactRequest {
         logical_id: logical_id.to_owned(),
@@ -1239,12 +1444,12 @@ fn workflow_request(logical_id: &str, reason: &str) -> SccmWorkflowArtifactReque
     }
 }
 
-/// Builds the artifact request for a group from the state that caused it.
+/// Builds the group-level artifact request from the state that caused it.
 ///
 /// Every reason is selected by cause first, so no wording can assert a state
 /// the evidence does not have. The group only refines which sources to name.
-fn request_for_cause(logical_id: &str, cause: RequestCause) -> SccmWorkflowArtifactRequest {
-    let reason = match (cause, logical_id) {
+fn workflow_request_for(repair: &PolicyRepair) -> SccmWorkflowArtifactRequest {
+    let reason = match (repair.cause, repair.group) {
         (RequestCause::LocationContext, _) => {
             "Capture bounded client-side location and transport context; do not infer a management-point cause."
         }
@@ -1257,6 +1462,15 @@ fn request_for_cause(logical_id: &str, cause: RequestCause) -> SccmWorkflowArtif
         (RequestCause::UnusableTime, _) => {
             "Recapture bounded policy-agent evidence with a valid timestamp offset; do not order by display time."
         }
+        // Both sides of an inversion are already normalized UTC, so nothing may
+        // claim the offset is unusable. What the evidence does show is two
+        // sources whose clocks disagree about the phase order.
+        (RequestCause::InvertedTime, POLICY_STATE_GROUP) => {
+            "Recapture bounded policy-state evidence from a source whose clock agrees with the rest of the capture; the recorded times contradict the phase order."
+        }
+        (RequestCause::InvertedTime, _) => {
+            "Recapture bounded policy-agent evidence from a source whose clock agrees with the rest of the capture; the recorded times contradict the phase order."
+        }
         (RequestCause::ConflictingOutcomes, POLICY_STATE_GROUP) => {
             "Recapture bounded policy-state evidence to resolve the conflicting client policy outcome."
         }
@@ -1264,14 +1478,14 @@ fn request_for_cause(logical_id: &str, cause: RequestCause) -> SccmWorkflowArtif
             "Recapture bounded policy-agent evidence to resolve the conflicting client policy outcome."
         }
         (RequestCause::MissingPhase, POLICY_STATE_GROUP) => {
-            "Capture bounded CIAgent and StateMessage evidence for Evaluate and Report."
+            "Capture bounded policy-state evidence for the missing client policy phase."
         }
         (RequestCause::MissingPhase, POLICY_AGENT_GROUP) => {
             "Capture bounded policy-agent evidence for the missing client policy phase."
         }
         (RequestCause::MissingPhase, _) => "Capture the bounded named SCCM client artifact.",
     };
-    workflow_request(logical_id, reason)
+    workflow_request(repair.group, reason)
 }
 
 /// Coverage gaps for one logical group, keeping every explicit non-outcome.
@@ -1460,6 +1674,7 @@ fn build_transaction_finding(
     evidence: Vec<SccmEvidenceRef>,
     terminal_failure_references: Vec<SccmEvidenceRef>,
     coverage_gaps: Vec<SccmFindingCoverageGap>,
+    repairs: &[PolicyRepair],
 ) -> Option<SccmFinding> {
     if transaction.classification == SccmWorkflowClassification::Success {
         return None;
@@ -1503,7 +1718,7 @@ fn build_transaction_finding(
         .into_iter()
         .map(SccmTerminalEvidence::observed_failure)
         .collect::<Vec<_>>();
-    let next_artifacts = specific_finding_requests(&transaction.next_artifacts);
+    let next_artifacts = finding_requests(repairs);
     SccmFindingBuilder::new(format!(
         "finding:policy:{}:{}",
         phase_name(transaction.phase),
@@ -1527,43 +1742,29 @@ fn build_transaction_finding(
     .ok()
 }
 
-fn specific_finding_requests(requests: &[SccmWorkflowArtifactRequest]) -> Vec<SccmArtifactRequest> {
-    let mut specific = Vec::new();
-    for request in requests {
-        match request.logical_id.as_str() {
-            CLIENT_LOCATION_GROUP => specific.push(SccmArtifactRequest {
-                logical_id: "clientLocation".to_owned(),
-                role: SccmRole::Client,
-                reason: "Collect the complete ClientLocation file.".to_owned(),
-            }),
-            POLICY_AGENT_GROUP => specific.push(SccmArtifactRequest {
-                logical_id: "policyAgent".to_owned(),
-                role: SccmRole::Client,
-                reason: "Collect the complete PolicyAgent file.".to_owned(),
-            }),
-            POLICY_STATE_GROUP => {
-                specific.push(SccmArtifactRequest {
-                    logical_id: "ciAgent".to_owned(),
-                    role: SccmRole::Client,
-                    reason: "Collect the complete CIAgent file.".to_owned(),
-                });
-                specific.push(SccmArtifactRequest {
-                    logical_id: "stateMessage".to_owned(),
-                    role: SccmRole::Client,
-                    reason: "Collect the complete StateMessage file.".to_owned(),
-                });
-            }
-            _ => {}
-        }
-    }
-    specific.sort_by(|left, right| {
+/// Turns repairs into requests for the files that would actually supply them.
+///
+/// The repair already carries the sources, so this never has to guess a file
+/// from a group. Expanding a group into its whole membership is what made a
+/// deferred `Scheduler.log` retry ask for `PolicyAgent.log`.
+fn finding_requests(repairs: &[PolicyRepair]) -> Vec<SccmArtifactRequest> {
+    let mut requests = repairs
+        .iter()
+        .flat_map(|repair| repair.sources.iter())
+        .map(|source| SccmArtifactRequest {
+            logical_id: source.logical_name.to_owned(),
+            role: SccmRole::Client,
+            reason: format!("Collect the complete {} file.", source.basename),
+        })
+        .collect::<Vec<_>>();
+    requests.sort_by(|left, right| {
         left.logical_id
             .cmp(&right.logical_id)
             .then_with(|| left.reason.cmp(&right.reason))
     });
-    specific
+    requests
         .dedup_by(|left, right| left.logical_id == right.logical_id && left.reason == right.reason);
-    specific
+    requests
 }
 
 fn build_rotation_partial_finding(
