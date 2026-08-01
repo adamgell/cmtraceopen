@@ -953,7 +953,9 @@ fn policy_later_same_artifact_success_recovers_a_deferred_phase() {
     scheduled.reference.line_end = Some(2);
     let mut deferred = scheduled.clone();
 
-    deferred.message = deferred.message.replace("Schedule succeeded", "Schedule deferred");
+    deferred.message = deferred
+        .message
+        .replace("Schedule succeeded", "Schedule deferred");
     deferred.evidence_id = format!("{}:deferred", deferred.evidence_id);
     deferred.reference.entry_id = format!("{}:deferred", deferred.reference.entry_id);
     deferred.reference.line_start = Some(1);
