@@ -1415,6 +1415,127 @@ fn policy_time_contradiction_asks_for_usable_timestamps() {
 }
 
 #[test]
+fn policy_non_failure_marker_with_a_terminal_result_is_never_phase_evidence() {
+    // The mirror of `policy_failure_requires_a_nonzero_terminal_result`. A
+    // marker and an explicit terminal code that disagree cannot both be read.
+    for (marker, terminal) in [
+        ("Report succeeded", "Result=0x80070005"),
+        ("Request succeeded", "Result=0x80070005"),
+        ("Evaluate succeeded", "hr=0x80070005"),
+        ("Persist succeeded", "[gle=0x80070005]"),
+    ] {
+        let mut bundle = load_bundle("complete");
+        let record = bundle
+            .evidence
+            .iter_mut()
+            .find(|evidence| evidence.message.contains(marker))
+            .unwrap_or_else(|| panic!("{marker} evidence"));
+        record.message = format!("{} {terminal}", record.message);
+
+        let analysis = analysis_json(&bundle);
+        let transaction = &analysis["transactions"][0];
+        assert_ne!(
+            transaction["state"], "succeeded",
+            "{marker} with {terminal} cannot prove a completed chain"
+        );
+        assert_ne!(
+            transaction["confidence"], "high",
+            "{marker} with {terminal} cannot carry high confidence"
+        );
+    }
+}
+
+#[test]
+fn policy_deferred_marker_with_a_terminal_result_is_never_phase_evidence() {
+    let mut bundle = load_bundle("scheduler-deferred");
+    let deferred = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Schedule deferred"))
+        .expect("deferred evidence");
+    deferred.message = format!("{} Result=0x80070005", deferred.message);
+
+    let analysis = analysis_json(&bundle);
+    let transaction = &analysis["transactions"][0];
+    assert_ne!(
+        transaction["state"], "deferred",
+        "a deferral carrying a terminal failure code contradicts its own marker"
+    );
+    assert_ne!(transaction["confidence"], "high");
+}
+
+fn clone_evidence_over_lines(
+    bundle: &mut SccmNormalizedBundle,
+    marker: &str,
+    replacement: &str,
+    line_start: u32,
+    line_end: u32,
+) {
+    let mut clone = bundle
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains(marker))
+        .cloned()
+        .unwrap_or_else(|| panic!("{marker} evidence"));
+    clone.message = clone.message.replace(marker, replacement);
+    clone.evidence_id = format!("{}:overlap", clone.evidence_id);
+    clone.reference.entry_id = format!("{}:overlap", clone.reference.entry_id);
+    clone.reference.line_start = Some(line_start);
+    clone.reference.line_end = Some(line_end);
+    bundle.evidence.push(clone);
+}
+
+#[test]
+fn policy_overlapping_evidence_ranges_never_prove_a_phase() {
+    let mut bundle = load_bundle("complete");
+    // The shipped Report record is StateMessage 1-1. A second record over 1-2
+    // is not a second logical record, it is the same physical line claimed
+    // twice, so neither claim can be trusted.
+    clone_evidence_over_lines(
+        &mut bundle,
+        "Report succeeded",
+        "Report failed terminal Result=0x80070005",
+        1,
+        2,
+    );
+
+    let forward = analysis_json(&bundle);
+    assert_eq!(
+        forward,
+        analysis_json(&reversed_bundle(&bundle)),
+        "overlapping physical ranges must not be resolved by input order"
+    );
+
+    let transaction = &forward["transactions"][0];
+    assert_ne!(
+        transaction["state"], "failed",
+        "a wider overlapping range must not outrank the record it overlaps"
+    );
+    assert_ne!(transaction["state"], "succeeded");
+    assert_ne!(transaction["confidence"], "high");
+}
+
+#[test]
+fn policy_one_physical_line_never_proves_two_phases() {
+    let mut bundle = load_bundle("complete");
+    // PolicyAgent carries Request on line 1 and Download on line 2. A Persist
+    // claim spanning 2-3 would prove two phases from one physical line.
+    clone_evidence_over_lines(&mut bundle, "Download succeeded", "Persist succeeded", 2, 3);
+
+    let forward = analysis_json(&bundle);
+    assert_eq!(
+        forward,
+        analysis_json(&reversed_bundle(&bundle)),
+        "overlapping phase claims must not be resolved by input order"
+    );
+    assert_ne!(
+        forward["transactions"][0]["state"], "succeeded",
+        "one physical line cannot prove two phases"
+    );
+    assert_ne!(forward["transactions"][0]["confidence"], "high");
+}
+
+#[test]
 fn policy_uncollected_client_location_never_outranks_a_recorded_absence() {
     let recorded = analysis_json(&load_bundle("request-auth-failure"));
     assert_eq!(recorded["transactions"][0]["confidence"], "medium");
