@@ -12,8 +12,25 @@ use crate::sccm::{
 
 use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
 
-type PathFingerprintKey = (String, String, String, String);
-type CanonicalArtifactIdentity = (String, String, String, String, String, String, String);
+type PathFingerprintKey = (
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    String,
+);
+type CanonicalArtifactIdentity = (
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SccmServerArtifactPayload {
@@ -463,12 +480,17 @@ fn normalize_artifact(
 
     let path_fingerprint_key = (
         role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.producer_host_handle.clone(),
         artifact.source_id.clone(),
         workflow_subject_role
             .as_ref()
             .map(role_sort_key)
             .unwrap_or_default()
             .to_owned(),
+        artifact
+            .workflow_subject
+            .as_ref()
+            .and_then(|subject| subject.instance_handle.clone()),
         artifact
             .configured_path_provenance
             .path_fingerprint
@@ -487,12 +509,17 @@ fn normalize_artifact(
 
     let canonical_identity = (
         role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.producer_host_handle.clone(),
         artifact.source_id.clone(),
         workflow_subject_role
             .as_ref()
             .map(role_sort_key)
             .unwrap_or_default()
             .to_owned(),
+        artifact
+            .workflow_subject
+            .as_ref()
+            .and_then(|subject| subject.instance_handle.clone()),
         artifact
             .configured_path_provenance
             .path_fingerprint
