@@ -1,0 +1,27 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "successful-user-run",
+  "workload": "apps/macos/shell-scripts",
+  "collectedAtUtc": "2026-07-31T00:00:00Z",
+  "description": "A script runs in a user session, logged to the per-user agent root.",
+  "artifacts": [
+    {
+      "artifactId": "agent-current",
+      "family": "intuneMdmAgent",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneMDMAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://user/IntuneMDMAgent.log",
+      "relativePath": "evidence/agent/current/IntuneMDMAgent.log",
+      "bytesCopied": 1033,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": null
+    }
+  ]
+}

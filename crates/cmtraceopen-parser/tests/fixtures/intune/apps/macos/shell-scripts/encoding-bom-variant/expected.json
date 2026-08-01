@@ -1,0 +1,36 @@
+{
+  "scenario": "encoding-bom-variant",
+  "workload": "apps/macos/shell-scripts",
+  "coverage": [
+    {
+      "artifactId": "daemon-current",
+      "status": "available"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "runs": [
+    {
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "cccccccc-3333-4333-8333-ccccccccccc3",
+      "executionContext": "system",
+      "outcome": "succeeded",
+      "reporting": "reported",
+      "output": "captured",
+      "lastConfirmedPhase": "reported",
+      "exitCode": {
+        "raw": "0",
+        "decimal": 0
+      },
+      "errorCode": null,
+      "timeoutSeconds": null,
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-shell-script-succeeded"
+  ],
+  "assertions": [
+    "a BOM is stripped and does not make the first record malformed"
+  ]
+}

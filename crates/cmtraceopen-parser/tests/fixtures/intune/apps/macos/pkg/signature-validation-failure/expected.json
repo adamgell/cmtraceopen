@@ -1,0 +1,33 @@
+{
+  "scenario": "signature-validation-failure",
+  "workload": "apps/macos/pkg",
+  "coverage": [
+    {
+      "artifactId": "daemon-current",
+      "status": "available"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "transactions": [
+    {
+      "appId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "appType": "pkg",
+      "outcome": "validationFailed",
+      "reporting": "notObserved",
+      "lastConfirmedPhase": "validating",
+      "errorCode": {
+        "raw": "-2147409155",
+        "decimal": -2147409155
+      },
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-pkg-validation-failed"
+  ],
+  "assertions": [
+    "validation failure is distinct from an installer failure"
+  ]
+}

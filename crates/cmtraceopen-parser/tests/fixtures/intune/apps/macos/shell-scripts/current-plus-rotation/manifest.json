@@ -1,0 +1,44 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "current-plus-rotation",
+  "workload": "apps/macos/shell-scripts",
+  "collectedAtUtc": "2026-07-31T00:00:00Z",
+  "description": "One run straddles a rotation boundary.",
+  "artifacts": [
+    {
+      "artifactId": "daemon-rotated",
+      "family": "intuneMdmDaemon",
+      "sourceKind": "agentLog",
+      "captureState": "capped",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneMDMDaemon 2026-07-29--08-00-00.log",
+      "sanitizedSourcePath": "SYNTHETIC://system/IntuneMDMDaemon-rotated.log",
+      "relativePath": "evidence/daemon/rotated/IntuneMDMDaemon 2026-07-29--08-00-00.log",
+      "bytesCopied": 649,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "rotated",
+        "fragmentComplete": false
+      },
+      "detail": "collection cap reached"
+    },
+    {
+      "artifactId": "daemon-current",
+      "family": "intuneMdmDaemon",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneMDMDaemon.log",
+      "sanitizedSourcePath": "SYNTHETIC://system/IntuneMDMDaemon.log",
+      "relativePath": "evidence/daemon/current/IntuneMDMDaemon.log",
+      "bytesCopied": 432,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": null
+    }
+  ]
+}

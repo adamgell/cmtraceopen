@@ -1,0 +1,27 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "successful-install",
+  "workload": "apps/macos/pkg",
+  "collectedAtUtc": "2026-07-31T00:00:00Z",
+  "description": "A .pkg deployment that downloads, validates, installs, is detected, and is reported.",
+  "artifacts": [
+    {
+      "artifactId": "daemon-current",
+      "family": "intuneMdmDaemon",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneMDMDaemon.log",
+      "sanitizedSourcePath": "SYNTHETIC://system/IntuneMDMDaemon.log",
+      "relativePath": "evidence/daemon/current/IntuneMDMDaemon.log",
+      "bytesCopied": 1832,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": null
+    }
+  ]
+}

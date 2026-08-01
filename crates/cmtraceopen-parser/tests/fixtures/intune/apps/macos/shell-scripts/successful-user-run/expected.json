@@ -1,0 +1,37 @@
+{
+  "scenario": "successful-user-run",
+  "workload": "apps/macos/shell-scripts",
+  "coverage": [
+    {
+      "artifactId": "agent-current",
+      "status": "available"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "runs": [
+    {
+      "policyId": "22222222-2222-4222-8222-222222222222",
+      "runId": "dddddddd-4444-4444-8444-ddddddddddd4",
+      "executionContext": "user",
+      "outcome": "succeeded",
+      "reporting": "notObserved",
+      "output": "explicitlyEmpty",
+      "lastConfirmedPhase": "completed",
+      "exitCode": {
+        "raw": "0",
+        "decimal": 0
+      },
+      "errorCode": null,
+      "timeoutSeconds": null,
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-shell-script-succeeded"
+  ],
+  "assertions": [
+    "the user log root is analyzed the same way as the system root",
+    "an explicit no-output record is not the same as unobserved output"
+  ]
+}

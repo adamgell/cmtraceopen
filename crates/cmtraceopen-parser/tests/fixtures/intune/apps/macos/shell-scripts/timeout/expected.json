@@ -1,0 +1,33 @@
+{
+  "scenario": "timeout",
+  "workload": "apps/macos/shell-scripts",
+  "coverage": [
+    {
+      "artifactId": "daemon-current",
+      "status": "available"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "runs": [
+    {
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "cccccccc-3333-4333-8333-ccccccccccc3",
+      "executionContext": "system",
+      "outcome": "timedOut",
+      "reporting": "notObserved",
+      "output": "notObserved",
+      "lastConfirmedPhase": "completed",
+      "exitCode": null,
+      "errorCode": null,
+      "timeoutSeconds": 600,
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-shell-script-timed-out"
+  ],
+  "assertions": [
+    "a timeout is distinct from a nonzero exit and has no exit status"
+  ]
+}

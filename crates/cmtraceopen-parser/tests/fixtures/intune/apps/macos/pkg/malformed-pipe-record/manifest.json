@@ -1,0 +1,27 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "malformed-pipe-record",
+  "workload": "apps/macos/pkg",
+  "collectedAtUtc": "2026-07-31T00:00:00Z",
+  "description": "Malformed lines are retained as malformed and do not stop the well-formed records around them.",
+  "artifacts": [
+    {
+      "artifactId": "daemon-current",
+      "family": "intuneMdmDaemon",
+      "sourceKind": "agentLog",
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneMDMDaemon.log",
+      "sanitizedSourcePath": "SYNTHETIC://system/IntuneMDMDaemon.log",
+      "relativePath": "evidence/daemon/current/IntuneMDMDaemon.log",
+      "bytesCopied": 814,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": null
+    }
+  ]
+}

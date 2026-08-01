@@ -1,0 +1,6 @@
+2026-07-29 09:00:00:000 | IntuneMDM-Agent | I | 1 | Fixture | SYNTHETIC FIXTURE: synthetic corpus for issue #361; no real data
+2026-07-29 09:00:01:000 | IntuneMDM-Agent | I | 1 | Startup | Intune MDM Agent version 2026.07.1 starting
+2026-07-29 09:10:00:000 | IntuneMDM-Agent | I | 10 | ShellScriptManager | Received shell script policy PolicyId=22222222-2222-4222-8222-222222222222 RunId=dddddddd-4444-4444-8444-ddddddddddd4 Name=Set Dock
+2026-07-29 09:10:02:000 | IntuneMDM-Agent | I | 10 | ShellScriptManager | Launching shell script PolicyId=22222222-2222-4222-8222-222222222222 RunId=dddddddd-4444-4444-8444-ddddddddddd4 Context=user
+2026-07-29 09:10:05:000 | IntuneMDM-Agent | I | 10 | ShellScriptManager | Shell script produced no output for PolicyId=22222222-2222-4222-8222-222222222222 RunId=dddddddd-4444-4444-8444-ddddddddddd4
+2026-07-29 09:10:06:000 | IntuneMDM-Agent | I | 10 | ShellScriptManager | Shell script finished PolicyId=22222222-2222-4222-8222-222222222222 RunId=dddddddd-4444-4444-8444-ddddddddddd4 ExitCode=0

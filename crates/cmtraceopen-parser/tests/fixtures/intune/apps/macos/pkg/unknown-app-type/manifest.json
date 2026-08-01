@@ -1,0 +1,44 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unknown-app-type",
+  "workload": "apps/macos/pkg",
+  "collectedAtUtc": "2026-07-31T00:00:00Z",
+  "description": "A DMG deployment is catalogued but package terminal semantics are withheld from it.",
+  "artifacts": [
+    {
+      "artifactId": "daemon-current",
+      "family": "intuneMdmDaemon",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneMDMDaemon.log",
+      "sanitizedSourcePath": "SYNTHETIC://system/IntuneMDMDaemon.log",
+      "relativePath": "evidence/daemon/current/IntuneMDMDaemon.log",
+      "bytesCopied": 588,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": null
+    },
+    {
+      "artifactId": "dmg-handler",
+      "family": "intuneMdmDaemon",
+      "sourceKind": "agentLog",
+      "captureState": "unsupported",
+      "encoding": null,
+      "originalBasename": "DmgHandler.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": "app type is not modelled by the package analyzer"
+    }
+  ]
+}

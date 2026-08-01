@@ -1,0 +1,30 @@
+{
+  "scenario": "successful-install",
+  "workload": "apps/macos/pkg",
+  "coverage": [
+    {
+      "artifactId": "daemon-current",
+      "status": "available"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "transactions": [
+    {
+      "appId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "appType": "pkg",
+      "outcome": "installed",
+      "reporting": "reported",
+      "lastConfirmedPhase": "reported",
+      "errorCode": null,
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-pkg-installed"
+  ],
+  "assertions": [
+    "a zero installer exit plus a detection record is the only path to installed"
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "scenario": "missing-output",
+  "workload": "apps/macos/shell-scripts",
+  "coverage": [
+    {
+      "artifactId": "daemon-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "script-output",
+      "status": "missing"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "runs": [
+    {
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "cccccccc-3333-4333-8333-ccccccccccc3",
+      "executionContext": "system",
+      "outcome": "succeeded",
+      "reporting": "notObserved",
+      "output": "notObserved",
+      "lastConfirmedPhase": "completed",
+      "exitCode": {
+        "raw": "0",
+        "decimal": 0
+      },
+      "errorCode": null,
+      "timeoutSeconds": null,
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-shell-script-output-not-observed",
+    "macos-shell-script-coverage-gap",
+    "macos-shell-script-succeeded"
+  ],
+  "assertions": [
+    "a missing output artifact is not evidence that the script was silent"
+  ]
+}

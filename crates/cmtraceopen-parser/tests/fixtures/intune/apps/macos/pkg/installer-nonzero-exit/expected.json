@@ -1,0 +1,33 @@
+{
+  "scenario": "installer-nonzero-exit",
+  "workload": "apps/macos/pkg",
+  "coverage": [
+    {
+      "artifactId": "daemon-current",
+      "status": "available"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "transactions": [
+    {
+      "appId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "appType": "pkg",
+      "outcome": "installFailed",
+      "reporting": "notObserved",
+      "lastConfirmedPhase": "installerCompleted",
+      "errorCode": {
+        "raw": "1",
+        "decimal": 1
+      },
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-pkg-installer-nonzero-exit"
+  ],
+  "assertions": [
+    "a nonzero exit is retained as an outcome, not promoted to a cause"
+  ]
+}

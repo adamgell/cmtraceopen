@@ -1,0 +1,49 @@
+{
+  "scenario": "deterministic-ordering",
+  "workload": "apps/macos/pkg",
+  "coverage": [
+    {
+      "artifactId": "daemon-a",
+      "status": "available"
+    },
+    {
+      "artifactId": "daemon-b",
+      "status": "available"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "transactions": [
+    {
+      "appId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "appType": "pkg",
+      "outcome": "installed",
+      "reporting": "notObserved",
+      "lastConfirmedPhase": "postInstallDetection",
+      "errorCode": null,
+      "retryCount": 0
+    },
+    {
+      "appId": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbb2",
+      "policyId": "22222222-2222-4222-8222-222222222222",
+      "appType": "pkg",
+      "outcome": "installFailed",
+      "reporting": "notObserved",
+      "lastConfirmedPhase": "installerCompleted",
+      "errorCode": {
+        "raw": "5",
+        "decimal": 5
+      },
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-pkg-installer-nonzero-exit",
+    "macos-pkg-installed"
+  ],
+  "assertions": [
+    "transactions are ordered by app id, not by artifact arrival order",
+    "permuting the supplied artifacts produces an identical snapshot"
+  ]
+}

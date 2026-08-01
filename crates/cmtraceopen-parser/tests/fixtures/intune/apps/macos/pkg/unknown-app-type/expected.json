@@ -1,0 +1,36 @@
+{
+  "scenario": "unknown-app-type",
+  "workload": "apps/macos/pkg",
+  "coverage": [
+    {
+      "artifactId": "daemon-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "dmg-handler",
+      "status": "unsupported"
+    }
+  ],
+  "grammarRecognized": true,
+  "malformedRecords": 0,
+  "transactions": [
+    {
+      "appId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "appType": "dmg",
+      "outcome": "unsupportedAppType",
+      "reporting": "notObserved",
+      "lastConfirmedPhase": "installerCompleted",
+      "errorCode": null,
+      "retryCount": 0
+    }
+  ],
+  "findingIds": [
+    "macos-pkg-unsupported-app-type",
+    "macos-pkg-coverage-gap"
+  ],
+  "assertions": [
+    "a nonzero exit on a dmg must not read as installFailed",
+    "the error code is withheld because pkg semantics do not apply"
+  ]
+}

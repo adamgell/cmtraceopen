@@ -1,0 +1,3 @@
+2026-07-29 09:00:00:000 | IntuneMDM-Daemon | I | 1 | Fixture | SYNTHETIC FIXTURE: synthetic corpus for issue #361; no real data
+2026-07-29 09:00:01:000 | IntuneMDM-Daemon | I | 1 | Startup | Intune MDM Agent version 2026.07.1 starting
+2026-07-29 09:10:06:000 | IntuneMDM-Daemon | I | 10 | ShellScriptManager | Shell script finished PolicyId=22222222-2222-4222-8222-222222222222 RunId=dddddddd-4444-4444-8444-ddddddddddd4 ExitCode=9

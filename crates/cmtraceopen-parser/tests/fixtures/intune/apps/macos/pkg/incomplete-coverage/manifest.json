@@ -1,0 +1,61 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "incomplete-coverage",
+  "workload": "apps/macos/pkg",
+  "collectedAtUtc": "2026-07-31T00:00:00Z",
+  "description": "Only the opening records survive; the artifacts holding the outcome were never collected.",
+  "artifacts": [
+    {
+      "artifactId": "daemon-current",
+      "family": "intuneMdmDaemon",
+      "sourceKind": "agentLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneMDMDaemon.log",
+      "sanitizedSourcePath": "SYNTHETIC://system/IntuneMDMDaemon.log",
+      "relativePath": "evidence/daemon/current/IntuneMDMDaemon.log",
+      "bytesCopied": 558,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": null
+    },
+    {
+      "artifactId": "daemon-rotated",
+      "family": "intuneMdmDaemon",
+      "sourceKind": "agentLog",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "IntuneMDMDaemon 2026-07-29--08-00-00.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": "rotation aged out before collection"
+    },
+    {
+      "artifactId": "agent-user",
+      "family": "intuneMdmAgent",
+      "sourceKind": "agentLog",
+      "captureState": "accessDenied",
+      "encoding": null,
+      "originalBasename": "IntuneMDMAgent.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "detail": "user log root not readable by the collector"
+    }
+  ]
+}
