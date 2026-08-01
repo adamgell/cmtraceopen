@@ -3085,6 +3085,78 @@ fn exact_key_admission_ignores_bracket_bounded_prefixes() {
 }
 
 #[test]
+fn rotated_fragment_capture_path_names_the_rotated_file() {
+    let scenario_root = task_sequence_root().join("rotation-boundary");
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let expected = read_json(&scenario_root.join("expected.json"));
+    let lo_id = "task-sequence-rotation-boundary-lo";
+    let lo = manifest["artifacts"]
+        .as_array()
+        .expect("rotation artifacts are an array")
+        .iter()
+        .find(|artifact| artifact["artifactId"] == lo_id)
+        .expect("rotation corpus has smsts.lo_");
+
+    assert_eq!(
+        lo["sanitizedSourcePath"], "SYNTHETIC://client/CCM/Logs/smsts.lo_",
+        "the rotated artifact's capture provenance must name the rotated physical file"
+    );
+    assert_eq!(
+        lo["smstsLogPathEvidence"], "SYNTHETIC://client/CCM/Logs/smsts.log",
+        "the in-record observation stays the active log path it physically records"
+    );
+    let lo_provenance = expected["artifactProvenance"]
+        .as_array()
+        .expect("rotation provenance is an array")
+        .iter()
+        .find(|item| item["artifactId"] == lo_id)
+        .expect("rotation provenance contains smsts.lo_");
+    assert_eq!(
+        lo_provenance["sanitizedSourcePath"], lo["sanitizedSourcePath"],
+        "expected output mirrors the corrected capture provenance"
+    );
+}
+
+#[test]
+fn capture_source_path_basename_is_bound_to_rotation() {
+    let rotation_root = task_sequence_root().join("rotation-boundary");
+    let rotation_manifest = read_json(&rotation_root.join("manifest.json"));
+    let mut manifest = rotation_manifest.clone();
+    let mut expected = read_json(&rotation_root.join("expected.json"));
+    let lo_id = "task-sequence-rotation-boundary-lo";
+    let active_log_path = Value::String("SYNTHETIC://client/CCM/Logs/smsts.log".to_owned());
+    let lo_index = manifest["artifacts"]
+        .as_array()
+        .expect("rotation artifacts are an array")
+        .iter()
+        .position(|artifact| artifact["artifactId"] == lo_id)
+        .expect("rotation corpus has smsts.lo_");
+    manifest["artifacts"][lo_index]["sanitizedSourcePath"] = active_log_path.clone();
+    let lo_provenance_index = expected["artifactProvenance"]
+        .as_array()
+        .expect("rotation provenance is an array")
+        .iter()
+        .position(|item| item["artifactId"] == lo_id)
+        .expect("rotation provenance contains smsts.lo_");
+    expected["artifactProvenance"][lo_provenance_index]["sanitizedSourcePath"] = active_log_path;
+
+    let error = validate_contract("rotation-boundary", &rotation_root, &manifest, &expected)
+        .expect_err("a rotated artifact cannot claim the active log as its capture source");
+    assert!(error.contains("capture source path"), "{error}");
+
+    let completed_root = task_sequence_root().join("completed");
+    let mut manifest = read_json(&completed_root.join("manifest.json"));
+    let mut expected = read_json(&completed_root.join("expected.json"));
+    let rotated_path = Value::String("SYNTHETIC://client/CCM/Logs/smsts.lo_".to_owned());
+    manifest["artifacts"][0]["sanitizedSourcePath"] = rotated_path.clone();
+    expected["artifactProvenance"][0]["sanitizedSourcePath"] = rotated_path;
+
+    let error = validate_contract("completed", &completed_root, &manifest, &expected)
+        .expect_err("a current artifact cannot claim a rotated capture source");
+    assert!(error.contains("capture source path"), "{error}");
+}
+
+#[test]
 fn keyed_evidence_cannot_be_laundered_through_source_local_observations() {
     let scenario = "unrelated-runs";
     let scenario_root = task_sequence_root().join(scenario);
