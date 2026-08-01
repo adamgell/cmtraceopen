@@ -1396,9 +1396,10 @@ fn counterpart_ready_fact(
             )
         })
         .collect::<Vec<_>>();
-    let [fact] = candidates.as_slice() else {
-        return None;
-    };
+    // A repeated identical request is not ambiguity, but the citation still
+    // may not be chosen by artifact name: take the earliest record under the
+    // records' own order, and refuse when they cannot be ordered at all.
+    let fact = earliest_comparable_fact(&candidates)?;
 
     let package_id = key.package_id.clone()?;
     let content_id = key.content_id.clone()?;
@@ -1436,6 +1437,22 @@ fn counterpart_ready_fact(
         },
         evidence: fact.reference.clone(),
     })
+}
+
+/// The earliest of several records, or nothing when any pair of them cannot be
+/// ordered. Refusing is the only answer that does not invent a sequence.
+fn earliest_comparable_fact<'a>(facts: &[&'a DeploymentFact]) -> Option<&'a DeploymentFact> {
+    let mut earliest = *facts.first()?;
+    for candidate in &facts[1..] {
+        match compare_fact_order(earliest, candidate)? {
+            Ordering::Greater => earliest = candidate,
+            Ordering::Less | Ordering::Equal => {}
+        }
+    }
+    for candidate in facts {
+        compare_fact_order(earliest, candidate)?;
+    }
+    Some(earliest)
 }
 
 fn format_normalized_utc(millis: i64) -> Option<String> {
