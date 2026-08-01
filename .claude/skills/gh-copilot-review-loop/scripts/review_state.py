@@ -68,9 +68,9 @@ def current_pr() -> tuple[str, str, int]:
         "number,url",
     ])
     path = urlparse(data["url"]).path.strip("/").split("/")
-    if len(path) != 4 or path[2] != "pull":
+    if len(path) < 4 or path[-2] != "pull":
         raise SystemExit(f"unexpected pull request URL: {data['url']}")
-    return path[0], path[1], int(data["number"])
+    return path[-4], path[-3], int(data["number"])
 
 
 def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:

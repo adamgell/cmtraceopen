@@ -51,6 +51,23 @@ class CurrentPullRequestTests(unittest.TestCase):
 
         self.assertEqual(current, ("base-owner", "base-repo", 42))
 
+    def test_enterprise_url_prefix_preserves_base_repository(self) -> None:
+        response = {
+            "number": 42,
+            "url": (
+                "https://enterprise.example/github/"
+                "base-owner/base-repo/pull/42"
+            ),
+        }
+
+        with patch.object(review_state, "run_json", return_value=response):
+            try:
+                current = review_state.current_pr()
+            except SystemExit as error:
+                self.fail(f"valid enterprise pull request URL rejected: {error}")
+
+        self.assertEqual(current, ("base-owner", "base-repo", 42))
+
 
 class CopilotReviewSummaryTests(unittest.TestCase):
     def test_pending_copilot_review_does_not_count_as_submitted(self) -> None:
