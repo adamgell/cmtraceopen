@@ -1,0 +1,17 @@
+{
+  "description": "Synthetic UPN, spaced profile name, credential switch, and payload contents are masked while correlation keys survive.",
+  "artifacts": [
+    {
+      "artifactId": "hs",
+      "fileName": "HealthScripts.log",
+      "filePath": "C:\\Users\\John Doe\\AppData\\Local\\Temp\\HealthScripts.log",
+      "contentFile": "HealthScripts.log"
+    },
+    {
+      "artifactId": "ae",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

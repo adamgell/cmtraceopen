@@ -1,0 +1,17 @@
+{
+  "description": "Another workload's records share the IME log; they must not create a script transaction nor inflate script coverage.",
+  "artifacts": [
+    {
+      "artifactId": "ime",
+      "fileName": "IntuneManagementExtension.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+      "contentFile": "IntuneManagementExtension.log"
+    },
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

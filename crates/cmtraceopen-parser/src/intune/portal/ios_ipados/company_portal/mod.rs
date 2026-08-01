@@ -1,3 +1,3 @@
-// Company Portal for iOS / iPadOS.
+//! iOS and iPadOS Company Portal application evidence.
 
 pub mod diagnostics;

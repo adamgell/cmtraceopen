@@ -1,0 +1,11 @@
+{
+  "description": "Policy receipt with no execution evidence stays non-terminal and names the missing artifact.",
+  "artifacts": [
+    {
+      "artifactId": "ime",
+      "fileName": "IntuneManagementExtension.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+      "contentFile": "IntuneManagementExtension.log"
+    }
+  ]
+}

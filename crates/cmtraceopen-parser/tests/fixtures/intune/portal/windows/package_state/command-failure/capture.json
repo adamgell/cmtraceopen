@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "capture": {
+    "capturedAtUtc": "2026-07-14T09:25:03.3310000Z",
+    "adapterVersion": "cmtraceopen-collector-appx/1",
+    "commandStatus": "failed",
+    "windowsBuild": "10.0.26100.0",
+    "powerShellVersion": "5.1.26100.2161",
+    "locale": "en-US",
+    "source": "json",
+    "scopeCoverage": [
+      { "scope": "allUsers", "status": "failed", "detail": null },
+      { "scope": "currentUser", "status": "failed", "detail": null },
+      { "scope": "provisioned", "status": "notQueried", "detail": null }
+    ],
+    "error": {
+      "code": "CommandNotFoundException",
+      "message": "The term 'Get-AppxPackage' is not recognized as a name of a cmdlet."
+    }
+  },
+  "packages": []
+}

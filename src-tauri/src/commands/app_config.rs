@@ -75,6 +75,7 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
 
     if cfg!(feature = "macos-diag") {
         workspaces.push("macos-diag");
+        workspaces.push("macos-jamf");
     }
 
     if cfg!(feature = "deployment") {
