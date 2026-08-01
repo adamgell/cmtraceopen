@@ -1149,6 +1149,63 @@ fn opaque_authorization_credentials_are_redacted() {
     }
 }
 
+/// `\b` is a word-boundary assertion and `:` is not a word character, so it
+/// cannot anchor an address that begins or ends with a colon. Every
+/// `::`-compressed form does one or both, and the address exports verbatim.
+#[test]
+fn compressed_ipv6_forms_are_fully_redacted() {
+    for address in [
+        "2001:db8:85a3::",
+        "fd12:3456:789a::",
+        "fe80::",
+        "::1",
+        "2001:db8::8a2e:370:7334",
+    ] {
+        let redacted = redact_text(&format!("peer {address} connected"));
+        assert!(
+            !redacted.contains(address),
+            "{address} survived redaction: {redacted}"
+        );
+        assert!(
+            redacted.starts_with("peer ") && redacted.ends_with(" connected"),
+            "delimiters must survive: {redacted}"
+        );
+    }
+}
+
+/// Two addresses separated by a single delimiter must both be redacted. A guard
+/// that consumes the delimiter on both sides would leave the second address
+/// without one to anchor against.
+#[test]
+fn adjacent_ipv6_addresses_are_both_redacted() {
+    let redacted = redact_text("peers fd12:3456:789a:: fd12:3456:789b:: done");
+    assert!(!redacted.contains("789a"), "first survived: {redacted}");
+    assert!(!redacted.contains("789b"), "second survived: {redacted}");
+
+    let redacted = redact_text("::1,::2");
+    assert!(!redacted.contains("::1"), "first survived: {redacted}");
+    assert!(!redacted.contains("::2"), "second survived: {redacted}");
+}
+
+/// The IPv6 matcher must not claim text that merely contains hex and colons.
+#[test]
+fn ipv6_redaction_does_not_claim_timestamps_macs_or_prose() {
+    let redacted = redact_text("collected at 08:18:00:104 local");
+    assert!(
+        redacted.contains("08:18:00:104"),
+        "a timestamp is not an address: {redacted}"
+    );
+
+    // A bare `::` identifies nothing and appears in ordinary prose.
+    let redacted = redact_text("called std::process::exit");
+    assert_eq!(redacted, "called std::process::exit");
+
+    // An address embedded in a word is not an address, and must not be
+    // half-matched into a partial redaction that hides the leak.
+    let redacted = redact_text("token x2001:db8::y");
+    assert_eq!(redacted, "token x2001:db8::y");
+}
+
 /// Unified-log evidence carries a `NetworkRequest` kind, so bare addresses are
 /// plausible in `eventMessage`. The ESP redactor already enforces this.
 #[test]
