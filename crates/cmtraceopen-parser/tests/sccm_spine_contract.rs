@@ -1250,6 +1250,223 @@ fn finding_serialization_prioritizes_conflicting_evidence_identity_ranges() {
     assert!(error.contains("ConflictingEvidenceReference"), "{error}");
 }
 
+/// Builds one finding per citation surface, carrying `second` on that surface
+/// only, so a validator that scans a single surface cannot pass by accident.
+fn evidence_surface_findings(
+    label: &str,
+    first: &SccmEvidenceRef,
+    second: &SccmEvidenceRef,
+) -> Vec<(String, Result<SccmFinding, SccmFindingValidationError>)> {
+    fn scaffold(finding_id: String) -> SccmFindingBuilder {
+        SccmFindingBuilder::new(finding_id)
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+    }
+
+    vec![
+        (
+            format!("{label}/top-level"),
+            scaffold(format!("{label}-top-level"))
+                .evidence(vec![first.clone(), second.clone()])
+                .build(),
+        ),
+        (
+            format!("{label}/terminal"),
+            scaffold(format!("{label}-terminal"))
+                .evidence(vec![first.clone()])
+                .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(second.clone())])
+                .build(),
+        ),
+        (
+            format!("{label}/correlation-key"),
+            scaffold(format!("{label}-correlation-key"))
+                .evidence(vec![first.clone()])
+                .correlation_keys(vec![finding_key(
+                    SccmCorrelationKeyKind::AssignmentId,
+                    "{ABCDEFAB-0000-0000-0000-000000000001}",
+                    "abcdefab-0000-0000-0000-000000000001",
+                    SccmKeyConfidence::Low,
+                    Some("sccm-keys-experimental-v1"),
+                    second.clone(),
+                )])
+                .build(),
+        ),
+    ]
+}
+
+#[test]
+fn finding_rejects_overlapping_ranges_across_distinct_evidence_identities() {
+    let first = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    // Every case claims at least one physical line of `first` under a second
+    // entry id, so the two references cannot both be the record they claim.
+    let cases = [
+        ("identical-span", Some(4), Some(6)),
+        ("shared-start-line", Some(1), Some(4)),
+        ("shared-end-line", Some(6), Some(9)),
+        ("contained-span", Some(5), Some(5)),
+        ("containing-span", Some(1), Some(9)),
+        ("straddling-span", Some(5), Some(9)),
+    ];
+
+    for (label, line_start, line_end) in cases {
+        let second = SccmEvidenceRef {
+            entry_id: "entry-b".into(),
+            line_start,
+            line_end,
+            ..first.clone()
+        };
+        for (surface, result) in evidence_surface_findings(label, &first, &second) {
+            assert_eq!(
+                result.unwrap_err(),
+                SccmFindingValidationError::OverlappingEvidenceReference,
+                "{surface}"
+            );
+        }
+    }
+}
+
+#[test]
+fn finding_overlap_rejection_survives_evidence_serde_round_trips() {
+    let first = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    let mut finding = SccmFindingBuilder::new("overlapping-serde-ranges")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![
+            first.clone(),
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(7),
+                line_end: Some(9),
+                ..first
+            },
+        ])
+        .build()
+        .unwrap();
+
+    let mut json = serde_json::to_value(&finding).unwrap();
+    json["evidence"][1]["lineStart"] = serde_json::json!(6);
+    let error = serde_json::from_value::<SccmFinding>(json)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("OverlappingEvidenceReference"), "{error}");
+
+    finding.evidence[1].line_start = Some(6);
+    assert_eq!(
+        finding.validate().unwrap_err(),
+        SccmFindingValidationError::OverlappingEvidenceReference
+    );
+    let error = serde_json::to_string(&finding).unwrap_err().to_string();
+    assert!(error.contains("OverlappingEvidenceReference"), "{error}");
+}
+
+#[test]
+fn finding_accepts_disjoint_and_unbounded_evidence_ranges() {
+    let anchor = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    // Overlap is a claim about physical extent within one artifact. Adjacent
+    // spans, other artifacts, and references that assert no extent at all are
+    // all citations nine lanes already emit, and must keep validating.
+    let cases = [
+        (
+            "adjacent-below",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(1),
+                line_end: Some(3),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "adjacent-above",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(7),
+                line_end: Some(9),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "same-span-other-artifact",
+            SccmEvidenceRef {
+                artifact_id: "artifact-b".into(),
+                entry_id: "entry-b".into(),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "unbounded-second",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: None,
+                line_end: None,
+                ..anchor.clone()
+            },
+        ),
+    ];
+
+    for (label, second) in cases {
+        let finding = SccmFindingBuilder::new(format!("disjoint-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![anchor.clone(), second])
+            .build()
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        let json = serde_json::to_value(&finding).unwrap();
+        assert_eq!(
+            serde_json::from_value::<SccmFinding>(json).unwrap(),
+            finding,
+            "{label}"
+        );
+    }
+
+    // Two references that both assert no extent stay indistinguishable by span
+    // and must not be treated as claiming the same lines.
+    let unbounded = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: None,
+        line_end: None,
+    };
+    SccmFindingBuilder::new("disjoint-both-unbounded")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![
+            unbounded.clone(),
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                ..unbounded
+            },
+        ])
+        .build()
+        .expect("unbounded references assert no physical extent");
+}
+
 #[test]
 fn finding_rejects_top_level_evidence_identity_whitespace_aliases() {
     assert_evidence_alias_is_rejected(FindingEvidenceAliasSurface::TopLevel);

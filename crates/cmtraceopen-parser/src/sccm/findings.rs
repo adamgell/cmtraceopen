@@ -457,6 +457,7 @@ pub enum SccmFindingValidationError {
     InvalidRole,
     InvalidEvidenceReference,
     ConflictingEvidenceReference,
+    OverlappingEvidenceReference,
     MissingEvidenceOrCoverageGap,
     MissingTerminalEvidence,
     InvalidTerminalEvidence,
