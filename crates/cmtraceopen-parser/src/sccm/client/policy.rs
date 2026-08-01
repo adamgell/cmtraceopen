@@ -198,9 +198,14 @@ struct ReducedTransaction {
 }
 
 pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnalysis {
+    // Scope the admission map to client artifacts before collecting by id.
+    // Collecting is last-wins, so an out-of-scope artifact reusing a client
+    // artifact id would otherwise shadow client evidence or be selected as its
+    // admission authority purely by artifact vector order.
     let artifact_by_id = bundle
         .artifacts
         .iter()
+        .filter(|artifact| artifact.role == SccmRole::Client)
         .map(|artifact| (artifact.artifact_id.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
     let context = ReductionContext { bundle };
