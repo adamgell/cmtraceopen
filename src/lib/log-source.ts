@@ -1040,7 +1040,13 @@ export async function loadLogSource(
     state.setSourceStatus({
       kind,
       message: accessDenied
-        ? `Access to this source was denied: ${getLogSourcePath(source)}`
+        ? // Prefer the backend's own bounded path: it is the thing that was
+          // actually denied, already length-capped for the IPC payload, and for
+          // a known source it is the resolved path rather than the catalog
+          // default the frontend would otherwise print.
+          accessDenied.path
+          ? `Access to this source was denied: ${accessDenied.path}`
+          : "Access to this source was denied."
         : kind === "missing"
           ? `Source path is missing or inaccessible: ${getLogSourcePath(source)}`
           : "Failed to load source.",

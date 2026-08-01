@@ -258,13 +258,19 @@ export function useAppMenu() {
           case "restart_as_administrator": {
             // Confirm first: the backend is never called straight from a menu
             // click, so UAC can only appear after a second, deliberate action.
-            // The active source rides along so the elevated process reopens what
-            // the user was looking at, and nothing else.
+            const activeWorkspace = useUiStore.getState().activeWorkspace;
             useUiStore.getState().setElevationPrompt({
               request: buildElevationRequest({
                 reason: "explicitMenu",
-                workspace: useUiStore.getState().activeWorkspace,
-                source: useLogStore.getState().activeSource,
+                workspace: activeWorkspace,
+                // The active source rides along only when the user is actually
+                // looking at it. `activeSource` survives a workspace switch, so
+                // restarting from ESP or Intune would otherwise reopen whatever
+                // log was last loaded instead of just the workspace on screen.
+                source:
+                  activeWorkspace === "log"
+                    ? useLogStore.getState().activeSource
+                    : null,
               }),
             });
             return;

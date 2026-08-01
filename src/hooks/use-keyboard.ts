@@ -106,6 +106,7 @@ function navigateSelection(key: string): boolean {
  */
 export function useKeyboard() {
   const showFindBarOpen = useUiStore((state) => state.showFindBar);
+  const elevationPromptOpen = useUiStore((state) => state.elevationPrompt);
   const showFilterDialogOpen = useUiStore((state) => state.showFilterDialog);
   const showErrorLookupDialogOpen = useUiStore(
     (state) => state.showErrorLookupDialog
@@ -140,6 +141,13 @@ export function useKeyboard() {
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
+      // The elevation prompt is a true modal: it traps focus and dims the app
+      // behind it. Unlike the find bar or the filter dialog, which deliberately
+      // leave the surrounding shortcuts live, nothing here may act on content
+      // the user cannot see or reach. The dialog owns its own Escape handling,
+      // so returning early does not strand it open.
+      if (elevationPromptOpen) return;
+
       const ctrl = event.ctrlKey || event.metaKey;
       const isInput = isTypingTarget(event.target);
       const isDialogOpen =
@@ -310,6 +318,7 @@ export function useKeyboard() {
     commandState.canAdjustTextSize,
     decreaseLogListTextSize,
     dismissTransientDialogs,
+    elevationPromptOpen,
     findNext,
     findPrevious,
     increaseLogListTextSize,
