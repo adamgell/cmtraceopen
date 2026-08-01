@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { tokens } from "@fluentui/react-components";
 import { useUiStore } from "../../stores/ui-store";
 import { describeElevationPrompt } from "../../lib/elevation-request";
@@ -7,6 +7,16 @@ import {
   requestElevatedRestart,
   type ElevationOutcome,
 } from "../../lib/elevation";
+
+/** Everything the browser would let Tab reach inside the modal. */
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
 
 /**
  * The single confirmation shown before CMTrace Open requests UAC.
@@ -20,6 +30,13 @@ import {
  * dialog. Its button is already an explicit, labelled affordance rather than a
  * failure the user did not ask for, so it calls the coordinator directly.
  *
+ * `aria-modal` is a promise to assistive technology, not an implementation:
+ * the browser still walks Tab into the content behind the overlay. So this
+ * component moves focus in on open, cycles Tab inside the surface, and restores
+ * focus to whatever opened it on close. Fluent's `Dialog` would supply all
+ * three, but its focus manager (tabster) calls `getComputedStyle` in a way the
+ * pinned jsdom build throws on, which takes the whole dialog suite down.
+ *
  * On a successful launch the dialog intentionally stays up in a pending state:
  * the current process is exiting, and swapping to a success message the user
  * will never finish reading only invites a second click during teardown.
@@ -29,6 +46,7 @@ export function RestartAsAdministratorDialog() {
   const setElevationPrompt = useUiStore((state) => state.setElevationPrompt);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
 
   const close = useCallback(() => {
     setElevationPrompt(null);
@@ -43,13 +61,74 @@ export function RestartAsAdministratorDialog() {
     }
   }, [prompt]);
 
+  const isOpen = Boolean(prompt);
+
+  // Move focus into the modal on open and hand it back on close, so a keyboard
+  // user is not left tabbing through the application behind the overlay.
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+
+    const surface = surfaceRef.current;
+    const target =
+      surface?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ?? surface;
+    target?.focus();
+
+    return () => {
+      previouslyFocused?.focus();
+    };
+  }, [isOpen]);
+
   useEffect(() => {
     if (!prompt) return;
+
     const handleKey = (event: KeyboardEvent) => {
       // Escape is a cancellation, which by contract makes no backend call. It is
       // ignored mid-flight because the request is already with Windows.
-      if (event.key === "Escape" && !isSubmitting) close();
+      if (event.key === "Escape") {
+        if (!isSubmitting) close();
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const surface = surfaceRef.current;
+      if (!surface) return;
+
+      const focusable = Array.from(
+        surface.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+      );
+      if (focusable.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+
+      if (!active || !surface.contains(active)) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+      if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+        return;
+      }
+      if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
+
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [prompt, isSubmitting, close]);
@@ -114,9 +193,11 @@ export function RestartAsAdministratorDialog() {
       }}
     >
       <div
+        ref={surfaceRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="elevation-dialog-title"
+        tabIndex={-1}
         style={{
           backgroundColor: tokens.colorNeutralBackground1,
           color: tokens.colorNeutralForeground1,

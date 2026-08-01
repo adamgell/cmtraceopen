@@ -101,6 +101,58 @@ describe("RestartAsAdministratorDialog", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("moves focus into the modal and restores it to the opener on close", async () => {
+    const opener = document.createElement("button");
+    opener.textContent = "behind the modal";
+    document.body.appendChild(opener);
+    opener.focus();
+    expect(document.activeElement).toBe(opener);
+
+    openPrompt();
+    const { rerender } = render(<RestartAsAdministratorDialog />);
+
+    // aria-modal is a promise to assistive tech, not an implementation: without
+    // this the keyboard user stays parked on the content behind the overlay.
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    rerender(<RestartAsAdministratorDialog />);
+
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+    opener.remove();
+  });
+
+  it("cycles Tab inside the modal instead of leaking to the page behind", () => {
+    const outside = document.createElement("button");
+    outside.textContent = "behind the modal";
+    document.body.appendChild(outside);
+
+    openPrompt();
+    render(<RestartAsAdministratorDialog />);
+
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const confirm = screen.getByRole("button", {
+      name: "Restart as administrator",
+    });
+
+    // Forward past the last control wraps to the first, never to `outside`.
+    confirm.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+
+    // And backwards past the first wraps to the last.
+    fireEvent.keyDown(window, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(confirm);
+
+    // Focus parked outside the modal is pulled back in.
+    outside.focus();
+    fireEvent.keyDown(window, { key: "Tab" });
+    expect(document.activeElement).toBe(cancel);
+
+    outside.remove();
+  });
+
   it("shows a recoverable failure and keeps the dialog usable", async () => {
     requestElevatedRestartMock.mockResolvedValue({
       status: "failed",

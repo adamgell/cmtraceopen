@@ -18,7 +18,7 @@ interface ElevationBannerProps {
 
 export function ElevationBanner({ elevation }: ElevationBannerProps) {
   const [actionState, setActionState] = useState<
-    "idle" | "requesting" | "requested" | "cancelled" | "failed"
+    "idle" | "requesting" | "requested" | "busy" | "cancelled" | "failed"
   >("idle");
 
   if (elevation.isElevated) return null;
@@ -45,6 +45,12 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
         break;
       case "alreadyElevated":
         setActionState("idle");
+        break;
+      // A restart is already in flight, raised by this banner, the global menu,
+      // or the Access Denied prompt. Reporting that as a failure would tell the
+      // user nothing started when something already has.
+      case "busy":
+        setActionState("busy");
         break;
       default:
         setActionState("failed");
@@ -115,11 +121,13 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
         <div aria-live="polite" style={{ marginTop: 2, fontSize: 11 }}>
           {actionState === "requested"
             ? "Administrator restart requested."
-            : actionState === "cancelled"
-              ? "Administrator restart was cancelled; coverage remains partial."
-              : actionState === "failed"
-                ? "Administrator restart could not be started; coverage remains partial."
-                : null}
+            : actionState === "busy"
+              ? "An administrator restart is already in progress."
+              : actionState === "cancelled"
+                ? "Administrator restart was cancelled; coverage remains partial."
+                : actionState === "failed"
+                  ? "Administrator restart could not be started; coverage remains partial."
+                  : null}
         </div>
       </div>
       {elevation.restartSupported ? (
@@ -127,7 +135,11 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
           appearance="primary"
           size="small"
           icon={<ShieldArrowRightRegular />}
-          disabled={actionState === "requesting" || actionState === "requested"}
+          disabled={
+            actionState === "requesting" ||
+            actionState === "requested" ||
+            actionState === "busy"
+          }
           onClick={restart}
         >
           Restart as administrator
