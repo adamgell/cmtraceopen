@@ -16,7 +16,20 @@ use super::models::{
 
 pub const MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS: usize = 240;
 pub const MAX_SCCM_NEXT_ARTIFACT_REQUESTS: usize = 16;
-const MAX_SCCM_COVERAGE_GAP_ARTIFACT_ID_CHARS: usize = 256;
+// Shared wire bound for every opaque identifier a finding carries: finding
+// ids, evidence artifact and entry ids, coverage-gap artifact ids, request
+// logical ids, and extraction profile ids. Enforced inside
+// is_canonical_opaque_id so no identifier path can skip it.
+const MAX_SCCM_OPAQUE_ID_CHARS: usize = 256;
+// Single-line display heading; twice the opaque id bound covers generated
+// "<subject> <outcome>" headings without admitting unbounded text.
+const MAX_SCCM_FINDING_TITLE_CHARS: usize = 512;
+// Multi-sentence display paragraph shown in the finding detail pane.
+const MAX_SCCM_FINDING_SUMMARY_CHARS: usize = 2048;
+// Correlation-key raw and normalized values. The widest canonical form is a
+// 253-character server-host FQDN; 256 leaves room for braces and prefixes
+// while excluding unbounded decimal ids.
+const MAX_SCCM_CORRELATION_KEY_VALUE_CHARS: usize = 256;
 // Intentionally empty: no extraction profile is verified as stable enough to
 // authorize key-only High confidence. Adding one requires contract review.
 const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] = &[];
@@ -618,9 +631,13 @@ impl SccmFindingBuilder {
 }
 
 fn validate_required_text(finding: &SccmFinding) -> Result<(), SccmFindingValidationError> {
+    let title = finding.title.trim();
+    let summary = finding.summary.trim();
     if !is_canonical_opaque_id(&finding.finding_id)
-        || finding.title.trim().is_empty()
-        || finding.summary.trim().is_empty()
+        || title.is_empty()
+        || title.chars().count() > MAX_SCCM_FINDING_TITLE_CHARS
+        || summary.is_empty()
+        || summary.chars().count() > MAX_SCCM_FINDING_SUMMARY_CHARS
         || !finding.phase.has_canonical_serialized_form()
     {
         return Err(SccmFindingValidationError::MissingRequiredField);
@@ -699,9 +716,7 @@ fn validate_coverage_gaps(
 ) -> Result<(), SccmFindingValidationError> {
     let mut coverage_by_artifact: BTreeMap<&str, &SccmFindingCoverageGap> = BTreeMap::new();
     for gap in coverage_gaps {
-        if !is_canonical_opaque_id(&gap.artifact_id)
-            || gap.artifact_id.chars().count() > MAX_SCCM_COVERAGE_GAP_ARTIFACT_ID_CHARS
-            || gap.coverage == SccmCoverageState::Captured
+        if !is_canonical_opaque_id(&gap.artifact_id) || gap.coverage == SccmCoverageState::Captured
         {
             return Err(SccmFindingValidationError::InvalidCoverageGap);
         }
@@ -2045,8 +2060,10 @@ fn validate_correlation_key_evidence(
         let normalized = normalize_key(key.kind.clone(), &key.raw);
         let has_canonical_value = !key.raw.is_empty()
             && key.raw.trim() == key.raw
+            && key.raw.chars().count() <= MAX_SCCM_CORRELATION_KEY_VALUE_CHARS
             && !key.normalized.is_empty()
             && key.normalized.trim() == key.normalized
+            && key.normalized.chars().count() <= MAX_SCCM_CORRELATION_KEY_VALUE_CHARS
             && normalized.confidence == SccmKeyConfidence::Exact
             && normalized.normalized == key.normalized;
         let has_valid_span = match (key.start, key.end) {
@@ -2142,7 +2159,7 @@ fn evidence_identity(reference: &SccmEvidenceRef) -> (&str, &str) {
 }
 
 fn is_canonical_opaque_id(value: &str) -> bool {
-    !value.is_empty() && value.trim() == value
+    !value.is_empty() && value.trim() == value && value.chars().count() <= MAX_SCCM_OPAQUE_ID_CHARS
 }
 
 fn normalize_finding(finding: &mut SccmFinding) {
