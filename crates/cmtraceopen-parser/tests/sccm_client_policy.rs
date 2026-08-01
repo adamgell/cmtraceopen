@@ -864,6 +864,71 @@ fn policy_duplicate_required_key_labels_never_emit_an_exact_transaction() {
 }
 
 #[test]
+fn policy_duplicate_key_labels_are_ambiguous_after_any_non_word_character() {
+    // A left word boundary is not the value-terminator set. Every character
+    // that cannot be part of a label must start a countable occurrence.
+    for prefix in [
+        '[', '(', '=', '/', '#', '|', '{', '*', '@', '!', '+', ':', ')', '}', '"', '\'', ',', ';',
+        ']', '<', ' ',
+    ] {
+        let analysis = request_message_mutation("complete", |message| {
+            format!("{message} context={prefix}RequestId={{99999999-9999-9999-9999-999999999999}}")
+        });
+        assert!(
+            analysis["transactions"]
+                .as_array()
+                .expect("transactions")
+                .is_empty(),
+            "a second RequestId after {prefix:?} must be counted as ambiguity"
+        );
+    }
+}
+
+#[test]
+fn policy_word_characters_never_start_a_key_label() {
+    // The mirror of the case above: a label welded onto a preceding word is
+    // not an occurrence, so it must not be counted as ambiguity either.
+    for prefix in ["Not", "caf\u{e9}", "sub_", "sub-", "9"] {
+        let analysis = request_message_mutation("complete", |message| {
+            format!("{message} {prefix}RequestId={{99999999-9999-9999-9999-999999999999}}")
+        });
+        assert_eq!(
+            analysis["transactions"]
+                .as_array()
+                .expect("transactions")
+                .len(),
+            1,
+            "{prefix}RequestId is not an occurrence of RequestId"
+        );
+    }
+}
+
+#[test]
+fn policy_phase_markers_respect_multibyte_word_characters() {
+    let analysis = request_message_mutation("complete", |message| {
+        message.replace("Request succeeded", "caf\u{e9}Request succeeded")
+    });
+    assert!(
+        analysis["transactions"]
+            .as_array()
+            .expect("transactions")
+            .is_empty(),
+        "a marker welded onto a multibyte word is not an exact marker"
+    );
+}
+
+#[test]
+fn policy_phase_markers_still_match_before_sentence_punctuation() {
+    let analysis = request_message_mutation("complete", |message| {
+        message.replace("Request succeeded", "Request succeeded.")
+    });
+    assert_eq!(
+        analysis["transactions"][0]["state"], "succeeded",
+        "a trailing period separates the marker, it does not extend the word"
+    );
+}
+
+#[test]
 fn policy_embedded_key_labels_are_never_admitted_as_required_keys() {
     let analysis = request_message_mutation("complete", |message| {
         message.replace("RequestId=", "NotRequestId=")
