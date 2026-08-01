@@ -47,9 +47,14 @@ pub const SCCM_SITE_CORE_STATUS_GROUP: &str = "server-status";
 
 /// The only ConfigMgr build this profile is validated against.
 const SITE_CORE_PROFILE_VERSION_TOKEN: &str = "5.00.TEST";
-/// Producer component recorded by each admitted source family.
-const COMPONENT_PRODUCER: &str = "SMS_SITE_COMPONENT_MANAGER";
-const STATUS_PRODUCER: &str = "SMS_STATUS_MANAGER";
+/// Producer components this profile is validated against. `hman.log` and
+/// `statesys.log` are declared members of the same groups, but no fixture
+/// validates the component they record, so they carry no entry here and can
+/// only become coverage.
+const VALIDATED_PRODUCERS: [(&str, &str); 2] = [
+    ("sitecomp", "SMS_SITE_COMPONENT_MANAGER"),
+    ("statmgr", "SMS_STATUS_MANAGER"),
+];
 /// Floor for a bounded recapture request after a capture limit truncated a
 /// source. Requests never ask for an unbounded file.
 const RECAPTURE_FLOOR_BYTES: u64 = 4096;
@@ -401,13 +406,6 @@ impl SiteCoreGroup {
         }
     }
 
-    fn producer(self) -> &'static str {
-        match self {
-            Self::Component => COMPONENT_PRODUCER,
-            Self::Status => STATUS_PRODUCER,
-        }
-    }
-
     fn family(self) -> SccmArtifactFamily {
         match self {
             Self::Component => SccmArtifactFamily::SiteComponent,
@@ -439,11 +437,14 @@ impl SiteCoreGroup {
 }
 
 /// A source that passed shape admission: role, group, catalogued basename,
-/// family, rotation, lineage and profile version all agree.
+/// family, rotation, lineage and profile version all agree. `producer` is the
+/// component whose records this profile is validated to read; a shape-admitted
+/// source without one stays visible as coverage but can never yield a fact.
 struct AdmittedSource<'a> {
     source: &'a SccmSiteCoreSource,
     group: SiteCoreGroup,
     basename: String,
+    producer: Option<&'static str>,
 }
 
 /// Sources are filtered to the site-server role and the two declared site-core
@@ -491,10 +492,14 @@ fn admit_source<'a>(
             .any(|logical_name| *logical_name == classified.logical_name)
         && classified.rotation == source.artifact.rotation
         && classified.basename == source.rotation_lineage;
-    matches_group.then_some(AdmittedSource {
+    matches_group.then(|| AdmittedSource {
         source,
         group,
         basename: source.artifact.display_name.clone(),
+        producer: VALIDATED_PRODUCERS
+            .iter()
+            .find(|(logical_name, _)| *logical_name == classified.logical_name)
+            .map(|(_, producer)| *producer),
     })
 }
 
@@ -654,6 +659,9 @@ fn collect_facts(context: &SiteCoreContext<'_>, site_code: Option<&str>) -> Vec<
 /// `capped` are coverage-only. A captured source that still carries an
 /// incomplete region is a fragment, not a fact source.
 fn source_carries_facts(admitted: &AdmittedSource<'_>) -> bool {
+    if admitted.producer.is_none() {
+        return false;
+    }
     match admitted.source.artifact.coverage {
         SccmCoverageState::Captured => admitted.source.fragment_complete != Some(false),
         SccmCoverageState::Capped => true,
@@ -666,7 +674,7 @@ fn parse_fact(
     admitted: &AdmittedSource<'_>,
     site_code: &str,
 ) -> Option<SiteCoreFact> {
-    if evidence.component.as_deref() != Some(admitted.group.producer()) {
+    if evidence.component.as_deref() != admitted.producer {
         return None;
     }
     let message = evidence.message.as_str();
@@ -1088,6 +1096,13 @@ fn collect_coverage_gaps(
         let artifact_id = source.artifact.artifact_id.as_str();
         let admitted = context.sources.get(artifact_id);
         let (state, evidence) = match (admitted, &source.artifact.coverage) {
+            // A declared source family this profile has no validated producer
+            // for. Its bytes are coverage, never a component outcome.
+            (Some(admitted), SccmCoverageState::Captured | SccmCoverageState::Capped)
+                if admitted.producer.is_none() =>
+            {
+                (SccmCoverageState::Unsupported, None)
+            }
             // An interpretable source that produced no complete record for
             // part of its range.
             (Some(_), SccmCoverageState::Captured) => match fragment_by_artifact.get(artifact_id) {
