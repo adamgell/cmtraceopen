@@ -750,37 +750,53 @@ fn unknown_and_lookalike_names_are_retained_as_unsupported_not_reclassified() {
 
 #[test]
 fn malformed_rotation_and_public_provenance_values_fail_closed() {
+    // The relative path is consistent with the declared rotation so the
+    // malformed timestamp grammar is the only contract this input violates.
     let mut invalid_rotation = synthetic_artifact("invalid-rotation", "AppEnforce.log.2026-bad");
     invalid_rotation.artifact.rotation = SccmRotation::Timestamped("2026-bad".to_owned());
-    assert!(assess_client_intake(&SccmClientIntakeBundle {
-        artifacts: vec![invalid_rotation],
-    })
-    .is_err());
+    invalid_rotation.relative_path =
+        Some("evidence/client-app-enforce/timestamped-2026-bad/AppEnforce.log.2026-bad".to_owned());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![invalid_rotation],
+        }),
+        Err(SccmClientIntakeError::InvalidRotation),
+        "a malformed rotation timestamp must fail on the rotation contract"
+    );
 
     let mut unsafe_basename =
         synthetic_artifact("unsafe-basename", r"C:\Users\RealUser\PolicyAgent.log");
     unsafe_basename.relative_path =
         Some("evidence/unknown/unsafe-basename/PolicyAgent.log".to_owned());
-    assert!(assess_client_intake(&SccmClientIntakeBundle {
-        artifacts: vec![unsafe_basename],
-    })
-    .is_err());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![unsafe_basename],
+        }),
+        Err(SccmClientIntakeError::InvalidBasename),
+        "a path-bearing basename must fail on the basename contract"
+    );
 
     let mut invalid_time = synthetic_artifact("invalid-time", "PolicyAgent.log");
     invalid_time.artifact.collected_at_utc = Some(r"C:\Users\RealUser".to_owned());
     invalid_time.relative_path = Some("evidence/client-policy-agent/PolicyAgent.log".to_owned());
-    assert!(assess_client_intake(&SccmClientIntakeBundle {
-        artifacts: vec![invalid_time],
-    })
-    .is_err());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![invalid_time],
+        }),
+        Err(SccmClientIntakeError::InvalidCollectedAt),
+        "a non-RFC-3339 collection timestamp must fail on the timestamp contract"
+    );
 
     let mut invalid_version = synthetic_artifact("invalid-version", "PolicyAgent.log");
     invalid_version.artifact.configmgr_version = Some("5.00.TEST/C:\\RealUser".to_owned());
     invalid_version.relative_path = Some("evidence/client-policy-agent/PolicyAgent.log".to_owned());
-    assert!(assess_client_intake(&SccmClientIntakeBundle {
-        artifacts: vec![invalid_version],
-    })
-    .is_err());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![invalid_version],
+        }),
+        Err(SccmClientIntakeError::InvalidConfigMgrVersion),
+        "an unsafe ConfigMgr version must fail on the version contract"
+    );
 }
 
 #[test]
@@ -1023,18 +1039,39 @@ fn fragment_completeness_and_every_path_fingerprint_are_explicit_and_unambiguous
     missing_completeness.relative_path =
         Some("evidence/client-policy-agent/PolicyAgent.log".to_owned());
     missing_completeness.fragment_complete = None;
-    assert!(assess_client_intake(&SccmClientIntakeBundle {
-        artifacts: vec![missing_completeness],
-    })
-    .is_err());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![missing_completeness],
+        }),
+        Err(SccmClientIntakeError::MissingFragmentCompleteness),
+        "fragment completeness must be an explicit declaration"
+    );
 
+    // A non-physical marker keeping fragmentComplete=true invents a physical
+    // capture it does not have; markers carry no bytes that could be
+    // complete, so the completeness contract is the check that fails.
     let mut invented_physical_state = synthetic_artifact("denied", "PolicyAgent.log");
     invented_physical_state.artifact.coverage = SccmCoverageState::AccessDenied;
     invented_physical_state.relative_path = None;
-    assert!(assess_client_intake(&SccmClientIntakeBundle {
-        artifacts: vec![invented_physical_state],
-    })
-    .is_err());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![invented_physical_state],
+        }),
+        Err(SccmClientIntakeError::InvalidFragmentCompleteness),
+        "a marker claiming a complete fragment invents a physical capture"
+    );
+
+    // The mirror image: a physical capture stripped of its collision-safe
+    // bundle path must fail on the provenance contract.
+    let mut missing_provenance = synthetic_artifact("missing-path", "PolicyAgent.log");
+    missing_provenance.relative_path = None;
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![missing_provenance],
+        }),
+        Err(SccmClientIntakeError::MissingPhysicalProvenance),
+        "a physical capture without its bundle path lacks required provenance"
+    );
 
     let mut first = synthetic_artifact("denied-one", "PolicyAgent.log");
     first.artifact.coverage = SccmCoverageState::AccessDenied;
@@ -1045,10 +1082,13 @@ fn fragment_completeness_and_every_path_fingerprint_are_explicit_and_unambiguous
     second.relative_path = None;
     second.fragment_complete = Some(false);
     second.path_fingerprint = first.path_fingerprint.clone();
-    assert!(assess_client_intake(&SccmClientIntakeBundle {
-        artifacts: vec![first, second],
-    })
-    .is_err());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![first, second],
+        }),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "two markers must not share one path fingerprint"
+    );
 }
 
 #[test]
@@ -1070,18 +1110,33 @@ fn unsupported_physical_artifacts_retain_safe_provenance_without_raw_host_or_pat
 
 #[test]
 fn ambiguous_identity_or_nonclient_role_fails_closed() {
+    // The collision fixture declares one basename under two configured roots,
+    // so each artifact stays individually well formed and only the identity
+    // channel under test collides.
     let mut duplicate = load_bundle("collision");
     duplicate.artifacts[1].artifact.artifact_id =
         duplicate.artifacts[0].artifact.artifact_id.clone();
-    assert!(assess_client_intake(&duplicate).is_err());
+    assert_eq!(
+        assess_client_intake(&duplicate),
+        Err(SccmClientIntakeError::DuplicateArtifactId),
+        "two artifacts must not share one caller identity"
+    );
 
     let mut duplicate_path = load_bundle("collision");
     duplicate_path.artifacts[1].relative_path = duplicate_path.artifacts[0].relative_path.clone();
-    assert!(assess_client_intake(&duplicate_path).is_err());
+    assert_eq!(
+        assess_client_intake(&duplicate_path),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "two captures must not share one bundle-relative evidence path"
+    );
 
     let mut wrong_role = load_bundle("complete");
     wrong_role.artifacts[0].artifact.role = SccmRole::ManagementPoint;
-    assert!(assess_client_intake(&wrong_role).is_err());
+    assert_eq!(
+        assess_client_intake(&wrong_role),
+        Err(SccmClientIntakeError::RoleMismatch),
+        "client intake must reject a non-client role outright"
+    );
 }
 
 #[test]
