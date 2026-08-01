@@ -314,10 +314,7 @@ pub struct SccmSiteCoreAnalysis {
 /// source-local observations, coverage gaps and bounded next-artifact requests.
 pub fn analyze_site_core(bundle: &SccmSiteCoreBundle) -> SccmSiteCoreAnalysis {
     let site_code = normalize_site_code(&bundle.topology.site_code);
-    let context = SiteCoreContext {
-        bundle,
-        sources: admitted_sources(bundle),
-    };
+    let context = SiteCoreContext::new(bundle);
     let facts = collect_facts(&context, site_code.as_deref());
     let fragments = collect_fragments(&context);
     let coverage_gaps = collect_coverage_gaps(&context, &fragments);
@@ -375,10 +372,34 @@ pub fn analyze_site_core(bundle: &SccmSiteCoreBundle) -> SccmSiteCoreAnalysis {
 // ---------------------------------------------------------------------------
 
 /// The admitted view of one bundle. Shape admission runs once so no later
-/// stage can silently re-derive a different source set.
+/// stage can silently re-derive a different source set, and every whole-bundle
+/// question a per-record or per-transaction stage would otherwise ask is
+/// answered here once as well.
 struct SiteCoreContext<'a> {
     bundle: &'a SccmSiteCoreBundle,
     sources: BTreeMap<&'a str, AdmittedSource<'a>>,
+    /// Whether each record in `bundle.evidence`, by position, holds an identity
+    /// no other record contests.
+    evidence_identity_is_unique: Vec<bool>,
+    /// The unparsed physical tail of each admitted source, if it has one.
+    truncated_tails: BTreeMap<&'a str, SccmSiteCoreEvidence>,
+}
+
+impl<'a> SiteCoreContext<'a> {
+    fn new(bundle: &'a SccmSiteCoreBundle) -> Self {
+        let sources = admitted_sources(bundle);
+        let truncated_tails = truncated_tails(bundle, &sources);
+        Self {
+            bundle,
+            sources,
+            evidence_identity_is_unique: unique_evidence_identities(bundle),
+            truncated_tails,
+        }
+    }
+
+    fn truncated_tail(&self, artifact_id: &str) -> Option<SccmSiteCoreEvidence> {
+        self.truncated_tails.get(artifact_id).cloned()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -635,14 +656,15 @@ fn collect_facts(context: &SiteCoreContext<'_>, site_code: Option<&str>) -> Vec<
         .bundle
         .evidence
         .iter()
-        .filter_map(|evidence| {
+        .enumerate()
+        .filter_map(|(position, evidence)| {
             let admitted = context
                 .sources
                 .get(evidence.reference.artifact_id.as_str())?;
             if !source_carries_facts(admitted)
                 || evidence.role != SccmRole::SiteServer
                 || !evidence_reference_fits_source(evidence, admitted)
-                || !evidence_identity_is_unique(context.bundle, evidence)
+                || !context.evidence_identity_is_unique[position]
             {
                 return None;
             }
@@ -887,15 +909,24 @@ fn reduce_transaction(
 
 /// Two facts at the same instant, in the same phase, disagreeing about the
 /// outcome cannot select a winner without letting vector order decide.
+///
+/// Facts are bucketed by the pair that has to match rather than compared
+/// pairwise: a bucket is in conflict exactly when it does not agree with its
+/// own first outcome, and one busy component key can hold thousands of records.
 fn has_same_instant_conflict(facts: &[SiteCoreFact]) -> bool {
-    facts.iter().enumerate().any(|(index, left)| {
-        facts[index + 1..].iter().any(|right| {
-            left.marker.phase == right.marker.phase
-                && left.ordering_millis().is_some()
-                && left.ordering_millis() == right.ordering_millis()
-                && left.marker.outcome != right.marker.outcome
-        })
-    })
+    let mut outcomes: BTreeMap<(SccmSiteCorePhase, i64), FactOutcome> = BTreeMap::new();
+    for fact in facts {
+        let Some(millis) = fact.ordering_millis() else {
+            continue;
+        };
+        let first = outcomes
+            .entry((fact.marker.phase, millis))
+            .or_insert(fact.marker.outcome);
+        if *first != fact.marker.outcome {
+            return true;
+        }
+    }
+    false
 }
 
 fn confidence_ceiling(
@@ -982,7 +1013,7 @@ fn capped_recapture_request(
     let (_, admitted) = context.sources.iter().find(|(artifact_id, admitted)| {
         cited.contains(*artifact_id)
             && admitted.source.artifact.coverage == SccmCoverageState::Capped
-            && truncated_tail(context.bundle, admitted).is_some()
+            && context.truncated_tails.contains_key(*artifact_id)
     })?;
 
     let limit = admitted.source.capture_limit_bytes.unwrap_or_default();
@@ -1043,7 +1074,7 @@ fn collect_fragments(context: &SiteCoreContext<'_>) -> Vec<FragmentArtifact> {
                 && admitted.source.artifact.coverage == SccmCoverageState::Captured
         })
         .filter_map(|admitted| {
-            let tail = truncated_tail(context.bundle, admitted)?;
+            let tail = context.truncated_tail(&admitted.source.artifact.artifact_id)?;
             Some(FragmentArtifact {
                 group: admitted.group,
                 lineage: admitted.source.rotation_lineage.clone(),
@@ -1058,19 +1089,43 @@ fn collect_fragments(context: &SiteCoreContext<'_>) -> Vec<FragmentArtifact> {
     fragments
 }
 
-fn truncated_tail(
-    bundle: &SccmSiteCoreBundle,
-    admitted: &AdmittedSource<'_>,
-) -> Option<SccmSiteCoreEvidence> {
-    let artifact_id = admitted.source.artifact.artifact_id.as_str();
-    let physical_line_end = admitted.source.physical_line_end?;
-    let parsed_line_end = bundle
-        .evidence
+/// The unparsed physical tail of every admitted source, resolved in one pass
+/// over the bundle. Three stages need this answer and one of them needs it per
+/// transaction, so deriving it on demand would rescan the whole evidence vector
+/// once per caller.
+fn truncated_tails<'a>(
+    bundle: &'a SccmSiteCoreBundle,
+    sources: &BTreeMap<&'a str, AdmittedSource<'a>>,
+) -> BTreeMap<&'a str, SccmSiteCoreEvidence> {
+    let mut parsed_line_ends: BTreeMap<&str, u32> = BTreeMap::new();
+    for evidence in &bundle.evidence {
+        let line_end = parsed_line_ends
+            .entry(evidence.reference.artifact_id.as_str())
+            .or_default();
+        *line_end = (*line_end).max(evidence.reference.line_end.unwrap_or_default());
+    }
+
+    sources
         .iter()
-        .filter(|evidence| evidence.reference.artifact_id == artifact_id)
-        .filter_map(|evidence| evidence.reference.line_end)
-        .max()
-        .unwrap_or_default();
+        .filter_map(|(artifact_id, admitted)| {
+            let tail = truncated_tail(
+                artifact_id,
+                admitted.source.physical_line_end?,
+                parsed_line_ends
+                    .get(artifact_id)
+                    .copied()
+                    .unwrap_or_default(),
+            )?;
+            Some((*artifact_id, tail))
+        })
+        .collect()
+}
+
+fn truncated_tail(
+    artifact_id: &str,
+    physical_line_end: u32,
+    parsed_line_end: u32,
+) -> Option<SccmSiteCoreEvidence> {
     let tail_start = parsed_line_end.checked_add(1)?;
     if tail_start > physical_line_end {
         return None;
@@ -1132,9 +1187,9 @@ fn collect_coverage_gaps(
                     (None, _) => continue,
                 }
             }
-            (Some(admitted), SccmCoverageState::Capped) => (
+            (Some(_), SccmCoverageState::Capped) => (
                 SccmCoverageState::Capped,
-                truncated_tail(context.bundle, admitted),
+                context.truncated_tail(artifact_id),
             ),
             (Some(_), state) => (state.clone(), None),
             // A source this profile cannot interpret, or whose identity is
@@ -1627,34 +1682,106 @@ fn evidence_reference_fits_source(evidence: &SccmEvidence, admitted: &AdmittedSo
 /// Two evidence records that share an identity, or whose physical ranges
 /// overlap within one artifact, cannot both be authoritative. Neither is
 /// admitted.
-fn evidence_identity_is_unique(bundle: &SccmSiteCoreBundle, evidence: &SccmEvidence) -> bool {
-    bundle
-        .evidence
-        .iter()
-        .filter(|candidate| {
-            candidate.evidence_id == evidence.evidence_id
-                || candidate.reference.entry_id == evidence.reference.entry_id
-                || references_overlap(&candidate.reference, &evidence.reference)
-        })
-        .take(2)
-        .count()
-        == 1
+///
+/// The question is answered for the whole bundle at once, by position, because
+/// the alternative is a rescan of every record for every record: a stock
+/// ConfigMgr server log holds tens of thousands of records and none of them
+/// collide, so the scan that only stops early on a collision never stops early.
+/// A record is contested when it shares an evidence id or an entry id with
+/// another, or when its physical range meets another range in the same
+/// artifact; the three are independent, so each is decided by its own pass.
+fn unique_evidence_identities(bundle: &SccmSiteCoreBundle) -> Vec<bool> {
+    let mut unique = vec![true; bundle.evidence.len()];
+    mark_repeated_keys(
+        &mut unique,
+        bundle
+            .evidence
+            .iter()
+            .map(|evidence| evidence.evidence_id.as_str()),
+    );
+    mark_repeated_keys(
+        &mut unique,
+        bundle
+            .evidence
+            .iter()
+            .map(|evidence| evidence.reference.entry_id.as_str()),
+    );
+    mark_met_ranges(&mut unique, bundle);
+    unique
 }
 
-fn references_overlap(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> bool {
-    if left.artifact_id != right.artifact_id {
-        return false;
+fn mark_repeated_keys<'a>(unique: &mut [bool], keys: impl Iterator<Item = &'a str>) {
+    let mut positions: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (position, key) in keys.enumerate() {
+        positions.entry(key).or_default().push(position);
     }
-    matches!(
-        (
-            left.line_start,
-            left.line_end,
-            right.line_start,
-            right.line_end,
-        ),
-        (Some(left_start), Some(left_end), Some(right_start), Some(right_end))
-            if left_start <= right_end && right_start <= left_end
-    )
+    for repeated in positions.into_values().filter(|group| group.len() > 1) {
+        for position in repeated {
+            unique[position] = false;
+        }
+    }
+}
+
+/// Two ranges meet when `left.start <= right.end` and `right.start <= left.end`.
+/// Sorting one artifact's ranges by start turns the first half of that test into
+/// a prefix: the candidates whose start is at or before this range's end are
+/// exactly the leading run. This range meets one of them when the largest end in
+/// that run, excluding this range itself, reaches this range's start, so the
+/// running largest and runner-up ends answer every range in one more pass.
+///
+/// The runner-up is what lets a range be excluded from its own prefix, and the
+/// arithmetic never assumes `start <= end`: a reference whose range is inverted
+/// is decided by the same test as any other rather than being read as empty.
+fn mark_met_ranges(unique: &mut [bool], bundle: &SccmSiteCoreBundle) {
+    let mut by_artifact: BTreeMap<&str, Vec<(u32, u32, usize)>> = BTreeMap::new();
+    for (position, evidence) in bundle.evidence.iter().enumerate() {
+        let reference = &evidence.reference;
+        if let (Some(start), Some(end)) = (reference.line_start, reference.line_end) {
+            by_artifact
+                .entry(reference.artifact_id.as_str())
+                .or_default()
+                .push((start, end, position));
+        }
+    }
+
+    for mut ranges in by_artifact.into_values() {
+        ranges.sort_unstable();
+        let mut largest_ends: Vec<(u32, usize, Option<u32>)> = Vec::with_capacity(ranges.len());
+        let mut largest: Option<(u32, usize)> = None;
+        let mut runner_up: Option<u32> = None;
+        for (index, &(_, end, _)) in ranges.iter().enumerate() {
+            match largest {
+                Some((current, _)) if end > current => {
+                    runner_up = Some(current);
+                    largest = Some((end, index));
+                }
+                Some(_) => {
+                    if runner_up.is_none_or(|value| end > value) {
+                        runner_up = Some(end);
+                    }
+                }
+                None => largest = Some((end, index)),
+            }
+            let (end, holder) = largest.expect("a largest end exists after the first range");
+            largest_ends.push((end, holder, runner_up));
+        }
+
+        for (index, &(start, end, position)) in ranges.iter().enumerate() {
+            let reachable = ranges.partition_point(|(candidate, _, _)| *candidate <= end);
+            if reachable == 0 {
+                continue;
+            }
+            let (largest_end, holder, runner_up) = largest_ends[reachable - 1];
+            let contender = if holder == index {
+                runner_up
+            } else {
+                Some(largest_end)
+            };
+            if contender.is_some_and(|candidate_end| candidate_end >= start) {
+                unique[position] = false;
+            }
+        }
+    }
 }
 
 fn compare_references(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> Ordering {
@@ -1696,5 +1823,149 @@ fn role_sort_key(role: &SccmRole) -> &str {
         SccmRole::Provider => "provider",
         SccmRole::AdminService => "adminService",
         SccmRole::Unknown(value) => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two references meet when they name the same artifact and their physical
+    /// ranges intersect. This is the definition `mark_met_ranges` answers by
+    /// sorting rather than by comparing every pair, so it is stated once here
+    /// and the pre-pass is held to it.
+    fn references_overlap(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> bool {
+        if left.artifact_id != right.artifact_id {
+            return false;
+        }
+        matches!(
+            (
+                left.line_start,
+                left.line_end,
+                right.line_start,
+                right.line_end,
+            ),
+            (Some(left_start), Some(left_end), Some(right_start), Some(right_end))
+                if left_start <= right_end && right_start <= left_end
+        )
+    }
+
+    /// The pairwise definition of contested identity, kept as the reference the
+    /// bundle-wide pre-pass has to reproduce exactly.
+    fn identity_is_unique_pairwise(bundle: &SccmSiteCoreBundle, evidence: &SccmEvidence) -> bool {
+        bundle
+            .evidence
+            .iter()
+            .filter(|candidate| {
+                candidate.evidence_id == evidence.evidence_id
+                    || candidate.reference.entry_id == evidence.reference.entry_id
+                    || references_overlap(&candidate.reference, &evidence.reference)
+            })
+            .take(2)
+            .count()
+            == 1
+    }
+
+    fn evidence(
+        evidence_id: &str,
+        artifact_id: &str,
+        entry_id: &str,
+        line_start: Option<u32>,
+        line_end: Option<u32>,
+    ) -> SccmEvidence {
+        SccmEvidence {
+            evidence_id: evidence_id.to_owned(),
+            reference: SccmEvidenceRef {
+                artifact_id: artifact_id.to_owned(),
+                entry_id: entry_id.to_owned(),
+                line_start,
+                line_end,
+            },
+            role: SccmRole::SiteServer,
+            component: Some("SMS_SITE_COMPONENT_MANAGER".to_owned()),
+            ccm_source_file: None,
+            message: String::new(),
+            timestamp: SccmTimestamp {
+                original_display: None,
+                offset_minutes: None,
+                utc_millis: None,
+                ordering_state: SccmTimeOrderingState::OffsetMissing,
+            },
+            execution_context: None,
+        }
+    }
+
+    fn bundle_of(evidence: Vec<SccmEvidence>) -> SccmSiteCoreBundle {
+        SccmSiteCoreBundle {
+            topology: SccmSiteCoreTopology {
+                site_code: "LAB".to_owned(),
+            },
+            sources: Vec::new(),
+            evidence,
+        }
+    }
+
+    /// Every shape the pre-pass has to agree with the pairwise reference on:
+    /// clean records, a repeated evidence id, a shared entry id under distinct
+    /// evidence ids, touching and nested ranges, equal ranges in *different*
+    /// artifacts (which never meet), a missing bound, and an inverted range,
+    /// which meets a range that spans it but not one that does not.
+    #[test]
+    fn the_identity_pre_pass_reproduces_the_pairwise_definition() {
+        let bundle = bundle_of(vec![
+            evidence("a1", "art-a", "a1", Some(1), Some(2)),
+            evidence("a2", "art-a", "a2", Some(3), Some(4)),
+            evidence("a3", "art-a", "a3", Some(4), Some(9)),
+            evidence("a4", "art-a", "a4", Some(20), Some(40)),
+            evidence("a5", "art-a", "a5", Some(25), Some(30)),
+            evidence("a6", "art-a", "a6", Some(60), Some(60)),
+            evidence("a6", "art-a", "a7", Some(70), Some(70)),
+            evidence("a8", "art-a", "shared", Some(80), Some(80)),
+            evidence("a9", "art-a", "shared", Some(90), Some(90)),
+            evidence("a10", "art-a", "a10", None, Some(100)),
+            evidence("a11", "art-a", "a11", Some(110), None),
+            evidence("a12", "art-a", "a12", Some(500), Some(400)),
+            evidence("a13", "art-a", "a13", Some(300), Some(600)),
+            evidence("a14", "art-a", "a14", Some(1000), Some(900)),
+            evidence("b1", "art-b", "b1", Some(1), Some(2)),
+            evidence("b2", "art-b", "b2", Some(3), Some(4)),
+        ]);
+
+        let expected = bundle
+            .evidence
+            .iter()
+            .map(|record| identity_is_unique_pairwise(&bundle, record))
+            .collect::<Vec<_>>();
+        assert_eq!(unique_evidence_identities(&bundle), expected);
+        // The reference itself has to be discriminating, or agreeing with it
+        // would prove nothing.
+        assert!(expected.iter().any(|unique| *unique));
+        assert!(expected.iter().any(|unique| !*unique));
+    }
+
+    #[test]
+    fn the_identity_pre_pass_agrees_on_a_bundle_with_no_collisions() {
+        let bundle = bundle_of(
+            (0..64u32)
+                .map(|index| {
+                    let line = index * 2 + 1;
+                    evidence(
+                        &format!("clean-{index}"),
+                        "art-a",
+                        &format!("clean-{index}"),
+                        Some(line),
+                        Some(line),
+                    )
+                })
+                .collect(),
+        );
+
+        let expected = bundle
+            .evidence
+            .iter()
+            .map(|record| identity_is_unique_pairwise(&bundle, record))
+            .collect::<Vec<_>>();
+        assert!(expected.iter().all(|unique| *unique));
+        assert_eq!(unique_evidence_identities(&bundle), expected);
     }
 }
