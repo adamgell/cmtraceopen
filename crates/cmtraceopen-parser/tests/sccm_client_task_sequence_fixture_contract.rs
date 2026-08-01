@@ -3103,6 +3103,123 @@ fn exact_key_admission_ignores_bracket_bounded_prefixes() {
     }
 }
 
+fn aliasing_observation(observation_id: &str, evidence: &Value) -> Value {
+    serde_json::json!({
+        "observationId": observation_id,
+        "artifactId": evidence["artifactId"].clone(),
+        "keyConfidence": "candidate",
+        "confidence": "low",
+        "confidenceCeiling": "low",
+        "correlationEligible": false,
+        "evidence": evidence.clone(),
+        "reason": "Synthetic alias of already keyed evidence."
+    })
+}
+
+#[test]
+fn padded_evidence_references_cannot_alias_keyed_records() {
+    let scenario = "unrelated-runs";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let source = read_json(&scenario_root.join("expected.json"));
+    let run_a_evidence = source["transactions"][0]["evidence"][0].clone();
+
+    let mut expected = source.clone();
+    expected["sourceLocalObservations"] = serde_json::json!([aliasing_observation(
+        "unrelated-runs-alias-a",
+        &run_a_evidence
+    )]);
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("control: an unpadded alias of keyed evidence is rejected");
+    assert!(error.contains("source-local"), "{error}");
+
+    let mut padded_evidence = run_a_evidence.clone();
+    padded_evidence["reviewerNote"] = Value::String("evidence_text ignores this key".to_owned());
+    let mut expected = source;
+    expected["sourceLocalObservations"] = serde_json::json!([aliasing_observation(
+        "unrelated-runs-alias-a",
+        &padded_evidence
+    )]);
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("a padded alias resolves to the same record and must also be rejected");
+    assert!(error.contains("unmodeled"), "{error}");
+}
+
+#[test]
+fn padded_observations_cannot_launder_cross_run_findings() {
+    let scenario = "unrelated-runs";
+    let scenario_root = task_sequence_root().join(scenario);
+    let manifest = read_json(&scenario_root.join("manifest.json"));
+    let mut expected = read_json(&scenario_root.join("expected.json"));
+    let mut padded_a = expected["transactions"][0]["evidence"][0].clone();
+    let mut padded_b = expected["transactions"][1]["evidence"][0].clone();
+    padded_a["reviewerNote"] = Value::String("padding".to_owned());
+    padded_b["reviewerNote"] = Value::String("padding".to_owned());
+    expected["sourceLocalObservations"] = serde_json::json!([
+        aliasing_observation("unrelated-runs-alias-a", &padded_a),
+        aliasing_observation("unrelated-runs-alias-b", &padded_b)
+    ]);
+    // The finding cites the padded aliases, so every reference resolves to a
+    // keyed physical record while matching only the laundering observations.
+    expected["findings"][0]["evidence"] = serde_json::json!([padded_a, padded_b]);
+
+    let error = validate_contract(scenario, &scenario_root, &manifest, &expected)
+        .expect_err("padded observations cannot launder a finding across two exact runs");
+    assert!(error.contains("unmodeled"), "{error}");
+}
+
+#[test]
+fn undelimitable_record_bodies_fail_closed() {
+    let scenario = "completed";
+    let key_fields = concat!(
+        "executionId=72400000-0000-0000-0000-000000000005 ",
+        "taskSequencePackageId=LAB00324 advertisementId=LAB20305 runContext=osd"
+    );
+
+    for (mutation, leading_space, relocate_key_fields, must_fail_at_head) in [
+        ("leading-space", true, false, false),
+        ("relocated-key-fields-indented", true, true, false),
+        ("relocated-key-fields-flush", false, true, true),
+    ] {
+        let temporary = copy_scenario_to_temporary_root(scenario, mutation);
+        let mut manifest = read_json(&temporary.root.join("manifest.json"));
+        let mut expected = read_json(&temporary.root.join("expected.json"));
+        let relative_path = manifest["artifacts"][0]["relativePath"]
+            .as_str()
+            .expect("completed artifact has a relative path");
+        let evidence_path = temporary.root.join(relative_path);
+        let original =
+            std::fs::read_to_string(&evidence_path).expect("completed evidence is readable");
+
+        let mut mutated = original.clone();
+        if relocate_key_fields {
+            mutated = mutated.replace(&format!("{key_fields} "), "");
+            mutated = mutated.replace("context=\"\"", &format!("context=\"{key_fields}\""));
+            assert!(
+                mutated.contains(&format!("context=\"{key_fields}\"")),
+                "{mutation}: the key fields moved into the record trailer"
+            );
+        }
+        if leading_space {
+            mutated = format!(" {mutated}");
+        }
+        assert_ne!(mutated, original, "{mutation}: the mutation is effective");
+        std::fs::write(&evidence_path, &mutated).expect("mutated evidence is writable");
+        manifest["artifacts"][0]["bytesCopied"] = Value::from(mutated.len() as u64);
+        expected["artifactProvenance"][0]["bytesCopied"] = Value::from(mutated.len() as u64);
+
+        let result = validate_contract(scenario, &temporary.root, &manifest, &expected);
+        if must_fail_at_head {
+            result.expect_err("control: a flush record never exposes its trailer to key admission");
+        } else {
+            let error = result.expect_err(
+                "a record body that cannot be delimited by the CCM framing must fail closed",
+            );
+            assert!(error.contains("framing"), "{mutation}: {error}");
+        }
+    }
+}
+
 #[test]
 fn rotated_fragment_capture_path_names_the_rotated_file() {
     let scenario_root = task_sequence_root().join("rotation-boundary");
