@@ -232,7 +232,7 @@ pub async fn restart_as_administrator(
 /// or already consumed. A failed restore is never fatal: the application starts
 /// normally, which is why this reports absence rather than an error.
 #[tauri::command]
-pub fn get_initial_elevation_restore(
+pub async fn get_initial_elevation_restore(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<RestoreTicket>, crate::error::AppError> {
@@ -249,20 +249,20 @@ pub fn get_initial_elevation_restore(
     };
     let directory = ticket_directory(&app_data);
 
-    let Some(ticket_id) = ticket_id else {
-        // No requested ticket can be lost, so this startup can sweep abandoned
-        // tickets immediately.
-        prune_expired(&directory);
-        return Ok(None);
-    };
-
-    match consume_initial_ticket(&directory, &ticket_id, now_ms()) {
-        Ok(ticket) => Ok(Some(ticket)),
-        Err(error) => {
+    match consume_initial_ticket_off_thread(directory, ticket_id, now_ms())
+        .await
+        .map(|outcome| outcome.ticket)
+    {
+        Some(Ok(ticket)) => Ok(ticket),
+        Some(Err(error)) => {
             log::warn!(
                 "[elevation] ignoring restore ticket: {}",
                 ticket_summary(&error)
             );
+            Ok(None)
+        }
+        None => {
+            log::warn!("[elevation] restore ticket worker did not complete");
             Ok(None)
         }
     }
@@ -315,6 +315,33 @@ async fn discard_ticket_off_thread(directory: std::path::PathBuf, ticket_id: Str
     let _ = run_blocking_operation(move || discard_ticket(&directory, &ticket_id)).await;
 }
 
+struct InitialTicketIo {
+    ticket: Result<Option<RestoreTicket>, TicketError>,
+    #[cfg(test)]
+    worker_thread: std::thread::ThreadId,
+}
+
+async fn consume_initial_ticket_off_thread(
+    directory: std::path::PathBuf,
+    ticket_id: Option<String>,
+    now_ms: i64,
+) -> Option<InitialTicketIo> {
+    run_blocking_operation(move || InitialTicketIo {
+        ticket: match ticket_id {
+            Some(ticket_id) => consume_initial_ticket(&directory, &ticket_id, now_ms).map(Some),
+            None => {
+                // No requested ticket can be lost, so this startup can sweep
+                // abandoned tickets immediately.
+                prune_expired(&directory);
+                Ok(None)
+            }
+        },
+        #[cfg(test)]
+        worker_thread: std::thread::current().id(),
+    })
+    .await
+}
+
 /// Claim the one ticket named by this startup before sweeping its directory.
 /// A future or unreadable filesystem mtime must not make pruning erase the
 /// requested ticket before its content timestamp is validated.
@@ -347,6 +374,36 @@ mod tests {
         .expect("blocking worker completes");
 
         assert_ne!(worker, caller, "ticket I/O must leave the calling thread");
+    }
+
+    #[test]
+    fn startup_ticket_claim_and_prune_run_on_the_blocking_pool() {
+        let directory = TempDir::new().expect("temp dir");
+        let ticket = ticket_for(
+            crate::elevation::AppWorkspace::Log,
+            crate::elevation::RestoreTarget::Workspace,
+            crate::elevation::ElevationReason::ExplicitMenu,
+            TEST_NOW_MS,
+        );
+        let id = crate::elevation::restore_ticket::write_ticket(directory.path(), &ticket)
+            .expect("write ticket");
+        let caller = thread::current().id();
+        let outcome = tauri::async_runtime::block_on(consume_initial_ticket_off_thread(
+            directory.path().to_path_buf(),
+            Some(id),
+            TEST_NOW_MS,
+        ))
+        .expect("blocking worker completes");
+        let restored = outcome
+            .ticket
+            .expect("ticket operation succeeds")
+            .expect("ticket is restored");
+
+        assert_ne!(
+            outcome.worker_thread, caller,
+            "startup ticket I/O must leave the caller"
+        );
+        assert_eq!(restored, ticket);
     }
 
     #[test]
@@ -393,8 +450,15 @@ mod tests {
             ))
             .expect("age abandoned ticket");
 
-        let restored = consume_initial_ticket(directory.path(), &id, TEST_NOW_MS)
-            .expect("the requested ticket is consumed before the sweep");
+        let restored = tauri::async_runtime::block_on(consume_initial_ticket_off_thread(
+            directory.path().to_path_buf(),
+            Some(id),
+            TEST_NOW_MS,
+        ))
+        .expect("blocking worker completes")
+        .ticket
+        .expect("ticket operation succeeds")
+        .expect("the requested ticket is consumed before the sweep");
 
         assert_eq!(restored, ticket);
         assert!(
