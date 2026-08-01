@@ -28,20 +28,38 @@ static REQUEST_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// Releases the in-flight guard however the request ends, including on an early
 /// return or a panic unwinding through the command.
-struct InFlightGuard;
+///
+/// The one exception is a successful launch, where `latch` holds the guard for
+/// the remaining life of the process. `app.exit(0)` is not instantaneous, so
+/// releasing there would leave a window in which a late duplicate IPC call
+/// could mint a second ticket and raise a second UAC prompt during teardown.
+/// This mirrors the frontend coordinator, which keeps its own guard set after a
+/// launch for the same reason.
+struct InFlightGuard {
+    release_on_drop: bool,
+}
 
 impl InFlightGuard {
     fn acquire() -> Option<Self> {
         REQUEST_IN_FLIGHT
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .ok()
-            .map(|_| Self)
+            .map(|_| Self {
+                release_on_drop: true,
+            })
+    }
+
+    /// Hold the latch permanently: the process is on its way out.
+    fn latch(&mut self) {
+        self.release_on_drop = false;
     }
 }
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        REQUEST_IN_FLIGHT.store(false, Ordering::SeqCst);
+        if self.release_on_drop {
+            REQUEST_IN_FLIGHT.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -130,7 +148,7 @@ pub async fn restart_as_administrator(
     app: AppHandle,
     request: ElevationRequest,
 ) -> Result<RelaunchResult, ElevationCommandError> {
-    let Some(_in_flight) = InFlightGuard::acquire() else {
+    let Some(mut in_flight) = InFlightGuard::acquire() else {
         return Err(ElevationCommandError::AlreadyInProgress);
     };
 
@@ -183,6 +201,11 @@ pub async fn restart_as_administrator(
 
     match outcome {
         Ok(result) if result.launched => {
+            // Windows has the elevated child. Hold the latch rather than
+            // releasing it on the way out of this scope: the exit below is not
+            // instantaneous, and a duplicate call landing in that window would
+            // mint a second ticket and prompt for UAC again.
+            in_flight.latch();
             app.exit(0);
             Ok(result)
         }
@@ -265,8 +288,11 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
 
+    // Both behaviours live in one test on purpose: `REQUEST_IN_FLIGHT` is
+    // process-global, so splitting them would let the two cases race when the
+    // harness runs them in parallel.
     #[test]
-    fn the_in_flight_guard_admits_one_request_at_a_time() {
+    fn the_in_flight_guard_admits_one_request_and_latches_after_a_launch() {
         let first = InFlightGuard::acquire().expect("first request proceeds");
         assert!(
             InFlightGuard::acquire().is_none(),
@@ -277,6 +303,20 @@ mod tests {
             InFlightGuard::acquire().is_some(),
             "the guard must release once the request finishes"
         );
+
+        // A launched restart keeps the latch for the life of the process:
+        // app.exit(0) is not instantaneous, and a duplicate call landing in
+        // that window would mint a second ticket and prompt for UAC again.
+        let mut launched = InFlightGuard::acquire().expect("a fresh request proceeds");
+        launched.latch();
+        drop(launched);
+        assert!(
+            InFlightGuard::acquire().is_none(),
+            "a latched guard must outlive its own drop"
+        );
+
+        // Leave the process-global latch as this test found it.
+        REQUEST_IN_FLIGHT.store(false, Ordering::SeqCst);
     }
 
     #[test]
