@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -272,7 +273,21 @@ fn missing_access_denied_and_capped_sources_remain_exact_coverage_states() {
         .groups
         .iter()
         .all(|group| group.coverage == SccmCoverageState::Absent));
-    assert_eq!(missing.coverage_gaps.len(), 11);
+    assert_eq!(
+        missing.coverage_gaps.len(),
+        12,
+        "the shared LocationServices declaration contributes one gap to each consumer group"
+    );
+    assert_eq!(
+        missing
+            .coverage_gaps
+            .iter()
+            .filter_map(|gap| gap.artifact_id.as_deref())
+            .collect::<BTreeSet<_>>()
+            .len(),
+        11,
+        "every missing source declaration remains identifiable"
+    );
     assert!(serde_json::to_string(&missing)
         .expect("missing JSON")
         .contains("\"coverage\":\"absent\""));
@@ -383,7 +398,7 @@ fn parse_failed_fragment_completeness_is_intentionally_two_valued() {
 }
 
 #[test]
-fn mixed_captured_and_absent_group_reports_the_capture_and_names_the_absent_source() {
+fn mixed_captured_and_absent_group_preserves_partial_coverage_and_names_the_absent_source() {
     let mut captured = synthetic_artifact("content-a", "CAS.log");
     captured.relative_path = Some("evidence/client-content/current/CAS.log".to_owned());
     let absent = synthetic_marker(
@@ -400,10 +415,15 @@ fn mixed_captured_and_absent_group_reports_the_capture_and_names_the_absent_sour
     let group = intake.group("client-content").expect("content group");
     assert_eq!(
         group.coverage,
-        SccmCoverageState::Captured,
-        "a captured fragment must never coexist with an all-absent group claim"
+        SccmCoverageState::Absent,
+        "partial source coverage must remain visible at the group boundary"
     );
     assert_eq!(group.fragments.len(), 2);
+    assert_eq!(
+        intake.physical_artifacts.len(),
+        1,
+        "a non-physical marker must not be published as a physical artifact"
+    );
 
     let gaps: Vec<_> = intake
         .coverage_gaps
@@ -413,9 +433,12 @@ fn mixed_captured_and_absent_group_reports_the_capture_and_names_the_absent_sour
     assert_eq!(gaps.len(), 1, "one per-source gap for the absent sibling");
     assert_eq!(gaps[0].coverage, SccmCoverageState::Absent);
     assert_eq!(
+        gaps[0].artifact_id.as_deref(),
+        Some("fixture-content-transfer-absent")
+    );
+    assert_eq!(
         gaps[0].reason,
-        "No artifact for client source ContentTransferManager.log was supplied alongside \
-         this group's physical evidence."
+        "No artifact for client source ContentTransferManager.log was supplied."
     );
     assert!(
         gaps.iter()
@@ -426,7 +449,7 @@ fn mixed_captured_and_absent_group_reports_the_capture_and_names_the_absent_sour
 }
 
 #[test]
-fn mixed_captured_and_access_denied_group_reports_the_capture_and_names_the_denied_source() {
+fn mixed_captured_and_access_denied_group_preserves_partial_coverage_and_names_the_denied_source() {
     let mut captured = synthetic_artifact("content-a", "CAS.log");
     captured.relative_path = Some("evidence/client-content/current/CAS.log".to_owned());
     let mut denied = synthetic_marker(
@@ -444,10 +467,11 @@ fn mixed_captured_and_access_denied_group_reports_the_capture_and_names_the_deni
     let group = intake.group("client-content").expect("content group");
     assert_eq!(
         group.coverage,
-        SccmCoverageState::Captured,
-        "an access-denied sibling marker must not erase the captured evidence"
+        SccmCoverageState::AccessDenied,
+        "captured evidence must not erase an access-denied sibling source"
     );
     assert_eq!(group.fragments.len(), 2);
+    assert_eq!(intake.physical_artifacts.len(), 1);
 
     let gaps: Vec<_> = intake
         .coverage_gaps
@@ -457,9 +481,12 @@ fn mixed_captured_and_access_denied_group_reports_the_capture_and_names_the_deni
     assert_eq!(gaps.len(), 1, "one per-source gap for the denied sibling");
     assert_eq!(gaps[0].coverage, SccmCoverageState::AccessDenied);
     assert_eq!(
+        gaps[0].artifact_id.as_deref(),
+        Some("fixture-content-denied")
+    );
+    assert_eq!(
         gaps[0].reason,
-        "Access was denied for client source DataTransferService.log alongside \
-         this group's physical evidence."
+        "Access was denied for client source DataTransferService.log."
     );
 }
 
@@ -494,23 +521,35 @@ fn mixed_capped_and_absent_group_keeps_the_capped_capture_and_names_the_absent_s
     assert_eq!(
         gaps.len(),
         2,
-        "the capped group gap and the per-source absent gap are both explicit"
+        "the capped and absent sources both retain explicit gaps"
     );
-    assert_eq!(gaps[0].coverage, SccmCoverageState::Capped);
+    let capped_gap = gaps
+        .iter()
+        .find(|gap| gap.artifact_id.as_deref() == Some("fixture-content-capped"))
+        .expect("capped source gap");
+    assert_eq!(capped_gap.coverage, SccmCoverageState::Capped);
     assert_eq!(
-        gaps[0].reason,
-        "The bounded client source group reached its capture limit."
+        capped_gap.reason,
+        "Client source DataTransferService.log reached its capture limit."
     );
-    assert_eq!(gaps[1].coverage, SccmCoverageState::Absent);
+    let absent_gap = gaps
+        .iter()
+        .find(|gap| gap.artifact_id.as_deref() == Some("fixture-content-absent"))
+        .expect("absent source gap");
+    assert_eq!(absent_gap.coverage, SccmCoverageState::Absent);
     assert_eq!(
-        gaps[1].reason,
-        "No artifact for client source CAS.log was supplied alongside \
-         this group's physical evidence."
+        absent_gap.reason,
+        "No artifact for client source CAS.log was supplied."
     );
 }
 
 #[test]
 fn duplicate_nonphysical_markers_for_the_same_source_fail_closed() {
+    assert_eq!(
+        SccmClientIntakeError::DuplicateArtifactId.to_string(),
+        "client intake contains a duplicate artifact ID or source declaration"
+    );
+
     let first = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
     let second = synthetic_marker("missing-two", "PolicyAgent.log", SccmCoverageState::Absent);
     assert_eq!(
@@ -563,6 +602,17 @@ fn absent_markers_with_distinct_path_fingerprints_remain_distinct_sources() {
         2,
         "per-root absence claims with distinct fingerprints are distinct sources"
     );
+    let gap_artifacts = intake
+        .coverage_gaps
+        .iter()
+        .filter(|gap| gap.logical_artifact_id == "client-policy-agent")
+        .filter_map(|gap| gap.artifact_id.as_deref())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        gap_artifacts,
+        BTreeSet::from(["fixture-missing-root-a", "fixture-missing-root-b"]),
+        "every configured root must retain its own explicit coverage gap"
+    );
 }
 
 #[test]
@@ -593,11 +643,9 @@ fn unpinned_marker_for_a_physically_declared_source_fails_closed() {
 }
 
 #[test]
-fn no_marker_may_share_basename_and_rotation_with_a_physical_declaration() {
-    // An absent, denied, or skipped claim about a source is disproved by
-    // physical evidence for the same source identity (basename plus
-    // rotation), so the collision is rejected regardless of whether the
-    // marker pins itself to a distinct configured root via a fingerprint.
+fn pinned_markers_for_distinct_roots_coexist_with_physical_evidence() {
+    // The basename and rotation are not a complete source identity when
+    // both declarations carry distinct configured-root fingerprints.
     for marker_coverage in [
         SccmCoverageState::Absent,
         SccmCoverageState::AccessDenied,
@@ -608,21 +656,23 @@ fn no_marker_may_share_basename_and_rotation_with_a_physical_declaration() {
             synthetic_marker("missing-one", "PolicyAgent.log", marker_coverage.clone());
         pinned.path_fingerprint = Some("synthetic:policy-root-b".to_owned());
 
+        let intake = assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![captured.clone(), pinned.clone()],
+        })
+        .expect("distinct configured roots remain distinct sources");
+        assert_eq!(intake.physical_artifacts.len(), 1);
         assert_eq!(
-            assess_client_intake(&SccmClientIntakeBundle {
-                artifacts: vec![captured.clone(), pinned.clone()],
-            }),
-            Err(SccmClientIntakeError::CollidingPhysicalIdentity),
-            "marker state {marker_coverage:?} must not coexist with captured evidence \
-             for the same source identity"
+            intake
+                .group("client-policy-agent")
+                .expect("policy group")
+                .coverage,
+            marker_coverage
         );
-        assert_eq!(
-            assess_client_intake(&SccmClientIntakeBundle {
-                artifacts: vec![pinned, captured],
-            }),
-            Err(SccmClientIntakeError::CollidingPhysicalIdentity),
-            "declaration order must not reopen the pinned marker collision"
-        );
+
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![pinned, captured],
+        })
+        .expect("declaration order must not collapse distinct roots");
     }
 
     let mut capped = synthetic_artifact("capped-one", "PolicyAgent.log");
@@ -630,12 +680,30 @@ fn no_marker_may_share_basename_and_rotation_with_a_physical_declaration() {
     capped.fragment_complete = Some(false);
     let mut pinned = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
     pinned.path_fingerprint = Some("synthetic:policy-root-b".to_owned());
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![capped, pinned],
+    })
+    .expect("a capped root and absent sibling root are both preserved");
+    assert_eq!(
+        intake
+            .group("client-policy-agent")
+            .expect("policy group")
+            .coverage,
+        SccmCoverageState::Capped
+    );
+}
+
+#[test]
+fn a_marker_cannot_reuse_the_physical_source_fingerprint() {
+    let captured = synthetic_artifact("policy", "PolicyAgent.log");
+    let mut marker = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
+    marker.path_fingerprint = captured.path_fingerprint.clone();
+
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
-            artifacts: vec![capped, pinned],
+            artifacts: vec![captured, marker],
         }),
-        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
-        "a capped capture is still physical evidence that a marker cannot contradict"
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity)
     );
 }
 
@@ -690,7 +758,7 @@ fn markers_for_distinct_rotations_of_a_captured_source_remain_representable() {
     .expect("a marker for a distinct rotation of a captured source stays representable");
 
     let group = intake.group("client-policy-agent").expect("policy group");
-    assert_eq!(group.coverage, SccmCoverageState::Captured);
+    assert_eq!(group.coverage, SccmCoverageState::Absent);
     assert_eq!(group.fragments.len(), 2);
 
     let gaps: Vec<_> = intake
@@ -700,10 +768,10 @@ fn markers_for_distinct_rotations_of_a_captured_source_remain_representable() {
         .collect();
     assert_eq!(gaps.len(), 1, "one per-source gap for the absent rotation");
     assert_eq!(gaps[0].coverage, SccmCoverageState::Absent);
+    assert_eq!(gaps[0].artifact_id.as_deref(), Some("fixture-missing-one"));
     assert_eq!(
         gaps[0].reason,
-        "No artifact for client source PolicyAgent.log.2 was supplied alongside \
-         this group's physical evidence."
+        "No artifact for client source PolicyAgent.log.2 was supplied."
     );
 }
 
@@ -929,6 +997,37 @@ fn unknown_rotation_public_metadata_is_versioned_and_opaque() {
     })
     .expect("versioned opaque future rotation remains representable");
     assert_eq!(assessed.unsupported_artifacts.len(), 1);
+}
+
+#[test]
+fn distinct_opaque_unknown_rotations_do_not_collapse_to_one_source_identity() {
+    let mut captured = synthetic_artifact("unknown-a", "PolicyAgent.log");
+    captured.artifact.rotation = SccmRotation::Unknown(SccmUnknownRotation {
+        kind: "cmtraceopen.rotation.opaque.v1".to_owned(),
+        value: Some(serde_json::json!(format!("sha256:{}", "a".repeat(64)))),
+    });
+    captured.relative_path = Some("evidence/unknown/PolicyAgent.log".to_owned());
+
+    let mut unavailable = synthetic_marker(
+        "unknown-b",
+        "PolicyAgent.log",
+        SccmCoverageState::AccessDenied,
+    );
+    unavailable.artifact.rotation = SccmRotation::Unknown(SccmUnknownRotation {
+        kind: "cmtraceopen.rotation.opaque.v1".to_owned(),
+        value: Some(serde_json::json!(format!("sha256:{}", "b".repeat(64)))),
+    });
+
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![captured, unavailable],
+    })
+    .expect("distinct opaque rotations remain distinct declarations");
+
+    assert_eq!(intake.unsupported_artifacts.len(), 2);
+    assert_ne!(
+        intake.unsupported_artifacts[0].rotation,
+        intake.unsupported_artifacts[1].rotation
+    );
 }
 
 #[test]
