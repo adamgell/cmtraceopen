@@ -1610,6 +1610,61 @@ fn finding_rejects_overlong_display_text_across_public_boundaries() {
     assert!(mismatches.is_empty(), "{mismatches:#?}");
 }
 
+#[test]
+fn finding_rejects_display_text_whose_stored_form_exceeds_the_bound() {
+    let mut accepted = Vec::new();
+
+    for (label, title, summary) in [
+        (
+            "title",
+            format!("{}bounded title", " ".repeat(512)),
+            "bounded summary".to_owned(),
+        ),
+        (
+            "summary",
+            "bounded title".to_owned(),
+            format!("{}bounded summary", " ".repeat(2048)),
+        ),
+    ] {
+        let builder = SccmFindingBuilder::new("padded-display-text")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .title(&title)
+            .summary(&summary)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::MissingRequiredField) {
+            accepted.push(format!("builder accepted padded {label}"));
+        }
+
+        let mut direct = bounded_finding_with_id("padded-display-direct").unwrap();
+        direct.title = title.clone();
+        direct.summary = summary.clone();
+        if direct.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+            accepted.push(format!("direct validation accepted padded {label}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serialization accepted padded {label}"));
+        }
+
+        let mut json =
+            serde_json::to_value(bounded_finding_with_id("padded-display-json").unwrap()).unwrap();
+        json["title"] = serde_json::json!(title);
+        json["summary"] = serde_json::json!(summary);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserialization accepted padded {label}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted display text with an oversized stored form: {accepted:#?}"
+    );
+}
+
 fn finding_with_ci_key_value(
     finding_id: &str,
     digits: &str,
@@ -1804,6 +1859,92 @@ fn artifact_request_deserializes_through_the_same_wire_contract_as_a_finding() {
     }
 
     assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn artifact_request_deserialization_returns_a_canonical_reason() {
+    let mut json = serde_json::to_value(finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        "Confirm the bounded policy request outcome.",
+    ))
+    .unwrap();
+    json["reason"] = serde_json::json!(" Confirm the bounded policy request outcome. ");
+
+    let request = serde_json::from_value::<SccmArtifactRequest>(json).unwrap();
+
+    assert_eq!(
+        request.reason,
+        "Confirm the bounded policy request outcome."
+    );
+
+    let serialized = serde_json::to_value(finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        " Confirm the bounded policy request outcome. ",
+    ))
+    .unwrap();
+    assert_eq!(
+        serialized["reason"],
+        "Confirm the bounded policy request outcome."
+    );
+}
+
+#[test]
+fn artifact_request_rejects_padding_that_exceeds_the_reason_bound() {
+    let reason = format!(
+        "{}Confirm the bounded policy request outcome.",
+        " ".repeat(MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS)
+    );
+    let mut accepted = Vec::new();
+
+    let builder = SccmFindingBuilder::new("padded-request-builder")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .next_artifact(finding_request("policyAgent", SccmRole::Client, &reason))
+        .build();
+    if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+        accepted.push("builder".to_owned());
+    }
+
+    let mut direct = finding_with_gap_and_request("padded-request-direct");
+    direct.next_artifacts[0].reason = reason.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+        accepted.push("direct validation".to_owned());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        accepted.push("serialization".to_owned());
+    }
+
+    let mut finding_json =
+        serde_json::to_value(finding_with_gap_and_request("padded-request-json")).unwrap();
+    finding_json["nextArtifacts"][0]["reason"] = serde_json::json!(&reason);
+    if serde_json::from_value::<SccmFinding>(finding_json).is_ok() {
+        accepted.push("finding deserialization".to_owned());
+    }
+
+    let mut request_json = serde_json::to_value(finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        "Confirm the bounded policy request outcome.",
+    ))
+    .unwrap();
+    request_json["reason"] = serde_json::json!(reason);
+    if serde_json::from_value::<SccmArtifactRequest>(request_json).is_ok() {
+        accepted.push("standalone request deserialization".to_owned());
+    }
+    if serde_json::to_value(finding_request("policyAgent", SccmRole::Client, &reason)).is_ok() {
+        accepted.push("standalone request serialization".to_owned());
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted an artifact request whose stored reason exceeds the bound: {accepted:#?}"
+    );
 }
 
 #[test]
@@ -3063,8 +3204,11 @@ fn finding_review_passive_unbounded_confirmation_requests_fail_at_every_public_b
         }
 
         let mut json = serde_json::to_value(&canonical).unwrap();
-        json["nextArtifacts"][0] =
-            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        json["nextArtifacts"][0] = serde_json::json!({
+            "logicalId": logical_id,
+            "role": "client",
+            "reason": reason,
+        });
         if serde_json::from_value::<SccmFinding>(json).is_ok() {
             accepted.push(format!("deserializer: {reason}"));
         }

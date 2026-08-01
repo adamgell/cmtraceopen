@@ -197,12 +197,41 @@ pub struct SccmFindingCoverageGap {
     pub coverage: SccmCoverageState,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmArtifactRequest {
     pub logical_id: String,
     pub role: SccmRole,
     pub reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmArtifactRequestSerializeWire<'a> {
+    logical_id: &'a str,
+    role: &'a SccmRole,
+    reason: &'a str,
+}
+
+impl Serialize for SccmArtifactRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let reason = self.reason.trim();
+        if !has_at_most_chars(&self.reason, MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS)
+            || reason.is_empty()
+        {
+            return Err(S::Error::custom(
+                "invalid SCCM artifact request contract: InvalidArtifactRequestReason",
+            ));
+        }
+        SccmArtifactRequestSerializeWire {
+            logical_id: &self.logical_id,
+            role: &self.role,
+            reason,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -480,10 +509,11 @@ impl<'de> Deserialize<'de> for SccmArtifactRequest {
     where
         D: Deserializer<'de>,
     {
-        let request = Self::from(SccmArtifactRequestWire::deserialize(deserializer)?);
+        let mut request = Self::from(SccmArtifactRequestWire::deserialize(deserializer)?);
         validate_artifact_requests(slice::from_ref(&request)).map_err(|error| {
             D::Error::custom(format!("invalid SCCM artifact request contract: {error:?}"))
         })?;
+        request.reason = request.reason.trim().to_owned();
         Ok(request)
     }
 }
@@ -512,6 +542,9 @@ impl<'de> Deserialize<'de> for SccmFinding {
             correlation_keys: wire.correlation_keys.into_iter().map(Into::into).collect(),
             next_artifacts: wire.next_artifacts.into_iter().map(Into::into).collect(),
         };
+        validate_raw_text_bounds(&finding).map_err(|error| {
+            D::Error::custom(format!("invalid SCCM finding contract: {error:?}"))
+        })?;
         normalize_finding(&mut finding);
         finding.validate().map_err(|error| {
             D::Error::custom(format!("invalid SCCM finding contract: {error:?}"))
@@ -522,6 +555,7 @@ impl<'de> Deserialize<'de> for SccmFinding {
 
 impl SccmFinding {
     pub fn validate(&self) -> Result<(), SccmFindingValidationError> {
+        validate_raw_text_bounds(self)?;
         validate_required_text(self)?;
         validate_roles(self)?;
         validate_all_evidence_references(self)?;
@@ -730,10 +764,27 @@ impl SccmFindingBuilder {
             correlation_keys: self.correlation_keys,
             next_artifacts: self.next_artifacts,
         };
+        validate_raw_text_bounds(&finding)?;
         normalize_finding(&mut finding);
         finding.validate()?;
         Ok(finding)
     }
+}
+
+fn validate_raw_text_bounds(finding: &SccmFinding) -> Result<(), SccmFindingValidationError> {
+    if !has_at_most_chars(&finding.title, MAX_SCCM_FINDING_TITLE_CHARS)
+        || !has_at_most_chars(&finding.summary, MAX_SCCM_FINDING_SUMMARY_CHARS)
+    {
+        return Err(SccmFindingValidationError::MissingRequiredField);
+    }
+    if finding
+        .next_artifacts
+        .iter()
+        .any(|request| !has_at_most_chars(&request.reason, MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS))
+    {
+        return Err(SccmFindingValidationError::InvalidArtifactRequestReason);
+    }
+    Ok(())
 }
 
 fn validate_required_text(finding: &SccmFinding) -> Result<(), SccmFindingValidationError> {
@@ -741,9 +792,7 @@ fn validate_required_text(finding: &SccmFinding) -> Result<(), SccmFindingValida
     let summary = finding.summary.trim();
     if !is_canonical_opaque_id(&finding.finding_id)
         || title.is_empty()
-        || title.chars().count() > MAX_SCCM_FINDING_TITLE_CHARS
         || summary.is_empty()
-        || summary.chars().count() > MAX_SCCM_FINDING_SUMMARY_CHARS
         || !finding.phase.has_canonical_serialized_form()
     {
         return Err(SccmFindingValidationError::MissingRequiredField);
@@ -881,11 +930,11 @@ fn is_bounded_request_reason(
     requested_logical_id: &str,
 ) -> bool {
     let trimmed = reason.trim();
-    if trimmed.is_empty()
+    if !has_at_most_chars(reason, MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS)
+        || trimmed.is_empty()
         || !trimmed
             .chars()
             .any(|character| character.is_ascii_alphanumeric())
-        || trimmed.chars().count() > MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS
         || contains_rooted_path(trimmed)
         || trimmed.contains(['*', '?', '[', ']'])
     {
@@ -2166,10 +2215,10 @@ fn validate_correlation_key_evidence(
         let normalized = normalize_key(key.kind.clone(), &key.raw);
         let has_canonical_value = !key.raw.is_empty()
             && key.raw.trim() == key.raw
-            && key.raw.chars().count() <= MAX_SCCM_CORRELATION_KEY_VALUE_CHARS
+            && has_at_most_chars(&key.raw, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS)
             && !key.normalized.is_empty()
             && key.normalized.trim() == key.normalized
-            && key.normalized.chars().count() <= MAX_SCCM_CORRELATION_KEY_VALUE_CHARS
+            && has_at_most_chars(&key.normalized, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS)
             && normalized.confidence == SccmKeyConfidence::Exact
             && normalized.normalized == key.normalized;
         let has_valid_span = match (key.start, key.end) {
@@ -2271,7 +2320,11 @@ fn evidence_identity(reference: &SccmEvidenceRef) -> (&str, &str) {
 }
 
 fn is_canonical_opaque_id(value: &str) -> bool {
-    !value.is_empty() && value.trim() == value && value.chars().count() <= MAX_SCCM_OPAQUE_ID_CHARS
+    !value.is_empty() && value.trim() == value && has_at_most_chars(value, MAX_SCCM_OPAQUE_ID_CHARS)
+}
+
+fn has_at_most_chars(value: &str, maximum: usize) -> bool {
+    value.chars().nth(maximum).is_none()
 }
 
 fn normalize_finding(finding: &mut SccmFinding) {
