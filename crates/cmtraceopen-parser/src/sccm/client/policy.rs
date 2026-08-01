@@ -1155,9 +1155,9 @@ fn coverage_gaps_for_group(
         });
     }
     gaps.sort_by(|left, right| {
-        left.artifact_id
-            .cmp(&right.artifact_id)
-            .then_with(|| coverage_priority(&left.coverage).cmp(&coverage_priority(&right.coverage)))
+        left.artifact_id.cmp(&right.artifact_id).then_with(|| {
+            coverage_priority(&left.coverage).cmp(&coverage_priority(&right.coverage))
+        })
     });
     gaps
 }
