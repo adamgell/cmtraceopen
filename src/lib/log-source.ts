@@ -93,7 +93,12 @@ export function classifySourceError(error: unknown): {
 
   // Fallback for failures that never reached the classifier. Only genuine
   // not-found wording counts as missing.
-  if (/not found|cannot find|no such file|os error 2|os error 3/i.test(message)) {
+  // The error codes are anchored: unanchored, "os error 2" also matches
+  // "os error 21" (is-a-directory) and "os error 32" (sharing violation),
+  // neither of which means the source is gone.
+  if (
+    /not found|cannot find|no such file|os error 2\b|os error 3\b/i.test(message)
+  ) {
     return {
       kind: "missing",
       message,

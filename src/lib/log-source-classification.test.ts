@@ -47,6 +47,16 @@ describe("classifySourceError", () => {
     },
   );
 
+  it.each([
+    "failed to open log: os error 21",
+    "failed to open log: os error 32",
+    "os error 234",
+  ])("does not let a longer error code match a shorter one: %s", (message) => {
+    // Unanchored, "os error 2" also matches "os error 21" (is-a-directory) and
+    // "os error 32" (sharing violation). Neither means the source is gone.
+    expect(classifySourceError(new Error(message)).kind).toBe("error");
+  });
+
   it("treats an unrecognized failure as a generic error", () => {
     const verdict = classifySourceError(new Error("disk quota exceeded"));
 
