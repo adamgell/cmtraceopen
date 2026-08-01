@@ -1344,6 +1344,68 @@ fn first_fact<'a>(
     facts.iter().copied().find(|fact| fact.kind == kind)
 }
 
+/// The first record of `kind` that follows the record already on the chain.
+///
+/// Every phase appends its record to a chain that `conclude` requires to be
+/// strictly ordered, so a record elected without regard to the chain tail can
+/// come from an earlier attempt and make an otherwise usable chain unorderable.
+/// The fallback keeps presence detection identical: a kind that is present
+/// still elects a record, and an unorderable one still fails closed later.
+fn next_fact_after<'a>(
+    facts: &[&'a DeploymentFact],
+    kind: DeploymentFactKind,
+    earlier: Option<&DeploymentFact>,
+) -> Option<&'a DeploymentFact> {
+    let Some(earlier) = earlier else {
+        return first_fact(facts, kind);
+    };
+    facts
+        .iter()
+        .copied()
+        .find(|fact| fact.kind == kind && fact_is_strictly_before(earlier, fact))
+        .or_else(|| first_fact(facts, kind))
+}
+
+/// The first record of `kind` that is strictly before every one of `later`.
+///
+/// Facts are in canonical reference order, which is artifact-major and not
+/// chronological, so the first record of a kind can belong to a different
+/// attempt than the record it is cited beside. Electing the start against the
+/// records it must precede keeps one attempt intact. Nothing is returned when
+/// no start qualifies, so a genuinely unorderable set still refuses.
+fn first_fact_before<'a>(
+    facts: &[&'a DeploymentFact],
+    kind: DeploymentFactKind,
+    later: &[&DeploymentFact],
+) -> Option<&'a DeploymentFact> {
+    facts.iter().copied().find(|fact| {
+        fact.kind == kind
+            && later
+                .iter()
+                .all(|candidate| fact_is_strictly_before(fact, candidate))
+    })
+}
+
+/// The first strictly ordered start and completion for one key.
+///
+/// Taking the first record of each kind independently can straddle two attempts
+/// and pair a later start with an earlier completion. That pair fails the chain
+/// order check in `conclude` and downgrades a transaction whose evidence does
+/// contain an orderable attempt. The pair is elected together instead.
+fn ordered_pair<'a>(
+    facts: &[&'a DeploymentFact],
+    start_kind: DeploymentFactKind,
+    completion_kind: DeploymentFactKind,
+) -> Option<(&'a DeploymentFact, &'a DeploymentFact)> {
+    facts
+        .iter()
+        .copied()
+        .filter(|fact| fact.kind == completion_kind)
+        .find_map(|completion| {
+            first_fact_before(facts, start_kind, &[completion]).map(|start| (start, completion))
+        })
+}
+
 /// Every failure that no later success of the same phase can be ordered after.
 ///
 /// All of them are returned. Two records that are equally terminal for one key
@@ -1506,7 +1568,11 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             &terminals,
         );
     }
-    let Some(requirements) = first_fact(facts, DeploymentFactKind::RequirementsSatisfied) else {
+    let Some(requirements) = next_fact_after(
+        facts,
+        DeploymentFactKind::RequirementsSatisfied,
+        chain.last().copied(),
+    ) else {
         return insufficient(
             SccmDeploymentPhase::Requirements,
             last,
@@ -1517,7 +1583,11 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     chain.push(requirements);
     last = Some(SccmDeploymentPhase::Requirements);
 
-    let Some(located) = first_fact(facts, DeploymentFactKind::ContentLocated) else {
+    let Some(located) = next_fact_after(
+        facts,
+        DeploymentFactKind::ContentLocated,
+        chain.last().copied(),
+    ) else {
         let reason = if first_fact(facts, DeploymentFactKind::ContentRequested).is_some() {
             REASON_LOCATION_RESPONSE_MISSING
         } else {
@@ -1539,7 +1609,14 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     );
     if !transfer_failures.is_empty() {
         let mut failed_chain = chain.clone();
-        failed_chain.extend(first_fact(facts, DeploymentFactKind::TransferStarted));
+        failed_chain.extend(
+            first_fact_before(
+                facts,
+                DeploymentFactKind::TransferStarted,
+                &transfer_failures,
+            )
+            .or_else(|| first_fact(facts, DeploymentFactKind::TransferStarted)),
+        );
         return conclude(
             &failed_chain,
             SccmDeploymentPhase::Transfer,
@@ -1560,6 +1637,14 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             coverage,
         );
     };
+    // An orderable attempt is preferred; a set with none still cites the first
+    // of each kind so an unorderable transfer keeps failing closed.
+    let (started, completed) = ordered_pair(
+        facts,
+        DeploymentFactKind::TransferStarted,
+        DeploymentFactKind::TransferCompleted,
+    )
+    .unwrap_or((started, completed));
     chain.push(started);
     chain.push(completed);
     last = Some(SccmDeploymentPhase::Transfer);
@@ -1580,7 +1665,11 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             &cache_failures,
         );
     }
-    let Some(cached) = first_fact(facts, DeploymentFactKind::CacheCommitted) else {
+    let Some(cached) = next_fact_after(
+        facts,
+        DeploymentFactKind::CacheCommitted,
+        chain.last().copied(),
+    ) else {
         return insufficient(SccmDeploymentPhase::Cache, last, REASON_CACHE, coverage);
     };
     chain.push(cached);
@@ -1602,13 +1691,21 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             &enforce_failures,
         );
     }
-    let Some(enforced) = first_fact(facts, DeploymentFactKind::EnforceSucceeded) else {
+    let Some(enforced) = next_fact_after(
+        facts,
+        DeploymentFactKind::EnforceSucceeded,
+        chain.last().copied(),
+    ) else {
         return insufficient(SccmDeploymentPhase::Enforce, last, REASON_ENFORCE, coverage);
     };
     chain.push(enforced);
     last = Some(SccmDeploymentPhase::Enforce);
 
-    if let Some(mismatch) = first_fact(facts, DeploymentFactKind::DetectionMismatch) {
+    if let Some(mismatch) = next_fact_after(
+        facts,
+        DeploymentFactKind::DetectionMismatch,
+        chain.last().copied(),
+    ) {
         let mut mismatch_chain = chain.clone();
         mismatch_chain.push(mismatch);
         return conclude(
@@ -1621,7 +1718,9 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             &[],
         );
     }
-    let Some(detected) = first_fact(facts, DeploymentFactKind::Detected) else {
+    let Some(detected) =
+        next_fact_after(facts, DeploymentFactKind::Detected, chain.last().copied())
+    else {
         return insufficient(SccmDeploymentPhase::Detect, last, REASON_DETECT, coverage);
     };
     chain.push(detected);
@@ -1643,7 +1742,11 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             &report_failures,
         );
     }
-    let Some(reported) = first_fact(facts, DeploymentFactKind::ReportSucceeded) else {
+    let Some(reported) = next_fact_after(
+        facts,
+        DeploymentFactKind::ReportSucceeded,
+        chain.last().copied(),
+    ) else {
         return insufficient(SccmDeploymentPhase::Report, last, REASON_REPORT, coverage);
     };
     chain.push(reported);
