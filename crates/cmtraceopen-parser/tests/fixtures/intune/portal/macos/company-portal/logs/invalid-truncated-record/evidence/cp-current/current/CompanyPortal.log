@@ -1,0 +1,4 @@
+2026-03-12 13:00:00:000-0700 | CompanyPortal | I | 6000 | Logging | SYNTHETIC FIXTURE: truncated record sample
+2026-03-12 13:00:01:000-0700 | CompanyPortal | I | 6000 | Sync | Sync started
+2026-03-12 13:00:02:000-0700 | CompanyPortal | E
+2026-03-12 13:00:03:000-0700 | CompanyPortal | I | 6000 | Sync | Sync finished

@@ -1,0 +1,78 @@
+{
+  "scenario": "deterministic-privacy-export",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-current",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-current"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-current",
+      "confirmed": true,
+      "rejection": null
+    }
+  ],
+  "stats": {
+    "totalRecords": 5,
+    "parsedRecords": 5,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 4,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 5,
+      "warning": 0,
+      "error": 0,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": true,
+  "redactionMustNotContain": [
+    "synthetic.user@example.invalid",
+    "22222222-3333-4444-8555-666666666666",
+    "graph.microsoft.invalid",
+    "FEDCBA9876543210FEDCBA9876543210FEDCBA98",
+    "Synthetic Device Cert",
+    "SYNTHETIC://Library/Logs/CompanyPortal"
+  ],
+  "redactionMustContain": [
+    "0xfeed0001",
+    "0xfeed0002",
+    "0xfeed0003",
+    "Auth",
+    "SignIn",
+    "Certificate"
+  ],
+  "repeatedIdentityRecordIndexes": [
+    1,
+    4
+  ],
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/advanced-logging-enabled",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "cp-current#1",
+        "cp-current#2",
+        "cp-current#3",
+        "cp-current#4"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "the export is byte-identical across runs",
+    "redacting an already-redacted snapshot changes nothing",
+    "one identity pseudonymizes to one label everywhere in the export"
+  ]
+}

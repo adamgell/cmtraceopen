@@ -1,0 +1,5 @@
+2026-03-12 09:14:20:000-0700 | CompanyPortal | I | 8412 | Logging | SYNTHETIC FIXTURE: synthetic Company Portal application log, no real data
+2026-03-12 09:14:21:118-0700 | CompanyPortal | I | 8412 | Catalog | Loaded 3 available applications
+2026-03-12 09:14:22:301-0700 | CompanyPortal | W | 8412 | Sync | Sync request throttled; retrying in 30s
+2026-03-12 09:14:23:507-0700 | CompanyPortal | E | 8413 | Catalog | Failed to render application tile
+2026-03-12 09:14:24:900-0700 | CompanyPortal | D | 8413 | Catalog | Tile cache size 12

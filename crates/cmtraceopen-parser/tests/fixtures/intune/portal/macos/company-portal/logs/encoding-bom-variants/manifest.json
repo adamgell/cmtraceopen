@@ -1,0 +1,42 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "encoding-bom-variants",
+  "workload": "portal/macos/company-portal/logs",
+  "description": "One rotation member written as UTF-8 with a byte-order mark and one without, carrying non-ASCII text. Pins that the mark is stripped rather than hiding the first record.",
+  "artifacts": [
+    {
+      "artifactId": "cp-current",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "companyPortalAppLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal.log",
+      "relativePath": "evidence/cp-current/current/CompanyPortal.log",
+      "bytesCopied": 199,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "cp-1",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "companyPortalAppLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal-1.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal-1.log",
+      "relativePath": "evidence/cp-1/rotation-1/CompanyPortal-1.log",
+      "bytesCopied": 227,
+      "capturedUtc": "2026-07-31T00:00:01Z",
+      "rotation": {
+        "kind": "numbered",
+        "ordinal": 1,
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

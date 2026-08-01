@@ -1,0 +1,10 @@
+2026-03-12 11:00:00:000-0700 | CompanyPortal | I | 7001 | Logging | SYNTHETIC FIXTURE: multiline payload sample
+2026-03-12 11:00:01:400-0700 | CompanyPortal | E | 7001 | Catalog | Install request failed
+Domain=CompanyPortalErrorDomain Code=-2016 "Package unavailable"
+{
+  "requestId": "synthetic-request-1",
+  "retryable": false
+}
+
+    at CompanyPortal.Catalog.install(Catalog.swift:214)
+2026-03-12 11:00:02:900-0700 | CompanyPortal | I | 7001 | Catalog | Install request abandoned

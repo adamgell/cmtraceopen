@@ -1,0 +1,4 @@
+SYNTHETIC FIXTURE: Apple unified log export, not a direct app log
+Timestamp                       Thread     Type        Activity             PID    TTL
+2026-03-12 15:10:00.123456-0700 0x1a2b3c   Default     0x0                  412    0    CompanyPortal: (Foundation) [com.microsoft.CompanyPortal:Catalog] refresh started
+2026-03-12 15:10:01.223456-0700 0x1a2b3d   Error       0x0                  412    0    CompanyPortal: (Foundation) [com.microsoft.CompanyPortal:Catalog] refresh failed

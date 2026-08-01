@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "negative-unified-log-export",
+  "workload": "portal/macos/company-portal/logs",
+  "description": "An Apple unified-log export saved into the log directory under an app-log file name. Pins that direct app logs stay distinct from log show output.",
+  "artifacts": [
+    {
+      "artifactId": "cp-unified",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "unifiedLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal.log",
+      "relativePath": "evidence/cp-unified/current/CompanyPortal.log",
+      "bytesCopied": 492,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

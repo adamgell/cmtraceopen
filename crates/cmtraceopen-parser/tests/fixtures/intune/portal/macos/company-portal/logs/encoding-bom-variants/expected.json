@@ -1,0 +1,80 @@
+{
+  "scenario": "encoding-bom-variants",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "cp-1",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-1",
+    "cp-current"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-1",
+      "confirmed": true,
+      "rejection": null
+    },
+    {
+      "artifactId": "cp-current",
+      "confirmed": true,
+      "rejection": null
+    }
+  ],
+  "stats": {
+    "totalRecords": 4,
+    "parsedRecords": 4,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 0,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 4,
+      "warning": 0,
+      "error": 0,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": false,
+  "decoding": [
+    {
+      "artifactId": "cp-1",
+      "encoding": "UTF-8",
+      "hadBom": false
+    },
+    {
+      "artifactId": "cp-current",
+      "encoding": "UTF-8",
+      "hadBom": true
+    }
+  ],
+  "messageMustContain": [
+    {
+      "recordIndex": 1,
+      "texts": [
+        "Synchronisation différée; café en cours"
+      ]
+    },
+    {
+      "recordIndex": 2,
+      "texts": [
+        "UTF-8 with a byte-order mark"
+      ]
+    }
+  ],
+  "findings": [],
+  "assertions": [
+    "a byte-order mark does not hide the first record",
+    "non-ASCII message text survives byte-for-byte"
+  ]
+}

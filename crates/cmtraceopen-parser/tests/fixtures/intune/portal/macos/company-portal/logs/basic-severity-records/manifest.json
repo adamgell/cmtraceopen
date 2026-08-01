@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "basic-severity-records",
+  "workload": "portal/macos/company-portal/logs",
+  "description": "Information, warning, error, and debug records in the plain five-field shape. Pins that severity is read from the structural field rather than guessed from the message text.",
+  "artifacts": [
+    {
+      "artifactId": "cp-current",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "companyPortalAppLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal.log",
+      "relativePath": "evidence/cp-current/current/CompanyPortal.log",
+      "bytesCopied": 536,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

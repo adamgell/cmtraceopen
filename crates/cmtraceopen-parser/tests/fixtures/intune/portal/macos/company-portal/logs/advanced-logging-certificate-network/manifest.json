@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "advanced-logging-certificate-network",
+  "workload": "portal/macos/company-portal/logs",
+  "description": "Advanced logging on: certificate and HTTP response detail with labeled category and activity attributes. Pins that the extra material is classified restricted and does not survive the redacted export.",
+  "artifacts": [
+    {
+      "artifactId": "cp-current",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "companyPortalAppLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal.log",
+      "relativePath": "evidence/cp-current/current/CompanyPortal.log",
+      "bytesCopied": 785,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

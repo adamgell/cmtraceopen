@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "multiline-exception-payload",
+  "workload": "portal/macos/company-portal/logs",
+  "description": "An error record followed by an exception domain line, a JSON payload containing a blank line, and a stack frame. Pins that logical framing keeps all of it attached to the record that emitted it.",
+  "artifacts": [
+    {
+      "artifactId": "cp-current",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "companyPortalAppLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal.log",
+      "relativePath": "evidence/cp-current/current/CompanyPortal.log",
+      "bytesCopied": 482,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

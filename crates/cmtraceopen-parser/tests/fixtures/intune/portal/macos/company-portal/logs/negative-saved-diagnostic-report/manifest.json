@@ -1,0 +1,25 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "negative-saved-diagnostic-report",
+  "workload": "portal/macos/company-portal/logs",
+  "description": "A saved diagnostic report sitting in the log directory under an app-log file name, quoting real app-log records. Pins that neither the path nor the quoted records are enough to claim it.",
+  "artifacts": [
+    {
+      "artifactId": "cp-report",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "diagnosticReport",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal.log",
+      "relativePath": "evidence/cp-report/current/CompanyPortal.log",
+      "bytesCopied": 417,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

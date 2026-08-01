@@ -1,0 +1,68 @@
+{
+  "scenario": "same-time-distinct-activities",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-current",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-current"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-current",
+      "confirmed": true,
+      "rejection": null
+    }
+  ],
+  "stats": {
+    "totalRecords": 5,
+    "parsedRecords": 5,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 4,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 4,
+      "warning": 1,
+      "error": 0,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": true,
+  "recordActivityIds": [
+    null,
+    "0xaaaa1111",
+    "0xbbbb2222",
+    "0xaaaa1111",
+    "0xbbbb2222"
+  ],
+  "distinctActivityIds": [
+    "0xaaaa1111",
+    "0xbbbb2222"
+  ],
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/advanced-logging-enabled",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "cp-current#1",
+        "cp-current#2",
+        "cp-current#3",
+        "cp-current#4"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "records sharing a timestamp are never merged",
+    "each activity keeps exactly its own records"
+  ]
+}

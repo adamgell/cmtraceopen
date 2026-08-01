@@ -1,0 +1,5 @@
+2026-03-12 16:00:00:000-0700 | CompanyPortal | I | 9200 | Logging | SYNTHETIC FIXTURE: privacy export sample, every value synthetic
+2026-03-12 16:00:01:000-0700 | CompanyPortal | I | 9200 | SignIn | category=Auth | activity=0xfeed0001 | Signed in as synthetic.user@example.invalid tenant 22222222-3333-4444-8555-666666666666
+2026-03-12 16:00:02:000-0700 | CompanyPortal | I | 9200 | Network | category=Http | activity=0xfeed0002 | GET https://graph.microsoft.invalid/v1.0/me/managedDevices status=200
+2026-03-12 16:00:03:000-0700 | CompanyPortal | I | 9200 | Security | category=Certificate | activity=0xfeed0003 | Client certificate CN=Synthetic Device Cert, thumbprint FEDCBA9876543210FEDCBA9876543210FEDCBA98
+2026-03-12 16:00:04:000-0700 | CompanyPortal | I | 9200 | SignIn | category=Auth | activity=0xfeed0001 | Token refresh for synthetic.user@example.invalid succeeded

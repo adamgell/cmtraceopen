@@ -1,0 +1,4 @@
+2026-03-12 10:00:00:000-0700 | CompanyPortal | I | 9100 | Logging | SYNTHETIC FIXTURE: advanced logging enabled, every value synthetic
+2026-03-12 10:00:01:250-0700 | CompanyPortal | I | 9100 | Network | category=Http | activity=0x1a2b3c | GET https://portal.manage.invalid/api/v1/devices?deviceId=11111111-2222-4333-8444-555555555555 status=200
+2026-03-12 10:00:02:410-0700 | CompanyPortal | I | 9100 | Security | category=Certificate | activity=0x1a2b3c | Server certificate CN=Synthetic Issuing CA 01, thumbprint 0123456789ABCDEF0123456789ABCDEF01234567, notAfter 2027-01-01
+2026-03-12 10:00:03:005-0700 | CompanyPortal | E | 9100 | Network | category=Http | activity=0x4d5e6f | POST https://portal.manage.invalid/api/v1/checkin failed status=401 user=synthetic.user@example.invalid

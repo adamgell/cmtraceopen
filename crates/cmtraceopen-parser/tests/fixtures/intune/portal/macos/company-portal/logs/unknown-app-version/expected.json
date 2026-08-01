@@ -1,0 +1,64 @@
+{
+  "scenario": "unknown-app-version",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-current",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-current"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-current",
+      "confirmed": true,
+      "rejection": null
+    }
+  ],
+  "stats": {
+    "totalRecords": 2,
+    "parsedRecords": 2,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 0,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 2,
+      "warning": 0,
+      "error": 0,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [
+    "9.2601.0"
+  ],
+  "advancedLoggingObserved": false,
+  "messageMustContain": [
+    {
+      "recordIndex": 0,
+      "texts": [
+        "unvalidated app version"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/unknown-app-version",
+      "severity": "warning",
+      "confidence": "low",
+      "evidence": [
+        "cp-current#0"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an unvalidated version demotes confidence instead of dropping records",
+    "a version attribute alone is not advanced logging"
+  ]
+}

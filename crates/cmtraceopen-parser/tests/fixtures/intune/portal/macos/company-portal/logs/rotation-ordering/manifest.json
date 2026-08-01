@@ -1,0 +1,59 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "rotation-ordering",
+  "workload": "portal/macos/company-portal/logs",
+  "description": "Three rotation members where the middle one was never collected. Pins oldest-first record ordering and that the uncollected member becomes a coverage gap rather than disappearing.",
+  "artifacts": [
+    {
+      "artifactId": "cp-current",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "companyPortalAppLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal.log",
+      "relativePath": "evidence/cp-current/current/CompanyPortal.log",
+      "bytesCopied": 196,
+      "capturedUtc": "2026-07-31T00:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "cp-1",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "companyPortalAppLog",
+      "captureState": "absent",
+      "encoding": null,
+      "originalBasename": "CompanyPortal-1.log",
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0,
+      "capturedUtc": "2026-07-31T00:00:01Z",
+      "rotation": {
+        "kind": "numbered",
+        "ordinal": 1,
+        "fragmentComplete": false
+      }
+    },
+    {
+      "artifactId": "cp-2",
+      "family": "portal/macos/company-portal/logs",
+      "sourceKind": "companyPortalAppLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "CompanyPortal-2.log",
+      "sanitizedSourcePath": "SYNTHETIC://Library/Logs/CompanyPortal/CompanyPortal-2.log",
+      "relativePath": "evidence/cp-2/rotation-2/CompanyPortal-2.log",
+      "bytesCopied": 207,
+      "capturedUtc": "2026-07-31T00:00:02Z",
+      "rotation": {
+        "kind": "numbered",
+        "ordinal": 2,
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

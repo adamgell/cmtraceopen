@@ -1,0 +1,5 @@
+2026-03-12 12:00:00:000-0700 | CompanyPortal | I | 5000 | Logging | SYNTHETIC FIXTURE: concurrent activities at one timestamp
+2026-03-12 12:00:01:250-0700 | CompanyPortal | I | 5001 | Sync | category=DeviceSync | activity=0xaaaa1111 | Sync started
+2026-03-12 12:00:01:250-0700 | CompanyPortal | I | 5002 | Catalog | category=AppCatalog | activity=0xbbbb2222 | Catalog refresh started
+2026-03-12 12:00:01:250-0700 | CompanyPortal | W | 5001 | Sync | category=DeviceSync | activity=0xaaaa1111 | Sync deferred
+2026-03-12 12:00:01:250-0700 | CompanyPortal | I | 5002 | Catalog | category=AppCatalog | activity=0xbbbb2222 | Catalog refresh finished

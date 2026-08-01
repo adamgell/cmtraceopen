@@ -1,0 +1,63 @@
+{
+  "scenario": "negative-saved-diagnostic-report",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-report",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-report"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-report",
+      "confirmed": false,
+      "rejection": "diagnosticReport"
+    }
+  ],
+  "stats": {
+    "totalRecords": 0,
+    "parsedRecords": 0,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 0,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 0,
+      "warning": 0,
+      "error": 0,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": false,
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/no-confirmed-app-log",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-report"
+      ]
+    },
+    {
+      "findingId": "company-portal-macos-logs/artifact-is-another-source-kind",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-report"
+      ]
+    }
+  ],
+  "assertions": [
+    "a diagnostic report is a distinct source kind and is never claimed here",
+    "quoted app-log excerpts do not override the report banner"
+  ]
+}

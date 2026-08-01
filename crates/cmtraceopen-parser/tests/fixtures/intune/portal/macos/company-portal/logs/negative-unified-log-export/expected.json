@@ -1,0 +1,63 @@
+{
+  "scenario": "negative-unified-log-export",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-unified",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-unified"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-unified",
+      "confirmed": false,
+      "rejection": "unifiedLogExport"
+    }
+  ],
+  "stats": {
+    "totalRecords": 0,
+    "parsedRecords": 0,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 0,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 0,
+      "warning": 0,
+      "error": 0,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": false,
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/no-confirmed-app-log",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unified"
+      ]
+    },
+    {
+      "findingId": "company-portal-macos-logs/artifact-is-another-source-kind",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-unified"
+      ]
+    }
+  ],
+  "assertions": [
+    "a unified-log export is a distinct source kind and is never claimed here",
+    "no unified-log query or parsing happens in this leaf"
+  ]
+}

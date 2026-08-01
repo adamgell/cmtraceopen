@@ -1,0 +1,80 @@
+{
+  "scenario": "rotation-ordering",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "cp-1",
+      "status": "missing"
+    },
+    {
+      "artifactId": "cp-2",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-2",
+    "cp-1",
+    "cp-current"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-2",
+      "confirmed": true,
+      "rejection": null
+    },
+    {
+      "artifactId": "cp-1",
+      "confirmed": false,
+      "rejection": "noContent"
+    },
+    {
+      "artifactId": "cp-current",
+      "confirmed": true,
+      "rejection": null
+    }
+  ],
+  "stats": {
+    "totalRecords": 4,
+    "parsedRecords": 4,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 0,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 4,
+      "warning": 0,
+      "error": 0,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": false,
+  "recordEvidenceIds": [
+    "cp-2#0",
+    "cp-2#1",
+    "cp-current#0",
+    "cp-current#1"
+  ],
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/incomplete-capture",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "cp-1"
+      ]
+    }
+  ],
+  "assertions": [
+    "records are ordered oldest rotation first, not adapter enumeration order",
+    "an uncollected rotation member is reported, so absence proves nothing"
+  ]
+}

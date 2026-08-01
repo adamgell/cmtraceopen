@@ -1,0 +1,65 @@
+{
+  "scenario": "multiline-exception-payload",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-current",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-current"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-current",
+      "confirmed": true,
+      "rejection": null
+    }
+  ],
+  "stats": {
+    "totalRecords": 3,
+    "parsedRecords": 3,
+    "malformedRecords": 0,
+    "continuationLines": 7,
+    "advancedRecords": 0,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 2,
+      "warning": 0,
+      "error": 1,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": false,
+  "messageMustContain": [
+    {
+      "recordIndex": 1,
+      "texts": [
+        "Install request failed",
+        "Domain=CompanyPortalErrorDomain",
+        "\"retryable\": false",
+        "at CompanyPortal.Catalog.install(Catalog.swift:214)"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/error-records-present",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        "cp-current#1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a blank line inside a payload is a continuation, not a record boundary",
+    "three headers produce exactly three records regardless of payload size"
+  ]
+}

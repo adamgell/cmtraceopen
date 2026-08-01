@@ -1,0 +1,90 @@
+{
+  "scenario": "advanced-logging-certificate-network",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-current",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-current"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-current",
+      "confirmed": true,
+      "rejection": null
+    }
+  ],
+  "stats": {
+    "totalRecords": 4,
+    "parsedRecords": 4,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 3,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 0,
+      "info": 3,
+      "warning": 0,
+      "error": 1,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": true,
+  "recordActivityIds": [
+    null,
+    "0x1a2b3c",
+    "0x1a2b3c",
+    "0x4d5e6f"
+  ],
+  "restrictedRecordIndexes": [
+    1,
+    2,
+    3
+  ],
+  "redactionMustNotContain": [
+    "portal.manage.invalid",
+    "11111111-2222-4333-8444-555555555555",
+    "0123456789ABCDEF0123456789ABCDEF01234567",
+    "Synthetic Issuing CA 01",
+    "synthetic.user@example.invalid"
+  ],
+  "redactionMustContain": [
+    "0x1a2b3c",
+    "0x4d5e6f",
+    "Certificate",
+    "Http"
+  ],
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/advanced-logging-enabled",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "cp-current#1",
+        "cp-current#2",
+        "cp-current#3"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "company-portal-macos-logs/error-records-present",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        "cp-current#3"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "advanced-logging records are classified restricted",
+    "certificate subjects, thumbprints, URLs, identities and GUIDs do not survive the redacted export",
+    "activity and category survive redaction because they carry no identity"
+  ]
+}

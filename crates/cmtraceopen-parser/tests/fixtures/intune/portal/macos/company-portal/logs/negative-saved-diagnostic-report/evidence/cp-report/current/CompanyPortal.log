@@ -1,0 +1,7 @@
+SYNTHETIC FIXTURE: saved Company Portal diagnostic report, not a direct app log
+=== Company Portal Diagnostic Report ===
+DiagnosticReportVersion: 3
+GeneratedUtc: 2026-03-12T22:10:00Z
+Device: SYNTHETIC-MAC-01
+2026-03-12 15:00:01:000-0700 | CompanyPortal | I | 8000 | Catalog | excerpt quoted inside the report
+2026-03-12 15:00:02:000-0700 | CompanyPortal | I | 8000 | Catalog | second excerpt quoted inside the report

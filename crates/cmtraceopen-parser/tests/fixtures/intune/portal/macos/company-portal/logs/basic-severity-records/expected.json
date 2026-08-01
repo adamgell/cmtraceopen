@@ -1,0 +1,54 @@
+{
+  "scenario": "basic-severity-records",
+  "workload": "portal/macos/company-portal/logs",
+  "coverage": [
+    {
+      "artifactId": "cp-current",
+      "status": "available"
+    }
+  ],
+  "artifactOrder": [
+    "cp-current"
+  ],
+  "detection": [
+    {
+      "artifactId": "cp-current",
+      "confirmed": true,
+      "rejection": null
+    }
+  ],
+  "stats": {
+    "totalRecords": 5,
+    "parsedRecords": 5,
+    "malformedRecords": 0,
+    "continuationLines": 0,
+    "advancedRecords": 0,
+    "severityCounts": {
+      "verbose": 0,
+      "debug": 1,
+      "info": 2,
+      "warning": 1,
+      "error": 1,
+      "fatal": 0,
+      "unrecognized": 0,
+      "absent": 0
+    }
+  },
+  "unknownAppVersions": [],
+  "advancedLoggingObserved": false,
+  "findings": [
+    {
+      "findingId": "company-portal-macos-logs/error-records-present",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        "cp-current#3"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "severity comes from the structural field, never from message text",
+    "a debug record is retained rather than dropped"
+  ]
+}
