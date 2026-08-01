@@ -3504,3 +3504,120 @@ fn sid_authority_variant_mutations_fail_closed() {
         "bare s-1-5 identifier suffix must stay accepted"
     );
 }
+
+#[test]
+fn two_subauthority_sid_free_text_mutations_fail_closed() {
+    // Well-known SIDs that carry exactly two subauthorities outside the s-1-5
+    // personal family: Nobody (s-1-0-0), Everyone (s-1-1-0), Local (s-1-2-0)
+    // and the integrity levels (s-1-16-4096, s-1-16-8192, s-1-16-12288).
+    const CLAIM_MUTATIONS: [(&str, &str); 5] = [
+        (
+            "mid-sentence Nobody SID",
+            "Observed records remain under s-1-0-0 markers.",
+        ),
+        (
+            "sentence-final integrity SID",
+            "Observed records remain withheld at s-1-16-12288.",
+        ),
+        (
+            "parenthesized Everyone SID",
+            "Observed records remain bounded (s-1-1-0) for this capture.",
+        ),
+        (
+            "comma-followed Local SID",
+            "Observed records remain under s-1-2-0, and stay source local.",
+        ),
+        (
+            "sentence-final Everyone SID",
+            "Observed records remain withheld at s-1-1-0.",
+        ),
+    ];
+    const REASON_MUTATIONS: [(&str, &str); 5] = [
+        (
+            "mid-sentence Everyone SID",
+            "Collect the bounded continuation for s-1-1-0 records.",
+        ),
+        (
+            "sentence-final Nobody SID",
+            "Collect the bounded continuation for s-1-0-0.",
+        ),
+        (
+            "parenthesized integrity SID",
+            "Collect the bounded continuation (s-1-16-8192) for this group.",
+        ),
+        (
+            "comma-followed integrity SID",
+            "Collect the bounded continuation for s-1-16-4096, then stop.",
+        ),
+        (
+            "mid-sentence Local SID",
+            "Collect the bounded continuation for s-1-2-0 records.",
+        ),
+    ];
+
+    let mut accepted = Vec::new();
+
+    let (observed_root, observed_manifest, observed_expected) =
+        load_contract("software-center-observed");
+    for (label, claim) in CLAIM_MUTATIONS {
+        let mut mutated = observed_expected.clone();
+        mutated["sourceLocalObservations"][0]["claim"] = Value::String(claim.to_owned());
+        if mutation_was_accepted(
+            "software-center-observed",
+            &observed_root,
+            &observed_manifest,
+            &mutated,
+        ) {
+            accepted.push(format!("{label} in a public observation claim"));
+        }
+    }
+
+    let (deferred_root, deferred_manifest, deferred_expected) =
+        load_contract("notification-deferred");
+    for (label, reason) in REASON_MUTATIONS {
+        let mut mutated = deferred_expected.clone();
+        mutated["transactions"][0]["nextArtifact"]["reason"] = Value::String(reason.to_owned());
+        if mutation_was_accepted(
+            "notification-deferred",
+            &deferred_root,
+            &deferred_manifest,
+            &mutated,
+        ) {
+            accepted.push(format!("{label} in a next-artifact request reason"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "two-subauthority SID free-text mutations were accepted: {accepted:?}"
+    );
+
+    // Designed acceptances that the token rule must preserve.
+    for accepted_text in [
+        "Access remained denied for the s-1-5 authority marker.",
+        "Observed records remain under s-1-abc-123 markers.",
+        "Collect the bounded continuation for s-1-abc-123 records.",
+    ] {
+        assert!(
+            public_free_text_is_safe(accepted_text),
+            "{accepted_text:?} must stay accepted"
+        );
+    }
+
+    // The identifier surface already fails closed on these runs and must not move.
+    for identifier in [
+        "software-center-observed-s-1-0-0",
+        "notification-deferred-s-1-16-12288",
+    ] {
+        assert!(
+            !public_identifier_is_safe(identifier),
+            "{identifier:?} must stay rejected as a public identifier"
+        );
+    }
+    for identifier in ["software-center-observed-s-1-5", "s-1-abc-123"] {
+        assert!(
+            public_identifier_is_safe(identifier),
+            "{identifier:?} must stay accepted as a public identifier"
+        );
+    }
+}
