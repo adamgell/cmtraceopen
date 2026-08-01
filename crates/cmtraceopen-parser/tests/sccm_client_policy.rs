@@ -1340,9 +1340,8 @@ fn policy_unavailable_sibling_stays_observable_when_the_chain_succeeds() {
             .expect("coverage gaps")
             .clone();
         assert!(
-            gaps.iter().any(
-                |gap| gap["artifactId"] == sibling_id.as_str() && gap["coverage"] == expected
-            ),
+            gaps.iter()
+                .any(|gap| gap["artifactId"] == sibling_id.as_str() && gap["coverage"] == expected),
             "{coverage:?} must remain observable even when nothing failed, got {gaps:?}"
         );
     }
