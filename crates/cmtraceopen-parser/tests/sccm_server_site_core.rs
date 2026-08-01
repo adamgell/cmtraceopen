@@ -8,6 +8,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use cmtraceopen_parser::sccm::server::windows::{
     analyze_site_core, SccmSiteCoreBundle, SccmSiteCoreSource, SccmSiteCoreTopology,
@@ -833,6 +834,95 @@ fn synthesized_fragment_references_never_collide_with_parsed_records() {
             );
         }
     }
+}
+
+/// One captured sitecomp source carrying `records` distinct, well-formed,
+/// non-overlapping component records. Nothing collides, which is the ordinary
+/// case and the one a per-record rescan of the bundle cannot short-circuit.
+fn probe_bundle(records: u32) -> SccmSiteCoreBundle {
+    let artifact = SccmArtifact {
+        artifact_id: "probe-sitecomp-current".to_owned(),
+        display_name: "sitecomp.log".to_owned(),
+        original_path: None,
+        host: None,
+        role: SccmRole::SiteServer,
+        configmgr_version: Some("5.00.TEST".to_owned()),
+        collected_at_utc: Some("2026-07-30T14:01:00Z".to_owned()),
+        rotation: SccmRotation::Current,
+        coverage: SccmCoverageState::Captured,
+        encoding: Some("utf-8".to_owned()),
+    };
+    let mut content = String::new();
+    for index in 0..records {
+        content.push_str(&format!(
+            "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB \
+             componentId=SMS_EXECUTIVE workItemId=SC-{index} \
+             statusId=SC_COMPONENT_START_OK outcome=success terminal=false]LOG]!>\
+             <time=\"14:00:01.000+000\" date=\"07-30-2026\" \
+             component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" \
+             thread=\"101\" file=\"sitecomp.cpp:101\">\n"
+        ));
+    }
+    let evidence = normalize_ccm_artifact(artifact.clone(), &content);
+    assert_eq!(
+        evidence.len(),
+        records as usize,
+        "the probe source must frame one record per line"
+    );
+
+    SccmSiteCoreBundle {
+        topology: SccmSiteCoreTopology {
+            site_code: "LAB".to_owned(),
+        },
+        sources: vec![SccmSiteCoreSource {
+            artifact,
+            source_group: "server-sitecomp".to_owned(),
+            rotation_lineage: "sitecomp.log".to_owned(),
+            fragment_complete: None,
+            physical_line_end: Some(records.max(1)),
+            capture_limit_bytes: None,
+        }],
+        evidence,
+    }
+}
+
+/// The fastest of three reductions. The floor is the least noisy estimate of
+/// the work the reducer actually does on a shared machine.
+fn fastest_reduction(records: u32) -> Duration {
+    let bundle = probe_bundle(records);
+    (0..3)
+        .map(|_| {
+            let start = Instant::now();
+            let analysis = analyze_site_core(&bundle);
+            let elapsed = start.elapsed();
+            assert_eq!(
+                analysis.results.len(),
+                records as usize,
+                "every probe record must reduce to its own transaction"
+            );
+            elapsed
+        })
+        .min()
+        .expect("three samples were taken")
+}
+
+/// Admission asks an identity question of every record. Answered by rescanning
+/// the whole bundle per record it is quadratic, and a stock ConfigMgr server
+/// log holds tens of thousands of records per file, so the reducer becomes
+/// unusable on exactly the input it exists for.
+///
+/// The bound is on growth rather than on a wall clock, so a slow machine cannot
+/// fail it: quadrupling the record count multiplies quadratic work by about
+/// sixteen and linearithmic work by about four.
+#[test]
+fn admission_cost_grows_with_the_records_not_their_square() {
+    let baseline = fastest_reduction(1_000);
+    let quadrupled = fastest_reduction(4_000);
+    assert!(
+        quadrupled <= baseline * 6,
+        "quadrupling the records multiplied the reduction cost by {:.1} ({baseline:?} -> {quadrupled:?})",
+        quadrupled.as_secs_f64() / baseline.as_secs_f64()
+    );
 }
 
 #[test]
