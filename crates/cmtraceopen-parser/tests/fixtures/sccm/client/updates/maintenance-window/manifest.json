@@ -1,0 +1,127 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "role": "client",
+    "workflow": "updates",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "updates-maintenance-window-01-scan",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "ScanAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/ScanAgent.log",
+      "pathFingerprint": "synthetic:updates-maintenance-window-01-scan",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T07:59:59Z",
+      "bytesCopied": 793,
+      "relativePath": "evidence/client-updates/current/ScanAgent.log"
+    },
+    {
+      "artifactId": "updates-maintenance-window-02-sup",
+      "designOnlyCatalog": {
+        "entryId": "client-location-services-shared",
+        "groupMemberships": [
+          "client-location-services-shared"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "LocationServices.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/LocationServices.log",
+      "pathFingerprint": "synthetic:updates-maintenance-window-02-sup",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T07:59:59Z",
+      "bytesCopied": 405,
+      "relativePath": "evidence/client-location-services-shared/current/LocationServices.log"
+    },
+    {
+      "artifactId": "updates-maintenance-window-03-download",
+      "designOnlyCatalog": {
+        "entryId": "client-content",
+        "groupMemberships": [
+          "client-content"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "DataTransferService.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/DataTransferService.log",
+      "pathFingerprint": "synthetic:updates-maintenance-window-03-download",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T07:59:59Z",
+      "bytesCopied": 408,
+      "relativePath": "evidence/client-content/current/DataTransferService.log"
+    },
+    {
+      "artifactId": "updates-maintenance-window-04-window",
+      "designOnlyCatalog": {
+        "entryId": "client-maintenance-window",
+        "groupMemberships": [
+          "client-maintenance-window"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "ServiceWindowManager.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/ServiceWindowManager.log",
+      "pathFingerprint": "synthetic:updates-maintenance-window-04-window",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T07:59:59Z",
+      "bytesCopied": 442,
+      "relativePath": "evidence/client-maintenance-window/current/ServiceWindowManager.log"
+    }
+  ]
+}
