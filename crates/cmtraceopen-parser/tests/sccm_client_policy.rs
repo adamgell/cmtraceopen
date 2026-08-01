@@ -1403,6 +1403,243 @@ fn policy_deferred_phase_still_asks_for_the_deferred_retry() {
     );
 }
 
+fn finding_request_ids(analysis: &Value) -> Vec<String> {
+    analysis["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .flat_map(|finding| {
+            finding["nextArtifacts"]
+                .as_array()
+                .expect("finding requests")
+                .iter()
+                .map(|request| {
+                    request["logicalId"]
+                        .as_str()
+                        .expect("request logical id")
+                        .to_owned()
+                })
+        })
+        .collect()
+}
+
+fn assert_findings_request_one_group(analysis: &Value, context: &str) {
+    for finding in analysis["findings"].as_array().expect("findings") {
+        let groups = finding["nextArtifacts"]
+            .as_array()
+            .expect("finding requests")
+            .iter()
+            .filter_map(|request| match request["logicalId"].as_str()? {
+                "clientLocation" | "locationServices" | "ccmMessaging" => Some("client-location"),
+                "policyAgent" | "policyAgentProvider" | "policyEvaluator" | "scheduler" => {
+                    Some("client-policy-agent")
+                }
+                "ciAgent" | "ciDownloader" | "stateMessage" | "statusAgent" => {
+                    Some("client-policy-state")
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(
+            groups.len() <= 1,
+            "{context}: one finding requested unrelated groups {groups:?}"
+        );
+    }
+}
+
+#[test]
+fn policy_missing_schedule_phase_requests_the_scheduler_source() {
+    let mut bundle = load_bundle("complete");
+    bundle
+        .artifacts
+        .retain(|artifact| artifact.display_name != "Scheduler.log");
+    bundle
+        .evidence
+        .retain(|evidence| !evidence.message.contains("Schedule succeeded"));
+
+    let analysis = analysis_json(&bundle);
+    let requests = finding_request_ids(&analysis);
+    assert!(
+        requests.contains(&"scheduler".to_owned()),
+        "Scheduler.log is the file that would supply the missing phase, got {requests:?}"
+    );
+    assert!(
+        !requests.contains(&"policyAgent".to_owned()),
+        "PolicyAgent.log is fully captured, asking for it cannot close the gap, got {requests:?}"
+    );
+}
+
+#[test]
+fn policy_deferred_retry_requests_the_source_that_deferred() {
+    let analysis = analysis_json(&load_bundle("scheduler-deferred"));
+    let requests = finding_request_ids(&analysis);
+    assert!(
+        requests.contains(&"scheduler".to_owned()),
+        "the deferral is recorded in Scheduler.log, got {requests:?}"
+    );
+    assert!(
+        !requests.contains(&"policyAgent".to_owned()),
+        "the finding must not contradict its own workflow request, got {requests:?}"
+    );
+}
+
+fn complete_with_download_moved_to_ci_downloader() -> SccmNormalizedBundle {
+    const DOWNLOADER_ID: &str = "policy-complete-downloader-current";
+
+    let mut bundle = load_bundle("complete");
+    let mut downloader = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.display_name == "PolicyAgent.log")
+        .cloned()
+        .expect("policy agent artifact");
+    downloader.artifact_id = DOWNLOADER_ID.to_owned();
+    downloader.display_name = "CIDownloader.log".to_owned();
+    bundle.artifacts.push(downloader);
+
+    let download = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Download succeeded"))
+        .expect("download evidence");
+    download.evidence_id = format!("{DOWNLOADER_ID}:1");
+    download.reference.artifact_id = DOWNLOADER_ID.to_owned();
+    download.reference.entry_id = format!("{DOWNLOADER_ID}:1-1");
+    download.reference.line_start = Some(1);
+    download.reference.line_end = Some(1);
+    download.timestamp.utc_millis = None;
+    download.timestamp.ordering_state = SccmTimeOrderingState::OffsetInvalid;
+    bundle
+        .artifacts
+        .sort_by(|left, right| left.artifact_id.cmp(&right.artifact_id));
+    bundle
+}
+
+#[test]
+fn policy_unusable_time_names_the_source_that_broke_chronology() {
+    let bundle = complete_with_download_moved_to_ci_downloader();
+    let analysis = analysis_json(&bundle);
+
+    assert_eq!(
+        analysis["transactions"][0]["coverageGapArtifactIds"],
+        json!(["client-policy-state"]),
+        "CIDownloader.log belongs to the policy-state family, not the agent family"
+    );
+    let requests = finding_request_ids(&analysis);
+    assert!(
+        requests.contains(&"ciDownloader".to_owned()),
+        "the file whose timestamps are unusable must be the file that is named, got {requests:?}"
+    );
+    assert!(
+        !requests.contains(&"policyAgent".to_owned()),
+        "PolicyAgent.log did not break chronology, got {requests:?}"
+    );
+}
+
+#[test]
+fn policy_cross_phase_inversion_asks_for_one_group_without_claiming_a_bad_offset() {
+    let mut bundle = load_bundle("complete");
+    let request_utc = bundle
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("Request succeeded"))
+        .and_then(|evidence| evidence.timestamp.utc_millis)
+        .expect("request UTC");
+    let report = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Report succeeded"))
+        .expect("report evidence");
+    report.timestamp.utc_millis = Some(request_utc - 1);
+
+    let analysis = analysis_json(&bundle);
+    assert_findings_request_one_group(&analysis, "cross-phase inversion");
+
+    let groups = analysis["transactions"][0]["nextArtifacts"]
+        .as_array()
+        .expect("transaction requests")
+        .iter()
+        .map(|request| request["logicalId"].as_str().expect("logical id"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        groups.len(),
+        1,
+        "an inversion names one broken link, got {groups:?}"
+    );
+
+    let reasons = request_reasons(&analysis);
+    assert!(
+        !reasons.is_empty(),
+        "an inversion must still ask for a repair"
+    );
+    assert!(
+        reasons
+            .iter()
+            .all(|reason| !reason.contains("timestamp offset")),
+        "both records carry a valid normalized offset, so the reason cannot claim otherwise, got {reasons:?}"
+    );
+}
+
+#[test]
+fn policy_missing_phase_and_broken_chronology_never_mix_groups() {
+    let mut bundle = load_bundle("complete");
+    bundle
+        .evidence
+        .retain(|evidence| !evidence.message.contains("Evaluate succeeded"));
+    let scheduled = bundle
+        .evidence
+        .iter_mut()
+        .find(|evidence| evidence.message.contains("Schedule succeeded"))
+        .expect("schedule evidence");
+    scheduled.timestamp.utc_millis = None;
+    scheduled.timestamp.ordering_state = SccmTimeOrderingState::OffsetInvalid;
+
+    let analysis = analysis_json(&bundle);
+    assert_findings_request_one_group(&analysis, "missing phase plus broken chronology");
+}
+
+#[test]
+fn policy_duplicate_non_policy_client_artifact_id_is_not_a_policy_symptom() {
+    let baseline = analysis_json(&load_bundle("complete"));
+
+    let mut bundle = load_bundle("complete");
+    for coverage in [SccmCoverageState::Captured, SccmCoverageState::Partial] {
+        bundle.artifacts.push(SccmArtifact {
+            artifact_id: "policy-complete-appenforce".to_owned(),
+            display_name: "AppEnforce.log".to_owned(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: Some("5.00.TEST.0000".to_owned()),
+            collected_at_utc: None,
+            rotation: SccmRotation::Current,
+            coverage,
+            encoding: Some("utf-8".to_owned()),
+        });
+    }
+    let mut record = bundle.evidence.first().cloned().expect("policy evidence");
+    record.evidence_id = "policy-complete-appenforce:1".to_owned();
+    record.reference.artifact_id = "policy-complete-appenforce".to_owned();
+    record.reference.entry_id = "policy-complete-appenforce:1-1".to_owned();
+    record.reference.line_start = Some(1);
+    record.reference.line_end = Some(1);
+    bundle.evidence.push(record);
+
+    let analysis = analysis_json(&bundle);
+    assert_eq!(
+        analysis["findings"], baseline["findings"],
+        "an ambiguous non-policy client id must not fabricate a policy finding"
+    );
+    assert_eq!(
+        analysis["sourceLocalObservations"], baseline["sourceLocalObservations"],
+        "an ambiguous non-policy client id must not fabricate a policy symptom"
+    );
+    assert_eq!(
+        analysis["artifactRequests"], baseline["artifactRequests"],
+        "an ambiguous non-policy client id must not request a policy source"
+    );
+}
+
 #[test]
 fn policy_time_contradiction_asks_for_usable_timestamps() {
     let reasons = request_reasons(&analysis_json(&load_bundle("contradictory-offset")));
