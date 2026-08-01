@@ -353,6 +353,22 @@ pub struct PortalCoverageEntry {
     pub evidence: Vec<PortalEvidenceRef>,
 }
 
+/// The usable identifier in `value`, or `None`.
+///
+/// An empty or whitespace-only identifier names nothing. Treating it as a value
+/// makes every record carrying one "share" an identifier with every other,
+/// which links records that have no relationship, collapses them into a single
+/// empty-keyed activity group, and justifies merges against a direct log.
+///
+/// Ingest already normalises blank fields to `None`, so this cannot arise from
+/// parsing a capture. It arises when a record reaches selection, reduction, or
+/// correlation by deserialization or direct construction, which the public API
+/// allows. This is the one place the rule lives; every identifier comparison in
+/// this module goes through it.
+pub fn usable_identifier(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|id| !id.is_empty())
+}
+
 /// Mints the `coverage_id` for the entry at `index` in a capture's coverage.
 ///
 /// Coverage entries come from two producers, ingest and reduction, and land in

@@ -136,7 +136,10 @@ fn build_activity_groups(
         if !selected.contains_key(&record.stream_index) {
             continue;
         }
-        let Some(activity_id) = record.activity.activity_id.as_deref() else {
+        // A blank activity id is not a group key. Without this every record
+        // carrying one lands in a single empty-keyed group, which reads as a
+        // shared activity that does not exist.
+        let Some(activity_id) = usable_identifier(record.activity.activity_id.as_deref()) else {
             continue;
         };
 
@@ -152,10 +155,12 @@ fn build_activity_groups(
             });
 
         if group.parent_activity_id.is_none() {
-            group.parent_activity_id = record.activity.parent_activity_id.clone();
+            group.parent_activity_id =
+                usable_identifier(record.activity.parent_activity_id.as_deref())
+                    .map(str::to_string);
         }
         group.record_ids.push(record.record_id.clone());
-        if let Some(signpost) = record.activity.signpost_id.as_deref() {
+        if let Some(signpost) = usable_identifier(record.activity.signpost_id.as_deref()) {
             if !group.signpost_ids.iter().any(|s| s == signpost) {
                 group.signpost_ids.push(signpost.to_string());
             }

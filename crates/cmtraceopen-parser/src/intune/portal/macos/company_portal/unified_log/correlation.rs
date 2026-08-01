@@ -73,12 +73,16 @@ fn explicit_match(
         ),
     ];
 
-    candidates
-        .into_iter()
-        .find_map(|(basis, left, right)| match (left, right) {
-            (Some(a), Some(b)) if !a.is_empty() && a == b => Some((basis, a.to_string())),
+    candidates.into_iter().find_map(|(basis, left, right)| {
+        // One shared rule with `selection` and `reduce`: a blank identifier
+        // names nothing, so it can never be the shared key that justifies a
+        // merge. This used to reject `""` on its own but let a whitespace
+        // key through.
+        match (usable_identifier(left), usable_identifier(right)) {
+            (Some(a), Some(b)) if a == b => Some((basis, a.to_string())),
             _ => None,
-        })
+        }
+    })
 }
 
 /// True when two timestamps denote the same instant, or the same literal text

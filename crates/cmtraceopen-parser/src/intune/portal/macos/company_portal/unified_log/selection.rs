@@ -173,7 +173,7 @@ fn explicit_ids(record: &PortalUnifiedLogRecord) -> Vec<(PortalIdentifierKind, &
         ),
     ]
     .into_iter()
-    .filter_map(|(kind, id)| id.map(|id| (kind, id)))
+    .filter_map(|(kind, id)| usable_identifier(id).map(|id| (kind, id)))
     .collect()
 }
 

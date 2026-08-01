@@ -60,11 +60,20 @@ const KNOWN_RECORD_KEYS: &[&str] = &[
 /// Parses a normalized capture in either supported encoding.
 ///
 /// Detection is structural, never by file name: a payload that parses whole as
-/// a JSON object carrying `records` is the JSON encoding; anything else is
-/// treated as NDJSON.
+/// a JSON object carrying `records`, or declaring a capture header, is the JSON
+/// encoding; anything else is treated as NDJSON.
+///
+/// Routing on `records` alone was not enough. `parse_capture_json_object`
+/// already treats an absent `records` key as an empty capture, but a
+/// pretty-printed capture with no records never reached it: it fell through to
+/// the NDJSON path, where every physical line of the pretty printing failed to
+/// parse, and a well-formed empty capture was reported as a stream of malformed
+/// records. The header test is the same one NDJSON framing uses, both keys
+/// rather than `schemaId` alone, so the two encodings agree on what a header is.
 pub fn parse_capture(input: &str) -> PortalUnifiedLogCaptureSet {
     if let Ok(Value::Object(root)) = serde_json::from_str::<Value>(input) {
-        if root.contains_key("records") {
+        let declares_header = root.contains_key("schemaId") && root.contains_key("schemaVersion");
+        if root.contains_key("records") || declares_header {
             return parse_capture_json_object(root);
         }
     }
