@@ -897,3 +897,386 @@ fn reordering_the_bundle_never_changes_the_analysis() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Synthetic adversarial contracts
+//
+// These cases cannot exist in the merged corpus but are exactly the ways a
+// deployment reducer overstates evidence in the field.
+// ---------------------------------------------------------------------------
+
+const ASSIGNMENT: &str = "10000000-0000-0000-0000-0000000000a1";
+const CI: &str = "20000000-0000-0000-0000-0000000000a2";
+const CONTENT: &str = "30000000-0000-0000-0000-0000000000a3";
+const REQUEST: &str = "40000000-0000-0000-0000-0000000000a4";
+const BITS_JOB: &str = "50000000-0000-0000-0000-0000000000a5";
+const PRODUCT: &str = "60000000-0000-0000-0000-0000000000a6";
+const OTHER_CI: &str = "20000000-0000-0000-0000-0000000000b2";
+
+fn client_artifact(artifact_id: &str, basename: &str) -> SccmArtifact {
+    SccmArtifact {
+        artifact_id: artifact_id.to_owned(),
+        display_name: basename.to_owned(),
+        original_path: None,
+        host: None,
+        role: SccmRole::Client,
+        configmgr_version: Some("5.00.TEST.0000".to_owned()),
+        collected_at_utc: None,
+        rotation: SccmRotation::Current,
+        coverage: SccmCoverageState::Captured,
+        encoding: Some("utf-8".to_owned()),
+    }
+}
+
+fn record(message: &str, time: &str, component: &str) -> String {
+    format!(
+        "<![LOG[{message}]LOG]!><time=\"{time}\" date=\"07-30-2026\" component=\"{component}\" context=\"\" type=\"1\" thread=\"1\" file=\"synthetic.cc:1\">\n"
+    )
+}
+
+fn bundle_from(sources: Vec<(SccmArtifact, String)>) -> SccmNormalizedBundle {
+    let mut artifacts = Vec::new();
+    let mut evidence = Vec::new();
+    for (artifact, content) in sources {
+        evidence.extend(normalize_ccm_artifact(artifact.clone(), &content));
+        evidence.extend(normalize_physical_lines(&artifact, &content));
+        artifacts.push(artifact);
+    }
+    SccmNormalizedBundle {
+        artifacts,
+        evidence,
+    }
+}
+
+fn intent_content() -> String {
+    format!(
+        "{}{}",
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment targeted assignmentId={ASSIGNMENT} ciId={CI} state=targeted"
+            ),
+            "05:00:00.000+000",
+            "AppIntentEval",
+        ),
+        record(
+            &format!("Requirements satisfied assignmentId={ASSIGNMENT} ciId={CI}"),
+            "05:00:01.000+000",
+            "AppIntentEval",
+        ),
+    )
+}
+
+fn content_content() -> String {
+    format!(
+        "{}{}",
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment content located assignmentId={ASSIGNMENT} ciId={CI} packageId=LAB00021 contentId={CONTENT} contentVersion=21 distributionPointHostHandle=safe:dp:lab-dp-02 requestId={REQUEST} siteCode=LAB"
+            ),
+            "05:00:02.000+000",
+            "CAS",
+        ),
+        record(
+            &format!(
+                "Cache commit completed assignmentId={ASSIGNMENT} ciId={CI} contentId={CONTENT} contentVersion=21"
+            ),
+            "05:00:05.000+000",
+            "CAS",
+        ),
+    )
+}
+
+fn transfer_content(started_time: &str, completed_time: &str) -> String {
+    format!(
+        "{}{}",
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment transfer started assignmentId={ASSIGNMENT} contentId={CONTENT} contentVersion=21 requestId={REQUEST} bitsJobId={BITS_JOB}"
+            ),
+            started_time,
+            "DataTransferService",
+        ),
+        record(
+            &format!("Transfer completed assignmentId={ASSIGNMENT} contentId={CONTENT} bitsJobId={BITS_JOB}"),
+            completed_time,
+            "DataTransferService",
+        ),
+    )
+}
+
+fn only_transaction(
+    analysis: &cmtraceopen_parser::sccm::SccmDeploymentAnalysis,
+) -> &cmtraceopen_parser::sccm::SccmDeploymentTransaction {
+    assert_eq!(analysis.transactions.len(), 1, "expected one transaction");
+    &analysis.transactions[0]
+}
+
+#[test]
+fn a_duplicate_client_artifact_identity_reports_coverage_only() {
+    let artifact = client_artifact("synthetic-intent", "AppIntentEval.log");
+    let mut bundle = bundle_from(vec![(artifact.clone(), intent_content())]);
+    assert_eq!(
+        analyze_client_deployment(&bundle).transactions.len(),
+        1,
+        "the same bundle without a collision must produce a transaction"
+    );
+
+    bundle.artifacts.push(artifact);
+    let analysis = analyze_client_deployment(&bundle);
+    assert!(
+        analysis.transactions.is_empty(),
+        "an ambiguous artifact identity cannot elect a source"
+    );
+    assert!(analysis.findings.is_empty());
+    assert!(
+        !analysis.coverage.is_empty(),
+        "coverage still reports what was collected"
+    );
+}
+
+#[test]
+fn a_duplicate_evidence_identity_reports_coverage_only() {
+    let artifact = client_artifact("synthetic-intent", "AppIntentEval.log");
+    let mut bundle = bundle_from(vec![(artifact, intent_content())]);
+    bundle.evidence.extend(bundle.evidence.clone());
+
+    let analysis = analyze_client_deployment(&bundle);
+    assert!(
+        analysis.transactions.is_empty(),
+        "a duplicated logical record cannot be an authority"
+    );
+    assert!(analysis.findings.is_empty());
+}
+
+#[test]
+fn an_artifact_from_another_role_never_decides_a_client_source() {
+    let client = client_artifact("shared-identity", "AppIntentEval.log");
+    let mut management_point = client.clone();
+    management_point.role = SccmRole::ManagementPoint;
+    management_point.display_name = "mpcontrol.log".to_owned();
+
+    let mut forward = bundle_from(vec![(client.clone(), intent_content())]);
+    let mut reversed = forward.clone();
+    forward.artifacts.push(management_point.clone());
+    reversed.artifacts.insert(0, management_point);
+
+    for (label, bundle) in [("client first", forward), ("client last", reversed)] {
+        let analysis = analyze_client_deployment(&bundle);
+        let transaction = only_transaction(&analysis);
+        assert_eq!(
+            transaction.key.assignment_id, ASSIGNMENT,
+            "{label}: client source was displaced by another role"
+        );
+        assert_eq!(
+            phase_name(transaction.phase),
+            "locateContent",
+            "{label}: phase"
+        );
+    }
+}
+
+#[test]
+fn an_unorderable_terminal_record_downgrades_to_a_low_confidence_symptom() {
+    let failing_transfer = format!(
+        "{}{}",
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment transfer started assignmentId={ASSIGNMENT} contentId={CONTENT} contentVersion=21 requestId={REQUEST} bitsJobId={BITS_JOB}"
+            ),
+            "05:00:03.000",
+            "DataTransferService",
+        ),
+        record(
+            &format!(
+                "Transfer terminal failure assignmentId={ASSIGNMENT} contentId={CONTENT} bitsJobId={BITS_JOB} errorCode=0x80070020 terminal=true"
+            ),
+            "05:00:04.000",
+            "DataTransferService",
+        ),
+    );
+    let bundle = bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            intent_content(),
+        ),
+        (
+            client_artifact("synthetic-content", "CAS.log"),
+            content_content(),
+        ),
+        (
+            client_artifact("synthetic-transfer", "DataTransferService.log"),
+            failing_transfer,
+        ),
+    ]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(phase_name(transaction.phase), "transfer");
+    assert_eq!(state_name(transaction.state), "insufficientEvidence");
+    assert_eq!(classification_name(transaction.classification), "symptom");
+    assert_eq!(confidence_name(transaction.confidence), "low");
+    assert!(
+        analysis
+            .findings
+            .iter()
+            .any(|finding| finding.finding.finding_id == "deployment-chronology-uncertain"),
+        "an unorderable chain must name the missing ordering evidence"
+    );
+}
+
+#[test]
+fn a_label_embedded_in_a_longer_phrase_is_not_a_requirements_outcome() {
+    let embedded = format!(
+        "{}{}",
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment targeted assignmentId={ASSIGNMENT} ciId={CI} state=targeted"
+            ),
+            "05:00:00.000+000",
+            "AppIntentEval",
+        ),
+        record(
+            &format!("Base requirements satisfied assignmentId={ASSIGNMENT} ciId={CI}"),
+            "05:00:01.000+000",
+            "AppIntentEval",
+        ),
+    );
+    let bundle = bundle_from(vec![(
+        client_artifact("synthetic-intent", "AppIntentEval.log"),
+        embedded,
+    )]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(phase_name(transaction.phase), "requirements");
+    assert_eq!(state_name(transaction.state), "insufficientEvidence");
+    assert_eq!(
+        transaction.last_successful_phase.map(phase_name),
+        Some("intent")
+    );
+}
+
+#[test]
+fn a_duplicated_key_label_fails_closed_for_the_whole_record() {
+    let duplicated = record(
+        &format!(
+            "SYNTHETIC FIXTURE deployment targeted assignmentId={ASSIGNMENT} assignmentId={ASSIGNMENT} ciId={CI} state=targeted"
+        ),
+        "05:00:00.000+000",
+        "AppIntentEval",
+    );
+    let bundle = bundle_from(vec![(
+        client_artifact("synthetic-intent", "AppIntentEval.log"),
+        duplicated,
+    )]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    assert!(
+        analysis.transactions.is_empty(),
+        "a duplicated exact-token label cannot pick a value"
+    );
+}
+
+#[test]
+fn two_configuration_items_under_one_assignment_never_form_a_transaction() {
+    let ambiguous = format!(
+        "{}{}",
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment targeted assignmentId={ASSIGNMENT} ciId={CI} state=targeted"
+            ),
+            "05:00:00.000+000",
+            "AppIntentEval",
+        ),
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment targeted assignmentId={ASSIGNMENT} ciId={OTHER_CI} state=targeted"
+            ),
+            "05:00:01.000+000",
+            "AppIntentEval",
+        ),
+    );
+    let bundle = bundle_from(vec![(
+        client_artifact("synthetic-intent", "AppIntentEval.log"),
+        ambiguous,
+    )]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    assert!(
+        analysis.transactions.is_empty(),
+        "two configuration items cannot share one exact transaction key"
+    );
+}
+
+#[test]
+fn an_unprofiled_source_version_stays_a_source_local_observation() {
+    let mut artifact = client_artifact("synthetic-intent", "AppIntentEval.log");
+    artifact.configmgr_version = Some("5.00.PROD.9128".to_owned());
+    let bundle = bundle_from(vec![(artifact, intent_content())]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    assert!(
+        analysis.transactions.is_empty(),
+        "an unprofiled version cannot produce facts"
+    );
+    assert_eq!(analysis.source_local_observations.len(), 1);
+    let observation = &analysis.source_local_observations[0];
+    assert!(observation.complete_logical_record);
+    assert!(!observation.correlation_eligible);
+    assert_eq!(
+        confidence_name(observation.confidence_ceiling),
+        "low",
+        "an unprofiled record stays capped at low confidence"
+    );
+}
+
+#[test]
+fn a_nonzero_exit_code_without_a_terminal_record_is_not_a_confirmed_failure() {
+    let enforcement = record(
+        &format!(
+            "SYNTHETIC FIXTURE deployment enforcement terminal failure assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} exitCode=1603"
+        ),
+        "05:00:06.000+000",
+        "AppEnforce",
+    );
+    let bundle = bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            intent_content(),
+        ),
+        (
+            client_artifact("synthetic-content", "CAS.log"),
+            content_content(),
+        ),
+        (
+            client_artifact("synthetic-transfer", "DataTransferService.log"),
+            transfer_content("05:00:03.000+000", "05:00:04.000+000"),
+        ),
+        (
+            client_artifact("synthetic-enforce", "AppEnforce.log"),
+            enforcement,
+        ),
+    ]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(phase_name(transaction.phase), "enforce");
+    assert_ne!(
+        classification_name(transaction.classification),
+        "confirmedFailure",
+        "a bare AppEnforce exit code is not a root cause"
+    );
+    assert_eq!(state_name(transaction.state), "insufficientEvidence");
+    assert_eq!(
+        transaction.last_successful_phase.map(phase_name),
+        Some("cache")
+    );
+    assert_eq!(
+        transaction
+            .next_artifact
+            .as_ref()
+            .map(|request| request.logical_artifact_id.as_str()),
+        Some("client-app-enforce")
+    );
+    assert!(transaction.key.exit_code.is_none(), "no admitted exit code");
+}
