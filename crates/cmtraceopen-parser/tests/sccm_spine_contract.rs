@@ -5637,6 +5637,14 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             true,
         ),
         (
+            "StateMessage.log",
+            SccmRole::Client,
+            "stateMessage",
+            SccmArtifactFamily::ClientPolicy,
+            true,
+            true,
+        ),
+        (
             "CAS.log",
             SccmRole::Client,
             "cas",

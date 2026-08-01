@@ -1,0 +1,1453 @@
+//! Issue #322: application, package, and content deployment transactions.
+//!
+//! The reducer is pure. It turns a normalized client bundle into conservative
+//! transactions whose every claim cites complete logical records. It never
+//! reads the file system, never contacts a server, and never states a
+//! distribution-point or site-server cause: the only cross-side output is a
+//! counterpart-ready client content request that issue #333 may later match.
+//!
+//! Deployment state chain:
+//!
+//! ```text
+//! Intent -> Requirements -> LocateContent -> Transfer -> Cache -> Enforce -> Detect -> Report
+//! ```
+
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Serialize;
+
+use crate::sccm::{
+    classify_artifact_name, SccmArtifact, SccmCoverageState, SccmEvidence, SccmEvidenceRef,
+    SccmRole, SccmTimeOrderingState,
+};
+
+use super::SccmNormalizedBundle;
+
+pub const SCCM_DEPLOYMENT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
+pub const SCCM_DEPLOYMENT_TEST_PROFILE_ID: &str = "deployment-client-5.00.test-v1";
+pub const SCCM_DEPLOYMENT_TEST_VERSION_PREFIX: &str = "5.00.TEST.";
+
+const GROUP_APP_INTENT: &str = "client-app-intent";
+const GROUP_APP_ENFORCE: &str = "client-app-enforce";
+const GROUP_CONTENT: &str = "client-content";
+const GROUP_POLICY_STATE: &str = "client-policy-state";
+
+const REASON_LOCATION_RESPONSE_MISSING: &str =
+    "capture a complete terminal location response; a client request alone cannot prove DP content state";
+const REASON_LOCATION_ACCESS_DENIED: &str =
+    "access denied is a coverage state, not proof of content success or failure";
+const REASON_LOCATION_ROTATION: &str =
+    "capture a complete logical CCM content record without joining physical rotation fragments";
+const REASON_LOCATION_ABSENT: &str =
+    "Capture an exact client content-location response for this assignment and CI.";
+const REASON_INTENT: &str =
+    "capture the complete client application intent record for this assignment and CI";
+const REASON_REQUIREMENTS: &str =
+    "capture the complete client requirement and dependency outcome for this assignment and CI";
+const REASON_TRANSFER: &str = "capture the complete client content transfer outcome for this key";
+const REASON_CACHE: &str = "capture the complete client cache commit outcome for this key";
+const REASON_ENFORCE: &str = "capture the complete client enforcement outcome for this key";
+const REASON_DETECT: &str = "capture the complete client detection outcome for this key";
+const REASON_REPORT: &str = "capture the complete client deployment state report for this key";
+const REASON_CHRONOLOGY: &str =
+    "capture records whose timestamps can be ordered against the earlier phases of this key";
+
+const COUNTERPART_READY_KEY_KINDS: [&str; 5] = [
+    "contentId",
+    "contentVersion",
+    "distributionPointHostHandle",
+    "packageId",
+    "requestId",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentWorkflow {
+    Deployment,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentPhase {
+    Intent,
+    Requirements,
+    LocateContent,
+    Transfer,
+    Cache,
+    Enforce,
+    Detect,
+    Report,
+}
+
+impl SccmDeploymentPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Intent => "intent",
+            Self::Requirements => "requirements",
+            Self::LocateContent => "locateContent",
+            Self::Transfer => "transfer",
+            Self::Cache => "cache",
+            Self::Enforce => "enforce",
+            Self::Detect => "detect",
+            Self::Report => "report",
+        }
+    }
+
+    fn artifact_group(self) -> &'static str {
+        match self {
+            Self::Intent | Self::Requirements | Self::Detect => GROUP_APP_INTENT,
+            Self::LocateContent | Self::Transfer | Self::Cache => GROUP_CONTENT,
+            Self::Enforce => GROUP_APP_ENFORCE,
+            Self::Report => GROUP_POLICY_STATE,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentState {
+    NotTargeted,
+    InsufficientEvidence,
+    Failed,
+    DetectionMismatch,
+    Succeeded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentClassification {
+    NotTargeted,
+    InsufficientEvidence,
+    Symptom,
+    ConfirmedFailure,
+    Success,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentConfidence {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentKeyProfileKind {
+    AssignmentCi,
+    AssignmentCiContentTopology,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentKeyConfidence {
+    Candidate,
+    Exact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentTimestampProvenanceKind {
+    ExplicitOffset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentCounterpartFactKind {
+    ClientContentRequest,
+}
+
+/// Exact, version-profiled identity of one deployment transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentKey {
+    pub key_profile_kind: SccmDeploymentKeyProfileKind,
+    pub assignment_id: String,
+    pub ci_id: String,
+    pub package_id: Option<String>,
+    pub content_id: Option<String>,
+    pub content_version: Option<u32>,
+    pub distribution_point_host_handle: Option<String>,
+    pub request_id: Option<String>,
+    pub bits_job_id: Option<String>,
+    pub product_code: Option<String>,
+    pub exit_code: Option<String>,
+    pub confidence: SccmDeploymentKeyConfidence,
+    pub extraction_profile_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentTimestampProvenance {
+    pub kind: SccmDeploymentTimestampProvenanceKind,
+    pub offset_minutes: i32,
+    pub normalized_utc: String,
+}
+
+/// The only issue #333 handoff this reducer produces.
+///
+/// It restates an exact client-side content request. It is not a distribution
+/// point observation and carries no claim about a server outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentCounterpartFact {
+    pub fact_kind: SccmDeploymentCounterpartFactKind,
+    pub phase: SccmDeploymentPhase,
+    pub extraction_profile_id: String,
+    pub package_id: String,
+    pub content_id: String,
+    pub content_version: u32,
+    pub distribution_point_host_handle: String,
+    pub request_id: String,
+    pub timestamp_provenance: SccmDeploymentTimestampProvenance,
+    pub evidence: SccmEvidenceRef,
+}
+
+/// The smallest next evidence bundle, named by deployment artifact group.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentArtifactRequest {
+    pub logical_artifact_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentTransaction {
+    pub transaction_id: String,
+    pub key: SccmDeploymentKey,
+    pub counterpart_ready_fact: Option<SccmDeploymentCounterpartFact>,
+    pub phase: SccmDeploymentPhase,
+    pub state: SccmDeploymentState,
+    pub last_successful_phase: Option<SccmDeploymentPhase>,
+    pub classification: SccmDeploymentClassification,
+    pub confidence: SccmDeploymentConfidence,
+    pub confidence_ceiling: SccmDeploymentConfidence,
+    pub coverage_gap_artifact_ids: Vec<String>,
+    pub next_artifact: Option<SccmDeploymentArtifactRequest>,
+    pub evidence: Vec<SccmEvidenceRef>,
+}
+
+/// Coverage of one deployment artifact group. Absence is a state, never proof.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentCoverage {
+    pub logical_artifact_id: String,
+    pub state: SccmCoverageState,
+    pub artifact_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentExtractionProfile {
+    pub profile_id: String,
+    pub source_version_prefix: String,
+    pub content_version_required: bool,
+    pub key_kinds: Vec<String>,
+    pub validated_artifact_families: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentCorrelationHandoff {
+    pub issue: String,
+    pub performed: bool,
+    pub time_only_eligible: bool,
+    pub topology_compatibility_evaluated: bool,
+    pub server_cause_claimed: bool,
+    pub counterpart_ready_key_kinds: Vec<String>,
+    pub emitted_counterpart_ready_fact: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentAnalysis {
+    pub schema_version: u32,
+    pub workflow: SccmDeploymentWorkflow,
+    pub extraction_profile: SccmDeploymentExtractionProfile,
+    pub coverage: Vec<SccmDeploymentCoverage>,
+    pub transactions: Vec<SccmDeploymentTransaction>,
+    pub correlation_handoff: SccmDeploymentCorrelationHandoff,
+}
+
+/// Reduce a normalized client bundle into deployment transactions.
+pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymentAnalysis {
+    let coverage = coverage_rows(bundle);
+
+    if bundle_identity_collides(bundle) {
+        return finalize(coverage, Vec::new());
+    }
+
+    // Only client-role artifacts may participate. Building this map from the
+    // full artifact list would let another role's identical artifact ID decide
+    // which source a record came from.
+    let artifacts_by_id = bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.role == SccmRole::Client)
+        .map(|artifact| (artifact.artifact_id.as_str(), artifact))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut facts = bundle
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.role == SccmRole::Client)
+        .flat_map(|evidence| {
+            artifacts_by_id
+                .get(evidence.reference.artifact_id.as_str())
+                .map(|artifact| parse_deployment_facts(evidence, artifact))
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    facts.sort_by(|left, right| compare_references(&left.reference, &right.reference));
+
+    let mut by_assignment = BTreeMap::<&str, Vec<&DeploymentFact>>::new();
+    for fact in &facts {
+        by_assignment
+            .entry(fact.assignment_id.as_str())
+            .or_default()
+            .push(fact);
+    }
+
+    let transactions = by_assignment
+        .into_iter()
+        .filter_map(|(assignment_id, facts)| build_transaction(assignment_id, &facts, &coverage))
+        .collect::<Vec<_>>();
+
+    finalize(coverage, transactions)
+}
+
+fn finalize(
+    coverage: Vec<SccmDeploymentCoverage>,
+    transactions: Vec<SccmDeploymentTransaction>,
+) -> SccmDeploymentAnalysis {
+    let emitted_counterpart_ready_fact = transactions
+        .iter()
+        .any(|transaction| transaction.counterpart_ready_fact.is_some());
+
+    SccmDeploymentAnalysis {
+        schema_version: SCCM_DEPLOYMENT_ANALYSIS_SCHEMA_VERSION,
+        workflow: SccmDeploymentWorkflow::Deployment,
+        extraction_profile: extraction_profile(&coverage, &transactions),
+        coverage,
+        transactions,
+        correlation_handoff: SccmDeploymentCorrelationHandoff {
+            issue: "#333".to_owned(),
+            performed: false,
+            time_only_eligible: false,
+            topology_compatibility_evaluated: false,
+            server_cause_claimed: false,
+            counterpart_ready_key_kinds: COUNTERPART_READY_KEY_KINDS
+                .iter()
+                .map(|kind| (*kind).to_owned())
+                .collect(),
+            emitted_counterpart_ready_fact,
+        },
+    }
+}
+
+fn extraction_profile(
+    coverage: &[SccmDeploymentCoverage],
+    transactions: &[SccmDeploymentTransaction],
+) -> SccmDeploymentExtractionProfile {
+    let mut key_kinds = BTreeSet::new();
+    for transaction in transactions {
+        key_kinds.insert("assignmentId");
+        key_kinds.insert("ciId");
+        for (kind, present) in [
+            ("packageId", transaction.key.package_id.is_some()),
+            ("contentId", transaction.key.content_id.is_some()),
+            ("contentVersion", transaction.key.content_version.is_some()),
+            (
+                "distributionPointHostHandle",
+                transaction.key.distribution_point_host_handle.is_some(),
+            ),
+            ("requestId", transaction.key.request_id.is_some()),
+            ("bitsJobId", transaction.key.bits_job_id.is_some()),
+            ("productCode", transaction.key.product_code.is_some()),
+            ("exitCode", transaction.key.exit_code.is_some()),
+        ] {
+            if present {
+                key_kinds.insert(kind);
+            }
+        }
+    }
+
+    let validated_artifact_families = coverage
+        .iter()
+        .filter(|row| {
+            row.state == SccmCoverageState::Captured
+                && matches!(
+                    row.logical_artifact_id.as_str(),
+                    GROUP_APP_INTENT | GROUP_APP_ENFORCE | GROUP_CONTENT | GROUP_POLICY_STATE
+                )
+        })
+        .map(|row| row.logical_artifact_id.clone())
+        .collect::<Vec<_>>();
+
+    SccmDeploymentExtractionProfile {
+        profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
+        source_version_prefix: SCCM_DEPLOYMENT_TEST_VERSION_PREFIX.to_owned(),
+        content_version_required: true,
+        key_kinds: key_kinds.into_iter().map(str::to_owned).collect(),
+        validated_artifact_families,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Identity guards
+// ---------------------------------------------------------------------------
+
+/// Duplicate artifact or evidence identities make source authority ambiguous.
+/// The reducer then reports coverage only: vector order must never elect one.
+fn bundle_identity_collides(bundle: &SccmNormalizedBundle) -> bool {
+    let mut artifact_ids = BTreeSet::new();
+    for artifact in bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.role == SccmRole::Client)
+    {
+        if !artifact_ids.insert(artifact.artifact_id.as_str()) {
+            return true;
+        }
+    }
+
+    let mut evidence_ids = BTreeSet::new();
+    let mut references = BTreeSet::new();
+    for evidence in bundle
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.role == SccmRole::Client)
+    {
+        if !evidence_ids.insert(evidence.evidence_id.as_str()) {
+            return true;
+        }
+        if !references.insert((
+            evidence.reference.artifact_id.as_str(),
+            evidence.reference.entry_id.as_str(),
+            evidence.reference.line_start,
+            evidence.reference.line_end,
+        )) {
+            return true;
+        }
+    }
+
+    false
+}
+
+// ---------------------------------------------------------------------------
+// Coverage
+// ---------------------------------------------------------------------------
+
+fn coverage_rows(bundle: &SccmNormalizedBundle) -> Vec<SccmDeploymentCoverage> {
+    let mut grouped = BTreeMap::<String, Vec<&SccmArtifact>>::new();
+    for artifact in bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.role == SccmRole::Client)
+    {
+        grouped
+            .entry(deployment_group_id(&artifact.display_name))
+            .or_default()
+            .push(artifact);
+    }
+
+    grouped
+        .into_iter()
+        .map(|(logical_artifact_id, artifacts)| {
+            let states = artifacts
+                .iter()
+                .map(|artifact| artifact.coverage.clone())
+                .collect::<Vec<_>>();
+            let mut artifact_ids = artifacts
+                .iter()
+                .filter(|artifact| artifact.coverage != SccmCoverageState::Captured)
+                .map(|artifact| artifact.artifact_id.clone())
+                .collect::<Vec<_>>();
+            artifact_ids.sort();
+            artifact_ids.dedup();
+
+            SccmDeploymentCoverage {
+                logical_artifact_id,
+                state: combine_coverage(&states),
+                artifact_ids,
+            }
+        })
+        .collect()
+}
+
+/// Any complete capture makes the group usable; otherwise the most explanatory
+/// incomplete state wins. Conflicting noncapture states stay `ParseFailed` so
+/// no caller can read a single cause out of a mixed group.
+fn combine_coverage(states: &[SccmCoverageState]) -> SccmCoverageState {
+    for candidate in [
+        SccmCoverageState::Captured,
+        SccmCoverageState::Capped,
+        SccmCoverageState::Partial,
+    ] {
+        if states.contains(&candidate) {
+            return candidate;
+        }
+    }
+
+    let distinct = states
+        .iter()
+        .map(coverage_order)
+        .collect::<BTreeSet<_>>()
+        .len();
+    match (distinct, states.first()) {
+        (1, Some(state)) => state.clone(),
+        _ => SccmCoverageState::ParseFailed,
+    }
+}
+
+fn coverage_order(coverage: &SccmCoverageState) -> u8 {
+    match coverage {
+        SccmCoverageState::Captured => 0,
+        SccmCoverageState::Partial => 1,
+        SccmCoverageState::Absent => 2,
+        SccmCoverageState::AccessDenied => 3,
+        SccmCoverageState::Capped => 4,
+        SccmCoverageState::Skipped => 5,
+        SccmCoverageState::Unsupported => 6,
+        SccmCoverageState::ParseFailed => 7,
+    }
+}
+
+fn coverage_for_group<'a>(
+    coverage: &'a [SccmDeploymentCoverage],
+    group: &str,
+) -> Option<&'a SccmDeploymentCoverage> {
+    coverage.iter().find(|row| row.logical_artifact_id == group)
+}
+
+// ---------------------------------------------------------------------------
+// Source classification
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeploymentSourceKind {
+    Intent,
+    Discovery,
+    Enforce,
+    ContentAccess,
+    Transfer,
+    StateReport,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DeploymentSource {
+    group: &'static str,
+    kind: DeploymentSourceKind,
+}
+
+/// Exact logical-name table. An unlisted source is never a deployment fact
+/// source, no matter how similar its text looks.
+fn deployment_source(logical_name: &str) -> Option<DeploymentSource> {
+    let (group, kind) = match logical_name {
+        "appIntentEval" => (GROUP_APP_INTENT, DeploymentSourceKind::Intent),
+        "appDiscovery" => (GROUP_APP_INTENT, DeploymentSourceKind::Discovery),
+        "appEnforce" => (GROUP_APP_ENFORCE, DeploymentSourceKind::Enforce),
+        "cas" => (GROUP_CONTENT, DeploymentSourceKind::ContentAccess),
+        "dataTransferService" | "contentTransferManager" => {
+            (GROUP_CONTENT, DeploymentSourceKind::Transfer)
+        }
+        "stateMessage" => (GROUP_POLICY_STATE, DeploymentSourceKind::StateReport),
+        _ => return None,
+    };
+    Some(DeploymentSource { group, kind })
+}
+
+fn deployment_group_id(display_name: &str) -> String {
+    let catalog = classify_artifact_name(display_name, SccmRole::Client);
+    match deployment_source(&catalog.logical_name) {
+        Some(source) => source.group.to_owned(),
+        None => format!("client-{}", kebab_case(&catalog.logical_name)),
+    }
+}
+
+fn kebab_case(value: &str) -> String {
+    let mut result = String::with_capacity(value.len() + 4);
+    for character in value.chars() {
+        if character.is_ascii_uppercase() {
+            if !result.is_empty() {
+                result.push('-');
+            }
+            result.push(character.to_ascii_lowercase());
+        } else {
+            result.push(character);
+        }
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Facts
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeploymentFactKind {
+    IntentTargeted,
+    IntentNotApplicable,
+    RequirementsSatisfied,
+    RequirementsFailed,
+    DependencyFailed,
+    ContentLocated,
+    ContentRequested,
+    TransferStarted,
+    TransferCompleted,
+    TransferFailed,
+    CacheCommitted,
+    CacheFailed,
+    EnforceSucceeded,
+    EnforceFailed,
+    Detected,
+    DetectionMismatch,
+    ReportSucceeded,
+    ReportFailed,
+}
+
+#[derive(Debug, Clone)]
+struct DeploymentFact {
+    kind: DeploymentFactKind,
+    reference: SccmEvidenceRef,
+    utc_millis: Option<i64>,
+    offset_minutes: Option<i32>,
+    time_comparable: bool,
+    assignment_id: String,
+    ci_id: Option<String>,
+    package_id: Option<String>,
+    content_id: Option<String>,
+    content_version: Option<u32>,
+    distribution_point_host_handle: Option<String>,
+    request_id: Option<String>,
+    bits_job_id: Option<String>,
+    product_code: Option<String>,
+    exit_code: Option<String>,
+}
+
+fn parse_deployment_facts(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Vec<DeploymentFact> {
+    let Some(source) = admitted_source(evidence, artifact) else {
+        return Vec::new();
+    };
+    let Some(payload) = deployment_event_payload(&evidence.message) else {
+        return Vec::new();
+    };
+    let phrase = event_phrase(payload);
+    let Some(assignment_id) =
+        field_value(payload, "assignmentId").filter(|value| valid_guid(value))
+    else {
+        return Vec::new();
+    };
+
+    let kinds = match source.kind {
+        DeploymentSourceKind::Intent => intent_fact_kinds(&phrase, payload),
+        DeploymentSourceKind::Discovery => discovery_fact_kinds(&phrase, payload),
+        DeploymentSourceKind::Enforce => enforce_fact_kinds(&phrase, payload),
+        DeploymentSourceKind::ContentAccess => content_fact_kinds(&phrase, payload),
+        DeploymentSourceKind::Transfer => transfer_fact_kinds(&phrase, payload),
+        DeploymentSourceKind::StateReport => report_fact_kinds(&phrase, payload),
+    };
+    if kinds.is_empty() {
+        return Vec::new();
+    }
+
+    let template = DeploymentFact {
+        kind: DeploymentFactKind::IntentTargeted,
+        reference: evidence.reference.clone(),
+        utc_millis: evidence.timestamp.utc_millis,
+        offset_minutes: evidence.timestamp.offset_minutes,
+        time_comparable: evidence.timestamp.ordering_state == SccmTimeOrderingState::NormalizedUtc
+            && evidence.timestamp.utc_millis.is_some(),
+        assignment_id: assignment_id.to_owned(),
+        ci_id: field_value(payload, "ciId")
+            .filter(|value| valid_guid(value))
+            .map(str::to_owned),
+        package_id: field_value(payload, "packageId")
+            .filter(|value| valid_package_id(value))
+            .map(str::to_owned),
+        content_id: field_value(payload, "contentId")
+            .filter(|value| valid_guid(value))
+            .map(str::to_owned),
+        content_version: field_value(payload, "contentVersion").and_then(parse_content_version),
+        distribution_point_host_handle: field_value(payload, "distributionPointHostHandle")
+            .filter(|value| valid_safe_handle(value))
+            .map(str::to_owned),
+        request_id: field_value(payload, "requestId")
+            .filter(|value| valid_guid(value))
+            .map(str::to_owned),
+        bits_job_id: field_value(payload, "bitsJobId")
+            .filter(|value| valid_guid(value))
+            .map(str::to_owned),
+        product_code: field_value(payload, "productCode")
+            .filter(|value| valid_guid(value))
+            .map(str::to_owned),
+        exit_code: field_value(payload, "exitCode")
+            .filter(|value| valid_exit_code(value))
+            .map(str::to_owned),
+    };
+
+    kinds
+        .into_iter()
+        .map(|kind| DeploymentFact {
+            kind,
+            ..template.clone()
+        })
+        .collect()
+}
+
+/// Version profile, role, coverage, rotation, and catalog identity must all
+/// agree before a record may become a fact.
+fn admitted_source(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option<DeploymentSource> {
+    if artifact.role != SccmRole::Client
+        || evidence.role != SccmRole::Client
+        || artifact.coverage != SccmCoverageState::Captured
+        || !valid_reference(&evidence.reference)
+    {
+        return None;
+    }
+    if !artifact
+        .configmgr_version
+        .as_deref()
+        .is_some_and(|version| version.starts_with(SCCM_DEPLOYMENT_TEST_VERSION_PREFIX))
+    {
+        return None;
+    }
+
+    let catalog = classify_artifact_name(&artifact.display_name, SccmRole::Client);
+    if !catalog.supported_for_diagnosis || artifact.rotation != catalog.rotation {
+        return None;
+    }
+    deployment_source(&catalog.logical_name)
+}
+
+fn intent_fact_kinds(phrase: &str, payload: &str) -> Vec<DeploymentFactKind> {
+    let mut kinds = Vec::new();
+    let state = field_value(payload, "state");
+    let terminal = is_terminal(payload);
+
+    if matches!(phrase, "intent" | "targeted" | "requirements satisfied")
+        && state == Some("targeted")
+    {
+        kinds.push(DeploymentFactKind::IntentTargeted);
+    }
+    if matches!(
+        phrase,
+        "explicitly not targeted" | "not targeted" | "not applicable"
+    ) && state == Some("notApplicable")
+        && terminal
+    {
+        kinds.push(DeploymentFactKind::IntentNotApplicable);
+    }
+    if phrase == "requirements satisfied" {
+        kinds.push(DeploymentFactKind::RequirementsSatisfied);
+    }
+    if phrase == "requirements terminal failure"
+        && terminal
+        && field_value(payload, "requirementId").is_some_and(valid_safe_key)
+    {
+        kinds.push(DeploymentFactKind::RequirementsFailed);
+    }
+    if phrase == "dependency terminal failure"
+        && terminal
+        && field_value(payload, "dependencyCiId").is_some_and(valid_guid)
+    {
+        kinds.push(DeploymentFactKind::DependencyFailed);
+    }
+    kinds
+}
+
+fn discovery_fact_kinds(phrase: &str, payload: &str) -> Vec<DeploymentFactKind> {
+    match (phrase, field_value(payload, "detected")) {
+        ("detected", Some("true")) => vec![DeploymentFactKind::Detected],
+        ("detection false negative", Some("false")) => vec![DeploymentFactKind::DetectionMismatch],
+        _ => Vec::new(),
+    }
+}
+
+/// A nonzero exit code alone stays a symptom. A confirmed enforcement failure
+/// needs the terminal marker on the same complete record.
+fn enforce_fact_kinds(phrase: &str, payload: &str) -> Vec<DeploymentFactKind> {
+    let Some(exit_code) = field_value(payload, "exitCode").filter(|value| valid_exit_code(value))
+    else {
+        return Vec::new();
+    };
+    if !is_terminal(payload) {
+        return Vec::new();
+    }
+    match phrase {
+        "enforcement completed" if exit_code == "0" => vec![DeploymentFactKind::EnforceSucceeded],
+        "enforcement terminal failure" if exit_code != "0" => {
+            vec![DeploymentFactKind::EnforceFailed]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn content_fact_kinds(phrase: &str, payload: &str) -> Vec<DeploymentFactKind> {
+    let has_topology = field_value(payload, "packageId").is_some_and(valid_package_id)
+        && field_value(payload, "contentId").is_some_and(valid_guid)
+        && field_value(payload, "contentVersion")
+            .and_then(parse_content_version)
+            .is_some()
+        && field_value(payload, "distributionPointHostHandle").is_some_and(valid_safe_handle)
+        && field_value(payload, "requestId").is_some_and(valid_guid);
+
+    match phrase {
+        "content located" if has_topology => vec![DeploymentFactKind::ContentLocated],
+        "content request observed"
+            if has_topology && field_value(payload, "responseState") == Some("unknown") =>
+        {
+            vec![DeploymentFactKind::ContentRequested]
+        }
+        "cache commit completed"
+            if field_value(payload, "contentId").is_some_and(valid_guid)
+                && field_value(payload, "contentVersion")
+                    .and_then(parse_content_version)
+                    .is_some() =>
+        {
+            vec![DeploymentFactKind::CacheCommitted]
+        }
+        "cache commit terminal failure" if is_terminal(payload) && has_nonzero_error(payload) => {
+            vec![DeploymentFactKind::CacheFailed]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn transfer_fact_kinds(phrase: &str, payload: &str) -> Vec<DeploymentFactKind> {
+    let content_id = field_value(payload, "contentId").is_some_and(valid_guid);
+    let bits_job_id = field_value(payload, "bitsJobId").is_some_and(valid_guid);
+    match phrase {
+        "transfer started"
+            if content_id
+                && bits_job_id
+                && field_value(payload, "requestId").is_some_and(valid_guid) =>
+        {
+            vec![DeploymentFactKind::TransferStarted]
+        }
+        "transfer completed" if content_id && bits_job_id => {
+            vec![DeploymentFactKind::TransferCompleted]
+        }
+        "transfer terminal failure"
+            if content_id && bits_job_id && is_terminal(payload) && has_nonzero_error(payload) =>
+        {
+            vec![DeploymentFactKind::TransferFailed]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn report_fact_kinds(phrase: &str, payload: &str) -> Vec<DeploymentFactKind> {
+    match (phrase, field_value(payload, "state")) {
+        ("reported", Some("succeeded")) => vec![DeploymentFactKind::ReportSucceeded],
+        ("reported", Some("failed")) => vec![DeploymentFactKind::ReportFailed],
+        _ => Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Message grammar
+// ---------------------------------------------------------------------------
+
+const PUBLIC_MESSAGE_PREFIX: &str = "[sccm-public-message-v1] ";
+const EVENT_QUALIFIERS: [&str; 4] = ["SYNTHETIC", "FIXTURE", "deployment", "success"];
+
+fn deployment_event_payload(message: &str) -> Option<&str> {
+    message.strip_prefix(PUBLIC_MESSAGE_PREFIX)
+}
+
+/// The leading clause of a record, with documented capture and scope
+/// qualifiers removed. Only a phrase that starts the clause selects an event,
+/// so an embedded label such as `Base requirements satisfied` never matches
+/// `requirements satisfied`.
+fn event_phrase(payload: &str) -> String {
+    payload
+        .split_whitespace()
+        .take_while(|word| !word.contains('='))
+        .skip_while(|word| EVENT_QUALIFIERS.contains(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+/// Exact-token lookup. A duplicated label, or a label that is only the tail of
+/// a longer token, yields nothing rather than a guess.
+fn field_value<'a>(message: &'a str, key: &str) -> Option<&'a str> {
+    let marker = format!("{key}=");
+    let mut matches = message
+        .match_indices(&marker)
+        .filter(|(index, _)| *index == 0 || message.as_bytes()[index - 1].is_ascii_whitespace());
+    let (first, _) = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+
+    let value_start = first + marker.len();
+    let value = &message[value_start..];
+    let value_end = value
+        .find(|character: char| character.is_ascii_whitespace() || matches!(character, ',' | ';'))
+        .unwrap_or(value.len());
+    (!value[..value_end].is_empty()).then_some(&value[..value_end])
+}
+
+fn is_terminal(payload: &str) -> bool {
+    field_value(payload, "terminal") == Some("true")
+}
+
+fn has_nonzero_error(payload: &str) -> bool {
+    field_value(payload, "errorCode")
+        .and_then(parse_hex_u32)
+        .is_some_and(|value| value != 0)
+}
+
+fn parse_hex_u32(value: &str) -> Option<u32> {
+    let hex = value.strip_prefix("0x")?;
+    (hex.len() == 8 && hex.chars().all(|character| character.is_ascii_hexdigit()))
+        .then(|| u32::from_str_radix(hex, 16).ok())
+        .flatten()
+}
+
+fn parse_content_version(value: &str) -> Option<u32> {
+    if value.len() > 1 && value.starts_with('0') {
+        return None;
+    }
+    value
+        .chars()
+        .all(|character| character.is_ascii_digit())
+        .then(|| value.parse::<u32>().ok())
+        .flatten()
+}
+
+fn valid_exit_code(value: &str) -> bool {
+    parse_content_version(value).is_some()
+}
+
+fn valid_guid(value: &str) -> bool {
+    value.len() == 36
+        && value.chars().enumerate().all(|(index, character)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                character == '-'
+            } else {
+                character.is_ascii_hexdigit()
+            }
+        })
+}
+
+fn valid_package_id(value: &str) -> bool {
+    value.len() == 8
+        && value
+            .chars()
+            .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit())
+}
+
+/// Distribution point identities stay opaque handles. A raw host name is never
+/// admitted, so no public output can carry a real server name.
+fn valid_safe_handle(value: &str) -> bool {
+    let Some(body) = value.strip_prefix("safe:") else {
+        return false;
+    };
+    !body.is_empty()
+        && body.len() <= 128
+        && body.split(':').all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with('-')
+                && !segment.ends_with('-')
+                && segment.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
+        })
+}
+
+fn valid_safe_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '-'
+        })
+}
+
+fn valid_reference(reference: &SccmEvidenceRef) -> bool {
+    valid_public_id(&reference.artifact_id)
+        && valid_public_id(&reference.entry_id)
+        && matches!(
+            (reference.line_start, reference.line_end),
+            (Some(start), Some(end)) if start > 0 && end >= start
+        )
+}
+
+fn valid_public_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':')
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Chronology
+// ---------------------------------------------------------------------------
+
+/// Records in one physical artifact order by line. Records in different
+/// artifacts order only when both carry a valid offset. Anything else is
+/// incomparable and must downgrade confidence, never assume a sequence.
+fn compare_fact_order(left: &DeploymentFact, right: &DeploymentFact) -> Option<Ordering> {
+    if left.reference.artifact_id == right.reference.artifact_id {
+        return Some(
+            left.reference
+                .line_start
+                .cmp(&right.reference.line_start)
+                .then_with(|| left.reference.line_end.cmp(&right.reference.line_end)),
+        );
+    }
+    if left.time_comparable && right.time_comparable {
+        return Some(left.utc_millis.cmp(&right.utc_millis));
+    }
+    None
+}
+
+fn fact_is_strictly_before(earlier: &DeploymentFact, later: &DeploymentFact) -> bool {
+    compare_fact_order(earlier, later) == Some(Ordering::Less)
+}
+
+fn chain_has_usable_order(facts: &[&DeploymentFact]) -> bool {
+    facts
+        .windows(2)
+        .all(|pair| fact_is_strictly_before(pair[0], pair[1]))
+}
+
+fn compare_references(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> Ordering {
+    left.artifact_id
+        .cmp(&right.artifact_id)
+        .then_with(|| left.line_start.cmp(&right.line_start))
+        .then_with(|| left.line_end.cmp(&right.line_end))
+        .then_with(|| left.entry_id.cmp(&right.entry_id))
+}
+
+// ---------------------------------------------------------------------------
+// Transaction composition
+// ---------------------------------------------------------------------------
+
+struct Outcome {
+    phase: SccmDeploymentPhase,
+    state: SccmDeploymentState,
+    classification: SccmDeploymentClassification,
+    confidence: SccmDeploymentConfidence,
+    last_successful_phase: Option<SccmDeploymentPhase>,
+    next_artifact: Option<SccmDeploymentArtifactRequest>,
+    coverage_gap_artifact_ids: Vec<String>,
+}
+
+fn build_transaction(
+    assignment_id: &str,
+    facts: &[&DeploymentFact],
+    coverage: &[SccmDeploymentCoverage],
+) -> Option<SccmDeploymentTransaction> {
+    let ci_id = unique_value(facts.iter().filter_map(|fact| fact.ci_id.clone()))?;
+    let key = build_key(assignment_id, &ci_id, facts);
+    let outcome = resolve_outcome(facts, coverage);
+
+    Some(SccmDeploymentTransaction {
+        transaction_id: format!("deployment:assignment:{assignment_id}"),
+        counterpart_ready_fact: counterpart_ready_fact(facts),
+        key,
+        phase: outcome.phase,
+        state: outcome.state,
+        last_successful_phase: outcome.last_successful_phase,
+        classification: outcome.classification,
+        confidence: outcome.confidence,
+        confidence_ceiling: outcome.confidence,
+        coverage_gap_artifact_ids: outcome.coverage_gap_artifact_ids,
+        next_artifact: outcome.next_artifact,
+        evidence: merged_evidence(facts),
+    })
+}
+
+/// Distinct values collapse to one key only when they agree. Two different
+/// values are ambiguity, not a choice.
+fn unique_value<T: Ord>(values: impl Iterator<Item = T>) -> Option<T> {
+    let mut distinct = values.collect::<BTreeSet<_>>();
+    (distinct.len() == 1)
+        .then(|| distinct.pop_first())
+        .flatten()
+}
+
+fn build_key(assignment_id: &str, ci_id: &str, facts: &[&DeploymentFact]) -> SccmDeploymentKey {
+    let package_id = unique_value(facts.iter().filter_map(|fact| fact.package_id.clone()));
+    let content_id = unique_value(facts.iter().filter_map(|fact| fact.content_id.clone()));
+    let content_version = unique_value(facts.iter().filter_map(|fact| fact.content_version));
+    let distribution_point_host_handle = unique_value(
+        facts
+            .iter()
+            .filter_map(|fact| fact.distribution_point_host_handle.clone()),
+    );
+    let request_id = unique_value(facts.iter().filter_map(|fact| fact.request_id.clone()));
+    let has_topology = package_id.is_some()
+        && content_id.is_some()
+        && content_version.is_some()
+        && distribution_point_host_handle.is_some()
+        && request_id.is_some();
+
+    SccmDeploymentKey {
+        key_profile_kind: if has_topology {
+            SccmDeploymentKeyProfileKind::AssignmentCiContentTopology
+        } else {
+            SccmDeploymentKeyProfileKind::AssignmentCi
+        },
+        assignment_id: assignment_id.to_owned(),
+        ci_id: ci_id.to_owned(),
+        package_id,
+        content_id,
+        content_version,
+        distribution_point_host_handle,
+        request_id,
+        bits_job_id: unique_value(facts.iter().filter_map(|fact| fact.bits_job_id.clone())),
+        product_code: unique_value(facts.iter().filter_map(|fact| fact.product_code.clone())),
+        exit_code: unique_value(
+            facts
+                .iter()
+                .filter(|fact| {
+                    matches!(
+                        fact.kind,
+                        DeploymentFactKind::EnforceSucceeded | DeploymentFactKind::EnforceFailed
+                    )
+                })
+                .filter_map(|fact| fact.exit_code.clone()),
+        ),
+        confidence: SccmDeploymentKeyConfidence::Exact,
+        extraction_profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
+    }
+}
+
+/// One reference per physical artifact, spanning the first through the last
+/// cited record. Callers can reopen exactly the bytes that produced the claim.
+fn merged_evidence(facts: &[&DeploymentFact]) -> Vec<SccmEvidenceRef> {
+    let mut spans = BTreeMap::<&str, (u32, u32)>::new();
+    for fact in facts {
+        let (Some(start), Some(end)) = (fact.reference.line_start, fact.reference.line_end) else {
+            continue;
+        };
+        spans
+            .entry(fact.reference.artifact_id.as_str())
+            .and_modify(|span| {
+                span.0 = span.0.min(start);
+                span.1 = span.1.max(end);
+            })
+            .or_insert((start, end));
+    }
+
+    spans
+        .into_iter()
+        .map(|(artifact_id, (start, end))| SccmEvidenceRef {
+            artifact_id: artifact_id.to_owned(),
+            entry_id: format!("{artifact_id}:{start}-{end}"),
+            line_start: Some(start),
+            line_end: Some(end),
+        })
+        .collect()
+}
+
+fn first_fact<'a>(
+    facts: &[&'a DeploymentFact],
+    kind: DeploymentFactKind,
+) -> Option<&'a DeploymentFact> {
+    facts.iter().copied().find(|fact| fact.kind == kind)
+}
+
+/// A failure is only unrecovered when no later success of the same phase can be
+/// ordered strictly after it.
+fn unrecovered_failure<'a>(
+    facts: &[&'a DeploymentFact],
+    failure_kind: DeploymentFactKind,
+    success_kind: DeploymentFactKind,
+) -> Option<&'a DeploymentFact> {
+    facts
+        .iter()
+        .copied()
+        .filter(|fact| fact.kind == failure_kind)
+        .find(|failure| {
+            !facts.iter().any(|candidate| {
+                candidate.kind == success_kind && fact_is_strictly_before(failure, candidate)
+            })
+        })
+}
+
+fn counterpart_ready_fact(facts: &[&DeploymentFact]) -> Option<SccmDeploymentCounterpartFact> {
+    let fact = first_fact(facts, DeploymentFactKind::ContentLocated)
+        .or_else(|| first_fact(facts, DeploymentFactKind::ContentRequested))?;
+    let offset_minutes = fact.offset_minutes?;
+    if !fact.time_comparable {
+        return None;
+    }
+
+    Some(SccmDeploymentCounterpartFact {
+        fact_kind: SccmDeploymentCounterpartFactKind::ClientContentRequest,
+        phase: SccmDeploymentPhase::LocateContent,
+        extraction_profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
+        package_id: fact.package_id.clone()?,
+        content_id: fact.content_id.clone()?,
+        content_version: fact.content_version?,
+        distribution_point_host_handle: fact.distribution_point_host_handle.clone()?,
+        request_id: fact.request_id.clone()?,
+        timestamp_provenance: SccmDeploymentTimestampProvenance {
+            kind: SccmDeploymentTimestampProvenanceKind::ExplicitOffset,
+            offset_minutes,
+            normalized_utc: format_normalized_utc(fact.utc_millis?)?,
+        },
+        evidence: fact.reference.clone(),
+    })
+}
+
+fn format_normalized_utc(millis: i64) -> Option<String> {
+    let timestamp = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)?;
+    Some(if millis.rem_euclid(1_000) == 0 {
+        timestamp.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+    } else {
+        timestamp.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+    })
+}
+
+fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage]) -> Outcome {
+    let mut chain: Vec<&DeploymentFact> = Vec::new();
+    let mut last: Option<SccmDeploymentPhase> = None;
+
+    if let Some(not_applicable) = first_fact(facts, DeploymentFactKind::IntentNotApplicable) {
+        return conclude(
+            &[not_applicable],
+            SccmDeploymentPhase::Intent,
+            SccmDeploymentState::NotTargeted,
+            SccmDeploymentClassification::NotTargeted,
+            None,
+        );
+    }
+
+    let Some(intent) = first_fact(facts, DeploymentFactKind::IntentTargeted) else {
+        return insufficient(SccmDeploymentPhase::Intent, last, REASON_INTENT, coverage);
+    };
+    chain.push(intent);
+    last = Some(SccmDeploymentPhase::Intent);
+
+    if let Some(failure) = first_fact(facts, DeploymentFactKind::RequirementsFailed)
+        .or_else(|| first_fact(facts, DeploymentFactKind::DependencyFailed))
+    {
+        chain.push(failure);
+        return conclude(
+            &chain,
+            SccmDeploymentPhase::Requirements,
+            SccmDeploymentState::Failed,
+            SccmDeploymentClassification::ConfirmedFailure,
+            last,
+        );
+    }
+    let Some(requirements) = first_fact(facts, DeploymentFactKind::RequirementsSatisfied) else {
+        return insufficient(
+            SccmDeploymentPhase::Requirements,
+            last,
+            REASON_REQUIREMENTS,
+            coverage,
+        );
+    };
+    chain.push(requirements);
+    last = Some(SccmDeploymentPhase::Requirements);
+
+    let Some(located) = first_fact(facts, DeploymentFactKind::ContentLocated) else {
+        let reason = if first_fact(facts, DeploymentFactKind::ContentRequested).is_some() {
+            REASON_LOCATION_RESPONSE_MISSING
+        } else {
+            match coverage_for_group(coverage, GROUP_CONTENT).map(|row| &row.state) {
+                Some(SccmCoverageState::Partial) => REASON_LOCATION_ROTATION,
+                Some(SccmCoverageState::AccessDenied) => REASON_LOCATION_ACCESS_DENIED,
+                _ => REASON_LOCATION_ABSENT,
+            }
+        };
+        return insufficient(SccmDeploymentPhase::LocateContent, last, reason, coverage);
+    };
+    chain.push(located);
+    last = Some(SccmDeploymentPhase::LocateContent);
+
+    if let Some(failure) = unrecovered_failure(
+        facts,
+        DeploymentFactKind::TransferFailed,
+        DeploymentFactKind::TransferCompleted,
+    ) {
+        let started = first_fact(facts, DeploymentFactKind::TransferStarted);
+        let mut failed_chain = chain.clone();
+        failed_chain.extend(started);
+        failed_chain.push(failure);
+        return conclude(
+            &failed_chain,
+            SccmDeploymentPhase::Transfer,
+            SccmDeploymentState::Failed,
+            SccmDeploymentClassification::ConfirmedFailure,
+            last,
+        );
+    }
+    let started = first_fact(facts, DeploymentFactKind::TransferStarted);
+    let completed = first_fact(facts, DeploymentFactKind::TransferCompleted);
+    let (Some(started), Some(completed)) = (started, completed) else {
+        return insufficient(
+            SccmDeploymentPhase::Transfer,
+            last,
+            REASON_TRANSFER,
+            coverage,
+        );
+    };
+    chain.push(started);
+    chain.push(completed);
+    last = Some(SccmDeploymentPhase::Transfer);
+
+    if let Some(failure) = unrecovered_failure(
+        facts,
+        DeploymentFactKind::CacheFailed,
+        DeploymentFactKind::CacheCommitted,
+    ) {
+        let mut failed_chain = chain.clone();
+        failed_chain.push(failure);
+        return conclude(
+            &failed_chain,
+            SccmDeploymentPhase::Cache,
+            SccmDeploymentState::Failed,
+            SccmDeploymentClassification::ConfirmedFailure,
+            last,
+        );
+    }
+    let Some(cached) = first_fact(facts, DeploymentFactKind::CacheCommitted) else {
+        return insufficient(SccmDeploymentPhase::Cache, last, REASON_CACHE, coverage);
+    };
+    chain.push(cached);
+    last = Some(SccmDeploymentPhase::Cache);
+
+    if let Some(failure) = unrecovered_failure(
+        facts,
+        DeploymentFactKind::EnforceFailed,
+        DeploymentFactKind::EnforceSucceeded,
+    ) {
+        let mut failed_chain = chain.clone();
+        failed_chain.push(failure);
+        return conclude(
+            &failed_chain,
+            SccmDeploymentPhase::Enforce,
+            SccmDeploymentState::Failed,
+            SccmDeploymentClassification::ConfirmedFailure,
+            last,
+        );
+    }
+    let Some(enforced) = first_fact(facts, DeploymentFactKind::EnforceSucceeded) else {
+        return insufficient(SccmDeploymentPhase::Enforce, last, REASON_ENFORCE, coverage);
+    };
+    chain.push(enforced);
+    last = Some(SccmDeploymentPhase::Enforce);
+
+    if let Some(mismatch) = first_fact(facts, DeploymentFactKind::DetectionMismatch) {
+        let mut mismatch_chain = chain.clone();
+        mismatch_chain.push(mismatch);
+        return conclude(
+            &mismatch_chain,
+            SccmDeploymentPhase::Detect,
+            SccmDeploymentState::DetectionMismatch,
+            SccmDeploymentClassification::Symptom,
+            last,
+        );
+    }
+    let Some(detected) = first_fact(facts, DeploymentFactKind::Detected) else {
+        return insufficient(SccmDeploymentPhase::Detect, last, REASON_DETECT, coverage);
+    };
+    chain.push(detected);
+    last = Some(SccmDeploymentPhase::Detect);
+
+    if let Some(failure) = unrecovered_failure(
+        facts,
+        DeploymentFactKind::ReportFailed,
+        DeploymentFactKind::ReportSucceeded,
+    ) {
+        let mut failed_chain = chain.clone();
+        failed_chain.push(failure);
+        return conclude(
+            &failed_chain,
+            SccmDeploymentPhase::Report,
+            SccmDeploymentState::Failed,
+            SccmDeploymentClassification::ConfirmedFailure,
+            last,
+        );
+    }
+    let Some(reported) = first_fact(facts, DeploymentFactKind::ReportSucceeded) else {
+        return insufficient(SccmDeploymentPhase::Report, last, REASON_REPORT, coverage);
+    };
+    chain.push(reported);
+
+    conclude(
+        &chain,
+        SccmDeploymentPhase::Report,
+        SccmDeploymentState::Succeeded,
+        SccmDeploymentClassification::Success,
+        last,
+    )
+}
+
+/// Terminal and success outcomes require a usable chronology through every
+/// prerequisite phase. Without one the transaction becomes a low-confidence
+/// symptom that names the missing ordering evidence.
+fn conclude(
+    chain: &[&DeploymentFact],
+    phase: SccmDeploymentPhase,
+    state: SccmDeploymentState,
+    classification: SccmDeploymentClassification,
+    last_successful_phase: Option<SccmDeploymentPhase>,
+) -> Outcome {
+    if !chain_has_usable_order(chain) {
+        return Outcome {
+            phase,
+            state: SccmDeploymentState::InsufficientEvidence,
+            classification: SccmDeploymentClassification::Symptom,
+            confidence: SccmDeploymentConfidence::Low,
+            last_successful_phase,
+            next_artifact: Some(SccmDeploymentArtifactRequest {
+                logical_artifact_id: phase.artifact_group().to_owned(),
+                reason: REASON_CHRONOLOGY.to_owned(),
+            }),
+            coverage_gap_artifact_ids: Vec::new(),
+        };
+    }
+
+    let (confidence, last_successful_phase) = match state {
+        SccmDeploymentState::Succeeded => (SccmDeploymentConfidence::High, Some(phase)),
+        SccmDeploymentState::DetectionMismatch => {
+            (SccmDeploymentConfidence::Medium, last_successful_phase)
+        }
+        _ => (SccmDeploymentConfidence::High, last_successful_phase),
+    };
+
+    Outcome {
+        phase,
+        state,
+        classification,
+        confidence,
+        last_successful_phase,
+        next_artifact: None,
+        coverage_gap_artifact_ids: Vec::new(),
+    }
+}
+
+fn insufficient(
+    phase: SccmDeploymentPhase,
+    last_successful_phase: Option<SccmDeploymentPhase>,
+    reason: &str,
+    coverage: &[SccmDeploymentCoverage],
+) -> Outcome {
+    let group = phase.artifact_group();
+    Outcome {
+        phase,
+        state: SccmDeploymentState::InsufficientEvidence,
+        classification: SccmDeploymentClassification::InsufficientEvidence,
+        confidence: SccmDeploymentConfidence::Low,
+        last_successful_phase,
+        next_artifact: Some(SccmDeploymentArtifactRequest {
+            logical_artifact_id: group.to_owned(),
+            reason: reason.to_owned(),
+        }),
+        coverage_gap_artifact_ids: coverage_for_group(coverage, group)
+            .map(|row| row.artifact_ids.clone())
+            .unwrap_or_default(),
+    }
+}

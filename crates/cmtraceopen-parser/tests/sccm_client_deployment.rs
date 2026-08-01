@@ -218,7 +218,9 @@ fn declared_transaction_outcomes_are_reproduced_for_every_scenario() {
             );
             assert_eq!(
                 confidence_name(produced.confidence),
-                declared["confidence"].as_str().expect("declared confidence"),
+                declared["confidence"]
+                    .as_str()
+                    .expect("declared confidence"),
                 "{label}: confidence"
             );
             assert_eq!(
@@ -391,7 +393,9 @@ fn counterpart_ready_facts_match_the_declared_content_request_boundary() {
 
             assert_eq!(
                 phase_name(fact.phase),
-                declared_fact["phase"].as_str().expect("declared fact phase"),
+                declared_fact["phase"]
+                    .as_str()
+                    .expect("declared fact phase"),
                 "{label}: counterpart phase"
             );
             assert_eq!(

@@ -1076,6 +1076,7 @@ fn role_sort_key(role: &SccmRole) -> &str {
 fn coverage_sort_key(state: &SccmCoverageState) -> &'static str {
     match state {
         SccmCoverageState::Captured => "captured",
+        SccmCoverageState::Partial => "partial",
         SccmCoverageState::Absent => "absent",
         SccmCoverageState::AccessDenied => "accessDenied",
         SccmCoverageState::Capped => "capped",

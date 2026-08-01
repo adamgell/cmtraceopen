@@ -14,6 +14,8 @@ const INVALID_SCCM_ROLE_MESSAGE: &str =
 #[serde(rename_all = "camelCase")]
 pub enum SccmCoverageState {
     Captured,
+    /// Bytes were captured but they do not form a complete logical record.
+    Partial,
     Absent,
     AccessDenied,
     Capped,
