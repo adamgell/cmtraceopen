@@ -73,6 +73,27 @@ describe("ElevationBanner restart outcomes", () => {
     ).toBeVisible();
   });
 
+  it("recovers when the coordinator breaks its never-throws contract", async () => {
+    // requestElevatedRestart rethrows if its internal contract is ever broken.
+    // Unhandled, that stuck the banner on "requesting" for good and escaped as
+    // an unhandled promise rejection.
+    requestElevatedRestartMock.mockRejectedValue(new Error("coordinator broke"));
+    render(<ElevationBanner elevation={ELEVATION} />);
+
+    clickRestart();
+
+    expect(
+      await screen.findByText(
+        "Administrator restart could not be started; coverage remains partial.",
+      ),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Restart as administrator" }),
+      ).toBeEnabled(),
+    );
+  });
+
   it("confirms a successful launch", async () => {
     requestElevatedRestartMock.mockResolvedValue({ status: "launched" });
     render(<ElevationBanner elevation={ELEVATION} />);

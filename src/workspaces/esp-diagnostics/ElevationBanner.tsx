@@ -4,7 +4,10 @@ import {
   ShieldArrowRightRegular,
   WarningShieldRegular,
 } from "@fluentui/react-icons";
-import { requestElevatedRestart } from "../../lib/elevation";
+import {
+  requestElevatedRestart,
+  type ElevationOutcome,
+} from "../../lib/elevation";
 import { buildElevationRequest } from "../../lib/elevation-request";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
@@ -28,14 +31,26 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
   // coordinator, which never throws and collapses concurrent requests.
   const restart = async () => {
     setActionState("requesting");
-    const outcome = await requestElevatedRestart(
-      buildElevationRequest({
-        reason: "coverageRecommended",
-        workspace: "esp-diagnostics",
-        // A coverage recommendation, not a source retry: workspace only.
-        source: null,
-      }),
-    );
+
+    let outcome: ElevationOutcome;
+    try {
+      outcome = await requestElevatedRestart(
+        buildElevationRequest({
+          reason: "coverageRecommended",
+          workspace: "esp-diagnostics",
+          // A coverage recommendation, not a source retry: workspace only.
+          source: null,
+        }),
+      );
+    } catch (error) {
+      // The coordinator is documented never to throw, but it rethrows if that
+      // contract is ever broken. Without this the banner sticks on "requesting"
+      // for good and the rejection escapes as an unhandled promise.
+      console.error("[elevation] banner restart request threw", { error });
+      setActionState("failed");
+      return;
+    }
+
     switch (outcome.status) {
       case "launched":
         setActionState("requested");
