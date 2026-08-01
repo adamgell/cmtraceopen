@@ -1,0 +1,60 @@
+{
+  "scenario": "report-submission-failure",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "compliant",
+    "rationale": "allEvaluatedSettingsCompliant"
+  },
+  "reporting": {
+    "state": "failed",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-1"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-report-submission-failed",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "evt-2"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "compliance-device-compliant",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "evt-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a submission failure is a reporting problem and leaves the local verdict compliant"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "available"
+    }
+  ]
+}

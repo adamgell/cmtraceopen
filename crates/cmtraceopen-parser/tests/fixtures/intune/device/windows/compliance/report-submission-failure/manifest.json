@@ -1,0 +1,42 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "report-submission-failure",
+  "workload": "device/windows/compliance",
+  "description": "Every local setting passed but the compliance report failed to submit, so the service holds no result from this evaluation.",
+  "generatedAtUtc": "2026-07-31T12:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-context",
+      "family": "deviceContext",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device-context.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/device-context/device-context.json",
+      "relativePath": "evidence/device-context/current/device-context.json",
+      "bytesCopied": 1228,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-events",
+      "family": "mdmEvents",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "mdm-events.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/mdm-events/mdm-events.json",
+      "relativePath": "evidence/mdm-events/current/mdm-events.json",
+      "bytesCopied": 3076,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

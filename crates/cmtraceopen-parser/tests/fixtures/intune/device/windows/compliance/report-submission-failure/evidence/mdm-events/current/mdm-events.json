@@ -1,0 +1,110 @@
+{ "syntheticFixture": "SYNTHETIC FIXTURE - synthetic Intune compliance evidence, no real device data",
+  "complianceInputVersion": 1,
+  "kind": "windowsEvents",
+  "records": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "evt-1",
+          "sourceArtifactId": "mdm-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "mdm-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T10:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T10:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T12:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+      "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+      "eventId": 813,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 1,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "SettingUri",
+          "value": "./Device/Vendor/MSFT/Policy/Result/System/BitLockerStatus"
+        },
+        {
+          "name": "Scope",
+          "value": "device"
+        },
+        {
+          "name": "EvaluationResult",
+          "value": "compliant"
+        },
+        {
+          "name": "DisplayName",
+          "value": "BitLocker status"
+        }
+      ],
+      "message": null
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "evt-2",
+          "sourceArtifactId": "mdm-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "mdm-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 2,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T10:05:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T10:05:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T12:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin",
+      "provider": "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+      "eventId": 821,
+      "level": "error",
+      "task": null,
+      "keywords": null,
+      "recordId": 2,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "ReportStatus",
+          "value": "failed"
+        },
+        {
+          "name": "ReportId",
+          "value": "synthetic-report-0003"
+        },
+        {
+          "name": "ErrorCode",
+          "value": "0x80072EE2"
+        }
+      ],
+      "message": null
+    }
+  ]
+}
