@@ -324,6 +324,77 @@ fn rotations_are_one_group_with_stable_physical_order_and_reordering_is_determin
 }
 
 #[test]
+fn rotation_lineage_cannot_cross_path_fingerprints_across_distinct_rotations() {
+    let mut bundle = load_bundle("rotations");
+    bundle.artifacts[1].path_fingerprint = Some("synthetic-root-b".to_owned());
+    bundle.artifacts[1].relative_path =
+        Some("evidence/client-app-enforce/root-b/lo/AppEnforce.lo_".to_owned());
+
+    assert_eq!(
+        assess_client_intake(&bundle),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "one immutable lineage cannot combine rotations from distinct configured roots"
+    );
+}
+
+#[test]
+fn fragment_order_is_source_identity_then_rotation_rank() {
+    let fixture = load_bundle("rotations");
+    let mut root_a_current = fixture.artifacts[0].clone();
+    root_a_current.relative_path =
+        Some("evidence/client-app-enforce/root-a/current/AppEnforce.log".to_owned());
+    let mut root_a_lo = fixture.artifacts[1].clone();
+    root_a_lo.relative_path =
+        Some("evidence/client-app-enforce/root-a/lo/AppEnforce.lo_".to_owned());
+
+    let mut root_b_current = root_a_current.clone();
+    root_b_current.artifact.artifact_id = "fixture-rotations-app-enforce-root-b-current".to_owned();
+    root_b_current.path_fingerprint = Some("synthetic-root-b".to_owned());
+    root_b_current.rotation_lineage = Some("synthetic:app-enforce-root-b".to_owned());
+    root_b_current.relative_path =
+        Some("evidence/client-app-enforce/root-b/current/AppEnforce.log".to_owned());
+
+    let mut root_b_lo = root_a_lo.clone();
+    root_b_lo.artifact.artifact_id = "fixture-rotations-app-enforce-root-b-lo".to_owned();
+    root_b_lo.path_fingerprint = Some("synthetic-root-b".to_owned());
+    root_b_lo.rotation_lineage = Some("synthetic:app-enforce-root-b".to_owned());
+    root_b_lo.relative_path =
+        Some("evidence/client-app-enforce/root-b/lo/AppEnforce.lo_".to_owned());
+
+    let bundle = SccmClientIntakeBundle {
+        artifacts: vec![root_b_lo, root_a_current, root_b_current, root_a_lo],
+    };
+    let assessment = assess_client_intake(&bundle).expect("two source lineages are valid");
+    let ordered_ids = assessment
+        .group("client-app-enforce")
+        .expect("app enforcement group")
+        .fragments
+        .iter()
+        .map(|fragment| fragment.artifact_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        ordered_ids,
+        [
+            "fixture-rotations-app-enforce-root-a-current",
+            "fixture-rotations-app-enforce-root-a-lo",
+            "fixture-rotations-app-enforce-root-b-current",
+            "fixture-rotations-app-enforce-root-b-lo",
+        ],
+        "stable source/path identity must precede rotation rank"
+    );
+
+    let mut reordered = bundle;
+    reordered.artifacts.reverse();
+    assert_eq!(
+        serde_json::to_string(&assess_client_intake(&reordered).expect("reordered intake"))
+            .expect("reordered JSON"),
+        serde_json::to_string(&assessment).expect("assessment JSON"),
+        "source-first ordering must remain independent of declaration order"
+    );
+}
+
+#[test]
 fn missing_access_denied_and_capped_sources_remain_exact_coverage_states() {
     let missing = assessment("missing-root");
     assert!(missing

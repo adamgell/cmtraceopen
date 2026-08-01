@@ -538,15 +538,28 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             return Err(SccmClientIntakeError::InvalidRotationLineage);
         }
 
+        let path_fingerprint = match source.path_fingerprint.as_deref() {
+            Some(fingerprint) if !is_safe_path_identity(fingerprint) => {
+                return Err(SccmClientIntakeError::InvalidPathFingerprint);
+            }
+            Some(fingerprint) => Some(fingerprint.to_ascii_lowercase()),
+            None => None,
+        };
+
         let basename =
             source_basename_identity(&source.artifact.display_name, &source.artifact.rotation);
         if let Some(lineage) = source.rotation_lineage.as_deref() {
-            if let Some(bound_basename) = rotation_lineage_bindings.get(lineage) {
-                if bound_basename != &basename {
+            if let Some((bound_basename, bound_fingerprint)) =
+                rotation_lineage_bindings.get(lineage)
+            {
+                if bound_basename != &basename || bound_fingerprint != &path_fingerprint {
                     return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
                 }
             } else {
-                rotation_lineage_bindings.insert(lineage.to_owned(), basename.clone());
+                rotation_lineage_bindings.insert(
+                    lineage.to_owned(),
+                    (basename.clone(), path_fingerprint.clone()),
+                );
             }
             if !lineage_rotation_identities.insert((
                 lineage.to_owned(),
@@ -556,11 +569,7 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             }
         }
 
-        if let Some(fingerprint) = source.path_fingerprint.as_deref() {
-            if !is_safe_path_identity(fingerprint) {
-                return Err(SccmClientIntakeError::InvalidPathFingerprint);
-            }
-            let fingerprint = fingerprint.to_ascii_lowercase();
+        if let Some(fingerprint) = path_fingerprint {
             let lineage = source
                 .rotation_lineage
                 .as_ref()
@@ -823,19 +832,17 @@ fn compare_fragments(
     left: &SccmClientIntakeFragment,
     right: &SccmClientIntakeFragment,
 ) -> Ordering {
-    compare_rotation(&left.rotation, &right.rotation)
+    left.path_fingerprint
+        .as_deref()
+        .unwrap_or_default()
+        .cmp(right.path_fingerprint.as_deref().unwrap_or_default())
         .then_with(|| {
             left.rotation_lineage
                 .as_deref()
                 .unwrap_or_default()
                 .cmp(right.rotation_lineage.as_deref().unwrap_or_default())
         })
-        .then_with(|| {
-            left.path_fingerprint
-                .as_deref()
-                .unwrap_or_default()
-                .cmp(right.path_fingerprint.as_deref().unwrap_or_default())
-        })
+        .then_with(|| compare_rotation(&left.rotation, &right.rotation))
         .then_with(|| left.basename.cmp(&right.basename))
         .then_with(|| left.artifact_id.cmp(&right.artifact_id))
 }
