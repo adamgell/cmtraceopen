@@ -84,9 +84,51 @@ pub struct FolderListingResult {
 /// only: the success path pays nothing, and the probe answers the one question
 /// that matters, which is whether the operating system refused access.
 ///
+/// The path's *kind* is established first, and that ordering is load-bearing.
+/// On Windows `CreateFileW` without `FILE_FLAG_BACKUP_SEMANTICS` — which is what
+/// `fs::File::open` issues — fails on a directory with `ERROR_ACCESS_DENIED`
+/// (5), and std maps 5 to `ErrorKind::PermissionDenied`. Probing the open before
+/// the kind therefore reported every folder that reached the file lane as Access
+/// Denied, which raised a spurious "Restart as administrator?" prompt whose
+/// elevated retry re-attempted the folder as a file and failed again. Statting
+/// first also makes the answer platform-independent: `fs::metadata` uses
+/// `FILE_FLAG_BACKUP_SEMANTICS` on Windows and succeeds on directories, so the
+/// folder verdict is the same on every host.
+///
 /// Anything other than a permission refusal keeps the parser's own message,
 /// which is more specific than a generic I/O error would be.
 fn classify_open_failure(path: &str, reason: String) -> crate::error::AppError {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => {
+            // Mirrors `list_log_folder`'s "path is not a folder": the two lanes
+            // now reject each other's kind the same way, and neither can dress a
+            // kind mismatch up as a permission problem.
+            return crate::error::AppError::InvalidInput(format!(
+                "path is a folder, not a file: {path}"
+            ));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            // The stat itself was refused, so the kind is genuinely unknowable
+            // and the refusal is the real failure. `fs::metadata` needs traverse
+            // permission on the parent, not read permission on the target, so an
+            // unreadable file still stats fine and falls through to the open
+            // probe below.
+            if let denied @ crate::error::AppError::AccessDenied { .. } =
+                crate::error::AppError::from_source_io(
+                    error,
+                    crate::error::SourceOperation::ReadFile,
+                    Some(path),
+                )
+            {
+                return denied;
+            }
+            // Missing, or any other stat failure: the parser's message is more
+            // specific than a re-probe would be.
+            return crate::error::AppError::Internal(reason);
+        }
+    }
+
     let Err(error) = fs::File::open(path) else {
         // Readable now, so this was a genuine parse failure, not a permission one.
         return crate::error::AppError::Internal(reason);
@@ -721,6 +763,38 @@ mod tests {
         // The file opens fine, so the parser's own message survives and no
         // elevation offer can be produced.
         assert!(matches!(error, crate::error::AppError::Internal(reason) if reason == "unsupported format"));
+    }
+
+    /// A folder reaching the file lane must be classified by its kind, never by
+    /// whatever the failed open happened to report.
+    ///
+    /// Deliberately ungated. On Windows `CreateFileW` without
+    /// `FILE_FLAG_BACKUP_SEMANTICS` fails a directory with
+    /// `ERROR_ACCESS_DENIED` (5), which std maps to `PermissionDenied`, so
+    /// probing the open first reported every dropped folder as Access Denied and
+    /// raised a spurious "Restart as administrator?" prompt. On Unix the same
+    /// probe succeeds and the parser's message survives. Establishing the kind
+    /// first is what makes one assertion hold on both.
+    #[test]
+    fn a_directory_is_classified_by_its_kind_not_by_the_failed_open() {
+        let dir = create_temp_dir("file-ops-directory");
+
+        let error = super::classify_open_failure(
+            dir.to_string_lossy().as_ref(),
+            "parser said something less specific".to_string(),
+        );
+
+        match error {
+            crate::error::AppError::InvalidInput(message) => {
+                assert!(
+                    message.contains("folder"),
+                    "the verdict must name the kind mismatch: {message}"
+                );
+            }
+            other => panic!("expected a folder verdict, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&dir).expect("remove temp dir");
     }
 
     #[test]

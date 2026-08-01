@@ -1,5 +1,6 @@
 import {
   getKnownLogSources,
+  inspectPathKind,
   listLogSourceFolder,
   openLogFile,
   openLogSourceFile,
@@ -402,6 +403,16 @@ async function loadFolderProgressive(
     parseMs,
   });
 }
+/**
+ * Recover from a selected file that would not load inside a folder source.
+ *
+ * The folder listing itself succeeded, so this is a recovery rather than a
+ * rethrow and the failure never reaches `loadLogSource`'s catch. That makes it
+ * the second place an Access Denied verdict has to be honoured: dropping it here
+ * reported a protected file as a generic load failure and left the user with no
+ * route to elevation, which is the same misreport the folder lane exists to
+ * prevent.
+ */
 async function recoverFromSelectedFileLoadFailure(
   source: LogSource,
   entries: FolderEntry[],
@@ -409,7 +420,7 @@ async function recoverFromSelectedFileLoadFailure(
   error: unknown
 ): Promise<LoadLogSourceResult> {
   const state = useLogStore.getState();
-  const { kind, message } = classifySourceError(error);
+  const { kind, message, accessDenied } = classifySourceError(error);
 
   console.warn("[log-source] selected source file failed to load", {
     source,
@@ -422,15 +433,25 @@ async function recoverFromSelectedFileLoadFailure(
 
   state.setSourceStatus({
     kind: "awaiting-file-selection",
-    message:
-      kind === "missing"
+    message: accessDenied
+      ? `Access to this file was denied: ${getBaseName(selectedFilePath)}.`
+      : kind === "missing"
         ? `Selected file is no longer available: ${getBaseName(selectedFilePath)}.`
         : `Could not load selected file: ${getBaseName(selectedFilePath)}.`,
     detail:
-      kind === "missing"
+      !accessDenied && kind === "missing"
         ? "The source was reloaded without that file. Select another file from the sidebar."
         : message,
   });
+
+  if (accessDenied) {
+    // The file, not the folder: elevating and reopening the folder would land
+    // on the same refusal. Fire and forget, matching `loadLogSource`.
+    void offerElevationForSourceFailure({
+      error,
+      source: { kind: "file", path: selectedFilePath },
+    });
+  }
 
   return {
     source,
@@ -905,6 +926,51 @@ function getCommonDirectory(paths: string[]): string {
   return commonParts.join("/") || "/";
 }
 
+/**
+ * Choose the lane a raw, user-supplied path should be opened through.
+ *
+ * The kind is established before the lane is picked, and that ordering is the
+ * whole point. The file lane ends at `open_log_file`, and on Windows opening a
+ * directory without `FILE_FLAG_BACKUP_SEMANTICS` fails with
+ * `ERROR_ACCESS_DENIED`, which the backend classifier would otherwise have to
+ * distinguish from a genuine permission refusal. A folder that reached the file
+ * lane therefore raised "Restart as administrator?", and confirming it
+ * re-attempted the very same folder as a file, so the prompt could never
+ * succeed.
+ *
+ * Living here rather than at any one caller is deliberate: every entry point
+ * that turns a dropped, pasted, restored, or argv-supplied path into a source
+ * goes through `loadPathAsLogSource`, so one guard covers all of them. The
+ * Intune and ESP workspaces already probe the kind the same way before building
+ * their own source.
+ *
+ * A probe that cannot answer keeps the historical file-first behaviour: an
+ * unknown kind must not turn a file open into a folder listing.
+ */
+async function resolveSourceForPath(
+  path: string,
+  preferFolder: boolean
+): Promise<LogSource> {
+  if (preferFolder) {
+    return { kind: "folder", path };
+  }
+
+  let pathKind: "file" | "folder" | "unknown";
+  try {
+    pathKind = await inspectPathKind(path);
+  } catch (error) {
+    console.warn("[log-source] could not determine path kind, assuming file", {
+      path,
+      error,
+    });
+    pathKind = "unknown";
+  }
+
+  return pathKind === "folder"
+    ? { kind: "folder", path }
+    : { kind: "file", path };
+}
+
 export async function loadPathAsLogSource(
   path: string,
   options: LoadPathAsLogSourceOptions = {}
@@ -913,16 +979,20 @@ export async function loadPathAsLogSource(
     selectedFilePath: options.selectedFilePath ?? null,
   };
 
-  const primarySource: LogSource = options.preferFolder
-    ? { kind: "folder", path }
-    : { kind: "file", path };
+  const primarySource = await resolveSourceForPath(
+    path,
+    options.preferFolder === true
+  );
 
   try {
     return await loadLogSource(primarySource, loadOptions);
   } catch (error) {
     const allowFolderFallback = options.fallbackToFolder !== false;
 
-    if (options.preferFolder || !allowFolderFallback) {
+    // Keyed off the lane actually taken, not off `preferFolder`: the kind probe
+    // can also select the folder lane, and retrying a folder as a folder would
+    // just repeat the same failure.
+    if (primarySource.kind === "folder" || !allowFolderFallback) {
       throw error;
     }
 
