@@ -1221,9 +1221,10 @@ fn policy_out_of_scope_artifact_never_answers_a_client_coverage_question() {
     // unavailable one must not invent a gap the client bundle never had.
     for coverage in [SccmCoverageState::Captured, SccmCoverageState::AccessDenied] {
         let mut bundle = load_bundle("request-auth-failure");
-        bundle
-            .artifacts
-            .push(out_of_scope_sibling("LocationServices.log", coverage.clone()));
+        bundle.artifacts.push(out_of_scope_sibling(
+            "LocationServices.log",
+            coverage.clone(),
+        ));
 
         let analysis = analysis_json(&bundle);
         assert_eq!(
