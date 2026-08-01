@@ -182,8 +182,7 @@ pub async fn restart_as_administrator(
     );
     let workspace = request.workspace;
     let ticket = ticket_for(workspace, request.target, request.reason, now_ms());
-    let ticket_id = crate::elevation::restore_ticket::write_ticket(&directory, &ticket)
-        .map_err(|_| ElevationCommandError::TicketUnavailable)?;
+    let ticket_id = write_ticket_off_thread(directory.clone(), ticket).await?;
 
     let launch_id = ticket_id.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
@@ -197,7 +196,7 @@ pub async fn restart_as_administrator(
         // ticket was never read. Remove it here rather than leaving restore
         // state on disk until the TTL sweep catches it.
         Err(_) => {
-            discard_ticket(&directory, &ticket_id);
+            discard_ticket_off_thread(directory.clone(), ticket_id.clone()).await;
             return Err(ElevationCommandError::from(RelaunchError::LaunchFailed {
                 message: "administrator restart task failed".to_string(),
             }));
@@ -217,11 +216,11 @@ pub async fn restart_as_administrator(
         // Cancelled, unsupported, or already elevated: the ticket was never
         // read, so remove it rather than leaving it to expire.
         Ok(result) => {
-            discard_ticket(&directory, &ticket_id);
+            discard_ticket_off_thread(directory.clone(), ticket_id.clone()).await;
             Ok(result)
         }
         Err(error) => {
-            discard_ticket(&directory, &ticket_id);
+            discard_ticket_off_thread(directory, ticket_id).await;
             Err(error.into())
         }
     }
@@ -250,14 +249,14 @@ pub fn get_initial_elevation_restore(
     };
     let directory = ticket_directory(&app_data);
 
-    // Clear abandoned tickets from cancelled prompts on the way past.
-    prune_expired(&directory);
-
     let Some(ticket_id) = ticket_id else {
+        // No requested ticket can be lost, so this startup can sweep abandoned
+        // tickets immediately.
+        prune_expired(&directory);
         return Ok(None);
     };
 
-    match consume_ticket(&directory, &ticket_id, now_ms()) {
+    match consume_initial_ticket(&directory, &ticket_id, now_ms()) {
         Ok(ticket) => Ok(Some(ticket)),
         Err(error) => {
             log::warn!(
@@ -289,9 +288,120 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// Run filesystem work on Tauri's blocking pool rather than an async command
+/// worker. A join failure is deliberately separate from the operation's own
+/// result so callers retain their existing bounded error mapping.
+async fn run_blocking_operation<F, R>(operation: F) -> Option<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation).await.ok()
+}
+
+async fn write_ticket_off_thread(
+    directory: std::path::PathBuf,
+    ticket: RestoreTicket,
+) -> Result<String, ElevationCommandError> {
+    run_blocking_operation(move || {
+        crate::elevation::restore_ticket::write_ticket(&directory, &ticket)
+    })
+    .await
+    .ok_or(ElevationCommandError::TicketUnavailable)?
+    .map_err(|_| ElevationCommandError::TicketUnavailable)
+}
+
+async fn discard_ticket_off_thread(directory: std::path::PathBuf, ticket_id: String) {
+    let _ = run_blocking_operation(move || discard_ticket(&directory, &ticket_id)).await;
+}
+
+/// Claim the one ticket named by this startup before sweeping its directory.
+/// A future or unreadable filesystem mtime must not make pruning erase the
+/// requested ticket before its content timestamp is validated.
+fn consume_initial_ticket(
+    directory: &std::path::Path,
+    ticket_id: &str,
+    now_ms: i64,
+) -> Result<RestoreTicket, TicketError> {
+    let result = consume_ticket(directory, ticket_id, now_ms);
+    prune_expired(directory);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::{File, FileTimes};
+    use std::thread;
+    use std::time::{Duration, SystemTime};
+    use tempfile::TempDir;
+
+    const TEST_NOW_MS: i64 = 1_760_000_000_000;
+
+    #[test]
+    fn ticket_operations_run_on_the_blocking_pool() {
+        let caller = thread::current().id();
+        let worker = tauri::async_runtime::block_on(run_blocking_operation(|| {
+            thread::current().id()
+        }))
+        .expect("blocking worker completes");
+
+        assert_ne!(worker, caller, "ticket I/O must leave the calling thread");
+    }
+
+    #[test]
+    fn startup_claims_the_requested_ticket_before_pruning_the_directory() {
+        let directory = TempDir::new().expect("temp dir");
+        let ticket = ticket_for(
+            crate::elevation::AppWorkspace::Log,
+            crate::elevation::RestoreTarget::Workspace,
+            crate::elevation::ElevationReason::ExplicitMenu,
+            TEST_NOW_MS,
+        );
+        let id = crate::elevation::restore_ticket::write_ticket(directory.path(), &ticket)
+            .expect("write ticket");
+        let path = directory.path().join(format!("{id}.json"));
+        File::options()
+            .write(true)
+            .open(&path)
+            .expect("open ticket")
+            .set_times(
+                FileTimes::new()
+                    .set_modified(SystemTime::now() + Duration::from_secs(60)),
+            )
+            .expect("set future mtime");
+
+        let abandoned = ticket_for(
+            crate::elevation::AppWorkspace::Log,
+            crate::elevation::RestoreTarget::Workspace,
+            crate::elevation::ElevationReason::ExplicitMenu,
+            TEST_NOW_MS,
+        );
+        let abandoned_id =
+            crate::elevation::restore_ticket::write_ticket(directory.path(), &abandoned)
+                .expect("write abandoned ticket");
+        let abandoned_path = directory.path().join(format!("{abandoned_id}.json"));
+        File::options()
+            .write(true)
+            .open(&abandoned_path)
+            .expect("open abandoned ticket")
+            .set_times(FileTimes::new().set_modified(
+                SystemTime::now()
+                    - Duration::from_millis(
+                        (crate::elevation::restore_ticket::TICKET_TTL_MS + 1_000) as u64,
+                    ),
+            ))
+            .expect("age abandoned ticket");
+
+        let restored = consume_initial_ticket(directory.path(), &id, TEST_NOW_MS)
+            .expect("the requested ticket is consumed before the sweep");
+
+        assert_eq!(restored, ticket);
+        assert!(
+            !abandoned_path.exists(),
+            "claim-first ordering must not disable the ordinary expired-ticket sweep"
+        );
+    }
 
     // Both behaviours live in one test on purpose: `REQUEST_IN_FLIGHT` is
     // process-global, so splitting them would let the two cases race when the

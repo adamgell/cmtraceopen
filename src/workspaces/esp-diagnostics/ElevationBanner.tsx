@@ -5,6 +5,7 @@ import {
   WarningShieldRegular,
 } from "@fluentui/react-icons";
 import {
+  describeElevationOutcome,
   requestElevatedRestart,
   type ElevationOutcome,
 } from "../../lib/elevation";
@@ -19,10 +20,18 @@ interface ElevationBannerProps {
   elevation: EspElevationState;
 }
 
+function appendCoverageGap(message: string | null): string {
+  const reason =
+    message?.trim() || "Administrator restart could not be started.";
+  const separator = /[.!?]$/.test(reason) ? " " : ". ";
+  return `${reason}${separator}Coverage remains partial.`;
+}
+
 export function ElevationBanner({ elevation }: ElevationBannerProps) {
   const [actionState, setActionState] = useState<
     "idle" | "requesting" | "requested" | "busy" | "cancelled" | "failed"
   >("idle");
+  const [failureMessage, setFailureMessage] = useState<string | null>(null);
 
   if (elevation.isElevated) return null;
 
@@ -31,6 +40,7 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
   // coordinator, which never throws and collapses concurrent requests.
   const restart = async () => {
     setActionState("requesting");
+    setFailureMessage(null);
 
     let outcome: ElevationOutcome;
     try {
@@ -47,6 +57,7 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
       // contract is ever broken. Without this the banner sticks on "requesting"
       // for good and the rejection escapes as an unhandled promise.
       console.error("[elevation] banner restart request threw", { error });
+      setFailureMessage("Administrator restart could not be started.");
       setActionState("failed");
       return;
     }
@@ -67,8 +78,11 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
       case "busy":
         setActionState("busy");
         break;
-      default:
+      case "failed":
+      case "unsupported":
+        setFailureMessage(describeElevationOutcome(outcome));
         setActionState("failed");
+        break;
     }
   };
 
@@ -141,7 +155,7 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
               : actionState === "cancelled"
                 ? "Administrator restart was cancelled; coverage remains partial."
                 : actionState === "failed"
-                  ? "Administrator restart could not be started; coverage remains partial."
+                  ? appendCoverageGap(failureMessage)
                   : null}
         </div>
       </div>

@@ -60,7 +60,8 @@ describe("ElevationBanner restart outcomes", () => {
   it("still reports a genuine launch failure as a failure", async () => {
     requestElevatedRestartMock.mockResolvedValue({
       status: "failed",
-      message: "Administrator restart could not be started.",
+      // Exact Display text serialized by ElevationCommandError::TicketUnavailable.
+      message: "the elevation restore ticket could not be prepared",
     });
     render(<ElevationBanner elevation={ELEVATION} />);
 
@@ -68,7 +69,20 @@ describe("ElevationBanner restart outcomes", () => {
 
     expect(
       await screen.findByText(
-        "Administrator restart could not be started; coverage remains partial.",
+        "the elevation restore ticket could not be prepared. Coverage remains partial.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("preserves the unsupported-platform reason", async () => {
+    requestElevatedRestartMock.mockResolvedValue({ status: "unsupported" });
+    render(<ElevationBanner elevation={ELEVATION} />);
+
+    clickRestart();
+
+    expect(
+      await screen.findByText(
+        "Restarting as administrator is only supported on Windows. Coverage remains partial.",
       ),
     ).toBeVisible();
   });
@@ -84,7 +98,7 @@ describe("ElevationBanner restart outcomes", () => {
 
     expect(
       await screen.findByText(
-        "Administrator restart could not be started; coverage remains partial.",
+        "Administrator restart could not be started. Coverage remains partial.",
       ),
     ).toBeVisible();
     await waitFor(() =>
