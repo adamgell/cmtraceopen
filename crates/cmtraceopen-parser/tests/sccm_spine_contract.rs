@@ -4997,6 +4997,69 @@ fn key_profile_and_extraction_result_have_deterministic_json_round_trips() {
 }
 
 #[test]
+fn key_extraction_never_emits_a_key_its_own_contract_rejects() {
+    let mut mismatches: Vec<String> = Vec::new();
+    let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1010"));
+
+    // Both raws are inside the regexes' token grammar but outside the
+    // correlation-key value bound. The KB case is bounded as a raw and only
+    // crosses the bound once normalization prepends "KB", so the producer has
+    // to weigh the normalized value too.
+    for (label, message, raw) in [
+        (
+            "an overlong CI ID",
+            format!("CI ID={} status=71", "1".repeat(300)),
+            "1".repeat(300),
+        ),
+        (
+            "a KB ID that normalizes past the bound",
+            format!("KB ID={}", "9".repeat(255)),
+            "9".repeat(255),
+        ),
+    ] {
+        let evidence = evidence_with_message(&message);
+        let result = extract_keys(&evidence, &profile);
+
+        for key in &result.keys {
+            let key_json = serde_json::to_value(key).unwrap();
+            if serde_json::from_value::<SccmCorrelationKey>(key_json)
+                .ok()
+                .as_ref()
+                != Some(key)
+            {
+                mismatches.push(format!(
+                    "extract_keys emitted a key its own validator rejects for {label}"
+                ));
+            }
+        }
+
+        let result_json = serde_json::to_value(&result).unwrap();
+        if serde_json::from_value::<SccmKeyExtractionResult>(result_json)
+            .ok()
+            .as_ref()
+            != Some(&result)
+        {
+            mismatches.push(format!(
+                "extract_keys emitted a result that does not round trip for {label}"
+            ));
+        }
+
+        // An out-of-bound candidate must stay visible as a gap rather than
+        // disappear, exactly as a candidate that fails to normalize does.
+        if !result.gaps.iter().any(|gap| {
+            gap.kind == SccmExtractionGapKind::MalformedCandidate
+                && gap.candidate_raw.as_deref() == Some(raw.as_str())
+        }) {
+            mismatches.push(format!(
+                "extract_keys dropped the out-of-bound candidate for {label}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
 fn public_ccm_malformed_continuation_stays_plain() {
     let text = "<![LOG[unfinished record\ncontinuation without attributes";
     let (entries, errors) =
