@@ -1319,3 +1319,246 @@ fn a_record_mentioning_schema_id_is_not_mistaken_for_the_header() {
         "the record must not be consumed as capture metadata"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Capture-scope defects are not record-scope defects
+// ---------------------------------------------------------------------------
+
+/// A defect in the capture header's own `coverage` array is a defect in the
+/// capture description, not in a record.
+///
+/// `records_malformed` is read against `stream_lines` and `records_parsed` to
+/// answer "how much of the record stream survived". Charging a header defect to
+/// that counter makes the three disagree and points a reader at a record that
+/// does not exist.
+#[test]
+fn a_malformed_capture_coverage_entry_is_not_a_malformed_record() {
+    let header = format!(
+        r#"{{"captureId":"c","collectedAtUtc":"2026-07-15T12:05:10Z","coverage":["not-an-object"],"schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+    let record = r#"{"category":"Enrollment","eventMessage":"only record","messageType":"Default","process":"CompanyPortal","sourceSequence":0,"subsystem":"com.microsoft.CompanyPortalMac","timestamp":"2026-07-15 07:02:00.000000-0500"}"#;
+
+    let capture = parse_capture_ndjson(&format!("{header}\n{record}\n"));
+
+    assert!(capture.supported);
+    assert_eq!(
+        capture.stats.records_malformed, 0,
+        "the defect is in the capture header, not in a record"
+    );
+    assert_eq!(capture.stats.stream_lines, 1);
+    assert_eq!(capture.stats.records_parsed, 1);
+
+    let entry = capture
+        .coverage
+        .iter()
+        .find(|c| c.detail.contains("capture coverage entry is not a JSON object"))
+        .expect("the unusable coverage entry is still reported, never dropped");
+    assert_eq!(
+        entry.scope,
+        PortalCoverageScope::Capture,
+        "a header defect is capture scope"
+    );
+    assert_eq!(entry.status, PortalCoverageStatus::UnknownSchema);
+    assert!(
+        entry.stream_index.is_none(),
+        "no stream line produced this defect"
+    );
+    assert_eq!(
+        entry
+            .raw_excerpt
+            .as_ref()
+            .map(|excerpt| excerpt.value.as_str()),
+        Some("\"not-an-object\""),
+        "the offending value is preserved verbatim"
+    );
+}
+
+/// Sibling of the case above, found by auditing every `push_malformed` call
+/// site: a `records` key that is not an array is a defect in the capture
+/// envelope. There is no record to be malformed, and no stream line was read.
+#[test]
+fn a_non_array_records_field_is_not_a_malformed_record() {
+    let payload = format!(
+        r#"{{"captureId":"c","collectedAtUtc":"2026-07-15T12:05:10Z","records":5,"schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+
+    let capture = parse_capture(&payload);
+
+    assert_eq!(
+        capture.stats.records_malformed, 0,
+        "the capture envelope is malformed, not a record"
+    );
+    assert_eq!(capture.stats.stream_lines, 0);
+    assert_eq!(capture.stats.records_parsed, 0);
+
+    let entry = capture
+        .coverage
+        .iter()
+        .find(|c| c.detail.contains("`records` is not an array"))
+        .expect("the unusable `records` value is still reported");
+    assert_eq!(entry.scope, PortalCoverageScope::Capture);
+    assert_eq!(entry.status, PortalCoverageStatus::UnknownSchema);
+    assert!(entry.stream_index.is_none());
+    assert_eq!(
+        entry
+            .raw_excerpt
+            .as_ref()
+            .map(|excerpt| excerpt.value.as_str()),
+        Some("5"),
+        "the offending value is preserved verbatim"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fixture provenance
+// ---------------------------------------------------------------------------
+
+/// Every fixture header must describe a capture that could have produced that
+/// fixture's own records.
+///
+/// A bounded `log show --start/--end` collection cannot return a record outside
+/// the window it declares, and a collector cannot stamp `collectedAtUtc` before
+/// the last record it collected. A fixture that breaks either models provenance
+/// no real capture produces, so it is not evidence of what this code does with a
+/// real one. This walks the whole fixture tree, so a fixture added later
+/// inherits the check instead of repeating the mistake.
+#[test]
+fn fixture_capture_headers_cover_their_own_records() {
+    let fixtures = capture_fixture_files();
+    assert!(
+        fixtures.len() >= 19,
+        "expected the full fixture tree, found {}",
+        fixtures.len()
+    );
+
+    let mut offenders = Vec::new();
+    for (path, text) in &fixtures {
+        let (header, records) = split_fixture(text);
+        let Some(header) = header else {
+            continue;
+        };
+        let window = header.get("window").and_then(Value::as_object);
+        let start = window
+            .and_then(|w| w.get("start"))
+            .and_then(Value::as_str)
+            .and_then(fixture_utc);
+        let end = window
+            .and_then(|w| w.get("end"))
+            .and_then(Value::as_str)
+            .and_then(fixture_utc);
+        let collected = header
+            .get("collectedAtUtc")
+            .and_then(Value::as_str)
+            .and_then(fixture_utc);
+
+        for record in &records {
+            let Some(stamp) = record
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(fixture_utc)
+            else {
+                // Local-only, boot-relative, and uninterpretable stamps are a
+                // separate documented case and carry no absolute position.
+                continue;
+            };
+            if let Some(start) = &start {
+                if stamp < *start {
+                    offenders.push(format!("{path}: record {stamp} precedes window.start {start}"));
+                }
+            }
+            if let Some(end) = &end {
+                if stamp > *end {
+                    offenders.push(format!("{path}: record {stamp} follows window.end {end}"));
+                }
+            }
+            if let Some(collected) = &collected {
+                if stamp > *collected {
+                    offenders.push(format!(
+                        "{path}: record {stamp} follows collectedAtUtc {collected}"
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "fixture headers contradict their own records:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Reads every capture fixture as `(relative path, text)`.
+fn capture_fixture_files() -> Vec<(String, String)> {
+    let root = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/intune/portal/macos/unified_log"
+    ));
+
+    let mut fixtures = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("fixture directory is readable") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let is_capture = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("capture") || name.ends_with(".ndjson"));
+            if !is_capture {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            fixtures.push((
+                relative,
+                std::fs::read_to_string(&path).expect("fixture is readable"),
+            ));
+        }
+    }
+    fixtures.sort();
+    fixtures
+}
+
+/// Splits fixture text into its capture header and its record objects, using the
+/// same header rule the parser uses. Lines that are not JSON objects are a
+/// deliberate part of some fixtures and are skipped.
+fn split_fixture(text: &str) -> (Option<Value>, Vec<Value>) {
+    if let Ok(Value::Object(root)) = serde_json::from_str::<Value>(text) {
+        if let Some(Value::Array(records)) = root.get("records") {
+            let records = records.clone();
+            return (Some(Value::Object(root)), records);
+        }
+    }
+
+    let mut header = None;
+    let mut records = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(trimmed) else {
+            continue;
+        };
+        let looks_like_header = obj.contains_key("schemaId") && obj.contains_key("schemaVersion");
+        if header.is_none() && records.is_empty() && looks_like_header {
+            header = Some(Value::Object(obj));
+        } else {
+            records.push(Value::Object(obj));
+        }
+    }
+    (header, records)
+}
+
+/// Normalized UTC text for a timestamp that carries an absolute position, using
+/// the crate's own normalizer so every value compares in one format.
+fn fixture_utc(raw: &str) -> Option<String> {
+    normalize_timestamp(raw).normalized_utc
+}
