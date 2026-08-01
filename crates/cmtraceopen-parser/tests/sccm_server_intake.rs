@@ -762,3 +762,77 @@ fn server_intake_discriminates_conforming_labels_from_identity_shapes() {
         });
     }
 }
+
+/// An unclassified supplement declares that it satisfies no source contract, so
+/// the declared catalog cannot name its `sourceId` and intake pins the value to
+/// one committed fixture spelling instead. That literal is the last remaining
+/// fixture string in production source, and it is not gated on the synthetic
+/// flag at all.
+///
+/// The projected `sourceId` for this path is the constant `unsupported`, so the
+/// declared value never reaches a public surface; it still has to stay a
+/// bounded, non-identity-bearing label, and it still has to admit a spelling
+/// the committed corpus has not already used.
+#[test]
+fn server_intake_admits_any_conforming_unclassified_supplement_source_id() {
+    for source_id in [
+        "unknown-registry-supplement",
+        "unknown-status-export",
+        "unknown-provider-supplement",
+    ] {
+        let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
+        let mut manifest = manifest_value(&manifest_json);
+        manifest["artifacts"][0]["sourceId"] = Value::String(source_id.to_owned());
+
+        let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+            .unwrap_or_else(|error| {
+                panic!("{source_id} is a conforming unclassified supplement: {error}")
+            });
+        let serialized = serde_json::to_string(&assessment).expect("assessment serializes");
+        assert!(
+            !serialized.contains(source_id),
+            "an unclassified sourceId must not reach a public surface: {serialized}"
+        );
+        assert_eq!(
+            assessment.artifacts[0].source_id, "unsupported",
+            "an unclassified supplement projects the constant source id"
+        );
+        assert_eq!(
+            assessment.coverage[0].source_id, "unsupported",
+            "coverage projects the constant source id too"
+        );
+    }
+
+    // The same surface must still refuse an identity-bearing value.
+    for shape in IDENTITY_SHAPES {
+        assert_unsafe_mutation_is_rejected(
+            "unsupported-db-supplement",
+            shape,
+            |manifest, _payloads| {
+                manifest["artifacts"][0]["sourceId"] = Value::String((*shape).to_owned());
+            },
+        );
+    }
+}
+
+/// A classified artifact's `sourceId` names a declared source contract, so the
+/// declared catalog is the only authority over it. Widening the unclassified
+/// path must not widen this one: an id the catalog does not declare stays
+/// rejected however well-formed it is.
+#[test]
+fn server_intake_binds_classified_source_ids_to_the_declared_catalog() {
+    for undeclared in [
+        "server-hierarchy-control",
+        "server-provider",
+        "server-admin-service",
+        "unknown-db-supplement",
+    ] {
+        let (manifest_json, payloads) = load_bundle("complete-multi-role");
+        let mut manifest = manifest_value(&manifest_json);
+        manifest["artifacts"][0]["sourceId"] = Value::String(undeclared.to_owned());
+        assert!(
+            assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+            "{undeclared} is not a declared server source contract"
+        );
+    }
+}
