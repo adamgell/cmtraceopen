@@ -1,0 +1,6 @@
+2026-05-12 08:14:20:104 | CompanyPortal | I | 261481 | AppDelegate | Company Portal version 5.2504.0 (build 2504.12) starting on macOS 15.4.1
+2026-05-12 08:14:20:311 | CompanyPortal | I | 261481 | SignInViewModel | [activityId=8f0c2f22-8a1a-4d64-9c1f-2a26f5c0a111] Sign-in requested for adele.vance@contoso.example
+2026-05-12 08:14:21:552 | CompanyPortal | W | 261488 | SyncManager | Sync deferred, last successful check-in was 2 hours ago
+2026-05-12 08:14:22:007 | CompanyPortal | E | 261488 | EnrollmentManager | Profile installation failed with error 0x87D1041C
+2026-05-12 08:14:23:118 | CompanyPortal | I | 261490 | AppCatalogViewModel | Catalog loaded with 14 available apps
+2026-05-12 08:14:24:200 | CompanyPortal | I | 261490 | AppCatalogViewModel | Ignoring benign failure: error 0x00000000 was already handled
