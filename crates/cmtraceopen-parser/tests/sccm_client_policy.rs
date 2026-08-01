@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::sccm::{
     analyze_client_policy, declared_source_catalog, normalize_ccm_artifact, SccmArtifact,
     SccmArtifactFamily, SccmCoverageState, SccmNormalizedBundle, SccmRole, SccmRotation,
+    SccmTimeOrderingState,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -971,6 +972,61 @@ fn policy_later_same_artifact_success_recovers_a_deferred_phase() {
     assert_eq!(transaction["state"], "succeeded");
     assert_eq!(transaction["lastSuccessfulPhase"], "report");
     assert_eq!(transaction["confidence"], "high");
+}
+
+#[test]
+fn policy_unusable_cross_artifact_time_never_proves_an_ordered_sequence() {
+    for ordering_state in [
+        SccmTimeOrderingState::OffsetInvalid,
+        SccmTimeOrderingState::OffsetMissing,
+        SccmTimeOrderingState::TimestampMissing,
+    ] {
+        let mut bundle = load_bundle("complete");
+        for evidence in &mut bundle.evidence {
+            evidence.timestamp.utc_millis = None;
+            evidence.timestamp.ordering_state = ordering_state.clone();
+        }
+
+        let analysis = analysis_json(&bundle);
+        let transaction = &analysis["transactions"][0];
+        assert_ne!(
+            transaction["state"], "succeeded",
+            "{ordering_state:?} cannot prove an ordered request-to-report path"
+        );
+        assert_ne!(
+            transaction["confidence"], "high",
+            "{ordering_state:?} cannot carry high confidence"
+        );
+        assert_eq!(
+            transaction["lastSuccessfulPhase"],
+            Value::Null,
+            "{ordering_state:?} cannot claim a last successful phase across sources"
+        );
+        assert!(
+            !analysis["artifactRequests"]
+                .as_array()
+                .expect("artifact requests")
+                .is_empty(),
+            "{ordering_state:?} must ask for usable provenance"
+        );
+    }
+}
+
+#[test]
+fn policy_same_artifact_sequence_survives_unusable_time() {
+    let mut bundle = load_bundle("download-failure");
+    for evidence in &mut bundle.evidence {
+        evidence.timestamp.utc_millis = None;
+        evidence.timestamp.ordering_state = SccmTimeOrderingState::OffsetInvalid;
+    }
+
+    let analysis = analysis_json(&bundle);
+    let transaction = &analysis["transactions"][0];
+    assert_eq!(
+        transaction["state"], "failed",
+        "source-local order still orders a single-artifact sequence"
+    );
+    assert_eq!(transaction["classification"], "confirmedFailure");
 }
 
 #[test]
