@@ -1351,7 +1351,7 @@ fn validate_contract(
                     .ok_or_else(|| format!("{transaction_id}: key {field} is not a string"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mut cited_record_texts = Vec::new();
+        let mut cited_record_token_sets = Vec::new();
         for evidence_ref in evidence_refs {
             let artifact = manifest_artifact(&artifacts_by_id, evidence_ref)?;
             let start_line = evidence_ref["startLine"]
@@ -1384,7 +1384,12 @@ fn validate_contract(
                     "{transaction_id}: declared key fields do not co-occur as complete tokens in cited complete CCM record ({missing_needle})"
                 ));
             }
-            cited_record_texts.push(record_text);
+            cited_record_token_sets.push(
+                record_tokens
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<BTreeSet<_>>(),
+            );
         }
 
         let phase = transaction["phase"]
@@ -1399,9 +1404,9 @@ fn validate_contract(
         if !STATE_CHAIN.contains(&phase)
             || !STATE_CHAIN.contains(&last_successful_phase)
             || !["inProgress", "blockedOrDeferred", "failed", "succeeded"].contains(&state)
-            || !cited_record_texts.iter().any(|record_text| {
-                record_text.contains(&format!("phase={phase}"))
-                    && record_text.contains(&format!("state={state}"))
+            || !cited_record_token_sets.iter().any(|record_tokens| {
+                record_tokens.contains(&format!("phase={phase}"))
+                    && record_tokens.contains(&format!("state={state}"))
             })
         {
             return Err(format!(
@@ -1696,9 +1701,14 @@ fn validate_contract(
                 &artifacts_by_id,
                 &transaction["terminalEvidence"],
             )?;
-            if !terminal_text.contains("terminal=true")
-                || !terminal_text.contains(&format!("state={terminal_state}"))
-                || !terminal_text.contains(&format!("phase={phase}"))
+            let terminal_tokens = complete_field_tokens(&terminal_text).ok_or_else(|| {
+                format!(
+                    "{transaction_id}: terminal record body is not delimited by the CCM framing"
+                )
+            })?;
+            if !terminal_tokens.contains("terminal=true")
+                || !terminal_tokens.contains(format!("state={terminal_state}").as_str())
+                || !terminal_tokens.contains(format!("phase={phase}").as_str())
             {
                 return Err(format!(
                     "{transaction_id}: terminal citation does not prove the terminal outcome"
