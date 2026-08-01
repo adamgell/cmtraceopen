@@ -430,9 +430,13 @@ impl From<SccmCorrelationKeyWire> for SccmCorrelationKey {
 }
 
 // The key's own evidence reference stands in as its citation set, exactly as
-// it would inside a finding. Crucially this keeps the confidence gate in
-// force: while REGISTERED_STABLE_CORRELATION_PROFILE_IDS is empty, no payload
-// can deserialize a Strong or Exact key and forge corroboration strength.
+// it would inside a finding. Containment is therefore self-satisfying here, so
+// validate_correlation_key_evidence validates the reference itself before it
+// checks containment; the wire struct nests SccmEvidenceRefWire and cannot
+// rely on the SccmEvidenceRef deserializer to do it. Crucially this keeps the
+// confidence gate in force: while REGISTERED_STABLE_CORRELATION_PROFILE_IDS is
+// empty, no payload can deserialize a Strong or Exact key and forge
+// corroboration strength.
 impl<'de> Deserialize<'de> for SccmCorrelationKey {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -2192,6 +2196,12 @@ fn validate_correlation_key_evidence(
         let Some(reference) = &key.evidence else {
             return Err(SccmFindingValidationError::CorrelationKeyMissingEvidence);
         };
+        // The containment check below only proves the reference is cited, and
+        // a standalone key is its own citation set, which makes containment
+        // self-satisfying. Validate the reference here rather than at the call
+        // sites so no caller can reach the trivially satisfied check with an
+        // unvalidated reference.
+        validate_evidence_reference(reference)?;
         if !evidence.contains(reference) {
             return Err(SccmFindingValidationError::CorrelationKeyEvidenceNotCited);
         }
