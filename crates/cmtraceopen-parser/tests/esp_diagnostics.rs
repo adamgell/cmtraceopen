@@ -10441,6 +10441,41 @@ fn redaction_projection_masks_ip_and_mac_addresses_in_public_raw_evidence() {
 }
 
 #[test]
+fn redaction_projection_masks_compressed_ipv6_addresses_in_public_raw_evidence() {
+    // The `\b` anchors this pattern used could not sit against a leading or trailing colon,
+    // so every `::`-compressed form leaked, while the boundary that *does* exist between an
+    // identifier character and a colon made C++ scope resolution match instead. The rule was
+    // the exact inverse of the one intended.
+    let mut snapshot = findings_snapshot();
+    let mut network = raw_export_record(
+        "compressed-ipv6",
+        EspSourceKind::DeploymentLog,
+        "deployment-log",
+        None,
+        "loopback ::1 peer [fe80::1]:8080 prefix fe80:: frame std::vector kept",
+    );
+    network.sensitivity = EspSensitivity::Public;
+    snapshot.raw_evidence = vec![network];
+
+    let safe = redacted_export_projection(&snapshot);
+    let EspObservationValue::Text(value) = &safe.raw_evidence[0].raw_value else {
+        panic!("expected text raw evidence")
+    };
+    for leaked in ["::1", "fe80::"] {
+        assert!(
+            !value.contains(leaked),
+            "compressed IPv6 form {leaked} leaked: {value}"
+        );
+    }
+    assert!(
+        value.contains("std::vector"),
+        "C++ scope resolution was redacted as an address: {value}"
+    );
+    assert!(value.contains("[redacted]"));
+    assert!(value.contains("loopback") && value.contains("kept"));
+}
+
+#[test]
 fn redaction_projection_masks_azure_sas_and_account_key_credentials() {
     let mut snapshot = findings_snapshot();
     snapshot.registration_events.push(EspRegistrationEvent {

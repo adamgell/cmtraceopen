@@ -134,6 +134,14 @@ pub(super) fn resolve_header(line: &str) -> HeaderResolution {
     for title in &titles {
         match resolve_title(title) {
             Some((column, locale)) => {
+                // The Timestamp-first rule decides whether this line can be a header at all,
+                // so it has to be applied to the first resolved role rather than after the
+                // loop. A later unknown title used to short-circuit to `Unregistered` first,
+                // which reported unrelated text such as a process table as a Console export
+                // with an unsupported layout instead of as not a Console export.
+                if columns.is_empty() && column != PortalConsoleColumn::Timestamp {
+                    return HeaderResolution::NotAHeader;
+                }
                 columns.push(column);
                 if let Some(tag) = locale {
                     locale_hint.get_or_insert_with(|| tag.to_string());
@@ -151,10 +159,6 @@ pub(super) fn resolve_header(line: &str) -> HeaderResolution {
                 };
             }
         }
-    }
-
-    if columns.first() != Some(&PortalConsoleColumn::Timestamp) {
-        return HeaderResolution::NotAHeader;
     }
 
     match LAYOUT_REGISTRY

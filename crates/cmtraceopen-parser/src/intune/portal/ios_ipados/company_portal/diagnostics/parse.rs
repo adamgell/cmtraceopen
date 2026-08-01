@@ -95,6 +95,43 @@ fn token_pattern() -> &'static Regex {
     CELL.get_or_init(|| Regex::new(r"^\S+").expect("token pattern must compile"))
 }
 
+/// The Subsystem cell: an Apple unified-logging subsystem, which is a reverse-DNS namespace.
+///
+/// Deliberately narrower than [`token_pattern`]. Console pads these cells with spaces, so an
+/// *empty* Subsystem is indistinguishable from padding to a `^\S+` token and the column
+/// silently takes the Category value instead, shifting every later column while the record
+/// still reported itself as `Parsed`. An empty Subsystem also demoted a Company Portal record
+/// to `OtherProcess`, corrupting the field structural filtering runs on.
+///
+/// The cells cannot be sliced at header-derived fixed-width boundaries: Console pads to a
+/// minimum width but lets a longer value overflow, and the shipped v2 fixture already carries
+/// a 30-character subsystem in a 29-character cell that shifts its row right by three columns.
+/// Requiring the cell to look like what it is turns the ambiguous case into a visible
+/// [`PortalConsoleParseState::Malformed`] record, preserved verbatim and reported in coverage,
+/// instead of a confidently wrong one.
+fn subsystem_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"^[A-Za-z][A-Za-z0-9\-]*(?:\.[A-Za-z0-9\-]+)+")
+            .expect("subsystem pattern must compile")
+    })
+}
+
+/// The Category cell: a bare identifier. See [`subsystem_pattern`] for why this is not `^\S+`.
+///
+/// The corruption this rejects is concrete: with either attribution cell empty, the Category
+/// column swallowed the message body's `Process:` token, so the value carried a trailing
+/// colon that a category can never contain.
+/// The trailing `(?:\s|$)` is what makes this a whole-cell test rather than a prefix test: it
+/// is matched but not captured, so `value` stays clean while `CompanyPortal:` is still
+/// rejected instead of being silently accepted as `CompanyPortal`.
+fn category_pattern() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"^(?P<value>[A-Za-z0-9_\-]+)(?:\s|$)").expect("category pattern must compile")
+    })
+}
+
 fn is_anchor(line: &str) -> bool {
     anchor_pattern().is_match(line)
 }
@@ -413,6 +450,12 @@ fn frame_records(lines: &[&str], body_start: usize) -> Frames {
     let mut records: Vec<Frame> = Vec::new();
     let mut current: Option<Frame> = None;
     let mut orphan: Vec<(usize, String)> = Vec::new();
+    // A blank line is part of a payload only when payload follows it. Holding it defers that
+    // question to the next line instead of guessing now: it is flushed when a continuation
+    // arrives, and dropped at the next anchor or at end of input. A blank line therefore
+    // never terminates a record, never splits a multi-line payload, and never extends a
+    // record's span with padding that carries no record content.
+    let mut pending_blanks: Vec<(usize, String)> = Vec::new();
 
     for (offset, line) in lines.iter().enumerate().skip(body_start) {
         let line_number = offset + 1;
@@ -421,6 +464,9 @@ fn frame_records(lines: &[&str], body_start: usize) -> Frames {
             if let Some(frame) = current.take() {
                 records.push(frame);
             }
+            // Blank lines held at a record boundary sit *between* records, so they belong to
+            // neither and are dropped. `totals.source_lines` still counts them.
+            pending_blanks.clear();
             current = Some(Frame {
                 first_line_number: line_number,
                 last_line_number: line_number,
@@ -431,23 +477,39 @@ fn frame_records(lines: &[&str], body_start: usize) -> Frames {
             continue;
         }
 
-        // Blank lines are copy artefacts. They neither terminate a record nor join it, so a
-        // blank line inside a multi-line payload cannot split that payload into two records.
-        // `totals.source_lines` still counts them, so nothing is hidden.
         if line.trim().is_empty() {
+            pending_blanks.push((line_number, (*line).to_string()));
             continue;
         }
 
         match current.as_mut() {
             Some(frame) => {
+                // Interior blank lines are payload. `raw_text` is documented as the record's
+                // source text verbatim and the record's span already claims these lines, so
+                // dropping them would leave the span and the text disagreeing and would make a
+                // JSON body or backtrace containing an empty line impossible to reconstruct.
+                for (_, blank) in pending_blanks.drain(..) {
+                    frame.raw_text.push('\n');
+                    frame.raw_text.push_str(&blank);
+                    frame.continuations.push(blank);
+                }
                 frame.last_line_number = line_number;
                 frame.continuations.push((*line).to_string());
                 frame.raw_text.push('\n');
                 frame.raw_text.push_str(line);
             }
             // Only reachable before the first anchor, so these lines are always the tail of
-            // a record whose start was not copied.
-            None => orphan.push((line_number, (*line).to_string())),
+            // a record whose start was not copied. Blanks join this block only once it has
+            // started, for the same reason they never start a record: leading blanks are copy
+            // padding, blanks between two carried lines are payload.
+            None => {
+                if orphan.is_empty() {
+                    pending_blanks.clear();
+                } else {
+                    orphan.append(&mut pending_blanks);
+                }
+                orphan.push((line_number, (*line).to_string()));
+            }
         }
     }
 
@@ -540,14 +602,19 @@ fn extract_columns(head: &str, layout: &[PortalConsoleColumn]) -> Option<Columns
                 rest = &rest[matched.end()..];
             }
             PortalConsoleColumn::Subsystem => {
-                let matched = token_pattern().find(rest)?;
+                let matched = subsystem_pattern().find(rest)?;
                 columns.subsystem = Some(matched.as_str().to_string());
                 rest = &rest[matched.end()..];
             }
             PortalConsoleColumn::Category => {
-                let matched = token_pattern().find(rest)?;
-                columns.category = Some(matched.as_str().to_string());
-                rest = &rest[matched.end()..];
+                let captures = category_pattern().captures(rest)?;
+                let value = captures
+                    .name("value")
+                    .expect("category value group must exist");
+                columns.category = Some(value.as_str().to_string());
+                // Advance to the end of the value, not the whole match: the delimiter the
+                // pattern tested for is left for the next column's `trim_start`.
+                rest = &rest[value.end()..];
             }
             PortalConsoleColumn::Process => {
                 let matched = token_pattern().find(rest)?;

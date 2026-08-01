@@ -423,8 +423,16 @@ Timestamp                       Thread     Type        Activity             PID 
 
     assert_eq!(capture.totals.total_records, 1);
     let record = record_at(&capture, 0);
-    assert_eq!(record.continuation_line_count, 2);
+    // Three, not two: the blank line is itself folded into the record, so the count has to
+    // include it. `continuation_line_count` reports the lines folded into `raw_text`, and a
+    // count that skipped the blank would disagree with the text and the span that carry it.
+    assert_eq!(record.continuation_line_count, 3);
     assert!(message_of(record).contains("second payload line after a blank"));
+    assert!(
+        message_of(record).contains("first payload line\n\n\tsecond payload line"),
+        "the blank line inside the payload was not preserved: {:?}",
+        message_of(record)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +644,81 @@ fn item08_explicit_subsystem_columns_resolve_to_the_v2_layout() {
         noise.source.subsystem.as_deref(),
         Some("com.apple.ManagedConfiguration")
     );
+}
+
+/// The shipped v2 fixture row, and the same row with exactly one attribution cell blanked.
+/// Every other byte and column offset is identical, so these differ from a good row only in
+/// the way a real empty cell would.
+const V2_HEADER: &str = "Timestamp                       Thread     Type        Activity             PID    TTL  Subsystem                    Category";
+const V2_EMPTY_SUBSYSTEM: &str = "2024-03-15 13:00:00.000001-0700 0x4001     Default     0x0                  312    0                                 Enrollment  CompanyPortal: (Enrollment) Profile installation requested";
+const V2_EMPTY_CATEGORY: &str = "2024-03-15 13:00:00.000001-0700 0x4001     Default     0x0                  312    0    com.microsoft.CompanyPortal              CompanyPortal: (Enrollment) Profile installation requested";
+
+#[test]
+fn item08_an_empty_v2_attribution_cell_fails_closed_instead_of_shifting_columns() {
+    // Console pads these cells with spaces, so to a `^\S+` tokenizer an empty cell is
+    // indistinguishable from padding and the column silently takes the *next* column's value.
+    // The record then carried another column's data in a named field and was still reported
+    // as `Parsed`. An empty Subsystem also moved a Company Portal record to `OtherProcess`,
+    // an attribution error in the very field that structural filtering depends on.
+    //
+    // The parser cannot delimit these cells (see the overflow test below for why fixed-width
+    // slicing is not available), so the honest outcome is a visible parse failure.
+    for (name, row) in [
+        ("empty subsystem", V2_EMPTY_SUBSYSTEM),
+        ("empty category", V2_EMPTY_CATEGORY),
+    ] {
+        let export = format!("{V2_HEADER}\n{row}\n");
+        let capture = parse_console_export(&export);
+        let record = record_at(&capture, 0);
+
+        assert_eq!(
+            record.parse_state,
+            PortalConsoleParseState::Malformed,
+            "{name}: an undelimitable cell must fail closed, not parse to shifted values"
+        );
+        // Nothing is guessed and nothing is attributed.
+        assert_eq!(record.source.subsystem, None, "{name}");
+        assert_eq!(record.source.category, None, "{name}");
+        assert_eq!(
+            record.source.class,
+            PortalConsoleSourceClass::Unattributed,
+            "{name}"
+        );
+        assert_eq!(capture.totals.company_portal_records, 0, "{name}");
+
+        // The input survives verbatim and is accounted for rather than dropped.
+        assert_eq!(record.raw_text, row, "{name}");
+        assert!(
+            capture
+                .coverage
+                .iter()
+                .any(|entry| entry.kind == PortalConsoleCoverageKind::MalformedRecord),
+            "{name}: the malformed record must be visible in coverage"
+        );
+    }
+}
+
+#[test]
+fn item08_a_subsystem_that_overflows_its_cell_still_parses() {
+    // The shipped fixture's third row carries a 30-character subsystem in a 29-character
+    // cell, so Console lets it overflow and every later column shifts right. That is why the
+    // columns cannot be sliced at header-derived fixed-width boundaries, and it is the case
+    // the empty-cell guard must not cost anything.
+    let capture = parse_console_export(SUBSYSTEM_COLUMNS);
+
+    assert!(
+        capture
+            .records
+            .iter()
+            .all(|record| record.parse_state == PortalConsoleParseState::Parsed),
+        "the shipped v2 fixture must still parse cleanly"
+    );
+    let overflowing = record_at(&capture, 2);
+    assert_eq!(
+        overflowing.source.subsystem.as_deref(),
+        Some("com.apple.ManagedConfiguration")
+    );
+    assert_eq!(overflowing.source.category.as_deref(), Some("profiled"));
 }
 
 // ---------------------------------------------------------------------------
@@ -856,6 +939,28 @@ fn item11_arbitrary_plain_log_is_rejected() {
         capture.ordering.confidence,
         PortalOrderingConfidence::Unordered
     );
+}
+
+#[test]
+fn item11_a_header_whose_first_column_is_not_a_timestamp_is_not_a_console_export() {
+    // `Process` resolves to a real column role, so the first title alone does not reject the
+    // line. The unknown second title then short-circuited to `Unregistered` before the
+    // Timestamp-first rule was ever reached, so an ordinary process table was reported as a
+    // Console export with an unsupported layout instead of as unrelated text.
+    let content = "\
+Process        Owner          Path
+launchd        root           /sbin/launchd
+loginwindow    adam           /System/Library/CoreServices/loginwindow.app
+";
+
+    let detection = detect_console_export(content);
+    assert_eq!(
+        detection.outcome,
+        PortalConsoleDetectionOutcome::NotConsoleExport,
+        "unrelated text must not be diagnosed as an unsupported Console layout; reason was {:?}",
+        detection.reason
+    );
+    assert_eq!(detection.layout, None);
 }
 
 #[test]
@@ -1197,6 +1302,81 @@ fn item12_network_addresses_are_redacted() {
 }
 
 #[test]
+fn item12_compressed_ipv6_addresses_are_redacted() {
+    // A `\b` anchor needs a word character on one side, and every `::`-compressed form either
+    // begins or ends with a colon, so the rule that exists to stop an address leak was the
+    // rule that leaked. Bracketed, port-suffixed and IPv4-mapped forms are all real Console
+    // shapes.
+    let text = redacted_console_text(&[
+        "Bound loopback ::1 for the retry probe",
+        "Bound loopback [::1] for the retry probe",
+        "Link-local prefix fe80:: is configured",
+        "Unspecified address :: is configured",
+        "peer ::1 connected",
+        "Dialing [fe80::1]:8080 for the retry probe",
+        "Mapped ::ffff:192.0.2.1 for the retry probe",
+    ]);
+
+    for leaked in [
+        "::1",
+        "[::1]",
+        "fe80::",
+        "::ffff",
+        "192.0.2.1",
+        "address :: is",
+    ] {
+        assert!(
+            !text.contains(leaked),
+            "compressed IPv6 form {leaked:?} survived redaction:\n{text}"
+        );
+    }
+    assert!(
+        text.contains(REDACTED_ADDRESS),
+        "no address placeholder:\n{text}"
+    );
+
+    // The surrounding text is evidence and must survive intact, including the delimiters that
+    // bounded the address.
+    for preserved in ["peer ", " connected", "for the retry probe", ":8080"] {
+        assert!(
+            text.contains(preserved),
+            "text around the address {preserved:?} was consumed:\n{text}"
+        );
+    }
+}
+
+#[test]
+fn item12_colon_separated_text_is_not_mistaken_for_an_ipv6_address() {
+    // The inverse failure of the `\b` anchoring: a word boundary *does* exist between an
+    // identifier character and a colon, so C++ scope resolution matched the rule that real
+    // addresses missed. Backtraces are the main reason a Console capture is collected, so
+    // eating their symbol names would destroy the evidence.
+    let text = redacted_console_text(&[
+        "Frame std::__1::basic_string in the backtrace",
+        "Symbol std::cout resolved during startup",
+        "Retry budget 3:2 with key:value pairs",
+        "Elapsed 10:00:00 since the first attempt",
+    ]);
+
+    for preserved in [
+        "std::__1::basic_string",
+        "std::cout",
+        "3:2",
+        "key:value",
+        "10:00:00",
+    ] {
+        assert!(
+            text.contains(preserved),
+            "ordinary colon-separated text {preserved:?} was redacted as an address:\n{text}"
+        );
+    }
+    assert!(
+        !text.contains(REDACTED_ADDRESS),
+        "ordinary colon-separated text was reported as an address:\n{text}"
+    );
+}
+
+#[test]
 fn item12_dotted_version_strings_are_not_mistaken_for_addresses() {
     // Console payloads are full of dotted version numbers. Bounding each IPv4 octet to 0-255
     // is what keeps a four-part build number out of the address matcher; an unbounded
@@ -1290,6 +1470,73 @@ fn item13_capture_round_trips_through_json() {
             serde_json::from_str(&encoded).expect("capture must deserialize");
         assert_eq!(capture, decoded, "{name} did not round-trip");
     }
+}
+
+#[test]
+fn item13_raw_text_reproduces_every_source_line_the_record_spans() {
+    // `PortalConsoleRecord::raw_text` is documented as the record's source text verbatim, and
+    // the record's span claims every line from `first_line_number` to `last_line_number`. A
+    // blank line inside a folded payload was dropped from `raw_text` while the span still
+    // covered it, so the two fields disagreed about the same source region and a JSON body or
+    // backtrace containing an empty line could not be reconstructed from the field that
+    // promises to carry it.
+    let export = format!(
+        "{CONSOLE_HEADER}\n\
+         2024-03-15 10:00:00.000001-0700 {CONSOLE_RECORD_PREFIX}Response body follows\n\
+         \t{{\n\
+         \n\
+         \t  \"status\": \"failed\"\n\
+         \t}}\n"
+    );
+
+    let capture = parse_console_export(&export);
+    let lines: Vec<&str> = export.lines().collect();
+    assert_eq!(capture.records.len(), 1, "fixture must yield one record");
+
+    for record in &capture.records {
+        let first = record.reference.first_line_number;
+        let last = record.reference.last_line_number;
+        assert_eq!(
+            record.raw_text,
+            lines[first - 1..last].join("\n"),
+            "raw_text must reproduce source lines {first}..={last} verbatim"
+        );
+    }
+
+    assert!(
+        capture.records[0].raw_text.contains("\n\n"),
+        "the blank line inside the folded payload was dropped: {:?}",
+        capture.records[0].raw_text
+    );
+    assert!(
+        capture.records[0].message.value.contains("\n\n"),
+        "the blank line is missing from the folded message: {:?}",
+        capture.records[0].message.value
+    );
+}
+
+#[test]
+fn item13_trailing_blank_lines_are_not_folded_into_the_last_record() {
+    // A blank line is payload only when payload follows it. Padding at the end of the copy
+    // must not extend the last record's span or its continuation count.
+    let export = format!(
+        "{CONSOLE_HEADER}\n\
+         2024-03-15 10:00:00.000001-0700 {CONSOLE_RECORD_PREFIX}Single line record\n\
+         \n\
+         \n"
+    );
+
+    let capture = parse_console_export(&export);
+    let record = record_at(&capture, 0);
+
+    assert_eq!(record.continuation_line_count, 0);
+    assert_eq!(record.reference.first_line_number, 2);
+    assert_eq!(record.reference.last_line_number, 2);
+    assert!(
+        !record.raw_text.ends_with('\n'),
+        "trailing padding was folded into the record: {:?}",
+        record.raw_text
+    );
 }
 
 #[test]
