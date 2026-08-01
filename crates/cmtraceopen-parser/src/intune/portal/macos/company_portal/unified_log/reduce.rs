@@ -51,13 +51,15 @@ pub fn reduce_capture_set(capture_set: PortalUnifiedLogCaptureSet) -> PortalUnif
         .unwrap_or_else(|| FALLBACK_ARTIFACT_ID.to_string());
 
     let verdicts = classify_records(&records);
-    let mut next_coverage = coverage.len();
     let mut evidence = Vec::new();
 
     for (record, selection) in records.iter().zip(verdicts) {
         if !selection.selected {
+            // The id is the entry's own position in the array it is being
+            // appended to, so reduction continues ingest's numbering without
+            // knowing anything about ingest's counter.
             coverage.push(PortalCoverageEntry {
-                coverage_id: format!("coverage-{next_coverage:04}"),
+                coverage_id: coverage_id(coverage.len()),
                 status: PortalCoverageStatus::NotSelected,
                 scope: PortalCoverageScope::Record,
                 detail: rejection_detail(record, &selection),
@@ -65,7 +67,6 @@ pub fn reduce_capture_set(capture_set: PortalUnifiedLogCaptureSet) -> PortalUnif
                 raw_excerpt: None,
                 evidence: Vec::new(),
             });
-            next_coverage += 1;
             continue;
         }
 

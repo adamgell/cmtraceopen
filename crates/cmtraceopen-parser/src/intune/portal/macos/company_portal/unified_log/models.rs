@@ -353,6 +353,17 @@ pub struct PortalCoverageEntry {
     pub evidence: Vec<PortalEvidenceRef>,
 }
 
+/// Mints the `coverage_id` for the entry at `index` in a capture's coverage.
+///
+/// Coverage entries come from two producers, ingest and reduction, and land in
+/// one array that a consumer reads as a single sequence. This is the only place
+/// the id scheme exists, so the two producers cannot drift apart: the index is
+/// the entry's own position in that array, which is what makes reduction able to
+/// continue the numbering ingest started simply by appending.
+pub fn coverage_id(index: usize) -> String {
+    format!("coverage-{index:04}")
+}
+
 /// Counts describing what the capture contained.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

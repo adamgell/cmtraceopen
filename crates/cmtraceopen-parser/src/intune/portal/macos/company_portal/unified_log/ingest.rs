@@ -198,7 +198,7 @@ struct CaptureSetBuilder {
 
 impl CaptureSetBuilder {
     fn coverage_id(&mut self) -> String {
-        let id = format!("coverage-{:04}", self.next_coverage);
+        let id = coverage_id(self.next_coverage);
         self.next_coverage += 1;
         id
     }

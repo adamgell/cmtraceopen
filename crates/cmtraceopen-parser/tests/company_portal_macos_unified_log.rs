@@ -1424,6 +1424,65 @@ fn a_non_array_records_field_is_not_a_malformed_record() {
 }
 
 // ---------------------------------------------------------------------------
+// One coverage-id scheme, one formatter
+// ---------------------------------------------------------------------------
+
+/// Ingest and reduction both append to one coverage array, and a consumer reads
+/// it as a single sequence. Pinning the ids against the one public formatter
+/// fails as soon as either producer invents its own format or its own seed.
+#[test]
+fn coverage_ids_are_one_dense_sequence_across_ingest_and_reduction() {
+    // A header whose declared coverage makes ingest emit entries, plus a record
+    // from an unrelated source that makes reduction emit one. Both land in the
+    // same array, so both producers are exercised in one sequence.
+    let header = format!(
+        r#"{{"captureId":"c","collectedAtUtc":"2026-07-15T12:05:10Z","coverage":[{{"detail":"capped","status":"capped"}},{{"detail":"denied","status":"permissionDenied"}}],"schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+    let unrelated = r#"{"category":"Misc","eventMessage":"not evidence","messageType":"Default","process":"Finder","sourceSequence":0,"subsystem":"com.example.unrelated","timestamp":"2026-07-15 07:02:00.000000-0500"}"#;
+
+    let reduction = reduce_capture_text(&format!("{header}\n{unrelated}\n"));
+
+    assert!(
+        reduction
+            .coverage
+            .iter()
+            .any(|entry| entry.status == PortalCoverageStatus::Capped),
+        "the ingest-side producer must have run"
+    );
+    assert!(
+        reduction
+            .coverage
+            .iter()
+            .any(|entry| entry.status == PortalCoverageStatus::NotSelected),
+        "the reduction-side producer must have run"
+    );
+    assert!(
+        reduction.coverage.len() >= 3,
+        "expected entries from both producers, got {:?}",
+        reduction.coverage.len()
+    );
+
+    for (index, entry) in reduction.coverage.iter().enumerate() {
+        assert_eq!(
+            entry.coverage_id,
+            coverage_id(index),
+            "coverage ids must be one dense sequence; entry {index} broke it"
+        );
+    }
+
+    let unique: BTreeSet<&str> = reduction
+        .coverage
+        .iter()
+        .map(|entry| entry.coverage_id.as_str())
+        .collect();
+    assert_eq!(
+        unique.len(),
+        reduction.coverage.len(),
+        "coverage ids must be unique"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Fixture provenance
 // ---------------------------------------------------------------------------
 
