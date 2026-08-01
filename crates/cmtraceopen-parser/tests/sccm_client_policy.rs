@@ -1243,6 +1243,62 @@ fn policy_out_of_scope_artifact_never_answers_a_client_coverage_question() {
 }
 
 #[test]
+fn policy_duplicate_client_artifact_id_is_never_resolved_by_vector_order() {
+    let mut bundle = load_bundle("complete");
+    let mut clash = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.display_name == "PolicyAgent.log")
+        .cloned()
+        .expect("policy agent artifact");
+    // Same role, same id, different identity: the map cannot pick an authority.
+    clash.display_name = "CIDownloader.log".to_owned();
+    clash.coverage = SccmCoverageState::AccessDenied;
+    bundle.artifacts.push(clash);
+
+    let forward = analysis_json(&bundle);
+    assert_eq!(
+        forward,
+        analysis_json(&reversed_bundle(&bundle)),
+        "a duplicate client artifact id must not be resolved by vector order"
+    );
+
+    let transactions = forward["transactions"].as_array().expect("transactions");
+    assert!(
+        transactions
+            .iter()
+            .all(|transaction| transaction["confidence"] != "high"),
+        "an ambiguous artifact id cannot authorize a high-confidence verdict"
+    );
+    assert!(
+        !forward["sourceLocalObservations"]
+            .as_array()
+            .expect("source-local observations")
+            .is_empty(),
+        "the ambiguous id must stay observable rather than vanish"
+    );
+}
+
+#[test]
+fn policy_identical_duplicate_client_artifact_entries_are_harmless() {
+    let mut bundle = load_bundle("complete");
+    let twin = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.display_name == "PolicyAgent.log")
+        .cloned()
+        .expect("policy agent artifact");
+    bundle.artifacts.push(twin);
+
+    let analysis = analysis_json(&bundle);
+    assert_eq!(
+        analysis["transactions"][0]["state"], "succeeded",
+        "an exactly repeated artifact entry is not an ambiguity"
+    );
+    assert_eq!(analysis["transactions"][0]["confidence"], "high");
+}
+
+#[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
     let later_success = bundle
