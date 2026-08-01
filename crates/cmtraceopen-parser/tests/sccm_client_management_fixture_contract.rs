@@ -352,6 +352,23 @@ fn source_version_matches_selected_profile(value: &str) -> bool {
         .is_some_and(|suffix| suffix.len() == 4 && suffix.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
+/// Whitespace tokens with their edge punctuation trimmed. Free-text identity
+/// rules run per token so that ordinary sentence punctuation cannot extend a
+/// token and hide the shape being screened for.
+fn public_free_text_tokens(value: &str) -> impl Iterator<Item = &str> {
+    value.split_ascii_whitespace().map(|token| {
+        token.trim_matches(|character: char| {
+            matches!(
+                character,
+                '.' | ',' | ';' | ':' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\''
+            )
+        })
+    })
+}
+
+/// True when a single token carries `s-1-` followed by at least two numeric
+/// subauthority segments. Applied per token on free-text surfaces and to the
+/// whole value on the identifier surface, which is one token by construction.
 fn contains_sid_shaped_run(value: &str) -> bool {
     value.match_indices("s-1-").any(|(index, _)| {
         let mut numeric_segments = 0usize;
@@ -396,17 +413,11 @@ fn public_free_text_is_safe(value: &str) -> bool {
     }
 
     let lower = value.to_ascii_lowercase();
-    if lower.contains("s-1-5-") || contains_sid_shaped_run(&lower) {
+    if lower.contains("s-1-5-") || public_free_text_tokens(&lower).any(contains_sid_shaped_run) {
         return false;
     }
 
-    !value.split_ascii_whitespace().any(|token| {
-        let token = token.trim_matches(|character: char| {
-            matches!(
-                character,
-                '.' | ',' | ';' | ':' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | '\''
-            )
-        });
+    !public_free_text_tokens(value).any(|token| {
         let labels = token.split('.').collect::<Vec<_>>();
         if labels.iter().any(|label| label.is_empty()) {
             return false;
