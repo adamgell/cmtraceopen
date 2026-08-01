@@ -319,7 +319,7 @@ impl TailReader {
         };
 
         let mut overflow_count = 0;
-        let mut records = if fragment.is_empty() {
+        let records = if fragment.is_empty() {
             pending
                 .map(|record| vec![FramedLogicalRecord::complete(record.content)])
                 .unwrap_or_default()
@@ -339,7 +339,10 @@ impl TailReader {
             records
         };
 
-        records.retain(|record| !record.content.is_empty());
+        // An empty record is kept rather than dropped. It parses to no entries
+        // either way, but a blank line is still a physical line, and dropping
+        // the record here would drop the line it accounts for and shift every
+        // later line number down by one.
         self.parse_logical_records(records, &selection, overflow_count)
     }
 
@@ -1124,6 +1127,66 @@ mod tests {
         assert_eq!(batch.entries.len(), 1);
         assert_eq!(batch.entries[0].message, "First action.");
         assert_eq!(batch.parse_errors, 0);
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_tail_reader_counts_a_flushed_blank_line_as_a_physical_line() {
+        // A blank first line is framed as a record of its own and parses to no
+        // entries. It is still a physical line, so the record that follows it
+        // sits on line 2. Discarding the empty record would discard the line it
+        // accounts for and shift every later line number down by one.
+        let path = unique_test_path("inventory-blank-first-line");
+        fs::write(&path, "").expect("should create empty harvester log");
+
+        let dialect = cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::Harvester;
+        let selection = ResolvedParser::intune_device_inventory(dialect);
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file).expect("should append a blank first line");
+        drop(file);
+
+        let blank = reader
+            .read_new_entries()
+            .expect("blank-line tail read should succeed");
+        assert!(blank.entries.is_empty(), "a blank line yields no entry");
+
+        std::thread::sleep(std::time::Duration::from_millis(275));
+        let flushed = reader
+            .read_new_entries()
+            .expect("quiescent tail read should flush the blank record");
+        assert!(flushed.entries.is_empty());
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "7/30/2026 6:00:54 AM [Information] After the blank.")
+            .expect("should append a harvester header");
+        drop(file);
+
+        let pending = reader
+            .read_new_entries()
+            .expect("header tail read should succeed");
+        assert!(
+            pending.entries.is_empty(),
+            "the newest record stays pending during the debounce"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(275));
+        let after = reader
+            .read_new_entries()
+            .expect("quiescent tail read should flush the header");
+        assert_eq!(after.entries.len(), 1);
+        assert_eq!(
+            after.entries[0].line_number, 2,
+            "the record after a blank first line sits on physical line 2"
+        );
 
         fs::remove_file(path).expect("should clean up temp file");
     }
