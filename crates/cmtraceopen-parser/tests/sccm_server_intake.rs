@@ -500,3 +500,96 @@ fn server_intake_exercises_role_state_rotation_and_privacy_matrix() {
         ]
     );
 }
+
+/// A fixture author must be able to declare new synthetic identifiers without
+/// editing production source. Every identifier written below conforms to the
+/// synthetic vocabulary the committed corpus already uses, and none of them
+/// appears in any committed intake fixture.
+#[test]
+fn server_intake_admits_conforming_new_synthetic_identifiers() {
+    let (manifest_json, mut payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["topology"]["captureHost"] = Value::String("LAB-DP01".to_owned());
+
+    let rewrites = [
+        (
+            "sitecomp-current",
+            "sitecomp-supplied-b",
+            "synthetic:host:site-02",
+            "synthetic:path:site-supplied-b",
+            "sitecomp-supplied-b",
+            None,
+        ),
+        (
+            "mp-policy-current",
+            "mp-policy-supplied-b",
+            "synthetic:host:mp-02",
+            "synthetic:path:mp-supplied-b",
+            "mp-policy-supplied-b",
+            None,
+        ),
+        (
+            "dp-dist-current",
+            "dp-distribution-supplied-b",
+            "synthetic:host:site-02",
+            "synthetic:path:site-dp-supplied-b",
+            "dp-distribution-supplied-b",
+            Some("synthetic:subject:dp-02"),
+        ),
+        (
+            "sup-sync-current",
+            "sup-sync-supplied-b",
+            "synthetic:host:site-02",
+            "synthetic:path:site-sup-supplied-b",
+            "sup-sync-supplied-b",
+            Some("synthetic:subject:sup-02"),
+        ),
+    ];
+
+    for (committed_id, artifact_id, host_handle, fingerprint, lineage_id, subject_handle) in rewrites
+    {
+        let artifact = manifest["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array")
+            .iter_mut()
+            .find(|artifact| artifact["artifactId"] == committed_id)
+            .unwrap_or_else(|| panic!("{committed_id} is present"));
+        artifact["artifactId"] = Value::String(artifact_id.to_owned());
+        artifact["producerHostHandle"] = Value::String(host_handle.to_owned());
+        artifact["configuredPathProvenance"]["pathFingerprint"] =
+            Value::String(fingerprint.to_owned());
+        artifact["rotation"]["lineageId"] = Value::String(lineage_id.to_owned());
+        if let Some(subject_handle) = subject_handle {
+            artifact["workflowSubject"]["instanceHandle"] = Value::String(subject_handle.to_owned());
+        }
+        for payload in &mut payloads {
+            if payload.manifest_artifact_id == committed_id {
+                payload.manifest_artifact_id = artifact_id.to_owned();
+            }
+        }
+    }
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("a conforming synthetic vocabulary must not require a production-source edit");
+    let serialized = serde_json::to_string(&assessment).expect("assessment serializes");
+    for projected in [
+        "synthetic:host:lab-dp01",
+        "sitecomp-supplied-b",
+        "mp-policy-supplied-b",
+        "dp-distribution-supplied-b",
+        "sup-sync-supplied-b",
+        "synthetic:host:site-02",
+        "synthetic:host:mp-02",
+        "synthetic:path:site-supplied-b",
+        "synthetic:path:mp-supplied-b",
+        "synthetic:path:site-dp-supplied-b",
+        "synthetic:path:site-sup-supplied-b",
+        "synthetic:subject:dp-02",
+        "synthetic:subject:sup-02",
+    ] {
+        assert!(
+            serialized.contains(projected),
+            "{projected} is not projected: {serialized}"
+        );
+    }
+}
