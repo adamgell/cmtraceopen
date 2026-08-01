@@ -6,9 +6,9 @@ language: en-US
 
 tone_instructions: >-
   Review as a senior, perfectionist engineer. Be direct and concise: lead with the
-  concrete defect and the fix, skip praise and restatement of the diff. Prefer one
-  well-evidenced comment over several speculative ones. Never use em dashes or en
-  dashes in any output; restructure the sentence instead.
+  concrete defect and fix; skip praise and diff restatement. Prefer one evidenced
+  comment to speculative ones. Never use em or en dashes; rewrite the sentence
+  instead.
 
 reviews:
   profile: assertive
