@@ -334,6 +334,77 @@ mod tests {
         assert!(redacted.starts_with("/Users/[redacted:user:001]/"));
     }
 
+    /// `\b` is a word-boundary assertion, and `:` is not a word character, so it
+    /// cannot anchor an address that begins or ends with a colon. Every
+    /// `::`-compressed form does one or both.
+    #[test]
+    fn compressed_ipv6_forms_are_fully_redacted() {
+        for address in [
+            "2001:db8:85a3::",
+            "fd12:3456:789a::",
+            "fe80::",
+            "::1",
+            "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+            "2001:db8::8a2e:370:7334",
+        ] {
+            let redacted = redact(&format!("peer {address} connected"));
+            assert!(
+                !redacted.contains(address),
+                "{address} survived redaction: {redacted}"
+            );
+            assert!(
+                redacted.starts_with("peer ") && redacted.ends_with(" connected"),
+                "delimiters must survive: {redacted}"
+            );
+        }
+    }
+
+    /// Two addresses separated by a single delimiter must both be redacted. A
+    /// guard that consumes the delimiter on both sides would leave the second
+    /// address without a delimiter to anchor against.
+    #[test]
+    fn adjacent_ipv6_addresses_are_both_redacted() {
+        let redacted = redact("peers fd12:3456:789a:: fd12:3456:789b:: done");
+        assert!(!redacted.contains("789a"), "first survived: {redacted}");
+        assert!(!redacted.contains("789b"), "second survived: {redacted}");
+
+        let redacted = redact("::1,::2");
+        assert!(!redacted.contains("::1"), "first survived: {redacted}");
+        assert!(!redacted.contains("::2"), "second survived: {redacted}");
+    }
+
+    /// The IPv6 matcher must not claim things that merely contain hex and
+    /// colons. Timestamps and MAC addresses are the two that appear in these
+    /// logs, and neither carries a `::` run or eight groups.
+    #[test]
+    fn ipv6_redaction_does_not_claim_timestamps_or_macs() {
+        let redacted = redact("2026-04-18 08:18:00:104 | CompanyPortal | I | 7 | Sync | ok");
+        assert!(
+            redacted.contains("08:18:00:104"),
+            "a timestamp is not an address: {redacted}"
+        );
+
+        // A MAC is redacted, but as a MAC, so its own token kind is used.
+        let redacted = redact("hw 00:11:22:33:44:55 up");
+        assert!(
+            redacted.contains("[redacted:mac:001]"),
+            "a MAC must stay a MAC: {redacted}"
+        );
+        assert!(redacted.ends_with(" up"));
+
+        // A bare `::` identifies nothing and appears in ordinary prose.
+        let redacted = redact("called std::process::exit");
+        assert_eq!(
+            redacted, "called std::process::exit",
+            "a path separator is not an address: {redacted}"
+        );
+
+        // An address embedded in a word is not an address, and must not be
+        // half-matched into a partial redaction that hides the leak.
+        let redacted = redact("token x2001:db8::y");
+        assert_eq!(redacted, "token x2001:db8::y");
+    }
+
     #[test]
     fn repeated_values_reuse_one_token() {
         let mut redactor = Redactor::default();
