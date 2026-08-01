@@ -198,16 +198,7 @@ struct ReducedTransaction {
 }
 
 pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnalysis {
-    // Scope the admission map to client artifacts before collecting by id.
-    // Collecting is last-wins, so an out-of-scope artifact reusing a client
-    // artifact id would otherwise shadow client evidence or be selected as its
-    // admission authority purely by artifact vector order.
-    let artifact_by_id = bundle
-        .artifacts
-        .iter()
-        .filter(|artifact| artifact.role == SccmRole::Client)
-        .map(|artifact| (artifact.artifact_id.as_str(), artifact))
-        .collect::<BTreeMap<_, _>>();
+    let (artifact_by_id, ambiguous_artifact_ids) = admissible_client_artifacts(bundle);
     let context = ReductionContext { bundle };
 
     let mut parsed_facts = Vec::new();
@@ -215,12 +206,19 @@ pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnaly
     let mut normalized_evidence_ids = BTreeSet::new();
 
     for evidence in &bundle.evidence {
+        if !is_safe_evidence_reference(&evidence.reference) {
+            continue;
+        }
+        if ambiguous_artifact_ids.contains(evidence.reference.artifact_id.as_str()) {
+            // No artifact can speak for this id, so the record cannot be
+            // admitted. It stays a visible local symptom rather than vanishing.
+            rejected_policy_evidence.push(evidence.reference.clone());
+            continue;
+        }
         let Some(artifact) = artifact_by_id.get(evidence.reference.artifact_id.as_str()) else {
             continue;
         };
-        if !is_admitted_policy_artifact(artifact)
-            || !is_safe_evidence_reference(&evidence.reference)
-        {
+        if !is_admitted_policy_artifact(artifact) {
             continue;
         }
         normalized_evidence_ids.insert(artifact.artifact_id.as_str());
@@ -526,6 +524,45 @@ fn resolve_phase(facts: &[&PolicyFact]) -> PhaseResolution {
     // usable state. That is what lets a later same-artifact success recover an
     // earlier Deferred instead of freezing the phase as contradictory.
     latest_comparable_outcome(facts).unwrap_or(PhaseResolution::Contradictory)
+}
+
+/// The client artifacts that may authorize admission, keyed by artifact id.
+///
+/// Returns the usable map and the set of ids that no artifact can speak for.
+/// Collecting into a map is last-wins, so a repeated id would otherwise make
+/// artifact vector order the admission authority. Role scoping alone is not
+/// enough: two client artifacts can carry the same id and disagree about
+/// basename or coverage. This is the artifact-level twin of
+/// [`quarantine_identity_collisions`]: an id that cannot be resolved is
+/// withheld rather than guessed. An exactly repeated entry is not a conflict,
+/// because every copy would answer identically.
+fn admissible_client_artifacts(
+    bundle: &SccmNormalizedBundle,
+) -> (BTreeMap<&str, &SccmArtifact>, BTreeSet<&str>) {
+    let mut by_id: BTreeMap<&str, &SccmArtifact> = BTreeMap::new();
+    let mut ambiguous = BTreeSet::new();
+
+    for artifact in bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.role == SccmRole::Client)
+    {
+        let id = artifact.artifact_id.as_str();
+        match by_id.get(id) {
+            Some(seen) if *seen == artifact => {}
+            Some(_) => {
+                ambiguous.insert(id);
+            }
+            None => {
+                by_id.insert(id, artifact);
+            }
+        }
+    }
+
+    for id in &ambiguous {
+        by_id.remove(id);
+    }
+    (by_id, ambiguous)
 }
 
 /// Identity of one logical record: artifact, entry, and line range.
