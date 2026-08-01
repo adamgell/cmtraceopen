@@ -1736,3 +1736,71 @@ fn a_chronology_finding_never_speaks_for_another_phase() {
         }
     }
 }
+
+#[test]
+fn every_equally_terminal_record_is_cited_rather_than_one_elected() {
+    let enforcement = |exit_code: &str, time: &str| {
+        record(
+            &format!(
+                "SYNTHETIC FIXTURE deployment enforcement terminal failure assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} exitCode={exit_code} terminal=true"
+            ),
+            time,
+            "AppEnforce",
+        )
+    };
+
+    for (label, first_id, second_id) in [
+        ("alphabetical", "synthetic-enforce-a", "synthetic-enforce-b"),
+        ("renamed", "synthetic-enforce-z", "synthetic-enforce-y"),
+    ] {
+        let bundle = bundle_from(vec![
+            (
+                client_artifact("synthetic-intent", "AppIntentEval.log"),
+                intent_content(),
+            ),
+            (
+                client_artifact("synthetic-content", "CAS.log"),
+                content_content(),
+            ),
+            (
+                client_artifact("synthetic-transfer", "DataTransferService.log"),
+                transfer_content("05:00:03.000+000", "05:00:04.000+000"),
+            ),
+            (
+                client_artifact(first_id, "AppEnforce.log"),
+                enforcement("1603", "05:00:06.000+000"),
+            ),
+            (
+                rotated_artifact(second_id, "AppEnforce.log.1", SccmRotation::Numbered(1)),
+                enforcement("1618", "05:00:07.000+000"),
+            ),
+        ]);
+
+        let analysis = analyze_client_deployment(&bundle);
+        let finding = analysis
+            .findings
+            .iter()
+            .find(|finding| finding.finding.finding_id == "deployment-enforce-terminal")
+            .unwrap_or_else(|| panic!("{label}: expected an enforcement terminal finding"));
+
+        let mut cited = finding
+            .finding
+            .terminal_evidence
+            .iter()
+            .map(|terminal| terminal.reference.artifact_id.clone())
+            .collect::<Vec<_>>();
+        cited.sort();
+        let mut expected = vec![first_id.to_owned(), second_id.to_owned()];
+        expected.sort();
+        assert_eq!(
+            cited, expected,
+            "{label}: every equally terminal record must be cited"
+        );
+
+        let transaction = only_transaction(&analysis);
+        assert!(
+            transaction.key.exit_code.is_none(),
+            "{label}: two conflicting exit codes cannot key the transaction"
+        );
+    }
+}
