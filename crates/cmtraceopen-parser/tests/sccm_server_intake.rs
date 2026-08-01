@@ -322,14 +322,38 @@ fn server_intake_scopes_canonical_identity_to_producer_host() {
     let fingerprint =
         manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
     let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
-    manifest["artifacts"][1]["producerHostHandle"] =
+    manifest["artifacts"][0]["producerHostHandle"] =
         Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["producerHostHandle"] =
+        Value::String("synthetic:host:mp-01".to_owned());
     manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
     manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
 
     let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
         .expect("the same artifact identity on a distinct producer host is independent");
     assert_eq!(assessment.artifacts.len(), 2);
+    assert_eq!(
+        assessment
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.producer_host_handle.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("synthetic:host:mp-01"), Some("synthetic:host:site-01"),],
+        "producer-host provenance orders otherwise-equal artifacts before caller ids",
+    );
+
+    let mut reordered_manifest = manifest.clone();
+    reordered_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .reverse();
+    let reordered = assess_server_intake(&serialize_manifest(&reordered_manifest), &payloads)
+        .expect("reordered distinct-host artifacts are assessed");
+    assert_eq!(
+        serde_json::to_vec(&assessment).expect("assessment serializes"),
+        serde_json::to_vec(&reordered).expect("reordered assessment serializes"),
+        "distinct-host output is independent of manifest order",
+    );
 }
 
 #[test]
@@ -377,18 +401,46 @@ fn configure_second_artifact_as_dp_identity(
 fn server_intake_scopes_canonical_identity_to_workflow_subject() {
     let (manifest_json, payloads) = load_bundle("complete-multi-role");
     let mut manifest = manifest_value(&manifest_json);
-    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:sup-01", true);
+    manifest["artifacts"][2]["workflowSubject"]["instanceHandle"] =
+        Value::String("synthetic:subject:dp-02".to_owned());
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-01", true);
 
     let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
         .expect("the same artifact identity for a distinct workflow subject is independent");
     assert_eq!(assessment.artifacts.len(), 4);
+    assert_eq!(
+        assessment
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.source_id == "server-dp-distribution")
+            .map(|artifact| artifact.workflow_subject_handle.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some("synthetic:subject:dp-01"),
+            Some("synthetic:subject:dp-02"),
+        ],
+        "workflow-subject provenance orders otherwise-equal artifacts before caller ids",
+    );
+
+    let mut reordered_manifest = manifest.clone();
+    reordered_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .reverse();
+    let reordered = assess_server_intake(&serialize_manifest(&reordered_manifest), &payloads)
+        .expect("reordered distinct-subject artifacts are assessed");
+    assert_eq!(
+        serde_json::to_vec(&assessment).expect("assessment serializes"),
+        serde_json::to_vec(&reordered).expect("reordered assessment serializes"),
+        "distinct-subject output is independent of manifest order",
+    );
 }
 
 #[test]
 fn server_intake_scopes_path_fingerprint_lineage_to_workflow_subject() {
     let (manifest_json, payloads) = load_bundle("complete-multi-role");
     let mut manifest = manifest_value(&manifest_json);
-    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:sup-01", false);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-02", false);
 
     let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
         .expect("path fingerprints are scoped to their workflow subject");

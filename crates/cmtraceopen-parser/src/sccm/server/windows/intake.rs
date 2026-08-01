@@ -310,10 +310,23 @@ struct PreparedArtifact {
 }
 
 impl PreparedArtifact {
-    fn sort_key(&self) -> (&str, &str, &str, String, &str, &str) {
+    fn sort_key(&self) -> (&str, &str, &str, &str, &str, &str, String, &str, &str) {
         (
             role_sort_key(&self.assessment.producer_role),
+            self.assessment
+                .producer_host_handle
+                .as_deref()
+                .unwrap_or_default(),
             self.assessment.source_id.as_str(),
+            self.assessment
+                .workflow_subject_role
+                .as_ref()
+                .map(role_sort_key)
+                .unwrap_or_default(),
+            self.assessment
+                .workflow_subject_handle
+                .as_deref()
+                .unwrap_or_default(),
             self.assessment.path_fingerprint.as_str(),
             rotation_sort_key(self.assessment.rotation.as_ref()),
             self.assessment
@@ -1055,7 +1068,9 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
             "subject" => {
                 matches!(
                     value,
-                    "synthetic:subject:dp-01" | "synthetic:subject:sup-01"
+                    "synthetic:subject:dp-01"
+                        | "synthetic:subject:dp-02"
+                        | "synthetic:subject:sup-01"
                 )
             }
             _ => false,
