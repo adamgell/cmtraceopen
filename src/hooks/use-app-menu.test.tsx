@@ -517,6 +517,27 @@ describe("useKeyboard native menu parity", () => {
     useUiStore.setState({ elevationPrompt: null });
   });
 
+  it("leaves a confirmation already on screen alone", async () => {
+    useUiStore.setState({ activeWorkspace: "log" });
+    renderHook(() => useAppMenu());
+
+    // An Access Denied recovery the user is part-way through.
+    const existing = {
+      reason: "accessDenied" as const,
+      workspace: "log" as const,
+      target: { kind: "file" as const, path: "C:\\Windows\\denied.log" },
+    };
+    useUiStore.getState().setElevationPrompt({ request: existing });
+
+    await emitMenuAction({ action: "restart_as_administrator" });
+
+    // Replacing it would reset the dialog's submitting and failure state
+    // mid-flight and discard the source the user was actually recovering.
+    expect(useUiStore.getState().elevationPrompt?.request).toEqual(existing);
+
+    useUiStore.setState({ elevationPrompt: null });
+  });
+
   it("restarts the log workspace with the source the user is looking at", async () => {
     useUiStore.setState({ activeWorkspace: "log" });
     useLogStore.setState({

@@ -256,6 +256,13 @@ export function useAppMenu() {
             return;
           }
           case "restart_as_administrator": {
+            // Never replace a confirmation already on screen. Overwriting it
+            // resets the dialog's submitting and failure state mid-flight, and
+            // would let a menu click clobber an Access Denied recovery prompt
+            // the user is part-way through. Matches the same guard in
+            // offerElevationForSourceFailure.
+            if (useUiStore.getState().elevationPrompt) return;
+
             // Confirm first: the backend is never called straight from a menu
             // click, so UAC can only appear after a second, deliberate action.
             const activeWorkspace = useUiStore.getState().activeWorkspace;
