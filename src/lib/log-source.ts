@@ -944,15 +944,21 @@ function getCommonDirectory(paths: string[]): string {
  * Intune and ESP workspaces already probe the kind the same way before building
  * their own source.
  *
- * A probe that cannot answer keeps the historical file-first behaviour: an
- * unknown kind must not turn a file open into a folder listing.
+ * An explicitly file-only request also keeps the file lane even if the path now
+ * names a directory. That preserves the caller's declared scope, which is
+ * especially important for a one-time elevation restore. A probe that cannot
+ * answer likewise keeps the historical file-first behaviour.
  */
 async function resolveSourceForPath(
   path: string,
-  preferFolder: boolean
+  preferFolder: boolean,
+  allowFolder: boolean
 ): Promise<LogSource> {
   if (preferFolder) {
     return { kind: "folder", path };
+  }
+  if (!allowFolder) {
+    return { kind: "file", path };
   }
 
   let pathKind: "file" | "folder" | "unknown";
@@ -981,7 +987,8 @@ export async function loadPathAsLogSource(
 
   const primarySource = await resolveSourceForPath(
     path,
-    options.preferFolder === true
+    options.preferFolder === true,
+    options.fallbackToFolder !== false
   );
 
   try {

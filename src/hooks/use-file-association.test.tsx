@@ -14,7 +14,12 @@ import {
 } from "../lib/log-source";
 import { useUiStore } from "../stores/ui-store";
 import type { RestoreTicket } from "../types/elevation";
+import type { WorkspaceId } from "../types/log";
 import { useFileAssociation } from "./use-file-association";
+
+const { workspaceOpenSourceMock } = vi.hoisted(() => ({
+  workspaceOpenSourceMock: vi.fn(),
+}));
 
 vi.mock("../lib/commands", () => ({
   getInitialElevationRestore: vi.fn(),
@@ -32,6 +37,19 @@ vi.mock("../lib/log-source", () => ({
   loadLogSource: vi.fn(),
   loadPathAsLogSource: vi.fn(),
 }));
+
+vi.mock("../workspaces/registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../workspaces/registry")>();
+  return {
+    ...actual,
+    getWorkspace: (id: WorkspaceId) => {
+      const workspace = actual.getWorkspace(id);
+      return id === "intune" || id === "esp-diagnostics"
+        ? { ...workspace, onOpenSource: workspaceOpenSourceMock }
+        : workspace;
+    },
+  };
+});
 
 const getInitialElevationRestoreMock = vi.mocked(getInitialElevationRestore);
 const getInitialFilePathsMock = vi.mocked(getInitialFilePaths);
@@ -83,6 +101,21 @@ describe("useFileAssociation startup routing", () => {
 
     await waitFor(() => expect(getInitialWorkspaceMock).toHaveBeenCalledOnce());
     expect(useUiStore.getState().activeView).toBe("esp-diagnostics");
+    expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
+    expect(loadFilesAsLogSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("routes a non-ESP workspace when a cross-account ticket cannot be read", async () => {
+    getInitialWorkspaceMock.mockResolvedValue("intune");
+    // The backend converts an unreadable or other-account ticket into absence;
+    // the closed workspace argv fallback remains available independently.
+    getInitialElevationRestoreMock.mockResolvedValue(null);
+
+    renderHook(() => useFileAssociation());
+
+    await waitFor(() =>
+      expect(useUiStore.getState().activeView).toBe("intune"),
+    );
     expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
     expect(loadFilesAsLogSourceMock).not.toHaveBeenCalled();
   });
@@ -144,7 +177,7 @@ describe("useFileAssociation startup routing", () => {
     expect(loadLogSourceMock).not.toHaveBeenCalled();
   });
 
-  it("reopens the exact file a ticket names, without folder fallback", async () => {
+  it("reopens the exact typed file a ticket names", async () => {
     getInitialElevationRestoreMock.mockResolvedValue(
       ticket({ target: { kind: "file", path: "C:\\Windows\\protected.log" } }),
     );
@@ -152,36 +185,127 @@ describe("useFileAssociation startup routing", () => {
     renderHook(() => useFileAssociation());
 
     await waitFor(() =>
-      expect(loadPathAsLogSourceMock).toHaveBeenCalledWith(
-        "C:\\Windows\\protected.log",
-        { fallbackToFolder: false },
-      ),
+      expect(loadLogSourceMock).toHaveBeenCalledWith({
+        kind: "file",
+        path: "C:\\Windows\\protected.log",
+      }),
     );
+    expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
   });
 
-  it("restores a source ticket into the workspace that asked for elevation", async () => {
+  it("restores a source through the workspace that asked for elevation", async () => {
     // An Access Denied raised inside ESP carries that workspace alongside the
     // file that failed. Forcing the log view would reopen the right source on
     // the wrong screen.
     getInitialElevationRestoreMock.mockResolvedValue(
       ticket({
         workspace: "esp-diagnostics",
-        target: { kind: "file", path: "C:\\Windows\\protected.log" },
+        target: { kind: "file", path: "C:\\Windows\\protected.zip" },
       }),
     );
 
     renderHook(() => useFileAssociation());
 
     await waitFor(() =>
-      expect(loadPathAsLogSourceMock).toHaveBeenCalledWith(
-        "C:\\Windows\\protected.log",
-        { fallbackToFolder: false },
+      expect(workspaceOpenSourceMock).toHaveBeenCalledWith(
+        { kind: "file", path: "C:\\Windows\\protected.zip" },
+        "startup.elevation-restore",
       ),
     );
     expect(useUiStore.getState().activeView).toBe("esp-diagnostics");
+    expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
   });
 
-  it("reopens a folder ticket through the folder source path", async () => {
+  it("reruns an Intune source through its analysis handler after elevation", async () => {
+    getInitialElevationRestoreMock.mockResolvedValue(
+      ticket({
+        workspace: "intune",
+        target: {
+          kind: "file",
+          path: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+        },
+      }),
+    );
+
+    renderHook(() => useFileAssociation());
+
+    await waitFor(() =>
+      expect(workspaceOpenSourceMock).toHaveBeenCalledWith(
+        {
+          kind: "file",
+          path: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+        },
+        "startup.elevation-restore",
+      ),
+    );
+    expect(useUiStore.getState().activeView).toBe("intune");
+    expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a source in a different workspace when the requested one is unavailable", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    useUiStore.setState({
+      activeWorkspace: "log",
+      activeView: "log",
+      enabledWorkspaces: ["log"],
+    });
+    getInitialElevationRestoreMock.mockResolvedValue(
+      ticket({
+        workspace: "intune",
+        target: {
+          kind: "file",
+          path: "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+        },
+      }),
+    );
+
+    renderHook(() => useFileAssociation());
+
+    try {
+      await waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          "[elevation] requested workspace is unavailable; source restore skipped",
+          { workspace: "intune" },
+        ),
+      );
+      expect(useUiStore.getState().activeView).toBe("log");
+      expect(workspaceOpenSourceMock).not.toHaveBeenCalled();
+      expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
+      expect(loadLogSourceMock).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not load hidden generic log state for a workspace without a source handler", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    useUiStore.setState({ currentPlatform: "windows" });
+    getInitialElevationRestoreMock.mockResolvedValue(
+      ticket({
+        workspace: "event-log",
+        target: { kind: "file", path: "C:\\Windows\\protected.evtx" },
+      }),
+    );
+
+    renderHook(() => useFileAssociation());
+
+    try {
+      await waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          "[elevation] requested workspace cannot restore sources; source restore skipped",
+          { workspace: "event-log" },
+        ),
+      );
+      expect(useUiStore.getState().activeView).toBe("event-log");
+      expect(workspaceOpenSourceMock).not.toHaveBeenCalled();
+      expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
+      expect(loadLogSourceMock).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("reopens the exact typed folder a ticket names", async () => {
     getInitialElevationRestoreMock.mockResolvedValue(
       ticket({ target: { kind: "folder", path: "C:\\Windows\\Logs" } }),
     );
@@ -189,11 +313,12 @@ describe("useFileAssociation startup routing", () => {
     renderHook(() => useFileAssociation());
 
     await waitFor(() =>
-      expect(loadPathAsLogSourceMock).toHaveBeenCalledWith(
-        "C:\\Windows\\Logs",
-        { fallbackToFolder: true },
-      ),
+      expect(loadLogSourceMock).toHaveBeenCalledWith({
+        kind: "folder",
+        path: "C:\\Windows\\Logs",
+      }),
     );
+    expect(loadPathAsLogSourceMock).not.toHaveBeenCalled();
   });
 
   it("resolves a known source by id rather than a persisted path", async () => {
@@ -217,6 +342,41 @@ describe("useFileAssociation startup routing", () => {
     expect(getKnownSourceMetadataByIdMock).toHaveBeenCalledWith(
       "ccm-client-logs",
     );
+  });
+
+  it("reasserts the requested workspace after asynchronous source resolution", async () => {
+    const source = { kind: "file" as const, path: "C:\\Windows\\protected.log" };
+    let resolveMetadata!: (
+      value: Awaited<ReturnType<typeof getKnownSourceMetadataById>>,
+    ) => void;
+    getKnownSourceMetadataByIdMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMetadata = resolve;
+        }),
+    );
+    getInitialElevationRestoreMock.mockResolvedValue(
+      ticket({ target: { kind: "knownSource", sourceId: "protected-log" } }),
+    );
+
+    renderHook(() => useFileAssociation());
+
+    await waitFor(() =>
+      expect(getKnownSourceMetadataByIdMock).toHaveBeenCalledOnce(),
+    );
+    useUiStore.getState().setActiveWorkspace("intune");
+    resolveMetadata({
+      id: "protected-log",
+      label: "Protected synthetic log",
+      description: "",
+      platform: "windows",
+      sourceKind: "file",
+      source,
+      filePatterns: [],
+    });
+
+    await waitFor(() => expect(loadLogSourceMock).toHaveBeenCalledWith(source));
+    expect(useUiStore.getState().activeView).toBe("log");
   });
 
   it("degrades to a warning when a restored known source no longer exists", async () => {

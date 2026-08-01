@@ -14,6 +14,7 @@ import {
 import { useFilterStore } from "../stores/filter-store";
 import { useUiStore } from "../stores/ui-store";
 import type { RestoreTicket } from "../types/elevation";
+import type { LogSource } from "../types/log";
 
 /**
  * Hook that handles validated launch intent at app startup.
@@ -78,10 +79,10 @@ export function useFileAssociation() {
           return;
         }
 
-        if (workspace === "esp-diagnostics") {
+        if (workspace) {
           useUiStore
             .getState()
-            .ensureWorkspaceVisible("esp-diagnostics", "startup.workspace");
+            .ensureWorkspaceVisible(workspace, "startup.workspace");
         }
       })
       .catch((error) => {
@@ -117,20 +118,66 @@ async function restoreElevatedSource(
 
   if (target.kind === "workspace") return;
 
-  clearFilter();
-
-  switch (target.kind) {
-    case "file":
-      await loadPathAsLogSource(target.path, { fallbackToFolder: false });
-      return;
-    case "folder":
-      await loadPathAsLogSource(target.path, { fallbackToFolder: true });
-      return;
-    case "knownSource":
-      // Known sources resolve through the catalog by stable id rather than a
-      // persisted expanded path, so the elevated process reads current metadata.
-      await openKnownSourceById(target.sourceId);
+  if (useUiStore.getState().activeWorkspace !== workspace) {
+    // A feature-disabled or platform-incompatible workspace cannot safely lend
+    // its source intent to whichever workspace happened to remain visible.
+    // Keep the app open at its normal fallback and make the coverage gap
+    // explicit without logging the source path.
+    console.warn(
+      "[elevation] requested workspace is unavailable; source restore skipped",
+      { workspace },
+    );
+    return;
   }
+
+  let source: LogSource;
+  if (target.kind === "knownSource") {
+    const restored = await resolveKnownSourceById(target.sourceId);
+    if (!restored) return;
+    source = restored;
+  } else {
+    source = { kind: target.kind, path: target.path };
+  }
+
+  // Replay the source through the same handler as an ordinary open in the
+  // workspace that actually survived the availability check above. This is
+  // load-bearing for diagnostic workspaces: loading an Intune folder into the
+  // generic log store would leave the right workspace visible with no analysis.
+  const { getWorkspace } = await import("../workspaces/registry");
+
+  // Source and workspace resolution above are asynchronous. Reassert the
+  // ticket's workspace immediately before dispatch so a workspace change that
+  // raced either lookup cannot route the restored source behind another view.
+  useUiStore
+    .getState()
+    .ensureWorkspaceVisible(workspace, "startup.elevation-restore");
+  if (useUiStore.getState().activeWorkspace !== workspace) {
+    console.warn(
+      "[elevation] requested workspace is unavailable; source restore skipped",
+      { workspace },
+    );
+    return;
+  }
+
+  const workspaceHandler = getWorkspace(workspace).onOpenSource;
+  if (workspaceHandler) {
+    await workspaceHandler(source, "startup.elevation-restore");
+    return;
+  }
+
+  if (workspace !== "log") {
+    // A validated ticket may still combine an allowlisted workspace with a
+    // source that workspace does not know how to open. Do not populate hidden
+    // Log Explorer state behind a different screen.
+    console.warn(
+      "[elevation] requested workspace cannot restore sources; source restore skipped",
+      { workspace },
+    );
+    return;
+  }
+
+  clearFilter();
+  await loadLogSource(source);
 }
 
 /**
@@ -140,13 +187,15 @@ async function restoreElevatedSource(
  * path means the elevated process opens whatever that source means now, and a
  * source that has since disappeared degrades to a warning instead of a bad path.
  */
-async function openKnownSourceById(sourceId: string): Promise<void> {
+async function resolveKnownSourceById(
+  sourceId: string,
+): Promise<LogSource | null> {
   const source = await getKnownSourceMetadataById(sourceId);
   if (!source) {
     console.warn("[elevation] restored known source is no longer available", {
       sourceId,
     });
-    return;
+    return null;
   }
-  await loadLogSource(source.source);
+  return source.source;
 }

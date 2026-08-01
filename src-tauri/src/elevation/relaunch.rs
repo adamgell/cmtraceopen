@@ -1,12 +1,13 @@
 //! Platform mechanics for restart-as-administrator.
 //!
 //! This module owns the only `ShellExecute`/`runas` implementation in the
-//! application. It is deliberately free of any workspace's models so it stays
-//! available regardless of which product features are compiled in.
+//! application. It accepts only the shared closed workspace enum, keeping the
+//! handoff independent of feature-specific workspace state.
 //!
 //! What reaches the elevated child is rebuilt from nothing: the current
-//! executable, the fixed `runas` verb, and at most one validated opaque restore
-//! ticket identifier. The caller's own startup arguments are never forwarded.
+//! executable, the fixed `runas` verb, a validated opaque restore ticket
+//! identifier, and its allowlisted workspace fallback. The caller's own startup
+//! arguments are never forwarded.
 
 use std::path::PathBuf;
 
@@ -14,14 +15,20 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::restore_ticket::validate_ticket_id;
+use super::AppWorkspace;
 
-/// The single startup option the elevated child accepts.
+/// Names the opaque one-time restore ticket for the elevated child.
 pub const ELEVATION_RESTORE_FLAG: &str = "--elevation-restore=";
+
+/// Names a closed workspace fallback for cross-account elevation, where the
+/// elevated child cannot read a ticket from the launching user's profile.
+pub const ELEVATION_WORKSPACE_FLAG: &str = "--elevation-workspace=";
 
 /// Substrings that must never appear in anything handed to the elevated child.
 ///
-/// Nothing is forwarded today, so this is a standing assertion rather than a
-/// filter: if a future change starts propagating arguments, it fails closed.
+/// No caller-supplied argument is forwarded, so this is a standing assertion
+/// rather than a filter: if a future change starts propagating arguments, it
+/// fails closed.
 const SECRET_MARKERS: &[&str] = &[
     "access-token",
     "accesstoken",
@@ -102,6 +109,7 @@ pub trait RelaunchProvider {
 pub fn restart_with_provider(
     provider: &impl RelaunchProvider,
     restore_ticket_id: Option<&str>,
+    workspace: Option<AppWorkspace>,
 ) -> Result<RelaunchResult, RelaunchError> {
     if !provider.platform_supported() {
         return Ok(result(false, RelaunchReason::UnsupportedPlatform));
@@ -113,7 +121,7 @@ pub fn restart_with_provider(
         return Ok(result(false, RelaunchReason::AlreadyElevated));
     }
 
-    let arguments = elevated_arguments(restore_ticket_id)?;
+    let arguments = elevated_arguments(restore_ticket_id, workspace)?;
     let executable = provider
         .current_executable()
         .map_err(|_| launch_failed("unable to resolve the CMTrace Open executable"))?;
@@ -152,19 +160,34 @@ fn launch_failed(message: &str) -> RelaunchError {
 
 /// Build the child's argument list from scratch.
 ///
-/// The result is either empty or exactly one `--elevation-restore=<id>` whose
-/// identifier has already passed the ticket character-set check.
-fn elevated_arguments(restore_ticket_id: Option<&str>) -> Result<Vec<String>, RelaunchError> {
-    let Some(id) = restore_ticket_id else {
-        return Ok(Vec::new());
-    };
-    validate_ticket_id(id).map_err(|_| RelaunchError::UnsafeArgument)?;
-
-    let argument = format!("{ELEVATION_RESTORE_FLAG}{id}");
-    if argument.contains('\0') || contains_secret_marker(&argument) {
+/// The restore identifier is validated before it is emitted. The optional
+/// workspace comes from `AppWorkspace`, so no arbitrary user value or path can
+/// cross the process boundary through this fallback.
+fn elevated_arguments(
+    restore_ticket_id: Option<&str>,
+    workspace: Option<AppWorkspace>,
+) -> Result<Vec<String>, RelaunchError> {
+    if restore_ticket_id.is_none() && workspace.is_some() {
         return Err(RelaunchError::UnsafeArgument);
     }
-    Ok(vec![argument])
+
+    let mut arguments = Vec::new();
+
+    if let Some(id) = restore_ticket_id {
+        validate_ticket_id(id).map_err(|_| RelaunchError::UnsafeArgument)?;
+        arguments.push(format!("{ELEVATION_RESTORE_FLAG}{id}"));
+    }
+    if let Some(workspace) = workspace {
+        arguments.push(format!("{ELEVATION_WORKSPACE_FLAG}{}", workspace.as_id()));
+    }
+
+    if arguments
+        .iter()
+        .any(|argument| argument.contains('\0') || contains_secret_marker(argument))
+    {
+        return Err(RelaunchError::UnsafeArgument);
+    }
+    Ok(arguments)
 }
 
 fn contains_secret_marker(value: &str) -> bool {
@@ -185,6 +208,15 @@ pub fn parse_restore_argument<S: AsRef<str>>(arguments: &[S]) -> Option<String> 
         let id = argument.as_ref().strip_prefix(ELEVATION_RESTORE_FLAG)?;
         validate_ticket_id(id).ok()?;
         Some(id.to_string())
+    })
+}
+
+/// Read a workspace fallback from a startup argument without ever accepting a
+/// path or a future workspace that this build does not know how to route.
+pub fn parse_workspace_argument<S: AsRef<str>>(arguments: &[S]) -> Option<AppWorkspace> {
+    arguments.iter().find_map(|argument| {
+        let id = argument.as_ref().strip_prefix(ELEVATION_WORKSPACE_FLAG)?;
+        AppWorkspace::from_id(id)
     })
 }
 
@@ -479,7 +511,7 @@ mod tests {
             ..FakeProvider::windows()
         };
 
-        let result = restart_with_provider(&provider, None).expect("no error");
+        let result = restart_with_provider(&provider, None, None).expect("no error");
 
         assert_eq!(
             result,
@@ -501,7 +533,7 @@ mod tests {
             ..FakeProvider::windows()
         };
 
-        let result = restart_with_provider(&provider, None).expect("no error");
+        let result = restart_with_provider(&provider, None, None).expect("no error");
 
         assert_eq!(result.reason, RelaunchReason::AlreadyElevated);
         assert!(!result.launched);
@@ -515,7 +547,7 @@ mod tests {
             ..FakeProvider::windows()
         };
 
-        let error = restart_with_provider(&provider, None).unwrap_err();
+        let error = restart_with_provider(&provider, None, None).unwrap_err();
 
         assert_eq!(
             error,
@@ -530,7 +562,7 @@ mod tests {
         let provider = FakeProvider::windows();
         let id = new_ticket_id();
 
-        let result = restart_with_provider(&provider, Some(&id)).expect("no error");
+        let result = restart_with_provider(&provider, Some(&id), None).expect("no error");
 
         assert_eq!(result.reason, RelaunchReason::Launched);
         assert!(result.launched);
@@ -547,10 +579,49 @@ mod tests {
     }
 
     #[test]
+    fn elevated_launch_carries_a_closed_workspace_fallback_with_the_ticket() {
+        let provider = FakeProvider::windows();
+        let id = new_ticket_id();
+
+        restart_with_provider(
+            &provider,
+            Some(&id),
+            Some(crate::elevation::AppWorkspace::Intune),
+        )
+        .expect("launch succeeds");
+
+        let seen = provider.seen.borrow();
+        let request = seen.first().expect("one launch");
+        assert_eq!(
+            request.arguments,
+            vec![
+                format!("--elevation-restore={id}"),
+                "--elevation-workspace=intune".to_string(),
+            ]
+        );
+        assert_eq!(request.parameters, request.arguments.join(" "));
+    }
+
+    #[test]
+    fn a_workspace_fallback_without_a_ticket_is_refused() {
+        let provider = FakeProvider::windows();
+
+        let error = restart_with_provider(
+            &provider,
+            None,
+            Some(crate::elevation::AppWorkspace::Intune),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, RelaunchError::UnsafeArgument);
+        assert!(provider.seen.borrow().is_empty());
+    }
+
+    #[test]
     fn a_workspace_only_restart_passes_no_arguments() {
         let provider = FakeProvider::windows();
 
-        restart_with_provider(&provider, None).expect("no error");
+        restart_with_provider(&provider, None, None).expect("no error");
 
         let seen = provider.seen.borrow();
         let request = seen.first().expect("one launch");
@@ -565,7 +636,7 @@ mod tests {
     fn a_malformed_ticket_identifier_is_refused() {
         let provider = FakeProvider::windows();
 
-        let error = restart_with_provider(&provider, Some("../../etc/passwd")).unwrap_err();
+        let error = restart_with_provider(&provider, Some("../../etc/passwd"), None).unwrap_err();
 
         assert_eq!(error, RelaunchError::UnsafeArgument);
         assert!(
@@ -581,7 +652,8 @@ mod tests {
             ..FakeProvider::windows()
         };
 
-        let result = restart_with_provider(&provider, None).expect("cancellation is not an error");
+        let result =
+            restart_with_provider(&provider, None, None).expect("cancellation is not an error");
 
         assert_eq!(result.reason, RelaunchReason::ElevationCancelled);
         assert!(!result.launched);
@@ -596,7 +668,7 @@ mod tests {
             ..FakeProvider::windows()
         };
 
-        let error = restart_with_provider(&provider, None).unwrap_err();
+        let error = restart_with_provider(&provider, None, None).unwrap_err();
 
         let RelaunchError::LaunchFailed { message } = error else {
             panic!("expected a launch failure");
@@ -614,7 +686,7 @@ mod tests {
             ..FakeProvider::windows()
         };
 
-        let error = restart_with_provider(&provider, None).unwrap_err();
+        let error = restart_with_provider(&provider, None, None).unwrap_err();
 
         let RelaunchError::LaunchFailed { message } = error else {
             panic!("expected a launch failure");
@@ -631,7 +703,7 @@ mod tests {
         };
 
         assert_eq!(
-            restart_with_provider(&provider, None).unwrap_err(),
+            restart_with_provider(&provider, None, None).unwrap_err(),
             RelaunchError::UnsafeArgument
         );
     }
@@ -644,7 +716,7 @@ mod tests {
         };
 
         assert_eq!(
-            restart_with_provider(&provider, None).unwrap_err(),
+            restart_with_provider(&provider, None, None).unwrap_err(),
             RelaunchError::LaunchFailed {
                 message: "unable to resolve the CMTrace Open executable".to_string()
             }
@@ -716,6 +788,23 @@ mod tests {
             parse_restore_argument(&[r"C:\logs\--elevation-restore=x.log".to_string()]),
             None
         );
+    }
+
+    #[test]
+    fn workspace_fallback_parsing_accepts_only_closed_exact_options() {
+        assert_eq!(
+            parse_workspace_argument(&["--elevation-workspace=intune"]),
+            Some(crate::elevation::AppWorkspace::Intune)
+        );
+        assert_eq!(
+            parse_workspace_argument(&["--elevation-workspace=future-workspace"]),
+            None
+        );
+        assert_eq!(
+            parse_workspace_argument(&[r"C:\logs\--elevation-workspace=intune.log"]),
+            None
+        );
+        assert_eq!(parse_workspace_argument(&["--elevation-workspace="]), None);
     }
 }
 

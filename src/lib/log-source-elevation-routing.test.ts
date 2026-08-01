@@ -8,11 +8,17 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectPathKind, listLogSourceFolder, openLogFile, openLogSourceFile } from "./commands";
+import {
+  inspectPathKind,
+  listLogSourceFolder,
+  openLogFile,
+  openLogSourceFile,
+} from "./commands";
 import { offerElevationForSourceFailure } from "./elevation-recovery";
 import { loadPathAsLogSource, loadLogSource } from "./log-source";
 import { recordAccessDenied } from "./source-error";
 import { useLogStore } from "../stores/log-store";
+import type { ParseResult } from "../types/log";
 
 vi.mock("./commands", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./commands")>();
@@ -36,6 +42,24 @@ const openLogSourceFileMock = vi.mocked(openLogSourceFile);
 const offerElevationMock = vi.mocked(offerElevationForSourceFailure);
 
 const FOLDER_PATH = "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs";
+
+const parsedFile: ParseResult = {
+  entries: [],
+  formatDetected: "Plain",
+  parserSelection: {
+    parser: "plain",
+    implementation: "plainText",
+    provenance: "fallback",
+    parseQuality: "textFallback",
+    recordFraming: "physicalLine",
+    dateOrder: null,
+  },
+  totalLines: 0,
+  parseErrors: 0,
+  filePath: "C:\\logs\\a.log",
+  fileSize: 0,
+  byteOffset: 0,
+};
 
 function deniedError(path: string): Error {
   const error = new Error("Access to this file was denied by the operating system.");
@@ -79,20 +103,12 @@ describe("path lane selection", () => {
 
   it("still opens a file through the file lane", async () => {
     inspectPathKindMock.mockResolvedValue("file");
-    openLogSourceFileMock.mockResolvedValue({
-      entries: [],
-      formatDetected: null,
-      parserSelection: null,
-      totalLines: 0,
-      parseErrors: 0,
-      filePath: "C:\\logs\\a.log",
-      fileSize: 0,
-      byteOffset: 0,
-    } as never);
+    openLogSourceFileMock.mockResolvedValue(parsedFile);
 
     await loadPathAsLogSource("C:\\logs\\a.log");
 
     expect(openLogSourceFileMock).toHaveBeenCalled();
+    expect(listLogSourceFolderMock).not.toHaveBeenCalled();
   });
 
   it("stays optimistic about the file lane when the kind cannot be determined", async () => {
@@ -100,19 +116,24 @@ describe("path lane selection", () => {
     // open into a folder listing: unknown keeps today's behaviour.
     inspectPathKindMock.mockResolvedValue("unknown");
     openLogSourceFileMock.mockResolvedValue({
-      entries: [],
-      formatDetected: null,
-      parserSelection: null,
-      totalLines: 0,
-      parseErrors: 0,
+      ...parsedFile,
       filePath: "C:\\logs\\b.log",
-      fileSize: 0,
-      byteOffset: 0,
-    } as never);
+    });
 
     await loadPathAsLogSource("C:\\logs\\b.log");
 
     expect(openLogSourceFileMock).toHaveBeenCalled();
+    expect(listLogSourceFolderMock).not.toHaveBeenCalled();
+  });
+
+  it("does not widen an explicit file-only retry into a folder source", async () => {
+    inspectPathKindMock.mockResolvedValue("folder");
+    openLogSourceFileMock.mockResolvedValue(parsedFile);
+
+    await loadPathAsLogSource(FOLDER_PATH, { fallbackToFolder: false });
+
+    expect(openLogSourceFileMock).toHaveBeenCalled();
+    expect(listLogSourceFolderMock).not.toHaveBeenCalled();
   });
 });
 

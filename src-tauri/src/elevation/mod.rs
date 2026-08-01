@@ -1,9 +1,10 @@
 //! Application-wide, user-initiated Windows elevation.
 //!
 //! One owner for restart-as-administrator across every workspace. The elevated
-//! child receives only an opaque one-time restore ticket identifier — never a
-//! source path, token, filter, or serialized session. See `relaunch` for the
-//! platform mechanics and `restore_ticket` for the handoff.
+//! child receives an opaque one-time restore ticket identifier plus a closed
+//! workspace fallback for over-the-shoulder elevation — never a source path,
+//! token, filter, or serialized session. See `relaunch` for the platform
+//! mechanics and `restore_ticket` for the handoff.
 
 pub mod relaunch;
 pub mod restore_ticket;
@@ -61,6 +62,27 @@ impl AppWorkspace {
             Self::Sysmon => "sysmon",
             Self::Timeline => "timeline",
             Self::DnsDhcp => "dns-dhcp",
+        }
+    }
+
+    /// Resolve an untrusted startup value through the same closed workspace
+    /// vocabulary used by restore tickets.
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "log" => Some(Self::Log),
+            "intune" => Some(Self::Intune),
+            "new-intune" => Some(Self::NewIntune),
+            "dsregcmd" => Some(Self::Dsregcmd),
+            "macos-diag" => Some(Self::MacosDiag),
+            "macos-jamf" => Some(Self::MacosJamf),
+            "deployment" => Some(Self::Deployment),
+            "event-log" => Some(Self::EventLog),
+            "esp-diagnostics" => Some(Self::EspDiagnostics),
+            "secureboot" => Some(Self::Secureboot),
+            "sysmon" => Some(Self::Sysmon),
+            "timeline" => Some(Self::Timeline),
+            "dns-dhcp" => Some(Self::DnsDhcp),
+            _ => None,
         }
     }
 }
@@ -329,6 +351,31 @@ mod tests {
             parsed.is_err(),
             "unknown workspace ids must not deserialize"
         );
+    }
+
+    #[test]
+    fn startup_workspace_ids_round_trip_through_the_closed_allowlist() {
+        for workspace in [
+            AppWorkspace::Log,
+            AppWorkspace::Intune,
+            AppWorkspace::NewIntune,
+            AppWorkspace::Dsregcmd,
+            AppWorkspace::MacosDiag,
+            AppWorkspace::MacosJamf,
+            AppWorkspace::Deployment,
+            AppWorkspace::EventLog,
+            AppWorkspace::EspDiagnostics,
+            AppWorkspace::Secureboot,
+            AppWorkspace::Sysmon,
+            AppWorkspace::Timeline,
+            AppWorkspace::DnsDhcp,
+        ] {
+            assert_eq!(AppWorkspace::from_id(workspace.as_id()), Some(workspace));
+        }
+
+        for untrusted in ["", "INTUNE", "future-workspace", "../intune"] {
+            assert_eq!(AppWorkspace::from_id(untrusted), None, "{untrusted:?}");
+        }
     }
 
     #[test]

@@ -49,9 +49,10 @@ struct InitialLaunchArguments {
 
 /// Parses app-owned startup options separately from positional file paths.
 ///
-/// Three kinds of argument are recognised and they never blend into each other:
-/// positional paths from an OS file association, the legacy workspace option
-/// that the ESP relaunch still emits, and the elevation restore ticket.
+/// Four kinds of argument are recognised and they never blend into each other:
+/// positional paths from an OS file association, the legacy ESP workspace
+/// option, the elevation restore ticket, and its closed
+/// `--elevation-workspace` fallback.
 ///
 /// An option that fails validation is dropped rather than demoted to a file
 /// path, so a malformed `--elevation-restore=` can never be opened as evidence
@@ -61,6 +62,7 @@ fn parse_initial_launch_arguments(
 ) -> InitialLaunchArguments {
     let mut launch = InitialLaunchArguments::default();
     let mut arguments = arguments.into_iter();
+    let mut elevation_workspace = None;
 
     while let Some(argument) = arguments.next() {
         if argument.eq_ignore_ascii_case("--workspace") {
@@ -84,6 +86,15 @@ fn parse_initial_launch_arguments(
             continue;
         }
 
+        if argument.starts_with(elevation::relaunch::ELEVATION_WORKSPACE_FLAG) {
+            if elevation_workspace.is_none() {
+                elevation_workspace =
+                    elevation::relaunch::parse_workspace_argument(std::slice::from_ref(&argument))
+                        .map(|workspace| workspace.as_id().to_string());
+            }
+            continue;
+        }
+
         if cfg!(feature = "esp-diagnostics")
             && (argument.eq_ignore_ascii_case("--workspace=esp-diagnostics")
                 || argument.eq_ignore_ascii_case("--esp-diagnostics"))
@@ -92,6 +103,10 @@ fn parse_initial_launch_arguments(
         } else if !argument.starts_with('-') {
             launch.file_paths.push(argument);
         }
+    }
+
+    if launch.elevation_restore.is_some() && launch.workspace.is_none() {
+        launch.workspace = elevation_workspace;
     }
 
     launch
@@ -451,6 +466,46 @@ mod tests {
         assert_eq!(launch.elevation_restore.as_deref(), Some(id.as_str()));
         assert!(launch.file_paths.is_empty());
         assert_eq!(launch.workspace, None);
+    }
+
+    #[test]
+    fn elevation_workspace_fallback_is_parsed_without_becoming_a_file_path() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--elevation-restore=1487dc30-3bb0-46bf-98ee-76771bd9953e",
+            "--elevation-workspace=intune",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("intune"));
+        assert_eq!(
+            launch.elevation_restore.as_deref(),
+            Some("1487dc30-3bb0-46bf-98ee-76771bd9953e"),
+        );
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[test]
+    fn elevation_workspace_fallback_without_a_ticket_is_dropped() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--elevation-workspace=intune",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.elevation_restore, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[test]
+    fn unknown_elevation_workspace_is_dropped_without_becoming_a_file_path() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--elevation-restore=1487dc30-3bb0-46bf-98ee-76771bd9953e",
+            "--elevation-workspace=future-workspace",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
     }
 
     #[test]

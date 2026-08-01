@@ -137,7 +137,11 @@ pub fn get_app_elevation_state() -> AppElevationState {
     crate::elevation::current_elevation_state()
 }
 
-/// Relaunch elevated, restoring only the requested workspace and source.
+/// Relaunch elevated with a one-time source ticket and closed workspace fallback.
+///
+/// A same-account child can consume the per-user ticket and restore the exact
+/// source. An over-the-shoulder child runs under another profile, so only the
+/// allowlisted workspace fallback remains available there.
 ///
 /// The current process exits only after Windows confirms the elevated child
 /// started. Cancelling UAC, running on an unsupported platform, and already
@@ -176,13 +180,14 @@ pub async fn restart_as_administrator(
             .app_local_data_dir()
             .map_err(|_| ElevationCommandError::StateDirectoryUnavailable)?,
     );
-    let ticket = ticket_for(request.workspace, request.target, request.reason, now_ms());
+    let workspace = request.workspace;
+    let ticket = ticket_for(workspace, request.target, request.reason, now_ms());
     let ticket_id = crate::elevation::restore_ticket::write_ticket(&directory, &ticket)
         .map_err(|_| ElevationCommandError::TicketUnavailable)?;
 
     let launch_id = ticket_id.clone();
     let joined = tauri::async_runtime::spawn_blocking(move || {
-        restart_with_provider(&NativeRelaunchProvider, Some(&launch_id))
+        restart_with_provider(&NativeRelaunchProvider, Some(&launch_id), Some(workspace))
     })
     .await;
 
