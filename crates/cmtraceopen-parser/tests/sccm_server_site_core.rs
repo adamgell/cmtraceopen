@@ -584,6 +584,112 @@ fn a_source_family_without_a_validated_producer_is_coverage_not_silence() {
     );
 }
 
+/// The producer gate is what makes an unvalidated family coverage rather than
+/// a diagnosis, so every stage that reads a source has to apply it. Bytes this
+/// profile has no validated producer for cannot become a source-local symptom,
+/// and the gap a transaction cites must agree with the gap the analysis
+/// publishes for the same artifact.
+#[test]
+fn an_unvalidated_source_family_is_never_read_as_a_symptom() {
+    let mut bundle = load_bundle("healthy");
+    let mut relabelled = String::new();
+    for source in &mut bundle.sources {
+        if source.source_group == "server-status" {
+            source.artifact.display_name = "statesys.log".to_owned();
+            source.rotation_lineage = "statesys.log".to_owned();
+            // Physical bytes past the last record this profile could read.
+            source.physical_line_end = source.physical_line_end.map(|end| end + 3);
+            relabelled = source.artifact.artifact_id.clone();
+        }
+    }
+    assert!(
+        !relabelled.is_empty(),
+        "healthy bundle declares a status source"
+    );
+
+    let analysis = analyze_site_core(&bundle);
+    assert!(
+        analysis.unlinked_observations.iter().all(|observation| {
+            observation
+                .evidence
+                .iter()
+                .all(|evidence| evidence.artifact_id != relabelled)
+        }),
+        "an unvalidated source family must never carry a source-local diagnosis"
+    );
+    let gap = analysis
+        .coverage_gaps
+        .iter()
+        .find(|gap| gap.artifact_id == relabelled)
+        .expect("an unvalidated source family stays visible as coverage");
+    assert_eq!(
+        gap.state,
+        SccmCoverageState::Unsupported,
+        "an unvalidated source family is unsupported coverage"
+    );
+    assert!(
+        analysis
+            .results
+            .iter()
+            .all(|result| result.coverage_gap_artifact_ids.contains(&relabelled)),
+        "every transaction must cite the unsupported source it could not read"
+    );
+    for finding in &analysis.findings {
+        for cited in &finding.finding.coverage_gaps {
+            if cited.artifact_id == relabelled {
+                assert_eq!(
+                    cited.coverage, gap.state,
+                    "a finding must not relabel the coverage gap it cites"
+                );
+            }
+        }
+    }
+}
+
+/// A captured source that yielded no complete logical record is not a fact
+/// source. Whether it also left an unparsed tail decides how it is cited, never
+/// whether it is cited at all: the gate that withholds its facts has to leave a
+/// coverage gap behind.
+#[test]
+fn a_captured_source_that_read_no_record_is_still_coverage() {
+    let mut bundle = load_bundle("healthy");
+    let mut incomplete = String::new();
+    for source in &mut bundle.sources {
+        if source.source_group == "server-status" {
+            source.fragment_complete = Some(false);
+            incomplete = source.artifact.artifact_id.clone();
+        }
+    }
+    assert!(
+        !incomplete.is_empty(),
+        "healthy bundle declares a status source"
+    );
+
+    let analysis = analyze_site_core(&bundle);
+    assert!(
+        analysis.results.iter().all(|result| result
+            .evidence
+            .iter()
+            .all(|evidence| evidence.artifact_id != incomplete)),
+        "an incomplete source must never contribute facts"
+    );
+    assert!(
+        analysis
+            .coverage_gaps
+            .iter()
+            .any(|gap| gap.artifact_id == incomplete
+                && gap.state == SccmCoverageState::ParseFailed),
+        "an incomplete source must stay visible as an explicit coverage gap"
+    );
+    assert!(
+        analysis
+            .results
+            .iter()
+            .all(|result| result.coverage_gap_artifact_ids.contains(&incomplete)),
+        "every transaction must cite the source it could not read"
+    );
+}
+
 #[test]
 fn analysis_is_independent_of_source_and_evidence_order() {
     for scenario in SCENARIOS {
