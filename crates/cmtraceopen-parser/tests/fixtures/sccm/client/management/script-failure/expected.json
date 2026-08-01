@@ -1,0 +1,72 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "script-failure",
+  "workflow": "scripts",
+  "extractionProfile": {
+    "id": "sccm-client-scripts-5.00.test-v1",
+    "versionPrefix": "5.00.TEST.",
+    "selectionState": "selected"
+  },
+  "ownership": {
+    "classification": "SccmOwned",
+    "confidence": "high",
+    "terminalHandoff": false,
+    "workload": "Scripts",
+    "evidence": [
+      {
+        "artifactId": "script-failure-owner",
+        "startLine": 1,
+        "endLine": 1
+      }
+    ],
+    "coverageGapArtifactIds": []
+  },
+  "coverage": [
+    {
+      "artifactId": "script-failure-current",
+      "logicalArtifactId": "client-scripts",
+      "state": "captured"
+    },
+    {
+      "artifactId": "script-failure-owner",
+      "logicalArtifactId": "client-co-management",
+      "state": "captured"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "script-failure-exec-326",
+      "workflow": "scripts",
+      "key": {
+        "keyProfileKind": "scriptExact",
+        "extractionProfileId": "sccm-client-scripts-5.00.test-v1",
+        "confidence": "exact",
+        "ScriptId": "SCRIPT-326-FAILURE",
+        "ExecutionId": "EXEC-326-FAILURE",
+        "ResourceHandle": "safe:resource-326-script-failure"
+      },
+      "phase": "Execute",
+      "state": "failed",
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "lastSuccessfulPhase": "Receive",
+      "evidence": [
+        {
+          "artifactId": "script-failure-current",
+          "startLine": 1,
+          "endLine": 2
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [],
+  "prohibitedClaims": [
+    "time alone proves causality",
+    "Intune handoff is an Intune failure",
+    "unsupported Software Center source is parsed",
+    "missing coverage proves success or failure"
+  ]
+}

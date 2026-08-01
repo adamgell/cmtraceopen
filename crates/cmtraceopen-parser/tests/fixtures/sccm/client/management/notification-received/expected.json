@@ -1,0 +1,72 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "notification-received",
+  "workflow": "notification",
+  "extractionProfile": {
+    "id": "sccm-client-notification-5.00.test-v1",
+    "versionPrefix": "5.00.TEST.",
+    "selectionState": "selected"
+  },
+  "ownership": {
+    "classification": "SccmOwned",
+    "confidence": "high",
+    "terminalHandoff": false,
+    "workload": "ClientNotification",
+    "evidence": [
+      {
+        "artifactId": "notification-received-owner",
+        "startLine": 1,
+        "endLine": 1
+      }
+    ],
+    "coverageGapArtifactIds": []
+  },
+  "coverage": [
+    {
+      "artifactId": "notification-received-current",
+      "logicalArtifactId": "client-notification",
+      "state": "captured"
+    },
+    {
+      "artifactId": "notification-received-owner",
+      "logicalArtifactId": "client-co-management",
+      "state": "captured"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "notification-received-326",
+      "workflow": "notification",
+      "key": {
+        "keyProfileKind": "notificationExact",
+        "extractionProfileId": "sccm-client-notification-5.00.test-v1",
+        "confidence": "exact",
+        "NotificationId": "NOTIFY-326-RECEIVED",
+        "ChannelId": "CHANNEL-326-CLIENT",
+        "ResourceHandle": "safe:resource-326-notification-received"
+      },
+      "phase": "Acknowledge",
+      "state": "acknowledged",
+      "classification": "success",
+      "confidence": "high",
+      "lastSuccessfulPhase": "Acknowledge",
+      "evidence": [
+        {
+          "artifactId": "notification-received-current",
+          "startLine": 1,
+          "endLine": 2
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [],
+  "prohibitedClaims": [
+    "time alone proves causality",
+    "Intune handoff is an Intune failure",
+    "unsupported Software Center source is parsed",
+    "missing coverage proves success or failure"
+  ]
+}

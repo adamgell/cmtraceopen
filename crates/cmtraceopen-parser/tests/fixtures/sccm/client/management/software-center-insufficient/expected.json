@@ -1,0 +1,92 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "software-center-insufficient",
+  "workflow": "softwareCenter",
+  "extractionProfile": {
+    "id": "sccm-client-software-center-candidate-v1",
+    "versionPrefix": "5.00.TEST.",
+    "selectionState": "unsupportedCandidate"
+  },
+  "ownership": {
+    "classification": "UnknownOwnership",
+    "confidence": "low",
+    "terminalHandoff": false,
+    "workload": "SoftwareCenter",
+    "evidence": [],
+    "coverageGapArtifactIds": [
+      "software-center-insufficient-owner"
+    ]
+  },
+  "coverage": [
+    {
+      "artifactId": "software-center-insufficient-absent",
+      "logicalArtifactId": "client-software-center",
+      "state": "absent"
+    },
+    {
+      "artifactId": "software-center-insufficient-malformed",
+      "logicalArtifactId": "client-software-center",
+      "state": "malformed"
+    },
+    {
+      "artifactId": "software-center-insufficient-owner",
+      "logicalArtifactId": "client-co-management",
+      "state": "absent"
+    },
+    {
+      "artifactId": "software-center-insufficient-unsupported",
+      "logicalArtifactId": "client-software-center",
+      "state": "unsupported"
+    }
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {
+      "observationId": "software-center-insufficient-absent-gap",
+      "kind": "coverageGap",
+      "claim": "The bounded Software Center candidate was absent; absence is not an outcome.",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "artifactIds": [
+        "software-center-insufficient-absent"
+      ]
+    },
+    {
+      "observationId": "software-center-insufficient-malformed-gap",
+      "kind": "malformedRecord",
+      "claim": "Malformed candidate bytes cannot establish a Software Center action.",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "artifactIds": [
+        "software-center-insufficient-malformed"
+      ]
+    },
+    {
+      "observationId": "software-center-insufficient-owner-gap",
+      "kind": "coverageGap",
+      "claim": "Ownership remains unknown because co-management evidence is absent.",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "artifactIds": [
+        "software-center-insufficient-owner"
+      ]
+    },
+    {
+      "observationId": "software-center-insufficient-unsupported-gap",
+      "kind": "unsupportedCandidate",
+      "claim": "An unsupported notification candidate is not admitted as Software Center evidence.",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "artifactIds": [
+        "software-center-insufficient-unsupported"
+      ]
+    }
+  ],
+  "findings": [],
+  "prohibitedClaims": [
+    "time alone proves causality",
+    "Intune handoff is an Intune failure",
+    "unsupported Software Center source is parsed",
+    "missing coverage proves success or failure"
+  ]
+}
