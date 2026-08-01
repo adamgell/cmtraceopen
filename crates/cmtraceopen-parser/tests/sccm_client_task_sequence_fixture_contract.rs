@@ -426,6 +426,14 @@ fn complete_field_tokens(record_text: &str) -> BTreeSet<&str> {
     body.split_whitespace().collect()
 }
 
+fn sanitized_basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn sanitized_parent(path: &str) -> &str {
+    path.rsplit_once('/').map_or(path, |(parent, _)| parent)
+}
+
 fn path_class_for_sanitized_path(path: &str) -> Option<&'static str> {
     [
         ("SYNTHETIC://client/", "client"),
@@ -719,6 +727,11 @@ fn validate_manifest_and_storage(
                     "{scenario}/{artifact_id}: pathClass is not bound to sanitized capture provenance"
                 ));
             }
+            if sanitized_basename(sanitized_path) != original_basename {
+                return Err(format!(
+                    "{scenario}/{artifact_id}: capture source path does not name the {original_basename} physical file"
+                ));
+            }
             let contents = std::fs::read_to_string(&fixture_path)
                 .map_err(|error| format!("{relative_path} is not UTF-8: {error}"))?;
             let (entries, errors) = parse_content(&contents, relative_path, None);
@@ -750,11 +763,16 @@ fn validate_manifest_and_storage(
                         })?,
                 )
             };
+            // Capture provenance and the in-record observation are separate: a
+            // rotated fragment is captured from smsts.lo_ while the record it
+            // physically contains still names the active log. The declared
+            // observation must be present in these bytes; it is never taken
+            // from the capture path.
             match declared_path {
                 Some(declared_path)
-                    if declared_path == sanitized_path
-                        && observed_paths.len() == 1
-                        && observed_paths.contains(declared_path) => {}
+                    if observed_paths.len() == 1
+                        && observed_paths.contains(declared_path)
+                        && sanitized_parent(declared_path) == sanitized_parent(sanitized_path) => {}
                 Some(_) => {
                     return Err(format!(
                         "{scenario}/{artifact_id}: _SMSTSLogPath is not observed in this physical artifact"
@@ -1086,7 +1104,8 @@ fn validate_contract(
             || current["rotation"]["fragmentComplete"] != false
             || lo["pathFingerprint"] != path_fingerprint
             || current["pathFingerprint"] != path_fingerprint
-            || lo["sanitizedSourcePath"] != sanitized_path
+            || lo["sanitizedSourcePath"].as_str().map(sanitized_parent)
+                != Some(sanitized_parent(sanitized_path))
             || current["sanitizedSourcePath"] != sanitized_path
             || lo["pathClass"] != path_class
             || current["pathClass"] != path_class
