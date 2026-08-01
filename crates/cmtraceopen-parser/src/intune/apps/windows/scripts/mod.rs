@@ -54,8 +54,9 @@ mod reducer;
 mod rules;
 mod sources;
 
+pub use crate::intune::apps::windows::common::redact_text;
 pub use models::*;
-pub use redaction::{redact_text, redacted_export_projection};
+pub use redaction::redacted_export_projection;
 pub use reducer::analyze_script_bundle;
 pub use rules::{classify_record, RecordClassification};
 pub use sources::{candidate_source_kind, classify_artifact, ScriptSourceInput};

@@ -1,0 +1,232 @@
+{
+  "transactions": [
+    {
+      "key": {
+        "policyId": "11111111-1111-4111-8111-111111111111",
+        "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+        "invocation": "scheduled"
+      },
+      "detection": {
+        "state": "compliant",
+        "exitToken": {
+          "stage": "detection",
+          "rawText": "0",
+          "decimal": 0,
+          "hexText": "0x00000000"
+        },
+        "evidence": [
+          {
+            "artifactId": "hs",
+            "recordNumber": 2,
+            "lineNumber": 2
+          },
+          {
+            "artifactId": "hs",
+            "recordNumber": 3,
+            "lineNumber": 3
+          }
+        ]
+      },
+      "remediation": {
+        "state": "skipped",
+        "exitToken": null,
+        "evidence": []
+      },
+      "postDetection": null,
+      "report": "submitted",
+      "attempts": 1,
+      "confidence": "high",
+      "payloads": [],
+      "observations": [
+        "hs:1",
+        "hs:2",
+        "hs:3",
+        "hs:4"
+      ],
+      "evidence": [
+        {
+          "artifactId": "hs",
+          "recordNumber": 1,
+          "lineNumber": 1
+        },
+        {
+          "artifactId": "hs",
+          "recordNumber": 2,
+          "lineNumber": 2
+        },
+        {
+          "artifactId": "hs",
+          "recordNumber": 3,
+          "lineNumber": 3
+        },
+        {
+          "artifactId": "hs",
+          "recordNumber": 4,
+          "lineNumber": 4
+        }
+      ],
+      "nextEvidenceRequest": null
+    }
+  ],
+  "observations": [
+    {
+      "observationId": "hs:1",
+      "evidence": {
+        "artifactId": "hs",
+        "recordNumber": 1,
+        "lineNumber": 1
+      },
+      "sourceKind": "healthScripts",
+      "timestamp": {
+        "rawText": "03-12-2026 09:00:00.000",
+        "originalOffset": null,
+        "normalizedUtc": null
+      },
+      "signal": "scheduled",
+      "stage": null,
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "invocation": "scheduled",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "[HealthScripts] Processing health script policy 11111111-1111-4111-8111-111111111111, runId = aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1, scheduled run",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "hs:2",
+      "evidence": {
+        "artifactId": "hs",
+        "recordNumber": 2,
+        "lineNumber": 2
+      },
+      "sourceKind": "healthScripts",
+      "timestamp": {
+        "rawText": "03-12-2026 09:00:01.000",
+        "originalOffset": null,
+        "normalizedUtc": null
+      },
+      "signal": "stageLaunched",
+      "stage": "detection",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "invocation": "scheduled",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "[HealthScripts] Starting detection script for policy 11111111-1111-4111-8111-111111111111",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "hs:3",
+      "evidence": {
+        "artifactId": "hs",
+        "recordNumber": 3,
+        "lineNumber": 3
+      },
+      "sourceKind": "healthScripts",
+      "timestamp": {
+        "rawText": "03-12-2026 09:00:09.000",
+        "originalOffset": null,
+        "normalizedUtc": null
+      },
+      "signal": "stageCompleted",
+      "stage": "detection",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "invocation": "scheduled",
+      "attempt": null,
+      "exitToken": {
+        "stage": "detection",
+        "rawText": "0",
+        "decimal": 0,
+        "hexText": "0x00000000"
+      },
+      "message": {
+        "value": "[HealthScripts] Detection script completed, exitCode = 0",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "hs:4",
+      "evidence": {
+        "artifactId": "hs",
+        "recordNumber": 4,
+        "lineNumber": 4
+      },
+      "sourceKind": "healthScripts",
+      "timestamp": {
+        "rawText": "03-12-2026 09:00:10.000",
+        "originalOffset": null,
+        "normalizedUtc": null
+      },
+      "signal": "reportSubmitted",
+      "stage": "detection",
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "invocation": "scheduled",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "[HealthScripts] Result has been sent to service successfully",
+        "sensitivity": "sensitive"
+      }
+    },
+    {
+      "observationId": "ae:1",
+      "evidence": {
+        "artifactId": "ae",
+        "recordNumber": 1,
+        "lineNumber": 1
+      },
+      "sourceKind": "agentExecutor",
+      "timestamp": {
+        "rawText": "03-12-2026 09:00:01.000",
+        "originalOffset": null,
+        "normalizedUtc": null
+      },
+      "signal": "unclassified",
+      "stage": null,
+      "policyId": null,
+      "runId": null,
+      "invocation": "unknown",
+      "attempt": null,
+      "exitToken": null,
+      "message": {
+        "value": "Starting Powershell Execution",
+        "sensitivity": "sensitive"
+      }
+    }
+  ],
+  "unkeyedObservations": [],
+  "coverage": {
+    "artifacts": [
+      {
+        "artifactId": "hs",
+        "fileName": "HealthScripts.log",
+        "filePath": {
+          "value": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\HealthScripts.log",
+          "sensitivity": "sensitive"
+        },
+        "sourceKind": "healthScripts",
+        "rotationOrdinal": 0
+      },
+      {
+        "artifactId": "ae",
+        "fileName": "AgentExecutor.log",
+        "filePath": {
+          "value": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+          "sensitivity": "sensitive"
+        },
+        "sourceKind": "agentExecutor",
+        "rotationOrdinal": 0
+      }
+    ],
+    "unclassifiedRecords": 1,
+    "missingExpectedSources": [],
+    "unknownVersionObserved": false,
+    "malformedPayloads": 0
+  }
+}
