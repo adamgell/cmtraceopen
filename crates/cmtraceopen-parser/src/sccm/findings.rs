@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::slice;
 
 use serde::de::Error as _;
 use serde::ser::Error as _;
@@ -181,7 +182,7 @@ impl SccmTerminalEvidence {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmFindingCoverageGap {
     pub artifact_id: String,
@@ -189,7 +190,7 @@ pub struct SccmFindingCoverageGap {
     pub coverage: SccmCoverageState,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmArtifactRequest {
     pub logical_id: String,
@@ -336,6 +337,22 @@ impl From<SccmFindingCoverageGapWire> for SccmFindingCoverageGap {
     }
 }
 
+// A coverage gap deserialized on its own must clear the same bar it clears
+// as a member of SccmFinding::coverage_gaps, so route it through the same
+// deny_unknown_fields wire struct and the same validator.
+impl<'de> Deserialize<'de> for SccmFindingCoverageGap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let gap = Self::from(SccmFindingCoverageGapWire::deserialize(deserializer)?);
+        validate_coverage_gaps(slice::from_ref(&gap)).map_err(|error| {
+            D::Error::custom(format!("invalid SCCM coverage gap contract: {error:?}"))
+        })?;
+        Ok(gap)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SccmCorrelationKeyWire {
@@ -379,6 +396,22 @@ impl From<SccmArtifactRequestWire> for SccmArtifactRequest {
             role: wire.role,
             reason: wire.reason,
         }
+    }
+}
+
+// Same contract as a request carried inside SccmFinding::next_artifacts: the
+// logical id must name a declared catalog source for the requested role and
+// the reason must stay bounded and scoped to that artifact.
+impl<'de> Deserialize<'de> for SccmArtifactRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let request = Self::from(SccmArtifactRequestWire::deserialize(deserializer)?);
+        validate_artifact_requests(slice::from_ref(&request)).map_err(|error| {
+            D::Error::custom(format!("invalid SCCM artifact request contract: {error:?}"))
+        })?;
+        Ok(request)
     }
 }
 
