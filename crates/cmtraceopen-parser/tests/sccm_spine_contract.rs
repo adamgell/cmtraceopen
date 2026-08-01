@@ -908,7 +908,16 @@ fn finding_unregistered_strong_or_exact_key_profiles_are_rejected() {
 #[test]
 fn finding_rejects_key_or_terminal_refs_that_are_not_cited() {
     let cited = finding_evidence_ref("client-policy-agent", "policy:1-1");
-    let missing = finding_evidence_ref("client-policy-agent", "policy:2-2");
+    // `finding_evidence_ref` pins every span to line 1, so this reference used
+    // to claim line 1 while calling itself `policy:2-2`. Two entry ids over one
+    // physical line is the shape this suite now rejects outright, and it would
+    // mask the uncited-reference rule under test. The span is spelled out to
+    // match the entry id it advertises.
+    let missing = SccmEvidenceRef {
+        line_start: Some(2),
+        line_end: Some(2),
+        ..finding_evidence_ref("client-policy-agent", "policy:2-2")
+    };
 
     let key_result = SccmFindingBuilder::new("uncited-key")
         .class(SccmFindingClass::Symptom)
