@@ -666,6 +666,50 @@ fn server_intake_suppresses_absent_default_request_when_configured_source_is_usa
 }
 
 #[test]
+fn server_intake_does_not_suppress_default_request_across_producer_hosts() {
+    let (configured_manifest, configured_payloads) = load_bundle("configured-nondefault-path");
+    let mut combined = manifest_value(&configured_manifest);
+    let (absent_manifest, _absent_payloads) = load_bundle("access-denied-mp");
+    let mut absent = manifest_value(&absent_manifest)["artifacts"][0].clone();
+    absent["producerHostHandle"] = Value::String("synthetic:host:site-01".to_owned());
+    absent["captureState"] = Value::String("absent".to_owned());
+    absent["configuredPathProvenance"]["state"] = Value::String("defaultCandidate".to_owned());
+    combined["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .push(absent);
+
+    let assessment = assess_server_intake(&serialize_manifest(&combined), &configured_payloads)
+        .expect("distinct-host configured and default candidates are assessed together");
+    assert_eq!(assessment.next_artifact_requests.len(), 1);
+    assert_eq!(
+        assessment.next_artifact_requests[0].logical_id,
+        "mpGetPolicy"
+    );
+}
+
+#[test]
+fn server_intake_does_not_suppress_default_request_across_workflow_subjects() {
+    let (captured_manifest, captured_payloads) = load_bundle("complete-multi-role");
+    let mut combined = manifest_value(&captured_manifest);
+    let (absent_manifest, _absent_payloads) = load_bundle("absent-dp");
+    let mut absent = manifest_value(&absent_manifest)["artifacts"][0].clone();
+    absent["workflowSubject"] = json!({
+        "role": "distributionPoint",
+        "instanceHandle": "synthetic:subject:dp-02",
+    });
+    combined["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .push(absent);
+
+    let assessment = assess_server_intake(&serialize_manifest(&combined), &captured_payloads)
+        .expect("distinct-subject configured and default candidates are assessed together");
+    assert_eq!(assessment.next_artifact_requests.len(), 1);
+    assert_eq!(assessment.next_artifact_requests[0].logical_id, "distmgr");
+}
+
+#[test]
 fn server_intake_exercises_role_state_rotation_and_privacy_matrix() {
     let cases = [
         (

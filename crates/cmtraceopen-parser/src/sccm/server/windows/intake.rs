@@ -873,14 +873,26 @@ fn normalize_collected_utc(value: &str) -> Result<String, SccmServerIntakeError>
         .to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
-fn logical_source_key(artifact: &SccmServerArtifactAssessment) -> (String, String, String) {
+fn logical_source_key(
+    artifact: &SccmServerArtifactAssessment,
+) -> (String, String, String, String, String) {
     (
         role_sort_key(&artifact.producer_role).to_owned(),
+        artifact
+            .producer_host_handle
+            .as_deref()
+            .unwrap_or_default()
+            .to_owned(),
         artifact.source_id.clone(),
         artifact
             .workflow_subject_role
             .as_ref()
             .map(role_sort_key)
+            .unwrap_or_default()
+            .to_owned(),
+        artifact
+            .workflow_subject_handle
+            .as_deref()
             .unwrap_or_default()
             .to_owned(),
     )
