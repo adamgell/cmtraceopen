@@ -24,9 +24,13 @@ pub enum PortalTimestampKind {
     /// Wall-clock text with no offset at all. The instant is device-local and the zone is
     /// unknown, so this value must never be silently treated as UTC.
     Local,
-    /// No timestamp text was present on the record at all.
+    /// The timestamp was never examined. Either the record carried no timestamp text at
+    /// all, or it was abandoned before the timestamp column was interpreted (unsupported
+    /// layout, or column extraction that failed on an earlier column). This is the absence
+    /// of a verdict, not a negative one.
     Unknown,
-    /// Timestamp text was present but is not a valid instant.
+    /// The timestamp column was examined and rejected: text was present but is not a valid
+    /// instant. Never used for text that was simply not interpreted.
     Invalid,
 }
 
@@ -35,6 +39,13 @@ pub enum PortalTimestampKind {
 /// `normalized_utc` is populated only for [`PortalTimestampKind::Utc`] and
 /// [`PortalTimestampKind::Offset`]. A missing timezone is a *state*, not an error, and is
 /// never defaulted to UTC.
+///
+/// `raw_text` carries the source text of the timestamp column and nothing else; it is
+/// empty whenever `kind` is [`PortalTimestampKind::Unknown`], because no column text was
+/// ever interpreted. The verbatim record line lives on `PortalConsoleRecord::raw_text`.
+///
+/// When `normalized_utc` is present it is rendered at fixed nanosecond width, so comparing
+/// two of these strings byte-wise agrees with comparing the instants they denote.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PortalTimestamp {

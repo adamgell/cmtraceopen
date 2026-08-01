@@ -622,13 +622,19 @@ fn build_record(
         },
     };
 
+    // Every `unparsed` record is built before the timestamp column has been looked at, so the
+    // timestamp reports "not examined" (`Unknown` with no text) rather than "examined and
+    // rejected" (`Invalid`). Putting the whole head line in `PortalTimestamp::raw_text` would
+    // also hand a consumer a full log record through a field that only ever carries timestamp
+    // text; the untouched record line stays available as `PortalConsoleRecord::raw_text`. The
+    // one path that *did* validate the column overwrites this with the real verdict.
     let unparsed = |state: PortalConsoleParseState| PortalConsoleRecord {
         reference: reference.clone(),
         timestamp: PortalTimestamp {
-            raw_text: frame.head.clone(),
+            raw_text: String::new(),
             original_offset: None,
             normalized_utc: None,
-            kind: PortalTimestampKind::Invalid,
+            kind: PortalTimestampKind::Unknown,
         },
         thread_id: None,
         activity_id: None,
@@ -670,6 +676,8 @@ fn build_record(
 
     let timestamp = normalize_timestamp(columns.timestamp_text.as_deref(), decimal_separator);
     if timestamp.kind == PortalTimestampKind::Invalid {
+        // The column *was* examined and rejected, so this record keeps the real `Invalid`
+        // verdict and the offending timestamp text, overwriting the `unparsed` placeholder.
         let mut record = unparsed(if may_be_truncated {
             PortalConsoleParseState::Truncated
         } else {
@@ -735,6 +743,18 @@ fn normalize_level(raw: Option<&str>) -> PortalConsoleLevel {
     }
 }
 
+/// Fixed-width nanosecond rendering of `normalized_utc`.
+///
+/// The timestamp column grammar accepts 1-9 fractional digits because Console can emit
+/// nanosecond precision, and chrono carries the parsed value at nanosecond resolution. A
+/// narrower format (this used to be `%.6f`) would round a 7-9 digit source timestamp away
+/// while `raw_text` still showed the full text, so the two fields would silently disagree
+/// about the same instant. Nine digits is the widest the grammar can produce, so this cannot
+/// truncate. It is deliberately fixed-width rather than chrono's variable `%.f` / `AutoSi`:
+/// a constant number of fractional digits keeps byte comparison of two `normalized_utc`
+/// values consistent with comparing the instants they denote.
+const NORMALIZED_UTC_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.9fZ";
+
 /// Normalize a Console timestamp.
 ///
 /// A timestamp with no offset yields [`PortalTimestampKind::Local`] and a `None`
@@ -790,7 +810,7 @@ fn normalize_timestamp(
                         normalized_utc: Some(
                             parsed
                                 .with_timezone(&Utc)
-                                .format("%Y-%m-%dT%H:%M:%S%.6fZ")
+                                .format(NORMALIZED_UTC_FORMAT)
                                 .to_string(),
                         ),
                         kind,
