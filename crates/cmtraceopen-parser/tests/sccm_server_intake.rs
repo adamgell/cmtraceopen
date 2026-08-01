@@ -1,4 +1,6 @@
-use cmtraceopen_parser::sccm::server::windows::{assess_server_intake, SccmServerArtifactPayload};
+use cmtraceopen_parser::sccm::server::windows::{
+    assess_server_intake, SccmServerArtifactPayload, SccmServerIntakeError,
+};
 use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -306,9 +308,103 @@ fn server_intake_rejects_relabelled_duplicate_canonical_artifact_identity() {
     manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
     manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
 
-    assert!(
-        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
-        "caller-chosen artifact and root labels must not duplicate one canonical identity"
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::DuplicateArtifact),
+        "caller-chosen artifact and root labels must not duplicate one canonical identity",
+    );
+}
+
+#[test]
+fn server_intake_scopes_canonical_identity_to_producer_host() {
+    let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
+    let mut manifest = manifest_value(&manifest_json);
+    let fingerprint =
+        manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
+    let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
+    manifest["artifacts"][1]["producerHostHandle"] =
+        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+    manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the same artifact identity on a distinct producer host is independent");
+    assert_eq!(assessment.artifacts.len(), 2);
+}
+
+#[test]
+fn server_intake_scopes_path_fingerprint_lineage_to_producer_host() {
+    let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
+    let mut manifest = manifest_value(&manifest_json);
+    let fingerprint =
+        manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
+    manifest["artifacts"][1]["producerHostHandle"] =
+        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("path fingerprints are scoped to their producer host");
+    assert_eq!(assessment.artifacts.len(), 2);
+}
+
+fn configure_second_artifact_as_dp_identity(
+    manifest: &mut Value,
+    subject_handle: &str,
+    share_lineage: bool,
+) {
+    let fingerprint =
+        manifest["artifacts"][2]["configuredPathProvenance"]["pathFingerprint"].clone();
+    let lineage = manifest["artifacts"][2]["rotation"]["lineageId"].clone();
+    let artifact = &mut manifest["artifacts"][3];
+    artifact["workflowSubject"] = json!({
+        "role": "distributionPoint",
+        "instanceHandle": subject_handle,
+    });
+    artifact["sourceId"] = Value::String("server-dp-distribution".to_owned());
+    artifact["originalPath"] = Value::String("REDACTED_SITE_DP_CONTROL_ROOT_COPY".to_owned());
+    artifact["originalBasename"] = Value::String("distmgr.log".to_owned());
+    artifact["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+    if share_lineage {
+        artifact["rotation"]["lineageId"] = lineage;
+    }
+    artifact["relativePath"] = Value::String(
+        "evidence/sccm/server/site-server/server-dp-distribution/subject-distribution-point/instance-bbbbbbbb/current/distmgr.log"
+            .to_owned(),
+    );
+}
+
+#[test]
+fn server_intake_scopes_canonical_identity_to_workflow_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:sup-01", true);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the same artifact identity for a distinct workflow subject is independent");
+    assert_eq!(assessment.artifacts.len(), 4);
+}
+
+#[test]
+fn server_intake_scopes_path_fingerprint_lineage_to_workflow_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:sup-01", false);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("path fingerprints are scoped to their workflow subject");
+    assert_eq!(assessment.artifacts.len(), 4);
+}
+
+#[test]
+fn server_intake_rejects_relabelled_duplicate_for_same_workflow_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-01", true);
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::DuplicateArtifact),
+        "caller labels cannot split one host-and-subject artifact identity",
     );
 }
 
