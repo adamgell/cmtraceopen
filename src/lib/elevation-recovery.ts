@@ -53,12 +53,21 @@ export async function offerElevationForSourceFailure({
 
   offerPending = true;
   try {
+    // Imported dynamically because the store reaches the workspace registry,
+    // which reaches back here through log-source.
+    const { useUiStore } = await import("../stores/ui-store");
+
+    // Captured before the elevation probe, which is an IPC round trip the user
+    // can switch workspaces during. The failure being recovered belongs to the
+    // workspace that was active when it happened, not to whichever one is on
+    // screen by the time the probe answers.
+    const workspace = useUiStore.getState().activeWorkspace;
+
     const state = await readElevationState();
     // Covers unsupported platform, already elevated, and the post-retry loop
     // guard in one call.
     if (!canOfferElevation(state)) return false;
 
-    const { useUiStore } = await import("../stores/ui-store");
     const ui = useUiStore.getState();
 
     // Never stack the recovery prompt on top of a confirmation already open.
@@ -67,7 +76,7 @@ export async function offerElevationForSourceFailure({
     ui.setElevationPrompt({
       request: buildElevationRequest({
         reason: "accessDenied",
-        workspace: ui.activeWorkspace,
+        workspace,
         // Restore the source that actually failed, not whatever tab happens to
         // be selected when the user gets around to clicking.
         source,

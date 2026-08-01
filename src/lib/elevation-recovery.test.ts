@@ -43,6 +43,28 @@ describe("offerElevationForSourceFailure", () => {
     });
   });
 
+  it("pins the workspace that failed, not the one switched to mid-probe", async () => {
+    useUiStore.setState({ activeWorkspace: "esp-diagnostics" });
+    // The probe is an IPC round trip. Switching workspaces while it is in
+    // flight must not repoint the restore at whatever is on screen when it
+    // answers: the denied source belonged to ESP.
+    readElevationStateMock.mockImplementation(async () => {
+      useUiStore.setState({ activeWorkspace: "log" });
+      return { platformSupported: true, isElevated: false };
+    });
+
+    await expect(
+      offerElevationForSourceFailure({
+        error: accessDeniedError(),
+        source: { kind: "file", path: "C:\\Windows\\Logs\\CBS.log" },
+      }),
+    ).resolves.toBe(true);
+
+    expect(useUiStore.getState().elevationPrompt?.request.workspace).toBe(
+      "esp-diagnostics",
+    );
+  });
+
   it("offers elevation for a confirmed Access Denied", async () => {
     await expect(
       offerElevationForSourceFailure({
