@@ -21,8 +21,13 @@ pub const COMPANY_PORTAL_LOG_DIRECTORY_HINT: &str = "Library/Logs/CompanyPortal"
 /// App-version families whose record grammar is covered by committed fixtures.
 ///
 /// A version banner outside these families is not an error: the records still
-/// parse, but the parse is reported as low-confidence with an explicit coverage
-/// note rather than a confident answer.
+/// parse, but detection reports [`PortalDetectionConfidence::Probable`] with an
+/// explicit [`PortalCoverageKind::UnknownAppVersion`] note instead of
+/// [`PortalDetectionConfidence::Confirmed`].
+///
+/// It is specifically *not* [`PortalDetectionConfidence::Low`], which this
+/// module reserves for a record structure that is mostly unusable. An
+/// unrecognised version says nothing about whether the records parsed.
 pub const VALIDATED_APP_VERSION_FAMILIES: &[&str] = &["5.2504."];
 
 /// Which macOS artifact a candidate text actually is.
@@ -221,8 +226,15 @@ pub struct PortalAppVersion {
 #[serde(rename_all = "camelCase")]
 pub struct PortalRotationMember {
     pub file_name: Option<String>,
-    /// `0` = current file, higher = older. `None` = not a recognized member.
+    /// Higher is older. `None` = not a recognized member. An index too large for
+    /// `u32` saturates to [`u32::MAX`], which sorts oldest.
+    ///
+    /// A `0` here does **not** mean the live file: `CompanyPortal-0.log` is a
+    /// recognized rotated member whose declared index is `0`. Read
+    /// [`Self::is_current`] for that, which is derived from the *absence* of a
+    /// declared index rather than from its value.
     pub rotation_index: Option<u32>,
+    /// True only for the undecorated `CompanyPortal.log`.
     pub is_current: bool,
 }
 

@@ -104,13 +104,34 @@ fn mac_address_re() -> &'static Regex {
     })
 }
 
-/// Fully-expanded eight-group IPv6 or any `::`-compressed form. Greedy so
-/// `replace_group` never leaves a trailing fragment behind.
+/// Fully-expanded eight-group IPv6 or any `::`-compressed form, in group 1.
+///
+/// The address is **not** wrapped in `\b`. `\b` is a word-boundary assertion and
+/// `:` is not a word character, so it cannot anchor an address that begins or
+/// ends with a colon, which every `::`-compressed form does at one end or both.
+/// With `\b` on both sides `fd12:3456:789a::` matched nothing at all and exported
+/// verbatim, and `::1` was missed the same way.
+///
+/// This engine has no look-around, so the left edge is a *consumed* guard group
+/// and the right edge has no assertion at all. That asymmetry is deliberate:
+///
+/// * Consuming only the left delimiter keeps two addresses separated by a single
+///   character both matchable. A guard on both sides would eat the delimiter that
+///   the following address needs, and `^` cannot stand in for it because it
+///   anchors to the start of the text, not to where scanning resumed.
+/// * No right-edge assertion is needed because the alternatives are already
+///   self-limiting: they consume only hex and colons, and each requires either
+///   eight groups or a `::` run. A MAC (`00:11:22:33:44:55`) and a house-grammar
+///   timestamp (`08:18:00:104`) have neither, so neither can be claimed.
+///
+/// A bare `::` carrying no group is excluded on purpose. It is the all-zeros
+/// address, it identifies nothing, and matching it would redact the path
+/// separator in ordinary prose such as `std::process`.
 fn ipv6_address_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)\b(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)\b",
+            r"(?i)(?:^|[^0-9A-Za-z:])((?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)",
         )
         .expect("ipv6 address pattern must compile")
     })
@@ -227,7 +248,9 @@ impl Redactor {
         let text = self.replace_group(&text, guid_re(), PortalRedactionKind::Guid, 0);
         let text = self.replace_group(&text, ipv4_address_re(), PortalRedactionKind::Ip, 0);
         let text = self.replace_group(&text, mac_address_re(), PortalRedactionKind::Mac, 0);
-        let text = self.replace_group(&text, ipv6_address_re(), PortalRedactionKind::Ip, 0);
+        // Group 1: the IPv6 pattern consumes a leading delimiter that must be
+        // written back out, so the address is captured rather than whole-matched.
+        let text = self.replace_group(&text, ipv6_address_re(), PortalRedactionKind::Ip, 1);
         self.replace_user_paths(&text)
     }
 

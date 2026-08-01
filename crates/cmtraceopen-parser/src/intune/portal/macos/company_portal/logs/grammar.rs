@@ -112,7 +112,14 @@ pub(crate) fn parse_record_head(line: &str) -> Option<PortalRecordHead> {
             .map(|m| m.as_str().trim())
             .unwrap_or("")
             .to_string(),
-        severity_letter: caps.get(9).map(|m| m.as_str()).unwrap_or("I").to_string(),
+        // Every group here is mandatory in the grammar, so no fallback is
+        // reachable today. They stay empty rather than substituting a plausible
+        // value: this one used to fall back to `"I"`, which would have reported a
+        // record as having *declared* Informational severity if the group were
+        // ever made optional. `severity_from_letter` already maps an
+        // unrecognised letter to `Info`, so the rendered severity is unchanged
+        // and only the fabricated claim goes away.
+        severity_letter: caps.get(9).map(|m| m.as_str()).unwrap_or("").to_string(),
         thread_id: caps.get(10).and_then(|m| m.as_str().parse().ok()),
         component: caps
             .get(11)
