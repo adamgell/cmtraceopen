@@ -469,6 +469,78 @@ fn every_classified_outcome_carries_a_validated_shared_finding() {
     }
 }
 
+/// A subject that names a finding class is read as a diagnosis, so the class is
+/// only true if a validated finding backs it. The mid-work bundle below is the
+/// ordinary case: component records exist, no status terminal record does, and
+/// every declared source was captured whole, so there is no coverage gap to
+/// cite and the shared finding contract rejects the insufficient-evidence
+/// finding. The advertised class must go with it.
+#[test]
+fn a_classified_subject_never_outlives_the_finding_that_backs_it() {
+    let mut bundle = load_bundle("healthy");
+    let status_artifact_ids = bundle
+        .sources
+        .iter()
+        .filter(|source| source.source_group == "server-status")
+        .map(|source| source.artifact.artifact_id.clone())
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !status_artifact_ids.is_empty(),
+        "healthy bundle declares a status source"
+    );
+    bundle
+        .sources
+        .retain(|source| source.source_group != "server-status");
+    bundle
+        .evidence
+        .retain(|evidence| !status_artifact_ids.contains(&evidence.reference.artifact_id));
+
+    let analysis = analyze_site_core(&bundle);
+    assert_eq!(
+        analysis
+            .results
+            .iter()
+            .map(|result| result.state)
+            .collect::<Vec<_>>(),
+        vec![cmtraceopen_parser::sccm::server::windows::SccmSiteCoreState::Incomplete],
+        "an uncollected status family leaves the component transaction incomplete"
+    );
+    assert!(
+        analysis.coverage_gaps.is_empty(),
+        "an uncollected source declares no artifact, so there is no gap to cite"
+    );
+
+    for (subject_id, finding_class) in analysis
+        .results
+        .iter()
+        .map(|result| (result.result_id.clone(), result.finding_class.clone()))
+        .chain(analysis.unlinked_observations.iter().map(|observation| {
+            (
+                observation.observation_id.clone(),
+                Some(observation.finding_class.clone()),
+            )
+        }))
+    {
+        let Some(class) = finding_class else {
+            continue;
+        };
+        let matching = analysis
+            .findings
+            .iter()
+            .filter(|finding| finding.subject_id == subject_id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            matching.len(),
+            1,
+            "subject {subject_id} advertises {class:?} with no finding to back it"
+        );
+        assert_eq!(
+            matching[0].finding.class, class,
+            "subject {subject_id} advertises a class its finding does not carry"
+        );
+    }
+}
+
 /// `statesys.log` and `hman.log` belong to the declared site-core groups but no
 /// fixture validates their producer records, so the profile must not reduce
 /// them into facts. They still have to stay visible as explicit coverage rather
