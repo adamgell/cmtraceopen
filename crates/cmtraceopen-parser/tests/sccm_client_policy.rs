@@ -1004,13 +1004,42 @@ fn policy_unusable_cross_artifact_time_never_proves_an_ordered_sequence() {
             Value::Null,
             "{ordering_state:?} cannot claim a last successful phase across sources"
         );
-        assert!(
-            !analysis["artifactRequests"]
-                .as_array()
-                .expect("artifact requests")
-                .is_empty(),
-            "{ordering_state:?} must ask for usable provenance"
+        let requests = analysis["artifactRequests"]
+            .as_array()
+            .expect("artifact requests");
+        assert_eq!(
+            requests.len(),
+            1,
+            "{ordering_state:?} must ask once, for the earliest source that broke the chain"
         );
+        assert_eq!(requests[0]["logicalId"], "client-policy-agent");
+        assert!(
+            requests[0]["reason"]
+                .as_str()
+                .expect("request reason")
+                .contains("timestamp offset"),
+            "the request must name unusable time provenance, not a missing phase, got {:?}",
+            requests[0]["reason"]
+        );
+
+        // A finding never mixes unrelated logical groups.
+        for finding in analysis["findings"].as_array().expect("findings") {
+            let groups = finding["nextArtifacts"]
+                .as_array()
+                .expect("finding requests")
+                .iter()
+                .filter_map(|request| match request["logicalId"].as_str()? {
+                    "clientLocation" => Some("client-location"),
+                    "policyAgent" => Some("client-policy-agent"),
+                    "ciAgent" | "stateMessage" => Some("client-policy-state"),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            assert!(
+                groups.len() <= 1,
+                "{ordering_state:?}: one finding requested unrelated groups {groups:?}"
+            );
+        }
     }
 }
 
