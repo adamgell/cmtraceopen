@@ -321,21 +321,12 @@ pub fn analyze_site_core(bundle: &SccmSiteCoreBundle) -> SccmSiteCoreAnalysis {
     let facts = collect_facts(&context, site_code.as_deref());
     let fragments = collect_fragments(&context);
     let coverage_gaps = collect_coverage_gaps(&context, &fragments);
-
-    let fragment_artifact_ids = fragments
-        .iter()
-        .map(|fragment| fragment.evidence.artifact_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let transaction_gap_ids = coverage_gaps
-        .iter()
-        .map(|gap| gap.artifact_id.clone())
-        .filter(|artifact_id| !fragment_artifact_ids.contains(artifact_id.as_str()))
-        .collect::<Vec<_>>();
+    let coverage = CoverageView::new(&coverage_gaps, &fragments);
 
     let mut results = Vec::new();
     let mut findings = Vec::new();
     for (key, facts) in group_facts(facts) {
-        let reduced = reduce_transaction(&context, key, &facts, &transaction_gap_ids);
+        let reduced = reduce_transaction(&context, &coverage, key, &facts);
         if let Some(finding) = reduced.finding {
             findings.push(finding);
         }
@@ -343,7 +334,12 @@ pub fn analyze_site_core(bundle: &SccmSiteCoreBundle) -> SccmSiteCoreAnalysis {
     }
 
     let mut unlinked_observations = Vec::new();
-    append_fragment_observations(&fragments, &mut unlinked_observations, &mut findings);
+    append_fragment_observations(
+        &fragments,
+        &coverage,
+        &mut unlinked_observations,
+        &mut findings,
+    );
 
     results.sort_by(|left, right| left.result_id.cmp(&right.result_id));
     unlinked_observations.sort_by(|left, right| left.observation_id.cmp(&right.observation_id));
@@ -758,10 +754,11 @@ struct ReducedTransaction {
 
 fn reduce_transaction(
     context: &SiteCoreContext<'_>,
+    coverage: &CoverageView<'_>,
     key: SccmSiteCoreTransactionKey,
     facts: &[SiteCoreFact],
-    coverage_gap_artifact_ids: &[String],
 ) -> ReducedTransaction {
+    let coverage_gap_artifact_ids = coverage.transaction_gap_ids.as_slice();
     let chronology_usable = facts.iter().all(|fact| fact.ordering_millis().is_some());
     let conflicting = has_same_instant_conflict(facts);
 
@@ -844,7 +841,7 @@ fn reduce_transaction(
     );
     let finding = candidate_class.and_then(|class| {
         build_finding(
-            context,
+            coverage,
             TransactionFinding {
                 subject_id: &result_id,
                 class,
@@ -1031,11 +1028,20 @@ struct FragmentArtifact {
 /// its physical range. The unparsed tail is cited by its physical line range;
 /// the reference can never collide with a parsed record because it starts
 /// after the last complete record.
+///
+/// The producer gate applies here for the same reason it applies to facts: an
+/// unparsed region of a family this profile has no validated producer for says
+/// nothing about the family's records, only that bytes were collected. Reading
+/// it as a source anomaly would let an unsupported family reach a diagnosis
+/// through the fragment path that the fact path denies it.
 fn collect_fragments(context: &SiteCoreContext<'_>) -> Vec<FragmentArtifact> {
     let mut fragments = context
         .sources
         .values()
-        .filter(|admitted| admitted.source.artifact.coverage == SccmCoverageState::Captured)
+        .filter(|admitted| {
+            admitted.producer.is_some()
+                && admitted.source.artifact.coverage == SccmCoverageState::Captured
+        })
         .filter_map(|admitted| {
             let tail = truncated_tail(context.bundle, admitted)?;
             Some(FragmentArtifact {
@@ -1112,11 +1118,20 @@ fn collect_coverage_gaps(
                 (SccmCoverageState::Unsupported, None)
             }
             // An interpretable source that produced no complete record for
-            // part of its range.
-            (Some(_), SccmCoverageState::Captured) => match fragment_by_artifact.get(artifact_id) {
-                Some(evidence) => (SccmCoverageState::ParseFailed, Some(evidence.clone())),
-                None => continue,
-            },
+            // part of its range. The unparsed tail is cited where there is one,
+            // but a source the manifest already declares incomplete is a gap
+            // whether or not the incompleteness left a tail behind: the same
+            // flag withholds its facts in `source_carries_facts`.
+            (Some(_), SccmCoverageState::Captured) => {
+                match (
+                    fragment_by_artifact.get(artifact_id),
+                    source.fragment_complete,
+                ) {
+                    (Some(evidence), _) => (SccmCoverageState::ParseFailed, Some(evidence.clone())),
+                    (None, Some(false)) => (SccmCoverageState::ParseFailed, None),
+                    (None, _) => continue,
+                }
+            }
             (Some(admitted), SccmCoverageState::Capped) => (
                 SccmCoverageState::Capped,
                 truncated_tail(context.bundle, admitted),
@@ -1140,6 +1155,59 @@ fn collect_coverage_gaps(
     gaps.into_values().collect()
 }
 
+/// The single coverage view every downstream claim reads.
+///
+/// `collect_coverage_gaps` decides what each artifact's coverage state is, and
+/// nothing after it re-derives that from the manifest. A finding that cited a
+/// state of its own would let the analysis publish two answers for one
+/// artifact, and the one inside the finding is the one a reader trusts.
+struct CoverageView<'a> {
+    states: BTreeMap<&'a str, SccmCoverageState>,
+    /// Gaps a transaction cites. A fragment artifact is excluded because its
+    /// unparsed region is already carried by its own source-local observation.
+    transaction_gap_ids: Vec<String>,
+}
+
+impl<'a> CoverageView<'a> {
+    fn new(gaps: &'a [SccmSiteCoreCoverageGap], fragments: &[FragmentArtifact]) -> Self {
+        let fragment_artifact_ids = fragments
+            .iter()
+            .map(|fragment| fragment.evidence.artifact_id.as_str())
+            .collect::<BTreeSet<_>>();
+        Self {
+            states: gaps
+                .iter()
+                .map(|gap| (gap.artifact_id.as_str(), gap.state.clone()))
+                .collect(),
+            transaction_gap_ids: gaps
+                .iter()
+                .map(|gap| gap.artifact_id.clone())
+                .filter(|artifact_id| !fragment_artifact_ids.contains(artifact_id.as_str()))
+                .collect(),
+        }
+    }
+
+    /// Project one published gap onto the shared finding contract. An artifact
+    /// with no published gap has nothing to cite, so it contributes nothing.
+    fn finding_gap(&self, artifact_id: &str) -> Option<SccmFindingCoverageGap> {
+        Some(SccmFindingCoverageGap {
+            artifact_id: artifact_id.to_owned(),
+            role: SccmRole::SiteServer,
+            coverage: self.states.get(artifact_id)?.clone(),
+        })
+    }
+
+    fn finding_gaps<'b>(
+        &self,
+        artifact_ids: impl IntoIterator<Item = &'b String>,
+    ) -> Vec<SccmFindingCoverageGap> {
+        artifact_ids
+            .into_iter()
+            .filter_map(|artifact_id| self.finding_gap(artifact_id))
+            .collect()
+    }
+}
+
 /// Fragment observations are source-local: they never advance a phase, join a
 /// record across a rotation boundary, or infer a terminal outcome.
 ///
@@ -1149,6 +1217,7 @@ fn collect_coverage_gaps(
 /// it is reported as a low-confidence symptom and never as a fact.
 fn append_fragment_observations(
     fragments: &[FragmentArtifact],
+    coverage: &CoverageView<'_>,
     observations: &mut Vec<SccmSiteCoreObservation>,
     findings: &mut Vec<SccmSiteCoreFinding>,
 ) {
@@ -1190,6 +1259,7 @@ fn append_fragment_observations(
             SccmSiteCoreConfidence::None,
             rotation_boundary,
             rotation_boundary_requests,
+            coverage,
         ) {
             observations.push(observation);
             findings.push(finding);
@@ -1203,6 +1273,7 @@ fn append_fragment_observations(
             SccmSiteCoreConfidence::Low,
             group_fragments,
             requests,
+            coverage,
         ) {
             observations.push(observation);
             findings.push(finding);
@@ -1222,6 +1293,7 @@ fn build_observation(
     confidence: SccmSiteCoreConfidence,
     fragments: Vec<&FragmentArtifact>,
     mut next_artifacts: Vec<SccmSiteCoreArtifactRequest>,
+    coverage: &CoverageView<'_>,
 ) -> Option<(SccmSiteCoreObservation, SccmSiteCoreFinding)> {
     let mut evidence = fragments
         .iter()
@@ -1238,14 +1310,7 @@ fn build_observation(
     next_artifacts.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
     next_artifacts.dedup();
 
-    let gaps = coverage_gap_artifact_ids
-        .iter()
-        .map(|artifact_id| SccmFindingCoverageGap {
-            artifact_id: artifact_id.clone(),
-            role: SccmRole::SiteServer,
-            coverage: SccmCoverageState::ParseFailed,
-        })
-        .collect::<Vec<_>>();
+    let gaps = coverage.finding_gaps(&coverage_gap_artifact_ids);
     let finding = build_observation_finding(
         observation_id,
         class.clone(),
@@ -1341,7 +1406,7 @@ struct TransactionFinding<'a> {
 }
 
 fn build_finding(
-    context: &SiteCoreContext<'_>,
+    coverage: &CoverageView<'_>,
     subject: TransactionFinding<'_>,
 ) -> Option<SccmSiteCoreFinding> {
     let cited = subject
@@ -1357,11 +1422,7 @@ fn build_finding(
         }
         _ => Vec::new(),
     };
-    let gaps = subject
-        .coverage_gap_artifact_ids
-        .iter()
-        .filter_map(|artifact_id| finding_gap(context.bundle, artifact_id))
-        .collect::<Vec<_>>();
+    let gaps = coverage.finding_gaps(subject.coverage_gap_artifact_ids);
     let summary = match subject.last_successful_phase {
         Some(phase) => format!(
             "The last confirmed successful phase is {}; later phases are bounded to cited evidence.",
@@ -1428,22 +1489,6 @@ fn build_observation_finding(
         finding,
         subject_id: subject_id.to_owned(),
         last_successful_phase: None,
-    })
-}
-
-fn finding_gap(bundle: &SccmSiteCoreBundle, artifact_id: &str) -> Option<SccmFindingCoverageGap> {
-    let source = bundle
-        .sources
-        .iter()
-        .find(|source| source.artifact.artifact_id == artifact_id)?;
-    let coverage = match source.artifact.coverage {
-        SccmCoverageState::Captured => SccmCoverageState::ParseFailed,
-        ref state => state.clone(),
-    };
-    Some(SccmFindingCoverageGap {
-        artifact_id: artifact_id.to_owned(),
-        role: SccmRole::SiteServer,
-        coverage,
     })
 }
 
