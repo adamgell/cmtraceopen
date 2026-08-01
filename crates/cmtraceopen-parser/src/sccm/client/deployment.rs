@@ -317,7 +317,7 @@ pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymen
     let coverage = coverage_rows(bundle);
 
     if bundle_identity_collides(bundle) {
-        return finalize(coverage, Vec::new(), Vec::new(), Vec::new());
+        return finalize(coverage, Vec::new(), Vec::new(), Vec::new(), Vec::new());
     }
 
     // Only client-role artifacts may participate. Building this map from the
@@ -369,10 +369,26 @@ pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymen
         .iter()
         .map(|fact| fact.reference.artifact_id.as_str())
         .collect::<BTreeSet<_>>();
+    // A family counts as validated only where the profile actually read a
+    // record. Captured bytes it could not read prove collection, not coverage
+    // of the workflow.
+    let validated_artifact_families = admitted_artifact_ids
+        .iter()
+        .filter_map(|artifact_id| artifacts_by_id.get(artifact_id))
+        .map(|artifact| deployment_group_id(&artifact.display_name))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
     let observations = source_local_observations(bundle, &artifacts_by_id, &admitted_artifact_ids);
     let findings = build_findings(&seeds, &artifacts_by_id);
 
-    finalize(coverage, transactions, observations, findings)
+    finalize(
+        coverage,
+        transactions,
+        observations,
+        findings,
+        validated_artifact_families,
+    )
 }
 
 fn finalize(
@@ -380,6 +396,7 @@ fn finalize(
     transactions: Vec<SccmDeploymentTransaction>,
     source_local_observations: Vec<SccmDeploymentObservation>,
     findings: Vec<SccmDeploymentFinding>,
+    validated_artifact_families: Vec<String>,
 ) -> SccmDeploymentAnalysis {
     let emitted_counterpart_ready_fact = transactions
         .iter()
@@ -410,7 +427,7 @@ fn finalize(
     SccmDeploymentAnalysis {
         schema_version: SCCM_DEPLOYMENT_ANALYSIS_SCHEMA_VERSION,
         workflow: SccmDeploymentWorkflow::Deployment,
-        extraction_profile: extraction_profile(&coverage, &transactions),
+        extraction_profile: extraction_profile(validated_artifact_families, &transactions),
         coverage,
         transactions,
         source_local_observations,
@@ -433,7 +450,7 @@ fn finalize(
 }
 
 fn extraction_profile(
-    coverage: &[SccmDeploymentCoverage],
+    validated_artifact_families: Vec<String>,
     transactions: &[SccmDeploymentTransaction],
 ) -> SccmDeploymentExtractionProfile {
     let mut key_kinds = BTreeSet::new();
@@ -458,18 +475,6 @@ fn extraction_profile(
             }
         }
     }
-
-    let validated_artifact_families = coverage
-        .iter()
-        .filter(|row| {
-            row.state == SccmCoverageState::Captured
-                && matches!(
-                    row.logical_artifact_id.as_str(),
-                    GROUP_APP_INTENT | GROUP_APP_ENFORCE | GROUP_CONTENT | GROUP_POLICY_STATE
-                )
-        })
-        .map(|row| row.logical_artifact_id.clone())
-        .collect::<Vec<_>>();
 
     SccmDeploymentExtractionProfile {
         profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
