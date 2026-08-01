@@ -1016,8 +1016,18 @@ fn capped_recapture_request(
             && context.truncated_tails.contains_key(*artifact_id)
     })?;
 
+    // `capture_limit_bytes` is declared by the caller, and a limit near the top
+    // of the range cannot be doubled and rounded up: `next_power_of_two`
+    // answers that overflow with a panic in debug and a zero in release, so the
+    // reducer would either abort or quietly ask for the floor. The largest
+    // representable power of two keeps the request a real, declared bound that
+    // is still wider than the limit which truncated the source.
     let limit = admitted.source.capture_limit_bytes.unwrap_or_default();
-    let requested = RECAPTURE_FLOOR_BYTES.max(limit.saturating_mul(2).next_power_of_two());
+    let doubled = limit
+        .saturating_mul(2)
+        .checked_next_power_of_two()
+        .unwrap_or(1 << (u64::BITS - 1));
+    let requested = RECAPTURE_FLOOR_BYTES.max(doubled);
     Some(SccmSiteCoreArtifactRequest {
         logical_name: admitted.group.id().to_owned(),
         role: SccmRole::SiteServer,
@@ -1030,11 +1040,17 @@ fn capped_recapture_request(
     })
 }
 
+/// Status basenames worth asking for again. The producer gate applies here too:
+/// a family this profile has no validated producer for cannot answer the
+/// question the request is asking, so naming it would spend the operator's
+/// collection budget on bytes that are already declared unsupported coverage.
+/// With no validated status source in the bundle the caller falls back to the
+/// declared status basename.
 fn status_group_candidates(context: &SiteCoreContext<'_>) -> Vec<String> {
     let mut basenames = context
         .sources
         .values()
-        .filter(|admitted| admitted.group == SiteCoreGroup::Status)
+        .filter(|admitted| admitted.group == SiteCoreGroup::Status && admitted.producer.is_some())
         .map(|admitted| admitted.basename.clone())
         .collect::<Vec<_>>();
     basenames.sort();
