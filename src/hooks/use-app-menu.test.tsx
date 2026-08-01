@@ -483,6 +483,17 @@ describe("useKeyboard native menu parity", () => {
     fireEvent.keyDown(window, { key: "h", ctrlKey: true });
     expect(actionMocks.current.toggleDetailsPane).not.toHaveBeenCalled();
 
+    // Suppressing our handler is not enough: the WebView would still run its
+    // own find-in-page or zoom behind the modal.
+    expect(
+      fireEvent.keyDown(window, { key: "f", ctrlKey: true }),
+    ).toBe(false);
+
+    // Plain keys stay untouched, because the dialog's focus trap owns Tab and
+    // its own listener owns Escape.
+    expect(fireEvent.keyDown(window, { key: "Tab" })).toBe(true);
+    expect(fireEvent.keyDown(window, { key: "Escape" })).toBe(true);
+
     useUiStore.setState({ elevationPrompt: null });
   });
 

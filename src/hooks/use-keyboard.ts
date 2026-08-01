@@ -144,9 +144,17 @@ export function useKeyboard() {
       // The elevation prompt is a true modal: it traps focus and dims the app
       // behind it. Unlike the find bar or the filter dialog, which deliberately
       // leave the surrounding shortcuts live, nothing here may act on content
-      // the user cannot see or reach. The dialog owns its own Escape handling,
-      // so returning early does not strand it open.
-      if (elevationPromptOpen) return;
+      // the user cannot see or reach.
+      if (elevationPromptOpen) {
+        // Cancel the WebView's own Ctrl/Cmd handling too, not just the app's.
+        // Returning without this would suppress our handlers while still
+        // letting find-in-page or zoom fire behind the modal.
+        if (event.ctrlKey || event.metaKey) event.preventDefault();
+        // Plain keys are deliberately left alone: the dialog's focus trap owns
+        // Tab and its own listener owns Escape, and preventDefault here would
+        // break both.
+        return;
+      }
 
       const ctrl = event.ctrlKey || event.metaKey;
       const isInput = isTypingTarget(event.target);
