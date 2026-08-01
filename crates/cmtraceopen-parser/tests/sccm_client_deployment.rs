@@ -1280,3 +1280,70 @@ fn a_nonzero_exit_code_without_a_terminal_record_is_not_a_confirmed_failure() {
     );
     assert!(transaction.key.exit_code.is_none(), "no admitted exit code");
 }
+
+#[test]
+fn the_public_projection_is_camel_case_and_carries_no_private_material() {
+    for scenario in SCENARIOS {
+        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let json = serde_json::to_value(&analysis)
+            .unwrap_or_else(|error| panic!("{scenario}: analysis serializes: {error}"));
+
+        for field in [
+            "schemaVersion",
+            "workflow",
+            "extractionProfile",
+            "coverage",
+            "transactions",
+            "sourceLocalObservations",
+            "findings",
+            "coverageGaps",
+            "artifactRequests",
+            "correlationHandoff",
+        ] {
+            assert!(
+                json.get(field).is_some(),
+                "{scenario}: public field {field} is missing"
+            );
+        }
+
+        let mut keys = Vec::new();
+        collect_object_keys(&json, &mut keys);
+        for key in keys {
+            assert!(
+                !key.contains('_') && key.chars().next().is_some_and(char::is_lowercase),
+                "{scenario}: public field {key} is not camelCase"
+            );
+        }
+
+        let text = serde_json::to_string(&analysis).expect("analysis serializes");
+        for forbidden in [
+            "CONTOSO",
+            "C:\\\\Users\\\\",
+            "S-1-",
+            "Bearer ",
+            "client_secret",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "{scenario}: public projection contains {forbidden}"
+            );
+        }
+    }
+}
+
+fn collect_object_keys(value: &Value, keys: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                keys.push(key.clone());
+                collect_object_keys(child, keys);
+            }
+        }
+        Value::Array(array) => {
+            for child in array {
+                collect_object_keys(child, keys);
+            }
+        }
+        _ => {}
+    }
+}
