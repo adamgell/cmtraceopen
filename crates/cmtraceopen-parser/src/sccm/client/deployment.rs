@@ -17,9 +17,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
+use crate::models::log_entry::Severity;
 use crate::sccm::{
-    classify_artifact_name, SccmArtifact, SccmCoverageState, SccmEvidence, SccmEvidenceRef,
-    SccmRole, SccmTimeOrderingState,
+    classify_artifact_name, SccmArtifact, SccmArtifactRequest, SccmConfidence, SccmCoverageState,
+    SccmEvidence, SccmEvidenceRef, SccmFinding, SccmFindingBuilder, SccmFindingClass,
+    SccmFindingCoverageGap, SccmPhase, SccmRole, SccmRotation, SccmTerminalEvidence,
+    SccmTimeOrderingState,
 };
 
 use super::SccmNormalizedBundle;
@@ -260,6 +263,40 @@ pub struct SccmDeploymentCorrelationHandoff {
     pub emitted_counterpart_ready_fact: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDeploymentObservationKeyConfidence {
+    None,
+    Candidate,
+}
+
+/// Bytes that were seen but can never become a fact.
+///
+/// A fragment, a capped tail, or an unvalidated supplemental installer line
+/// stays here: it is capped at Low confidence and is never correlation
+/// eligible, so it can neither override nor join a keyed transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentObservation {
+    pub observation_id: String,
+    pub artifact_id: String,
+    pub complete_logical_record: bool,
+    pub key_confidence: SccmDeploymentObservationKeyConfidence,
+    pub confidence_ceiling: SccmDeploymentConfidence,
+    pub correlation_eligible: bool,
+    pub reason: String,
+    pub evidence: SccmEvidenceRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDeploymentFinding {
+    #[serde(flatten)]
+    pub finding: SccmFinding,
+    pub deployment_phase: SccmDeploymentPhase,
+    pub last_successful_phase: Option<SccmDeploymentPhase>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmDeploymentAnalysis {
@@ -268,6 +305,10 @@ pub struct SccmDeploymentAnalysis {
     pub extraction_profile: SccmDeploymentExtractionProfile,
     pub coverage: Vec<SccmDeploymentCoverage>,
     pub transactions: Vec<SccmDeploymentTransaction>,
+    pub source_local_observations: Vec<SccmDeploymentObservation>,
+    pub findings: Vec<SccmDeploymentFinding>,
+    pub coverage_gaps: Vec<SccmFindingCoverageGap>,
+    pub artifact_requests: Vec<SccmArtifactRequest>,
     pub correlation_handoff: SccmDeploymentCorrelationHandoff,
 }
 
@@ -276,7 +317,7 @@ pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymen
     let coverage = coverage_rows(bundle);
 
     if bundle_identity_collides(bundle) {
-        return finalize(coverage, Vec::new());
+        return finalize(coverage, Vec::new(), Vec::new(), Vec::new());
     }
 
     // Only client-role artifacts may participate. Building this map from the
@@ -310,21 +351,61 @@ pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymen
             .push(fact);
     }
 
-    let transactions = by_assignment
-        .into_iter()
-        .filter_map(|(assignment_id, facts)| build_transaction(assignment_id, &facts, &coverage))
-        .collect::<Vec<_>>();
+    let mut transactions = Vec::new();
+    let mut seeds = Vec::new();
+    for (assignment_id, assignment_facts) in by_assignment {
+        let Some((transaction, seed)) =
+            build_transaction(assignment_id, &assignment_facts, &coverage)
+        else {
+            continue;
+        };
+        transactions.push(transaction);
+        if let Some(seed) = seed {
+            seeds.push(seed);
+        }
+    }
 
-    finalize(coverage, transactions)
+    let admitted_artifact_ids = facts
+        .iter()
+        .map(|fact| fact.reference.artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let observations = source_local_observations(bundle, &artifacts_by_id, &admitted_artifact_ids);
+    let findings = build_findings(&seeds, &artifacts_by_id);
+
+    finalize(coverage, transactions, observations, findings)
 }
 
 fn finalize(
     coverage: Vec<SccmDeploymentCoverage>,
     transactions: Vec<SccmDeploymentTransaction>,
+    source_local_observations: Vec<SccmDeploymentObservation>,
+    findings: Vec<SccmDeploymentFinding>,
 ) -> SccmDeploymentAnalysis {
     let emitted_counterpart_ready_fact = transactions
         .iter()
         .any(|transaction| transaction.counterpart_ready_fact.is_some());
+
+    let mut coverage_gaps = findings
+        .iter()
+        .flat_map(|finding| finding.finding.coverage_gaps.iter().cloned())
+        .collect::<Vec<_>>();
+    coverage_gaps.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| coverage_order(&left.coverage).cmp(&coverage_order(&right.coverage)))
+    });
+    coverage_gaps.dedup();
+
+    let mut artifact_requests = findings
+        .iter()
+        .flat_map(|finding| finding.finding.next_artifacts.iter().cloned())
+        .collect::<Vec<_>>();
+    artifact_requests.sort_by(|left, right| {
+        left.logical_id
+            .cmp(&right.logical_id)
+            .then_with(|| left.reason.cmp(&right.reason))
+    });
+    artifact_requests.dedup();
 
     SccmDeploymentAnalysis {
         schema_version: SCCM_DEPLOYMENT_ANALYSIS_SCHEMA_VERSION,
@@ -332,6 +413,10 @@ fn finalize(
         extraction_profile: extraction_profile(&coverage, &transactions),
         coverage,
         transactions,
+        source_local_observations,
+        findings,
+        coverage_gaps,
+        artifact_requests,
         correlation_handoff: SccmDeploymentCorrelationHandoff {
             issue: "#333".to_owned(),
             performed: false,
@@ -1037,31 +1122,77 @@ struct Outcome {
     last_successful_phase: Option<SccmDeploymentPhase>,
     next_artifact: Option<SccmDeploymentArtifactRequest>,
     coverage_gap_artifact_ids: Vec<String>,
+    finding_id: Option<&'static str>,
+    terminal_evidence: Option<SccmEvidenceRef>,
+}
+
+/// One transaction's contribution to a bundle-level finding.
+struct FindingSeed {
+    finding_id: &'static str,
+    class: SccmFindingClass,
+    phase: SccmDeploymentPhase,
+    confidence: SccmConfidence,
+    last_successful_phase: Option<SccmDeploymentPhase>,
+    evidence: Vec<SccmEvidenceRef>,
+    terminal_evidence: Option<SccmEvidenceRef>,
+    coverage_gap_artifact_ids: Vec<String>,
+    coverage_gap_group: Option<&'static str>,
+    request_phase: Option<SccmDeploymentPhase>,
 }
 
 fn build_transaction(
     assignment_id: &str,
     facts: &[&DeploymentFact],
     coverage: &[SccmDeploymentCoverage],
-) -> Option<SccmDeploymentTransaction> {
+) -> Option<(SccmDeploymentTransaction, Option<FindingSeed>)> {
     let ci_id = unique_value(facts.iter().filter_map(|fact| fact.ci_id.clone()))?;
     let key = build_key(assignment_id, &ci_id, facts);
     let outcome = resolve_outcome(facts, coverage);
+    let evidence = merged_evidence(facts);
 
-    Some(SccmDeploymentTransaction {
-        transaction_id: format!("deployment:assignment:{assignment_id}"),
-        counterpart_ready_fact: counterpart_ready_fact(facts),
-        key,
+    let seed = outcome.finding_id.map(|finding_id| FindingSeed {
+        finding_id,
+        class: match outcome.classification {
+            SccmDeploymentClassification::ConfirmedFailure => SccmFindingClass::ConfirmedFailure,
+            SccmDeploymentClassification::Symptom => SccmFindingClass::Symptom,
+            _ => SccmFindingClass::InsufficientEvidence,
+        },
         phase: outcome.phase,
-        state: outcome.state,
+        confidence: match outcome.confidence {
+            SccmDeploymentConfidence::High => SccmConfidence::High,
+            SccmDeploymentConfidence::Medium => SccmConfidence::Moderate,
+            SccmDeploymentConfidence::Low => SccmConfidence::Low,
+        },
         last_successful_phase: outcome.last_successful_phase,
-        classification: outcome.classification,
-        confidence: outcome.confidence,
-        confidence_ceiling: outcome.confidence,
-        coverage_gap_artifact_ids: outcome.coverage_gap_artifact_ids,
-        next_artifact: outcome.next_artifact,
-        evidence: merged_evidence(facts),
-    })
+        evidence: match &outcome.terminal_evidence {
+            Some(reference) => vec![reference.clone()],
+            None => evidence.clone(),
+        },
+        terminal_evidence: outcome.terminal_evidence.clone(),
+        coverage_gap_artifact_ids: outcome.coverage_gap_artifact_ids.clone(),
+        coverage_gap_group: (outcome.classification
+            == SccmDeploymentClassification::InsufficientEvidence)
+            .then(|| outcome.phase.artifact_group()),
+        request_phase: outcome.next_artifact.as_ref().map(|_| outcome.phase),
+    });
+
+    Some((
+        SccmDeploymentTransaction {
+            transaction_id: format!("deployment:assignment:{assignment_id}"),
+            counterpart_ready_fact: counterpart_ready_fact(facts),
+            key,
+            phase: outcome.phase,
+            state: outcome.state,
+            last_successful_phase: outcome.last_successful_phase,
+            classification: outcome.classification,
+            confidence: outcome.confidence,
+            confidence_ceiling: outcome.confidence,
+            coverage_gap_artifact_ids: outcome.coverage_gap_artifact_ids,
+            next_artifact: outcome.next_artifact,
+            evidence,
+        },
+        seed,
+    ))
 }
 
 /// Distinct values collapse to one key only when they agree. Two different
@@ -1219,6 +1350,8 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentState::NotTargeted,
             SccmDeploymentClassification::NotTargeted,
             None,
+            None,
+            None,
         );
     }
 
@@ -1231,6 +1364,11 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     if let Some(failure) = first_fact(facts, DeploymentFactKind::RequirementsFailed)
         .or_else(|| first_fact(facts, DeploymentFactKind::DependencyFailed))
     {
+        let finding_id = if failure.kind == DeploymentFactKind::RequirementsFailed {
+            FINDING_REQUIREMENTS_TERMINAL
+        } else {
+            FINDING_DEPENDENCY_TERMINAL
+        };
         chain.push(failure);
         return conclude(
             &chain,
@@ -1238,6 +1376,8 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentState::Failed,
             SccmDeploymentClassification::ConfirmedFailure,
             last,
+            Some(finding_id),
+            Some(failure),
         );
     }
     let Some(requirements) = first_fact(facts, DeploymentFactKind::RequirementsSatisfied) else {
@@ -1281,6 +1421,8 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentState::Failed,
             SccmDeploymentClassification::ConfirmedFailure,
             last,
+            Some(FINDING_TRANSFER_TERMINAL),
+            Some(failure),
         );
     }
     let started = first_fact(facts, DeploymentFactKind::TransferStarted);
@@ -1310,6 +1452,8 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentState::Failed,
             SccmDeploymentClassification::ConfirmedFailure,
             last,
+            Some(FINDING_CACHE_TERMINAL),
+            Some(failure),
         );
     }
     let Some(cached) = first_fact(facts, DeploymentFactKind::CacheCommitted) else {
@@ -1331,6 +1475,8 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentState::Failed,
             SccmDeploymentClassification::ConfirmedFailure,
             last,
+            Some(FINDING_ENFORCE_TERMINAL),
+            Some(failure),
         );
     }
     let Some(enforced) = first_fact(facts, DeploymentFactKind::EnforceSucceeded) else {
@@ -1348,6 +1494,8 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentState::DetectionMismatch,
             SccmDeploymentClassification::Symptom,
             last,
+            Some(FINDING_DETECTION_MISMATCH),
+            None,
         );
     }
     let Some(detected) = first_fact(facts, DeploymentFactKind::Detected) else {
@@ -1369,6 +1517,8 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             SccmDeploymentState::Failed,
             SccmDeploymentClassification::ConfirmedFailure,
             last,
+            Some(FINDING_REPORT_TERMINAL),
+            Some(failure),
         );
     }
     let Some(reported) = first_fact(facts, DeploymentFactKind::ReportSucceeded) else {
@@ -1382,18 +1532,23 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
         SccmDeploymentState::Succeeded,
         SccmDeploymentClassification::Success,
         last,
+        None,
+        None,
     )
 }
 
 /// Terminal and success outcomes require a usable chronology through every
 /// prerequisite phase. Without one the transaction becomes a low-confidence
 /// symptom that names the missing ordering evidence.
+#[allow(clippy::too_many_arguments)]
 fn conclude(
     chain: &[&DeploymentFact],
     phase: SccmDeploymentPhase,
     state: SccmDeploymentState,
     classification: SccmDeploymentClassification,
     last_successful_phase: Option<SccmDeploymentPhase>,
+    finding_id: Option<&'static str>,
+    terminal: Option<&DeploymentFact>,
 ) -> Outcome {
     if !chain_has_usable_order(chain) {
         return Outcome {
@@ -1407,6 +1562,8 @@ fn conclude(
                 reason: REASON_CHRONOLOGY.to_owned(),
             }),
             coverage_gap_artifact_ids: Vec::new(),
+            finding_id: Some(FINDING_CHRONOLOGY_UNCERTAIN),
+            terminal_evidence: None,
         };
     }
 
@@ -1426,6 +1583,8 @@ fn conclude(
         last_successful_phase,
         next_artifact: None,
         coverage_gap_artifact_ids: Vec::new(),
+        finding_id,
+        terminal_evidence: terminal.map(|fact| fact.reference.clone()),
     }
 }
 
@@ -1449,5 +1608,363 @@ fn insufficient(
         coverage_gap_artifact_ids: coverage_for_group(coverage, group)
             .map(|row| row.artifact_ids.clone())
             .unwrap_or_default(),
+        finding_id: Some(coverage_gap_finding_id(phase)),
+        terminal_evidence: None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Source-local observations
+// ---------------------------------------------------------------------------
+
+/// Every client artifact that carried bytes but produced no admitted fact.
+///
+/// The observation exists so a reader can see the fragment; it can never be
+/// promoted, ordered, or correlated.
+fn source_local_observations(
+    bundle: &SccmNormalizedBundle,
+    artifacts_by_id: &BTreeMap<&str, &SccmArtifact>,
+    admitted_artifact_ids: &BTreeSet<&str>,
+) -> Vec<SccmDeploymentObservation> {
+    let mut evidence_by_artifact = BTreeMap::<&str, Vec<&SccmEvidence>>::new();
+    for evidence in bundle
+        .evidence
+        .iter()
+        .filter(|evidence| evidence.role == SccmRole::Client)
+    {
+        let artifact_id = evidence.reference.artifact_id.as_str();
+        if admitted_artifact_ids.contains(artifact_id)
+            || !artifacts_by_id.contains_key(artifact_id)
+            || !valid_reference(&evidence.reference)
+        {
+            continue;
+        }
+        evidence_by_artifact
+            .entry(artifact_id)
+            .or_default()
+            .push(evidence);
+    }
+
+    evidence_by_artifact
+        .into_iter()
+        .filter_map(|(artifact_id, evidence)| {
+            let artifact = artifacts_by_id.get(artifact_id)?;
+            let complete_logical_record = artifact.coverage == SccmCoverageState::Captured;
+            let start = evidence
+                .iter()
+                .filter_map(|item| item.reference.line_start)
+                .min()?;
+            let end = evidence
+                .iter()
+                .filter_map(|item| item.reference.line_end)
+                .max()?;
+            let key_confidence = if evidence.iter().any(|item| has_candidate_key(&item.message)) {
+                SccmDeploymentObservationKeyConfidence::Candidate
+            } else {
+                SccmDeploymentObservationKeyConfidence::None
+            };
+
+            Some(SccmDeploymentObservation {
+                observation_id: format!(
+                    "{}:{artifact_id}",
+                    if complete_logical_record {
+                        "supplemental"
+                    } else {
+                        "fragment"
+                    }
+                ),
+                artifact_id: artifact_id.to_owned(),
+                complete_logical_record,
+                key_confidence,
+                confidence_ceiling: SccmDeploymentConfidence::Low,
+                correlation_eligible: false,
+                reason: observation_reason(artifact).to_owned(),
+                evidence: SccmEvidenceRef {
+                    artifact_id: artifact_id.to_owned(),
+                    entry_id: format!("{artifact_id}:{start}-{end}"),
+                    line_start: Some(start),
+                    line_end: Some(end),
+                },
+            })
+        })
+        .collect()
+}
+
+fn observation_reason(artifact: &SccmArtifact) -> &'static str {
+    match (&artifact.coverage, &artifact.rotation) {
+        (SccmCoverageState::Partial, SccmRotation::Current) => {
+            "current-file fragment cannot complete the archived physical record"
+        }
+        (SccmCoverageState::Partial, SccmRotation::LoUnderscore) => {
+            "archived-file fragment cannot be joined across a physical rotation boundary"
+        }
+        (SccmCoverageState::Partial, _) => {
+            "a physical rotation fragment cannot form a logical record"
+        }
+        (SccmCoverageState::Capped, _) => {
+            "capped bytes do not form a logical record and cannot attach by time"
+        }
+        _ => "unvalidated supplemental text cannot override an exact keyed client transaction",
+    }
+}
+
+/// A fragment may still show something that looks like a key. Saying so is not
+/// the same as trusting it: the observation stays capped at Low and unlinked.
+fn has_candidate_key(message: &str) -> bool {
+    let Some(payload) = deployment_event_payload(message) else {
+        return false;
+    };
+    field_value(payload, "assignmentId").is_some_and(valid_guid)
+        || field_value(payload, "ciId").is_some_and(valid_guid)
+        || field_value(payload, "contentId").is_some_and(valid_guid)
+        || field_value(payload, "requestId").is_some_and(valid_guid)
+        || field_value(payload, "bitsJobId").is_some_and(valid_guid)
+        || field_value(payload, "productCode").is_some_and(valid_guid)
+        || field_value(payload, "packageId").is_some_and(valid_package_id)
+        || field_value(payload, "distributionPointHostHandle").is_some_and(valid_safe_handle)
+        || field_value(payload, "contentVersion")
+            .and_then(parse_content_version)
+            .is_some()
+}
+
+// ---------------------------------------------------------------------------
+// Findings
+// ---------------------------------------------------------------------------
+
+const FINDING_REQUIREMENTS_TERMINAL: &str = "deployment-requirements-terminal";
+const FINDING_DEPENDENCY_TERMINAL: &str = "deployment-dependency-terminal";
+const FINDING_TRANSFER_TERMINAL: &str = "deployment-transfer-terminal";
+const FINDING_CACHE_TERMINAL: &str = "deployment-cache-terminal";
+const FINDING_ENFORCE_TERMINAL: &str = "deployment-enforce-terminal";
+const FINDING_REPORT_TERMINAL: &str = "deployment-report-terminal";
+const FINDING_DETECTION_MISMATCH: &str = "deployment-detection-mismatch";
+const FINDING_CHRONOLOGY_UNCERTAIN: &str = "deployment-chronology-uncertain";
+
+fn coverage_gap_finding_id(phase: SccmDeploymentPhase) -> &'static str {
+    match phase {
+        SccmDeploymentPhase::Intent => "deployment-intent-coverage-gap",
+        SccmDeploymentPhase::Requirements => "deployment-requirements-coverage-gap",
+        SccmDeploymentPhase::LocateContent => "deployment-location-coverage-gap",
+        SccmDeploymentPhase::Transfer => "deployment-transfer-coverage-gap",
+        SccmDeploymentPhase::Cache => "deployment-cache-coverage-gap",
+        SccmDeploymentPhase::Enforce => "deployment-enforce-coverage-gap",
+        SccmDeploymentPhase::Detect => "deployment-detect-coverage-gap",
+        SccmDeploymentPhase::Report => "deployment-report-coverage-gap",
+    }
+}
+
+/// Titles and summaries never name a distribution point, a server, a download
+/// cause, or a policy prerequisite: those claims belong to other issues.
+fn finding_text(finding_id: &str) -> (&'static str, &'static str) {
+    match finding_id {
+        FINDING_REQUIREMENTS_TERMINAL => (
+            "Client requirement evaluation recorded a terminal failure",
+            "A complete version-profiled requirement record ended this assignment before any content phase.",
+        ),
+        FINDING_DEPENDENCY_TERMINAL => (
+            "Client dependency evaluation recorded a terminal failure",
+            "A complete version-profiled dependency record ended this assignment before any content phase.",
+        ),
+        FINDING_TRANSFER_TERMINAL => (
+            "Client content transfer recorded a terminal failure",
+            "The same exact content key recorded a terminal transfer error after content was located.",
+        ),
+        FINDING_CACHE_TERMINAL => (
+            "Client cache commit recorded a terminal failure",
+            "The same exact content key recorded a terminal cache error after the transfer completed.",
+        ),
+        FINDING_ENFORCE_TERMINAL => (
+            "Client enforcement recorded a terminal failure",
+            "A complete enforcement record ended with a nonzero terminal exit code after the cache commit.",
+        ),
+        FINDING_REPORT_TERMINAL => (
+            "Client deployment state report recorded a terminal failure",
+            "A complete state report ended this assignment with a failed deployment state.",
+        ),
+        FINDING_DETECTION_MISMATCH => (
+            "Post-enforcement detection did not find the application",
+            "Enforcement completed with a zero exit code and detection still reported the application absent.",
+        ),
+        FINDING_CHRONOLOGY_UNCERTAIN => (
+            "Deployment chronology is not usable",
+            "Records for this key cannot be ordered through the earlier phases, so no outcome is claimed.",
+        ),
+        "deployment-intent-coverage-gap" => (
+            "Client application intent evidence is incomplete",
+            "No complete client intent record was available for this assignment and CI.",
+        ),
+        "deployment-requirements-coverage-gap" => (
+            "Client requirement evidence is incomplete",
+            "No complete client requirement or dependency outcome was available for this assignment and CI.",
+        ),
+        "deployment-location-coverage-gap" => (
+            "Client content-location evidence is incomplete",
+            "No complete client content-location record was available for this assignment and CI.",
+        ),
+        "deployment-transfer-coverage-gap" => (
+            "Client content transfer evidence is incomplete",
+            "No complete client transfer outcome was available for this content key.",
+        ),
+        "deployment-cache-coverage-gap" => (
+            "Client cache commit evidence is incomplete",
+            "No complete client cache commit outcome was available for this content key.",
+        ),
+        "deployment-enforce-coverage-gap" => (
+            "Client enforcement evidence is incomplete",
+            "No complete client enforcement outcome was available for this content key.",
+        ),
+        "deployment-detect-coverage-gap" => (
+            "Client detection evidence is incomplete",
+            "No complete client detection outcome was available for this content key.",
+        ),
+        _ => (
+            "Client deployment state report evidence is incomplete",
+            "No complete client state report was available for this content key.",
+        ),
+    }
+}
+
+/// The smallest catalog source that can close the gap for a phase.
+fn phase_artifact_request(phase: SccmDeploymentPhase) -> SccmArtifactRequest {
+    let (logical_id, basename) = match phase {
+        SccmDeploymentPhase::Intent | SccmDeploymentPhase::Requirements => {
+            ("appIntentEval", "AppIntentEval.log")
+        }
+        SccmDeploymentPhase::LocateContent | SccmDeploymentPhase::Cache => ("cas", "CAS.log"),
+        SccmDeploymentPhase::Transfer => ("dataTransferService", "DataTransferService.log"),
+        SccmDeploymentPhase::Enforce => ("appEnforce", "AppEnforce.log"),
+        SccmDeploymentPhase::Detect => ("appDiscovery", "AppDiscovery.log"),
+        SccmDeploymentPhase::Report => ("stateMessage", "StateMessage.log"),
+    };
+    SccmArtifactRequest {
+        logical_id: logical_id.to_owned(),
+        role: SccmRole::Client,
+        reason: format!("Collect the complete {basename} file."),
+    }
+}
+
+/// Transactions blocked by the same cause share one finding: repeating an
+/// identical coverage claim per assignment would overstate the evidence.
+fn build_findings(
+    seeds: &[FindingSeed],
+    artifacts_by_id: &BTreeMap<&str, &SccmArtifact>,
+) -> Vec<SccmDeploymentFinding> {
+    let mut grouped = BTreeMap::<&str, Vec<&FindingSeed>>::new();
+    for seed in seeds {
+        grouped.entry(seed.finding_id).or_default().push(seed);
+    }
+
+    grouped
+        .into_iter()
+        .filter_map(|(finding_id, seeds)| {
+            let first = seeds.first()?;
+            let (title, summary) = finding_text(finding_id);
+
+            let evidence = if first.terminal_evidence.is_some() {
+                let mut references = seeds
+                    .iter()
+                    .flat_map(|seed| seed.evidence.iter().cloned())
+                    .collect::<Vec<_>>();
+                references.sort_by(compare_references);
+                references.dedup();
+                references
+            } else {
+                merge_reference_spans(seeds.iter().flat_map(|seed| seed.evidence.iter()))
+            };
+
+            let mut terminal_evidence = seeds
+                .iter()
+                .filter_map(|seed| seed.terminal_evidence.clone())
+                .map(SccmTerminalEvidence::observed_failure)
+                .collect::<Vec<_>>();
+            terminal_evidence
+                .sort_by(|left, right| compare_references(&left.reference, &right.reference));
+            terminal_evidence.dedup();
+
+            let mut coverage_gaps = seeds
+                .iter()
+                .flat_map(|seed| {
+                    seed.coverage_gap_artifact_ids
+                        .iter()
+                        .filter_map(|artifact_id| {
+                            let artifact = artifacts_by_id.get(artifact_id.as_str())?;
+                            Some(SccmFindingCoverageGap {
+                                artifact_id: artifact_id.clone(),
+                                role: SccmRole::Client,
+                                coverage: artifact.coverage.clone(),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            coverage_gaps.sort_by(|left, right| left.artifact_id.cmp(&right.artifact_id));
+            coverage_gaps.dedup();
+            if coverage_gaps.is_empty() {
+                // An insufficient-evidence finding always names what is
+                // missing. With no incomplete artifact to blame, the gap is the
+                // group itself: bytes exist, the needed record does not.
+                if let Some(group) = first.coverage_gap_group {
+                    coverage_gaps.push(SccmFindingCoverageGap {
+                        artifact_id: group.to_owned(),
+                        role: SccmRole::Client,
+                        coverage: SccmCoverageState::Partial,
+                    });
+                }
+            }
+
+            let mut builder = SccmFindingBuilder::new(finding_id)
+                .class(first.class.clone())
+                .phase(SccmPhase::Unknown(first.phase.as_str().to_owned()))
+                .role(SccmRole::Client)
+                .severity(match first.class {
+                    SccmFindingClass::ConfirmedFailure => Severity::Error,
+                    _ => Severity::Warning,
+                })
+                .confidence(first.confidence)
+                .title(title)
+                .summary(summary)
+                .evidence(evidence)
+                .terminal_evidence(terminal_evidence)
+                .coverage_gaps(coverage_gaps);
+            if let Some(phase) = first.request_phase {
+                builder = builder.next_artifact(phase_artifact_request(phase));
+            }
+
+            Some(SccmDeploymentFinding {
+                finding: builder
+                    .build()
+                    .expect("deployment finding must satisfy the shared contract"),
+                deployment_phase: first.phase,
+                last_successful_phase: first.last_successful_phase,
+            })
+        })
+        .collect()
+}
+
+fn merge_reference_spans<'a>(
+    references: impl Iterator<Item = &'a SccmEvidenceRef>,
+) -> Vec<SccmEvidenceRef> {
+    let mut spans = BTreeMap::<String, (u32, u32)>::new();
+    for reference in references {
+        let (Some(start), Some(end)) = (reference.line_start, reference.line_end) else {
+            continue;
+        };
+        spans
+            .entry(reference.artifact_id.clone())
+            .and_modify(|span| {
+                span.0 = span.0.min(start);
+                span.1 = span.1.max(end);
+            })
+            .or_insert((start, end));
+    }
+
+    spans
+        .into_iter()
+        .map(|(artifact_id, (start, end))| SccmEvidenceRef {
+            entry_id: format!("{artifact_id}:{start}-{end}"),
+            artifact_id,
+            line_start: Some(start),
+            line_end: Some(end),
+        })
+        .collect()
 }

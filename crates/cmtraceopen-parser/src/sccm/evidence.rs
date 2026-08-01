@@ -326,6 +326,39 @@ impl SccmRawEvidenceSnapshot {
         }
     }
 
+    /// One physical line that never became a logical record.
+    ///
+    /// The snapshot carries no timestamp: a fragment has no provable instant,
+    /// so it can never be ordered against, or attached to, a real record.
+    pub(crate) fn from_physical_line(
+        artifact: &SccmArtifact,
+        line_number: u32,
+        text: &str,
+    ) -> Self {
+        let entry_id = format!("{}:{line_number}-{line_number}", artifact.artifact_id);
+
+        Self {
+            evidence_id: entry_id.clone(),
+            reference: SccmEvidenceRef {
+                artifact_id: artifact.artifact_id.clone(),
+                entry_id,
+                line_start: Some(line_number),
+                line_end: Some(line_number),
+            },
+            role: artifact.role.clone(),
+            component: None,
+            ccm_source_file: None,
+            message: text.to_owned(),
+            timestamp: SccmTimestamp {
+                original_display: None,
+                offset_minutes: None,
+                utc_millis: None,
+                ordering_state: SccmTimeOrderingState::TimestampMissing,
+            },
+            raw_execution_context: None,
+        }
+    }
+
     pub(crate) fn export(&self) -> SccmEvidence {
         SccmEvidence {
             evidence_id: self.evidence_id.clone(),
