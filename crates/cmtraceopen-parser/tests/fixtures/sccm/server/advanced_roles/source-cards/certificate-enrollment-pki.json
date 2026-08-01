@@ -1,0 +1,80 @@
+{
+  "cardSchemaVersion": "1.0.0",
+  "cardId": "certificate-enrollment-pki",
+  "cardVersion": "1.0.0",
+  "family": "Certificate enrollment and PKI role diagnostics",
+  "roleScope": [
+    "certificateRegistrationPoint"
+  ],
+  "candidateBasenames": [
+    "crp.log"
+  ],
+  "pathClasses": [
+    "configuredRoleLogRoot",
+    "siteServerLogs"
+  ],
+  "rawParserFamily": "ccm",
+  "sourceVersionScope": {
+    "state": "unknown",
+    "allowedPrefixes": []
+  },
+  "capture": {
+    "classification": "optional",
+    "maxBytes": 4194304,
+    "accessPolicy": "leastPrivilegeNoEscalation",
+    "rotationPolicy": {
+      "kinds": [
+        "current",
+        "lo_"
+      ],
+      "maxFiles": 2
+    }
+  },
+  "privacy": {
+    "sensitivity": "high",
+    "classes": [
+      "certificateIdentity",
+      "deviceIdentity",
+      "subjectName"
+    ],
+    "redactionRequired": true,
+    "publicProjection": [
+      "captureState",
+      "cardId",
+      "coverageState",
+      "roleScope"
+    ],
+    "rawSensitiveFieldProjection": []
+  },
+  "expectedHealthyEvidence": "A future validated rule must cite a bounded enrollment request and its terminal certificate-registration disposition from the same role instance.",
+  "terminalFailureEvidence": "A future terminal rule must cite an explicit certificate-registration failure and must not infer failure from a missing file, access denial, or time proximity.",
+  "correlationPolicy": {
+    "keyState": "unvalidated",
+    "allowedKeyKinds": [],
+    "timeOnlyEligible": false,
+    "topologyRequired": true
+  },
+  "fixtureIds": [],
+  "ownerIssue": "#334",
+  "promotion": {
+    "state": "candidate",
+    "observedEvidenceIds": [],
+    "implementationIssue": null,
+    "productionReducer": null,
+    "deferredReason": null
+  },
+  "semanticPolicy": {
+    "captureGuidanceOnly": true,
+    "canCreateTransactions": false,
+    "canCreateFailureFindings": false
+  },
+  "nextEvidence": [
+    "Record sanitized configured-role and source-version provenance from an authorized development server.",
+    "Design success, terminal-failure, privacy, incomplete-capture, and rotation fixtures before proposing a reducer."
+  ],
+  "supersession": {
+    "state": "active",
+    "supersedes": [],
+    "supersededBy": null
+  }
+}

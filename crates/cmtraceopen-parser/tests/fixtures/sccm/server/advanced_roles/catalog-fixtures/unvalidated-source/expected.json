@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "1.0.0",
+  "valid": false,
+  "admittedToSemanticCatalog": false,
+  "issues": [
+    "candidateMetadataInvalid",
+    "unvalidatedSourceCannotDiagnose"
+  ]
+}
