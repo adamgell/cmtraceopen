@@ -3387,3 +3387,90 @@ fn keyed_evidence_cannot_be_laundered_through_source_local_observations() {
         .expect_err("keyed transaction evidence cannot be laundered into source-local citations");
     assert!(error.contains("source-local"), "{error}");
 }
+
+#[test]
+fn phase_state_and_terminal_bind_to_body_tokens_only() {
+    // The completed scenario declares the strongest claim in the corpus:
+    // success, high confidence, phase complete, state succeeded, terminal.
+    let scenario = "completed";
+    let mut accepted = Vec::new();
+
+    for (mutation, body_removal, trailer_claim, body_rewrite) in [
+        (
+            "phase-and-state-relocated-to-trailer",
+            Some("phase=complete state=succeeded "),
+            Some("phase=complete state=succeeded"),
+            None,
+        ),
+        (
+            "terminal-relocated-to-trailer",
+            Some("terminal=true "),
+            Some("terminal=true"),
+            None,
+        ),
+        (
+            "phase-token-suffixed",
+            None,
+            None,
+            Some(("phase=complete", "phase=completeX")),
+        ),
+        (
+            "state-token-suffixed",
+            None,
+            None,
+            Some(("state=succeeded", "state=succeededX")),
+        ),
+        (
+            "terminal-token-suffixed",
+            None,
+            None,
+            Some(("terminal=true", "terminal=trueX")),
+        ),
+        (
+            "terminal-state-token-extended",
+            None,
+            None,
+            Some(("state=succeeded", "state=succeededLater")),
+        ),
+    ] {
+        let temporary = copy_scenario_to_temporary_root(scenario, mutation);
+        let mut manifest = read_json(&temporary.root.join("manifest.json"));
+        let mut expected = read_json(&temporary.root.join("expected.json"));
+        let relative_path = manifest["artifacts"][0]["relativePath"]
+            .as_str()
+            .expect("completed artifact has a relative path");
+        let evidence_path = temporary.root.join(relative_path);
+        let original =
+            std::fs::read_to_string(&evidence_path).expect("completed evidence is readable");
+
+        let mut mutated = original.clone();
+        if let Some(body_removal) = body_removal {
+            mutated = mutated.replace(body_removal, "");
+        }
+        if let Some(trailer_claim) = trailer_claim {
+            mutated = mutated.replace("context=\"\"", &format!("context=\"{trailer_claim}\""));
+            assert!(
+                mutated.contains(&format!("context=\"{trailer_claim}\"")),
+                "{mutation}: the claim moved into the record trailer"
+            );
+        }
+        if let Some((from, to)) = body_rewrite {
+            mutated = mutated.replace(from, to);
+        }
+        assert_ne!(mutated, original, "{mutation}: the mutation is effective");
+        std::fs::write(&evidence_path, &mutated).expect("mutated evidence is writable");
+        manifest["artifacts"][0]["bytesCopied"] = Value::from(mutated.len() as u64);
+        expected["artifactProvenance"][0]["bytesCopied"] = Value::from(mutated.len() as u64);
+
+        if validate_contract(scenario, &temporary.root, &manifest, &expected).is_ok() {
+            accepted.push(mutation);
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "validate_contract accepted {} trailer or partial-token outcome claims: {}",
+        accepted.len(),
+        accepted.join(", ")
+    );
+}
