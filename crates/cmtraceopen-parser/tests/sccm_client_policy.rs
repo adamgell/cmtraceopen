@@ -1030,6 +1030,44 @@ fn policy_same_artifact_sequence_survives_unusable_time() {
 }
 
 #[test]
+fn policy_captured_sibling_never_erases_an_explicit_coverage_gap() {
+    for (state, expected) in [
+        (SccmCoverageState::AccessDenied, "accessDenied"),
+        (SccmCoverageState::Capped, "capped"),
+        (SccmCoverageState::Skipped, "skipped"),
+        (SccmCoverageState::Unsupported, "unsupported"),
+        (SccmCoverageState::ParseFailed, "parseFailed"),
+        (SccmCoverageState::Absent, "absent"),
+    ] {
+        let mut bundle = load_bundle("complete");
+        let report = bundle
+            .artifacts
+            .iter_mut()
+            .find(|artifact| artifact.display_name == "StateMessage.log")
+            .expect("state-message artifact");
+        let report_id = report.artifact_id.clone();
+        report.coverage = state.clone();
+
+        // The CIAgent sibling in the same logical group stays captured.
+        let analysis = analysis_json(&bundle);
+        let gaps = analysis["coverageGaps"]
+            .as_array()
+            .expect("coverage gaps")
+            .clone();
+
+        assert!(
+            gaps.iter()
+                .any(|gap| gap["artifactId"] == report_id.as_str() && gap["coverage"] == expected),
+            "{state:?} must stay observable on its own source, got {gaps:?}"
+        );
+        assert!(
+            !gaps.iter().any(|gap| gap["coverage"] == "partial"),
+            "{state:?} must not be replaced by a synthesized partial gap"
+        );
+    }
+}
+
+#[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
     let later_success = bundle
