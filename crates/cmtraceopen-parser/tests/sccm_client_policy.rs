@@ -1068,6 +1068,34 @@ fn policy_captured_sibling_never_erases_an_explicit_coverage_gap() {
 }
 
 #[test]
+fn policy_cross_role_artifact_id_collision_never_admits_by_vector_order() {
+    let mut bundle = load_bundle("complete");
+    let mut shadow = bundle
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.display_name == "PolicyAgent.log")
+        .cloned()
+        .expect("policy agent artifact");
+    shadow.role = SccmRole::ManagementPoint;
+    shadow.display_name = "mpcontrol.log".to_owned();
+    bundle.artifacts.push(shadow);
+
+    let forward = analysis_json(&bundle);
+    assert_eq!(
+        forward,
+        analysis_json(&reversed_bundle(&bundle)),
+        "an out-of-scope artifact reusing a client artifact id must not decide admission by order"
+    );
+
+    let transaction = &forward["transactions"][0];
+    assert_eq!(
+        transaction["state"], "succeeded",
+        "the client artifact keeps its own evidence"
+    );
+    assert_eq!(transaction["confidence"], "high");
+}
+
+#[test]
 fn policy_recovery_requires_the_same_validated_assignment_key() {
     let mut bundle = load_bundle("recovery");
     let later_success = bundle
