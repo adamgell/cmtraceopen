@@ -1149,15 +1149,32 @@ fn opaque_authorization_credentials_are_redacted() {
     }
 }
 
+/// Removes `[redacted:...]` spans so a hextet is only ever matched against text
+/// that actually survived. Placeholder tokens carry characters of their own.
+fn strip_placeholder_tokens(redacted: &str) -> String {
+    let mut out = String::with_capacity(redacted.len());
+    let mut rest = redacted;
+    while let Some(start) = rest.find("[redacted:") {
+        out.push_str(&rest[..start]);
+        let Some(end) = rest[start..].find(']') else {
+            return out;
+        };
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Asserts every meaningful hextet of an address is gone.
 ///
 /// `!redacted.contains(address)` alone is too weak: a partial redaction leaving
 /// `fd12:3456:[redacted:host]` satisfies it while still exporting a stable
 /// network prefix, which is the identifying part.
 fn assert_no_ipv6_component_survives(address: &str, redacted: &str) {
+    let remaining = strip_placeholder_tokens(redacted);
     for hextet in address.split(':').filter(|part| !part.is_empty()) {
         assert!(
-            !redacted.contains(hextet),
+            !remaining.contains(hextet),
             "hextet `{hextet}` of {address} survived: {redacted}"
         );
     }
@@ -1554,6 +1571,42 @@ fn coverage_ids_are_one_dense_sequence_across_ingest_and_reduction() {
         reduction.coverage.len(),
         "coverage ids must be unique"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Unknown members that no text pattern can catch
+// ---------------------------------------------------------------------------
+
+/// A value the record redactor replaces wholesale, because no text pattern can
+/// recognise it, must also be recognised by name inside `unknownFields`.
+///
+/// A bare host name has no `@`, no scheme, and no dotted quad, which is exactly
+/// why `capture.host.hostName` is replaced whole rather than pattern-matched.
+/// The same value arriving as an unknown member had no such protection. Image
+/// paths are the same shape of problem: only paths under `/Users` match a
+/// pattern, so `/Applications/Company Portal.app/...` exported verbatim.
+#[test]
+fn unknown_members_naming_a_host_or_image_path_are_redacted() {
+    let header = format!(
+        r#"{{"captureId":"c","schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+    let record = r#"{"category":"Enrollment","eventMessage":"enrolled","messageType":"Default","process":"CompanyPortal","sourceSequence":0,"subsystem":"com.microsoft.CompanyPortalMac","timestamp":"2026-07-15 07:02:00.000000-0500","hostName":"synthetic-mac-0001","computerName":"synthetic-mac-0001","deviceName":"rin-macbook","nested":{"machineName":"synthetic-mac-0002","processImagePath":"/Applications/Company Portal.app/Contents/MacOS/CompanyPortal"}}"#;
+
+    let capture = parse_capture(&format!("{header}\n{record}\n"));
+    let projection = redacted_capture_projection(&capture);
+    let serialized = serde_json::to_string(&projection).unwrap();
+
+    for secret in [
+        "synthetic-mac-0001",
+        "synthetic-mac-0002",
+        "rin-macbook",
+        "/Applications/Company Portal.app",
+    ] {
+        assert!(
+            !serialized.contains(secret),
+            "{secret} leaked through unknownFields: {serialized}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
