@@ -397,7 +397,7 @@ fn reduce_policy_transaction(
                         .map(|fact| fact.reference.clone()),
                 );
                 if phase == SccmPolicyPhase::Request
-                    && coverage_gap_for_group(context, CLIENT_LOCATION_GROUP).is_some()
+                    && group_has_no_captured_source(context, CLIENT_LOCATION_GROUP)
                 {
                     confidence = SccmWorkflowConfidence::Medium;
                     coverage_gap_artifact_ids.push(CLIENT_LOCATION_GROUP.to_owned());
@@ -491,13 +491,7 @@ fn reduce_policy_transaction(
 
     let gaps = coverage_gap_artifact_ids
         .iter()
-        .map(|logical_id| {
-            coverage_gap_for_group(context, logical_id).unwrap_or(SccmFindingCoverageGap {
-                artifact_id: logical_id.clone(),
-                role: SccmRole::Client,
-                coverage: SccmCoverageState::Partial,
-            })
-        })
+        .flat_map(|logical_id| coverage_gaps_for_group(context, logical_id))
         .collect::<Vec<_>>();
     let finding = build_transaction_finding(
         &transaction,
@@ -1109,26 +1103,74 @@ fn request_for_group(logical_id: &str, phase: SccmPolicyPhase) -> SccmWorkflowAr
     workflow_request(logical_id, reason)
 }
 
-fn coverage_gap_for_group(
+/// Coverage gaps for one logical group, keeping every explicit non-outcome.
+///
+/// A group can hold both a captured source and an unavailable one. Reporting a
+/// single group-level state would let the captured sibling erase the other
+/// source's AccessDenied, Capped, Skipped, Unsupported, or ParseFailed state,
+/// so each unavailable source keeps its own citation and state. Only a group
+/// that is fully captured, yet still failed to yield the phase, falls back to a
+/// synthesized partial gap.
+fn coverage_gaps_for_group(
     context: &ReductionContext<'_>,
     logical_id: &str,
-) -> Option<SccmFindingCoverageGap> {
-    let mut states = context
+) -> Vec<SccmFindingCoverageGap> {
+    let artifacts = context
+        .bundle
+        .artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact.role == SccmRole::Client
+                && policy_group(&artifact.display_name) == Some(logical_id)
+        })
+        .collect::<Vec<_>>();
+    if artifacts.is_empty() {
+        return vec![SccmFindingCoverageGap {
+            artifact_id: logical_id.to_owned(),
+            role: SccmRole::Client,
+            coverage: SccmCoverageState::Absent,
+        }];
+    }
+
+    let mut gaps = artifacts
+        .iter()
+        .filter(|artifact| artifact.coverage != SccmCoverageState::Captured)
+        .filter(|artifact| is_safe_opaque_id(&artifact.artifact_id))
+        .map(|artifact| SccmFindingCoverageGap {
+            artifact_id: artifact.artifact_id.clone(),
+            role: SccmRole::Client,
+            coverage: artifact.coverage.clone(),
+        })
+        .collect::<Vec<_>>();
+    if gaps.is_empty() {
+        gaps.push(SccmFindingCoverageGap {
+            artifact_id: logical_id.to_owned(),
+            role: SccmRole::Client,
+            coverage: SccmCoverageState::Partial,
+        });
+    }
+    gaps.sort_by(|left, right| {
+        left.artifact_id
+            .cmp(&right.artifact_id)
+            .then_with(|| coverage_priority(&left.coverage).cmp(&coverage_priority(&right.coverage)))
+    });
+    gaps
+}
+
+/// Whether a logical group has no captured source at all.
+///
+/// This is the admission question, not the citation question: it asks whether
+/// the group can still contribute evidence, so a captured sibling does answer
+/// it. Citations use [`coverage_gaps_for_group`].
+fn group_has_no_captured_source(context: &ReductionContext<'_>, logical_id: &str) -> bool {
+    let mut artifacts = context
         .bundle
         .artifacts
         .iter()
         .filter(|artifact| policy_group(&artifact.display_name) == Some(logical_id))
-        .map(|artifact| artifact.coverage.clone())
-        .collect::<Vec<_>>();
-    if states.is_empty() || states.contains(&SccmCoverageState::Captured) {
-        return None;
-    }
-    states.sort_by_key(coverage_priority);
-    Some(SccmFindingCoverageGap {
-        artifact_id: logical_id.to_owned(),
-        role: SccmRole::Client,
-        coverage: states.remove(0),
-    })
+        .peekable();
+    artifacts.peek().is_some()
+        && artifacts.all(|artifact| artifact.coverage != SccmCoverageState::Captured)
 }
 
 fn coverage_priority(state: &SccmCoverageState) -> u8 {
