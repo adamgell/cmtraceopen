@@ -106,7 +106,11 @@ function navigateSelection(key: string): boolean {
  */
 export function useKeyboard() {
   const showFindBarOpen = useUiStore((state) => state.showFindBar);
-  const elevationPromptOpen = useUiStore((state) => state.elevationPrompt);
+  // A boolean, not the prompt itself: only openness matters here, and selecting
+  // the object would re-register the listener on every identity change.
+  const elevationPromptOpen = useUiStore(
+    (state) => state.elevationPrompt !== null,
+  );
   const showFilterDialogOpen = useUiStore((state) => state.showFilterDialog);
   const showErrorLookupDialogOpen = useUiStore(
     (state) => state.showErrorLookupDialog
