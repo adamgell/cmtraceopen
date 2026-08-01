@@ -340,7 +340,7 @@ fn item04_identical_timestamps_stay_distinct_records_in_source_order() {
     assert!(
         instants
             .iter()
-            .all(|instant| *instant == Some("2024-03-15T19:00:00.500000Z")),
+            .all(|instant| *instant == Some("2024-03-15T19:00:00.500000000Z")),
         "fixture shares one instant across processes: {instants:?}"
     );
 
@@ -518,6 +518,59 @@ fn item07_malformed_records_are_preserved_and_never_attributed() {
     );
 }
 
+#[test]
+fn item07_a_timestamp_column_that_was_never_examined_reports_unknown_not_invalid() {
+    // `Invalid` is a verdict: the timestamp column was read and rejected. It must not be
+    // reported for a record abandoned before the column was ever looked at, and
+    // `PortalTimestamp::raw_text` must never carry a whole record line.
+
+    // (1) Unsupported layout: columns are not interpreted at all.
+    let unsupported = parse_console_export(UNREGISTERED_HEADER);
+    assert!(!unsupported.records.is_empty());
+    for record in &unsupported.records {
+        assert_eq!(record.parse_state, PortalConsoleParseState::Unsupported);
+        assert_eq!(
+            record.timestamp.kind,
+            PortalTimestampKind::Unknown,
+            "no column was interpreted, so the timestamp was never examined"
+        );
+        assert_eq!(
+            record.timestamp.raw_text, "",
+            "timestamp raw_text must not hold the whole record line: {:?}",
+            record.timestamp.raw_text
+        );
+        assert_eq!(record.timestamp.normalized_utc, None);
+        // The untouched line is still preserved on the record itself.
+        assert!(record.raw_text.contains("CompanyPortal"));
+    }
+
+    // (2) Column extraction failed before the timestamp was validated.
+    let malformed = parse_console_export(MALFORMED_RECORDS);
+    let bad_column = record_at(&malformed, 2);
+    assert_eq!(bad_column.parse_state, PortalConsoleParseState::Malformed);
+    assert!(bad_column.raw_text.contains("non-numeric PID column"));
+    assert_eq!(
+        bad_column.timestamp.kind,
+        PortalTimestampKind::Unknown,
+        "extraction failed on the PID column, so the timestamp verdict is unknown"
+    );
+    assert_eq!(
+        bad_column.timestamp.raw_text, "",
+        "timestamp raw_text must not hold the whole record line: {:?}",
+        bad_column.timestamp.raw_text
+    );
+
+    // (3) Contrast: the column *was* examined and rejected, so `Invalid` stays, and
+    // `raw_text` carries the offending timestamp text and nothing else.
+    let bad_timestamp = record_at(&malformed, 1);
+    assert_eq!(bad_timestamp.timestamp.kind, PortalTimestampKind::Invalid);
+    assert_eq!(
+        bad_timestamp.timestamp.raw_text,
+        "2024-13-45 99:99:99.000002-0700"
+    );
+    assert_eq!(bad_timestamp.timestamp.normalized_utc, None);
+}
+
 // ---------------------------------------------------------------------------
 // Item 8 - locale / layout variants
 // ---------------------------------------------------------------------------
@@ -547,7 +600,7 @@ fn item08_localized_header_and_comma_decimals_resolve_to_the_v1_layout() {
     // 12:00:00,123456 +0100 is 11:00:00.123456 UTC.
     assert_eq!(
         first.timestamp.normalized_utc.as_deref(),
-        Some("2024-03-15T11:00:00.123456Z")
+        Some("2024-03-15T11:00:00.123456000Z")
     );
     assert!(capture.is_cross_source_comparable());
 }
@@ -636,7 +689,7 @@ fn item09_fully_offset_capture_is_cross_source_comparable() {
     assert_eq!(first.timestamp.kind, PortalTimestampKind::Offset);
     assert_eq!(
         first.timestamp.normalized_utc.as_deref(),
-        Some("2024-03-15T17:00:00.123456Z")
+        Some("2024-03-15T17:00:00.123456000Z")
     );
 }
 
@@ -668,8 +721,51 @@ Timestamp                       Thread     Type        Activity             PID 
     assert_eq!(record.timestamp.kind, PortalTimestampKind::Utc);
     assert_eq!(
         record.timestamp.normalized_utc.as_deref(),
-        Some("2024-03-15T10:00:00.000001Z")
+        Some("2024-03-15T10:00:00.000001000Z")
     );
+}
+
+#[test]
+fn item09_sub_microsecond_precision_is_not_rounded_away_by_normalization() {
+    // Console can emit up to nanosecond precision and the timestamp grammar accepts it, so
+    // `normalized_utc` must denote the same instant as `raw_text` rather than a rounded one.
+    let export = "\
+Timestamp                       Thread     Type        Activity             PID    TTL
+2024-03-15 10:00:00.123456789-0700 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Sync) [com.microsoft.CompanyPortal:Sync] Nanosecond precision
+2024-03-15 10:00:01.1234567-0700 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Sync) [com.microsoft.CompanyPortal:Sync] Seven fractional digits
+";
+    let capture = parse_console_export(export);
+
+    let nanos = record_at(&capture, 0);
+    assert_eq!(nanos.parse_state, PortalConsoleParseState::Parsed);
+    assert_eq!(nanos.timestamp.kind, PortalTimestampKind::Offset);
+    assert_eq!(
+        nanos.timestamp.raw_text,
+        "2024-03-15 10:00:00.123456789-0700"
+    );
+    assert_eq!(
+        nanos.timestamp.normalized_utc.as_deref(),
+        Some("2024-03-15T17:00:00.123456789Z"),
+        "the .789 nanoseconds present in raw_text must survive UTC normalization"
+    );
+
+    // A 7-digit fraction is likewise carried whole, padded to the fixed nanosecond width.
+    let seven = record_at(&capture, 1);
+    assert_eq!(seven.parse_state, PortalConsoleParseState::Parsed);
+    assert_eq!(
+        seven.timestamp.normalized_utc.as_deref(),
+        Some("2024-03-15T17:00:01.123456700Z")
+    );
+
+    // Fixed-width rendering keeps byte order agreeing with instant order.
+    let mut rendered: Vec<&str> = capture
+        .records
+        .iter()
+        .filter_map(|record| record.timestamp.normalized_utc.as_deref())
+        .collect();
+    let source_order = rendered.clone();
+    rendered.sort_unstable();
+    assert_eq!(rendered, source_order);
 }
 
 // ---------------------------------------------------------------------------
