@@ -15,6 +15,23 @@ use crate::sccm::{
 pub const SCCM_POLICY_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_POLICY_TEST_PROFILE_ID: &str = "policy-client-5.00.test-v1";
 
+/// Labels admitted by the frozen key profile named by
+/// [`SCCM_POLICY_TEST_PROFILE_ID`].
+///
+/// Extraction is closed over this list: an unlisted label is never read, and an
+/// admitted label is only read when it occurs exactly once at an exact token
+/// boundary. Ambiguous, duplicate, and embedded labels fail closed so a record
+/// that cannot be keyed unambiguously never becomes exact evidence.
+const POLICY_PROFILE_LABELS: [&str; 7] = [
+    "AssignmentId",
+    "ClientHandle",
+    "PolicyId",
+    "RequestId",
+    "Result",
+    "SelectedManagementPointHostHandle",
+    "SiteCode",
+];
+
 const POLICY_AGENT_GROUP: &str = "client-policy-agent";
 const POLICY_STATE_GROUP: &str = "client-policy-state";
 const CLIENT_LOCATION_GROUP: &str = "client-location";
@@ -663,14 +680,23 @@ fn contains_token_sequence(message: &str, marker: &str) -> bool {
     while let Some(relative_start) = message[search_from..].find(marker) {
         let start = search_from + relative_start;
         let end = start + marker.len();
-        let left_ok = start == 0 || !message.as_bytes()[start - 1].is_ascii_alphanumeric();
-        let right_ok = end == message.len() || !message.as_bytes()[end].is_ascii_alphanumeric();
+        let left_ok = start == 0 || is_marker_boundary(message.as_bytes()[start - 1]);
+        let right_ok = end == message.len() || is_marker_boundary(message.as_bytes()[end]);
         if left_ok && right_ok {
             return true;
         }
         search_from = end;
     }
     false
+}
+
+/// A phase marker only matches when both of its edges sit on a real separator.
+///
+/// Word-joining bytes stay inside the token so compound text such as
+/// `not-Request succeeded-ish` is never read as the exact `Request succeeded`
+/// marker.
+fn is_marker_boundary(byte: u8) -> bool {
+    !byte.is_ascii_alphanumeric() && !matches!(byte, b'-' | b'_')
 }
 
 fn extract_uuid_label(message: &str, label: &str) -> Option<String> {
@@ -759,19 +785,64 @@ fn cross_phase_time_inversion_groups(
     groups
 }
 
+/// Reads one label admitted by the frozen policy key profile.
+///
+/// Returns `None` for any label outside [`POLICY_PROFILE_LABELS`], so the
+/// profile, not the call site, decides what may be keyed.
 fn extract_label_token<'a>(message: &'a str, label: &str) -> Option<&'a str> {
+    if !POLICY_PROFILE_LABELS.contains(&label) {
+        return None;
+    }
+    extract_exactly_one_label_token(message, label)
+}
+
+/// Reads the single exact-boundary occurrence of `label` in `message`.
+///
+/// Occurrences that start inside a longer word (`NotRequestId=`) are not
+/// occurrences of the label at all, and two or more admissible occurrences are
+/// ambiguous, so both cases return `None` rather than silently taking the first
+/// match.
+fn extract_exactly_one_label_token<'a>(message: &'a str, label: &str) -> Option<&'a str> {
     let normalized = message.to_ascii_lowercase();
     let marker = format!("{}=", label.to_ascii_lowercase());
-    let start = normalized.find(&marker)? + marker.len();
-    let remainder = &message[start..];
+    let mut token = None;
+    let mut search_from = 0;
+
+    while let Some(relative_start) = normalized[search_from..].find(&marker) {
+        let start = search_from + relative_start;
+        let value_start = start + marker.len();
+        search_from = value_start;
+        if !is_label_boundary_start(message, start) {
+            continue;
+        }
+        if token.is_some() {
+            return None;
+        }
+        token = Some(label_value_token(message, value_start));
+    }
+
+    token.flatten()
+}
+
+fn is_label_boundary_start(message: &str, start: usize) -> bool {
+    start == 0
+        || message[..start]
+            .chars()
+            .next_back()
+            .is_some_and(is_label_token_boundary)
+}
+
+fn label_value_token(message: &str, value_start: usize) -> Option<&str> {
+    let remainder = &message[value_start..];
     let end = remainder
-        .find(|character: char| {
-            character.is_ascii_whitespace()
-                || matches!(character, ',' | ';' | ']' | '<' | '"' | '\'')
-        })
+        .find(is_label_token_boundary)
         .unwrap_or(remainder.len());
     let token = &remainder[..end];
     (!token.is_empty()).then_some(token)
+}
+
+fn is_label_token_boundary(character: char) -> bool {
+    character.is_ascii_whitespace() || matches!(character, ',' | ';' | ']' | '<' | '"' | '\'')
 }
 
 fn is_canonical_uuid(value: &str) -> bool {
