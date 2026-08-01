@@ -30,6 +30,10 @@ const MAX_SCCM_FINDING_SUMMARY_CHARS: usize = 2048;
 // Correlation-key raw and normalized values. The widest canonical form is a
 // 253-character server-host FQDN; 256 leaves room for braces and prefixes
 // while excluding unbounded decimal ids.
+// Do not lower this. normalize_server_host self-caps a host at 253 chars, so
+// a worst-case ServerHost key normalizes to 254 with a trailing-dot source
+// against this 256 limit, roughly 99% of the bound and the tightest headroom
+// any bound in this module carries.
 const MAX_SCCM_CORRELATION_KEY_VALUE_CHARS: usize = 256;
 // Intentionally empty: no extraction profile is verified as stable enough to
 // authorize key-only High confidence. Adding one requires contract review.
@@ -166,7 +170,7 @@ impl<'de> Deserialize<'de> for SccmTerminalEvidenceKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmTerminalEvidence {
     pub reference: SccmEvidenceRef,
@@ -303,6 +307,25 @@ impl From<SccmEvidenceRefWire> for SccmEvidenceRef {
     }
 }
 
+// SccmEvidenceRef is declared in models.rs, but its wire contract belongs
+// here next to the validator it must satisfy. Every reference the crate
+// accepts, whether standalone or nested in SccmEvidence or an extraction gap,
+// clears the same bar a finding's own citations clear.
+impl<'de> Deserialize<'de> for SccmEvidenceRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let reference = Self::from(SccmEvidenceRefWire::deserialize(deserializer)?);
+        validate_evidence_reference(&reference).map_err(|error| {
+            D::Error::custom(format!(
+                "invalid SCCM evidence reference contract: {error:?}"
+            ))
+        })?;
+        Ok(reference)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SccmTerminalEvidenceWire {
@@ -316,6 +339,31 @@ impl From<SccmTerminalEvidenceWire> for SccmTerminalEvidence {
             reference: wire.reference.into(),
             kind: wire.kind,
         }
+    }
+}
+
+// A standalone terminal evidence has no surrounding finding to cite, so it
+// stands as its own citation set. That trivially satisfies the "must be cited"
+// rule while still enforcing the kind gate: only observedFailure is terminal.
+impl<'de> Deserialize<'de> for SccmTerminalEvidence {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let terminal = Self::from(SccmTerminalEvidenceWire::deserialize(deserializer)?);
+        validate_evidence_reference(&terminal.reference)
+            .and_then(|()| {
+                validate_terminal_evidence(
+                    slice::from_ref(&terminal.reference),
+                    slice::from_ref(&terminal),
+                )
+            })
+            .map_err(|error| {
+                D::Error::custom(format!(
+                    "invalid SCCM terminal evidence contract: {error:?}"
+                ))
+            })?;
+        Ok(terminal)
     }
 }
 
@@ -378,6 +426,24 @@ impl From<SccmCorrelationKeyWire> for SccmCorrelationKey {
             start: wire.start,
             end: wire.end,
         }
+    }
+}
+
+// The key's own evidence reference stands in as its citation set, exactly as
+// it would inside a finding. Crucially this keeps the confidence gate in
+// force: while REGISTERED_STABLE_CORRELATION_PROFILE_IDS is empty, no payload
+// can deserialize a Strong or Exact key and forge corroboration strength.
+impl<'de> Deserialize<'de> for SccmCorrelationKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let key = Self::from(SccmCorrelationKeyWire::deserialize(deserializer)?);
+        let citations = key.evidence.as_slice();
+        validate_correlation_key_evidence(citations, slice::from_ref(&key)).map_err(|error| {
+            D::Error::custom(format!("invalid SCCM correlation key contract: {error:?}"))
+        })?;
+        Ok(key)
     }
 }
 

@@ -147,7 +147,11 @@ pub struct SccmTimestamp {
     pub ordering_state: SccmTimeOrderingState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Deserialize is implemented by hand in findings.rs, where the
+// deny_unknown_fields wire struct and validate_evidence_reference live, so a
+// reference cannot enter the crate through a door the finding contract does
+// not guard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmEvidenceRef {
     pub artifact_id: String,
@@ -203,7 +207,10 @@ pub enum SccmKeyConfidence {
     Exact,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Deserialize is implemented by hand in findings.rs so that a standalone key
+// clears validate_correlation_key_evidence, including the confidence gate that
+// keeps every key at Low while no stable extraction profile is registered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmCorrelationKey {
     pub kind: SccmCorrelationKeyKind,
