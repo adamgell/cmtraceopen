@@ -4478,6 +4478,39 @@ fn signless_ccm_offset_is_enriched_only_in_sccm_provenance() {
 }
 
 #[test]
+fn microsecond_precision_tail_is_not_read_as_a_source_offset() {
+    // A six-digit unsigned tail is ambiguous: `%03u%d` would read it as three
+    // millisecond digits plus a positive offset, and .NET microsecond
+    // precision writes six fractional digits. 456 is not a real UTC offset
+    // (it is neither within UTC-14..UTC+14 as a quarter-hour value nor a
+    // shape `%d` emits), so the tail stays fractional and the record is not
+    // promoted to UTC-normalized ordering.
+    let text = r#"<![LOG[Microsecond precision]LOG]!><time="10:00:00.123456" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(errors, 0);
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(
+        evidence[0].timestamp.original_display.as_deref(),
+        Some("07-30-2026 10:00:00.123456")
+    );
+    assert_eq!(evidence[0].timestamp.offset_minutes, None);
+    assert_eq!(
+        evidence[0].timestamp.ordering_state,
+        SccmTimeOrderingState::OffsetMissing
+    );
+    assert_eq!(evidence[0].timestamp.utc_millis, None);
+
+    // The public LogEntry still carries the pre-spine greedy projection,
+    // which assigns the final digit to the offset. That divergence is
+    // deliberate compatibility, not a second reading of the grammar.
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].timezone_offset, Some(6));
+}
+
+#[test]
 fn evidence_uses_one_logical_record_and_normalized_utc_ordering() {
     let text = include_str!("fixtures/sccm/spine/multiline-policy.log");
     let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
