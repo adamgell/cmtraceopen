@@ -262,7 +262,7 @@ pub fn analyze_client_policy(bundle: &SccmNormalizedBundle) -> SccmWorkflowAnaly
     }
 
     let mut facts_by_assignment: BTreeMap<String, Vec<PolicyFact>> = BTreeMap::new();
-    for fact in quarantine_identity_collisions(parsed_facts, &mut rejected_policy_evidence) {
+    for fact in quarantine_overlapping_evidence(parsed_facts, &mut rejected_policy_evidence) {
         facts_by_assignment
             .entry(fact.assignment_id.clone())
             .or_default()
@@ -634,51 +634,77 @@ fn admissible_client_artifacts(
     (by_id, ambiguous)
 }
 
-/// Identity of one logical record: artifact, entry, and line range.
-type EvidenceIdentity = (String, String, Option<u32>, Option<u32>);
-
-fn evidence_identity(reference: &SccmEvidenceRef) -> EvidenceIdentity {
-    (
-        reference.artifact_id.clone(),
-        reference.entry_id.clone(),
-        reference.line_start,
-        reference.line_end,
+/// Whether two references claim overlapping physical lines of one source.
+///
+/// Physical extent, not an identity tuple, is the question. Two logical records
+/// from one artifact occupy disjoint lines, so any overlap means at least one
+/// of them is not the record it claims to be. An equal range is the degenerate
+/// overlap and is caught by the same test.
+fn evidence_references_overlap(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> bool {
+    if left.artifact_id != right.artifact_id {
+        return false;
+    }
+    matches!(
+        (
+            left.line_start,
+            left.line_end,
+            right.line_start,
+            right.line_end,
+        ),
+        (Some(left_start), Some(left_end), Some(right_start), Some(right_end))
+            if left_start <= right_end && right_start <= left_end
     )
 }
 
-/// Drops every fact whose logical evidence identity carries more than one claim.
+/// Drops every fact whose physical lines are claimed by another fact.
 ///
-/// One artifact, entry, and line range is one logical record, so two facts that
-/// share that identity but disagree cannot both be true. Reference comparison
-/// rates them equal, which would let the latest-state search pick by input
-/// order, so the whole identity is quarantined into the rejected set and proves
-/// nothing rather than proving whichever claim was parsed last.
-fn quarantine_identity_collisions(
+/// Comparing identity tuples only catches an exact repeat of one range. It
+/// leaves the wider hole open: a record spanning 1-2 and a record spanning 1-1
+/// are different identities over the same physical line, so both survive, and
+/// [`compare_evidence_refs`] then ranks the wider range higher and lets it
+/// decide the phase. One physical line proving two phases is the same hole seen
+/// from the other side. Every participant in an overlap is quarantined into the
+/// rejected set and proves nothing, which is the rule the management-point
+/// reducer already applies.
+fn quarantine_overlapping_evidence(
     facts: Vec<PolicyFact>,
     rejected: &mut Vec<SccmEvidenceRef>,
 ) -> Vec<PolicyFact> {
-    let mut claims: BTreeMap<EvidenceIdentity, BTreeSet<(SccmPolicyPhase, FactOutcome)>> =
-        BTreeMap::new();
-    for fact in &facts {
-        claims
-            .entry(evidence_identity(&fact.reference))
-            .or_default()
-            .insert((fact.phase, fact.outcome));
-    }
+    let overlapping = {
+        let mut by_artifact: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for (index, fact) in facts.iter().enumerate() {
+            by_artifact
+                .entry(fact.reference.artifact_id.as_str())
+                .or_default()
+                .push(index);
+        }
 
-    let collisions = claims
-        .into_iter()
-        .filter(|(_, claims)| claims.len() > 1)
-        .map(|(identity, _)| identity)
-        .collect::<BTreeSet<_>>();
-    if collisions.is_empty() {
+        let mut overlapping = BTreeSet::new();
+        for indexes in by_artifact.values() {
+            for (position, &left) in indexes.iter().enumerate() {
+                for &right in &indexes[position + 1..] {
+                    if evidence_references_overlap(&facts[left].reference, &facts[right].reference)
+                    {
+                        overlapping.insert(left);
+                        overlapping.insert(right);
+                    }
+                }
+            }
+        }
+        overlapping
+    };
+    if overlapping.is_empty() {
         return facts;
     }
 
-    let (collided, kept) = facts
-        .into_iter()
-        .partition::<Vec<_>, _>(|fact| collisions.contains(&evidence_identity(&fact.reference)));
-    rejected.extend(collided.into_iter().map(|fact| fact.reference));
+    let mut kept = Vec::new();
+    for (index, fact) in facts.into_iter().enumerate() {
+        if overlapping.contains(&index) {
+            rejected.push(fact.reference);
+        } else {
+            kept.push(fact);
+        }
+    }
     kept
 }
 
@@ -727,7 +753,11 @@ fn parse_policy_fact(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option
     if !source_allows_phase(&artifact.display_name, phase) {
         return None;
     }
-    if outcome == FactOutcome::Failed && !has_terminal_failure_signal(&evidence.message) {
+    // Two-sided, not one-sided. A terminal marker without an explicit nonzero
+    // result proves nothing, and a success or deferral carrying one contradicts
+    // its own marker. A record whose marker and result code disagree cannot be
+    // read either way, so neither direction becomes exact phase evidence.
+    if has_terminal_failure_signal(&evidence.message) != (outcome == FactOutcome::Failed) {
         return None;
     }
 
