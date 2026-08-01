@@ -1125,6 +1125,73 @@ fn an_unorderable_terminal_record_downgrades_to_a_low_confidence_symptom() {
 }
 
 #[test]
+fn a_transfer_pair_is_elected_together_across_two_attempts() {
+    // A rotated transfer source keeps the completion of an attempt whose start
+    // has already scrolled out, so the earliest completion in canonical
+    // reference order belongs to a different attempt than the earliest start.
+    let orphan_completion = record(
+        &format!(
+            "Transfer completed assignmentId={ASSIGNMENT} contentId={CONTENT} bitsJobId={BITS_JOB}"
+        ),
+        "05:00:03.000+000",
+        "ContentTransferManager",
+    );
+    let bundle = bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            intent_content(),
+        ),
+        (
+            client_artifact("synthetic-content", "CAS.log"),
+            content_content(),
+        ),
+        (
+            client_artifact("synthetic-transfer-a", "ContentTransferManager.log"),
+            orphan_completion,
+        ),
+        (
+            client_artifact("synthetic-transfer-b", "DataTransferService.log"),
+            transfer_content("05:00:03.500+000", "05:00:04.000+000"),
+        ),
+        (
+            client_artifact("synthetic-enforce", "AppEnforce.log"),
+            record(
+                &format!(
+                    "SYNTHETIC FIXTURE deployment enforcement terminal failure assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} exitCode=1603 terminal=true"
+                ),
+                "05:00:06.000+000",
+                "AppEnforce",
+            ),
+        ),
+    ]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(
+        transaction.last_successful_phase.map(phase_name),
+        Some("cache"),
+        "one attempt is fully ordered, so the transfer phase must be admitted"
+    );
+    assert_eq!(phase_name(transaction.phase), "enforce");
+    assert_eq!(
+        state_name(transaction.state),
+        "failed",
+        "a terminal enforcement record stays terminal when the chain is orderable"
+    );
+    assert_eq!(
+        classification_name(transaction.classification),
+        "confirmedFailure"
+    );
+    assert!(
+        !analysis.findings.iter().any(|finding| finding
+            .finding
+            .finding_id
+            .starts_with("deployment-chronology-uncertain")),
+        "an orderable start and completion must not be reported as unorderable"
+    );
+}
+
+#[test]
 fn a_label_embedded_in_a_longer_phrase_is_not_a_requirements_outcome() {
     let embedded = format!(
         "{}{}",
