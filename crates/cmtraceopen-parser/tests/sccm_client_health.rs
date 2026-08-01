@@ -530,6 +530,56 @@ fn health_equal_time_opposing_transport_outcomes_are_contradictory() {
 }
 
 #[test]
+fn health_overlapping_source_local_spans_cannot_prove_transport_success() {
+    let mut bundle = load_bundle("success");
+    let response = bundle
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("Transport response completed"))
+        .expect("success fixture transport response")
+        .clone();
+
+    let mut overlapping = response.clone();
+    overlapping.evidence_id = "evidence:health-overlapping-transport-response".to_owned();
+    overlapping.reference.entry_id = "overlapping-transport-response".to_owned();
+    overlapping.reference.line_end = Some(
+        response
+            .reference
+            .line_end
+            .expect("success fixture transport response line end")
+            + 1,
+    );
+    bundle.evidence.push(overlapping);
+
+    let analysis = analyze_client_health(&bundle);
+    assert_eq!(
+        analysis.last_successful_phase,
+        Some(SccmHealthPhase::ManagementPoint),
+        "two distinct records sharing a source-local span cannot prove a completed transport"
+    );
+    assert_eq!(analysis.findings.len(), 1);
+    assert_eq!(
+        analysis.findings[0].finding.finding_id,
+        "health-transport-contradictory"
+    );
+    assert_eq!(
+        analysis.findings[0].finding.class,
+        SccmFindingClass::Symptom
+    );
+    assert_eq!(analysis.findings[0].finding.confidence, SccmConfidence::Low);
+    assert!(!has_high_confirmed_failure(&bundle));
+
+    let mut reversed = bundle.clone();
+    reversed.artifacts.reverse();
+    reversed.evidence.reverse();
+    assert_eq!(
+        serde_json::to_string(&analyze_client_health(&reversed)).expect("reversed analysis JSON"),
+        serde_json::to_string(&analysis).expect("forward analysis JSON"),
+        "overlapping source-local spans must fail closed deterministically"
+    );
+}
+
+#[test]
 fn health_guid_matching_is_case_insensitive() {
     let mut bundle = load_bundle("success");
     let original = "11111111-1111-1111-1111-111111111111";

@@ -875,14 +875,36 @@ fn latest_comparable_fact<'a>(facts: &[&'a HealthFact]) -> Option<&'a HealthFact
 
 fn compare_fact_order(left: &HealthFact, right: &HealthFact) -> Option<std::cmp::Ordering> {
     if left.reference.artifact_id == right.reference.artifact_id {
-        return left
-            .reference
-            .line_start
-            .cmp(&right.reference.line_start)
-            .into();
+        return compare_source_local_spans(&left.reference, &right.reference);
     }
     if left.time_comparable && right.time_comparable {
         return left.utc_millis.cmp(&right.utc_millis).into();
+    }
+    None
+}
+
+/// Orders two references inside one artifact by their source-local line spans.
+///
+/// Only one record can occupy a line span, so `Equal` is reserved for the same
+/// record and disjoint spans carry the source-local order. Distinct records that
+/// share or overlap a span are malformed input with no provable sequence between
+/// them: comparing `line_start` alone would call them simultaneous, which lets
+/// `latest_comparable_fact` pick one arbitrarily and admit a terminal or success
+/// outcome. They stay incomparable instead so every ordered claim fails closed.
+fn compare_source_local_spans(
+    left: &SccmEvidenceRef,
+    right: &SccmEvidenceRef,
+) -> Option<std::cmp::Ordering> {
+    let (left_start, left_end) = (left.line_start?, left.line_end?);
+    let (right_start, right_end) = (right.line_start?, right.line_end?);
+    if left.entry_id == right.entry_id && left_start == right_start && left_end == right_end {
+        return Some(std::cmp::Ordering::Equal);
+    }
+    if left_end < right_start {
+        return Some(std::cmp::Ordering::Less);
+    }
+    if right_end < left_start {
+        return Some(std::cmp::Ordering::Greater);
     }
     None
 }
