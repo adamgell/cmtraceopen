@@ -282,17 +282,17 @@ fn extract_all_field_values(msg: &str, prefix: &str, suffix: &str) -> Vec<String
 /// GUID regex when a name field is also present on the same line.
 pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
     // Try "AppId" — direct and escaped JSON
-    if let Some(value) = extract_json_field(msg, "\"AppId\":\"", "\"") {
-        return Some(value.to_string());
-    }
-    if let Some(value) = extract_json_field(msg, "\\\"AppId\\\":\\\"", "\\\"") {
-        return Some(value.to_string());
-    }
-    // Try "Id" — appears in policy payloads like Get policies = [{"Id":"<GUID>","Name":"..."}]
-    if let Some(value) = extract_guid_from_id_field(msg, "\"Id\":\"", "\"") {
+    if let Some(value) = extract_guid_field(msg, "\"AppId\":\"", "\"") {
         return Some(value);
     }
-    if let Some(value) = extract_guid_from_id_field(msg, "\\\"Id\\\":\\\"", "\\\"") {
+    if let Some(value) = extract_guid_field(msg, "\\\"AppId\\\":\\\"", "\\\"") {
+        return Some(value);
+    }
+    // Try "Id" — appears in policy payloads like Get policies = [{"Id":"<GUID>","Name":"..."}]
+    if let Some(value) = extract_guid_field(msg, "\"Id\":\"", "\"") {
+        return Some(value);
+    }
+    if let Some(value) = extract_guid_field(msg, "\\\"Id\\\":\\\"", "\\\"") {
         return Some(value);
     }
     // Try regex for "AppId" specifically
@@ -314,10 +314,8 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
         })
 }
 
-/// Extract a GUID from an `"Id"` field, validating it looks like a UUID.
-/// This is more conservative than `extract_json_field` alone because `"Id"`
-/// is a very generic key — we only accept values that are 36-char UUIDs.
-fn extract_guid_from_id_field(msg: &str, prefix: &str, suffix: &str) -> Option<String> {
+/// Extract a GUID from an identity field, rejecting arbitrary log content.
+fn extract_guid_field(msg: &str, prefix: &str, suffix: &str) -> Option<String> {
     let value = extract_json_field(msg, prefix, suffix)?;
     if value.len() == 36 && guid_re().is_match(value) {
         Some(value.to_string())
@@ -782,5 +780,26 @@ mod tests {
             json["bbbb1111-2222-3333-4444-555566667777"]["source"].as_str(),
             Some("SetUpFilePath")
         );
+    }
+
+    #[test]
+    fn app_id_fields_only_supply_valid_guid_identities() {
+        let valid_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+        assert_eq!(
+            extract_app_id(&format!(r#"launch {{"AppId":"{valid_guid}"}}"#)),
+            Some(valid_guid.to_string())
+        );
+        assert_eq!(extract_app_id(r#"launch {"AppId":"script-你好"}"#), None);
+        assert_eq!(
+            extract_app_id(r#"launch {"AppId":"zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"}"#),
+            None
+        );
+
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[line(
+            r#"Processing app: {"AppId":"script-你好","ApplicationName":"Contoso Script"}"#,
+        )]);
+        assert!(registry.is_empty());
     }
 }

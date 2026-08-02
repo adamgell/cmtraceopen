@@ -591,7 +591,7 @@ fn extract_appworkload_event(
             .map(|m| m.as_str().to_string());
         let short = guid
             .as_deref()
-            .map(|g| &g[..8.min(g.len())])
+            .map(|g| g.get(..8).unwrap_or(g))
             .unwrap_or("unknown");
         let phase = if flags.sidecar_script_complete {
             "Complete"
@@ -2032,5 +2032,23 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].status, IntuneStatus::Success);
         assert_eq!(events[0].detail, message);
+    }
+
+    #[test]
+    fn sidecar_non_guid_multibyte_app_id_is_not_an_identity_or_panic() {
+        let events = extract_events(
+            &[line(
+                r#"SidecarScriptDetectionManager launch {"AppId":"aaaaaa你好"}"#,
+                "01-15-2024 10:00:05.000",
+                1,
+            )],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, IntuneEventType::PowerShellScript);
+        assert_eq!(events[0].guid, None);
+        assert_eq!(events[0].name, "Script Detection Running (unknown)");
     }
 }
