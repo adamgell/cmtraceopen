@@ -580,8 +580,15 @@ fn extract_appworkload_event(
         return None;
     };
 
-    // Try primary extract_guid, fall back to guid_registry::extract_app_id
-    let guid = extract_guid(msg).or_else(|| guid_registry::extract_app_id(msg));
+    let guid = match guid_registry::explicit_app_identity(msg) {
+        guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid),
+        guid_registry::ExplicitAppIdentity::Invalid => None,
+        guid_registry::ExplicitAppIdentity::Absent => {
+            // Preserve the established AppWorkload heuristics only when the
+            // line does not claim an explicit JSON identity field.
+            extract_guid(msg).or_else(|| guid_registry::extract_app_id(msg))
+        }
+    };
 
     if is_sidecar {
         let status = determine_sidecar_script_status(msg, flags);
@@ -591,7 +598,7 @@ fn extract_appworkload_event(
             .map(|m| m.as_str().to_string());
         let short = guid
             .as_deref()
-            .map(|g| &g[..8.min(g.len())])
+            .map(|g| utf8_prefix(g, 8))
             .unwrap_or("unknown");
         let phase = if flags.sidecar_script_complete {
             "Complete"
@@ -1494,6 +1501,13 @@ fn short_guid(value: &str) -> &str {
     value
 }
 
+fn utf8_prefix(value: &str, max_chars: usize) -> &str {
+    value
+        .char_indices()
+        .nth(max_chars)
+        .map_or(value, |(byte_index, _)| &value[..byte_index])
+}
+
 fn contains_case_insensitive(value: &str, needle: &str) -> bool {
     contains_ascii_case_insensitive(value, needle)
 }
@@ -2032,5 +2046,213 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].status, IntuneStatus::Success);
         assert_eq!(events[0].detail, message);
+    }
+
+    #[test]
+    fn sidecar_non_guid_multibyte_app_id_is_not_an_identity() {
+        let events = extract_events(
+            &[line(
+                r#"SidecarScriptDetectionManager launch {"AppId":"aaaaaa你好"}"#,
+                "01-15-2024 10:00:05.000",
+                1,
+            )],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, IntuneEventType::PowerShellScript);
+        assert_eq!(events[0].guid, None);
+        assert_eq!(events[0].name, "Script Detection Running (unknown)");
+    }
+
+    #[test]
+    fn utf8_prefix_counts_characters_without_splitting_them() {
+        assert_eq!(utf8_prefix("aaaaaa你好世界", 8), "aaaaaa你好");
+        assert_eq!(utf8_prefix("a1b2c3d4-e5f6", 8), "a1b2c3d4");
+        assert_eq!(utf8_prefix("short", 8), "short");
+    }
+
+    #[test]
+    fn appworkload_invalid_explicit_identity_suppresses_unrelated_guid() {
+        let unrelated_guid = "11111111-2222-3333-4444-555555555555";
+        let messages = [
+            format!(
+                r#"tenant {unrelated_guid} SidecarScriptDetectionManager launch {{"AppId":"not-an-app-guid","ApplicationName":"Contoso"}}"#
+            ),
+            format!(
+                r#"tenant {unrelated_guid} SidecarScriptDetectionManager launch {{\"Id\":\"not-an-app-guid\",\"Name\":\"Contoso\"}}"#
+            ),
+        ];
+
+        for message in messages {
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].guid, None, "accepted identity from {message}");
+            assert_eq!(events[0].parent_app_guid, None);
+            assert_eq!(events[0].name, "Script Detection Running (unknown)");
+        }
+    }
+
+    #[test]
+    fn appworkload_valid_explicit_identity_beats_unrelated_guid() {
+        let unrelated_guid = "11111111-2222-3333-4444-555555555555";
+        let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let messages = [
+            format!(
+                r#"tenant {unrelated_guid} SidecarScriptDetectionManager launch {{"AppId" : "{app_guid}","ApplicationName":"Contoso"}}"#
+            ),
+            format!(
+                r#"tenant {unrelated_guid} SidecarScriptDetectionManager launch {{"AppId":"invalid","Id":"{app_guid}","Name":"Contoso"}}"#
+            ),
+        ];
+
+        for message in messages {
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].guid.as_deref(), Some(app_guid));
+            assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
+        }
+    }
+
+    #[test]
+    fn appworkload_named_context_fallback_remains_without_identity_field() {
+        let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let message = format!(
+            r#"SidecarScriptDetectionManager launch identity {app_guid} {{"ApplicationName":"Contoso"}}"#
+        );
+        let events = extract_events(
+            &[line(&message, "01-15-2024 10:00:05.000", 1)],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].guid.as_deref(), Some(app_guid));
+        assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
+    }
+
+    #[test]
+    fn appworkload_decorated_identity_uses_its_field_local_guid() {
+        let unrelated_guid = "11111111-2222-3333-4444-555555555555";
+        let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let message = format!(
+            r#"tenant {unrelated_guid} SidecarScriptDetectionManager launch {{"AppId":"Win32App_{app_guid}_1","ApplicationName":"Contoso"}}"#
+        );
+        let events = extract_events(
+            &[line(&message, "01-15-2024 10:00:05.000", 1)],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].guid.as_deref(), Some(app_guid));
+        assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
+    }
+
+    #[test]
+    fn appworkload_app_id_syntaxes_precede_id() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let id_guid = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\":\"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId" : "{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\" : \"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId":"Win32App_{app_guid}_1","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"AppId\":\"Win32App_{app_guid}_1\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#
+            ),
+            format!(r#"{{"Id":"{id_guid}","AppId" : "{app_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"Id\":\"{id_guid}\",\"AppId\":\"Win32App_{app_guid}_1\",\"Name\":\"Contoso\"}}"#
+            ),
+        ];
+
+        for payload in payloads {
+            let message = format!("SidecarScriptDetectionManager launch {payload}");
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                events[0].guid.as_deref(),
+                Some(app_guid),
+                "wrong identity for {payload}"
+            );
+            assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
+        }
+    }
+
+    #[test]
+    fn appworkload_duplicate_identity_conflicts_have_no_attribution() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"{{"AppId":"{first}","AppId":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}","Id":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"{first}",\"AppId\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}",\"Id\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"invalid","AppId":"{first}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"invalid","Id":"{first}","Name":"Contoso"}}"#),
+        ];
+
+        for payload in payloads {
+            let message = format!("SidecarScriptDetectionManager launch {payload}");
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].guid, None, "attributed conflict from {payload}");
+            assert_eq!(events[0].parent_app_guid, None);
+        }
+    }
+
+    #[test]
+    fn appworkload_sibling_identity_objects_have_no_attribution() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"[{{"AppId":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"AppId":"{first}"}}]"#),
+            format!(r#"[{{"Id":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"Id":"{first}"}}]"#),
+            format!(r#"{{"Items":[{{"Id":"{first}"}},{{"AppId":"{second}"}}]}}"#),
+            format!(
+                r#"{{"Left":{{"AppId":"{first}"}},"Right":{{"Metadata":{{"AppId":"{second}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"Left":{{"Metadata":{{"AppId":"{second}"}}}},"Right":{{"AppId":"{first}"}}}}"#
+            ),
+        ];
+
+        for payload in payloads {
+            let message = format!("SidecarScriptDetectionManager launch {payload}");
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].guid, None, "attributed sibling from {payload}");
+            assert_eq!(events[0].parent_app_guid, None);
+        }
     }
 }

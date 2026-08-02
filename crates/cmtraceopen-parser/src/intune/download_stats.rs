@@ -3,7 +3,10 @@ use std::path::Path;
 
 use regex::Regex;
 
-use super::guid_registry::{extract_app_id, extract_app_name, is_fallback_name, GuidRegistry};
+use super::guid_registry::{
+    explicit_app_identity, extract_app_id, extract_app_name, is_fallback_name, ExplicitAppIdentity,
+    GuidRegistry,
+};
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
 use super::timeline::parse_timestamp;
@@ -349,14 +352,20 @@ fn classify_download_source(source_file: &str) -> DownloadSourceKind {
 }
 
 fn extract_content_id(msg: &str) -> Option<String> {
-    // Primary: shared extraction from guid_registry (handles AppId, Id, etc.)
-    extract_app_id(msg).or_else(|| {
-        // Fallback: download-specific broader pattern (e.g. "content id: <GUID>")
-        content_id_re()
-            .captures(msg)
-            .and_then(|captures| captures.get(1))
-            .map(|value| value.as_str().to_string())
-    })
+    match explicit_app_identity(msg) {
+        ExplicitAppIdentity::Valid(guid) => Some(guid),
+        ExplicitAppIdentity::Invalid => None,
+        ExplicitAppIdentity::Absent => {
+            // Preserve named-context and download-specific heuristics only
+            // when the line has no explicit JSON identity field.
+            extract_app_id(msg).or_else(|| {
+                content_id_re()
+                    .captures(msg)
+                    .and_then(|captures| captures.get(1))
+                    .map(|value| value.as_str().to_string())
+            })
+        }
+    }
 }
 
 fn extract_display_name(msg: &str) -> Option<String> {
@@ -732,5 +741,173 @@ mod tests {
             extract_display_name(message).as_deref(),
             Some("Contoso App")
         );
+    }
+
+    #[test]
+    fn invalid_explicit_identity_suppresses_download_line_fallback() {
+        let message = r#"Starting content download for app 11111111-2222-3333-4444-555555555555 {"AppId":"not-an-app-guid","ApplicationName":"Contoso"}"#;
+        assert_eq!(extract_content_id(message), None);
+    }
+
+    #[test]
+    fn download_app_id_syntaxes_precede_id() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let id_guid = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\":\"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId" : "{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\" : \"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId":"Win32App_{app_guid}_1","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"AppId\":\"Win32App_{app_guid}_1\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#
+            ),
+            format!(r#"{{"Id":"{id_guid}","AppId" : "{app_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"Id\":\"{id_guid}\",\"AppId\":\"Win32App_{app_guid}_1\",\"Name\":\"Contoso\"}}"#
+            ),
+        ];
+
+        for payload in payloads {
+            let lines = vec![
+                ImeLine {
+                    line_number: 1,
+                    timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Starting content download {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                },
+                ImeLine {
+                    line_number: 2,
+                    timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Download completed successfully {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                },
+            ];
+
+            let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+            assert_eq!(downloads.len(), 1, "missing download for {payload}");
+            assert_eq!(
+                downloads[0].content_id, app_guid,
+                "wrong identity for {payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn download_invalid_app_id_still_allows_valid_id_fallback() {
+        let id_guid = "11111111-2222-3333-4444-555555555555";
+        let payload = format!(r#"{{"AppId":"invalid","Id":"{id_guid}","Name":"Contoso"}}"#);
+        let lines = vec![
+            ImeLine {
+                line_number: 1,
+                timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                timestamp_utc: None,
+                message: format!("Starting content download {payload}"),
+                component: None,
+                thread: None,
+                timezone_offset: None,
+            },
+            ImeLine {
+                line_number: 2,
+                timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
+                message: format!("Download completed successfully {payload}"),
+                component: None,
+                thread: None,
+                timezone_offset: None,
+            },
+        ];
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].content_id, id_guid);
+    }
+
+    #[test]
+    fn download_duplicate_identity_conflicts_have_no_attribution() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"{{"AppId":"{first}","AppId":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}","Id":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"{first}",\"AppId\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}",\"Id\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"invalid","AppId":"{first}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"invalid","Id":"{first}","Name":"Contoso"}}"#),
+        ];
+
+        for payload in payloads {
+            let lines = vec![
+                ImeLine {
+                    line_number: 1,
+                    timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Starting content download {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                },
+                ImeLine {
+                    line_number: 2,
+                    timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Download completed successfully {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                },
+            ];
+
+            let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+            assert_eq!(downloads.len(), 1, "missing coverage record for {payload}");
+            assert_eq!(
+                downloads[0].content_id, "unknown",
+                "attributed conflict from {payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn download_sibling_identity_objects_have_no_attribution() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"[{{"AppId":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"AppId":"{first}"}}]"#),
+            format!(r#"[{{"Id":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"Id":"{first}"}}]"#),
+            format!(r#"{{"Items":[{{"Id":"{first}"}},{{"AppId":"{second}"}}]}}"#),
+            format!(
+                r#"{{"Left":{{"AppId":"{first}"}},"Right":{{"Metadata":{{"AppId":"{second}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"Left":{{"Metadata":{{"AppId":"{second}"}}}},"Right":{{"AppId":"{first}"}}}}"#
+            ),
+        ];
+
+        for payload in payloads {
+            let lines = vec![ImeLine {
+                line_number: 1,
+                timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
+                message: format!("Download completed successfully {payload}"),
+                component: None,
+                thread: None,
+                timezone_offset: None,
+            }];
+
+            let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+            assert_eq!(downloads.len(), 1, "missing coverage record for {payload}");
+            assert_eq!(
+                downloads[0].content_id, "unknown",
+                "attributed sibling from {payload}"
+            );
+        }
     }
 }
