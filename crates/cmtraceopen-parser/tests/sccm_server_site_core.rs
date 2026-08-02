@@ -1,9 +1,14 @@
 use cmtraceopen_parser::sccm::server::windows::{
     analyze_site_core, assess_server_intake, SccmServerArtifactPayload, SccmServerIntakeAssessment,
-    SccmSiteCoreConfidence, SccmSiteCorePhase, SccmSiteCoreState,
+    SccmSiteCoreAnalysis, SccmSiteCoreConfidence, SccmSiteCorePhase, SccmSiteCoreState,
 };
-use cmtraceopen_parser::sccm::{SccmCoverageState, SccmFindingClass, SccmTimeOrderingState};
+use cmtraceopen_parser::sccm::{
+    SccmCoverageState, SccmFindingClass, SccmRole, SccmRotation, SccmTimeOrderingState,
+    SccmUnknownRotation,
+};
 use serde_json::{json, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 const HEALTHY_SITECOMP: &str = include_str!(
     "fixtures/sccm/server/site_core/healthy/evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
@@ -54,6 +59,12 @@ const SUCCESS_AFTER_FAILURE: &str = concat!(
     "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-LATE-001 statusId=SC_COMPONENT_START_OK outcome=success terminal=false]LOG]!><time=\"14:10:01.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"201\" file=\"sitecomp.cpp:101\">\n",
     "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-LATE-001 statusId=SC_COMPONENT_TERMINAL_FAILURE outcome=failure terminal=true]LOG]!><time=\"14:10:02.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"3\" thread=\"201\" file=\"sitecomp.cpp:190\">\n",
     "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-LATE-001 statusId=SC_COMPONENT_WORK_OK outcome=success terminal=false]LOG]!><time=\"14:10:03.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"201\" file=\"sitecomp.cpp:102\">\n",
+);
+const DEFERRED_THEN_ACCEPTED: &str = concat!(
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-DEFER-001 statusId=SC_COMPONENT_START_OK outcome=success terminal=false]LOG]!><time=\"14:20:01.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"301\" file=\"sitecomp.cpp:101\">\n",
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-DEFER-001 statusId=SC_COMPONENT_WORK_OK outcome=success terminal=false]LOG]!><time=\"14:20:02.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"301\" file=\"sitecomp.cpp:102\">\n",
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-DEFER-001 statusId=SC_INBOX_BACKLOG outcome=deferred terminal=false queueDepth=17]LOG]!><time=\"14:20:03.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"2\" thread=\"301\" file=\"sitecomp.cpp:150\">\n",
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-DEFER-001 statusId=SC_INBOX_ACCEPTED outcome=success terminal=false]LOG]!><time=\"14:20:04.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"301\" file=\"sitecomp.cpp:151\">\n",
 );
 
 #[derive(Clone)]
@@ -286,6 +297,63 @@ fn classifications(assessment: &SccmServerIntakeAssessment) -> Vec<Option<SccmFi
         .into_iter()
         .map(|result| result.finding_class)
         .collect()
+}
+
+fn assert_explicit_gap_and_request(
+    analysis: &SccmSiteCoreAnalysis,
+    artifact_id: &str,
+    source_id: &str,
+) {
+    assert!(analysis.coverage_gaps.iter().any(|gap| {
+        gap.artifact_id == artifact_id && gap.state == SccmCoverageState::ParseFailed
+    }));
+    assert!(analysis.unlinked_observations.iter().any(|observation| {
+        observation.finding_class == SccmFindingClass::InsufficientEvidence
+            && observation
+                .coverage_gap_artifact_ids
+                .iter()
+                .any(|candidate| candidate == artifact_id)
+    }));
+    assert!(analysis.artifact_requests.iter().any(|request| {
+        request.logical_name == source_id && request.max_artifacts > 0 && request.max_artifacts <= 2
+    }));
+}
+
+fn site_core_corpus_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/server/site_core")
+}
+
+fn load_corpus_scenario(scenario: &str) -> (SccmServerIntakeAssessment, Value) {
+    let root = site_core_corpus_root().join(scenario);
+    let manifest_path = root.join("manifest.json");
+    let manifest_json = fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", manifest_path.display()));
+    let manifest: Value = serde_json::from_str(&manifest_json)
+        .unwrap_or_else(|error| panic!("parse {}: {error}", manifest_path.display()));
+    let payloads = manifest["artifacts"]
+        .as_array()
+        .expect("corpus manifest artifacts")
+        .iter()
+        .filter_map(|artifact| {
+            let relative_path = artifact["relativePath"].as_str()?;
+            let artifact_id = artifact["artifactId"].as_str().expect("corpus artifact id");
+            let evidence_path = root.join(relative_path);
+            Some(SccmServerArtifactPayload {
+                manifest_artifact_id: artifact_id.to_owned(),
+                bytes: fs::read(&evidence_path)
+                    .unwrap_or_else(|error| panic!("read {}: {error}", evidence_path.display())),
+            })
+        })
+        .collect::<Vec<_>>();
+    let assessment = assess_server_intake(&manifest_json, &payloads)
+        .unwrap_or_else(|error| panic!("assess corpus scenario {scenario}: {error}"));
+    let expected_path = root.join("expected.json");
+    let expected = serde_json::from_str(
+        &fs::read_to_string(&expected_path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", expected_path.display())),
+    )
+    .unwrap_or_else(|error| panic!("parse {}: {error}", expected_path.display()));
+    (assessment, expected)
 }
 
 #[test]
@@ -691,4 +759,338 @@ fn no_provenance_mutation_can_reintroduce_a_confirmed_failure() {
     assert!(classifications(&assessment)
         .into_iter()
         .all(|class| class != Some(SccmFindingClass::ConfirmedFailure)));
+}
+
+#[test]
+fn rejected_role_subject_and_duplicate_sources_become_explicit_parse_gaps() {
+    let healthy = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+
+    let mut wrong_role = healthy.clone();
+    wrong_role
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-status")
+        .expect("status artifact")
+        .producer_role = SccmRole::ManagementPoint;
+    assert_explicit_gap_and_request(
+        &analyze_site_core(&wrong_role),
+        "z-site-status",
+        "server-status",
+    );
+
+    let mut wrong_subject = healthy.clone();
+    let sitecomp = wrong_subject
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-sitecomp")
+        .expect("sitecomp artifact");
+    sitecomp.workflow_subject_role = Some(SccmRole::Client);
+    sitecomp.workflow_subject_handle = Some("synthetic:subject:client-01".to_owned());
+    assert_explicit_gap_and_request(
+        &analyze_site_core(&wrong_subject),
+        "sitecomp-current",
+        "server-sitecomp",
+    );
+
+    let mut duplicate = healthy;
+    let duplicate_sitecomp = duplicate
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.source_id == "server-sitecomp")
+        .expect("sitecomp artifact")
+        .clone();
+    duplicate.artifacts.push(duplicate_sitecomp);
+    assert_explicit_gap_and_request(
+        &analyze_site_core(&duplicate),
+        "sitecomp-current",
+        "server-sitecomp",
+    );
+}
+
+#[test]
+fn colliding_evidence_identities_are_parse_gaps_not_silent_drops() {
+    let mut assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    let duplicate = assessment.evidence[0].clone();
+    assessment.evidence.push(duplicate);
+
+    let analysis = analyze_site_core(&assessment);
+    assert_explicit_gap_and_request(&analysis, "sitecomp-current", "server-sitecomp");
+    assert!(analysis.results.iter().all(|result| {
+        result.state != SccmSiteCoreState::Healthy
+            || result.confidence != SccmSiteCoreConfidence::High
+    }));
+}
+
+#[test]
+fn closed_profile_schema_rejects_arbitrary_keys_and_retains_safe_unknown_facts() {
+    let mut arbitrary_work = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    for evidence in &mut arbitrary_work.evidence {
+        evidence.message = evidence
+            .message
+            .replace("workItemId=SC-HEALTH-001", "workItemId=ARBITRARY-001");
+    }
+    let arbitrary = analyze_site_core(&arbitrary_work);
+    assert!(arbitrary.results.is_empty());
+    assert!(!arbitrary.unlinked_observations.is_empty());
+    let arbitrary_wire = serde_json::to_string(&arbitrary).expect("analysis serializes");
+    assert!(arbitrary_work
+        .evidence
+        .iter()
+        .all(|evidence| arbitrary_wire.contains(&evidence.evidence_id)));
+
+    let mut unknown_status = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    let rejected_id = unknown_status.evidence[0].evidence_id.clone();
+    unknown_status.evidence[0].message = unknown_status.evidence[0]
+        .message
+        .replace("SC_COMPONENT_START_OK", "SC_UNREVIEWED_STATUS");
+    let unknown = analyze_site_core(&unknown_status);
+    let unknown_wire = serde_json::to_string(&unknown).expect("analysis serializes");
+    assert!(unknown_wire.contains(&rejected_id));
+    assert!(unknown.unlinked_observations.iter().any(|observation| {
+        observation.finding_class == SccmFindingClass::Symptom
+            || observation.finding_class == SccmFindingClass::InsufficientEvidence
+    }));
+}
+
+#[test]
+fn every_required_source_coverage_state_emits_insufficient_evidence_and_a_request() {
+    for state in [
+        SccmCoverageState::Absent,
+        SccmCoverageState::AccessDenied,
+        SccmCoverageState::Skipped,
+        SccmCoverageState::Unsupported,
+    ] {
+        let mut assessment = assess(&[
+            Source::sitecomp(HEALTHY_SITECOMP),
+            Source::status(HEALTHY_STATUS),
+        ]);
+        assessment
+            .artifacts
+            .iter_mut()
+            .find(|artifact| artifact.source_id == "server-sitecomp")
+            .expect("sitecomp artifact")
+            .state = state.clone();
+        assessment
+            .coverage
+            .iter_mut()
+            .find(|coverage| coverage.source_id == "server-sitecomp")
+            .expect("sitecomp coverage")
+            .state = state.clone();
+
+        let analysis = analyze_site_core(&assessment);
+        assert!(analysis
+            .coverage_gaps
+            .iter()
+            .any(|gap| { gap.artifact_id == "sitecomp-current" && gap.state == state }));
+        assert!(analysis.unlinked_observations.iter().any(|observation| {
+            observation.finding_class == SccmFindingClass::InsufficientEvidence
+                && observation
+                    .coverage_gap_artifact_ids
+                    .contains(&"sitecomp-current".to_owned())
+        }));
+        assert!(analysis
+            .artifact_requests
+            .iter()
+            .any(|request| request.logical_name == "server-sitecomp"));
+        assert!(analysis.results.iter().all(|result| {
+            result.state != SccmSiteCoreState::Healthy
+                && result.finding_class != Some(SccmFindingClass::ConfirmedFailure)
+        }));
+    }
+}
+
+#[test]
+fn generated_result_and_finding_ids_are_bounded_stable_and_opaque() {
+    let analysis = analyze_site_core(&assess(&[
+        Source::sitecomp(COMPONENT_FAILURE),
+        Source::absent_status(),
+    ]));
+    assert_eq!(analysis.results.len(), 1);
+    assert_eq!(analysis.findings.len(), 2);
+    let result = &analysis.results[0];
+    assert!(result.result_id.starts_with("site-core:result:v1:"));
+    assert_eq!(result.result_id.len(), "site-core:result:v1:".len() + 64);
+    assert!(!result
+        .result_id
+        .contains(&result.transaction_key.component_id));
+    assert!(!result
+        .result_id
+        .contains(&result.transaction_key.work_item_id));
+    assert!(analysis.findings.iter().all(|finding| {
+        finding
+            .finding
+            .finding_id
+            .starts_with("site-core:finding:v1:")
+            && finding.finding.finding_id.len() == "site-core:finding:v1:".len() + 64
+    }));
+}
+
+#[test]
+fn invalid_finding_inputs_become_explicit_gaps_instead_of_clearing_class() {
+    let mut assessment = assess(&[Source::sitecomp(COMPONENT_FAILURE), Source::absent_status()]);
+    let oversized_id = "a".repeat(300);
+    assessment
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-sitecomp")
+        .expect("sitecomp artifact")
+        .artifact_id = oversized_id.clone();
+    for coverage in &mut assessment.coverage {
+        for artifact_id in &mut coverage.artifact_ids {
+            if artifact_id == "sitecomp-current" {
+                *artifact_id = oversized_id.clone();
+            }
+        }
+    }
+    for evidence in &mut assessment.evidence {
+        if evidence.reference.artifact_id == "sitecomp-current" {
+            evidence.reference.artifact_id = oversized_id.clone();
+            evidence.evidence_id = format!("{oversized_id}:{}", evidence.evidence_id);
+            evidence.reference.entry_id = evidence.evidence_id.clone();
+        }
+    }
+
+    let analysis = analyze_site_core(&assessment);
+    assert!(analysis.results.iter().all(|result| {
+        result.finding_class.is_some() || result.state == SccmSiteCoreState::Healthy
+    }));
+    assert!(!analysis.unlinked_observations.is_empty());
+    assert!(!analysis.artifact_requests.is_empty());
+}
+
+#[test]
+fn committed_site_core_corpus_exactly_matches_every_serialized_output() {
+    for scenario in [
+        "healthy",
+        "component-failure",
+        "inbox-backlog",
+        "status-processing-failure",
+        "recovery",
+        "contradictory",
+        "rotation-boundary",
+        "incomplete",
+        "malformed",
+    ] {
+        let (assessment, expected) = load_corpus_scenario(scenario);
+        assert_eq!(
+            serde_json::to_value(analyze_site_core(&assessment))
+                .expect("site-core analysis serializes"),
+            expected,
+            "corpus scenario {scenario} diverged"
+        );
+    }
+}
+
+#[test]
+fn later_same_phase_success_clears_deferred_but_unrecovered_deferred_remains() {
+    let cleared = analyze_site_core(&assess(&[
+        Source::sitecomp(DEFERRED_THEN_ACCEPTED),
+        Source::absent_status(),
+    ]));
+    assert_eq!(cleared.results.len(), 1);
+    assert_eq!(cleared.results[0].state, SccmSiteCoreState::Incomplete);
+    assert_eq!(
+        cleared.results[0].finding_class,
+        Some(SccmFindingClass::InsufficientEvidence)
+    );
+
+    let pending = analyze_site_core(&assess(&[
+        Source::sitecomp(INBOX_BACKLOG),
+        Source::absent_status(),
+    ]));
+    assert_eq!(pending.results.len(), 1);
+    assert_eq!(
+        pending.results[0].state,
+        SccmSiteCoreState::BlockedOrDeferred
+    );
+}
+
+#[test]
+fn rotation_provenance_must_match_classification_and_requests_use_exact_pairs() {
+    let mut mismatch = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    mismatch
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-sitecomp")
+        .expect("sitecomp artifact")
+        .rotation = Some(SccmRotation::LoUnderscore);
+    let rejected = analyze_site_core(&mismatch);
+    assert_explicit_gap_and_request(&rejected, "sitecomp-current", "server-sitecomp");
+    assert!(rejected.results.iter().all(|result| {
+        result.state != SccmSiteCoreState::Healthy
+            || result.confidence != SccmSiteCoreConfidence::High
+    }));
+
+    let backlog = analyze_site_core(&assess(&[
+        Source::sitecomp(INBOX_BACKLOG),
+        Source::absent_status(),
+    ]));
+    let request = backlog
+        .artifact_requests
+        .iter()
+        .find(|request| request.logical_name == "server-status")
+        .expect("bounded status request");
+    let request_wire = serde_json::to_value(request).expect("request serializes");
+    assert_eq!(
+        request_wire["candidates"],
+        json!([
+            {"basename": "statmgr.log", "rotation": "current"},
+            {"basename": "statmgr.lo_", "rotation": "loUnderscore"}
+        ])
+    );
+    assert!(request_wire.get("basenames").is_none());
+    assert!(request_wire.get("rotations").is_none());
+
+    let mut unknown_rotation = assess(&[
+        Source::capped_sitecomp(HEALTHY_SITECOMP),
+        Source::absent_status(),
+    ]);
+    unknown_rotation
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-sitecomp")
+        .expect("sitecomp artifact")
+        .rotation = Some(SccmRotation::Unknown(SccmUnknownRotation {
+        kind: "future".to_owned(),
+        value: None,
+    }));
+    let unknown = analyze_site_core(&unknown_rotation);
+    assert!(unknown.artifact_requests.iter().all(|request| {
+        serde_json::to_value(request).expect("request serializes")["candidates"]
+            .as_array()
+            .is_some_and(|candidates| !candidates.is_empty())
+    }));
+}
+
+#[test]
+fn intake_coverage_must_be_congruent_before_facts_can_shape_results() {
+    let mut assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    assessment.coverage.clear();
+
+    let analysis = analyze_site_core(&assessment);
+    assert!(analysis.results.iter().all(|result| {
+        result.state != SccmSiteCoreState::Healthy
+            || result.confidence != SccmSiteCoreConfidence::High
+    }));
+    assert!(!analysis.coverage_gaps.is_empty());
+    assert!(!analysis.unlinked_observations.is_empty());
+    assert!(!analysis.artifact_requests.is_empty());
 }
