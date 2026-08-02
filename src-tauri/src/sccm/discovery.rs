@@ -7,14 +7,13 @@ use std::fmt;
 #[cfg(test)]
 use std::cell::Cell;
 
-use cmtraceopen_parser::sccm::SccmRotation;
-use sha2::{Digest, Sha256};
-
 use super::contract::{
-    SccmManifestSourceState, canonical_client_source, catalog_entry_id,
-    expected_marker_artifact_id, expected_physical_artifact_id, logical_artifact_ids_for_basename,
-    root_handle_digest, rotation_order, rotation_segment, source_identity_digest,
+    canonical_client_source, catalog_entry_id, expected_marker_artifact_id,
+    expected_physical_artifact_id, logical_artifact_ids_for_basename, root_handle_digest,
+    rotation_order, rotation_segment, sha256_bytes, source_identity_digest,
+    SccmManifestSourceState,
 };
+use cmtraceopen_parser::sccm::SccmRotation;
 
 pub const MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS: usize = 4_096;
 /// Defensive bound for supplied observations. Native enumeration must report
@@ -110,6 +109,7 @@ struct PhysicalObservationKey {
 struct NormalizedObservation<'a> {
     observation: &'a SccmClientDiscoveryObservation,
     canonical_basename: String,
+    logical_artifact_ids: Vec<String>,
 }
 
 #[cfg(test)]
@@ -130,7 +130,12 @@ pub fn discover_client_sources(
     let observations = normalize_observations(input)?;
     let mut found_per_source = BTreeMap::<(String, String), usize>::new();
     let mut capped_sources = BTreeSet::<(String, String)>::new();
-    let mut declarations = Vec::with_capacity(MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS);
+    let mut declarations = Vec::with_capacity(
+        input
+            .observations
+            .len()
+            .min(MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS),
+    );
     let mut first_omitted: Option<(NormalizedObservation<'_>, SccmClientDiscoveryState)> = None;
 
     for observation in observations {
@@ -208,9 +213,11 @@ fn normalize_observation(
     NORMALIZATION_OPERATIONS.with(|count| count.set(count.get() + 1));
     root_handle_digest(&observation.root_handle)?;
     let canonical_basename = canonical_client_source(&observation.basename, &observation.rotation)?;
+    let logical_artifact_ids = logical_artifact_ids(&canonical_basename);
     Some(NormalizedObservation {
         observation,
         canonical_basename,
+        logical_artifact_ids,
     })
 }
 
@@ -249,10 +256,15 @@ fn candidate_from_observation(observation: &NormalizedObservation<'_>) -> Option
         &observation.canonical_basename,
     )?;
 
+    let mut physical_observation = observation.observation.clone();
+    physical_observation.basename = physical_basename(
+        &observation.canonical_basename,
+        &physical_observation.rotation,
+    );
     Some(Candidate {
-        observation: observation.observation.clone(),
+        observation: physical_observation,
         catalog_entry_id: catalog_entry_id(&observation.canonical_basename),
-        logical_artifact_ids: logical_artifact_ids(&observation.canonical_basename),
+        logical_artifact_ids: observation.logical_artifact_ids.clone(),
         source_digest,
     })
 }
@@ -337,22 +349,15 @@ fn evidence_id(
         "cmtraceopen.sccm.evidence.v1\0{catalog_entry_id}\0{source_digest}\0{}\0{basename}",
         rotation_segment(rotation)
     );
-    let digest = Sha256::digest(value.as_bytes());
-    format!(
-        "sccm-evidence:v1:sha256:{}",
-        digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    )
+    format!("sccm-evidence:v1:sha256:{}", sha256_bytes(value.as_bytes()))
 }
 
 fn compare_observation_order(
     left: &NormalizedObservation<'_>,
     right: &NormalizedObservation<'_>,
 ) -> Ordering {
-    logical_artifact_ids(&left.canonical_basename)
-        .cmp(&logical_artifact_ids(&right.canonical_basename))
+    left.logical_artifact_ids
+        .cmp(&right.logical_artifact_ids)
         .then_with(|| {
             left.observation
                 .root_handle
@@ -367,6 +372,21 @@ fn logical_artifact_ids(canonical_basename: &str) -> Vec<String> {
     #[cfg(test)]
     LOGICAL_ARTIFACT_ID_LOOKUPS.with(|count| count.set(count.get() + 1));
     logical_artifact_ids_for_basename(canonical_basename)
+}
+
+fn physical_basename(canonical_basename: &str, rotation: &SccmRotation) -> String {
+    match rotation {
+        SccmRotation::Current => canonical_basename.to_owned(),
+        SccmRotation::LoUnderscore => {
+            let stem = canonical_basename
+                .strip_suffix(".log")
+                .expect("prevalidated lo_ rotation has a canonical log basename");
+            format!("{stem}.lo_")
+        }
+        SccmRotation::Numbered(number) => format!("{canonical_basename}.{number}"),
+        SccmRotation::Timestamped(timestamp) => format!("{canonical_basename}.{timestamp}"),
+        SccmRotation::Unknown(_) => unreachable!("supported observation has a known rotation"),
+    }
 }
 
 fn state_rank(state: SccmClientDiscoveryObservationState) -> u8 {

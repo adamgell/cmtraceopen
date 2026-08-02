@@ -1,7 +1,7 @@
 use app_lib::sccm::{
+    discover_client_sources, SccmClientDiscoveryError, SccmClientDiscoveryInput,
+    SccmClientDiscoveryObservation, SccmClientDiscoveryObservationState, SccmClientDiscoveryState,
     MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS, MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
-    SccmClientDiscoveryError, SccmClientDiscoveryInput, SccmClientDiscoveryObservation,
-    SccmClientDiscoveryObservationState, SccmClientDiscoveryState, discover_client_sources,
 };
 use cmtraceopen_parser::sccm::SccmRotation;
 use sha2::{Digest, Sha256};
@@ -184,12 +184,10 @@ fn discovery_at_the_exact_global_boundary_does_not_manufacture_a_gap() {
         result.declarations.len(),
         MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
     );
-    assert!(
-        result
-            .declarations
-            .iter()
-            .all(|declaration| declaration.state == SccmClientDiscoveryState::Discovered)
-    );
+    assert!(result
+        .declarations
+        .iter()
+        .all(|declaration| declaration.state == SccmClientDiscoveryState::Discovered));
 }
 
 #[test]
@@ -342,18 +340,14 @@ fn discovery_preserves_denied_and_not_found_coverage_with_stable_collision_safe_
     .expect("valid observations");
 
     assert_eq!(result.declarations, reversed.declarations);
-    assert!(
-        result
-            .declarations
-            .iter()
-            .any(|declaration| declaration.state == SccmClientDiscoveryState::AccessDenied)
-    );
-    assert!(
-        result
-            .declarations
-            .iter()
-            .any(|declaration| declaration.state == SccmClientDiscoveryState::NotFound)
-    );
+    assert!(result
+        .declarations
+        .iter()
+        .any(|declaration| declaration.state == SccmClientDiscoveryState::AccessDenied));
+    assert!(result
+        .declarations
+        .iter()
+        .any(|declaration| declaration.state == SccmClientDiscoveryState::NotFound));
 
     let collisions = result
         .declarations
