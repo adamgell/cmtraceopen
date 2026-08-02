@@ -1391,6 +1391,11 @@ mod tests {
         for message in messages {
             let context = explicit_app_identity_context(&message);
             assert_eq!(context.identity, ExplicitAppIdentity::Absent);
+            assert_eq!(context.fallback_app_id, None);
+
+            let context =
+                explicit_app_identity_context_with_named_guid_fallback(&message);
+            assert_eq!(context.identity, ExplicitAppIdentity::Absent);
             assert_eq!(context.fallback_app_id.as_deref(), Some(lower));
         }
 
@@ -1398,7 +1403,7 @@ mod tests {
         assert_eq!(context.identity, ExplicitAppIdentity::Absent);
         assert_eq!(context.fallback_app_id, None);
 
-        let valid = explicit_app_identity_context(&format!(
+        let valid = explicit_app_identity_context_with_named_guid_fallback(&format!(
             r#"Processing identity {upper} for {{"AppId":"{lower}","Name":"Contoso"}}"#
         ));
         assert_eq!(
@@ -1407,7 +1412,7 @@ mod tests {
         );
         assert_eq!(valid.fallback_app_id, None);
 
-        let invalid = explicit_app_identity_context(&format!(
+        let invalid = explicit_app_identity_context_with_named_guid_fallback(&format!(
             r#"Processing identity {upper} for {{"AppId":"invalid","Name":"Contoso"}}"#
         ));
         assert_eq!(invalid.identity, ExplicitAppIdentity::Invalid);

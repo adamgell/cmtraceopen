@@ -2154,6 +2154,7 @@ mod tests {
         let mut registry = GuidRegistry::new();
         registry.ingest_lines(&[line(&message, "01-15-2024 10:00:04.000", 1)]);
         assert_eq!(registry.resolve(app_guid), Some("Contoso"));
+        guid_registry::reset_named_guid_fallback_extraction_count();
         let events = extract_events(
             &[line(&message, "01-15-2024 10:00:05.000", 2)],
             "C:/Logs/AppWorkload.log",
@@ -2164,6 +2165,7 @@ mod tests {
         assert_eq!(events[0].event_type, IntuneEventType::ContentDownload);
         assert_eq!(events[0].guid.as_deref(), Some(app_guid));
         assert!(events[0].name.contains("Contoso"));
+        assert_eq!(guid_registry::named_guid_fallback_extraction_count(), 0);
     }
 
     #[test]
@@ -2413,6 +2415,7 @@ mod tests {
             "C:/Logs/AppWorkload.log",
             &explicit_registry,
         );
+        guid_registry::reset_named_guid_fallback_extraction_count();
         let fallback_events = extract_events(
             &[line(&fallback, "01-15-2024 10:00:05.000", 4)],
             "C:/Logs/IntuneManagementExtension.log",
@@ -2424,5 +2427,6 @@ mod tests {
         assert_eq!(fallback_events.len(), 1);
         assert_eq!(fallback_events[0].guid.as_deref(), Some(app_guid));
         assert!(fallback_events[0].name.contains("Fallback Name"));
+        assert_eq!(guid_registry::named_guid_fallback_extraction_count(), 0);
     }
 }
