@@ -144,7 +144,7 @@ pub fn analyze_distribution_point(
         source_observation_sort_key(left).cmp(&source_observation_sort_key(right))
     });
 
-    let mut coverage_gaps = coverage_gaps(intake, &artifacts, &source_observations);
+    let mut coverage_gaps = coverage_gaps(intake, &source_observations);
     coverage_gaps.sort_by_key(coverage_gap_sort_key);
 
     let artifact_requests = artifact_requests(&coverage_gaps);
@@ -370,12 +370,13 @@ fn canonical_evidence_set(
     }
 
     ranges.sort_unstable();
-    ranges.windows(2).all(|pair| pair[0].1 < pair[1].0)
+    ranges
+        .windows(2)
+        .all(|pair| pair[0].1.checked_add(1) == Some(pair[1].0))
 }
 
 fn coverage_gaps(
     intake: &SccmServerIntakeAssessment,
-    artifacts: &BTreeMap<&str, &SccmServerArtifactAssessment>,
     observations: &[SccmDistributionPointSourceObservation],
 ) -> Vec<SccmDistributionPointCoverageGap> {
     let observed_artifact_ids = observations
@@ -387,12 +388,8 @@ fn coverage_gaps(
         .iter()
         .filter(|coverage| is_dp_distribution_coverage(coverage))
         .filter_map(|coverage| {
-            let artifact_ids = coverage
-                .artifact_ids
-                .iter()
-                .filter(|artifact_id| artifacts.contains_key(artifact_id.as_str()))
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut artifact_ids = coverage.artifact_ids.clone();
+            artifact_ids.sort();
             let all_admitted = coverage.state == SccmCoverageState::Captured
                 && !artifact_ids.is_empty()
                 && artifact_ids
