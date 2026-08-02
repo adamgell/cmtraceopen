@@ -469,8 +469,7 @@ fn canonical_intake_producer(
 
 /// Legacy synthetic-fixture hook. Production callers must enter through
 /// [`analyze_management_point_from_server_intake`].
-#[doc(hidden)]
-pub fn analyze_management_point_fixture(
+pub(crate) fn analyze_management_point_fixture(
     bundle: &SccmManagementPointBundle,
 ) -> SccmManagementPointAnalysis {
     let source_by_artifact = bundle
@@ -1310,6 +1309,10 @@ fn opaque_host_handle(value: &str) -> bool {
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         })
 }
+
+#[cfg(test)]
+#[path = "management_point_tests.rs"]
+mod management_point_tests;
 
 fn safe_opaque_id(value: &str) -> bool {
     !value.is_empty()
