@@ -870,7 +870,9 @@ mod windows_tests {
         use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 
         use windows::core::PWSTR;
-        use windows::Win32::Foundation::{LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL};
+        use windows::Win32::Foundation::{
+            LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL, READ_CONTROL, WRITE_DAC,
+        };
         use windows::Win32::Security::Authorization::{
             GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, GRANT_ACCESS,
             NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
@@ -882,8 +884,11 @@ mod windows_tests {
         use windows::Win32::Storage::FileSystem::{FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS};
 
         fs::create_dir_all(path).expect("create bundle directory");
+        // READ_CONTROL is required for GetSecurityInfo (owner query).
+        // WRITE_DAC is required for SetSecurityInfo (DACL write); it is NOT included
+        // in GENERIC_READ, so using .read(true) alone produces ERROR_ACCESS_DENIED.
         let directory = OpenOptions::new()
-            .read(true)
+            .access_mode(READ_CONTROL.0 | WRITE_DAC.0)
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
             .open(path)
             .expect("open bundle directory for DACL fixture");
