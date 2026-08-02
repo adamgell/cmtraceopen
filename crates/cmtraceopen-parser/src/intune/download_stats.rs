@@ -3,7 +3,10 @@ use std::path::Path;
 
 use regex::Regex;
 
-use super::guid_registry::{extract_app_id, extract_app_name, is_fallback_name, GuidRegistry};
+use super::guid_registry::{
+    explicit_app_identity, extract_app_id, extract_app_name, is_fallback_name, ExplicitAppIdentity,
+    GuidRegistry,
+};
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
 use super::timeline::parse_timestamp;
@@ -349,14 +352,20 @@ fn classify_download_source(source_file: &str) -> DownloadSourceKind {
 }
 
 fn extract_content_id(msg: &str) -> Option<String> {
-    // Primary: shared extraction from guid_registry (handles AppId, Id, etc.)
-    extract_app_id(msg).or_else(|| {
-        // Fallback: download-specific broader pattern (e.g. "content id: <GUID>")
-        content_id_re()
-            .captures(msg)
-            .and_then(|captures| captures.get(1))
-            .map(|value| value.as_str().to_string())
-    })
+    match explicit_app_identity(msg) {
+        ExplicitAppIdentity::Valid(guid) => Some(guid),
+        ExplicitAppIdentity::Invalid => None,
+        ExplicitAppIdentity::Absent => {
+            // Preserve named-context and download-specific heuristics only
+            // when the line has no explicit JSON identity field.
+            extract_app_id(msg).or_else(|| {
+                content_id_re()
+                    .captures(msg)
+                    .and_then(|captures| captures.get(1))
+                    .map(|value| value.as_str().to_string())
+            })
+        }
+    }
 }
 
 fn extract_display_name(msg: &str) -> Option<String> {
@@ -732,5 +741,11 @@ mod tests {
             extract_display_name(message).as_deref(),
             Some("Contoso App")
         );
+    }
+
+    #[test]
+    fn invalid_explicit_identity_suppresses_download_line_fallback() {
+        let message = r#"Starting content download for app 11111111-2222-3333-4444-555555555555 {"AppId":"not-an-app-guid","ApplicationName":"Contoso"}"#;
+        assert_eq!(extract_content_id(message), None);
     }
 }

@@ -39,6 +39,16 @@ pub(crate) fn guid_re() -> &'static Regex {
     })
 }
 
+const APP_ID_FIELD_SYNTAXES: [(&str, &str); 2] = [("\"AppId\"", "\""), ("\\\"AppId\\\"", "\\\"")];
+const ID_FIELD_SYNTAXES: [(&str, &str); 2] = [("\"Id\"", "\""), ("\\\"Id\\\"", "\\\"")];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExplicitAppIdentity {
+    Absent,
+    Valid(String),
+    Invalid,
+}
+
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
 /// Fast prefix/suffix JSON field extraction without regex overhead.
@@ -286,26 +296,10 @@ fn extract_all_field_values(msg: &str, prefix: &str, suffix: &str) -> Vec<String
 /// Checks (in order): `"AppId"`, `"Id"`, then falls back to a generic
 /// GUID regex when a name field is also present on the same line.
 pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
-    // Try "AppId" — direct and escaped JSON
-    if let Some(value) = extract_guid_field(msg, "\"AppId\":\"", "\"") {
-        return Some(value);
-    }
-    if let Some(value) = extract_guid_field(msg, "\\\"AppId\\\":\\\"", "\\\"") {
-        return Some(value);
-    }
-    // Try "Id" — appears in policy payloads like Get policies = [{"Id":"<GUID>","Name":"..."}]
-    if let Some(value) = extract_guid_field(msg, "\"Id\":\"", "\"") {
-        return Some(value);
-    }
-    if let Some(value) = extract_guid_field(msg, "\\\"Id\\\":\\\"", "\\\"") {
-        return Some(value);
-    }
-    // Try regex for "AppId" specifically
-    app_id_json_re()
-        .captures(msg)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_string())
-        .or_else(|| {
+    match explicit_app_identity(msg) {
+        ExplicitAppIdentity::Valid(guid) => Some(guid),
+        ExplicitAppIdentity::Invalid => None,
+        ExplicitAppIdentity::Absent => {
             // Only fall back to generic GUID if a name field is present
             // (avoids polluting registry with context-free GUIDs)
             if has_name_field(msg) {
@@ -316,17 +310,103 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
             } else {
                 None
             }
-        })
+        }
+    }
+}
+
+/// Classify explicit JSON `AppId`/`Id` fields without falling back to other
+/// GUIDs on the line. An invalid explicit field is an identity boundary: its
+/// presence suppresses line-wide GUID inference.
+pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
+    // Preserve the established fast paths and their ordering.
+    for (prefix, suffix) in [
+        ("\"AppId\":\"", "\""),
+        ("\\\"AppId\\\":\\\"", "\\\""),
+        ("\"Id\":\"", "\""),
+        ("\\\"Id\\\":\\\"", "\\\""),
+    ] {
+        if let Some(value) = extract_guid_field(msg, prefix, suffix) {
+            return ExplicitAppIdentity::Valid(value);
+        }
+    }
+
+    // Preserve the whitespace-tolerant AppId path with its canonical GUID
+    // grammar. The field scanner below covers escaped spacing and Id fields.
+    if let Some(value) = app_id_json_re()
+        .captures(msg)
+        .and_then(|captures| captures.get(1))
+    {
+        return ExplicitAppIdentity::Valid(value.as_str().to_string());
+    }
+
+    let allow_decorated = has_name_field(msg);
+    let (app_id_present, app_id) =
+        scan_identity_fields(msg, &APP_ID_FIELD_SYNTAXES, allow_decorated);
+    if let Some(value) = app_id {
+        return ExplicitAppIdentity::Valid(value);
+    }
+
+    let (id_present, id) = scan_identity_fields(msg, &ID_FIELD_SYNTAXES, allow_decorated);
+    if let Some(value) = id {
+        return ExplicitAppIdentity::Valid(value);
+    }
+
+    if app_id_present || id_present {
+        ExplicitAppIdentity::Invalid
+    } else {
+        ExplicitAppIdentity::Absent
+    }
+}
+
+fn scan_identity_fields(
+    msg: &str,
+    syntaxes: &[(&str, &str)],
+    allow_decorated: bool,
+) -> (bool, Option<String>) {
+    let mut present = false;
+
+    for &(key, quote) in syntaxes {
+        let mut remaining = msg;
+        while let Some(key_index) = remaining.find(key) {
+            present = true;
+            let after_key = &remaining[key_index + key.len()..];
+            if let Some(value) = json_string_value_after_key(after_key, quote) {
+                if let Some(guid) = exact_guid(value).or_else(|| {
+                    if allow_decorated {
+                        guid_re()
+                            .captures(value)
+                            .and_then(|captures| captures.get(1))
+                            .map(|matched| matched.as_str().to_string())
+                    } else {
+                        None
+                    }
+                }) {
+                    return (true, Some(guid));
+                }
+            }
+            remaining = after_key;
+        }
+    }
+
+    (present, None)
+}
+
+fn json_string_value_after_key<'a>(after_key: &'a str, quote: &str) -> Option<&'a str> {
+    let after_colon = after_key.trim_start().strip_prefix(':')?.trim_start();
+    let value = after_colon.strip_prefix(quote)?;
+    let end = value.find(quote)?;
+    value.get(..end)
+}
+
+fn exact_guid(value: &str) -> Option<String> {
+    let matched = guid_re().find(value)?;
+    (matched.start() == 0 && matched.end() == value.len()).then(|| value.to_string())
 }
 
 /// Extract a GUID from an identity field, rejecting arbitrary log content.
 fn extract_guid_field(msg: &str, prefix: &str, suffix: &str) -> Option<String> {
     let value = extract_json_field(msg, prefix, suffix)?;
-    if value.len() == 36 && guid_re().is_match(value) {
-        Some(value.to_string())
-    } else {
-        None
-    }
+    exact_guid(value)
 }
 
 /// Returns `true` if the message contains any name-bearing JSON field.
@@ -841,5 +921,79 @@ mod tests {
             )),
             Some(valid_guid.to_string())
         );
+    }
+
+    #[test]
+    fn invalid_explicit_identity_fields_suppress_line_wide_guid_fallback() {
+        let unrelated_guid = "11111111-2222-3333-4444-555555555555";
+        let messages = [
+            format!(
+                r#"tenant {unrelated_guid} {{"AppId":"not-an-app-guid","ApplicationName":"Contoso"}}"#
+            ),
+            format!(
+                r#"tenant {unrelated_guid} {{\"AppId\":\"not-an-app-guid\",\"ApplicationName\":\"Contoso\"}}"#
+            ),
+            format!(r#"tenant {unrelated_guid} {{"Id":"not-an-app-guid","Name":"Contoso"}}"#),
+            format!(
+                r#"tenant {unrelated_guid} {{\"Id\" : \"not-an-app-guid\",\"Name\":\"Contoso\"}}"#
+            ),
+        ];
+
+        for message in messages {
+            assert_eq!(extract_app_id(&message), None, "accepted {message}");
+
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert!(registry.is_empty(), "registered from {message}");
+        }
+    }
+
+    #[test]
+    fn valid_explicit_identity_fields_beat_unrelated_line_guids() {
+        let unrelated_guid = "11111111-2222-3333-4444-555555555555";
+        let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let messages = [
+            format!(
+                r#"tenant {unrelated_guid} {{"AppId":"{app_guid}","ApplicationName":"Contoso"}}"#
+            ),
+            format!(
+                r#"tenant {unrelated_guid} {{\"AppId\" : \"{app_guid}\",\"ApplicationName\":\"Contoso\"}}"#
+            ),
+            format!(r#"tenant {unrelated_guid} {{"Id" : "{app_guid}","Name":"Contoso"}}"#),
+            format!(r#"tenant {unrelated_guid} {{\"Id\":\"{app_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(
+                r#"tenant {unrelated_guid} {{"AppId":"invalid","Id":"{app_guid}","Name":"Contoso"}}"#
+            ),
+        ];
+
+        for message in messages {
+            assert_eq!(
+                extract_app_id(&message),
+                Some(app_guid.to_string()),
+                "wrong identity for {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn named_context_fallback_remains_available_without_identity_fields() {
+        let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        assert_eq!(
+            extract_app_id(&format!(
+                r#"Processing identity {app_guid} for {{"ApplicationName":"Contoso"}}"#
+            )),
+            Some(app_guid.to_string())
+        );
+    }
+
+    #[test]
+    fn decorated_identity_field_uses_its_field_local_guid() {
+        let unrelated_guid = "11111111-2222-3333-4444-555555555555";
+        let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+        let message = format!(
+            r#"tenant {unrelated_guid} {{"AppId":"Win32App_{app_guid}_1","ApplicationName":"Contoso"}}"#
+        );
+
+        assert_eq!(extract_app_id(&message), Some(app_guid.to_string()));
     }
 }
