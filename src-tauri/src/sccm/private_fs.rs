@@ -438,7 +438,9 @@ fn open_relative_file_no_follow(root: &File, relative: &Path) -> io::Result<File
         NtCreateFile, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
         FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
     };
-    use windows::Win32::Foundation::{HANDLE, OBJ_CASE_INSENSITIVE, UNICODE_STRING};
+    use windows::Win32::Foundation::{
+        RtlNtStatusToDosError, HANDLE, OBJ_CASE_INSENSITIVE, UNICODE_STRING,
+    };
     use windows::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ,
         FILE_SHARE_WRITE,
@@ -472,7 +474,11 @@ fn open_relative_file_no_follow(root: &File, relative: &Path) -> io::Result<File
                     "SCCM bundle path component is too long",
                 )
             })?;
-        if wide_name.is_empty() || wide_name.contains(&0) || wide_bytes > u16::MAX as usize {
+        if wide_name.is_empty()
+            || wide_name.contains(&0)
+            || wide_name.contains(&(b':' as u16))
+            || wide_bytes > u16::MAX as usize
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "SCCM bundle path contains an invalid component",
@@ -518,6 +524,13 @@ fn open_relative_file_no_follow(root: &File, relative: &Path) -> io::Result<File
             )
         };
         if status.0 < 0 || handle.0.is_null() || handle.is_invalid() {
+            if status.0 < 0 {
+                // SAFETY: RtlNtStatusToDosError converts the NTSTATUS returned
+                // by NtCreateFile without dereferencing caller-owned memory.
+                return Err(io::Error::from_raw_os_error(unsafe {
+                    RtlNtStatusToDosError(status) as i32
+                }));
+            }
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "SCCM bundle entry could not be opened safely",
