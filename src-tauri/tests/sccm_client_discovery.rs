@@ -498,6 +498,39 @@ fn discovery_rejects_conflicting_states_for_one_canonical_physical_source() {
 }
 
 #[test]
+fn discovery_rejects_accepted_and_rejected_facts_for_one_raw_physical_observation() {
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                unsupported_rotation(".backup"),
+                SccmClientDiscoveryObservationState::AccessDenied,
+            ),
+        ],
+    };
+
+    let error = discover_client_sources(&input)
+        .expect_err("classification disagreement cannot split one raw physical observation");
+    let mut reversed = input;
+    reversed.observations.reverse();
+    let reversed_error = discover_client_sources(&reversed)
+        .expect_err("accepted/rejected conflicts remain order independent");
+
+    assert_eq!(error, SccmClientDiscoveryError::ConflictingObservation);
+    assert_eq!(reversed_error, error);
+    assert!(!error.to_string().contains(ROOT_A));
+    assert!(!error.to_string().contains("AppEnforce.log"));
+}
+
+#[test]
 fn discovery_rejects_late_conflicts_after_the_global_declaration_frontier() {
     let mut observations = Vec::new();
     for number in 1..=2_047 {
