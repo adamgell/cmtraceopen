@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -606,10 +606,74 @@ fn validate_catalog(cards: &[SourceCard]) -> Vec<Validation> {
         .iter()
         .map(|card| card.card_id.clone())
         .collect::<BTreeSet<_>>();
+    let cycle_members = supersession_cycle_members(cards);
     cards
         .iter()
-        .map(|card| validate_card_with_inventory(card, &inventory))
+        .map(|card| {
+            let mut validation = validate_card_with_inventory(card, &inventory);
+            if cycle_members.contains(&card.card_id) {
+                validation
+                    .issues
+                    .push("supersessionCycleDetected".to_owned());
+                validation.issues.sort();
+                validation.issues.dedup();
+                validation.valid = false;
+                validation.admitted_to_semantic_catalog = false;
+            }
+            validation
+        })
         .collect()
+}
+
+fn supersession_cycle_members(cards: &[SourceCard]) -> BTreeSet<String> {
+    let mut graph = cards
+        .iter()
+        .map(|card| (card.card_id.clone(), Vec::new()))
+        .collect::<BTreeMap<_, _>>();
+
+    for card in cards {
+        if let Some(successor) = &card.supersession.superseded_by {
+            graph
+                .entry(card.card_id.clone())
+                .or_default()
+                .push(successor.clone());
+        }
+        for predecessor in &card.supersession.supersedes {
+            graph
+                .entry(predecessor.clone())
+                .or_default()
+                .push(card.card_id.clone());
+        }
+    }
+
+    cards
+        .iter()
+        .filter(|card| {
+            supersession_cycle_reaches(&card.card_id, &card.card_id, &graph, &mut BTreeSet::new())
+        })
+        .map(|card| card.card_id.clone())
+        .collect()
+}
+
+fn supersession_cycle_reaches(
+    origin: &str,
+    current: &str,
+    graph: &BTreeMap<String, Vec<String>>,
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    graph.get(current).is_some_and(|targets| {
+        targets.iter().any(|target| {
+            if target == origin {
+                return true;
+            }
+            if !visited.insert(target.clone()) {
+                return false;
+            }
+            let reaches_origin = supersession_cycle_reaches(origin, target, graph, visited);
+            visited.remove(target);
+            reaches_origin
+        })
+    })
 }
 
 fn validate_path(path: &Path) -> Validation {
@@ -663,11 +727,7 @@ fn candidate_catalog_is_typed_private_and_not_semantically_admitted() {
     );
     let validations = validate_catalog(&cards);
     let mut card_ids = Vec::new();
-    for ((filename, card), validation) in SOURCE_CARDS
-        .into_iter()
-        .zip(cards)
-        .zip(validations)
-    {
+    for ((filename, card), validation) in SOURCE_CARDS.into_iter().zip(cards).zip(validations) {
         assert!(
             validation.valid,
             "{filename}: {}",
@@ -854,6 +914,19 @@ fn supersession_self_references_and_cycles_fail_closed() {
         validation.issues == ["supersessionCycleDetected"]
             && !validation.admitted_to_semantic_catalog
     }));
+
+    let mut predecessor = load_card(&path).expect("valid fixture loads");
+    predecessor.card_id = "predecessor-card".to_owned();
+    predecessor.supersession.state = SupersessionState::Deprecated;
+    predecessor.supersession.superseded_by = Some("successor-card".to_owned());
+    let mut successor = load_card(&path).expect("valid fixture loads");
+    successor.card_id = "successor-card".to_owned();
+    successor.supersession.supersedes = vec!["predecessor-card".to_owned()];
+
+    let reciprocal_validations = validate_catalog(&[predecessor, successor]);
+    assert!(reciprocal_validations
+        .iter()
+        .all(|validation| validation.valid));
 }
 
 #[test]
