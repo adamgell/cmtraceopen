@@ -182,6 +182,106 @@ fn bounded_manifest(
     )
 }
 
+fn opaque_future_role_manifest(
+    capture_state: &str,
+    ordinal: usize,
+) -> (
+    String,
+    Vec<SccmServerArtifactPayload>,
+    String,
+    Option<String>,
+) {
+    let (manifest_json, _) = bounded_manifest(1, 4_096);
+    let mut manifest = manifest_value(&manifest_json);
+    let role_digest = format!("{ordinal:064x}");
+    let source_digest = format!("{:064x}", ordinal + 1);
+    let basename_digest = format!("{:064x}", ordinal + 2);
+    let future_role = format!("cmtraceopen.role.sha256.v1:{role_digest}");
+    let source_id = format!("cmtraceopen.source.sha256.v1:{source_digest}");
+    let source_kind = opaque_handle("cmtraceopen.source-kind.sha256.v1:", ordinal + 3);
+    let original_basename = format!("cmtraceopen.basename.sha256.v1:{basename_digest}");
+    manifest["topology"]["rolesObserved"] = json!(["managementPoint", future_role]);
+
+    let artifact = &mut manifest["artifacts"][0];
+    let artifact_id = artifact["artifactId"]
+        .as_str()
+        .expect("bounded artifact ID is a string")
+        .to_owned();
+    artifact["producerRole"] = Value::String(future_role.clone());
+    artifact["producerHostHandle"] =
+        Value::String(opaque_handle("cmtraceopen.host.sha256.v1:", ordinal + 4));
+    artifact["sourceId"] = Value::String(source_id);
+    artifact["sourceKind"] = Value::String(source_kind);
+    artifact["sourceVersion"] = Value::Null;
+    artifact["originalPath"] = Value::String(opaque_handle(
+        "cmtraceopen.original-path.sha256.v1:",
+        ordinal + 5,
+    ));
+    artifact["originalBasename"] = Value::String(original_basename);
+    artifact["configuredPathProvenance"] = json!({
+        "state": "supplied",
+        "pathFingerprint": opaque_handle("cmtraceopen.path.sha256.v1:", ordinal + 6),
+    });
+    artifact["captureState"] = Value::String(capture_state.to_owned());
+    artifact["collectionDetail"] = Value::Null;
+    artifact["skipReason"] = Value::Null;
+    artifact["unsupportedReason"] = Value::Null;
+    artifact["truncated"] = Value::Null;
+    artifact["fragmentComplete"] = Value::Null;
+
+    let (payloads, relative_path) = if capture_state == "capped" {
+        let bytes = vec![b'x'; 16];
+        let relative_path = format!(
+            "evidence/sccm/server/role-{role_digest}/source-{source_digest}/current/basename-{basename_digest}"
+        );
+        artifact["rotation"] = json!({
+            "kind": "current",
+            "lineageId": opaque_handle("cmtraceopen.lineage.sha256.v1:", ordinal + 7),
+        });
+        artifact["encoding"] = Value::String("utf-8".to_owned());
+        artifact["collectionLimit"] = json!({ "byteLimit": 16, "limitApplied": true });
+        artifact["bytesCopied"] = Value::from(16);
+        artifact["truncated"] = Value::Bool(true);
+        artifact["fragmentComplete"] = Value::Bool(false);
+        artifact["relativePath"] = Value::String(relative_path.clone());
+        (
+            vec![SccmServerArtifactPayload {
+                manifest_artifact_id: artifact_id,
+                bytes,
+            }],
+            Some(relative_path),
+        )
+    } else {
+        artifact["rotation"] = json!({
+            "kind": "none",
+            "lineageId": opaque_handle("cmtraceopen.lineage.sha256.v1:", ordinal + 7),
+        });
+        artifact["encoding"] = Value::Null;
+        artifact["collectionLimit"] = Value::Null;
+        artifact["bytesCopied"] = Value::from(0);
+        artifact["relativePath"] = Value::Null;
+        if capture_state == "accessDenied" {
+            artifact["collectionDetail"] = Value::String(opaque_handle(
+                "cmtraceopen.collection-detail.sha256.v1:",
+                ordinal + 8,
+            ));
+        } else if capture_state == "unsupported" {
+            artifact["unsupportedReason"] = Value::String(opaque_handle(
+                "cmtraceopen.unsupported-reason.sha256.v1:",
+                ordinal + 8,
+            ));
+        }
+        (Vec::new(), None)
+    };
+
+    (
+        serialize_manifest(&manifest),
+        payloads,
+        future_role,
+        relative_path,
+    )
+}
+
 fn assert_unsafe_mutation_is_rejected(
     scenario: &str,
     marker: &str,
@@ -1511,6 +1611,55 @@ fn server_manifest_version_gate_precedes_v1_extension_validation() {
 }
 
 #[test]
+fn server_manifest_known_metadata_errors_route_to_manifest_scope() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut wrong_results = Vec::new();
+
+    for case in [
+        "missingPrivacy",
+        "invalidPrivacySynthetic",
+        "invalidPrivacyRawPaths",
+        "missingProposalOnly",
+        "invalidProposalOnly",
+        "invalidInputOrderDeclaration",
+    ] {
+        let mut manifest = manifest_value(&manifest_json);
+        match case {
+            "missingPrivacy" => {
+                manifest
+                    .as_object_mut()
+                    .expect("manifest is an object")
+                    .remove("privacy");
+            }
+            "invalidPrivacySynthetic" => manifest["privacy"]["synthetic"] = Value::Bool(false),
+            "invalidPrivacyRawPaths" => {
+                manifest["privacy"]["rawPaths"] = Value::String("raw".to_owned());
+            }
+            "missingProposalOnly" => {
+                manifest
+                    .as_object_mut()
+                    .expect("manifest is an object")
+                    .remove("proposalOnly");
+            }
+            "invalidProposalOnly" => manifest["proposalOnly"] = Value::Bool(false),
+            "invalidInputOrderDeclaration" => {
+                manifest["inputOrderIsDeliberatelyUnsorted"] = Value::Bool(false);
+            }
+            _ => unreachable!(),
+        }
+        let actual = assess_server_intake(&serialize_manifest(&manifest), &payloads);
+        if actual != Err(SccmServerIntakeError::MalformedManifest) {
+            wrong_results.push((case, actual));
+        }
+    }
+
+    assert!(
+        wrong_results.is_empty(),
+        "manifest/privacy known-field errors must stay in manifest scope: {wrong_results:?}"
+    );
+}
+
+#[test]
 fn server_manifest_v1_rejects_unversioned_or_nonopaque_unknown_fields() {
     let (manifest_json, payloads) = bounded_manifest(1, 4_096);
 
@@ -1832,6 +1981,92 @@ fn server_intake_retains_only_opaque_future_roles_as_unsupported_coverage() {
 }
 
 #[test]
+fn server_intake_retains_opaque_future_roles_across_conservative_coverage_states() {
+    let mut failures = Vec::new();
+
+    for (wire_state, expected_state, ordinal) in [
+        ("absent", SccmCoverageState::Absent, 101),
+        ("accessDenied", SccmCoverageState::AccessDenied, 102),
+        ("capped", SccmCoverageState::Capped, 103),
+        ("unsupported", SccmCoverageState::Unsupported, 104),
+    ] {
+        let (manifest_json, payloads, future_role, expected_relative_path) =
+            opaque_future_role_manifest(wire_state, ordinal);
+        let result = (|| -> Result<(), String> {
+            let assessment = assess_server_intake(&manifest_json, &payloads)
+                .map_err(|error| format!("intake rejected the state: {error:?}"))?;
+            let expected_role = SccmRole::Unknown(future_role.clone());
+            if !assessment.topology.roles_observed.contains(&expected_role) {
+                return Err("future role was not retained in topology".to_owned());
+            }
+            let artifact = assessment
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.producer_role == expected_role)
+                .ok_or_else(|| "future-role artifact was not retained".to_owned())?;
+            if artifact.state != expected_state {
+                return Err(format!(
+                    "coverage changed from {expected_state:?} to {:?}",
+                    artifact.state
+                ));
+            }
+            if artifact.parser_eligible {
+                return Err("future-role artifact became parser eligible".to_owned());
+            }
+            if artifact.relative_path != expected_relative_path {
+                return Err(format!(
+                    "relative path mismatch: {:?}",
+                    artifact.relative_path
+                ));
+            }
+            if expected_state == SccmCoverageState::Capped {
+                let provenance = artifact
+                    .capture_provenance
+                    .as_ref()
+                    .ok_or_else(|| "capped artifact lost capture provenance".to_owned())?;
+                if provenance.schema_version != 1
+                    || provenance.encoding != "utf-8"
+                    || provenance.byte_limit != 16
+                    || !provenance.limit_applied
+                    || artifact.bytes_copied != 16
+                    || artifact.truncated != Some(true)
+                    || artifact.fragment_complete != Some(false)
+                    || artifact.content_sha256.is_none()
+                {
+                    return Err(format!("capped provenance was incoherent: {artifact:?}"));
+                }
+            } else if artifact.capture_provenance.is_some()
+                || artifact.content_sha256.is_some()
+                || artifact.bytes_copied != 0
+            {
+                return Err(format!(
+                    "nonphysical state retained physical provenance: {artifact:?}"
+                ));
+            }
+            if assessment.coverage.len() != 1
+                || assessment.coverage[0].state != expected_state
+                || !assessment.evidence.is_empty()
+                || !assessment.findings.is_empty()
+                || !assessment.next_artifact_requests.is_empty()
+            {
+                return Err(format!(
+                    "future-role state influenced diagnostics: {assessment:?}"
+                ));
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            failures.push((wire_state, error));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "future-role coverage states must remain inert and exact: {failures:?}"
+    );
+}
+
+#[test]
 fn server_intake_rejects_identity_bearing_future_roles() {
     let (manifest_json, _) = bounded_manifest(1, 4_096);
     let mut manifest = manifest_value(&manifest_json);
@@ -1852,7 +2087,7 @@ fn server_intake_rejects_identity_bearing_future_roles() {
 }
 
 #[test]
-fn server_intake_rejects_future_roles_without_unsupported_capture() {
+fn server_intake_rejects_future_topology_roles_without_a_matching_artifact() {
     let (manifest_json, payloads) = bounded_manifest(1, 4_096);
     let mut manifest = manifest_value(&manifest_json);
     manifest["topology"]["rolesObserved"] = json!([
@@ -1860,9 +2095,23 @@ fn server_intake_rejects_future_roles_without_unsupported_capture() {
         opaque_handle("cmtraceopen.role.sha256.v1:", 10),
     ]);
 
-    assert!(
-        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
-        "future roles are valid only when retained by an unsupported capture"
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidTopology),
+        "every future topology role must have retained artifact provenance"
+    );
+}
+
+#[test]
+fn server_intake_rejects_future_role_artifacts_missing_from_topology() {
+    let (manifest_json, payloads, _, _) = opaque_future_role_manifest("unsupported", 105);
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["topology"]["rolesObserved"] = json!(["managementPoint"]);
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact),
+        "future producer provenance must be declared by topology"
     );
 }
 

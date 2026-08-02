@@ -404,10 +404,10 @@ pub fn assess_server_intake(
     let topology = normalize_topology(&manifest)?;
     if topology.roles_observed.iter().any(|role| {
         is_opaque_future_role(role)
-            && !manifest.artifacts.iter().any(|artifact| {
-                artifact.producer_role == *role
-                    && artifact.capture_state == SccmCoverageState::Unsupported
-            })
+            && !manifest
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.producer_role == *role)
     }) {
         return Err(SccmServerIntakeError::InvalidTopology);
     }
@@ -657,12 +657,12 @@ fn validate_manifest_metadata(manifest: &RawServerManifest) -> Result<(), SccmSe
         let privacy = manifest
             .privacy
             .as_ref()
-            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+            .ok_or(SccmServerIntakeError::MalformedManifest)?;
         if manifest.proposal_only != Some(true)
             || !privacy.synthetic
             || privacy.raw_paths != "redacted"
         {
-            return Err(SccmServerIntakeError::InvalidArtifact);
+            return Err(SccmServerIntakeError::MalformedManifest);
         }
     } else if manifest.proposal_only == Some(true)
         || manifest
@@ -670,11 +670,11 @@ fn validate_manifest_metadata(manifest: &RawServerManifest) -> Result<(), SccmSe
             .as_ref()
             .is_some_and(|privacy| privacy.synthetic || privacy.raw_paths != "redacted")
     {
-        return Err(SccmServerIntakeError::InvalidArtifact);
+        return Err(SccmServerIntakeError::MalformedManifest);
     }
 
     if manifest.input_order_is_deliberately_unsorted == Some(false) {
-        return Err(SccmServerIntakeError::InvalidArtifact);
+        return Err(SccmServerIntakeError::MalformedManifest);
     }
     Ok(())
 }
@@ -777,18 +777,14 @@ fn normalize_artifact(
     let synthetic_unclassified =
         artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
     let opaque_future_role = !synthetic_fixture && is_opaque_future_role(&artifact.producer_role);
-    let unsupported_unknown = artifact.capture_state == SccmCoverageState::Unsupported
-        && (synthetic_unclassified || opaque_future_role);
+    let retained_unknown = opaque_future_role
+        || (synthetic_unclassified && artifact.capture_state == SccmCoverageState::Unsupported);
     validate_artifact_annotations(&artifact, synthetic_fixture)?;
     let source_version =
         normalize_source_version(artifact.source_version.as_deref(), synthetic_fixture)?;
     if !safe_manifest_artifact_id(&artifact.artifact_id, synthetic_fixture)
-        || !safe_source_id(&artifact.source_id, unsupported_unknown, synthetic_fixture)
-        || !safe_source_kind(
-            &artifact.source_kind,
-            unsupported_unknown,
-            synthetic_fixture,
-        )
+        || !safe_source_id(&artifact.source_id, retained_unknown, synthetic_fixture)
+        || !safe_source_kind(&artifact.source_kind, retained_unknown, synthetic_fixture)
         || !safe_lineage_id(&artifact.rotation.lineage_id, synthetic_fixture)
         || !safe_path_fingerprint(
             &artifact.configured_path_provenance.path_fingerprint,
@@ -808,8 +804,9 @@ fn normalize_artifact(
             synthetic_fixture,
             "subject",
         )
-        || (!unsupported_unknown && artifact.producer_host_handle.is_none())
-        || (unsupported_unknown
+        || ((!retained_unknown || is_physical_state(&artifact.capture_state))
+            && artifact.producer_host_handle.is_none())
+        || (retained_unknown
             && !safe_public_basename(&artifact.original_basename, synthetic_fixture))
     {
         return Err(SccmServerIntakeError::InvalidArtifact);
@@ -817,7 +814,7 @@ fn normalize_artifact(
 
     let producer_is_observed = roles_observed.contains(&artifact.producer_role);
     if (!producer_is_observed && !synthetic_unclassified)
-        || (!is_declared_server_role(&artifact.producer_role) && !unsupported_unknown)
+        || (!is_declared_server_role(&artifact.producer_role) && !retained_unknown)
     {
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
@@ -862,7 +859,7 @@ fn normalize_artifact(
             } else {
                 (family, None, None, false)
             }
-        } else if unsupported_unknown {
+        } else if retained_unknown {
             (
                 SccmArtifactFamily::Unknown(artifact.source_id.clone()),
                 Some(artifact.original_basename.clone()),
@@ -1172,16 +1169,18 @@ fn validate_relative_path(
     let components = relative_path.split('/').collect::<Vec<_>>();
     let expected_role =
         role_path_segment(&artifact.producer_role).ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let expected_source = source_path_segment(&artifact.source_id);
     let expected_rotation =
         rotation_path_segment(rotation).ok_or(SccmServerIntakeError::InvalidArtifact)?;
     let basename = original_basename.ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let expected_basename = basename_path_segment(basename);
     let mut cursor = 0;
     let fixed_prefix = [
         "evidence",
         "sccm",
         "server",
-        expected_role,
-        artifact.source_id.as_str(),
+        expected_role.as_str(),
+        expected_source.as_str(),
     ];
     if components.get(..fixed_prefix.len()) != Some(fixed_prefix.as_slice()) {
         return Err(SccmServerIntakeError::InvalidArtifact);
@@ -1216,7 +1215,7 @@ fn validate_relative_path(
     }
 
     if components.get(cursor).copied() != Some(expected_rotation.as_str())
-        || components.get(cursor + 1).copied() != Some(basename)
+        || components.get(cursor + 1).copied() != Some(expected_basename.as_str())
         || components.len() != cursor + 2
         || relative_path.contains('\\')
         || relative_path.split('/').any(|segment| {
@@ -1245,17 +1244,33 @@ fn safe_encoding(encoding: &str) -> bool {
     matches!(encoding, "utf-8" | "utf-16le" | "windows-1252" | "unknown")
 }
 
-fn role_path_segment(role: &SccmRole) -> Option<&'static str> {
-    match role {
-        SccmRole::SiteServer => Some("site-server"),
-        SccmRole::ManagementPoint => Some("management-point"),
-        SccmRole::DistributionPoint => Some("distribution-point"),
-        SccmRole::SoftwareUpdatePoint => Some("software-update-point"),
-        SccmRole::WsUs => Some("wsus"),
-        SccmRole::Provider => Some("provider"),
-        SccmRole::AdminService => Some("admin-service"),
-        SccmRole::Client | SccmRole::Unknown(_) => None,
-    }
+fn role_path_segment(role: &SccmRole) -> Option<String> {
+    Some(match role {
+        SccmRole::SiteServer => "site-server".to_owned(),
+        SccmRole::ManagementPoint => "management-point".to_owned(),
+        SccmRole::DistributionPoint => "distribution-point".to_owned(),
+        SccmRole::SoftwareUpdatePoint => "software-update-point".to_owned(),
+        SccmRole::WsUs => "wsus".to_owned(),
+        SccmRole::Provider => "provider".to_owned(),
+        SccmRole::AdminService => "admin-service".to_owned(),
+        SccmRole::Unknown(value) => format!(
+            "role-{}",
+            opaque_sha256_digest(value, "cmtraceopen.role.sha256.v1:")?
+        ),
+        SccmRole::Client => return None,
+    })
+}
+
+fn source_path_segment(source_id: &str) -> String {
+    opaque_sha256_digest(source_id, "cmtraceopen.source.sha256.v1:")
+        .map(|digest| format!("source-{digest}"))
+        .unwrap_or_else(|| source_id.to_owned())
+}
+
+fn basename_path_segment(basename: &str) -> String {
+    opaque_sha256_digest(basename, "cmtraceopen.basename.sha256.v1:")
+        .map(|digest| format!("basename-{digest}"))
+        .unwrap_or_else(|| basename.to_owned())
 }
 
 fn rotation_path_segment(rotation: Option<&SccmRotation>) -> Option<String> {
@@ -1756,13 +1771,17 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
     opaque_sha256_handle(value, &format!("cmtraceopen.{domain}.sha256.v1:"))
 }
 
-fn opaque_sha256_handle(value: &str, prefix: &str) -> bool {
-    value.strip_prefix(prefix).is_some_and(|digest| {
+fn opaque_sha256_digest<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    value.strip_prefix(prefix).filter(|digest| {
         digest.len() == 64
             && digest
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     })
+}
+
+fn opaque_sha256_handle(value: &str, prefix: &str) -> bool {
+    opaque_sha256_digest(value, prefix).is_some()
 }
 
 fn is_declared_server_role(role: &SccmRole) -> bool {
