@@ -465,6 +465,22 @@ fn intake_wire_rejects_more_than_the_v1_artifact_limit_while_deserializing() {
     );
 }
 
+#[test]
+fn intake_wire_rejects_more_than_the_v1_artifact_limit_from_json_text() {
+    let artifact = synthetic_artifact("wire-limit-text", "PolicyAgent.log");
+    let oversized = serde_json::json!({
+        "artifacts": vec![artifact; MAX_SCCM_CLIENT_INTAKE_ARTIFACTS + 1],
+    });
+    let text = oversized.to_string();
+
+    let error = serde_json::from_str::<SccmClientIntakeBundle>(&text)
+        .expect_err("streaming JSON must reject an oversized artifact sequence");
+    assert!(
+        error.to_string().contains("artifact count exceeds"),
+        "the streaming fallback must report the bounded-contract violation: {error}"
+    );
+}
+
 /// Every assertion that a serialized projection did not leak an identity must
 /// casefold its input and route through this helper. A bare substring check
 /// against the original-case JSON has twice missed a form this covers: the

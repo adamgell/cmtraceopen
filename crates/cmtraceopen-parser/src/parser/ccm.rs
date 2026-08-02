@@ -387,7 +387,11 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
             .get(0)
             .expect("CCM regex captures always include the full match");
 
-        if newest_nested_opener(content, full_match.start(), full_match.end()).is_some()
+        let message_end = caps
+            .name("msg")
+            .expect("complete CCM matches always include the message capture")
+            .end();
+        if newest_nested_opener(content, full_match.start(), message_end).is_some()
             && mode == CcmScanMode::SccmEvidence
         {
             // A line-start opener inside a complete-looking multiline record
@@ -492,13 +496,15 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
 fn newest_nested_opener(
     content: &str,
     full_match_start: usize,
-    full_match_end: usize,
+    message_end: usize,
 ) -> Option<usize> {
-    // Only physical-line openers can delimit recovery records. Scan newest
-    // first so an adversarial run of partial openers is discarded in one pass.
+    // Only physical-line openers inside the message can delimit recovery
+    // records. Attribute values are outside the raw CCM payload and may
+    // contain literal opener text. Scan newest first so an adversarial run of
+    // partial message openers is discarded in one pass.
     let nested_search_start = full_match_start.checked_add(CCM_RECORD_OPENER.len())?;
     content
-        .get(nested_search_start..full_match_end)?
+        .get(nested_search_start..message_end)?
         .rmatch_indices(CCM_RECORD_OPENER)
         .find_map(|(offset, _)| {
             let absolute = nested_search_start + offset;
@@ -1122,6 +1128,25 @@ mod tests {
         );
         assert_eq!(records[0].line_start, 1);
         assert_eq!(records[0].line_end, 1);
+    }
+
+    #[test]
+    fn logical_scanner_ignores_line_start_opener_inside_attribute_value() {
+        let text = concat!(
+            "<![LOG[Policy request completed]LOG]!>",
+            "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+            "component=\"PolicyAgent\" context=\"diagnostic continuation\n",
+            "<![LOG[literal attribute token\" type=\"1\" thread=\"42\">"
+        );
+
+        let records = scan_logical_records(text, "PolicyAgent.log");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].entry.message, "Policy request completed");
+        assert_eq!(
+            records[0].context.as_deref(),
+            Some("diagnostic continuation\n<![LOG[literal attribute token")
+        );
     }
 
     #[test]

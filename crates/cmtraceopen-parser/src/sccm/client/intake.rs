@@ -239,7 +239,7 @@ where
                 .is_some_and(|size| size > MAX_SCCM_CLIENT_INTAKE_ARTIFACTS)
             {
                 return Err(A::Error::custom(
-                    "client intake artifact count exceeds the supported limit",
+                    SccmClientIntakeError::ArtifactLimitExceeded,
                 ));
             }
 
@@ -257,7 +257,7 @@ where
 
             if sequence.next_element::<IgnoredAny>()?.is_some() {
                 return Err(A::Error::custom(
-                    "client intake artifact count exceeds the supported limit",
+                    SccmClientIntakeError::ArtifactLimitExceeded,
                 ));
             }
 
