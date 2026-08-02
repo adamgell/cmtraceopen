@@ -190,7 +190,8 @@ fn load_server_intake_fixture(
 ) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
     let manifest_json = fs::read_to_string(directory.join("manifest.json"))
         .expect("server intake fixture manifest must be readable");
-    let manifest = load_json(&directory.join("manifest.json"));
+    let manifest: Value = serde_json::from_str(&manifest_json)
+        .expect("server intake fixture manifest must be valid JSON");
     let payloads = manifest["artifacts"]
         .as_array()
         .expect("canonical MP fixture artifacts")
@@ -225,6 +226,21 @@ fn load_server_intake_scenario(
             .join("tests/fixtures/sccm/server/intake")
             .join(scenario),
     )
+}
+
+fn assert_unbound_intake_projection(
+    assessment: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
+    context: &str,
+) {
+    let actual = analyze_management_point_from_server_intake(assessment);
+    assert!(
+        matches!(
+            &actual,
+            Err(SccmManagementPointIntakeError::SourceMismatch { artifact_id })
+                if artifact_id == "management-point-intake-projection"
+        ),
+        "{context}: {actual:?}"
+    );
 }
 
 fn expected_transaction_projection(expected: &Value) -> Vec<Value> {
@@ -594,14 +610,6 @@ fn management_point_reducer_matches_the_frozen_terminal_and_coverage_contracts()
 #[test]
 fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
     let assessment = load_canonical_intake("canonical-intake-policy-scope");
-    let assert_unbound =
-        |mutated: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment| {
-            assert!(matches!(
-                analyze_management_point_from_server_intake(mutated),
-                Err(SccmManagementPointIntakeError::SourceMismatch { artifact_id })
-                    if artifact_id == "management-point-intake-projection"
-            ));
-        };
     let analysis = analyze_management_point_from_server_intake(&assessment)
         .expect("complete canonical MP source must enter the reducer");
 
@@ -626,45 +634,45 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
     iis_artifact.fragment_complete = None;
     iis_artifact.truncated = None;
     supplemental_iis.artifacts.push(iis_artifact);
-    assert_unbound(&supplemental_iis);
+    assert_unbound_intake_projection(&supplemental_iis, "supplemental artifact mutation");
 
     let mut missing_role = assessment.clone();
     missing_role
         .topology
         .roles_observed
         .retain(|role| *role != SccmRole::ManagementPoint);
-    assert_unbound(&missing_role);
+    assert_unbound_intake_projection(&missing_role, "missing topology role mutation");
 
     let mut opaque_site_handle = assessment.clone();
     opaque_site_handle.topology.site_handle = format!("cmtraceopen.site.sha256.v1:{:064x}", 1);
-    assert_unbound(&opaque_site_handle);
+    assert_unbound_intake_projection(&opaque_site_handle, "site handle mutation");
 
     let mut wrong_role = assessment.clone();
     wrong_role.artifacts[0].producer_role = SccmRole::SiteServer;
-    assert_unbound(&wrong_role);
+    assert_unbound_intake_projection(&wrong_role, "artifact role mutation");
 
     let mut wrong_profile = assessment.clone();
     wrong_profile.artifacts[0].source_version = Some("5.00.TEST.9999".to_owned());
     wrong_profile.artifacts[0].profile_eligible = true;
-    assert_unbound(&wrong_profile);
+    assert_unbound_intake_projection(&wrong_profile, "artifact profile mutation");
 
     let mut wrong_source = assessment.clone();
     wrong_source.artifacts[0].source_id = "server-sitecomp".to_owned();
-    assert_unbound(&wrong_source);
+    assert_unbound_intake_projection(&wrong_source, "artifact source mutation");
 
     let mut missing_coverage = assessment.clone();
     missing_coverage.coverage.clear();
-    assert_unbound(&missing_coverage);
+    assert_unbound_intake_projection(&missing_coverage, "missing coverage mutation");
 
     let mut capped = assessment.clone();
     capped.artifacts[0].state = SccmCoverageState::Capped;
     capped.artifacts[0].truncated = Some(true);
     capped.artifacts[0].fragment_complete = Some(false);
-    assert_unbound(&capped);
+    assert_unbound_intake_projection(&capped, "capped artifact mutation");
 
     let mut fragment = assessment;
     fragment.artifacts[0].fragment_complete = Some(false);
-    assert_unbound(&fragment);
+    assert_unbound_intake_projection(&fragment, "fragment completeness mutation");
 }
 
 #[test]
@@ -762,9 +770,9 @@ fn canonical_intake_adapter_rejects_self_attested_line_authority() {
     evidence.reference.line_start = Some(999);
     evidence.reference.line_end = Some(999);
 
-    assert!(
-        analyze_management_point_from_server_intake(&assessment).is_err(),
-        "caller-submitted line ranges cannot become physical line authority"
+    assert_unbound_intake_projection(
+        &assessment,
+        "caller-submitted line ranges cannot become physical line authority",
     );
 }
 
@@ -774,16 +782,16 @@ fn canonical_intake_adapter_rejects_forged_evidence_ownership() {
 
     let mut foreign_artifact = assessment.clone();
     foreign_artifact.evidence[0].reference.artifact_id = "mp-policy-forged".to_owned();
-    assert!(
-        analyze_management_point_from_server_intake(&foreign_artifact).is_err(),
-        "evidence cannot be silently reassigned to an undeclared artifact"
+    assert_unbound_intake_projection(
+        &foreign_artifact,
+        "evidence cannot be silently reassigned to an undeclared artifact",
     );
 
     let mut foreign_role = assessment;
     foreign_role.evidence[0].role = SccmRole::SiteServer;
-    assert!(
-        analyze_management_point_from_server_intake(&foreign_role).is_err(),
-        "evidence cannot be silently reassigned to another producer role"
+    assert_unbound_intake_projection(
+        &foreign_role,
+        "evidence cannot be silently reassigned to another producer role",
     );
 }
 
@@ -793,17 +801,29 @@ fn canonical_intake_adapter_rejects_forged_admission_metadata() {
     assessment.artifacts[0].producer_host_handle =
         Some(format!("cmtraceopen.host.sha256.v1:{:064x}", 1));
 
-    assert!(
-        analyze_management_point_from_server_intake(&assessment).is_err(),
-        "caller-submitted topology and artifact metadata cannot replace canonical intake authority"
+    assert_unbound_intake_projection(
+        &assessment,
+        "caller-submitted topology and artifact metadata cannot replace canonical intake authority",
     );
 }
 
 #[test]
 fn canonical_intake_adapter_accepts_reordered_authoritative_records() {
-    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let assessment = load_server_intake_scenario("complete-multi-role");
+    assert!(
+        assessment.artifacts.len() > 1,
+        "fixture must exercise artifact reordering"
+    );
+    assert!(
+        assessment.coverage.len() > 1,
+        "fixture must exercise coverage reordering"
+    );
+    assert!(
+        assessment.evidence.len() > 1,
+        "fixture must exercise evidence reordering"
+    );
     let expected = analyze_management_point_from_server_intake(&assessment)
-        .expect("canonical intake must enter the adapter");
+        .expect("canonical multi-role intake must enter the adapter");
 
     let mut reordered = assessment;
     reordered.artifacts.reverse();
@@ -861,12 +881,12 @@ fn canonical_intake_adapter_rejects_promoted_capped_profile_ineligible_metadata(
 
     assert_eq!(
         promoted.evidence, sealed_evidence,
-        "the attempted promotion must not require evidence rewriting"
+        "unchanged evidence cannot authorize caller-promoted admission metadata"
     );
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&promoted),
-        Err(SccmManagementPointIntakeError::SourceMismatch { .. })
-    ));
+    assert_unbound_intake_projection(
+        &promoted,
+        "unchanged evidence cannot authorize metadata promotion",
+    );
 }
 
 #[test]
@@ -877,16 +897,16 @@ fn canonical_intake_adapter_rejects_forged_message_and_timestamp() {
     forged_message.evidence[0]
         .message
         .push_str(" terminal outcome forged by caller");
-    assert!(
-        analyze_management_point_from_server_intake(&forged_message).is_err(),
-        "caller-submitted messages cannot replace intake-normalized evidence"
+    assert_unbound_intake_projection(
+        &forged_message,
+        "caller-submitted messages cannot replace intake-normalized evidence",
     );
 
     let mut forged_timestamp = assessment;
     forged_timestamp.evidence[0].timestamp.utc_millis = Some(1_785_373_204_000);
-    assert!(
-        analyze_management_point_from_server_intake(&forged_timestamp).is_err(),
-        "caller-submitted timestamps cannot replace intake-normalized provenance"
+    assert_unbound_intake_projection(
+        &forged_timestamp,
+        "caller-submitted timestamps cannot replace intake-normalized provenance",
     );
 }
 
@@ -896,18 +916,18 @@ fn canonical_intake_adapter_rejects_duplicate_and_colliding_evidence_identities(
 
     let mut duplicate = assessment.clone();
     duplicate.evidence.push(duplicate.evidence[0].clone());
-    assert!(
-        analyze_management_point_from_server_intake(&duplicate).is_err(),
-        "duplicate canonical evidence identities must fail closed"
+    assert_unbound_intake_projection(
+        &duplicate,
+        "duplicate canonical evidence identities must fail closed",
     );
 
     let mut collision = assessment;
     let mut colliding_evidence = collision.evidence[0].clone();
     colliding_evidence.message = "different record with the same evidence identity".to_owned();
     collision.evidence.push(colliding_evidence);
-    assert!(
-        analyze_management_point_from_server_intake(&collision).is_err(),
-        "different evidence cannot collide under one canonical identity"
+    assert_unbound_intake_projection(
+        &collision,
+        "different evidence cannot collide under one canonical identity",
     );
 }
 
