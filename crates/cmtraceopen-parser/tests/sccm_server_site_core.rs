@@ -292,6 +292,31 @@ fn assess(sources: &[Source<'_>]) -> SccmServerIntakeAssessment {
         .expect("site-core test manifest must pass the shared server intake")
 }
 
+fn replace_source_artifact_id(
+    assessment: &mut SccmServerIntakeAssessment,
+    source_id: &str,
+    replacement: &str,
+) {
+    let artifact = assessment
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == source_id)
+        .expect("source artifact");
+    let original = std::mem::replace(&mut artifact.artifact_id, replacement.to_owned());
+    for coverage in &mut assessment.coverage {
+        for artifact_id in &mut coverage.artifact_ids {
+            if artifact_id == &original {
+                *artifact_id = replacement.to_owned();
+            }
+        }
+    }
+    for evidence in &mut assessment.evidence {
+        if evidence.reference.artifact_id == original {
+            evidence.reference.artifact_id = replacement.to_owned();
+        }
+    }
+}
+
 fn assert_bounded_request_has_specific_scope(request: &SccmSiteCoreArtifactRequest) {
     assert!((1..=2).contains(&request.max_artifacts));
     assert!(!request.candidates.is_empty());
@@ -323,6 +348,114 @@ fn assert_bounded_request_has_specific_scope(request: &SccmSiteCoreArtifactReque
         "request {} serialized an empty or unusable scope",
         request.logical_name
     );
+}
+
+fn assert_malformed_peer_source_fails_closed(
+    analysis: &SccmSiteCoreAnalysis,
+    malformed_id: &str,
+    required_source_id: &str,
+    required_reason_code: &str,
+) {
+    assert_eq!(analysis.results.len(), 1);
+    let result = &analysis.results[0];
+    assert_eq!(result.state, SccmSiteCoreState::Incomplete);
+    assert_eq!(
+        result.finding_class,
+        Some(SccmFindingClass::InsufficientEvidence)
+    );
+    assert!(!result.evidence.is_empty());
+
+    let synthetic_gap = analysis
+        .coverage_gaps
+        .iter()
+        .find(|gap| {
+            gap.source_id == required_source_id
+                && gap.state == SccmCoverageState::Absent
+                && gap.reason_code == required_reason_code
+        })
+        .expect("ineligible peer leaves a synthetic missing-source gap");
+    assert!(synthetic_gap
+        .artifact_id
+        .starts_with("site-core:missing-source:v1:"));
+    assert_eq!(
+        result.coverage_gap_artifact_ids,
+        vec![synthetic_gap.artifact_id.clone()]
+    );
+
+    let rejected_gap = analysis
+        .coverage_gaps
+        .iter()
+        .find(|gap| {
+            gap.source_id == required_source_id
+                && gap.state == SccmCoverageState::ParseFailed
+                && gap.reason_code == "evidence-reference-rejected"
+        })
+        .expect("malformed peer remains explicit rejected coverage");
+    assert!(rejected_gap
+        .artifact_id
+        .starts_with("site-core:rejected-artifact:v1:"));
+    assert_ne!(rejected_gap.artifact_id, malformed_id);
+    assert!(analysis.coverage_gaps.iter().all(|gap| {
+        gap.artifact_id != malformed_id
+            && !gap.artifact_id.is_empty()
+            && gap.artifact_id.len() <= 256
+            && gap.artifact_id.trim() == gap.artifact_id
+            && gap.artifact_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b':' | b'_' | b'-')
+            })
+    }));
+
+    let result_finding = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.subject_id == result.result_id)
+        .expect("malformed peer retains a validated result finding");
+    assert_eq!(
+        result_finding.finding.class,
+        SccmFindingClass::InsufficientEvidence
+    );
+    assert_eq!(result_finding.finding.coverage_gaps.len(), 1);
+    assert_eq!(
+        result_finding.finding.coverage_gaps[0].artifact_id,
+        synthetic_gap.artifact_id
+    );
+
+    for gap in &analysis.coverage_gaps {
+        let observation = analysis
+            .unlinked_observations
+            .iter()
+            .find(|observation| observation.coverage_gap_artifact_ids == [gap.artifact_id.clone()])
+            .expect("each gap has an explicit coverage observation");
+        let finding = analysis
+            .findings
+            .iter()
+            .find(|finding| finding.subject_id == observation.observation_id)
+            .expect("each gap has a validated coverage finding");
+        assert_eq!(
+            finding.finding.class,
+            SccmFindingClass::InsufficientEvidence
+        );
+        assert!(finding
+            .finding
+            .coverage_gaps
+            .iter()
+            .any(|finding_gap| finding_gap.artifact_id == gap.artifact_id));
+    }
+
+    let requests = analysis
+        .artifact_requests
+        .iter()
+        .filter(|request| request.logical_name == required_source_id)
+        .collect::<Vec<_>>();
+    assert!(!requests.is_empty());
+    for request in requests {
+        assert_bounded_request_has_specific_scope(request);
+        assert_eq!(
+            request.scope.producer_host_handle.as_deref(),
+            Some("synthetic:host:site-01")
+        );
+    }
+    assert!(!analysis.cross_side_correlation_performed);
 }
 
 fn assert_explicit_gap_and_request(
@@ -981,6 +1114,42 @@ fn undeclared_component_source_is_an_explicit_host_component_work_item_scoped_co
     assert_eq!(request.scope.component_id.as_deref(), Some("SMS_EXECUTIVE"));
     assert_eq!(request.scope.work_item_id.as_deref(), Some("SC-HEALTH-001"));
     assert_eq!(request.scope.rotation_lineage_handle, None);
+}
+
+#[test]
+fn malformed_status_peer_cannot_hide_required_status_coverage() {
+    for malformed_id in ["a".repeat(300), "invalid/status".to_owned()] {
+        let mut assessment = assess(&[
+            Source::sitecomp(HEALTHY_SITECOMP),
+            Source::status(HEALTHY_STATUS),
+        ]);
+        replace_source_artifact_id(&mut assessment, "server-status", &malformed_id);
+
+        assert_malformed_peer_source_fails_closed(
+            &analyze_site_core(&assessment),
+            &malformed_id,
+            "server-status",
+            "required-status-source-not-declared",
+        );
+    }
+}
+
+#[test]
+fn malformed_component_peer_cannot_hide_required_component_coverage() {
+    for malformed_id in ["a".repeat(300), "invalid/component".to_owned()] {
+        let mut assessment = assess(&[
+            Source::sitecomp(HEALTHY_SITECOMP),
+            Source::status(HEALTHY_STATUS),
+        ]);
+        replace_source_artifact_id(&mut assessment, "server-sitecomp", &malformed_id);
+
+        assert_malformed_peer_source_fails_closed(
+            &analyze_site_core(&assessment),
+            &malformed_id,
+            "server-sitecomp",
+            "required-component-source-not-declared",
+        );
+    }
 }
 
 #[test]
