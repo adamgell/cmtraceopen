@@ -1045,8 +1045,15 @@ fn normalize_artifact(
 }
 
 fn payload_sha256(bytes: &[u8]) -> String {
+    const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+
     let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn validate_payload_contract<'a>(
@@ -2008,6 +2015,9 @@ fn preflight_server_manifest_extensions(manifest_json: &str) -> Result<(), SccmS
         )?;
     }
     if let Some(PreservedJsonValue::Array(artifacts)) = preserved_field(manifest, "artifacts") {
+        if artifacts.len() > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
         for artifact in artifacts {
             let PreservedJsonValue::Object(artifact) = artifact else {
                 continue;
