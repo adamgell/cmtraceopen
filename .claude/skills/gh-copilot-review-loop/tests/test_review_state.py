@@ -25,6 +25,14 @@ UPSTREAM_SOURCE = (
 )
 UPSTREAM_AUTHOR = "Jorge Suarez (jorgeasaurus)"
 LICENSE_IDENTIFIER = "MIT, as declared by the upstream repository README. The"
+LICENSE_IDENTIFIER_PARAGRAPH = (
+    "License identifier: MIT, as declared by the upstream repository README. The\n"
+    "upstream repository did not publish a root license file at this commit, so the\n"
+    "standard MIT license text and source attribution are recorded locally."
+)
+UPSTREAM_LICENSE_DECLARATION = (
+    "The upstream repository declares the work under the MIT License in its README."
+)
 REPOSITORY_LEVEL_CHANGES = (
     "SKILL.md uses a repository-relative invocation and an explicit --repo/--pr "
     "example; the reviewer-request command is formatted on one line; downstream "
@@ -194,6 +202,8 @@ class ProvenanceTests(unittest.TestCase):
         )
         self.assertEqual(labeled_fields["Script changes"], SCRIPT_CHANGES)
         self.assertEqual(labeled_fields["License identifier"], LICENSE_IDENTIFIER)
+        self.assertIn(UPSTREAM_LICENSE_DECLARATION, skill_provenance)
+        self.assertIn(LICENSE_IDENTIFIER_PARAGRAPH, license_text)
         for section in MIT_LICENSE_SECTIONS:
             self.assertIn(section, license_text)
         self.assertEqual(
