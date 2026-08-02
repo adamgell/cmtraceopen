@@ -2196,4 +2196,31 @@ mod tests {
             assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
         }
     }
+
+    #[test]
+    fn appworkload_duplicate_identity_conflicts_have_no_attribution() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"{{"AppId":"{first}","AppId":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}","Id":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"{first}",\"AppId\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}",\"Id\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"invalid","AppId":"{first}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"invalid","Id":"{first}","Name":"Contoso"}}"#),
+        ];
+
+        for payload in payloads {
+            let message = format!("SidecarScriptDetectionManager launch {payload}");
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].guid, None, "attributed conflict from {payload}");
+            assert_eq!(events[0].parent_app_guid, None);
+        }
+    }
 }

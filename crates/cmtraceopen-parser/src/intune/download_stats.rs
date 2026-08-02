@@ -828,4 +828,48 @@ mod tests {
         assert_eq!(downloads.len(), 1);
         assert_eq!(downloads[0].content_id, id_guid);
     }
+
+    #[test]
+    fn download_duplicate_identity_conflicts_have_no_attribution() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"{{"AppId":"{first}","AppId":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}","Id":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"{first}",\"AppId\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}",\"Id\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"invalid","AppId":"{first}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"invalid","Id":"{first}","Name":"Contoso"}}"#),
+        ];
+
+        for payload in payloads {
+            let lines = vec![
+                ImeLine {
+                    line_number: 1,
+                    timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Starting content download {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                },
+                ImeLine {
+                    line_number: 2,
+                    timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Download completed successfully {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                },
+            ];
+
+            let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+            assert_eq!(downloads.len(), 1, "missing coverage record for {payload}");
+            assert_eq!(
+                downloads[0].content_id, "unknown",
+                "attributed conflict from {payload}"
+            );
+        }
+    }
 }

@@ -8,15 +8,6 @@ use std::sync::OnceLock;
 
 // ── Shared regexes (also used by download_stats.rs) ─────────────────────────
 
-pub(crate) fn app_id_json_re() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(
-            r#"\"AppId\"\s*:\s*\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\""#,
-        )
-        .unwrap()
-    })
-}
 pub(crate) fn app_name_json_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -47,6 +38,14 @@ pub(crate) enum ExplicitAppIdentity {
     Absent,
     Valid(String),
     Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IdentityFieldState {
+    Absent,
+    Valid(String),
+    Malformed,
+    Conflict,
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -118,20 +117,14 @@ impl GuidRegistry {
 
     /// Extract GUID→name pairs from a single message string.
     fn ingest_message(&mut self, msg: &str) {
-        let (_, app_id) = explicit_app_id(msg, has_name_field(msg));
-
         // Multi-pair path: extract all "Id"+"Name" pairs from JSON arrays
         // e.g. Get policies = [{"Id":"guid1","Name":"name1"},{"Id":"guid2","Name":"name2"}]
-        // A valid AppId is the higher-priority identity for the whole message,
-        // so an accompanying Id must not also enter the registry.
-        if app_id.is_none() {
-            for (guid, name, source) in extract_all_id_name_pairs(msg) {
-                self.insert_if_dominated(guid, name, source);
-            }
+        for (guid, name, source) in extract_all_id_name_pairs(msg) {
+            self.insert_if_dominated(guid, name, source);
         }
 
         // Single-GUID path: handles AppId, ApplicationName, SetUpFilePath
-        if let Some(guid) = app_id.or_else(|| extract_app_id(msg)) {
+        if let Some(guid) = extract_app_id(msg) {
             if let Some((name, source)) = extract_app_name_with_source(msg) {
                 self.insert_if_dominated(guid, name, source);
             }
@@ -140,6 +133,7 @@ impl GuidRegistry {
 
     /// Insert an entry if no higher-confidence entry already exists for this GUID.
     fn insert_if_dominated(&mut self, guid: String, name: String, source: GuidNameSource) {
+        let guid = normalize_guid_key(&guid);
         let dominated = self
             .entries
             .get(&guid)
@@ -159,7 +153,9 @@ impl GuidRegistry {
 
     /// Look up the display name for a GUID.
     pub fn resolve(&self, guid: &str) -> Option<&str> {
-        self.entries.get(guid).map(|entry| entry.name.as_str())
+        self.entries
+            .get(&normalize_guid_key(guid))
+            .map(|entry| entry.name.as_str())
     }
 
     /// If `current_name` looks like a short-id fallback (e.g. "Download (a1b2c3d4...)"),
@@ -203,7 +199,7 @@ impl GuidRegistry {
     /// Collect all GUIDs that have no resolved name.
     pub fn unresolved_guids_from<'a>(&self, guids: impl Iterator<Item = &'a str>) -> Vec<String> {
         guids
-            .filter(|g| !self.entries.contains_key(*g))
+            .filter(|guid| self.resolve(guid).is_none())
             .map(|g| g.to_string())
             .collect()
     }
@@ -249,52 +245,141 @@ pub struct GuidRegistryEntry {
 ///
 /// Returns one `(guid, name, NameField)` tuple per valid pair found.
 fn extract_all_id_name_pairs(msg: &str) -> Vec<(String, String, GuidNameSource)> {
-    // Try direct JSON, then escaped JSON
-    for &(id_pre, id_suf, name_pre, name_suf) in &[
-        ("\"Id\":\"", "\"", "\"Name\":\"", "\""),
-        ("\\\"Id\\\":\\\"", "\\\"", "\\\"Name\\\":\\\"", "\\\""),
-    ] {
-        let ids = extract_all_field_values(msg, id_pre, id_suf);
-        if ids.is_empty() {
-            continue;
-        }
-        let names = extract_all_field_values(msg, name_pre, name_suf);
-        if names.is_empty() {
-            continue;
-        }
-
-        let mut pairs = Vec::new();
-        for (id_val, name_val) in ids.into_iter().zip(names) {
-            if id_val.len() == 36 && guid_re().is_match(&id_val) {
-                pairs.push((id_val, name_val, GuidNameSource::NameField));
-            }
-        }
-        if !pairs.is_empty() {
-            return pairs;
-        }
+    let scopes = json_object_direct_scopes(msg);
+    if scopes.is_empty() {
+        return extract_id_name_pair(msg).into_iter().collect();
     }
 
-    Vec::new()
+    scopes
+        .iter()
+        .filter_map(|scope| extract_id_name_pair(&scope.direct))
+        .collect()
 }
 
-/// Find all occurrences of a `prefix…suffix` delimited field in `msg`.
-fn extract_all_field_values(msg: &str, prefix: &str, suffix: &str) -> Vec<String> {
-    let mut results = Vec::new();
-    let mut search_from = 0;
-    while let Some(pos) = msg[search_from..].find(prefix) {
-        let start = search_from + pos + prefix.len();
-        let Some(remainder) = msg.get(start..) else {
-            break;
-        };
-        let Some(end) = remainder.find(suffix) else {
-            break;
-        };
-        if let Some(value) = remainder.get(..end) {
-            results.push(value.to_string());
-        }
-        search_from = start + end + suffix.len();
+fn extract_id_name_pair(object: &str) -> Option<(String, String, GuidNameSource)> {
+    let allow_decorated = has_name_field(object);
+    match classify_identity_fields(object, &APP_ID_FIELD_SYNTAXES, allow_decorated) {
+        IdentityFieldState::Valid(_) | IdentityFieldState::Conflict => return None,
+        IdentityFieldState::Absent | IdentityFieldState::Malformed => {}
     }
-    results
+
+    let id = match classify_identity_fields(object, &ID_FIELD_SYNTAXES, allow_decorated) {
+        IdentityFieldState::Valid(id) => id,
+        IdentityFieldState::Absent
+        | IdentityFieldState::Malformed
+        | IdentityFieldState::Conflict => return None,
+    };
+    let (name, source) = extract_app_name_with_source(object)?;
+    Some((id, name, source))
+}
+
+#[derive(Clone, Copy)]
+struct ObjectRange {
+    start: usize,
+    end: usize,
+}
+
+struct ObjectFrame {
+    start: usize,
+    depth: usize,
+    children: Vec<ObjectRange>,
+}
+
+struct JsonObjectScope {
+    start: usize,
+    depth: usize,
+    direct: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuoteStyle {
+    Direct,
+    BackslashEscaped,
+}
+
+/// Return each balanced JSON-like object's direct fields from direct or
+/// one-layer escaped payloads. Nested object bytes are masked in the parent
+/// scope so identity precedence is evaluated per object rather than per line.
+fn json_object_direct_scopes(msg: &str) -> Vec<JsonObjectScope> {
+    let bytes = msg.as_bytes();
+    let mut quote_style = None;
+    let mut stack: Vec<ObjectFrame> = Vec::new();
+    let mut scopes = Vec::new();
+
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if byte == b'"' {
+            let backslashes = preceding_backslash_count(bytes, index);
+            match (quote_style, backslashes) {
+                (Some(QuoteStyle::Direct), count) if count % 2 == 0 => quote_style = None,
+                (Some(QuoteStyle::BackslashEscaped), 1) => quote_style = None,
+                (None, count) if count % 2 == 0 => quote_style = Some(QuoteStyle::Direct),
+                (None, 1) => quote_style = Some(QuoteStyle::BackslashEscaped),
+                _ => {}
+            }
+            continue;
+        }
+        if quote_style.is_some() {
+            continue;
+        }
+
+        match byte {
+            b'{' => {
+                let depth = stack.len();
+                stack.push(ObjectFrame {
+                    start: index,
+                    depth,
+                    children: Vec::new(),
+                });
+            }
+            b'}' => {
+                let Some(frame) = stack.pop() else {
+                    continue;
+                };
+                let range = ObjectRange {
+                    start: frame.start,
+                    end: index + 1,
+                };
+                if let Some(direct) = object_direct_scope(msg, range, &frame.children) {
+                    scopes.push(JsonObjectScope {
+                        start: frame.start,
+                        depth: frame.depth,
+                        direct,
+                    });
+                }
+                if let Some(parent) = stack.last_mut() {
+                    parent.children.push(range);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    scopes.sort_by_key(|scope| (scope.depth, scope.start));
+    scopes
+}
+
+fn object_direct_scope(msg: &str, object: ObjectRange, children: &[ObjectRange]) -> Option<String> {
+    let mut scope = String::with_capacity(object.end.checked_sub(object.start)?);
+    let mut cursor = object.start;
+
+    for child in children {
+        scope.push_str(msg.get(cursor..child.start)?);
+        scope.extend(std::iter::repeat_n(
+            ' ',
+            child.end.checked_sub(child.start)?,
+        ));
+        cursor = child.end;
+    }
+    scope.push_str(msg.get(cursor..object.end)?);
+    Some(scope)
+}
+
+fn preceding_backslash_count(bytes: &[u8], quote_index: usize) -> usize {
+    bytes[..quote_index]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
 }
 
 /// Extract a GUID from a log message via JSON identity fields.
@@ -312,7 +397,7 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
                 guid_re()
                     .captures(msg)
                     .and_then(|c| c.get(1))
-                    .map(|m| m.as_str().to_string())
+                    .map(|m| m.as_str().to_ascii_lowercase())
             } else {
                 None
             }
@@ -324,84 +409,89 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
 /// GUIDs on the line. An invalid explicit field is an identity boundary: its
 /// presence suppresses line-wide GUID inference.
 pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
+    let scopes = json_object_direct_scopes(msg);
+    let mut start = 0;
+    while start < scopes.len() {
+        let depth = scopes[start].depth;
+        let mut end = start;
+        let mut direct_at_depth = String::new();
+        while end < scopes.len() && scopes[end].depth == depth {
+            direct_at_depth.push_str(&scopes[end].direct);
+            direct_at_depth.push('\n');
+            end += 1;
+        }
+
+        let identity = classify_explicit_identity_scope(&direct_at_depth);
+        if identity != ExplicitAppIdentity::Absent {
+            return identity;
+        }
+        start = end;
+    }
+
+    classify_explicit_identity_scope(msg)
+}
+
+fn classify_explicit_identity_scope(msg: &str) -> ExplicitAppIdentity {
     let allow_decorated = has_name_field(msg);
-    let (app_id_present, app_id) = explicit_app_id(msg, allow_decorated);
-    if let Some(value) = app_id {
-        return ExplicitAppIdentity::Valid(value);
+    let app_id = classify_identity_fields(msg, &APP_ID_FIELD_SYNTAXES, allow_decorated);
+    let app_id_absent = matches!(app_id, IdentityFieldState::Absent);
+    match app_id {
+        IdentityFieldState::Valid(value) => return ExplicitAppIdentity::Valid(value),
+        IdentityFieldState::Conflict => return ExplicitAppIdentity::Invalid,
+        IdentityFieldState::Absent | IdentityFieldState::Malformed => {}
     }
 
-    // AppId has higher precedence than Id, so only inspect Id after every
-    // supported AppId syntax has been exhausted.
-    for (prefix, suffix) in [("\"Id\":\"", "\""), ("\\\"Id\\\":\\\"", "\\\"")] {
-        if let Some(value) = extract_guid_field(msg, prefix, suffix) {
-            return ExplicitAppIdentity::Valid(value);
-        }
-    }
-
-    let (id_present, id) = scan_identity_fields(msg, &ID_FIELD_SYNTAXES, allow_decorated);
-    if let Some(value) = id {
-        return ExplicitAppIdentity::Valid(value);
-    }
-
-    if app_id_present || id_present {
-        ExplicitAppIdentity::Invalid
-    } else {
-        ExplicitAppIdentity::Absent
+    match classify_identity_fields(msg, &ID_FIELD_SYNTAXES, allow_decorated) {
+        IdentityFieldState::Valid(value) => ExplicitAppIdentity::Valid(value),
+        IdentityFieldState::Absent if app_id_absent => ExplicitAppIdentity::Absent,
+        IdentityFieldState::Absent
+        | IdentityFieldState::Malformed
+        | IdentityFieldState::Conflict => ExplicitAppIdentity::Invalid,
     }
 }
 
-fn explicit_app_id(msg: &str, allow_decorated: bool) -> (bool, Option<String>) {
-    // Preserve the established compact direct and escaped fast paths.
-    for (prefix, suffix) in [("\"AppId\":\"", "\""), ("\\\"AppId\\\":\\\"", "\\\"")] {
-        if let Some(value) = extract_guid_field(msg, prefix, suffix) {
-            return (true, Some(value));
-        }
-    }
-
-    // Preserve the whitespace-tolerant escaped AppId path with its canonical
-    // GUID grammar, then scan all direct/escaped forms including decorated
-    // field-local GUIDs.
-    if let Some(value) = app_id_json_re()
-        .captures(msg)
-        .and_then(|captures| captures.get(1))
-    {
-        return (true, Some(value.as_str().to_string()));
-    }
-
-    scan_identity_fields(msg, &APP_ID_FIELD_SYNTAXES, allow_decorated)
-}
-
-fn scan_identity_fields(
+fn classify_identity_fields(
     msg: &str,
     syntaxes: &[(&str, &str)],
     allow_decorated: bool,
-) -> (bool, Option<String>) {
-    let mut present = false;
+) -> IdentityFieldState {
+    let mut members = Vec::new();
 
     for &(key, quote) in syntaxes {
         let mut remaining = msg;
         while let Some(key_index) = remaining.find(key) {
-            present = true;
             let after_key = &remaining[key_index + key.len()..];
-            if let Some(value) = json_string_value_after_key(after_key, quote) {
-                if let Some(guid) = exact_guid(value).or_else(|| {
+            let guid = json_string_value_after_key(after_key, quote).and_then(|value| {
+                exact_guid(value).or_else(|| {
                     if allow_decorated {
                         guid_re()
                             .captures(value)
                             .and_then(|captures| captures.get(1))
-                            .map(|matched| matched.as_str().to_string())
+                            .map(|matched| matched.as_str().to_ascii_lowercase())
                     } else {
                         None
                     }
-                }) {
-                    return (true, Some(guid));
-                }
-            }
+                })
+            });
+            members.push(guid);
             remaining = after_key;
         }
     }
 
-    (present, None)
+    match members.as_slice() {
+        [] => IdentityFieldState::Absent,
+        [Some(guid)] => IdentityFieldState::Valid(guid.clone()),
+        [None] => IdentityFieldState::Malformed,
+        many if many.iter().any(Option::is_none) => IdentityFieldState::Conflict,
+        [Some(first), rest @ ..]
+            if rest
+                .iter()
+                .all(|value| value.as_ref().is_some_and(|guid| guid == first)) =>
+        {
+            IdentityFieldState::Valid(first.clone())
+        }
+        _ => IdentityFieldState::Conflict,
+    }
 }
 
 fn json_string_value_after_key<'a>(after_key: &'a str, quote: &str) -> Option<&'a str> {
@@ -413,13 +503,11 @@ fn json_string_value_after_key<'a>(after_key: &'a str, quote: &str) -> Option<&'
 
 fn exact_guid(value: &str) -> Option<String> {
     let matched = guid_re().find(value)?;
-    (matched.start() == 0 && matched.end() == value.len()).then(|| value.to_string())
+    (matched.start() == 0 && matched.end() == value.len()).then(|| value.to_ascii_lowercase())
 }
 
-/// Extract a GUID from an identity field, rejecting arbitrary log content.
-fn extract_guid_field(msg: &str, prefix: &str, suffix: &str) -> Option<String> {
-    let value = extract_json_field(msg, prefix, suffix)?;
-    exact_guid(value)
+fn normalize_guid_key(value: &str) -> String {
+    value.to_ascii_lowercase()
 }
 
 /// Returns `true` if the message contains any name-bearing JSON field.
@@ -1000,6 +1088,18 @@ mod tests {
     }
 
     #[test]
+    fn named_context_fallback_normalizes_guid_case() {
+        let upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+        let lower = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        assert_eq!(
+            extract_app_id(&format!(
+                r#"Processing identity {upper} for {{"ApplicationName":"Contoso"}}"#
+            )),
+            Some(lower.to_string())
+        );
+    }
+
+    #[test]
     fn decorated_identity_field_uses_its_field_local_guid() {
         let unrelated_guid = "11111111-2222-3333-4444-555555555555";
         let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
@@ -1056,5 +1156,199 @@ mod tests {
 
         assert_eq!(registry.resolve(id_guid), Some("Contoso"));
         assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_explicit_identity_conflicts_fail_closed() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let messages = [
+            format!(r#"{{"AppId":"{first}","AppId":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}","Id":"{second}","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"{first}",\"AppId\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"{first}",\"Id\":\"{second}\","Name":"Contoso"}}"#),
+            format!(r#"{{"AppId":"invalid","AppId":"{first}","Name":"Contoso"}}"#),
+            format!(r#"{{"Id":"invalid","Id":"{first}","Name":"Contoso"}}"#),
+        ];
+
+        for message in messages {
+            assert_eq!(
+                explicit_app_identity(&message),
+                ExplicitAppIdentity::Invalid,
+                "did not fail closed for {message}"
+            );
+
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert!(registry.is_empty(), "registered identity from {message}");
+        }
+    }
+
+    #[test]
+    fn duplicate_identical_normalized_identity_values_remain_valid() {
+        let lower = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+        let messages = [
+            format!(r#"{{"AppId":"{upper}",\"AppId\":\"{lower}\"}}"#),
+            format!(r#"{{\"Id\":\"{upper}\","Id":"{lower}"}}"#),
+            format!(r#"{{"AppId":"{lower}","AppId":"{lower}"}}"#),
+        ];
+
+        for message in messages {
+            assert_eq!(
+                explicit_app_identity(&message),
+                ExplicitAppIdentity::Valid(lower.to_string()),
+                "duplicate normalization depended on order for {message}"
+            );
+        }
+
+        let fallback = format!(r#"{{"AppId":"invalid","Id":"{lower}"}}"#);
+        assert_eq!(
+            explicit_app_identity(&fallback),
+            ExplicitAppIdentity::Valid(lower.to_string())
+        );
+    }
+
+    #[test]
+    fn registry_keeps_independent_id_name_objects_alongside_app_id() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let first_id = "11111111-2222-3333-4444-555555555555";
+        let second_id = "66666666-7777-8888-9999-000000000000";
+        let messages = [
+            format!(
+                r#"App {{"AppId":"{app_guid}","ApplicationName":"Shared Name"}} Policies [{{"Id":"{first_id}","Name":"Shared Name"}},{{"Id":"{second_id}","Name":"Policy Two"}}]"#
+            ),
+            format!(
+                r#"App {{\"AppId\":\"{app_guid}\",\"ApplicationName\":\"Contoso App\"}} Policies [{{\"Id\":\"{first_id}\",\"Name\":\"Policy One\"}},{{\"Id\":\"{second_id}\",\"Name\":\"Policy Two\"}}]"#
+            ),
+        ];
+
+        for message in messages {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+
+            assert!(
+                registry.resolve(app_guid).is_some(),
+                "missing AppId mapping"
+            );
+            assert!(
+                registry.resolve(first_id).is_some(),
+                "missing first Id mapping"
+            );
+            assert_eq!(registry.resolve(second_id), Some("Policy Two"));
+            assert_eq!(
+                registry.len(),
+                3,
+                "wrong object-boundary result for {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_keeps_id_pair_on_object_with_nested_metadata() {
+        let outer_id = "11111111-2222-3333-4444-555555555555";
+        let inner_id = "66666666-7777-8888-9999-000000000000";
+        let messages = [
+            format!(
+                r#"{{"Id":"{outer_id}","Name":"Outer Policy","Metadata":{{"Id":"{inner_id}","Name":"Inner Policy"}}}}"#
+            ),
+            format!(
+                r#"{{\"Id\":\"{outer_id}\",\"Name\":\"Outer Policy\",\"Metadata\":{{\"Id\":\"{inner_id}\",\"Name\":\"Inner Policy\"}}}}"#
+            ),
+        ];
+
+        for message in messages {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert_eq!(
+                registry.resolve(outer_id),
+                Some("Outer Policy"),
+                "lost outer object fields for {message}"
+            );
+            assert_eq!(registry.resolve(inner_id), Some("Inner Policy"));
+        }
+    }
+
+    #[test]
+    fn outer_identity_precedes_nested_identity_fields() {
+        let outer = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let nested = "11111111-2222-3333-4444-555555555555";
+        let messages = [
+            format!(
+                r#"{{"AppId":"{outer}","Name":"Outer","Metadata":{{"AppId":"{nested}","Name":"Nested"}}}}"#
+            ),
+            format!(
+                r#"{{"Id":"{outer}","Name":"Outer","Metadata":{{"AppId":"{nested}","Name":"Nested"}}}}"#
+            ),
+            format!(
+                r#"{{\"AppId\":\"{outer}\",\"Name\":\"Outer\",\"Metadata\":{{\"Id\":\"{nested}\",\"Name\":\"Nested\"}}}}"#
+            ),
+        ];
+
+        for message in messages {
+            assert_eq!(
+                explicit_app_identity(&message),
+                ExplicitAppIdentity::Valid(outer.to_string()),
+                "nested identity overrode outer scope for {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn escaped_quote_braces_remain_inside_one_object_scope() {
+        let message = r#"{\"AppId\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"ApplicationName\":\"Quoted \\\"value with { braces }\\\" tail\"}"#;
+        let scopes = json_object_direct_scopes(message);
+
+        assert_eq!(
+            scopes.len(),
+            1,
+            "escaped string was split into child scopes"
+        );
+        assert!(
+            scopes[0].direct.contains("{ braces }"),
+            "braces inside the escaped quoted value were masked"
+        );
+    }
+
+    #[test]
+    fn registry_keys_are_case_insensitive_and_serialize_once() {
+        let lower = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+
+        let mut graph = GuidRegistry::new();
+        graph.insert(
+            upper.to_string(),
+            "Graph Name".to_string(),
+            GuidNameSource::GraphApi,
+        );
+        assert_eq!(graph.resolve(lower), Some("Graph Name"));
+        assert_eq!(graph.resolve(upper), Some("Graph Name"));
+        assert_eq!(
+            graph.resolve_fallback_name("Download (aaaaaaaa...)", lower),
+            Some("Graph Name".to_string())
+        );
+        assert_eq!(
+            graph.enrich_event_name("Win32 App (aaaaaaaa...)", upper),
+            Some("Win32 App — Graph Name".to_string())
+        );
+        assert!(graph
+            .unresolved_guids_from([lower, upper].into_iter())
+            .is_empty());
+
+        let mut parsed = GuidRegistry::new();
+        parsed.insert(
+            lower.to_string(),
+            "Parsed Name".to_string(),
+            GuidNameSource::NameField,
+        );
+        assert_eq!(parsed.resolve(upper), Some("Parsed Name"));
+        parsed.merge(&graph);
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed.resolve(lower), Some("Graph Name"));
+        let serialized = parsed.to_serializable();
+        assert_eq!(serialized.len(), 1);
+        assert!(serialized.contains_key(lower));
+        assert!(!serialized.contains_key(upper));
     }
 }
