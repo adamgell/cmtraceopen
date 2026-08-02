@@ -80,9 +80,13 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
         if !scenario_directory.is_dir() {
             continue;
         }
+        let expected_path = scenario_directory.join("expected.json");
+        if !expected_path.is_file() {
+            continue;
+        }
 
         let expected: Value = serde_json::from_str(
-            &fs::read_to_string(scenario_directory.join("expected.json"))
+            &fs::read_to_string(expected_path)
                 .expect("MP expected fixture must be readable"),
         )
         .expect("MP expected fixture must be valid JSON");

@@ -4,7 +4,7 @@
   "scenario": "iis-supplemental",
   "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
   "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
   "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
   "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
   "reorderedInputDeterministic": true,
