@@ -815,6 +815,35 @@ mod windows_tests {
     use super::*;
 
     #[test]
+    fn missing_final_component_preserves_not_found_for_legacy_fallback() {
+        let temp = tempdir().expect("temporary root");
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(&root).expect("create bundle");
+
+        let verified = verify_bundle_root(&root).expect("open private root");
+        let error = verified
+            .open_relative_file(Path::new("sccm-manifest.json"))
+            .expect_err("missing native manifest is reported to the legacy fallback");
+
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn relative_component_rejects_alternate_data_streams() {
+        let temp = tempdir().expect("temporary root");
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(&root).expect("create bundle");
+        fs::write(root.join("manifest.json"), b"{}\n").expect("create manifest");
+
+        let verified = verify_bundle_root(&root).expect("open private root");
+        let error = verified
+            .open_relative_file(Path::new("manifest.json:alternate"))
+            .expect_err("alternate data streams cannot be opened as bundle entries");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
     fn verified_root_keeps_reading_the_original_directory_after_root_replacement() {
         let temp = tempdir().expect("temporary root");
         let root = temp.path().join("bundle");
