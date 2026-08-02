@@ -872,4 +872,42 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn download_sibling_identity_objects_have_no_attribution() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"[{{"AppId":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"AppId":"{first}"}}]"#),
+            format!(r#"[{{"Id":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"Id":"{first}"}}]"#),
+            format!(r#"{{"Items":[{{"Id":"{first}"}},{{"AppId":"{second}"}}]}}"#),
+            format!(
+                r#"{{"Left":{{"AppId":"{first}"}},"Right":{{"Metadata":{{"AppId":"{second}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"Left":{{"Metadata":{{"AppId":"{second}"}}}},"Right":{{"AppId":"{first}"}}}}"#
+            ),
+        ];
+
+        for payload in payloads {
+            let lines = vec![ImeLine {
+                line_number: 1,
+                timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
+                message: format!("Download completed successfully {payload}"),
+                component: None,
+                thread: None,
+                timezone_offset: None,
+            }];
+
+            let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+            assert_eq!(downloads.len(), 1, "missing coverage record for {payload}");
+            assert_eq!(
+                downloads[0].content_id, "unknown",
+                "attributed sibling from {payload}"
+            );
+        }
+    }
 }

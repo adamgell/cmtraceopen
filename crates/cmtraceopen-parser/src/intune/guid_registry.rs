@@ -30,8 +30,7 @@ pub(crate) fn guid_re() -> &'static Regex {
     })
 }
 
-const APP_ID_FIELD_SYNTAXES: [(&str, &str); 2] = [("\"AppId\"", "\""), ("\\\"AppId\\\"", "\\\"")];
-const ID_FIELD_SYNTAXES: [(&str, &str); 2] = [("\"Id\"", "\""), ("\\\"Id\\\"", "\\\"")];
+const MAX_JSON_CONTAINER_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExplicitAppIdentity {
@@ -117,16 +116,26 @@ impl GuidRegistry {
 
     /// Extract GUID→name pairs from a single message string.
     fn ingest_message(&mut self, msg: &str) {
-        // Multi-pair path: extract all "Id"+"Name" pairs from JSON arrays
-        // e.g. Get policies = [{"Id":"guid1","Name":"name1"},{"Id":"guid2","Name":"name2"}]
-        for (guid, name, source) in extract_all_id_name_pairs(msg) {
+        let Ok(scan) = scan_json_fields(msg) else {
+            return;
+        };
+
+        for (guid, name, source) in extract_all_identity_name_pairs(&scan) {
             self.insert_if_dominated(guid, name, source);
         }
 
-        // Single-GUID path: handles AppId, ApplicationName, SetUpFilePath
-        if let Some(guid) = extract_app_id(msg) {
-            if let Some((name, source)) = extract_app_name_with_source(msg) {
-                self.insert_if_dominated(guid, name, source);
+        // Preserve the established named-context fallback only when the line
+        // contains no explicit identity field at all. Explicit fields are
+        // always paired with names inside their own object above.
+        if !scan.has_explicit_identity_fields() {
+            let guid = guid_re()
+                .captures(msg)
+                .and_then(|captures| captures.get(1))
+                .map(|matched| matched.as_str().to_ascii_lowercase());
+            if let Some(guid) = guid {
+                if let Some((name, source)) = extract_app_name_with_source(msg) {
+                    self.insert_if_dominated(guid, name, source);
+                }
             }
         }
     }
@@ -236,60 +245,55 @@ pub struct GuidRegistryEntry {
 
 // ── Private extraction helpers ───────────────────────────────────────────────
 
-/// Extract all `"Id"` + `"Name"` pairs from a message that may contain a JSON array.
-///
-/// Handles lines like:
-/// ```text
-/// Get policies = [{"Id":"guid1","Name":"name1","Version":1},{"Id":"guid2","Name":"name2"}]
-/// ```
-///
-/// Returns one `(guid, name, NameField)` tuple per valid pair found.
-fn extract_all_id_name_pairs(msg: &str) -> Vec<(String, String, GuidNameSource)> {
-    let scopes = json_object_direct_scopes(msg);
-    if scopes.is_empty() {
-        return extract_id_name_pair(msg).into_iter().collect();
-    }
-
-    scopes
-        .iter()
-        .filter_map(|scope| extract_id_name_pair(&scope.direct))
-        .collect()
-}
-
-fn extract_id_name_pair(object: &str) -> Option<(String, String, GuidNameSource)> {
-    let allow_decorated = has_name_field(object);
-    match classify_identity_fields(object, &APP_ID_FIELD_SYNTAXES, allow_decorated) {
-        IdentityFieldState::Valid(_) | IdentityFieldState::Conflict => return None,
-        IdentityFieldState::Absent | IdentityFieldState::Malformed => {}
-    }
-
-    let id = match classify_identity_fields(object, &ID_FIELD_SYNTAXES, allow_decorated) {
-        IdentityFieldState::Valid(id) => id,
-        IdentityFieldState::Absent
-        | IdentityFieldState::Malformed
-        | IdentityFieldState::Conflict => return None,
-    };
-    let (name, source) = extract_app_name_with_source(object)?;
-    Some((id, name, source))
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JsonFieldKind {
+    AppId,
+    Id,
+    ApplicationName,
+    Name,
+    SetUpFilePath,
 }
 
 #[derive(Clone, Copy)]
-struct ObjectRange {
+struct JsonField<'a> {
+    kind: JsonFieldKind,
+    value: Option<&'a str>,
+}
+
+struct JsonObjectScope<'a> {
     start: usize,
     end: usize,
+    tree_start: usize,
+    fields: Vec<JsonField<'a>>,
 }
 
-struct ObjectFrame {
-    start: usize,
-    depth: usize,
-    children: Vec<ObjectRange>,
+struct JsonFieldScan<'a> {
+    root: JsonObjectScope<'a>,
+    scopes: Vec<JsonObjectScope<'a>>,
 }
 
-struct JsonObjectScope {
-    start: usize,
-    depth: usize,
-    direct: String,
+impl JsonFieldScan<'_> {
+    fn has_explicit_identity_fields(&self) -> bool {
+        self.root
+            .fields
+            .iter()
+            .chain(self.scopes.iter().flat_map(|scope| scope.fields.iter()))
+            .any(|field| matches!(field.kind, JsonFieldKind::AppId | JsonFieldKind::Id))
+    }
 }
+
+struct ObjectFrame<'a> {
+    scope: JsonObjectScope<'a>,
+    expect_key: bool,
+}
+
+enum ContainerFrame<'a> {
+    Object(ObjectFrame<'a>),
+    Array,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct JsonScanError;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum QuoteStyle {
@@ -297,81 +301,147 @@ enum QuoteStyle {
     BackslashEscaped,
 }
 
-/// Return each balanced JSON-like object's direct fields from direct or
-/// one-layer escaped payloads. Nested object bytes are masked in the parent
-/// scope so identity precedence is evaluated per object rather than per line.
-fn json_object_direct_scopes(msg: &str) -> Vec<JsonObjectScope> {
+struct ActiveString {
+    style: QuoteStyle,
+    content_start: usize,
+}
+
+/// Scan only direct, relevant string fields in JSON-like objects. Values are
+/// borrowed from the input and nested objects own their own fields, keeping
+/// retained memory linear in the number of relevant fields rather than in
+/// `nesting depth * line length`.
+fn scan_json_fields(msg: &str) -> Result<JsonFieldScan<'_>, JsonScanError> {
     let bytes = msg.as_bytes();
-    let mut quote_style = None;
-    let mut stack: Vec<ObjectFrame> = Vec::new();
+    let mut active_string: Option<ActiveString> = None;
+    let mut containers: Vec<ContainerFrame<'_>> = Vec::new();
+    let mut object_depth: usize = 0;
+    let mut current_tree_start = None;
     let mut scopes = Vec::new();
+    let mut root = ObjectFrame {
+        scope: JsonObjectScope {
+            start: 0,
+            end: msg.len(),
+            tree_start: 0,
+            fields: Vec::new(),
+        },
+        expect_key: true,
+    };
 
     for (index, byte) in bytes.iter().copied().enumerate() {
         if byte == b'"' {
             let backslashes = preceding_backslash_count(bytes, index);
-            match (quote_style, backslashes) {
-                (Some(QuoteStyle::Direct), count) if count % 2 == 0 => quote_style = None,
-                (Some(QuoteStyle::BackslashEscaped), 1) => quote_style = None,
-                (None, count) if count % 2 == 0 => quote_style = Some(QuoteStyle::Direct),
-                (None, 1) => quote_style = Some(QuoteStyle::BackslashEscaped),
-                _ => {}
+            if let Some(active) = active_string.as_ref() {
+                if quote_closes(active.style, backslashes) {
+                    let content_end = match active.style {
+                        QuoteStyle::Direct => index,
+                        QuoteStyle::BackslashEscaped => index.saturating_sub(1),
+                    };
+                    if let Some(content) = msg.get(active.content_start..content_end) {
+                        if containers.is_empty() {
+                            process_string_token(&mut root, msg, content, index + 1, false);
+                        } else if let Some(ContainerFrame::Object(frame)) = containers.last_mut() {
+                            process_string_token(frame, msg, content, index + 1, true);
+                        }
+                    }
+                    active_string = None;
+                }
+            } else if let Some(style) = quote_opens(backslashes) {
+                active_string = Some(ActiveString {
+                    style,
+                    content_start: index + 1,
+                });
             }
             continue;
         }
-        if quote_style.is_some() {
+        if active_string.is_some() {
             continue;
         }
 
         match byte {
             b'{' => {
-                let depth = stack.len();
-                stack.push(ObjectFrame {
-                    start: index,
-                    depth,
-                    children: Vec::new(),
-                });
+                if containers.len() >= MAX_JSON_CONTAINER_DEPTH {
+                    return Err(JsonScanError);
+                }
+                let tree_start = current_tree_start.unwrap_or(index);
+                current_tree_start = Some(tree_start);
+                containers.push(ContainerFrame::Object(ObjectFrame {
+                    scope: JsonObjectScope {
+                        start: index,
+                        end: msg.len(),
+                        tree_start,
+                        fields: Vec::new(),
+                    },
+                    expect_key: true,
+                }));
+                object_depth += 1;
+            }
+            b'[' => {
+                if containers.len() >= MAX_JSON_CONTAINER_DEPTH {
+                    return Err(JsonScanError);
+                }
+                containers.push(ContainerFrame::Array);
             }
             b'}' => {
-                let Some(frame) = stack.pop() else {
-                    continue;
-                };
-                let range = ObjectRange {
-                    start: frame.start,
-                    end: index + 1,
-                };
-                if let Some(direct) = object_direct_scope(msg, range, &frame.children) {
-                    scopes.push(JsonObjectScope {
-                        start: frame.start,
-                        depth: frame.depth,
-                        direct,
-                    });
+                if matches!(containers.last(), Some(ContainerFrame::Object(_))) {
+                    let Some(ContainerFrame::Object(mut frame)) = containers.pop() else {
+                        unreachable!();
+                    };
+                    frame.scope.end = index + 1;
+                    object_depth = object_depth.saturating_sub(1);
+                    if object_depth == 0 {
+                        current_tree_start = None;
+                    }
+                    if !frame.scope.fields.is_empty() {
+                        scopes.push(frame.scope);
+                    }
                 }
-                if let Some(parent) = stack.last_mut() {
-                    parent.children.push(range);
+            }
+            b']' => {
+                if matches!(containers.last(), Some(ContainerFrame::Array)) {
+                    containers.pop();
+                }
+            }
+            b',' => {
+                if let Some(ContainerFrame::Object(frame)) = containers.last_mut() {
+                    frame.expect_key = true;
                 }
             }
             _ => {}
         }
     }
 
-    scopes.sort_by_key(|scope| (scope.depth, scope.start));
-    scopes
+    // Keep relevant fields from truncated raw-log payloads. The depth cap is
+    // the only scanner error because an incomplete log line is common input,
+    // while an attacker-controlled nesting explosion must fail closed.
+    for container in containers {
+        if let ContainerFrame::Object(frame) = container {
+            if !frame.scope.fields.is_empty() {
+                scopes.push(frame.scope);
+            }
+        }
+    }
+    scopes.sort_by_key(|scope| (scope.tree_start, scope.start));
+    Ok(JsonFieldScan {
+        root: root.scope,
+        scopes,
+    })
 }
 
-fn object_direct_scope(msg: &str, object: ObjectRange, children: &[ObjectRange]) -> Option<String> {
-    let mut scope = String::with_capacity(object.end.checked_sub(object.start)?);
-    let mut cursor = object.start;
-
-    for child in children {
-        scope.push_str(msg.get(cursor..child.start)?);
-        scope.extend(std::iter::repeat_n(
-            ' ',
-            child.end.checked_sub(child.start)?,
-        ));
-        cursor = child.end;
+fn quote_opens(backslashes: usize) -> Option<QuoteStyle> {
+    if backslashes & 1 == 0 {
+        Some(QuoteStyle::Direct)
+    } else if backslashes & 3 == 1 {
+        Some(QuoteStyle::BackslashEscaped)
+    } else {
+        None
     }
-    scope.push_str(msg.get(cursor..object.end)?);
-    Some(scope)
+}
+
+fn quote_closes(style: QuoteStyle, backslashes: usize) -> bool {
+    match style {
+        QuoteStyle::Direct => backslashes & 1 == 0,
+        QuoteStyle::BackslashEscaped => backslashes & 3 == 1,
+    }
 }
 
 fn preceding_backslash_count(bytes: &[u8], quote_index: usize) -> usize {
@@ -380,6 +450,125 @@ fn preceding_backslash_count(bytes: &[u8], quote_index: usize) -> usize {
         .rev()
         .take_while(|byte| **byte == b'\\')
         .count()
+}
+
+fn process_string_token<'a>(
+    frame: &mut ObjectFrame<'a>,
+    msg: &'a str,
+    content: &'a str,
+    token_end: usize,
+    enforce_object_state: bool,
+) {
+    if enforce_object_state && !frame.expect_key {
+        return;
+    }
+
+    let Some(colon) = colon_after_token(msg, token_end) else {
+        return;
+    };
+    if enforce_object_state {
+        frame.expect_key = false;
+    }
+
+    let Some(kind) = json_field_kind(content) else {
+        return;
+    };
+    frame.scope.fields.push(JsonField {
+        kind,
+        value: json_string_value_after_colon(msg, colon + 1),
+    });
+}
+
+fn colon_after_token(msg: &str, token_end: usize) -> Option<usize> {
+    let bytes = msg.as_bytes();
+    let mut index = token_end;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    (bytes.get(index) == Some(&b':')).then_some(index)
+}
+
+fn json_string_value_after_colon(msg: &str, start: usize) -> Option<&str> {
+    let bytes = msg.as_bytes();
+    let mut index = start;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+
+    let (style, quote_index) = match (bytes.get(index), bytes.get(index + 1)) {
+        (Some(b'"'), _) => (QuoteStyle::Direct, index),
+        (Some(b'\\'), Some(b'"')) => (QuoteStyle::BackslashEscaped, index + 1),
+        _ => return None,
+    };
+    let content_start = quote_index + 1;
+
+    for closing_quote in content_start..bytes.len() {
+        if bytes[closing_quote] != b'"' {
+            continue;
+        }
+        let backslashes = preceding_backslash_count(bytes, closing_quote);
+        if quote_closes(style, backslashes) {
+            let content_end = match style {
+                QuoteStyle::Direct => closing_quote,
+                QuoteStyle::BackslashEscaped => closing_quote.checked_sub(1)?,
+            };
+            return msg.get(content_start..content_end);
+        }
+    }
+    None
+}
+
+fn json_field_kind(key: &str) -> Option<JsonFieldKind> {
+    match key {
+        "AppId" => Some(JsonFieldKind::AppId),
+        "Id" => Some(JsonFieldKind::Id),
+        "ApplicationName" => Some(JsonFieldKind::ApplicationName),
+        "Name" => Some(JsonFieldKind::Name),
+        "SetUpFilePath" => Some(JsonFieldKind::SetUpFilePath),
+        _ => None,
+    }
+}
+
+fn extract_all_identity_name_pairs(
+    scan: &JsonFieldScan<'_>,
+) -> Vec<(String, String, GuidNameSource)> {
+    std::iter::once(&scan.root)
+        .chain(scan.scopes.iter())
+        .filter_map(identity_name_pair)
+        .collect()
+}
+
+fn identity_name_pair(scope: &JsonObjectScope<'_>) -> Option<(String, String, GuidNameSource)> {
+    let guid = match classify_scope_identity(scope) {
+        ExplicitAppIdentity::Valid(guid) => guid,
+        ExplicitAppIdentity::Absent | ExplicitAppIdentity::Invalid => return None,
+    };
+    let (name, source) = scope_name(scope)?;
+    Some((guid, name, source))
+}
+
+fn scope_name(scope: &JsonObjectScope<'_>) -> Option<(String, GuidNameSource)> {
+    for kind in [
+        JsonFieldKind::ApplicationName,
+        JsonFieldKind::Name,
+        JsonFieldKind::SetUpFilePath,
+    ] {
+        let Some(value) = scope
+            .fields
+            .iter()
+            .filter(|field| field.kind == kind)
+            .find_map(|field| field.value)
+        else {
+            continue;
+        };
+        return Some(match kind {
+            JsonFieldKind::ApplicationName => (value.to_string(), GuidNameSource::ApplicationName),
+            JsonFieldKind::Name => (value.to_string(), GuidNameSource::NameField),
+            JsonFieldKind::SetUpFilePath => (setup_file_name(value), GuidNameSource::SetUpFilePath),
+            JsonFieldKind::AppId | JsonFieldKind::Id => unreachable!(),
+        });
+    }
+    None
 }
 
 /// Extract a GUID from a log message via JSON identity fields.
@@ -393,7 +582,7 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
         ExplicitAppIdentity::Absent => {
             // Only fall back to generic GUID if a name field is present
             // (avoids polluting registry with context-free GUIDs)
-            if has_name_field(msg) {
+            if scan_json_fields(msg).is_ok_and(|scan| scan_has_name_field(&scan)) {
                 guid_re()
                     .captures(msg)
                     .and_then(|c| c.get(1))
@@ -409,31 +598,59 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
 /// GUIDs on the line. An invalid explicit field is an identity boundary: its
 /// presence suppresses line-wide GUID inference.
 pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
-    let scopes = json_object_direct_scopes(msg);
+    let Ok(scan) = scan_json_fields(msg) else {
+        return ExplicitAppIdentity::Invalid;
+    };
+
+    let root_identity = classify_scope_identity(&scan.root);
+    let mut selected = (root_identity != ExplicitAppIdentity::Absent).then_some(root_identity);
     let mut start = 0;
-    while start < scopes.len() {
-        let depth = scopes[start].depth;
+    while start < scan.scopes.len() {
+        let tree_start = scan.scopes[start].tree_start;
         let mut end = start;
-        let mut direct_at_depth = String::new();
-        while end < scopes.len() && scopes[end].depth == depth {
-            direct_at_depth.push_str(&scopes[end].direct);
-            direct_at_depth.push('\n');
+        let mut tree_identity = None;
+        let mut identity_span = None;
+        let mut ambiguous = false;
+        while end < scan.scopes.len() && scan.scopes[end].tree_start == tree_start {
+            let identity = classify_scope_identity(&scan.scopes[end]);
+            if identity != ExplicitAppIdentity::Absent {
+                match identity_span {
+                    None => {
+                        identity_span = Some((scan.scopes[end].start, scan.scopes[end].end));
+                        tree_identity = Some(identity);
+                    }
+                    Some((outer_start, outer_end))
+                        if scan.scopes[end].start >= outer_start
+                            && scan.scopes[end].end <= outer_end => {}
+                    Some(_) => ambiguous = true,
+                }
+            }
             end += 1;
         }
 
-        let identity = classify_explicit_identity_scope(&direct_at_depth);
-        if identity != ExplicitAppIdentity::Absent {
-            return identity;
+        if let Some(mut identity) = tree_identity {
+            if ambiguous {
+                identity = ExplicitAppIdentity::Invalid;
+            }
+            if selected.is_some() {
+                return ExplicitAppIdentity::Invalid;
+            }
+            selected = Some(identity);
         }
         start = end;
     }
 
-    classify_explicit_identity_scope(msg)
+    selected.unwrap_or(ExplicitAppIdentity::Absent)
 }
 
-fn classify_explicit_identity_scope(msg: &str) -> ExplicitAppIdentity {
-    let allow_decorated = has_name_field(msg);
-    let app_id = classify_identity_fields(msg, &APP_ID_FIELD_SYNTAXES, allow_decorated);
+fn classify_scope_identity(scope: &JsonObjectScope<'_>) -> ExplicitAppIdentity {
+    let allow_decorated = scope.fields.iter().any(|field| {
+        matches!(
+            field.kind,
+            JsonFieldKind::ApplicationName | JsonFieldKind::Name | JsonFieldKind::SetUpFilePath
+        ) && field.value.is_some()
+    });
+    let app_id = classify_identity_fields(scope, JsonFieldKind::AppId, allow_decorated);
     let app_id_absent = matches!(app_id, IdentityFieldState::Absent);
     match app_id {
         IdentityFieldState::Valid(value) => return ExplicitAppIdentity::Valid(value),
@@ -441,7 +658,7 @@ fn classify_explicit_identity_scope(msg: &str) -> ExplicitAppIdentity {
         IdentityFieldState::Absent | IdentityFieldState::Malformed => {}
     }
 
-    match classify_identity_fields(msg, &ID_FIELD_SYNTAXES, allow_decorated) {
+    match classify_identity_fields(scope, JsonFieldKind::Id, allow_decorated) {
         IdentityFieldState::Valid(value) => ExplicitAppIdentity::Valid(value),
         IdentityFieldState::Absent if app_id_absent => ExplicitAppIdentity::Absent,
         IdentityFieldState::Absent
@@ -451,17 +668,16 @@ fn classify_explicit_identity_scope(msg: &str) -> ExplicitAppIdentity {
 }
 
 fn classify_identity_fields(
-    msg: &str,
-    syntaxes: &[(&str, &str)],
+    scope: &JsonObjectScope<'_>,
+    kind: JsonFieldKind,
     allow_decorated: bool,
 ) -> IdentityFieldState {
-    let mut members = Vec::new();
-
-    for &(key, quote) in syntaxes {
-        let mut remaining = msg;
-        while let Some(key_index) = remaining.find(key) {
-            let after_key = &remaining[key_index + key.len()..];
-            let guid = json_string_value_after_key(after_key, quote).and_then(|value| {
+    let members = scope
+        .fields
+        .iter()
+        .filter(|field| field.kind == kind)
+        .map(|field| {
+            field.value.and_then(|value| {
                 exact_guid(value).or_else(|| {
                     if allow_decorated {
                         guid_re()
@@ -472,11 +688,9 @@ fn classify_identity_fields(
                         None
                     }
                 })
-            });
-            members.push(guid);
-            remaining = after_key;
-        }
-    }
+            })
+        })
+        .collect::<Vec<_>>();
 
     match members.as_slice() {
         [] => IdentityFieldState::Absent,
@@ -494,13 +708,6 @@ fn classify_identity_fields(
     }
 }
 
-fn json_string_value_after_key<'a>(after_key: &'a str, quote: &str) -> Option<&'a str> {
-    let after_colon = after_key.trim_start().strip_prefix(':')?.trim_start();
-    let value = after_colon.strip_prefix(quote)?;
-    let end = value.find(quote)?;
-    value.get(..end)
-}
-
 fn exact_guid(value: &str) -> Option<String> {
     let matched = guid_re().find(value)?;
     (matched.start() == 0 && matched.end() == value.len()).then(|| value.to_ascii_lowercase())
@@ -510,12 +717,17 @@ fn normalize_guid_key(value: &str) -> String {
     value.to_ascii_lowercase()
 }
 
-/// Returns `true` if the message contains any name-bearing JSON field.
-fn has_name_field(msg: &str) -> bool {
-    msg.contains("ApplicationName")
-        || msg.contains("\"Name\"")
-        || msg.contains("\\\"Name\\\"")
-        || msg.contains("SetUpFilePath")
+fn scan_has_name_field(scan: &JsonFieldScan<'_>) -> bool {
+    scan.root
+        .fields
+        .iter()
+        .chain(scan.scopes.iter().flat_map(|scope| scope.fields.iter()))
+        .any(|field| {
+            matches!(
+                field.kind,
+                JsonFieldKind::ApplicationName | JsonFieldKind::Name | JsonFieldKind::SetUpFilePath
+            ) && field.value.is_some()
+        })
 }
 
 /// Extract a display name, discarding the confidence source.
@@ -1283,6 +1495,9 @@ mod tests {
             format!(
                 r#"{{\"AppId\":\"{outer}\",\"Name\":\"Outer\",\"Metadata\":{{\"Id\":\"{nested}\",\"Name\":\"Nested\"}}}}"#
             ),
+            format!(
+                r#"{{"Wrapper":{{"AppId":"{outer}","Name":"Outer","Metadata":{{"AppId":"{nested}","Name":"Nested"}}}}}}"#
+            ),
         ];
 
         for message in messages {
@@ -1297,16 +1512,16 @@ mod tests {
     #[test]
     fn escaped_quote_braces_remain_inside_one_object_scope() {
         let message = r#"{\"AppId\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"ApplicationName\":\"Quoted \\\"value with { braces }\\\" tail\"}"#;
-        let scopes = json_object_direct_scopes(message);
+        let scan = scan_json_fields(message).expect("bounded payload should scan");
 
         assert_eq!(
-            scopes.len(),
+            scan.scopes.len(),
             1,
             "escaped string was split into child scopes"
         );
         assert!(
-            scopes[0].direct.contains("{ braces }"),
-            "braces inside the escaped quoted value were masked"
+            scope_name(&scan.scopes[0]).is_some_and(|(name, _)| name.contains("{ braces }")),
+            "braces inside the escaped quoted value were not retained"
         );
     }
 
@@ -1350,5 +1565,127 @@ mod tests {
         assert_eq!(serialized.len(), 1);
         assert!(serialized.contains_key(lower));
         assert!(!serialized.contains_key(upper));
+    }
+
+    #[test]
+    fn independent_sibling_identity_objects_are_ambiguous() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let messages = [
+            format!(r#"[{{"AppId":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"AppId":"{first}"}}]"#),
+            format!(r#"[{{"Id":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"Id":"{first}"}}]"#),
+            format!(r#"{{"Items":[{{"Id":"{first}"}},{{"AppId":"{second}"}}]}}"#),
+            format!(
+                r#"{{"Left":{{"AppId":"{first}"}},"Right":{{"Metadata":{{"AppId":"{second}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"Left":{{"Metadata":{{"AppId":"{second}"}}}},"Right":{{"AppId":"{first}"}}}}"#
+            ),
+            format!(r#""Id":"{first}" {{"Metadata":{{"AppId":"{second}"}}}}"#),
+            format!(r#"[{{\"Id\":\"{first}\"}},{{\"AppId\":\"{second}\"}}]"#),
+        ];
+
+        for message in messages {
+            assert_eq!(
+                explicit_app_identity(&message),
+                ExplicitAppIdentity::Invalid,
+                "selected one independent sibling for {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn quoted_key_like_text_is_not_an_identity_field() {
+        let selected = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let injected = "11111111-2222-3333-4444-555555555555";
+        let messages = [
+            format!(r#"{{"AppId":"{selected}","Name":"literal \"AppId\":\"{injected}\" text"}}"#),
+            format!(r#"{{"Name":"literal \"AppId\":\"{injected}\" text","AppId":"{selected}"}}"#),
+            format!(r#"{{"Id":"{selected}","Name":"literal \"AppId\":\"{injected}\" text"}}"#),
+            format!(
+                r#"{{\"AppId\":\"{selected}\",\"Name\":\"literal \\\"AppId\\\":\\\"{injected}\\\" text\"}}"#
+            ),
+        ];
+
+        for message in messages {
+            assert_eq!(
+                explicit_app_identity(&message),
+                ExplicitAppIdentity::Valid(selected.to_string()),
+                "treated quoted value text as a field for {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_never_binds_an_identity_to_a_sibling_name() {
+        let app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let policy = "11111111-2222-3333-4444-555555555555";
+        let laundering_attempts = [
+            format!(r#"[{{"AppId":"{app}"}},{{"Name":"Wrong Name"}}]"#),
+            format!(r#"[{{"Name":"Wrong Name"}},{{"AppId":"{app}"}}]"#),
+            format!(r#"[{{"Id":"{policy}"}},{{"Name":"Wrong Name"}}]"#),
+            format!(r#"[{{"Name":"Wrong Name"}},{{"Id":"{policy}"}}]"#),
+        ];
+
+        for message in laundering_attempts {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert!(registry.is_empty(), "laundered sibling name for {message}");
+        }
+
+        let valid_orders = [
+            format!(
+                r#"[{{"AppId":"{app}","Name":"App Name"}},{{"Id":"{policy}","Name":"Policy Name"}}]"#
+            ),
+            format!(
+                r#"[{{"Id":"{policy}","Name":"Policy Name"}},{{"AppId":"{app}","Name":"App Name"}}]"#
+            ),
+        ];
+        for message in valid_orders {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert_eq!(registry.resolve(app), Some("App Name"));
+            assert_eq!(registry.resolve(policy), Some("Policy Name"));
+            assert_eq!(registry.len(), 2);
+        }
+    }
+
+    #[test]
+    fn registry_keeps_independent_root_and_object_local_pairs() {
+        let root = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let object = "11111111-2222-3333-4444-555555555555";
+        let message = format!(
+            r#""AppId":"{root}","Name":"Root Name" [{{"Id":"{object}","Name":"Object Name"}}]"#
+        );
+
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[line(&message)]);
+
+        assert_eq!(registry.resolve(root), Some("Root Name"));
+        assert_eq!(registry.resolve(object), Some("Object Name"));
+        assert_eq!(registry.len(), 2);
+    }
+
+    #[test]
+    fn over_depth_json_fails_closed() {
+        let guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let depth = 129;
+        let mut message = format!(r#"{{"AppId":"{guid}","Name":"Outer""#);
+        for _ in 1..depth {
+            message.push_str(r#", "Metadata":{"#);
+        }
+        for _ in 0..depth {
+            message.push('}');
+        }
+
+        assert_eq!(
+            explicit_app_identity(&message),
+            ExplicitAppIdentity::Invalid
+        );
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[line(&message)]);
+        assert!(registry.is_empty());
     }
 }

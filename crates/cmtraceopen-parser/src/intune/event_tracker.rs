@@ -2223,4 +2223,36 @@ mod tests {
             assert_eq!(events[0].parent_app_guid, None);
         }
     }
+
+    #[test]
+    fn appworkload_sibling_identity_objects_have_no_attribution() {
+        let first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let second = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"[{{"AppId":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"AppId":"{first}"}}]"#),
+            format!(r#"[{{"Id":"{first}"}},{{"AppId":"{second}"}}]"#),
+            format!(r#"[{{"AppId":"{second}"}},{{"Id":"{first}"}}]"#),
+            format!(r#"{{"Items":[{{"Id":"{first}"}},{{"AppId":"{second}"}}]}}"#),
+            format!(
+                r#"{{"Left":{{"AppId":"{first}"}},"Right":{{"Metadata":{{"AppId":"{second}"}}}}}}"#
+            ),
+            format!(
+                r#"{{"Left":{{"Metadata":{{"AppId":"{second}"}}}},"Right":{{"AppId":"{first}"}}}}"#
+            ),
+        ];
+
+        for payload in payloads {
+            let message = format!("SidecarScriptDetectionManager launch {payload}");
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].guid, None, "attributed sibling from {payload}");
+            assert_eq!(events[0].parent_app_guid, None);
+        }
+    }
 }
