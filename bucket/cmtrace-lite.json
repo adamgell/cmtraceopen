@@ -1,5 +1,5 @@
 {
-    "version": "1.5.0",
+    "version": "1.5.1",
     "description": "Lite edition of CMTrace Open: a free, open-source CMTrace replacement for Windows log files with format auto-detection, real-time tailing, find and filter, and Windows error-code lookup.",
     "homepage": "https://cmtraceopen.com",
     "license": "MIT",
@@ -11,12 +11,12 @@
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.5.0/CMTrace-Open-Lite_1.5.0_x64.exe#/cmtrace-lite.exe",
-            "hash": "cdcd984bcc2c76688de0bcd587a12ed9047882e9bada9539234d650804797818"
+            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.5.1/CMTrace-Open-Lite_1.5.1_x64.exe#/cmtrace-lite.exe",
+            "hash": "e5ae9bf01b2194f19ae7a510b3292d58dbe84dd1eefca8d91beeaead7d42f35e"
         },
         "arm64": {
-            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.5.0/CMTrace-Open-Lite_1.5.0_arm64.exe#/cmtrace-lite.exe",
-            "hash": "84117a3e890b4a4605773b9f56be2951aab8a062ba65776f6235c9febe2ace30"
+            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.5.1/CMTrace-Open-Lite_1.5.1_arm64.exe#/cmtrace-lite.exe",
+            "hash": "8ab5887479cf79f07a7e0beff7aae6c7cacb045eae581ff08a6415cd5251bacc"
         }
     },
     "bin": "cmtrace-lite.exe",
