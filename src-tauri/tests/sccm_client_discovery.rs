@@ -127,7 +127,7 @@ fn expected_evidence_identity(
 }
 
 #[test]
-fn discovery_uses_one_global_declaration_budget_and_marks_the_first_omitted_rotation() {
+fn discovery_uses_one_global_declaration_budget_and_reports_capacity_coverage() {
     let mut observations = Vec::new();
     for number in 1..=2_048 {
         observations.push(observation(
@@ -161,21 +161,32 @@ fn discovery_uses_one_global_declaration_budget_and_marks_the_first_omitted_rota
         MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
         "the 4096 declaration budget must be shared by all roots and sources"
     );
-    let gap = result
+    let terminal = result
         .declarations
         .last()
-        .expect("the globally capped result retains the first omitted declaration");
-    assert_eq!(gap.basename, "PolicyAgent.log.2048");
-    assert_eq!(gap.rotation, SccmRotation::Numbered(2_048));
-    assert_eq!(gap.state, SccmClientDiscoveryState::Capped);
+        .expect("the globally bounded result retains its deterministic terminal observation");
+    assert_eq!(terminal.basename, "PolicyAgent.log.2049");
+    assert_eq!(terminal.rotation, SccmRotation::Numbered(2_049));
+    assert_eq!(terminal.state, SccmClientDiscoveryState::Discovered);
     assert_eq!(
         result
             .declarations
             .iter()
             .filter(|declaration| declaration.state == SccmClientDiscoveryState::Discovered)
             .count(),
-        MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS - 1
+        MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
     );
+    assert_eq!(result.coverage_issues.len(), 1);
+    let capacity_gap = &result.coverage_issues[0];
+    assert_eq!(
+        capacity_gap.state,
+        SccmClientDiscoveryCoverageIssueState::DeclarationLimitExceeded
+    );
+    assert_eq!(
+        capacity_gap.omitted_declaration_state,
+        Some(SccmClientDiscoveryState::Discovered)
+    );
+    assert_eq!(capacity_gap.occurrence_count.get(), 1);
 }
 
 #[test]
@@ -256,10 +267,15 @@ fn discovery_global_capacity_preserves_explicit_states_and_reports_a_coverage_ga
         "one omitted explicit declaration becomes one coverage gap"
     );
     let capacity_gap = &result.coverage_issues[0];
-    assert!(
-        capacity_gap.state != SccmClientDiscoveryCoverageIssueState::InvalidProvenance
-            && capacity_gap.state != SccmClientDiscoveryCoverageIssueState::Unsupported,
-        "capacity needs a dedicated coverage state"
+    assert_eq!(
+        capacity_gap.state,
+        SccmClientDiscoveryCoverageIssueState::DeclarationLimitExceeded,
+        "capacity has a dedicated coverage state"
+    );
+    assert_eq!(
+        capacity_gap.omitted_declaration_state,
+        Some(SccmClientDiscoveryState::AccessDenied),
+        "the privacy-safe gap retains the omitted physical fact's actual state"
     );
     assert_eq!(capacity_gap.catalog_entry_id, "sccm-client-source:v1:none");
     assert!(capacity_gap.logical_artifact_ids.is_empty());
@@ -306,8 +322,9 @@ fn discovery_capacity_gap_retains_an_omitted_per_source_capped_state() {
         1,
         "the globally omitted per-source marker needs an explicit capacity issue"
     );
-    assert!(
-        format!("{:?}", result.coverage_issues[0]).contains("Capped"),
+    assert_eq!(
+        result.coverage_issues[0].omitted_declaration_state,
+        Some(SccmClientDiscoveryState::Capped),
         "the capacity issue must retain the omitted declaration's Capped state"
     );
     assert!(result.declarations.iter().any(|declaration| {
@@ -318,6 +335,77 @@ fn discovery_capacity_gap_retains_an_omitted_per_source_capped_state() {
         .declarations
         .iter()
         .all(|declaration| declaration.state != SccmClientDiscoveryState::Capped));
+}
+
+#[test]
+fn discovery_capacity_gaps_retain_each_omitted_nonfound_state() {
+    for (omitted_input_state, expected_omitted_state, terminal_state, expected_terminal_state) in [
+        (
+            SccmClientDiscoveryObservationState::NotFound,
+            SccmClientDiscoveryState::NotFound,
+            SccmClientDiscoveryObservationState::Skipped,
+            SccmClientDiscoveryState::Skipped,
+        ),
+        (
+            SccmClientDiscoveryObservationState::Skipped,
+            SccmClientDiscoveryState::Skipped,
+            SccmClientDiscoveryObservationState::NotFound,
+            SccmClientDiscoveryState::NotFound,
+        ),
+    ] {
+        let mut observations = (1..=MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS as u32)
+            .map(|number| {
+                observation(
+                    ROOT_A,
+                    &format!("AppEnforce.log.{number}"),
+                    SccmRotation::Numbered(number),
+                    omitted_input_state,
+                )
+            })
+            .collect::<Vec<_>>();
+        observations.push(observation(
+            ROOT_B,
+            "ScanAgent.log",
+            SccmRotation::Current,
+            terminal_state,
+        ));
+        let input = SccmClientDiscoveryInput {
+            max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+            observations,
+        };
+
+        let result = discover_client_sources(&input).expect("bounded explicit-state coverage");
+        let mut reversed_input = input;
+        reversed_input.observations.reverse();
+        let reversed = discover_client_sources(&reversed_input)
+            .expect("explicit-state capacity coverage is order independent");
+
+        assert_eq!(result, reversed);
+        assert_eq!(
+            result.declarations.len(),
+            MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
+        );
+        assert!(result.declarations.iter().any(|declaration| {
+            declaration.basename == "ScanAgent.log" && declaration.state == expected_terminal_state
+        }));
+        assert!(result
+            .declarations
+            .iter()
+            .all(|declaration| declaration.state != SccmClientDiscoveryState::Capped));
+        assert_eq!(result.coverage_issues.len(), 1);
+        let capacity_gap = &result.coverage_issues[0];
+        assert_eq!(
+            capacity_gap.state,
+            SccmClientDiscoveryCoverageIssueState::DeclarationLimitExceeded
+        );
+        assert_eq!(
+            capacity_gap.omitted_declaration_state,
+            Some(expected_omitted_state)
+        );
+        assert_eq!(capacity_gap.occurrence_count.get(), 1);
+        assert!(!format!("{capacity_gap:?}").contains(ROOT_A));
+        assert!(!format!("{capacity_gap:?}").contains("AppEnforce.log"));
+    }
 }
 
 #[test]
@@ -918,6 +1006,7 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
         SccmClientDiscoveryRotationCategory::Unknown,
         "rejected provenance cannot retain caller-supplied rotation trust"
     );
+    assert_eq!(invalid_provenance.omitted_declaration_state, None);
     let unsupported = result
         .coverage_issues
         .iter()
@@ -1087,6 +1176,7 @@ fn discovery_never_assigns_catalog_memberships_to_rejected_rotation_candidates()
         issue.catalog_entry_id == "sccm-client-source:v1:none"
             && issue.logical_artifact_ids.is_empty()
             && issue.rotation_category == SccmClientDiscoveryRotationCategory::Unknown
+            && issue.omitted_declaration_state.is_none()
             && !format!("{issue:?}").contains(raw_root)
             && !format!("{issue:?}").contains("PolicyAgent.log.backup")
             && !format!("{issue:?}").contains("PolicyAgent.log.1")

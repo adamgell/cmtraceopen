@@ -37,7 +37,7 @@ pub enum SccmClientDiscoveryObservationState {
     Skipped,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SccmClientDiscoveryState {
     Discovered,
     AccessDenied,
@@ -50,6 +50,9 @@ pub enum SccmClientDiscoveryState {
 pub enum SccmClientDiscoveryCoverageIssueState {
     InvalidProvenance,
     Unsupported,
+    /// The bounded declaration output omitted one or more otherwise eligible
+    /// observations. This is a capacity fact, not a source-observation state.
+    DeclarationLimitExceeded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -74,6 +77,10 @@ pub struct SccmClientDiscoveryCoverageIssue {
     pub logical_artifact_ids: Vec<String>,
     pub rotation_category: SccmClientDiscoveryRotationCategory,
     pub state: SccmClientDiscoveryCoverageIssueState,
+    /// Actual declaration state omitted only by the global output bound. This
+    /// preserves per-source `Capped` separately from raw input `Found`.
+    /// Other issue kinds leave this unset.
+    pub omitted_declaration_state: Option<SccmClientDiscoveryState>,
     /// Number of supplied observations represented by this privacy-safe issue
     /// category. The category identity intentionally remains count-independent.
     pub occurrence_count: NonZeroU16,
@@ -152,7 +159,7 @@ struct NormalizedObservation<'a> {
 
 struct NormalizedDiscovery<'a> {
     observations: Vec<NormalizedObservation<'a>>,
-    coverage_issues: Vec<SccmClientDiscoveryCoverageIssue>,
+    coverage_issue_counts: BTreeMap<CoverageIssueKey, u16>,
 }
 
 #[derive(Debug)]
@@ -188,6 +195,7 @@ struct CoverageIssueKey {
     logical_artifact_ids: Vec<String>,
     rotation_category: SccmClientDiscoveryRotationCategory,
     state: SccmClientDiscoveryCoverageIssueState,
+    omitted_declaration_state: Option<SccmClientDiscoveryState>,
 }
 
 #[cfg(test)]
@@ -208,17 +216,18 @@ pub fn discover_client_sources(
         return Err(SccmClientDiscoveryError::ObservationLimitExceeded);
     }
 
-    let normalized = normalize_observations(input)?;
-    let observations = normalized.observations;
+    let NormalizedDiscovery {
+        observations,
+        mut coverage_issue_counts,
+    } = normalize_observations(input)?;
     let mut found_per_source = BTreeMap::<(String, String), usize>::new();
     let mut capped_sources = BTreeSet::<(String, String)>::new();
-    let mut declarations = Vec::with_capacity(
+    let mut selected = Vec::with_capacity(
         input
             .observations
             .len()
-            .min(MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS),
+            .min(MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS),
     );
-    let mut first_omitted: Option<(NormalizedObservation<'_>, SccmClientDiscoveryState)> = None;
 
     for observation in observations {
         let Some(state) = selection_state(
@@ -229,36 +238,40 @@ pub fn discover_client_sources(
         ) else {
             continue;
         };
+        selected.push((observation, state));
+    }
 
-        if declarations.len() < MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS - 1 {
-            declarations.push(declaration_from_candidate(
+    if selected.len() > MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS {
+        let terminal = selected
+            .pop()
+            .expect("an over-cap selection has a terminal observation");
+        for (_, omitted_state) in &selected[MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS - 1..] {
+            add_coverage_issue_count(
+                &mut coverage_issue_counts,
+                declaration_limit_issue_key(*omitted_state),
+                1,
+            );
+        }
+        selected.truncate(MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS - 1);
+        selected.push(terminal);
+    }
+
+    let declarations = selected
+        .into_iter()
+        .map(|(observation, state)| {
+            declaration_from_candidate(
                 candidate_from_observation(&observation).expect("prevalidated observation"),
                 state,
-            ));
-        } else if let Some((first_omitted, _)) = first_omitted {
-            declarations.push(declaration_from_candidate(
-                candidate_from_observation(&first_omitted).expect("prevalidated observation"),
-                SccmClientDiscoveryState::Capped,
-            ));
-            return Ok(SccmClientDiscoveryResult {
-                declarations,
-                coverage_issues: normalized.coverage_issues,
-            });
-        } else {
-            first_omitted = Some((observation, state));
-        }
-    }
-
-    if let Some((last, state)) = first_omitted {
-        declarations.push(declaration_from_candidate(
-            candidate_from_observation(&last).expect("prevalidated observation"),
-            state,
-        ));
-    }
-
+            )
+        })
+        .collect();
+    debug_assert!(coverage_issue_counts.len() <= MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES);
     Ok(SccmClientDiscoveryResult {
         declarations,
-        coverage_issues: normalized.coverage_issues,
+        coverage_issues: coverage_issue_counts
+            .into_iter()
+            .map(|(issue, count)| coverage_issue_from_key(issue, count))
+            .collect(),
     })
 }
 
@@ -382,10 +395,7 @@ fn normalize_observations(
             }
             (root_is_valid, catalog_basename) => {
                 let coverage_issue = coverage_issue_key(root_is_valid, catalog_basename.as_deref());
-                let count = coverage_issue_counts.entry(coverage_issue).or_insert(0_u16);
-                *count = count
-                    .checked_add(1)
-                    .expect("admitted discovery issue count fits in u16");
+                add_coverage_issue_count(&mut coverage_issue_counts, coverage_issue, 1);
             }
         }
     }
@@ -394,10 +404,7 @@ fn normalize_observations(
     debug_assert!(coverage_issue_counts.len() <= MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES);
     Ok(NormalizedDiscovery {
         observations,
-        coverage_issues: coverage_issue_counts
-            .into_iter()
-            .map(|(issue, count)| coverage_issue_from_key(issue, count))
-            .collect(),
+        coverage_issue_counts,
     })
 }
 
@@ -415,7 +422,33 @@ fn coverage_issue_key(root_is_valid: bool, catalog_basename: Option<&str>) -> Co
         logical_artifact_ids: Vec::new(),
         rotation_category: SccmClientDiscoveryRotationCategory::Unknown,
         state,
+        omitted_declaration_state: None,
     }
+}
+
+fn declaration_limit_issue_key(
+    omitted_declaration_state: SccmClientDiscoveryState,
+) -> CoverageIssueKey {
+    CoverageIssueKey {
+        catalog_entry_id: "sccm-client-source:v1:none".to_owned(),
+        logical_artifact_ids: Vec::new(),
+        rotation_category: SccmClientDiscoveryRotationCategory::Unknown,
+        state: SccmClientDiscoveryCoverageIssueState::DeclarationLimitExceeded,
+        omitted_declaration_state: Some(omitted_declaration_state),
+    }
+}
+
+fn add_coverage_issue_count(
+    counts: &mut BTreeMap<CoverageIssueKey, u16>,
+    key: CoverageIssueKey,
+    additional_count: usize,
+) {
+    let additional_count =
+        u16::try_from(additional_count).expect("admitted discovery issue count fits in u16");
+    let count = counts.entry(key).or_insert(0_u16);
+    *count = count
+        .checked_add(additional_count)
+        .expect("aggregated discovery issue count fits in u16");
 }
 
 fn coverage_issue_from_key(
@@ -427,14 +460,21 @@ fn coverage_issue_from_key(
         logical_artifact_ids,
         rotation_category,
         state,
+        omitted_declaration_state,
     } = key;
-    let artifact_id = coverage_issue_id(&catalog_entry_id, rotation_category, state);
+    let artifact_id = coverage_issue_id(
+        &catalog_entry_id,
+        rotation_category,
+        state,
+        omitted_declaration_state,
+    );
     SccmClientDiscoveryCoverageIssue {
         artifact_id,
         catalog_entry_id,
         logical_artifact_ids,
         rotation_category,
         state,
+        omitted_declaration_state,
         occurrence_count: NonZeroU16::new(occurrence_count)
             .expect("every coverage issue represents an admitted observation"),
     }
@@ -450,6 +490,7 @@ fn coverage_issue_id(
     catalog_entry_id: &str,
     rotation_category: SccmClientDiscoveryRotationCategory,
     state: SccmClientDiscoveryCoverageIssueState,
+    omitted_declaration_state: Option<SccmClientDiscoveryState>,
 ) -> String {
     let rotation = match rotation_category {
         SccmClientDiscoveryRotationCategory::Current => "current",
@@ -461,10 +502,25 @@ fn coverage_issue_id(
     let state = match state {
         SccmClientDiscoveryCoverageIssueState::InvalidProvenance => "invalid-provenance",
         SccmClientDiscoveryCoverageIssueState::Unsupported => "unsupported",
+        SccmClientDiscoveryCoverageIssueState::DeclarationLimitExceeded => {
+            "declaration-limit-exceeded"
+        }
     };
-    let value = format!(
-        "cmtraceopen.sccm.discovery.coverage.v1\\0{catalog_entry_id}\\0{rotation}\\0{state}"
-    );
+    let omitted_state = omitted_declaration_state.map(|state| match state {
+        SccmClientDiscoveryState::Discovered => "discovered",
+        SccmClientDiscoveryState::AccessDenied => "access-denied",
+        SccmClientDiscoveryState::NotFound => "not-found",
+        SccmClientDiscoveryState::Capped => "capped",
+        SccmClientDiscoveryState::Skipped => "skipped",
+    });
+    let value = match omitted_state {
+        Some(omitted_state) => format!(
+            "cmtraceopen.sccm.discovery.coverage.v1\\0{catalog_entry_id}\\0{rotation}\\0{state}\\0{omitted_state}"
+        ),
+        None => format!(
+            "cmtraceopen.sccm.discovery.coverage.v1\\0{catalog_entry_id}\\0{rotation}\\0{state}"
+        ),
+    };
     format!(
         "sccm-discovery-coverage:v1:sha256:{}",
         sha256_bytes(value.as_bytes())
