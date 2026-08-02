@@ -604,3 +604,76 @@ mod tests {
         assert_eq!(contents, "original");
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use std::io::Read;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn verified_root_keeps_reading_the_original_directory_after_root_replacement() {
+        let temp = tempdir().expect("temporary root");
+        let root = temp.path().join("bundle");
+        let replacement = temp.path().join("replacement");
+        fs::create_dir_all(root.join("nested")).expect("create original bundle");
+        fs::create_dir_all(replacement.join("nested")).expect("create replacement bundle");
+        fs::write(root.join("nested/evidence.log"), b"original").expect("original evidence");
+        fs::write(replacement.join("nested/evidence.log"), b"replacement")
+            .expect("replacement evidence");
+
+        let verified = verify_bundle_root(&root).expect("open original root");
+        fs::rename(&root, temp.path().join("retired")).expect("move original root");
+        fs::rename(&replacement, &root).expect("install replacement root");
+
+        let mut opened = verified
+            .open_relative_file(Path::new("nested/evidence.log"))
+            .expect("bound root remains readable");
+        let mut contents = String::new();
+        opened
+            .read_to_string(&mut contents)
+            .expect("read bound evidence");
+        assert_eq!(contents, "original");
+    }
+
+    #[test]
+    fn verified_root_rejects_a_hard_linked_final_entry() {
+        let temp = tempdir().expect("temporary root");
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(&root).expect("create bundle");
+        let manifest = root.join("manifest.json");
+        let second_link = root.join("manifest-copy.json");
+        fs::write(&manifest, b"{}\n").expect("manifest");
+        fs::hard_link(&manifest, &second_link).expect("create hard link");
+
+        let verified = verify_bundle_root(&root).expect("open private root");
+        let error = verified
+            .open_relative_file(Path::new("manifest.json"))
+            .expect_err("hard-linked entries are unsafe");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn verified_root_rejects_a_reparse_final_entry_when_symlinks_are_available() {
+        use std::os::windows::fs::symlink_file;
+
+        let temp = tempdir().expect("temporary root");
+        let root = temp.path().join("bundle");
+        fs::create_dir_all(&root).expect("create bundle");
+        let target = temp.path().join("outside-manifest.json");
+        fs::write(&target, b"outside").expect("outside manifest");
+        if symlink_file(&target, root.join("manifest.json")).is_err() {
+            // Windows systems without Developer Mode or SeCreateSymbolicLinkPrivilege
+            // cannot create this fixture. The hosted Windows job covers the real path.
+            return;
+        }
+
+        let verified = verify_bundle_root(&root).expect("open private root");
+        let error = verified
+            .open_relative_file(Path::new("manifest.json"))
+            .expect_err("reparse entries are unsafe");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+}
