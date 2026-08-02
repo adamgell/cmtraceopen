@@ -29,9 +29,13 @@ fn sha256(value: &[u8]) -> String {
 }
 
 fn catalog_entry_id() -> String {
+    catalog_entry_id_for(POLICY_BASENAME)
+}
+
+fn catalog_entry_id_for(basename: &str) -> String {
     format!(
         "sccm-client-source:v1:sha256:{}",
-        sha256(POLICY_BASENAME.as_bytes())
+        sha256(basename.as_bytes())
     )
 }
 
@@ -85,7 +89,13 @@ fn relative_path(rotation: &SccmRotation) -> String {
     )
 }
 
-fn physical_artifact(rotation: SccmRotation, content: &[u8]) -> Value {
+#[derive(Clone)]
+struct PhysicalArtifactFixture {
+    value: Value,
+    content: Vec<u8>,
+}
+
+fn physical_artifact(rotation: SccmRotation, content: &[u8]) -> PhysicalArtifactFixture {
     let basename = rotation_basename(&rotation);
     let fingerprint = path_fingerprint();
     let artifact_id = format!(
@@ -98,7 +108,8 @@ fn physical_artifact(rotation: SccmRotation, content: &[u8]) -> Value {
             .as_bytes()
         )
     );
-    json!({
+    PhysicalArtifactFixture {
+        value: json!({
         "catalogEntryId": catalog_entry_id(),
         "logicalArtifactIds": [POLICY_GROUP],
         "artifactId": artifact_id,
@@ -118,7 +129,9 @@ fn physical_artifact(rotation: SccmRotation, content: &[u8]) -> Value {
         "configmgrVersion": CONFIGMGR_VERSION,
         "collectedAtUtc": COLLECTED_AT_UTC,
         "encoding": "utf-8"
-    })
+        }),
+        content: content.to_vec(),
+    }
 }
 
 fn capture_gap(rotation: SccmRotation, state: &str) -> Value {
@@ -178,27 +191,28 @@ fn make_private_directory(path: &Path) {
     }
 }
 
-fn write_native_bundle(root: &Path, artifacts: &[Value], capture_gaps: &[Value]) {
+fn write_native_bundle(
+    root: &Path,
+    artifacts: &[&PhysicalArtifactFixture],
+    capture_gaps: &[Value],
+) {
     make_private_directory(root);
     for artifact in artifacts {
-        let relative_path = artifact["relativePath"]
+        let relative_path = artifact.value["relativePath"]
             .as_str()
             .expect("physical fixture path");
-        let basename = artifact["basename"]
-            .as_str()
-            .expect("physical fixture basename");
-        let content = match basename {
-            POLICY_BASENAME => b"policy-current".as_slice(),
-            "PolicyAgent.log.1" => b"policy-rotation-one".as_slice(),
-            "PolicyAgent.log.2" => b"policy-rotation-two".as_slice(),
-            _ => panic!("unexpected physical fixture basename"),
-        };
         let destination = root.join(relative_path);
         fs::create_dir_all(destination.parent().expect("evidence parent"))
             .expect("create evidence tree");
-        fs::write(destination, content).expect("write synthetic evidence");
+        fs::write(destination, &artifact.content).expect("write synthetic evidence");
     }
-    let manifest = native_manifest(artifacts.to_vec(), capture_gaps.to_vec());
+    let manifest = native_manifest(
+        artifacts
+            .iter()
+            .map(|artifact| artifact.value.clone())
+            .collect(),
+        capture_gaps.to_vec(),
+    );
     fs::write(
         root.join(SCCM_MANIFEST_FILE_NAME),
         serde_json::to_vec_pretty(&manifest).expect("serialize fixture manifest"),
@@ -226,7 +240,7 @@ fn validated_v1_reader_projects_one_physical_client_artifact() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
-    write_native_bundle(&bundle_root, std::slice::from_ref(&current), &[]);
+    write_native_bundle(&bundle_root, &[&current], &[]);
 
     let manifest = read_sccm_manifest_or_legacy(&bundle_root).expect("validated manifest");
     let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("verified pure projection");
@@ -251,6 +265,18 @@ fn validated_v1_reader_projects_one_physical_client_artifact() {
 }
 
 #[test]
+fn validated_v1_reader_preserves_a_complete_fragment() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let mut current = physical_artifact(SccmRotation::Current, b"complete-policy-current");
+    current.value["fragmentComplete"] = json!(true);
+    write_native_bundle(&bundle_root, &[&current], &[]);
+
+    let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("verified pure projection");
+    assert_eq!(bundle.artifacts[0].fragment_complete, Some(true));
+}
+
+#[test]
 fn omitted_capped_rotation_projects_as_a_gap_without_a_fake_fragment() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("bundle");
@@ -258,7 +284,7 @@ fn omitted_capped_rotation_projects_as_a_gap_without_a_fake_fragment() {
     let omitted = capture_gap(SccmRotation::Numbered(1), "capped");
     write_native_bundle(
         &bundle_root,
-        std::slice::from_ref(&current),
+        &[&current],
         std::slice::from_ref(&omitted),
     );
 
@@ -292,7 +318,7 @@ fn parse_failed_omitted_rotation_remains_coverage_only() {
     let failed = capture_gap(SccmRotation::Numbered(2), "parseFailed");
     write_native_bundle(
         &bundle_root,
-        std::slice::from_ref(&current),
+        &[&current],
         std::slice::from_ref(&failed),
     );
     let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("verified pure projection");
@@ -310,14 +336,14 @@ fn parse_failed_omitted_rotation_remains_coverage_only() {
 fn native_manifest_uses_one_shared_4096_entry_decode_ceiling() {
     let gap = capture_gap(SccmRotation::Numbered(1), "capped");
     let boundary = native_manifest(
-        vec![physical_artifact(SccmRotation::Current, b"policy-current")],
+        vec![physical_artifact(SccmRotation::Current, b"policy-current").value],
         vec![gap.clone(); MAX_SCCM_MANIFEST_ARTIFACTS - 1],
     );
     serde_json::from_value::<SccmBundleManifestV1>(boundary)
         .expect("combined 4096-entry boundary decodes");
 
     let overflow = native_manifest(
-        vec![physical_artifact(SccmRotation::Current, b"policy-current")],
+        vec![physical_artifact(SccmRotation::Current, b"policy-current").value],
         vec![gap; MAX_SCCM_MANIFEST_ARTIFACTS],
     );
     let error = serde_json::from_value::<SccmBundleManifestV1>(overflow)
@@ -333,7 +359,7 @@ fn reader_rejects_artifacts_outside_canonical_rotation_order() {
     let bundle_root = temp.path().join("bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
     let numbered = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
-    write_native_bundle(&bundle_root, &[numbered, current], &[]);
+    write_native_bundle(&bundle_root, &[&numbered, &current], &[]);
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
         .expect_err("manifest order is part of deterministic intake");
@@ -341,11 +367,11 @@ fn reader_rejects_artifacts_outside_canonical_rotation_order() {
 }
 
 #[test]
-fn reader_rejects_duplicate_artifact_ids_and_relative_paths() {
+fn reader_rejects_duplicate_artifact_ids() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
-    write_native_bundle(&bundle_root, &[current.clone(), current], &[]);
+    write_native_bundle(&bundle_root, &[&current, &current], &[]);
 
     let error =
         read_sccm_manifest_or_legacy(&bundle_root).expect_err("colliding artifacts fail closed");
@@ -363,7 +389,13 @@ fn legacy_projection_never_invents_native_capture_gaps() {
             "collection": {
                 "collectorProfile": "cmtrace-full-diagnostics-v1",
                 "collectorVersion": "1.1.0",
-                "results": { "gaps": [] }
+                "results": {
+                    "gaps": [{
+                        "artifactId": "configmgr-ccm-logs",
+                        "category": "logs",
+                        "status": "Missing"
+                    }]
+                }
             },
             "artifacts": []
         }))
@@ -379,6 +411,18 @@ fn legacy_projection_never_invents_native_capture_gaps() {
     );
     assert!(manifest.capture_gaps.is_empty());
     assert!(bundle.capture_gaps.is_empty());
+    assert_eq!(bundle.artifacts.len(), 1);
+    let expected_catalog_id = catalog_entry_id_for("ccmsetup.log");
+    let expected_artifact_id = format!(
+        "sccm-artifact:v1:sha256:{}",
+        sha256(
+            format!(
+                "marker:v1:{expected_catalog_id}:absent:current:ccmsetup.log:unscoped"
+            )
+            .as_bytes()
+        )
+    );
+    assert_eq!(bundle.artifacts[0].artifact.artifact_id, expected_artifact_id);
 }
 
 #[test]
@@ -458,7 +502,7 @@ fn manifest_wire_and_debug_never_gain_raw_host_or_native_path_fields() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("RealUser-secret-bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
-    write_native_bundle(&bundle_root, std::slice::from_ref(&current), &[]);
+    write_native_bundle(&bundle_root, &[&current], &[]);
 
     let manifest = read_sccm_manifest_or_legacy(&bundle_root).expect("validated manifest");
     let serialized = serde_json::to_string(&manifest).expect("manifest JSON");
@@ -470,7 +514,7 @@ fn manifest_wire_and_debug_never_gain_raw_host_or_native_path_fields() {
         assert!(!public.contains("RealUser"));
     }
 
-    let mut raw_host = native_manifest(vec![current], vec![]);
+    let mut raw_host = native_manifest(vec![current.value], vec![]);
     raw_host["host"] = json!("LAB-CLIENT-SECRET");
     assert!(serde_json::from_value::<SccmBundleManifestV1>(raw_host).is_err());
 }
@@ -480,7 +524,7 @@ fn malformed_native_state_is_rejected_before_pure_projection() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("bundle");
     let mut value = native_manifest(
-        vec![physical_artifact(SccmRotation::Current, b"policy-current")],
+        vec![physical_artifact(SccmRotation::Current, b"policy-current").value],
         vec![],
     );
     value["artifacts"][0]["state"] = json!("absent");
@@ -507,7 +551,7 @@ fn reader_enforces_the_physical_file_cap_per_canonical_source_before_evidence_re
     let bundle_root = temp.path().join("bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
     let rotated = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
-    write_native_bundle(&bundle_root, &[current, rotated], &[]);
+    write_native_bundle(&bundle_root, &[&current, &rotated], &[]);
     set_native_limits(&bundle_root, 1, 4096);
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
@@ -521,7 +565,7 @@ fn reader_accepts_the_exact_physical_byte_cap_boundary() {
     let bundle_root = temp.path().join("bundle");
     let content = b"policy-current";
     let current = physical_artifact(SccmRotation::Current, content);
-    write_native_bundle(&bundle_root, std::slice::from_ref(&current), &[]);
+    write_native_bundle(&bundle_root, &[&current], &[]);
     set_native_limits(&bundle_root, 1, content.len() as u64);
 
     read_sccm_manifest_or_legacy(&bundle_root)
@@ -534,7 +578,7 @@ fn reader_rejects_multi_rotation_physical_bytes_over_the_source_cap() {
     let bundle_root = temp.path().join("bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
     let rotated = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
-    write_native_bundle(&bundle_root, &[current, rotated], &[]);
+    write_native_bundle(&bundle_root, &[&current, &rotated], &[]);
     set_native_limits(&bundle_root, 2, b"policy-current".len() as u64);
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
@@ -543,18 +587,55 @@ fn reader_rejects_multi_rotation_physical_bytes_over_the_source_cap() {
 }
 
 #[test]
-fn reader_rejects_overflowing_physical_byte_totals_before_hashing_evidence() {
+fn reader_rejects_physical_byte_metadata_overflow_before_evidence_reads() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("bundle");
     let mut current = physical_artifact(SccmRotation::Current, b"policy-current");
-    current["bytesCopied"] = json!(u64::MAX);
+    current.value["bytesCopied"] = json!(u64::MAX);
     let rotated = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
-    write_native_bundle(&bundle_root, &[current, rotated], &[]);
+    write_native_bundle(&bundle_root, &[&current, &rotated], &[]);
     set_native_limits(&bundle_root, 2, u64::MAX);
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
         .expect_err("overflowing source bytes fail before unbounded evidence verification");
     assert!(error.to_string().contains("source byte cap"));
+}
+
+#[test]
+fn reader_rejects_a_client_owned_per_artifact_ceiling_before_evidence_reads() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let mut current = physical_artifact(SccmRotation::Current, b"policy-current");
+    current.value["bytesCopied"] = json!(256_u64 * 1024 * 1024 + 1);
+    write_native_bundle(&bundle_root, &[&current], &[]);
+    set_native_limits(&bundle_root, 8, u64::MAX);
+
+    let error = read_sccm_manifest_or_legacy(&bundle_root)
+        .expect_err("a manifest cannot raise the reader-owned artifact ceiling");
+    assert!(error.to_string().contains("physical artifact byte cap"));
+}
+
+#[test]
+fn reader_rejects_a_client_owned_aggregate_ceiling_before_evidence_reads() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let mut artifacts = vec![
+        physical_artifact(SccmRotation::Current, b"policy-current"),
+        physical_artifact(SccmRotation::LoUnderscore, b"policy-lo"),
+        physical_artifact(SccmRotation::Numbered(1), b"policy-one"),
+        physical_artifact(SccmRotation::Numbered(2), b"policy-two"),
+        physical_artifact(SccmRotation::Numbered(3), b"policy-three"),
+    ];
+    for artifact in &mut artifacts {
+        artifact.value["bytesCopied"] = json!(205_u64 * 1024 * 1024);
+    }
+    let references = artifacts.iter().collect::<Vec<_>>();
+    write_native_bundle(&bundle_root, &references, &[]);
+    set_native_limits(&bundle_root, 8, u64::MAX);
+
+    let error = read_sccm_manifest_or_legacy(&bundle_root)
+        .expect_err("a manifest cannot raise the reader-owned aggregate ceiling");
+    assert!(error.to_string().contains("aggregate physical byte cap"));
 }
 
 #[cfg(unix)]
@@ -563,7 +644,7 @@ fn reader_rejects_hard_linked_physical_evidence() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
-    write_native_bundle(&bundle_root, std::slice::from_ref(&current), &[]);
+    write_native_bundle(&bundle_root, &[&current], &[]);
     let evidence = bundle_root.join(relative_path(&SccmRotation::Current));
     fs::hard_link(&evidence, bundle_root.join("duplicate-evidence-link"))
         .expect("create a second name for the evidence inode");
