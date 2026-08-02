@@ -417,6 +417,11 @@ fn terminal_component_and_status_outcomes_require_exact_cited_facts() {
         status.results[0].last_successful_phase,
         Some(SccmSiteCorePhase::StatusOrStateProcessing)
     );
+    assert_eq!(
+        status.results[0].finding_class,
+        Some(SccmFindingClass::ConfirmedFailure)
+    );
+    assert_eq!(status.findings.len(), 1);
     assert_eq!(status.findings[0].finding.terminal_evidence.len(), 1);
 }
 
@@ -489,14 +494,23 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
         .expect("status artifact")
         .producer_host_handle = Some("synthetic:host:site-02".to_owned());
     let split = analyze_site_core(&split_hosts);
+    assert_eq!(split.results.len(), 2);
+    assert_ne!(
+        split.results[0].transaction_key.producer_host_handle,
+        split.results[1].transaction_key.producer_host_handle
+    );
     assert!(split.results.iter().all(|result| {
         result.state != SccmSiteCoreState::Healthy
             || result.confidence != SccmSiteCoreConfidence::High
     }));
-    assert!(split.results.iter().all(|result| {
-        result.transaction_key.producer_host_handle == "synthetic:host:site-01"
-            || result.transaction_key.producer_host_handle == "synthetic:host:site-02"
-    }));
+    assert!(split
+        .results
+        .iter()
+        .any(|result| { result.transaction_key.producer_host_handle == "synthetic:host:site-01" }));
+    assert!(split
+        .results
+        .iter()
+        .any(|result| { result.transaction_key.producer_host_handle == "synthetic:host:site-02" }));
 
     let mut foreign_gap = assess(&[Source::sitecomp(HEALTHY_SITECOMP), Source::absent_status()]);
     foreign_gap
