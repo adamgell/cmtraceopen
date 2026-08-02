@@ -217,14 +217,10 @@ impl Serialize for SccmArtifactRequest {
     where
         S: Serializer,
     {
+        validate_artifact_requests(slice::from_ref(self)).map_err(|error| {
+            S::Error::custom(format!("invalid SCCM artifact request contract: {error:?}"))
+        })?;
         let reason = self.reason.trim();
-        if !has_at_most_chars(&self.reason, MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS)
-            || reason.is_empty()
-        {
-            return Err(S::Error::custom(
-                "invalid SCCM artifact request contract: InvalidArtifactRequestReason",
-            ));
-        }
         SccmArtifactRequestSerializeWire {
             logical_id: &self.logical_id,
             role: &self.role,

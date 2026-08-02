@@ -2088,6 +2088,61 @@ fn artifact_request_deserializes_through_the_same_wire_contract_as_a_finding() {
 }
 
 #[test]
+fn artifact_request_serialization_enforces_the_full_standalone_contract() {
+    let cases = [
+        (
+            "an undeclared logical ID",
+            finding_request(
+                "not-a-declared-source",
+                SccmRole::Client,
+                "Confirm the not-a-declared-source request outcome.",
+            ),
+            "UndeclaredArtifactRequest",
+        ),
+        (
+            "a role mismatch",
+            finding_request(
+                "policyAgent",
+                SccmRole::DistributionPoint,
+                "Confirm the bounded policy request outcome.",
+            ),
+            "ArtifactRequestRoleMismatch",
+        ),
+        (
+            "a rooted-path reason",
+            finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                ROOTED_ARTIFACT_REQUEST_REASONS[1],
+            ),
+            "InvalidArtifactRequestReason",
+        ),
+        (
+            "an out-of-scope reason",
+            finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                "Collect the complete CAS.log file.",
+            ),
+            "InvalidArtifactRequestReason",
+        ),
+    ];
+    let mut mismatches = Vec::new();
+
+    for (label, request, expected_error) in cases {
+        match serde_json::to_value(request) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains(expected_error) => mismatches.push(format!(
+                "serializer rejected {label} with the wrong contract error: {error}"
+            )),
+            Err(_) => {}
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
 fn artifact_request_deserialization_returns_a_canonical_reason() {
     let mut json = serde_json::to_value(finding_request(
         "policyAgent",
