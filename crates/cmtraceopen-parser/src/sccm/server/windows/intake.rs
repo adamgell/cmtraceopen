@@ -6,6 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::sccm::rotation::is_canonical_rotation_timestamp;
 use crate::sccm::{
     classify_artifact_name, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
     SccmArtifactRequest, SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
@@ -368,8 +369,15 @@ fn validate_manifest_bounds(
     }
 
     let mut declared_bytes = 0u64;
+    let mut copied_bytes = 0u64;
     for artifact in &manifest.artifacts {
         if artifact.bytes_copied > MAX_SCCM_SERVER_ARTIFACT_BYTES {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
+        copied_bytes = copied_bytes
+            .checked_add(artifact.bytes_copied)
+            .ok_or(SccmServerIntakeError::ManifestLimitExceeded)?;
+        if copied_bytes > MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES {
             return Err(SccmServerIntakeError::ManifestLimitExceeded);
         }
         if let Some(limit) = &artifact.collection_limit {
@@ -1010,6 +1018,7 @@ fn parse_declared_rotation(
                 .value
                 .as_ref()
                 .and_then(Value::as_str)
+                .filter(|value| is_canonical_rotation_timestamp(value))
                 .ok_or(SccmServerIntakeError::InvalidArtifact)?;
             SccmRotation::Timestamped(timestamp.to_owned())
         }
@@ -1024,7 +1033,9 @@ fn parse_retained_rotation(
     if rotation.kind == "none" && rotation.value.is_none() {
         return Ok(None);
     }
-    parse_declared_rotation(rotation)
+    parse_declared_rotation(rotation)?
+        .ok_or(SccmServerIntakeError::InvalidArtifact)
+        .map(Some)
 }
 
 fn parse_configured_path_state(

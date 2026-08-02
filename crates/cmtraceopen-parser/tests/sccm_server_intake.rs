@@ -1473,6 +1473,27 @@ fn server_intake_expected_oracles_do_not_claim_native_collection_acceptance() {
 }
 
 #[test]
+fn server_intake_rejects_ambiguous_retained_unknown_rotations() {
+    for (kind, value) in [
+        ("future", Value::Null),
+        ("current", Value::String("unexpected".to_owned())),
+        ("none", Value::String("unexpected".to_owned())),
+        ("timestamped", Value::String("not-a-timestamp".to_owned())),
+    ] {
+        let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
+        let mut manifest = manifest_value(&manifest_json);
+        manifest["artifacts"][0]["rotation"]["kind"] = Value::String(kind.to_owned());
+        manifest["artifacts"][0]["rotation"]["value"] = value;
+
+        assert_eq!(
+            assess_server_intake(&serialize_manifest(&manifest), &payloads),
+            Err(SccmServerIntakeError::InvalidArtifact),
+            "retained unknown evidence needs an unambiguous rotation identity"
+        );
+    }
+}
+
+#[test]
 fn server_intake_bounds_each_declared_artifact_limit() {
     let (manifest_json, payloads) = bounded_manifest(1, 268_435_457);
 
@@ -1499,6 +1520,25 @@ fn server_intake_bounds_aggregate_declared_bytes() {
     assert!(
         assess_server_intake(&manifest_json, &payloads).is_err(),
         "aggregate declared collection work may not exceed 1 GiB"
+    );
+}
+
+#[test]
+fn server_intake_bounds_aggregate_bytes_copied_without_collection_limits() {
+    let (manifest_json, payloads) = bounded_manifest(5, 1);
+    let mut manifest = manifest_value(&manifest_json);
+    for artifact in manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+    {
+        artifact["bytesCopied"] = Value::from(268_435_456_u64);
+        artifact["collectionLimit"] = Value::Null;
+    }
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::ManifestLimitExceeded),
+        "aggregate copied-byte claims stay bounded even before payload validation"
     );
 }
 
