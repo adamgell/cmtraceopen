@@ -34,5 +34,4 @@ License identifier: MIT, as declared by the upstream repository README. The
 upstream repository did not publish a root license file at this commit, so the
 standard MIT license text and source attribution are recorded locally.
 
-The maintained downstream scripts/review_state.py is therefore not
-byte-identical to the pinned upstream script.
+Derivative status: the maintained scripts/review_state.py is not byte-identical to the pinned upstream script
