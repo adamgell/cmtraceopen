@@ -10,7 +10,9 @@ fn intake_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/server/intake")
 }
 
-fn load_assessment(scenario: &str) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
+fn load_assessment(
+    scenario: &str,
+) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
     let scenario_root = intake_root().join(scenario);
     let manifest_json =
         std::fs::read_to_string(scenario_root.join("manifest.json")).expect("manifest is readable");
@@ -49,7 +51,10 @@ fn distribution_point_adapter_projects_only_canonical_intake_observations_determ
     let observation = &analysis.source_observations[0];
     assert_eq!(observation.artifact_id, "dp-dist-current");
     assert_eq!(observation.producer_role, SccmRole::SiteServer);
-    assert_eq!(observation.workflow_subject_role, Some(SccmRole::DistributionPoint));
+    assert_eq!(
+        observation.workflow_subject_role,
+        Some(SccmRole::DistributionPoint)
+    );
     assert_eq!(observation.source_id, "server-dp-distribution");
     assert_eq!(
         observation.timestamp.ordering_state,
@@ -76,9 +81,16 @@ fn absent_dp_candidate_is_coverage_not_a_role_diagnosis() {
     assert!(!analysis.cross_side_correlation_performed);
     assert!(analysis.source_observations.is_empty());
     assert_eq!(analysis.coverage_gaps.len(), 1);
-    assert_eq!(analysis.coverage_gaps[0].state, SccmCoverageState::Absent);
-    assert_eq!(analysis.coverage_gaps[0].source_id, "server-dp-distribution");
+    assert_eq!(
+        analysis.coverage_gaps[0].state,
+        Some(SccmCoverageState::Absent)
+    );
+    assert_eq!(
+        analysis.coverage_gaps[0].source_id,
+        "server-dp-distribution"
+    );
     assert_eq!(analysis.artifact_requests.len(), 1);
-    assert_eq!(analysis.artifact_requests[0].logical_id, "server-dp-distribution");
-    assert_eq!(analysis.artifact_requests[0].role, SccmRole::DistributionPoint);
+    assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
+    assert_eq!(analysis.artifact_requests[0].role, SccmRole::SiteServer);
+    serde_json::to_value(&analysis).expect("coverage-only analysis serializes");
 }
