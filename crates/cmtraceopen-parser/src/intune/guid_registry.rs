@@ -1667,6 +1667,50 @@ mod tests {
     }
 
     #[test]
+    fn registry_rejects_conflicting_duplicate_names() {
+        let app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let messages = [
+            format!(r#"{{"AppId":"{app}","Name":"First Name","Name":"Second Name"}}"#),
+            format!(r#"{{"AppId":"{app}","Name":"Second Name","Name":"First Name"}}"#),
+        ];
+
+        for message in messages {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert_eq!(
+                registry.resolve(app),
+                None,
+                "accepted conflicting name from {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_keeps_identical_names_and_application_name_precedence() {
+        let app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let cases = [
+            (
+                format!(r#"{{"AppId":"{app}","Name":"Same Name","Name":"Same Name"}}"#),
+                "Same Name",
+            ),
+            (
+                format!(r#"{{"AppId":"{app}","ApplicationName":"Preferred","Name":"Fallback"}}"#),
+                "Preferred",
+            ),
+            (
+                format!(r#"{{"AppId":"{app}","Name":"Fallback","ApplicationName":"Preferred"}}"#),
+                "Preferred",
+            ),
+        ];
+
+        for (message, expected) in cases {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert_eq!(registry.resolve(app), Some(expected));
+        }
+    }
+
+    #[test]
     fn registry_keeps_independent_root_and_object_local_pairs() {
         let root = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         let object = "11111111-2222-3333-4444-555555555555";
