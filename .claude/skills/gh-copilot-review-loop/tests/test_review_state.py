@@ -168,6 +168,10 @@ class ProvenanceTests(unittest.TestCase):
         self.assertIn("regression tests", labeled_fields["Repository-level changes"])
         self.assertIn("base-repository URL parsing", labeled_fields["Script changes"])
         self.assertIn("pending-review filtering", labeled_fields["Script changes"])
+        self.assertEqual(
+            labeled_fields["Derivative status"],
+            "the maintained scripts/review_state.py is not byte-identical to the pinned upstream script",
+        )
         self.assertIn(UPSTREAM_COMMIT, skill_provenance)
         for commit in DOWNSTREAM_SCRIPT_COMMITS:
             self.assertIn(commit, skill_provenance)
