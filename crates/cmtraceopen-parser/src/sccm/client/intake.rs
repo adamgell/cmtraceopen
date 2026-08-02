@@ -1515,12 +1515,16 @@ fn group_coverage(
 fn coverage_rank(coverage: &SccmCoverageState) -> u8 {
     match coverage {
         SccmCoverageState::Captured => 0,
-        SccmCoverageState::Absent => 1,
-        SccmCoverageState::Unsupported => 2,
-        SccmCoverageState::Skipped => 3,
-        SccmCoverageState::Capped => 4,
-        SccmCoverageState::AccessDenied => 5,
-        SccmCoverageState::ParseFailed => 6,
+        // Partial carries real evidence, so it outranks every noncaptured
+        // state while still losing to a complete capture. This mirrors
+        // `findings::coverage_state_order`, which is the canonical ordering.
+        SccmCoverageState::Partial => 1,
+        SccmCoverageState::Absent => 2,
+        SccmCoverageState::Unsupported => 3,
+        SccmCoverageState::Skipped => 4,
+        SccmCoverageState::Capped => 5,
+        SccmCoverageState::AccessDenied => 6,
+        SccmCoverageState::ParseFailed => 7,
     }
 }
 
@@ -1540,6 +1544,7 @@ fn coverage_reason(coverage: &SccmCoverageState) -> &'static str {
         SccmCoverageState::ParseFailed => {
             "The supplied client source group could not be normalized as CCM evidence."
         }
+        SccmCoverageState::Partial => "The bounded client source group was captured incompletely.",
         SccmCoverageState::Captured => "",
     }
 }
@@ -1572,6 +1577,12 @@ fn source_coverage_reason(fragment: &SccmClientIntakeFragment) -> Option<String>
         )),
         SccmCoverageState::ParseFailed => Some(format!(
             "Client source {} could not be normalized as CCM evidence.",
+            fragment.basename
+        )),
+        // Partial is a noncaptured declaration for gap purposes: it holds usable
+        // evidence but not all of it, so it must stay observable to the operator.
+        SccmCoverageState::Partial => Some(format!(
+            "Client source {} was captured incompletely.",
             fragment.basename
         )),
         SccmCoverageState::Captured if fragment.fragment_complete == Some(false) => Some(format!(

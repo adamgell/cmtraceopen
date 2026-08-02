@@ -1979,11 +1979,14 @@ fn collect_artifact_requests(
 fn coverage_order(state: &SccmCoverageState) -> u8 {
     match state {
         SccmCoverageState::Captured => 0,
-        SccmCoverageState::Absent => 1,
-        SccmCoverageState::AccessDenied => 2,
-        SccmCoverageState::Capped => 3,
-        SccmCoverageState::Skipped => 4,
-        SccmCoverageState::Unsupported => 5,
-        SccmCoverageState::ParseFailed => 6,
+        // Matches `findings::coverage_state_order`: partial evidence outranks
+        // every noncaptured state but never a complete capture.
+        SccmCoverageState::Partial => 1,
+        SccmCoverageState::Absent => 2,
+        SccmCoverageState::AccessDenied => 3,
+        SccmCoverageState::Capped => 4,
+        SccmCoverageState::Skipped => 5,
+        SccmCoverageState::Unsupported => 6,
+        SccmCoverageState::ParseFailed => 7,
     }
 }

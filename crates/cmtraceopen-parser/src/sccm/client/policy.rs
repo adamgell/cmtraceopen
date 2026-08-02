@@ -12,6 +12,11 @@ use crate::sccm::{
     SccmTerminalEvidence,
 };
 
+// The workflow discriminant is the shared client intake contract, not a
+// policy-local type: every client reducer must agree on one set of workflow
+// names or the same evidence sorts differently per lane.
+use super::intake::SccmClientWorkflow;
+
 pub const SCCM_POLICY_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_POLICY_TEST_PROFILE_ID: &str = "policy-client-5.00.test-v1";
 
@@ -44,12 +49,6 @@ const POLICY_PHASES: [SccmPolicyPhase; 6] = [
     SccmPolicyPhase::Evaluate,
     SccmPolicyPhase::Report,
 ];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum SccmClientWorkflow {
-    Policy,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

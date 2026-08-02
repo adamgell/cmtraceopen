@@ -634,6 +634,7 @@ fn unresolved_coverage_artifact_id(evidence: &SccmEvidence, is_foreign_source: b
 fn coverage_rejection_reason(state: &SccmCoverageState) -> &'static str {
     match state {
         SccmCoverageState::Captured => "source-contract-rejected",
+        SccmCoverageState::Partial => "required-source-partial",
         SccmCoverageState::Absent => "required-source-absent",
         SccmCoverageState::AccessDenied => "required-source-access-denied",
         SccmCoverageState::Capped => "required-source-capped",
@@ -2062,6 +2063,7 @@ fn rotation_name(rotation: &crate::sccm::SccmRotation) -> Option<String> {
 fn coverage_sort_key(state: &SccmCoverageState) -> &'static str {
     match state {
         SccmCoverageState::Captured => "captured",
+        SccmCoverageState::Partial => "partial",
         SccmCoverageState::Absent => "absent",
         SccmCoverageState::AccessDenied => "accessDenied",
         SccmCoverageState::Capped => "capped",

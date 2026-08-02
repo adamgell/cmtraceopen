@@ -348,30 +348,6 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
         family: SccmArtifactFamily::ClientPolicy,
     },
     CatalogSpec {
-        basename: "CIAgent",
-        logical_name: "ciAgent",
-        role: SccmRole::Client,
-        family: SccmArtifactFamily::ClientPolicy,
-    },
-    CatalogSpec {
-        basename: "CIDownloader",
-        logical_name: "ciDownloader",
-        role: SccmRole::Client,
-        family: SccmArtifactFamily::ClientPolicy,
-    },
-    CatalogSpec {
-        basename: "StateMessage",
-        logical_name: "stateMessage",
-        role: SccmRole::Client,
-        family: SccmArtifactFamily::ClientPolicy,
-    },
-    CatalogSpec {
-        basename: "StatusAgent",
-        logical_name: "statusAgent",
-        role: SccmRole::Client,
-        family: SccmArtifactFamily::ClientPolicy,
-    },
-    CatalogSpec {
         basename: "CAS",
         logical_name: "cas",
         role: SccmRole::Client,
