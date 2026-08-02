@@ -2255,4 +2255,40 @@ mod tests {
             assert_eq!(events[0].parent_app_guid, None);
         }
     }
+
+    #[test]
+    fn non_appworkload_events_respect_explicit_identity_boundaries() {
+        let unrelated_guid = "11111111-2222-3333-4444-555555555555";
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let cases = [
+            (
+                format!(r#"ESP status for tenant {unrelated_guid} {{"AppId":"not-an-app-guid"}}"#),
+                None,
+            ),
+            (
+                format!(r#"ESP status for tenant {unrelated_guid} {{"Id":"not-an-app-guid"}}"#),
+                None,
+            ),
+            (format!("ESP status for tenant {unrelated_guid}"), Some(unrelated_guid)),
+            (
+                format!(r#"ESP status for tenant {unrelated_guid} {{"AppId":"{app_guid}"}}"#),
+                Some(app_guid),
+            ),
+        ];
+
+        for (message, expected_guid) in cases {
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/IntuneManagementExtension.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1, "missing event for {message}");
+            assert_eq!(
+                events[0].guid.as_deref(),
+                expected_guid,
+                "wrong GUID attribution for {message}"
+            );
+        }
+    }
 }
