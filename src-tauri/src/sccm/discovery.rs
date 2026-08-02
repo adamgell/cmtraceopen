@@ -455,6 +455,86 @@ mod tests {
     }
 
     #[test]
+    fn defensive_observation_limit_rejects_before_any_normalization_or_construction() {
+        let observations = (1..=MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS + 1)
+            .map(|number| {
+                observation(
+                    ROOT_A,
+                    format!("AppEnforce.log.{number}"),
+                    SccmRotation::Numbered(number as u32),
+                )
+            })
+            .collect();
+        let input = SccmClientDiscoveryInput {
+            max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+            observations,
+        };
+
+        reset_construction_counts();
+        reset_normalization_count();
+        assert_eq!(
+            discover_client_sources(&input),
+            Err(SccmClientDiscoveryError::ObservationLimitExceeded),
+            "input beyond the defensive discovery contract must fail conservatively"
+        );
+        assert_eq!(
+            normalization_count(),
+            0,
+            "the defensive limit rejects before any observation is normalized"
+        );
+        assert_eq!(
+            construction_counts(),
+            (0, 0),
+            "the defensive limit rejects before candidates or declarations are built"
+        );
+    }
+
+    #[test]
+    fn defensive_observation_bound_normalizes_each_all_found_or_mixed_state_input_once() {
+        let all_found = (1..=MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS)
+            .map(|number| {
+                observation(
+                    ROOT_A,
+                    format!("AppEnforce.log.{number}"),
+                    SccmRotation::Numbered(number as u32),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mixed_states = (1..=MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS)
+            .map(|number| SccmClientDiscoveryObservation {
+                root_handle: if number % 2 == 0 { ROOT_A } else { ROOT_B }.to_owned(),
+                basename: format!("PolicyAgent.log.{number}"),
+                rotation: SccmRotation::Numbered(number as u32),
+                state: match number % 3 {
+                    0 => SccmClientDiscoveryObservationState::Found,
+                    1 => SccmClientDiscoveryObservationState::AccessDenied,
+                    _ => SccmClientDiscoveryObservationState::NotFound,
+                },
+            })
+            .collect::<Vec<_>>();
+
+        for observations in [all_found, mixed_states] {
+            reset_construction_counts();
+            reset_normalization_count();
+            let result = discover_client_sources(&SccmClientDiscoveryInput {
+                max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+                observations,
+            })
+            .expect("the defensive boundary itself remains processable");
+
+            assert_eq!(
+                normalization_count(),
+                MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+                "each accepted observation is normalized exactly once"
+            );
+            assert!(
+                result.declarations.len() <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+                "the declaration output remains globally bounded"
+            );
+        }
+    }
+
+    #[test]
     fn oversized_discovery_constructs_only_the_bounded_retained_candidates_and_declarations() {
         let mut observations = Vec::new();
         for number in 1..=6_000 {
