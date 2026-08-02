@@ -1668,8 +1668,8 @@ fn build_result_finding(
         .phase(SccmPhase::Unknown(
             result
                 .last_successful_phase
-                .unwrap_or(SccmSiteCorePhase::ComponentStart)
-                .serialized_name()
+                .map(SccmSiteCorePhase::serialized_name)
+                .unwrap_or("siteCoreUnconfirmed")
                 .to_owned(),
         ))
         .role(SccmRole::SiteServer)
