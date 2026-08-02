@@ -165,6 +165,10 @@ pub struct SccmClientIntakeArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
+    /// Whether the captured bytes begin and end on complete logical-record
+    /// boundaries. This is independent of normalization success: a
+    /// `ParseFailed` fragment may be complete when all bytes were copied but
+    /// their contents could not be normalized as CCM evidence.
     pub fragment_complete: Option<bool>,
 }
 
@@ -183,6 +187,9 @@ pub struct SccmClientIntakeFragment {
     pub path_fingerprint: Option<String>,
     pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
+    /// Boundary completeness projected independently from `coverage`.
+    /// In particular, `ParseFailed` plus `Some(true)` means the full fragment
+    /// was copied but could not be normalized as CCM evidence.
     pub fragment_complete: Option<bool>,
     pub configmgr_version: Option<String>,
     pub collected_at_utc: Option<String>,
@@ -1099,7 +1106,7 @@ fn coverage_reason(coverage: &SccmCoverageState) -> &'static str {
             "The supplied client source group is unsupported by this contract."
         }
         SccmCoverageState::ParseFailed => {
-            "The supplied client source group could not be normalized completely."
+            "The supplied client source group could not be normalized as CCM evidence."
         }
         SccmCoverageState::Captured => "",
     }
@@ -1132,7 +1139,7 @@ fn source_coverage_reason(fragment: &SccmClientIntakeFragment) -> Option<String>
             fragment.basename
         )),
         SccmCoverageState::ParseFailed => Some(format!(
-            "Client source {} could not be normalized completely.",
+            "Client source {} could not be normalized as CCM evidence.",
             fragment.basename
         )),
         SccmCoverageState::Captured if fragment.fragment_complete == Some(false) => Some(format!(
