@@ -220,6 +220,13 @@ fn write_native_bundle(
     .expect("write fixture manifest");
 }
 
+fn remove_written_evidence(root: &Path, artifact: &PhysicalArtifactFixture) {
+    let relative_path = artifact.value["relativePath"]
+        .as_str()
+        .expect("physical fixture path");
+    fs::remove_file(root.join(relative_path)).expect("remove evidence after writing manifest");
+}
+
 fn set_native_limits(root: &Path, max_files: u64, max_bytes: u64) {
     let manifest_path = root.join(SCCM_MANIFEST_FILE_NAME);
     let mut manifest: Value = serde_json::from_slice(
@@ -605,6 +612,7 @@ fn reader_rejects_a_client_owned_per_artifact_ceiling_before_evidence_reads() {
     current.value["bytesCopied"] = json!(256_u64 * 1024 * 1024 + 1);
     write_native_bundle(&bundle_root, &[&current], &[]);
     set_native_limits(&bundle_root, 8, u64::MAX);
+    remove_written_evidence(&bundle_root, &current);
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
         .expect_err("a manifest cannot raise the reader-owned artifact ceiling");
@@ -628,6 +636,9 @@ fn reader_rejects_a_client_owned_aggregate_ceiling_before_evidence_reads() {
     let references = artifacts.iter().collect::<Vec<_>>();
     write_native_bundle(&bundle_root, &references, &[]);
     set_native_limits(&bundle_root, 8, u64::MAX);
+    for artifact in &artifacts {
+        remove_written_evidence(&bundle_root, artifact);
+    }
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
         .expect_err("a manifest cannot raise the reader-owned aggregate ceiling");
