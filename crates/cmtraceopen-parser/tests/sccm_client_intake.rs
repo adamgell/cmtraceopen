@@ -1177,6 +1177,17 @@ fn parse_failed_fragment_completeness_is_intentionally_two_valued() {
             Some(fragment_complete),
             "declared parse-failed completeness must project unchanged"
         );
+        let expected_artifact_id = format!("fixture-{artifact_id}");
+        let parse_gap = intake
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.artifact_id.as_deref() == Some(expected_artifact_id.as_str()))
+            .expect("parse-failed source retains its own coverage gap");
+        assert_eq!(
+            parse_gap.reason,
+            "Client source PolicyAgent.log could not be normalized as CCM evidence.",
+            "parse failure wording must remain independent of fragment-boundary completeness"
+        );
     }
 }
 
