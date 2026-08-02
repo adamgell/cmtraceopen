@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use crate::sccm::{
     classify_artifact_name, SccmArtifactFamily, SccmArtifactRequest, SccmCoverageState,
-    SccmEvidenceRef, SccmRole, SccmRotation, SccmTimeOrderingState, SccmTimestamp,
+    SccmEvidence, SccmEvidenceRef, SccmRole, SccmRotation, SccmTimeOrderingState, SccmTimestamp,
 };
 
 use super::{
@@ -84,10 +84,37 @@ pub struct SccmDistributionPointAnalysis {
 pub fn analyze_distribution_point(
     intake: &SccmServerIntakeAssessment,
 ) -> SccmDistributionPointAnalysis {
+    let artifact_id_counts =
+        intake
+            .artifacts
+            .iter()
+            .fold(BTreeMap::<&str, usize>::new(), |mut counts, artifact| {
+                *counts.entry(artifact.artifact_id.as_str()).or_default() += 1;
+                counts
+            });
+    let evidence_by_artifact = intake.evidence.iter().fold(
+        BTreeMap::<&str, Vec<&SccmEvidence>>::new(),
+        |mut grouped, evidence| {
+            grouped
+                .entry(evidence.reference.artifact_id.as_str())
+                .or_default()
+                .push(evidence);
+            grouped
+        },
+    );
     let artifacts = intake
         .artifacts
         .iter()
-        .filter(|artifact| is_dp_distribution_artifact(artifact))
+        .filter(|artifact| {
+            artifact_id_counts
+                .get(artifact.artifact_id.as_str())
+                .is_some_and(|count| *count == 1)
+                && is_dp_distribution_artifact(artifact)
+                && artifact_metadata_is_congruent(intake, artifact, &artifact_id_counts)
+                && evidence_by_artifact
+                    .get(artifact.artifact_id.as_str())
+                    .is_some_and(|evidence| canonical_evidence_set(artifact, evidence))
+        })
         .map(|artifact| (artifact.artifact_id.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
 
@@ -169,6 +196,181 @@ fn admitted_for_source_observation(
         && artifact.fragment_complete != Some(false)
         && evidence.role == artifact.producer_role
         && evidence.timestamp.ordering_state == SccmTimeOrderingState::NormalizedUtc
+}
+
+fn artifact_metadata_is_congruent(
+    intake: &SccmServerIntakeAssessment,
+    artifact: &SccmServerArtifactAssessment,
+    artifact_id_counts: &BTreeMap<&str, usize>,
+) -> bool {
+    artifact.state == SccmCoverageState::Captured
+        && artifact.profile_eligible
+        && artifact.parser_eligible
+        && artifact.fragment_complete != Some(false)
+        && supported_source_version(artifact.source_version.as_deref())
+        && rotation_is_canonical_for_artifact(artifact)
+        && safe_assessed_handle(&intake.topology.capture_host_handle)
+        && safe_assessed_handle(&intake.topology.site_handle)
+        && artifact
+            .producer_host_handle
+            .as_deref()
+            .is_some_and(safe_assessed_handle)
+        && subject_handle_is_congruent(artifact)
+        && topology_is_congruent(intake, artifact)
+        && coverage_is_congruent(intake, artifact, artifact_id_counts)
+}
+
+fn supported_source_version(value: Option<&str>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    if value == "5.00.TEST" {
+        return true;
+    }
+    let mut parts = value.split('.');
+    matches!(
+        (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ),
+        (Some("5"), Some("00"), Some(build), Some(revision), None)
+            if build.len() == 4
+                && revision.len() == 4
+                && build.bytes().all(|byte| byte.is_ascii_digit())
+                && revision.bytes().all(|byte| byte.is_ascii_digit())
+    )
+}
+
+fn rotation_is_canonical_for_artifact(artifact: &SccmServerArtifactAssessment) -> bool {
+    let Some(basename) = artifact.original_basename.as_deref() else {
+        return false;
+    };
+    let classified = classify_artifact_name(basename, artifact.producer_role.clone());
+    artifact.rotation.as_ref() == Some(&classified.rotation)
+        && safe_assessed_handle(&artifact.rotation_lineage_handle)
+}
+
+fn safe_assessed_handle(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+        && value.len() <= 256
+}
+
+fn subject_handle_is_congruent(artifact: &SccmServerArtifactAssessment) -> bool {
+    match (
+        &artifact.producer_role,
+        artifact.workflow_subject_role.as_ref(),
+        artifact.workflow_subject_handle.as_deref(),
+    ) {
+        (SccmRole::SiteServer, Some(SccmRole::DistributionPoint), Some(handle)) => {
+            safe_assessed_handle(handle)
+        }
+        (SccmRole::DistributionPoint, None, None) => true,
+        _ => false,
+    }
+}
+
+fn topology_is_congruent(
+    intake: &SccmServerIntakeAssessment,
+    artifact: &SccmServerArtifactAssessment,
+) -> bool {
+    role_occurrences(&intake.topology.roles_observed, &artifact.producer_role) == 1
+        && artifact
+            .workflow_subject_role
+            .as_ref()
+            .is_none_or(|role| role_occurrences(&intake.topology.roles_observed, role) == 1)
+}
+
+fn role_occurrences(roles: &[SccmRole], expected: &SccmRole) -> usize {
+    roles.iter().filter(|role| *role == expected).count()
+}
+
+fn coverage_is_congruent(
+    intake: &SccmServerIntakeAssessment,
+    artifact: &SccmServerArtifactAssessment,
+    artifact_id_counts: &BTreeMap<&str, usize>,
+) -> bool {
+    let memberships = intake
+        .coverage
+        .iter()
+        .filter(|coverage| {
+            coverage
+                .artifact_ids
+                .iter()
+                .any(|artifact_id| artifact_id == &artifact.artifact_id)
+        })
+        .collect::<Vec<_>>();
+    let Some(coverage) = memberships.first() else {
+        return false;
+    };
+    memberships.len() == 1
+        && coverage
+            .artifact_ids
+            .iter()
+            .filter(|artifact_id| *artifact_id == &artifact.artifact_id)
+            .count()
+            == 1
+        && coverage.producer_role == artifact.producer_role
+        && coverage.workflow_subject_role == artifact.workflow_subject_role
+        && coverage.source_id == artifact.source_id
+        && coverage.state == artifact.state
+        && coverage.artifact_ids.iter().all(|artifact_id| {
+            artifact_id_counts
+                .get(artifact_id.as_str())
+                .is_some_and(|count| *count == 1)
+                && intake.artifacts.iter().any(|candidate| {
+                    candidate.artifact_id == *artifact_id
+                        && candidate.producer_role == coverage.producer_role
+                        && candidate.workflow_subject_role == coverage.workflow_subject_role
+                        && candidate.source_id == coverage.source_id
+                        && candidate.state == coverage.state
+                        && is_dp_distribution_artifact(candidate)
+                        && rotation_is_canonical_for_artifact(candidate)
+                })
+        })
+}
+
+fn canonical_evidence_set(
+    artifact: &SccmServerArtifactAssessment,
+    evidence: &[&SccmEvidence],
+) -> bool {
+    if evidence.is_empty() {
+        return false;
+    }
+
+    let mut ranges = Vec::with_capacity(evidence.len());
+    let mut evidence_ids = BTreeSet::new();
+    let mut entry_ids = BTreeSet::new();
+    for item in evidence {
+        let (Some(line_start), Some(line_end)) =
+            (item.reference.line_start, item.reference.line_end)
+        else {
+            return false;
+        };
+        let expected_entry_id = format!("{}:{line_start}-{line_end}", artifact.artifact_id);
+        if line_start == 0
+            || line_end < line_start
+            || item.reference.artifact_id != artifact.artifact_id
+            || item.reference.entry_id != expected_entry_id
+            || item.evidence_id != item.reference.entry_id
+            || !evidence_ids.insert(item.evidence_id.as_str())
+            || !entry_ids.insert(item.reference.entry_id.as_str())
+            || item.role != artifact.producer_role
+            || item.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
+            || item.timestamp.offset_minutes.is_none()
+            || item.timestamp.utc_millis.is_none()
+        {
+            return false;
+        }
+        ranges.push((line_start, line_end));
+    }
+
+    ranges.sort_unstable();
+    ranges.windows(2).all(|pair| pair[0].1 < pair[1].0)
 }
 
 fn coverage_gaps(

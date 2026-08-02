@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::sccm::server::windows::{
     analyze_distribution_point, assess_server_intake, SccmServerArtifactPayload,
 };
-use cmtraceopen_parser::sccm::{
-    SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState,
-};
+use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState};
 use serde_json::Value;
 
 fn intake_root() -> PathBuf {
