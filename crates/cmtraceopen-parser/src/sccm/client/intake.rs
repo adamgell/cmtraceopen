@@ -19,7 +19,10 @@ use crate::sccm::{
 
 /// Maximum artifact declarations admitted by one SCCM client intake bundle.
 ///
-/// This is the shared v1 manifest ceiling. Validate it before allocating
+/// This is the authoritative v1 ceiling for both pure client intake and the
+/// native SCCM client manifest/capture boundary. Native readers, writers, and
+/// collectors must import and reuse this constant rather than define a wider
+/// or otherwise parallel limit. Pure intake validates it before allocating
 /// per-artifact indexes so a malformed bundle cannot turn validation into an
 /// unbounded allocation path.
 pub const MAX_SCCM_CLIENT_INTAKE_ARTIFACTS: usize = 4096;
