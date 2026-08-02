@@ -5,6 +5,9 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::sccm::catalog::{
+    classify_artifact_name, declared_client_source_memberships, SccmClientSourceMembership,
+};
 use crate::sccm::{
     SccmArtifact, SccmCoverageState, SccmRole, SccmRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
@@ -156,6 +159,11 @@ pub struct SccmClientIntakeArtifact {
     /// every configured root for that source and therefore collides with any
     /// physical declaration for it.
     pub path_fingerprint: Option<String>,
+    /// Versioned, privacy-safe identity shared by rotations of one physical
+    /// source. Optional for compatibility with pre-lineage intake values;
+    /// repeating a path fingerprint requires an explicit matching lineage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
     pub fragment_complete: Option<bool>,
 }
@@ -174,6 +182,8 @@ pub struct SccmClientIntakeFragment {
     pub rotation: SccmRotation,
     pub coverage: SccmCoverageState,
     pub path_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
     pub fragment_complete: Option<bool>,
     pub configmgr_version: Option<String>,
@@ -209,6 +219,8 @@ pub struct SccmClientUnsupportedArtifact {
     pub classification: SccmCoverageState,
     pub rotation: SccmRotation,
     pub path_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
     pub fragment_complete: Option<bool>,
     pub configmgr_version: Option<String>,
@@ -257,6 +269,8 @@ pub enum SccmClientIntakeError {
     DuplicateArtifactId,
     #[error("client intake contains an invalid path fingerprint")]
     InvalidPathFingerprint,
+    #[error("client intake contains an invalid rotation lineage")]
+    InvalidRotationLineage,
     #[error("client intake contains an invalid bundle-relative evidence path")]
     InvalidRelativePath,
     #[error("client intake contains a colliding path identity")]
@@ -272,7 +286,6 @@ pub enum SccmClientIntakeError {
 #[derive(Clone, Copy)]
 struct ClientSourceGroupSpec {
     logical_artifact_id: &'static str,
-    accepted_basenames: &'static [&'static str],
     workflows: &'static [SccmClientWorkflow],
     requiredness: SccmClientSourceRequiredness,
 }
@@ -287,92 +300,56 @@ const HEALTH_DEPLOYMENT: &[SccmClientWorkflow] =
 const CLIENT_SOURCE_GROUPS: &[ClientSourceGroupSpec] = &[
     ClientSourceGroupSpec {
         logical_artifact_id: "client-app-enforce",
-        accepted_basenames: &["AppEnforce.log", "ExecMgr.log"],
         workflows: DEPLOYMENT,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-app-intent",
-        accepted_basenames: &["AppDiscovery.log", "AppIntentEval.log"],
         workflows: DEPLOYMENT,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-ccmsetup",
-        accepted_basenames: &["ccmsetup.log", "client.msi.log"],
         workflows: HEALTH,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-content",
-        accepted_basenames: &[
-            "CAS.log",
-            "ContentTransferManager.log",
-            "DataTransferService.log",
-            "LocationServices.log",
-        ],
         workflows: DEPLOYMENT,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-evaluation",
-        accepted_basenames: &["CcmEval.log", "CcmExec.log", "CcmRestart.log"],
         workflows: HEALTH,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-identity",
-        accepted_basenames: &["ClientIDManagerStartup.log"],
         workflows: HEALTH,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-location",
-        accepted_basenames: &[
-            "CcmMessaging.log",
-            "ClientLocation.log",
-            "LocationServices.log",
-        ],
         workflows: HEALTH_DEPLOYMENT,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-policy-agent",
-        accepted_basenames: &[
-            "PolicyAgent.log",
-            "PolicyAgentProvider.log",
-            "PolicyEvaluator.log",
-            "Scheduler.log",
-        ],
         workflows: POLICY,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-policy-state",
-        accepted_basenames: &[
-            "CIAgent.log",
-            "CIDownloader.log",
-            "StateMessage.log",
-            "StatusAgent.log",
-        ],
         workflows: POLICY,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-updates",
-        accepted_basenames: &[
-            "ScanAgent.log",
-            "UpdatesDeployment.log",
-            "UpdatesHandler.log",
-            "UpdatesStore.log",
-            "WUAHandler.log",
-        ],
         workflows: UPDATES,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-windows-update-supplemental",
-        accepted_basenames: &["ReportingEvents.log"],
         workflows: UPDATES,
         requiredness: SccmClientSourceRequiredness::Supplemental,
     },
@@ -383,10 +360,14 @@ pub fn declared_client_source_groups() -> Vec<SccmClientSourceGroupDefinition> {
         .iter()
         .map(|group| SccmClientSourceGroupDefinition {
             logical_artifact_id: group.logical_artifact_id.to_owned(),
-            accepted_basenames: group
-                .accepted_basenames
+            accepted_basenames: declared_client_source_memberships()
                 .iter()
-                .map(|basename| (*basename).to_owned())
+                .filter(|source| {
+                    source
+                        .logical_artifact_ids
+                        .contains(&group.logical_artifact_id)
+                })
+                .map(|source| source.basename.to_owned())
                 .collect(),
             workflows: group.workflows.to_vec(),
             requiredness: group.requiredness,
@@ -414,6 +395,7 @@ pub fn assess_client_intake(
                 classification: SccmCoverageState::Unsupported,
                 rotation: source.artifact.rotation.clone(),
                 path_fingerprint: source.path_fingerprint.clone(),
+                rotation_lineage: source.rotation_lineage.clone(),
                 relative_path: source.relative_path.clone(),
                 fragment_complete: source.fragment_complete,
                 configmgr_version: source.artifact.configmgr_version.clone(),
@@ -460,8 +442,7 @@ pub fn assess_client_intake(
             });
         } else {
             for fragment in &fragments {
-                if let Some(reason) = source_coverage_reason(&fragment.coverage, &fragment.basename)
-                {
+                if let Some(reason) = source_coverage_reason(fragment) {
                     coverage_gaps.push(SccmClientIntakeCoverageGap {
                         logical_artifact_id: definition.logical_artifact_id.to_owned(),
                         artifact_id: Some(fragment.artifact_id.clone()),
@@ -490,7 +471,9 @@ pub fn assess_client_intake(
 
 fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientIntakeError> {
     let mut artifact_ids = BTreeSet::new();
-    let mut path_fingerprints = BTreeSet::new();
+    let mut path_fingerprint_bindings: BTreeMap<String, (Option<String>, String)> = BTreeMap::new();
+    let mut rotation_lineage_bindings = BTreeMap::new();
+    let mut lineage_rotation_identities = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
     // Canonical source identity (casefolded basename plus rotation
     // discriminator) for every declaration, split by declaration shape so
@@ -547,13 +530,59 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
         if !artifact_ids.insert(source.artifact.artifact_id.to_ascii_lowercase()) {
             return Err(SccmClientIntakeError::DuplicateArtifactId);
         }
+        if source
+            .rotation_lineage
+            .as_deref()
+            .is_some_and(|lineage| !is_safe_rotation_lineage(lineage))
+        {
+            return Err(SccmClientIntakeError::InvalidRotationLineage);
+        }
 
-        if let Some(fingerprint) = source.path_fingerprint.as_deref() {
-            if !is_safe_path_identity(fingerprint) {
+        let path_fingerprint = match source.path_fingerprint.as_deref() {
+            Some(fingerprint) if !is_safe_path_identity(fingerprint) => {
                 return Err(SccmClientIntakeError::InvalidPathFingerprint);
             }
-            if !path_fingerprints.insert(fingerprint.to_ascii_lowercase()) {
+            Some(fingerprint) => Some(fingerprint.to_ascii_lowercase()),
+            None => None,
+        };
+
+        let basename =
+            source_basename_identity(&source.artifact.display_name, &source.artifact.rotation);
+        if let Some(lineage) = source.rotation_lineage.as_deref() {
+            if let Some((bound_basename, bound_fingerprint)) =
+                rotation_lineage_bindings.get(lineage)
+            {
+                if bound_basename != &basename || bound_fingerprint != &path_fingerprint {
+                    return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+                }
+            } else {
+                rotation_lineage_bindings.insert(
+                    lineage.to_owned(),
+                    (basename.clone(), path_fingerprint.clone()),
+                );
+            }
+            if !lineage_rotation_identities.insert((
+                lineage.to_owned(),
+                rotation_identity(&source.artifact.rotation),
+            )) {
                 return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+            }
+        }
+
+        if let Some(fingerprint) = path_fingerprint {
+            let lineage = source
+                .rotation_lineage
+                .as_ref()
+                .map(|value| value.to_owned());
+            if let Some((bound_lineage, bound_basename)) =
+                path_fingerprint_bindings.get(&fingerprint)
+            {
+                if lineage.is_none() || bound_lineage != &lineage || bound_basename != &basename {
+                    return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+                }
+            } else {
+                path_fingerprint_bindings
+                    .insert(fingerprint.clone(), (lineage.clone(), basename.clone()));
             }
         }
         if let Some(relative_path) = source.relative_path.as_deref() {
@@ -580,11 +609,6 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             if source.artifact.coverage == SccmCoverageState::Capped && fragment_complete {
                 return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
             }
-            // Captured means the whole source was copied; an admitted
-            // incomplete capture must be declared as Capped instead.
-            if source.artifact.coverage == SccmCoverageState::Captured && !fragment_complete {
-                return Err(SccmClientIntakeError::InvalidFragmentCompleteness);
-            }
             source
                 .path_fingerprint
                 .as_deref()
@@ -609,8 +633,9 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             }
             if source.path_fingerprint.is_some() {
                 // Pinned markers and physical captures under other configured
-                // roots are distinct sources. Reusing an exact fingerprint
-                // already failed the shared fingerprint dedup above.
+                // roots are distinct sources. Reusing a fingerprint without
+                // an explicit lineage, or reusing one lineage/rotation pair,
+                // already failed the identity checks above.
                 if unpinned_marker_identities.contains(&source_identity) {
                     return Err(SccmClientIntakeError::DuplicateArtifactId);
                 }
@@ -638,15 +663,42 @@ fn matching_groups(
     display_name: &str,
     rotation: &SccmRotation,
 ) -> Vec<&'static ClientSourceGroupSpec> {
-    CLIENT_SOURCE_GROUPS
+    let Some(source) = catalogued_client_source(display_name, rotation) else {
+        return Vec::new();
+    };
+
+    source
+        .logical_artifact_ids
         .iter()
-        .filter(|group| {
-            group.accepted_basenames.iter().any(|basename| {
-                expected_rotated_name(basename, rotation)
-                    .is_some_and(|expected| expected == display_name)
-            })
+        .filter_map(|logical_artifact_id| {
+            CLIENT_SOURCE_GROUPS
+                .iter()
+                .find(|group| group.logical_artifact_id == *logical_artifact_id)
         })
         .collect()
+}
+
+fn catalogued_client_source(
+    display_name: &str,
+    rotation: &SccmRotation,
+) -> Option<&'static SccmClientSourceMembership> {
+    let classified = classify_artifact_name(display_name, SccmRole::Client);
+    if !classified.supported_for_diagnosis || &classified.rotation != rotation {
+        return None;
+    }
+
+    let source = declared_client_source_memberships()
+        .iter()
+        .find(|source| source.basename.eq_ignore_ascii_case(&classified.basename))?;
+    expected_rotated_name(source.basename, rotation)
+        .is_some_and(|expected| expected == display_name)
+        .then_some(source)
+}
+
+fn source_basename_identity(display_name: &str, rotation: &SccmRotation) -> String {
+    catalogued_client_source(display_name, rotation)
+        .map(|source| source.basename.to_ascii_lowercase())
+        .unwrap_or_else(|| display_name.to_ascii_lowercase())
 }
 
 fn expected_rotated_name(basename: &str, rotation: &SccmRotation) -> Option<String> {
@@ -668,6 +720,7 @@ fn intake_fragment(source: &SccmClientIntakeArtifact) -> SccmClientIntakeFragmen
         rotation: source.artifact.rotation.clone(),
         coverage: source.artifact.coverage.clone(),
         path_fingerprint: source.path_fingerprint.clone(),
+        rotation_lineage: source.rotation_lineage.clone(),
         relative_path: source.relative_path.clone(),
         fragment_complete: source.fragment_complete,
         configmgr_version: source.artifact.configmgr_version.clone(),
@@ -716,28 +769,39 @@ fn coverage_reason(coverage: &SccmCoverageState) -> &'static str {
     }
 }
 
-/// Per-source gap wording for every declaration without complete captured
-/// coverage. The safe artifact ID on the gap disambiguates identical
-/// basenames declared under separate configured roots.
-fn source_coverage_reason(coverage: &SccmCoverageState, basename: &str) -> Option<String> {
-    match coverage {
+/// Per-source gap wording for every noncaptured declaration and for a
+/// captured fragment that ends on an incomplete logical-record boundary.
+/// The safe artifact ID disambiguates identical basenames declared under
+/// separate configured roots.
+fn source_coverage_reason(fragment: &SccmClientIntakeFragment) -> Option<String> {
+    match &fragment.coverage {
         SccmCoverageState::Absent => Some(format!(
-            "No artifact for client source {basename} was supplied."
+            "No artifact for client source {} was supplied.",
+            fragment.basename
         )),
-        SccmCoverageState::AccessDenied => {
-            Some(format!("Access was denied for client source {basename}."))
-        }
+        SccmCoverageState::AccessDenied => Some(format!(
+            "Access was denied for client source {}.",
+            fragment.basename
+        )),
         SccmCoverageState::Capped => Some(format!(
-            "Client source {basename} reached its capture limit."
+            "Client source {} reached its capture limit.",
+            fragment.basename
         )),
         SccmCoverageState::Skipped => Some(format!(
-            "Client source {basename} was intentionally skipped."
+            "Client source {} was intentionally skipped.",
+            fragment.basename
         )),
         SccmCoverageState::Unsupported => Some(format!(
-            "Client source {basename} was declared unsupported."
+            "Client source {} was declared unsupported.",
+            fragment.basename
         )),
         SccmCoverageState::ParseFailed => Some(format!(
-            "Client source {basename} could not be normalized completely."
+            "Client source {} could not be normalized completely.",
+            fragment.basename
+        )),
+        SccmCoverageState::Captured if fragment.fragment_complete == Some(false) => Some(format!(
+            "Client source {} was captured with an incomplete logical-record boundary.",
+            fragment.basename
         )),
         SccmCoverageState::Captured => None,
     }
@@ -768,13 +832,17 @@ fn compare_fragments(
     left: &SccmClientIntakeFragment,
     right: &SccmClientIntakeFragment,
 ) -> Ordering {
-    compare_rotation(&left.rotation, &right.rotation)
+    left.path_fingerprint
+        .as_deref()
+        .unwrap_or_default()
+        .cmp(right.path_fingerprint.as_deref().unwrap_or_default())
         .then_with(|| {
-            left.path_fingerprint
+            left.rotation_lineage
                 .as_deref()
                 .unwrap_or_default()
-                .cmp(right.path_fingerprint.as_deref().unwrap_or_default())
+                .cmp(right.rotation_lineage.as_deref().unwrap_or_default())
         })
+        .then_with(|| compare_rotation(&left.rotation, &right.rotation))
         .then_with(|| left.basename.cmp(&right.basename))
         .then_with(|| left.artifact_id.cmp(&right.artifact_id))
 }
@@ -847,9 +915,9 @@ fn is_safe_basename(value: &str, rotation: &SccmRotation) -> bool {
 }
 
 fn is_canonical_client_basename(value: &str) -> bool {
-    CLIENT_SOURCE_GROUPS
+    declared_client_source_memberships()
         .iter()
-        .any(|group| group.accepted_basenames.contains(&value))
+        .any(|source| source.basename == value)
 }
 
 fn is_opaque_unsupported_basename(value: &str) -> bool {
@@ -916,6 +984,15 @@ fn is_safe_path_identity(value: &str) -> bool {
     }
 }
 
+fn is_safe_rotation_lineage(value: &str) -> bool {
+    value
+        .strip_prefix("synthetic:")
+        .is_some_and(is_safe_synthetic_fingerprint)
+        || value
+            .strip_prefix("cmtraceopen.lineage.sha256.v1:")
+            .is_some_and(is_sha256_digest)
+}
+
 fn is_safe_synthetic_fingerprint(payload: &str) -> bool {
     let tokens = payload.split([':', '-']).collect::<Vec<_>>();
     tokens.len() <= MAX_SYNTHETIC_FINGERPRINT_TOKENS
@@ -975,8 +1052,8 @@ fn is_expected_client_bundle_group(
         [matching_group] => group == matching_group.logical_artifact_id,
         _ => {
             group == "client-location-services-shared"
-                && expected_rotated_name("LocationServices.log", rotation)
-                    .is_some_and(|expected| expected == display_name)
+                && catalogued_client_source(display_name, rotation)
+                    .is_some_and(|source| source.basename == "LocationServices.log")
         }
     }
 }

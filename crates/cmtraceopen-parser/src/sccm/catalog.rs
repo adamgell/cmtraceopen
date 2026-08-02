@@ -107,10 +107,153 @@ struct CatalogSpec {
     family: SccmArtifactFamily,
 }
 
+/// Immutable client intake membership owned by the shared SCCM source
+/// catalog. A physical source may feed more than one logical intake group;
+/// `LocationServices.log` is intentionally captured once and projected into
+/// both location and content coverage.
+#[derive(Clone, Copy)]
+pub(crate) struct SccmClientSourceMembership {
+    pub basename: &'static str,
+    pub logical_artifact_ids: &'static [&'static str],
+}
+
+const CLIENT_SOURCE_MEMBERSHIPS: &[SccmClientSourceMembership] = &[
+    SccmClientSourceMembership {
+        basename: "AppEnforce.log",
+        logical_artifact_ids: &["client-app-enforce"],
+    },
+    SccmClientSourceMembership {
+        basename: "ExecMgr.log",
+        logical_artifact_ids: &["client-app-enforce"],
+    },
+    SccmClientSourceMembership {
+        basename: "AppDiscovery.log",
+        logical_artifact_ids: &["client-app-intent"],
+    },
+    SccmClientSourceMembership {
+        basename: "AppIntentEval.log",
+        logical_artifact_ids: &["client-app-intent"],
+    },
+    SccmClientSourceMembership {
+        basename: "ccmsetup.log",
+        logical_artifact_ids: &["client-ccmsetup"],
+    },
+    SccmClientSourceMembership {
+        basename: "client.msi.log",
+        logical_artifact_ids: &["client-ccmsetup"],
+    },
+    SccmClientSourceMembership {
+        basename: "CAS.log",
+        logical_artifact_ids: &["client-content"],
+    },
+    SccmClientSourceMembership {
+        basename: "ContentTransferManager.log",
+        logical_artifact_ids: &["client-content"],
+    },
+    SccmClientSourceMembership {
+        basename: "DataTransferService.log",
+        logical_artifact_ids: &["client-content"],
+    },
+    SccmClientSourceMembership {
+        basename: "CcmEval.log",
+        logical_artifact_ids: &["client-evaluation"],
+    },
+    SccmClientSourceMembership {
+        basename: "CcmExec.log",
+        logical_artifact_ids: &["client-evaluation"],
+    },
+    SccmClientSourceMembership {
+        basename: "CcmRestart.log",
+        logical_artifact_ids: &["client-evaluation"],
+    },
+    SccmClientSourceMembership {
+        basename: "ClientIDManagerStartup.log",
+        logical_artifact_ids: &["client-identity"],
+    },
+    SccmClientSourceMembership {
+        basename: "CcmMessaging.log",
+        logical_artifact_ids: &["client-location"],
+    },
+    SccmClientSourceMembership {
+        basename: "ClientLocation.log",
+        logical_artifact_ids: &["client-location"],
+    },
+    SccmClientSourceMembership {
+        basename: "LocationServices.log",
+        logical_artifact_ids: &["client-location", "client-content"],
+    },
+    SccmClientSourceMembership {
+        basename: "PolicyAgent.log",
+        logical_artifact_ids: &["client-policy-agent"],
+    },
+    SccmClientSourceMembership {
+        basename: "PolicyAgentProvider.log",
+        logical_artifact_ids: &["client-policy-agent"],
+    },
+    SccmClientSourceMembership {
+        basename: "PolicyEvaluator.log",
+        logical_artifact_ids: &["client-policy-agent"],
+    },
+    SccmClientSourceMembership {
+        basename: "Scheduler.log",
+        logical_artifact_ids: &["client-policy-agent"],
+    },
+    SccmClientSourceMembership {
+        basename: "CIAgent.log",
+        logical_artifact_ids: &["client-policy-state"],
+    },
+    SccmClientSourceMembership {
+        basename: "CIDownloader.log",
+        logical_artifact_ids: &["client-policy-state"],
+    },
+    SccmClientSourceMembership {
+        basename: "StateMessage.log",
+        logical_artifact_ids: &["client-policy-state"],
+    },
+    SccmClientSourceMembership {
+        basename: "StatusAgent.log",
+        logical_artifact_ids: &["client-policy-state"],
+    },
+    SccmClientSourceMembership {
+        basename: "ScanAgent.log",
+        logical_artifact_ids: &["client-updates"],
+    },
+    SccmClientSourceMembership {
+        basename: "UpdatesDeployment.log",
+        logical_artifact_ids: &["client-updates"],
+    },
+    SccmClientSourceMembership {
+        basename: "UpdatesHandler.log",
+        logical_artifact_ids: &["client-updates"],
+    },
+    SccmClientSourceMembership {
+        basename: "UpdatesStore.log",
+        logical_artifact_ids: &["client-updates"],
+    },
+    SccmClientSourceMembership {
+        basename: "WUAHandler.log",
+        logical_artifact_ids: &["client-updates"],
+    },
+    SccmClientSourceMembership {
+        basename: "ReportingEvents.log",
+        logical_artifact_ids: &["client-windows-update-supplemental"],
+    },
+];
+
+pub(crate) fn declared_client_source_memberships() -> &'static [SccmClientSourceMembership] {
+    CLIENT_SOURCE_MEMBERSHIPS
+}
+
 const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
-        basename: "CCMSetup",
+        basename: "ccmsetup",
         logical_name: "ccmSetup",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientSetup,
+    },
+    CatalogSpec {
+        basename: "client.msi",
+        logical_name: "clientMsi",
         role: SccmRole::Client,
         family: SccmArtifactFamily::ClientSetup,
     },
@@ -175,6 +318,30 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
         family: SccmArtifactFamily::ClientPolicy,
     },
     CatalogSpec {
+        basename: "CIAgent",
+        logical_name: "ciAgent",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientPolicy,
+    },
+    CatalogSpec {
+        basename: "CIDownloader",
+        logical_name: "ciDownloader",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientPolicy,
+    },
+    CatalogSpec {
+        basename: "StateMessage",
+        logical_name: "stateMessage",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientPolicy,
+    },
+    CatalogSpec {
+        basename: "StatusAgent",
+        logical_name: "statusAgent",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientPolicy,
+    },
+    CatalogSpec {
         basename: "Scheduler",
         logical_name: "scheduler",
         role: SccmRole::Client,
@@ -217,6 +384,12 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
         family: SccmArtifactFamily::ClientApplication,
     },
     CatalogSpec {
+        basename: "ExecMgr",
+        logical_name: "execMgr",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientApplication,
+    },
+    CatalogSpec {
         basename: "ScanAgent",
         logical_name: "scanAgent",
         role: SccmRole::Client,
@@ -243,6 +416,12 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "UpdatesStore",
         logical_name: "updatesStore",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientUpdates,
+    },
+    CatalogSpec {
+        basename: "ReportingEvents",
+        logical_name: "reportingEvents",
         role: SccmRole::Client,
         family: SccmArtifactFamily::ClientUpdates,
     },
@@ -411,7 +590,7 @@ pub fn classify_artifact_name(name: &str, role: SccmRole) -> SccmSourceCatalogEn
             role,
             family: entry.family.clone(),
             rotation: parsed.rotation,
-            uses_ccm_records: true,
+            uses_ccm_records: catalog_entry_uses_ccm_records(entry),
             supported_for_diagnosis: parsed.rotation_supported,
         };
     }
@@ -445,9 +624,13 @@ fn declared_catalog_entry(entry: &CatalogSpec, role: SccmRole) -> SccmSourceCata
         role,
         family: entry.family.clone(),
         rotation: SccmRotation::Current,
-        uses_ccm_records: true,
+        uses_ccm_records: catalog_entry_uses_ccm_records(entry),
         supported_for_diagnosis: true,
     }
+}
+
+fn catalog_entry_uses_ccm_records(entry: &CatalogSpec) -> bool {
+    !matches!(entry.logical_name, "clientMsi" | "reportingEvents")
 }
 
 struct ParsedArtifactName<'a> {

@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::{
-    assess_client_intake, declared_client_source_groups, SccmArtifact, SccmClientIntakeArtifact,
-    SccmClientIntakeBundle, SccmClientIntakeError, SccmCoverageState, SccmRole, SccmRotation,
-    SccmUnknownRotation,
+    assess_client_intake, classify_artifact_name, declared_client_source_groups, SccmArtifact,
+    SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientIntakeError, SccmCoverageState,
+    SccmRole, SccmRotation, SccmUnknownRotation,
 };
 use serde::Deserialize;
 
@@ -38,6 +38,7 @@ struct FixtureRotation {
     kind: String,
     number: Option<u32>,
     timestamp: Option<String>,
+    lineage_id: Option<String>,
     fragment_complete: Option<bool>,
 }
 
@@ -73,6 +74,7 @@ fn load_bundle(scenario: &str) -> SccmClientIntakeBundle {
                         encoding: fixture.encoding,
                     },
                     path_fingerprint: fixture.path_fingerprint,
+                    rotation_lineage: fixture.rotation.lineage_id,
                     relative_path: fixture.relative_path,
                     fragment_complete: fixture.rotation.fragment_complete,
                 }
@@ -136,6 +138,7 @@ fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntake
             encoding: Some("utf-8".to_owned()),
         },
         path_fingerprint: Some(format!("synthetic-{artifact_id}")),
+        rotation_lineage: None,
         relative_path: Some(relative_path),
         fragment_complete: Some(true),
     }
@@ -199,6 +202,30 @@ fn serialized_privacy_probe_detects_forward_slash_normalized_windows_user_path()
 }
 
 #[test]
+fn every_declared_client_basename_is_supported_by_the_authoritative_catalog() {
+    for group in declared_client_source_groups() {
+        for basename in group.accepted_basenames {
+            let classified = classify_artifact_name(&basename, SccmRole::Client);
+            assert!(
+                classified.supported_for_diagnosis,
+                "{basename} in {} bypasses the shared SCCM catalog",
+                group.logical_artifact_id
+            );
+            assert_eq!(
+                classified.basename, basename,
+                "{basename} in {} must use the shared catalog's exact canonical basename",
+                group.logical_artifact_id
+            );
+            assert_eq!(
+                classified.uses_ccm_records,
+                !matches!(basename.as_str(), "client.msi.log" | "ReportingEvents.log"),
+                "the shared catalog must not route a non-CCM supplement through raw CCM"
+            );
+        }
+    }
+}
+
+#[test]
 fn complete_client_intake_covers_every_declared_group_without_a_diagnosis() {
     let declared = declared_client_source_groups();
     let intake = assessment("complete");
@@ -254,7 +281,17 @@ fn rotations_are_one_group_with_stable_physical_order_and_reordering_is_determin
             .filter_map(|fragment| fragment.path_fingerprint.as_deref())
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
-        3
+        1,
+        "one configured source fingerprint is retained across its rotations"
+    );
+    assert_eq!(
+        group
+            .fragments
+            .iter()
+            .filter_map(|fragment| fragment.rotation_lineage.as_deref())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["synthetic:app-enforce-root-a"]),
+        "every rotation retains the immutable source lineage"
     );
 
     let mut reordered = bundle;
@@ -263,6 +300,102 @@ fn rotations_are_one_group_with_stable_physical_order_and_reordering_is_determin
     assert_eq!(
         serde_json::to_string(&reordered).expect("reordered JSON"),
         serde_json::to_string(&intake).expect("intake JSON")
+    );
+
+    let mut duplicate_bundle = load_bundle("rotations");
+    let mut duplicate = duplicate_bundle.artifacts[1].clone();
+    duplicate.artifact.artifact_id = "fixture-rotations-app-enforce-root-a-lo-two".to_owned();
+    duplicate.relative_path =
+        Some("evidence/client-app-enforce/root-a/lo/AppEnforce.lo_".to_owned());
+    duplicate_bundle.artifacts.push(duplicate);
+    assert_eq!(
+        assess_client_intake(&duplicate_bundle),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "one lineage cannot declare the same physical rotation twice"
+    );
+
+    let mut conflicting_root_bundle = load_bundle("rotations");
+    let mut conflicting_root = conflicting_root_bundle.artifacts[1].clone();
+    conflicting_root.artifact.artifact_id = "fixture-rotations-app-enforce-root-b-lo".to_owned();
+    conflicting_root.path_fingerprint = Some("synthetic-root-b".to_owned());
+    conflicting_root.relative_path =
+        Some("evidence/client-app-enforce/root-b/lo/AppEnforce.lo_".to_owned());
+    conflicting_root_bundle.artifacts.push(conflicting_root);
+    assert_eq!(
+        assess_client_intake(&conflicting_root_bundle),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "one lineage and rotation cannot be relabeled as a second configured root"
+    );
+}
+
+#[test]
+fn rotation_lineage_cannot_cross_path_fingerprints_across_distinct_rotations() {
+    let mut bundle = load_bundle("rotations");
+    bundle.artifacts[1].path_fingerprint = Some("synthetic-root-b".to_owned());
+    bundle.artifacts[1].relative_path =
+        Some("evidence/client-app-enforce/root-b/lo/AppEnforce.lo_".to_owned());
+
+    assert_eq!(
+        assess_client_intake(&bundle),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "one immutable lineage cannot combine rotations from distinct configured roots"
+    );
+}
+
+#[test]
+fn fragment_order_is_source_identity_then_rotation_rank() {
+    let fixture = load_bundle("rotations");
+    let mut root_a_current = fixture.artifacts[0].clone();
+    root_a_current.relative_path =
+        Some("evidence/client-app-enforce/root-a/current/AppEnforce.log".to_owned());
+    let mut root_a_lo = fixture.artifacts[1].clone();
+    root_a_lo.relative_path =
+        Some("evidence/client-app-enforce/root-a/lo/AppEnforce.lo_".to_owned());
+
+    let mut root_b_current = root_a_current.clone();
+    root_b_current.artifact.artifact_id = "fixture-rotations-app-enforce-root-b-current".to_owned();
+    root_b_current.path_fingerprint = Some("synthetic-root-b".to_owned());
+    root_b_current.rotation_lineage = Some("synthetic:app-enforce-root-b".to_owned());
+    root_b_current.relative_path =
+        Some("evidence/client-app-enforce/root-b/current/AppEnforce.log".to_owned());
+
+    let mut root_b_lo = root_a_lo.clone();
+    root_b_lo.artifact.artifact_id = "fixture-rotations-app-enforce-root-b-lo".to_owned();
+    root_b_lo.path_fingerprint = Some("synthetic-root-b".to_owned());
+    root_b_lo.rotation_lineage = Some("synthetic:app-enforce-root-b".to_owned());
+    root_b_lo.relative_path =
+        Some("evidence/client-app-enforce/root-b/lo/AppEnforce.lo_".to_owned());
+
+    let bundle = SccmClientIntakeBundle {
+        artifacts: vec![root_b_lo, root_a_current, root_b_current, root_a_lo],
+    };
+    let assessment = assess_client_intake(&bundle).expect("two source lineages are valid");
+    let ordered_ids = assessment
+        .group("client-app-enforce")
+        .expect("app enforcement group")
+        .fragments
+        .iter()
+        .map(|fragment| fragment.artifact_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        ordered_ids,
+        [
+            "fixture-rotations-app-enforce-root-a-current",
+            "fixture-rotations-app-enforce-root-a-lo",
+            "fixture-rotations-app-enforce-root-b-current",
+            "fixture-rotations-app-enforce-root-b-lo",
+        ],
+        "stable source/path identity must precede rotation rank"
+    );
+
+    let mut reordered = bundle;
+    reordered.artifacts.reverse();
+    assert_eq!(
+        serde_json::to_string(&assess_client_intake(&reordered).expect("reordered intake"))
+            .expect("reordered JSON"),
+        serde_json::to_string(&assessment).expect("assessment JSON"),
+        "source-first ordering must remain independent of declaration order"
     );
 }
 
@@ -338,6 +471,7 @@ fn capped_cas_fragment_cannot_claim_complete() {
             encoding: Some("utf-8".to_owned()),
         },
         path_fingerprint: Some("synthetic:content-capped".to_owned()),
+        rotation_lineage: None,
         relative_path: Some("evidence/client-content/current/CAS.log".to_owned()),
         fragment_complete: Some(true),
     };
@@ -352,19 +486,27 @@ fn capped_cas_fragment_cannot_claim_complete() {
 }
 
 #[test]
-fn captured_cas_fragment_cannot_admit_an_incomplete_capture() {
-    let mut contradictory = synthetic_artifact("content-a", "CAS.log");
-    contradictory.relative_path = Some("evidence/client-content/current/CAS.log".to_owned());
-    contradictory.fragment_complete = Some(false);
+fn captured_incomplete_fragment_retains_a_boundary_without_becoming_capped() {
+    let mut boundary = synthetic_artifact("content-a", "CAS.log");
+    boundary.relative_path = Some("evidence/client-content/current/CAS.log".to_owned());
+    boundary.fragment_complete = Some(false);
 
-    assert_eq!(
-        assess_client_intake(&SccmClientIntakeBundle {
-            artifacts: vec![contradictory],
-        }),
-        Err(SccmClientIntakeError::InvalidFragmentCompleteness),
-        "a captured physical fragment admitting an incomplete capture must fail closed; \
-         Capped exists to represent an incomplete capture"
-    );
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![boundary],
+    })
+    .expect("a fully copied rotation may still end on an incomplete logical record");
+    let content = intake.group("client-content").expect("content group");
+
+    assert_eq!(content.coverage, SccmCoverageState::Captured);
+    assert_eq!(content.fragments[0].coverage, SccmCoverageState::Captured);
+    assert_eq!(content.fragments[0].fragment_complete, Some(false));
+    assert!(intake.coverage_gaps.iter().any(|gap| {
+        gap.logical_artifact_id == "client-content"
+            && gap.artifact_id.as_deref() == Some("fixture-content-a")
+            && gap.coverage == SccmCoverageState::Captured
+            && gap.reason
+                == "Client source CAS.log was captured with an incomplete logical-record boundary."
+    }));
 }
 
 #[test]
@@ -1384,6 +1526,48 @@ fn identity_bearing_relative_paths_fail_before_public_projection() {
         }),
         Err(SccmClientIntakeError::InvalidRotation),
         "malformed timestamp rotation must fail on its own metadata contract"
+    );
+}
+
+#[test]
+fn rotation_lineage_is_versioned_privacy_safe_and_bound_to_one_source() {
+    let digest = "a".repeat(64);
+    let mut opaque = synthetic_artifact("policy-a", "PolicyAgent.log");
+    opaque.rotation_lineage = Some(format!("cmtraceopen.lineage.sha256.v1:{digest}"));
+    assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![opaque],
+    })
+    .expect("the versioned opaque lineage form is accepted");
+
+    for lineage in [
+        "",
+        "synthetic:free-form-user-value",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "cmtraceopen.lineage.sha256.v1:short",
+        "cmtraceopen.lineage.sha256.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        r"C:\Users\RealUser\CCM\Logs",
+    ] {
+        let mut artifact = synthetic_artifact("policy-a", "PolicyAgent.log");
+        artifact.rotation_lineage = Some(lineage.to_owned());
+        assert_eq!(
+            assess_client_intake(&SccmClientIntakeBundle {
+                artifacts: vec![artifact],
+            }),
+            Err(SccmClientIntakeError::InvalidRotationLineage),
+            "unsafe lineage reached the public projection: {lineage:?}"
+        );
+    }
+
+    let mut policy = synthetic_artifact("policy-a", "PolicyAgent.log");
+    policy.rotation_lineage = Some("synthetic:policy-root-a".to_owned());
+    let mut state = synthetic_artifact("state-b", "CIAgent.log");
+    state.rotation_lineage = Some("synthetic:policy-root-a".to_owned());
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![policy, state],
+        }),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "one immutable lineage cannot be rebound to a different catalog source"
     );
 }
 
