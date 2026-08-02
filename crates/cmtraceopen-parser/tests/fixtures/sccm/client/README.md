@@ -1,10 +1,12 @@
 # Synthetic SCCM client intake fixtures
 
-These are preparation-only fixtures for issue #319. They are not accepted by a
-production SCCM reader until #318 publishes its stable public contracts.
-`manifest.json` and `expected.json` are proposed contract inputs/outputs, not
-compiled test fixtures. Every identity, path, timestamp, byte count, UUID, and
-log record is deterministic and synthetic.
+These are compiled pure-intake fixtures for issue #319. The parser test harness
+maps their declared artifact fields into the published #318 spine types and
+checks the executable #319 assessment. `manifest.json` remains a
+`proposalOnly` native wire design: no native SCCM manifest reader, discovery,
+capture, legacy adapter, or Windows acceptance is implied. Every identity,
+path, timestamp, byte count, UUID, and log record is deterministic and
+synthetic.
 
 Privacy markers: manifests require `syntheticFixture: true` and
 `proposalOnly: true`; issue #319 intake evidence uses only `LAB-CLIENT-01`, the
@@ -24,14 +26,21 @@ paths; `root-a` and `root-b` are opaque configured-root handles, not native
 paths.
 `missing-root`, `access-denied`, and `capped` prove coverage behavior only;
 their evidence must not form workflow findings. `skipped`, `unsafe-path`, and
-legacy generic-manifest mapping are intentionally documented test designs in
-`docs/sccm/preparation/issue-319-client-intake.md`, pending #318 contracts.
+legacy generic-manifest mapping are intentionally documented native test
+designs in `docs/sccm/preparation/issue-319-client-intake.md` and remain
+pending.
 
-Expected arrays are stable-sorted by `logicalArtifactId`. `contractState` must
-remain `proposedPending318` until an implementation maps this design to the
-published spine schema. Replay after #318: deserialize via its public reader,
-assert coverage directly, reorder artifacts and compare normalized output, and
-never interpret capped/split fragment text as a phase or terminal diagnosis.
+`contractState` is `pureIntakeImplementedNativePending`. Each `expected.json`
+separates three contracts: `pureAssessment` is a typed, exact normalized view
+of every public group, fragment, physical artifact, unsupported artifact, and
+coverage gap; `nativeDesignPending` retains bounded byte/digest expectations
+without claiming a native reader or collector exists; and
+`downstreamDesignPending` labels request wording and prohibited diagnostic
+claims that are not intake output. The pure arrays retain their deterministic
+production order, while the deduplicated fragment table and pending native
+artifact provenance are stable-sorted by artifact ID. Mutation tests reject
+unknown fields, omissions, reordered output, and forged provenance. No test
+interprets capped/split fragment text as a phase or terminal diagnosis.
 
 Every manifest artifact has one physical `artifactId` and a
 `designOnlyCatalog` object containing one catalog entry plus sorted logical
@@ -39,8 +48,11 @@ group memberships. These are preparation labels, not final #318 field names.
 For every `captured` or `capped` artifact, `bytesCopied` equals the physical
 evidence-file length, `encoding` is `utf-8`, and `collectionLimit` states both
 the byte limit and whether it applied; `expected.json` mirrors those values in
-`artifactProvenance`. Noncapture artifacts remain `bytesCopied: 0` with a null
-relative path and do not invent capture provenance. An applied cap counts
+`nativeDesignPending.artifactProvenance`, including an exact `bytesCopied` for
+every physical fixture. In `manifest.json`, noncapture artifacts remain
+`bytesCopied: 0` with a null relative path; they are omitted from
+`expected.json`'s `nativeDesignPending.artifactProvenance` and do not invent
+capture provenance. An applied cap counts
 inclusive raw source bytes before decoding and retains that exact source
 prefix, even when the last byte splits a text or logical-record boundary. The
 collector never appends a truncation marker or repairs/replaces bytes. The

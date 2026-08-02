@@ -3841,6 +3841,153 @@ fn finding_review_every_exact_catalog_identity_passes_at_every_public_boundary()
 }
 
 #[test]
+fn finding_request_accepts_exact_multi_dot_catalog_basename_at_every_public_boundary() {
+    let reason = "Collect the complete client.msi.log file.";
+    let request = finding_request("clientMsi", SccmRole::Client, reason);
+    let canonical = finding_with_gap_and_request("exact-multi-dot-catalog-identity-parity");
+    let mut rejected = Vec::new();
+
+    let builder = SccmFindingBuilder::new("exact-multi-dot-catalog-identity-builder")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .next_artifact(request.clone())
+        .build();
+    if let Err(error) = builder {
+        rejected.push(format!("builder ({error:?})"));
+    }
+
+    let mut direct = canonical.clone();
+    direct.next_artifacts[0] = request.clone();
+    if let Err(error) = direct.validate() {
+        rejected.push(format!("direct validate ({error:?})"));
+    }
+    if let Err(error) = serde_json::to_value(&direct) {
+        rejected.push(format!("serializer ({error})"));
+    }
+
+    let mut json = serde_json::to_value(&canonical).unwrap();
+    json["nextArtifacts"][0] = serde_json::to_value(request).unwrap();
+    if let Err(error) = serde_json::from_value::<SccmFinding>(json) {
+        rejected.push(format!("deserializer ({error})"));
+    }
+
+    assert!(
+        rejected.is_empty(),
+        "rejected exact multi-dot catalog identity: {rejected:#?}"
+    );
+}
+
+#[test]
+fn finding_request_rejects_multi_dot_scope_without_exact_catalog_authorization() {
+    let canonical = finding_with_gap_and_request("invalid-multi-dot-catalog-identity-parity");
+    let cases = [
+        (
+            "unknown multi-dot basename",
+            finding_request(
+                "clientMsi",
+                SccmRole::Client,
+                "Collect the complete client.unknown.log file.",
+            ),
+            SccmFindingValidationError::InvalidArtifactRequestReason,
+        ),
+        (
+            "bare component of the multi-dot basename",
+            finding_request(
+                "clientMsi",
+                SccmRole::Client,
+                "Collect the complete client.log file.",
+            ),
+            SccmFindingValidationError::InvalidArtifactRequestReason,
+        ),
+        (
+            "mismatched logical id",
+            finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                "Collect the complete client.msi.log file.",
+            ),
+            SccmFindingValidationError::InvalidArtifactRequestReason,
+        ),
+        (
+            "mismatched role",
+            finding_request(
+                "clientMsi",
+                SccmRole::ManagementPoint,
+                "Collect the complete client.msi.log file.",
+            ),
+            SccmFindingValidationError::ArtifactRequestRoleMismatch,
+        ),
+        (
+            "glob",
+            finding_request(
+                "clientMsi",
+                SccmRole::Client,
+                "Collect client.msi*.log from the bundle.",
+            ),
+            SccmFindingValidationError::InvalidArtifactRequestReason,
+        ),
+        (
+            "unbounded language",
+            finding_request(
+                "clientMsi",
+                SccmRole::Client,
+                "Collect client.msi.log and every file on the system.",
+            ),
+            SccmFindingValidationError::InvalidArtifactRequestReason,
+        ),
+    ];
+    let mut incorrectly_accepted = Vec::new();
+
+    for (label, request, expected_error) in cases {
+        let builder = SccmFindingBuilder::new("invalid-multi-dot-catalog-identity-builder")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .next_artifact(request.clone())
+            .build();
+        if builder.err() != Some(expected_error) {
+            incorrectly_accepted.push(format!("builder: {label}"));
+        }
+
+        let mut direct = canonical.clone();
+        direct.next_artifacts[0] = request.clone();
+        if direct.validate().err() != Some(expected_error) {
+            incorrectly_accepted.push(format!("direct validate: {label}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            incorrectly_accepted.push(format!("serializer: {label}"));
+        }
+
+        let mut json = serde_json::to_value(&canonical).unwrap();
+        json["nextArtifacts"][0] = serde_json::json!({
+            "logicalId": &request.logical_id,
+            "role": &request.role,
+            "reason": &request.reason,
+        });
+        let deserialized = serde_json::from_value::<SccmFinding>(json);
+        let expected_message = format!("invalid SCCM finding contract: {expected_error:?}");
+        let matches_expected = deserialized
+            .err()
+            .is_some_and(|error| error.to_string() == expected_message);
+        if !matches_expected {
+            incorrectly_accepted.push(format!("deserializer: {label}"));
+        }
+    }
+
+    assert!(
+        incorrectly_accepted.is_empty(),
+        "accepted or misclassified unauthorized multi-dot requests: {incorrectly_accepted:#?}"
+    );
+}
+
+#[test]
 fn finding_review_percentages_are_not_environment_paths_at_every_public_boundary() {
     let reason = "Collect PolicyAgent.log after 50% and before 60% completion.";
     let canonical = finding_with_gap_and_request("review-percentage-path-parity");
@@ -6913,11 +7060,19 @@ type ExpectedCatalogTuple = (
 fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
     vec![
         (
-            "CCMSetup.log",
+            "ccmsetup.log",
             SccmRole::Client,
             "ccmSetup",
             SccmArtifactFamily::ClientSetup,
             true,
+            true,
+        ),
+        (
+            "client.msi.log",
+            SccmRole::Client,
+            "clientMsi",
+            SccmArtifactFamily::ClientSetup,
+            false,
             true,
         ),
         (
@@ -7001,6 +7156,38 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             true,
         ),
         (
+            "CIAgent.log",
+            SccmRole::Client,
+            "ciAgent",
+            SccmArtifactFamily::ClientPolicy,
+            true,
+            true,
+        ),
+        (
+            "CIDownloader.log",
+            SccmRole::Client,
+            "ciDownloader",
+            SccmArtifactFamily::ClientPolicy,
+            true,
+            true,
+        ),
+        (
+            "StateMessage.log",
+            SccmRole::Client,
+            "stateMessage",
+            SccmArtifactFamily::ClientPolicy,
+            true,
+            true,
+        ),
+        (
+            "StatusAgent.log",
+            SccmRole::Client,
+            "statusAgent",
+            SccmArtifactFamily::ClientPolicy,
+            true,
+            true,
+        ),
+        (
             "Scheduler.log",
             SccmRole::Client,
             "scheduler",
@@ -7057,6 +7244,14 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             true,
         ),
         (
+            "ExecMgr.log",
+            SccmRole::Client,
+            "execMgr",
+            SccmArtifactFamily::ClientApplication,
+            true,
+            true,
+        ),
+        (
             "ScanAgent.log",
             SccmRole::Client,
             "scanAgent",
@@ -7094,6 +7289,14 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             "updatesStore",
             SccmArtifactFamily::ClientUpdates,
             true,
+            true,
+        ),
+        (
+            "ReportingEvents.log",
+            SccmRole::Client,
+            "reportingEvents",
+            SccmArtifactFamily::ClientUpdates,
+            false,
             true,
         ),
         (

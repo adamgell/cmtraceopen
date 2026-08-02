@@ -2,12 +2,13 @@
 
 ## Purpose and dependency boundary
 
-This preparation artifact defines the bounded source inventory and synthetic
-fixture design for issue #319. It is deliberately not production code and does
-not freeze an API, Rust type, Tauri feature, Cargo dependency, or the #318
-serialized contract. #319 may start implementation only after #318 publishes
-and tests its public artifact, evidence, coverage, signal, key, timestamp,
-redaction, finding, and bundle-reader contracts.
+This document began as the bounded source inventory and synthetic fixture
+design for issue #319. The pure parser intake is now implemented against the
+published #318 artifact, coverage, rotation, and schema contracts; its public
+assessment is executable and validated on both serialization and
+deserialization. The native manifest reader/writer, bounded discovery/capture,
+legacy adapter, and Windows acceptance described below remain pending and do
+not become delivered merely because the pure projection is available.
 
 The proposed native adapter consumes the catalog below and writes an additive,
 versioned SCCM extension (for example `sccm-manifest.json`). The generic bundle
@@ -139,7 +140,10 @@ filesystem access, globbing in the pure crate, or redefinition of CCM.
 
 - Sort manifest artifacts by catalog entry ID, normalized path fingerprint,
   rotation rank, original basename, then physical artifact ID. Group memberships
-  are sorted independently. Expected coverage arrays use stable logical IDs.
+  are sorted independently. `expected.json` preserves the public group,
+  physical-artifact, unsupported-artifact, and coverage-gap order exactly; its
+  deduplicated fragment table and pending native provenance are sorted by
+  physical artifact ID.
 - Use the declared `current, lo, numeric ascending, timestamp ascending`
   capture order. Parsing may later use valid normalized timestamps for evidence
   order; it may not infer a cross-artifact relationship from rotation order.
@@ -175,15 +179,16 @@ filesystem access, globbing in the pure crate, or redefinition of CCM.
 
 The six committed fixture directories are intentionally the smallest corpus
 for first intake tests. `skipped`, `unsafe-path`, and `legacy-mapping` remain
-test-design cases until #318 publishes compatible public types and a native
-test-double boundary; they must be added before #319 reaches its exit gate.
-Every production behavior must begin with a focused red test. Required pure
-tests deserialize through the published #318 bundle reader, use direct field
-assertions (not permissive snapshots), and cover unknown basenames, unsupported
-suffixes, deterministic reordered input, source collisions, and each capture
-state above. Native temp-directory tests cover caps, access provider results,
-escape rejection, and legacy mapping. Windows client collection remains a
-separate acceptance gate.
+test-design cases until the additive native manifest and test-double boundary
+exist; they must be added before #319 reaches its exit gate. Every production
+behavior must begin with a focused red test. Required pure tests use typed,
+unknown-field-denying expectations and exact normalized comparison across all
+groups, fragments, physical artifacts, unsupported artifacts, and coverage
+gaps. Mutation tests cover omissions, reordering, forged provenance, unknown
+basenames, unsupported suffixes, source collisions, and every supported pure
+coverage state. Native temp-directory tests cover caps, access-provider
+results, escape rejection, and legacy mapping. Windows client collection
+remains a separate acceptance gate.
 
 ## Fixture privacy and sanitization
 
@@ -203,23 +208,28 @@ separate acceptance gate.
   incomplete 128-byte fragment, and non-CCM supplemental fixtures use it as
   plain text. A production collector must not treat the marker as a real SCCM
   file format.
-- `expected.json` asserts explicit coverage and requests. Its `contractState`
-  is `proposedPending318`, so no fixture suggests that interface names, enum
-  spellings, or schema fields are final.
+- `expected.json` uses `contractState: pureIntakeImplementedNativePending`.
+  `pureAssessment` is the complete typed
+  executable oracle. `nativeDesignPending` holds byte/limit/digest facts that
+  remain outside the pure projection, and `downstreamDesignPending` labels
+  request wording and prohibited claims that are not intake output. Native
+  manifest emission, discovery/capture, and Windows acceptance remain
+  design-only gates rather than delivered claims.
 
-## Exact dependency blockers
+## Remaining delivery blockers
 
-1. #318 has not yet supplied a stable public `SccmArtifact`, evidence,
-   coverage, rotation, redaction, key/timestamp, finding, and bundle-reader
-   contract in this worktree. No parser source, test compiled against an
-   invented interface, or Cargo change is authorized here.
-2. The final mapping from the proposed SCCM extension states to #318 coverage
-   variants is unresolved. In particular `accessDenied`, `capped`, `skipped`,
-   `unsafePath`, and `legacyUnknownDetail` must remain distinct.
+1. The additive SCCM native manifest reader/writer and bounded client
+   discovery/capture adapter are not implemented. The committed
+   `proposalOnly` manifest shape is test design, not a native wire acceptance
+   claim.
+2. Pure coverage already keeps `captured`, `absent`, `accessDenied`, `capped`,
+   `skipped`, `unsupported`, and `parseFailed` distinct. Native `unsafePath`
+   and `legacyUnknownDetail` mapping still need their own additive manifest
+   and test-double contracts rather than being guessed into an existing state.
 3. The public legacy generic-manifest adapter and tolerant unknown-field/enum
-   behavior are unresolved; only provenance-backed `collected`/`missing` may
-   map forward.
+   behavior remain unresolved; only provenance-backed `collected`/`missing`
+   may map forward.
 4. A Windows SCCM development client and Windows CI are required to accept
    actual canonicalization/reparse/ACL/rotation collection semantics. macOS
-   can validate only JSON, ordering, synthetic privacy, and later pure/native
-   test doubles.
+   proves the pure projection, JSON, ordering, synthetic privacy, and future
+   native test doubles only.

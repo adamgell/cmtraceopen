@@ -2320,7 +2320,8 @@ fn requested_artifact_identity_ranges(
     requested_basename: &str,
     requested_logical_id: &str,
 ) -> Vec<(usize, usize)> {
-    let basename = normalize_catalog_identity(catalog_log_stem(requested_basename));
+    let basename_stem = catalog_log_stem(requested_basename);
+    let basename = normalize_catalog_identity(basename_stem);
     let logical_id = normalize_catalog_identity(requested_logical_id);
     let mut ranges = tokens
         .iter()
@@ -2329,11 +2330,37 @@ fn requested_artifact_identity_ranges(
         .map(|(index, _)| (index, index + 1))
         .collect::<Vec<_>>();
 
+    // Exact request authorization is established earlier from the selected
+    // catalog entry and its punctuated alias. This additional range only lets
+    // the broad-scope guard recognize that same basename after tokenization
+    // splits a catalog identity such as `client.msi` at its punctuation.
+    let basename_components = basename_stem
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|component| !component.is_empty())
+        .map(normalize_catalog_identity)
+        .collect::<Vec<_>>();
+    if basename_components.len() > 1 {
+        ranges.extend(
+            tokens
+                .windows(basename_components.len())
+                .enumerate()
+                .filter_map(|(index, window)| {
+                    window
+                        .iter()
+                        .zip(&basename_components)
+                        .all(|(token, component)| *token == component)
+                        .then_some((index, index + window.len()))
+                }),
+        );
+    }
+
     if logical_id == "smsts" {
         ranges.extend(tokens.windows(3).enumerate().filter_map(|(index, window)| {
             (window == ["task", "sequence", "log"]).then_some((index, index + 3))
         }));
     }
+    ranges.sort_unstable();
+    ranges.dedup();
     ranges
 }
 
