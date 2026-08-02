@@ -69,8 +69,8 @@ pub struct SccmClientDiscoveryCoverageIssue {
     /// A validated catalog identity or the fixed `none` category. It never
     /// derives from an unvalidated basename or root handle.
     pub catalog_entry_id: String,
-    /// Invalid provenance can affect a known workflow group; unsupported
-    /// observations always have zero memberships.
+    /// Rejected observations never assert workflow membership, even when a
+    /// privacy-safe catalog identity can still be retained.
     pub logical_artifact_ids: Vec<String>,
     pub rotation_category: SccmClientDiscoveryRotationCategory,
     pub state: SccmClientDiscoveryCoverageIssueState,
@@ -341,11 +341,8 @@ fn normalize_observations(
                         root_handle: &observation.root_handle,
                         raw_basename: &observation.basename,
                     };
-                    let coverage_issue = coverage_issue_key(
-                        root_is_valid,
-                        catalog_basename.as_deref(),
-                        &observation.rotation,
-                    );
+                    let coverage_issue =
+                        coverage_issue_key(root_is_valid, catalog_basename.as_deref());
                     (consistency_key, None, Some(coverage_issue))
                 }
             };
@@ -396,11 +393,7 @@ fn normalize_observations(
     })
 }
 
-fn coverage_issue_key(
-    root_is_valid: bool,
-    catalog_basename: Option<&str>,
-    rotation: &SccmRotation,
-) -> CoverageIssueKey {
+fn coverage_issue_key(root_is_valid: bool, catalog_basename: Option<&str>) -> CoverageIssueKey {
     let state = if root_is_valid {
         SccmClientDiscoveryCoverageIssueState::Unsupported
     } else {
@@ -409,21 +402,10 @@ fn coverage_issue_key(
     let catalog_entry_id = catalog_basename
         .map(catalog_entry_id)
         .unwrap_or_else(|| "sccm-client-source:v1:none".to_owned());
-    let logical_artifact_ids = if state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance
-    {
-        catalog_basename
-            .map(logical_artifact_ids)
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    let rotation_category = catalog_basename
-        .map(|_| rotation_category(rotation))
-        .unwrap_or(SccmClientDiscoveryRotationCategory::Unknown);
     CoverageIssueKey {
         catalog_entry_id,
-        logical_artifact_ids,
-        rotation_category,
+        logical_artifact_ids: Vec::new(),
+        rotation_category: SccmClientDiscoveryRotationCategory::Unknown,
         state,
     }
 }
@@ -454,16 +436,6 @@ fn classify_observation_source(basename: &str, rotation: &SccmRotation) -> Optio
     #[cfg(test)]
     CLASSIFIER_INVOCATIONS.with(|count| count.set(count.get() + 1));
     canonical_client_source(basename, rotation)
-}
-
-fn rotation_category(rotation: &SccmRotation) -> SccmClientDiscoveryRotationCategory {
-    match rotation {
-        SccmRotation::Current => SccmClientDiscoveryRotationCategory::Current,
-        SccmRotation::LoUnderscore => SccmClientDiscoveryRotationCategory::LoUnderscore,
-        SccmRotation::Numbered(_) => SccmClientDiscoveryRotationCategory::Numbered,
-        SccmRotation::Timestamped(_) => SccmClientDiscoveryRotationCategory::Timestamped,
-        SccmRotation::Unknown(_) => SccmClientDiscoveryRotationCategory::Unknown,
-    }
 }
 
 fn coverage_issue_id(
