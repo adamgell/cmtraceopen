@@ -1551,8 +1551,7 @@ fn is_profile_record_candidate(message: &str) -> bool {
 }
 
 fn profile_labels_are_closed(message: &str) -> bool {
-    message.split_ascii_whitespace().all(|token| {
-        let token = token.trim_matches(|character| matches!(character, ',' | ';' | '&'));
+    message.split(is_token_boundary).all(|token| {
         let Some((label, _)) = token.split_once('=') else {
             return true;
         };
