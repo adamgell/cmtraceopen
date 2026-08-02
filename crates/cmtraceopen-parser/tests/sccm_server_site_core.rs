@@ -671,9 +671,21 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
         .producer_host_handle = Some("synthetic:host:site-02".to_owned());
     let foreign_gap_analysis = analyze_site_core(&foreign_gap);
     assert_eq!(foreign_gap_analysis.results.len(), 1);
-    assert!(foreign_gap_analysis.results[0]
-        .coverage_gap_artifact_ids
-        .is_empty());
+    assert_eq!(
+        foreign_gap_analysis.results[0]
+            .coverage_gap_artifact_ids
+            .len(),
+        1
+    );
+    let local_gap_id = &foreign_gap_analysis.results[0].coverage_gap_artifact_ids[0];
+    assert!(local_gap_id.starts_with("site-core:missing-source:v1:"));
+    assert_ne!(local_gap_id, "z-site-status");
+    assert!(foreign_gap_analysis.coverage_gaps.iter().any(|gap| {
+        gap.artifact_id == *local_gap_id
+            && gap.source_id == "server-status"
+            && gap.state == SccmCoverageState::Absent
+            && gap.reason_code == "required-status-source-not-declared"
+    }));
     assert!(!foreign_gap_analysis.results[0].next_artifacts.is_empty());
     assert!(foreign_gap_analysis.results[0]
         .next_artifacts

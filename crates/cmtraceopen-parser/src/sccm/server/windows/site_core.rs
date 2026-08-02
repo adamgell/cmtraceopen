@@ -298,6 +298,7 @@ struct SiteCoreContext<'a> {
     sources: BTreeMap<&'a str, AdmittedSource<'a>>,
     evidence_identity_is_unique: Vec<bool>,
     coverage_gaps: Vec<SccmSiteCoreCoverageGap>,
+    coverage_gap_producer_hosts: BTreeMap<String, String>,
 }
 
 impl<'a> SiteCoreContext<'a> {
@@ -322,12 +323,55 @@ impl<'a> SiteCoreContext<'a> {
             sources,
             evidence_identity_is_unique,
             coverage_gaps,
+            coverage_gap_producer_hosts: BTreeMap::new(),
         }
+    }
+
+    fn add_undeclared_status_gaps(
+        &mut self,
+        grouped: &BTreeMap<SccmSiteCoreTransactionKey, Vec<SiteCoreFact>>,
+    ) {
+        let producer_hosts = grouped
+            .iter()
+            .filter(|(_, facts)| {
+                facts
+                    .iter()
+                    .any(|fact| fact.marker.group == SiteCoreGroup::Component)
+            })
+            .map(|(key, _)| key.producer_host_handle.clone())
+            .collect::<BTreeSet<_>>();
+        for producer_host_handle in producer_hosts {
+            let compatible_status_source_exists = self.sources.values().any(|source| {
+                source.group == SiteCoreGroup::Status
+                    && source.artifact.producer_role == SccmRole::SiteServer
+                    && source.artifact.producer_host_handle.as_deref()
+                        == Some(producer_host_handle.as_str())
+                    && source.artifact.workflow_subject_role.is_none()
+                    && source.artifact.workflow_subject_handle.is_none()
+            });
+            if compatible_status_source_exists {
+                continue;
+            }
+            let artifact_id = stable_opaque_id(
+                "site-core:missing-source:v1:",
+                &[SCCM_SITE_CORE_STATUS_GROUP, &producer_host_handle],
+            );
+            self.coverage_gap_producer_hosts
+                .insert(artifact_id.clone(), producer_host_handle);
+            self.coverage_gaps.push(SccmSiteCoreCoverageGap {
+                artifact_id,
+                source_id: SCCM_SITE_CORE_STATUS_GROUP.to_owned(),
+                state: SccmCoverageState::Absent,
+                reason_code: "required-status-source-not-declared".to_owned(),
+                diagnostic_meaning: SccmSiteCoreDiagnosticMeaning::CoverageOnly,
+            });
+        }
+        sort_and_dedup_coverage_gaps(&mut self.coverage_gaps);
     }
 }
 
 pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAnalysis {
-    let context = SiteCoreContext::new(intake);
+    let mut context = SiteCoreContext::new(intake);
     let mut grouped = BTreeMap::<SccmSiteCoreTransactionKey, Vec<SiteCoreFact>>::new();
     let mut record_observations = Vec::new();
     for (position, evidence) in intake.evidence.iter().enumerate() {
@@ -361,6 +405,7 @@ pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAna
             ProfileRecordParse::NotCandidate => {}
         }
     }
+    context.add_undeclared_status_gaps(&grouped);
 
     let mut results = Vec::new();
     let mut findings = Vec::new();
@@ -663,12 +708,16 @@ fn coverage_gap_ids_for_key(
         .iter()
         .filter(|gap| {
             context
-                .sources
-                .get(gap.artifact_id.as_str())
-                .is_some_and(|source| {
-                    source.artifact.producer_host_handle.as_deref()
-                        == Some(key.producer_host_handle.as_str())
-                })
+                .coverage_gap_producer_hosts
+                .get(&gap.artifact_id)
+                .is_some_and(|producer| producer == &key.producer_host_handle)
+                || context
+                    .sources
+                    .get(gap.artifact_id.as_str())
+                    .is_some_and(|source| {
+                        source.artifact.producer_host_handle.as_deref()
+                            == Some(key.producer_host_handle.as_str())
+                    })
         })
         .map(|gap| gap.artifact_id.clone())
         .collect()
@@ -1369,6 +1418,16 @@ fn coverage_request(
     context: &SiteCoreContext<'_>,
 ) -> Option<SccmSiteCoreArtifactRequest> {
     let group = SiteCoreGroup::from_source_id(&gap.source_id)?;
+    if let Some(producer_host_handle) = context.coverage_gap_producer_hosts.get(&gap.artifact_id) {
+        let scope = SccmSiteCoreRequestScope {
+            producer_host_handle: Some(producer_host_handle.clone()),
+            component_id: None,
+            work_item_id: None,
+            rotation_lineage_handle: None,
+        };
+        return request_scope_is_specific(&scope)
+            .then(|| group_request(group, &gap.reason_code, scope));
+    }
     if let Some(source) = context.sources.get(gap.artifact_id.as_str()) {
         if gap.state == SccmCoverageState::Capped {
             if let Some(request) = recapture_request(source.artifact, None) {
