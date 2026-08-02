@@ -717,6 +717,20 @@ fn canonical_intake_adapter_rejects_forged_evidence_ownership() {
 }
 
 #[test]
+fn canonical_intake_adapter_rejects_forged_admission_metadata() {
+    let mut assessment = load_canonical_intake("canonical-intake-policy-scope");
+    assessment.artifacts[0].producer_host_handle = Some(format!(
+        "cmtraceopen.host.sha256.v1:{:064x}",
+        1
+    ));
+
+    assert!(
+        analyze_management_point_from_server_intake(&assessment).is_err(),
+        "caller-submitted topology and artifact metadata cannot replace canonical intake authority"
+    );
+}
+
+#[test]
 fn canonical_intake_adapter_rejects_forged_message_and_timestamp() {
     let assessment = load_canonical_intake("canonical-intake-policy-scope");
 
