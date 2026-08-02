@@ -903,9 +903,8 @@ fn strip_short_guid_suffix(name: &str) -> Option<String> {
     if inner.is_empty() {
         return None;
     }
-    // Accept full GUID: hex + dashes, 36 chars
-    let is_full_guid =
-        inner.len() == 36 && inner.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    // Accept only a complete 8-4-4-4-12 GUID shape.
+    let is_full_guid = exact_guid(inner).is_some();
     // Accept legacy short format: hex chars followed by "..."
     let is_short_guid = inner.ends_with("...")
         && inner[..inner.len() - 3]
