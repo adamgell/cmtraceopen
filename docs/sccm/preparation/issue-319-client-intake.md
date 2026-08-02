@@ -222,10 +222,10 @@ remains a separate acceptance gate.
    discovery/capture adapter are not implemented. The committed
    `proposalOnly` manifest shape is test design, not a native wire acceptance
    claim.
-2. Pure coverage already keeps `accessDenied`, `capped`, `skipped`,
-   `unsupported`, and `parseFailed` distinct. Native `unsafePath` and
-   `legacyUnknownDetail` mapping still need their own additive manifest and
-   test-double contracts rather than being guessed into an existing state.
+2. Pure coverage already keeps `captured`, `absent`, `accessDenied`, `capped`,
+   `skipped`, `unsupported`, and `parseFailed` distinct. Native `unsafePath`
+   and `legacyUnknownDetail` mapping still need their own additive manifest
+   and test-double contracts rather than being guessed into an existing state.
 3. The public legacy generic-manifest adapter and tolerant unknown-field/enum
    behavior remain unresolved; only provenance-backed `collected`/`missing`
    may map forward.
