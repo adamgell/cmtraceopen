@@ -601,6 +601,14 @@ mod tests {
         LOGICAL_ARTIFACT_ID_LOOKUPS.with(|count| count.set(0));
     }
 
+    fn consistency_key_count() -> usize {
+        CONSISTENCY_KEY_CONSTRUCTIONS.with(Cell::get)
+    }
+
+    fn reset_consistency_key_count() {
+        CONSISTENCY_KEY_CONSTRUCTIONS.with(|count| count.set(0));
+    }
+
     #[test]
     fn defensive_observation_limit_rejects_before_any_normalization_or_construction() {
         let observations = (1..=MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS + 1)
@@ -619,6 +627,7 @@ mod tests {
 
         reset_construction_counts();
         reset_normalization_count();
+        reset_consistency_key_count();
         assert_eq!(
             discover_client_sources(&input),
             Err(SccmClientDiscoveryError::ObservationLimitExceeded),
@@ -633,6 +642,11 @@ mod tests {
             construction_counts(),
             (0, 0),
             "the defensive limit rejects before candidates or declarations are built"
+        );
+        assert_eq!(
+            consistency_key_count(),
+            0,
+            "the defensive limit rejects before ephemeral consistency keys are built"
         );
     }
 
@@ -663,6 +677,7 @@ mod tests {
         for observations in [all_found, mixed_states] {
             reset_construction_counts();
             reset_normalization_count();
+            reset_consistency_key_count();
             let result = discover_client_sources(&SccmClientDiscoveryInput {
                 max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
                 observations,
@@ -673,6 +688,11 @@ mod tests {
                 normalization_count(),
                 MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
                 "each accepted observation is normalized exactly once"
+            );
+            assert_eq!(
+                consistency_key_count(),
+                MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+                "the bounded consistency pass builds exactly one borrowed key per observation"
             );
             assert!(
                 result.declarations.len() <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,

@@ -4,7 +4,8 @@ use app_lib::sccm::{
     SccmClientDiscoveryState, MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES,
     MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS, MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
 };
-use cmtraceopen_parser::sccm::SccmRotation;
+use cmtraceopen_parser::sccm::{SccmRotation, SccmUnknownRotation};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 const ROOT_A: &str = "root-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -22,6 +23,13 @@ fn observation(
         rotation,
         state,
     }
+}
+
+fn unsupported_rotation(suffix: &str) -> SccmRotation {
+    SccmRotation::Unknown(SccmUnknownRotation {
+        kind: "filenameSuffix".to_owned(),
+        value: Some(Value::String(suffix.to_owned())),
+    })
 }
 
 fn sha256(value: impl AsRef<[u8]>) -> String {
@@ -755,7 +763,7 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
         .iter()
         .filter(|issue| issue.state == SccmClientDiscoveryCoverageIssueState::Unsupported)
         .collect::<Vec<_>>();
-    assert_eq!(unsupported.len(), 2);
+    assert_eq!(unsupported.len(), 1);
     assert!(unsupported
         .iter()
         .all(|issue| issue.logical_artifact_ids.is_empty()));
@@ -766,7 +774,7 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
             .expect("arbitrary supplied names have one privacy-safe unsupported category")
             .occurrence_count
             .get(),
-        3,
+        4,
         "coalesced unsupported metadata retains the bounded count of supplied observations"
     );
     assert!(result.coverage_issues.iter().all(|issue| {
@@ -863,9 +871,149 @@ fn discovery_preserves_coverage_issue_cardinality_at_the_exact_admission_boundar
 
     assert!(result.declarations.is_empty());
     assert_eq!(result.coverage_issues.len(), 1);
+    let single = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+        observations: vec![observation(
+            ROOT_A,
+            "Unrelated.log",
+            SccmRotation::Current,
+            SccmClientDiscoveryObservationState::Found,
+        )],
+    })
+    .expect("one unsupported observation remains explicit");
+    assert_eq!(
+        result.coverage_issues[0].artifact_id, single.coverage_issues[0].artifact_id,
+        "coverage issue identity must not depend on its aggregated count"
+    );
     assert_eq!(
         result.coverage_issues[0].occurrence_count.get() as usize,
         MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
         "privacy-safe issue coalescing must retain exact duplicate cardinality"
     );
+}
+
+#[test]
+fn discovery_never_assigns_catalog_memberships_to_rejected_rotation_candidates() {
+    let raw_root = "C:\\private\\ccm\\logs";
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                raw_root,
+                "PolicyAgent.log.backup",
+                unsupported_rotation(".backup"),
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_A,
+                "PolicyAgent.log.1",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_B,
+                "PolicyAgent.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+        ],
+    };
+
+    let result = discover_client_sources(&input).expect("rejected candidates remain coverage-only");
+    let reversed = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: input.max_found_fragments_per_source,
+        observations: input.observations.into_iter().rev().collect(),
+    })
+    .expect("rejected candidate coverage is order independent");
+
+    assert_eq!(result, reversed);
+    assert_eq!(result.declarations.len(), 1);
+    assert_eq!(result.coverage_issues.len(), 2);
+    assert!(result.coverage_issues.iter().all(|issue| {
+        issue.catalog_entry_id == "sccm-client-source:v1:none"
+            && issue.logical_artifact_ids.is_empty()
+            && !format!("{issue:?}").contains(raw_root)
+            && !format!("{issue:?}").contains("PolicyAgent.log.backup")
+    }));
+}
+
+#[test]
+fn discovery_rejects_conflicting_states_for_the_same_rejected_physical_observation() {
+    let raw_root = "C:\\private\\ccm\\logs";
+    let raw_basename = "PolicyAgent.log.backup";
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                raw_root,
+                raw_basename,
+                unsupported_rotation(".backup"),
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                raw_root,
+                raw_basename,
+                unsupported_rotation(".backup"),
+                SccmClientDiscoveryObservationState::AccessDenied,
+            ),
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+        ],
+    };
+
+    let error = discover_client_sources(&input)
+        .expect_err("one rejected physical observation cannot carry contradictory states");
+    let mut reversed = input;
+    reversed.observations.reverse();
+    let reversed_error = discover_client_sources(&reversed)
+        .expect_err("rejected physical conflicts remain order independent");
+
+    assert_eq!(error, SccmClientDiscoveryError::ConflictingObservation);
+    assert_eq!(reversed_error, error);
+    assert!(!error.to_string().contains(raw_root));
+    assert!(!error.to_string().contains(raw_basename));
+}
+
+#[test]
+fn discovery_does_not_conflict_distinct_rejected_alias_spellings() {
+    let raw_root = "C:\\private\\ccm\\logs";
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                raw_root,
+                "PolicyAgent.log.backup",
+                unsupported_rotation(".backup"),
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                raw_root,
+                "policyagent.log.backup",
+                unsupported_rotation(".backup"),
+                SccmClientDiscoveryObservationState::AccessDenied,
+            ),
+        ],
+    };
+
+    let result = discover_client_sources(&input)
+        .expect("distinct raw rejected spellings are not one physical observation");
+    let reversed = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: input.max_found_fragments_per_source,
+        observations: input.observations.into_iter().rev().collect(),
+    })
+    .expect("distinct rejected aliases remain nonconflicting under reversal");
+
+    assert_eq!(result, reversed);
+    assert!(result.declarations.is_empty());
+    assert_eq!(result.coverage_issues.len(), 1);
+    assert_eq!(result.coverage_issues[0].occurrence_count.get(), 2);
+    assert_eq!(
+        result.coverage_issues[0].catalog_entry_id,
+        "sccm-client-source:v1:none"
+    );
+    assert!(result.coverage_issues[0].logical_artifact_ids.is_empty());
 }
