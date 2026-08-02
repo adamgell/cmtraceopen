@@ -1,7 +1,9 @@
 use app_lib::sccm::{
-    discover_client_sources, SccmClientDiscoveryError, SccmClientDiscoveryInput,
-    SccmClientDiscoveryObservation, SccmClientDiscoveryObservationState, SccmClientDiscoveryState,
-    MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS, MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+    discover_client_sources, SccmClientDiscoveryCoverageIssueState, SccmClientDiscoveryError,
+    SccmClientDiscoveryInput, SccmClientDiscoveryObservation,
+    SccmClientDiscoveryObservationState, SccmClientDiscoveryState,
+    MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES, MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+    MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
 };
 use cmtraceopen_parser::sccm::SccmRotation;
 use sha2::{Digest, Sha256};
@@ -84,6 +86,10 @@ fn expected_marker_artifact_id(
             rotation_segment(rotation)
         ))
     )
+}
+
+fn expected_catalog_entry_id(canonical_basename: &str) -> String {
+    format!("sccm-client-source:v1:sha256:{}", sha256(canonical_basename))
 }
 
 fn expected_evidence_identity(
@@ -659,12 +665,13 @@ fn discovery_rejects_observations_beyond_its_defensive_contract() {
 }
 
 #[test]
-fn discovery_skips_malformed_roots_and_unsupported_basenames() {
-    let result = discover_client_sources(&SccmClientDiscoveryInput {
+fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw_roots() {
+    let malformed_root = "C:\\private\\SCCM\\Client\\Logs";
+    let input = SccmClientDiscoveryInput {
         max_found_fragments_per_source: 8,
         observations: vec![
             observation(
-                "root-not-a-sha256-handle",
+                malformed_root,
                 "AppEnforce.log",
                 SccmRotation::Current,
                 SccmClientDiscoveryObservationState::Found,
@@ -677,15 +684,113 @@ fn discovery_skips_malformed_roots_and_unsupported_basenames() {
             ),
             observation(
                 ROOT_B,
+                "AppEnforce.log.1",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_A,
+                "CIAgent.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Skipped,
+            ),
+            observation(
+                ROOT_A,
+                "ScanAgent.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::NotFound,
+            ),
+            observation(
+                ROOT_B,
                 "PolicyAgent.log",
                 SccmRotation::Current,
                 SccmClientDiscoveryObservationState::Found,
             ),
         ],
+    };
+    let result = discover_client_sources(&input)
+        .expect("invalid observations remain explicit coverage without aborting valid sources");
+    let reversed = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: input.max_found_fragments_per_source,
+        observations: input.observations.into_iter().rev().collect(),
     })
-    .expect("malformed roots are skipped rather than becoming a discovery failure");
+    .expect("coverage results remain deterministic under input reversal");
 
-    assert_eq!(result.declarations.len(), 1);
-    assert_eq!(result.declarations[0].root_handle, ROOT_B);
-    assert_eq!(result.declarations[0].basename, "PolicyAgent.log");
+    assert_eq!(result, reversed);
+    assert_eq!(
+        result
+            .declarations
+            .iter()
+            .map(|declaration| (declaration.basename.as_str(), declaration.state))
+            .collect::<Vec<_>>(),
+        vec![
+            ("CIAgent.log", SccmClientDiscoveryState::Skipped),
+            ("PolicyAgent.log", SccmClientDiscoveryState::Discovered),
+            ("ScanAgent.log", SccmClientDiscoveryState::NotFound),
+        ],
+        "skipped, absent, and found remain separate coverage states"
+    );
+    assert_eq!(result.coverage_issues.len(), 3);
+    assert!(result.coverage_issues.iter().any(|issue| {
+        issue.state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance
+            && issue.catalog_entry_id == expected_catalog_entry_id("AppEnforce.log")
+            && issue.logical_artifact_ids == ["client-app-enforce"]
+    }));
+    let unsupported = result
+        .coverage_issues
+        .iter()
+        .filter(|issue| issue.state == SccmClientDiscoveryCoverageIssueState::Unsupported)
+        .collect::<Vec<_>>();
+    assert_eq!(unsupported.len(), 2);
+    assert!(unsupported
+        .iter()
+        .all(|issue| issue.logical_artifact_ids.is_empty()));
+    assert!(result.coverage_issues.iter().all(|issue| {
+        !format!("{issue:?}").contains(malformed_root)
+            && !issue.artifact_id.contains(malformed_root)
+            && !issue.catalog_entry_id.contains(malformed_root)
+    }));
+    assert!(result.declarations.iter().all(|declaration| {
+        declaration.artifact_id != result.coverage_issues[0].artifact_id
+            && declaration.artifact_id != result.coverage_issues[1].artifact_id
+            && declaration.artifact_id != result.coverage_issues[2].artifact_id
+    }));
+}
+
+#[test]
+fn discovery_retains_coverage_issues_past_the_declaration_cap_without_admitting_them_as_capture() {
+    let mut observations = (1..=MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS)
+        .map(|number| {
+            observation(
+                ROOT_A,
+                &format!("AppEnforce.log.{number}"),
+                SccmRotation::Numbered(number as u32),
+                SccmClientDiscoveryObservationState::Found,
+            )
+        })
+        .collect::<Vec<_>>();
+    observations.push(observation(
+        "not-a-root-handle",
+        "CIAgent.log",
+        SccmRotation::Current,
+        SccmClientDiscoveryObservationState::Found,
+    ));
+
+    let result = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+        observations,
+    })
+    .expect("a malformed observation cannot hide coverage behind declaration capping");
+
+    assert_eq!(result.declarations.len(), MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS);
+    assert_eq!(result.coverage_issues.len(), 1);
+    assert!(result.coverage_issues.len() <= MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES);
+    assert_eq!(
+        result.coverage_issues[0].state,
+        SccmClientDiscoveryCoverageIssueState::InvalidProvenance
+    );
+    assert!(result
+        .declarations
+        .iter()
+        .all(|declaration| declaration.artifact_id != result.coverage_issues[0].artifact_id));
 }
