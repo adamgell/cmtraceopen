@@ -14,6 +14,8 @@ use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, ParserSpecialization, Severity};
 use std::sync::OnceLock;
 
+const CCM_RECORD_OPENER: &str = "<![LOG[";
+
 /// Compiled regex matching a complete CCM log line.
 ///
 /// Based on the binary's scanf pattern:
@@ -377,12 +379,40 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
     let mut errors = 0u32;
     let mut id_counter = 0u64;
     let mut cursor = 0usize;
+    let mut search_cursor = 0usize;
     let mut matched_any = false;
 
-    for caps in ccm_re().captures_iter(content) {
-        let Some(full_match) = caps.get(0) else {
+    while let Some(caps) = ccm_re().captures_at(content, search_cursor) {
+        let full_match = caps
+            .get(0)
+            .expect("CCM regex captures always include the full match");
+
+        let message_end = caps
+            .name("msg")
+            .expect("complete CCM matches always include the message capture")
+            .end();
+        if newest_nested_opener(content, full_match.start(), message_end).is_some()
+            && mode == CcmScanMode::SccmEvidence
+        {
+            // A line-start opener inside a complete-looking multiline record
+            // is byte-for-byte ambiguous: it can be a literal message token
+            // or a recovery boundary after partial input. SCCM evidence must
+            // not promote either interpretation. The public projection keeps
+            // the legacy full-match result to preserve LogEntry compatibility.
+            push_unmatched_plain(
+                &content[cursor..full_match.end()],
+                cursor,
+                &line_starts,
+                file_path,
+                &mut records,
+                &mut id_counter,
+                &mut errors,
+            );
+            cursor = full_match.end();
+            search_cursor = full_match.end();
+            matched_any = true;
             continue;
-        };
+        }
 
         // Emit unmatched text between the previous match and this one
         push_unmatched_plain(
@@ -426,6 +456,7 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
         }
 
         cursor = full_match.end();
+        search_cursor = full_match.end();
         matched_any = true;
     }
 
@@ -460,6 +491,30 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
     }
 
     CcmScan { records, errors }
+}
+
+fn newest_nested_opener(
+    content: &str,
+    full_match_start: usize,
+    message_end: usize,
+) -> Option<usize> {
+    // Only physical-line openers inside the message can delimit recovery
+    // records. Attribute values are outside the raw CCM payload and may
+    // contain literal opener text. Scan newest first so an adversarial run of
+    // partial message openers is discarded in one pass.
+    let nested_search_start = full_match_start.checked_add(CCM_RECORD_OPENER.len())?;
+    content
+        .get(nested_search_start..message_end)?
+        .rmatch_indices(CCM_RECORD_OPENER)
+        .find_map(|(offset, _)| {
+            let absolute = nested_search_start + offset;
+            let starts_logical_line = absolute == 0
+                || content
+                    .as_bytes()
+                    .get(absolute - 1)
+                    .is_some_and(|previous| matches!(previous, b'\n' | b'\r'));
+            starts_logical_line.then_some(absolute)
+        })
 }
 
 /// Parse named captures from a CCM regex match into a CcmParsed struct.
@@ -1009,6 +1064,115 @@ mod tests {
             CcmTimestampParseState::NormalizedUtc
         );
         assert!(records[0].timestamp.utc_millis.is_some());
+    }
+
+    #[test]
+    fn logical_scanner_treats_line_start_opener_inside_multiline_message_as_ambiguous() {
+        for newline in ["\n", "\r\n"] {
+            let text = format!(
+                concat!(
+                    "<![LOG[first line{newline}",
+                    "<![LOG[literal at continuation start]LOG]!>",
+                    "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+                    "component=\"PolicyAgent\" context=\"\" type=\"1\" thread=\"42\">"
+                ),
+                newline = newline,
+            );
+
+            assert!(
+                scan_logical_records(&text, "PolicyAgent.log").is_empty(),
+                "{newline:?} physical-line ambiguity must remain coverage-only"
+            );
+        }
+    }
+
+    #[test]
+    fn public_projection_keeps_multiline_line_start_literal_opener_as_one_log_entry() {
+        for newline in ["\n", "\r\n"] {
+            let text = format!(
+                concat!(
+                    "<![LOG[first line{newline}",
+                    "<![LOG[literal at continuation start]LOG]!>",
+                    "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+                    "component=\"PolicyAgent\" context=\"\" type=\"1\" thread=\"42\">"
+                ),
+                newline = newline,
+            );
+
+            let (entries, errors) = parse_content(&text, "PolicyAgent.log", None);
+
+            assert_eq!(errors, 0, "{newline:?} public parse must remain compatible");
+            assert_eq!(entries.len(), 1, "{newline:?} must remain one LogEntry");
+            assert_eq!(entries[0].format, LogFormat::Ccm);
+            assert_eq!(
+                entries[0].message,
+                format!("first line{newline}<![LOG[literal at continuation start")
+            );
+        }
+    }
+
+    #[test]
+    fn logical_scanner_keeps_same_line_literal_opener_in_one_complete_record() {
+        let text = concat!(
+            "<![LOG[Diagnostic text retained a literal <![LOG[ token]LOG]!>",
+            "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+            "component=\"PolicyAgent\" context=\"\" type=\"1\" thread=\"42\">"
+        );
+
+        let records = scan_logical_records(text, "PolicyAgent.log");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].entry.message,
+            "Diagnostic text retained a literal <![LOG[ token"
+        );
+        assert_eq!(records[0].line_start, 1);
+        assert_eq!(records[0].line_end, 1);
+    }
+
+    #[test]
+    fn logical_scanner_ignores_line_start_opener_inside_attribute_value() {
+        let text = concat!(
+            "<![LOG[Policy request completed]LOG]!>",
+            "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+            "component=\"PolicyAgent\" context=\"diagnostic continuation\n",
+            "<![LOG[literal attribute token\" type=\"1\" thread=\"42\">"
+        );
+
+        let records = scan_logical_records(text, "PolicyAgent.log");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].entry.message, "Policy request completed");
+        assert_eq!(
+            records[0].context.as_deref(),
+            Some("diagnostic continuation\n<![LOG[literal attribute token")
+        );
+    }
+
+    #[test]
+    fn ambiguity_recovery_selects_the_newest_physical_line_opener() {
+        let partial_prefix = "<![LOG[partial\n".repeat(4_096);
+        let text = format!(
+            concat!(
+                "{partial_prefix}<![LOG[complete record]LOG]!><time=\"10:00:00.000-240\" ",
+                "date=\"07-30-2026\" component=\"PolicyAgent\" context=\"\" ",
+                "type=\"1\" thread=\"42\">"
+            ),
+            partial_prefix = partial_prefix,
+        );
+        let full_match = ccm_re()
+            .find(&text)
+            .expect("the partial prefix and terminal close form one complete-looking match");
+
+        assert_eq!(
+            newest_nested_opener(&text, full_match.start(), full_match.end()),
+            text.rfind("<![LOG["),
+            "recovery must jump to the newest nested opener in one scan"
+        );
+        assert!(
+            scan_logical_records(&text, "PolicyAgent.log").is_empty(),
+            "the adversarial ambiguous segment must remain coverage-only"
+        );
     }
 
     fn logical_record_for_time_tail(tail: &str) -> CcmLogicalRecord {

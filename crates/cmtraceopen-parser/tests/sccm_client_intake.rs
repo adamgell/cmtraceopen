@@ -7,6 +7,7 @@ use cmtraceopen_parser::sccm::{
     SccmClientIntakeArtifact, SccmClientIntakeAssessment, SccmClientIntakeBundle,
     SccmClientIntakeCoverageGap, SccmClientIntakeError, SccmClientIntakeFragment,
     SccmClientUnsupportedArtifact, SccmCoverageState, SccmRole, SccmRotation, SccmUnknownRotation,
+    MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -424,6 +425,60 @@ fn synthetic_marker(
     artifact.relative_path = None;
     artifact.fragment_complete = Some(false);
     artifact
+}
+
+#[test]
+fn intake_rejects_more_than_the_v1_artifact_limit_before_validation_indexes() {
+    // Keep the input otherwise invalid (all declarations collide) so this
+    // asserts that the public limit runs before the per-artifact indexes.
+    let duplicate = synthetic_artifact("limit", "PolicyAgent.log");
+    let artifacts = vec![duplicate; MAX_SCCM_CLIENT_INTAKE_ARTIFACTS + 1];
+
+    let error = assess_client_intake(&SccmClientIntakeBundle { artifacts })
+        .expect_err("the v1 client intake artifact ceiling must fail closed");
+
+    assert_eq!(
+        error.to_string(),
+        "client intake artifact count exceeds the supported limit"
+    );
+}
+
+#[test]
+fn intake_wire_rejects_more_than_the_v1_artifact_limit_while_deserializing() {
+    let artifact = serde_json::to_value(synthetic_artifact("wire-limit", "PolicyAgent.log"))
+        .expect("synthetic intake artifact serializes");
+    let boundary = serde_json::json!({
+        "artifacts": vec![artifact.clone(); MAX_SCCM_CLIENT_INTAKE_ARTIFACTS],
+    });
+    let decoded: SccmClientIntakeBundle =
+        serde_json::from_value(boundary).expect("the declared v1 boundary is accepted");
+    assert_eq!(decoded.artifacts.len(), MAX_SCCM_CLIENT_INTAKE_ARTIFACTS);
+
+    let oversized = serde_json::json!({
+        "artifacts": vec![artifact; MAX_SCCM_CLIENT_INTAKE_ARTIFACTS + 1],
+    });
+    let error = serde_json::from_value::<SccmClientIntakeBundle>(oversized)
+        .expect_err("the wire must reject an oversized artifact sequence");
+    assert!(
+        error.to_string().contains("artifact count exceeds"),
+        "the wire must report the bounded-contract violation: {error}"
+    );
+}
+
+#[test]
+fn intake_wire_rejects_more_than_the_v1_artifact_limit_from_json_text() {
+    let artifact = synthetic_artifact("wire-limit-text", "PolicyAgent.log");
+    let oversized = serde_json::json!({
+        "artifacts": vec![artifact; MAX_SCCM_CLIENT_INTAKE_ARTIFACTS + 1],
+    });
+    let text = oversized.to_string();
+
+    let error = serde_json::from_str::<SccmClientIntakeBundle>(&text)
+        .expect_err("streaming JSON must reject an oversized artifact sequence");
+    assert!(
+        error.to_string().contains("artifact count exceeds"),
+        "the streaming fallback must report the bounded-contract violation: {error}"
+    );
 }
 
 /// Every assertion that a serialized projection did not leak an identity must
