@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::num::NonZeroU16;
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -71,6 +72,9 @@ pub struct SccmClientDiscoveryCoverageIssue {
     pub logical_artifact_ids: Vec<String>,
     pub rotation_category: SccmClientDiscoveryRotationCategory,
     pub state: SccmClientDiscoveryCoverageIssueState,
+    /// Number of supplied observations represented by this privacy-safe issue
+    /// category. The category identity intentionally remains count-independent.
+    pub occurrence_count: NonZeroU16,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -227,10 +231,15 @@ fn normalize_observations(
     input: &SccmClientDiscoveryInput,
 ) -> Result<NormalizedDiscovery<'_>, SccmClientDiscoveryError> {
     let mut observations = BTreeMap::<PhysicalObservationKey, NormalizedObservation<'_>>::new();
-    let mut coverage_issues = BTreeSet::new();
+    let mut coverage_issue_counts = BTreeMap::new();
     for observation in &input.observations {
         let Some(normalized) = normalize_observation(observation) else {
-            coverage_issues.insert(coverage_issue_from_observation(observation));
+            let count = coverage_issue_counts
+                .entry(coverage_issue_from_observation(observation))
+                .or_insert(0_u16);
+            *count = count
+                .checked_add(1)
+                .expect("admitted discovery issue count fits in u16");
             continue;
         };
         let key = PhysicalObservationKey {
@@ -254,10 +263,17 @@ fn normalize_observations(
     }
     let mut observations = observations.into_values().collect::<Vec<_>>();
     observations.sort_by(compare_observation_order);
-    debug_assert!(coverage_issues.len() <= MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES);
+    debug_assert!(coverage_issue_counts.len() <= MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES);
     Ok(NormalizedDiscovery {
         observations,
-        coverage_issues: coverage_issues.into_iter().collect(),
+        coverage_issues: coverage_issue_counts
+            .into_iter()
+            .map(|(mut issue, count)| {
+                issue.occurrence_count = NonZeroU16::new(count)
+                    .expect("every coverage issue represents an admitted observation");
+                issue
+            })
+            .collect(),
     })
 }
 
@@ -307,6 +323,7 @@ fn coverage_issue_from_observation(
         logical_artifact_ids,
         rotation_category,
         state,
+        occurrence_count: NonZeroU16::MIN,
     }
 }
 
