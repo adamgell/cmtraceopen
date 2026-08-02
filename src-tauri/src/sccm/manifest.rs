@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path};
 
@@ -23,7 +23,7 @@ use super::contract::{
     SccmManifestSourceState, MAX_SCCM_MANIFEST_ARTIFACTS, MAX_SCCM_MANIFEST_BYTES,
     SCCM_CLIENT_SOURCE_CATALOG_VERSION, SCCM_MANIFEST_FILE_NAME, SCCM_MANIFEST_VERSION,
 };
-use super::private_fs::{is_reparse_point, open_file_no_follow, verify_bundle_root};
+use super::private_fs::{is_reparse_point, verify_bundle_root, VerifiedBundleRoot};
 
 const LEGACY_MANIFEST_FILE_NAME: &str = "manifest.json";
 const LEGACY_GENERIC_PROFILE_NAME: &str = "cmtrace-full-diagnostics-v1";
@@ -35,9 +35,8 @@ const LEGACY_CCMSETUP_BASENAME: &str = "ccmsetup.log";
 const MAX_SAFE_TEXT_CHARS: usize = 160;
 
 pub fn read_sccm_manifest_or_legacy(bundle_root: &Path) -> Result<SccmBundleManifestV1, AppError> {
-    let canonical_root = verify_bundle_root(bundle_root)?;
-    let manifest_path = canonical_root.join(SCCM_MANIFEST_FILE_NAME);
-    match open_file_no_follow(&manifest_path) {
+    let verified_root = verify_bundle_root(bundle_root)?;
+    match verified_root.open_relative_file(Path::new(SCCM_MANIFEST_FILE_NAME)) {
         Ok(input) => {
             let bytes = read_bounded_file(input, MAX_SCCM_MANIFEST_BYTES, "SCCM manifest")?;
             let manifest =
@@ -47,11 +46,11 @@ pub fn read_sccm_manifest_or_legacy(bundle_root: &Path) -> Result<SccmBundleMani
                         reason: error.to_string(),
                     }
                 })?;
-            validate_native_manifest(&canonical_root, &manifest)?;
+            validate_native_manifest(&verified_root, &manifest)?;
             Ok(manifest)
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            read_legacy_manifest(&canonical_root)
+            read_legacy_manifest(&verified_root)
         }
         Err(_) => Err(AppError::InvalidInput(
             "SCCM manifest cannot be opened safely".to_owned(),
@@ -59,7 +58,7 @@ pub fn read_sccm_manifest_or_legacy(bundle_root: &Path) -> Result<SccmBundleMani
     }
 }
 
-pub fn manifest_to_client_intake_bundle(
+fn manifest_to_client_intake_bundle(
     manifest: &SccmBundleManifestV1,
 ) -> Result<SccmClientIntakeBundle, AppError> {
     validate_native_manifest_structure(manifest)?;
@@ -114,21 +113,62 @@ pub fn read_sccm_client_intake_bundle(
 ) -> Result<SccmClientIntakeBundle, AppError> {
     let manifest = read_sccm_manifest_or_legacy(bundle_root)?;
     if manifest.provenance == SccmManifestProvenance::LegacyGenericUnscoped {
-        let canonical_root = verify_bundle_root(bundle_root)?;
-        return read_legacy_client_intake_bundle(&canonical_root);
+        let verified_root = verify_bundle_root(bundle_root)?;
+        return read_legacy_client_intake_bundle(&verified_root);
     }
     manifest_to_client_intake_bundle(&manifest)
 }
 
 fn validate_native_manifest(
-    bundle_root: &Path,
+    bundle_root: &VerifiedBundleRoot,
     manifest: &SccmBundleManifestV1,
 ) -> Result<(), AppError> {
     validate_native_manifest_structure(manifest)?;
     manifest_to_client_intake_bundle(manifest)?;
+    validate_physical_source_limits(manifest)?;
     for artifact in &manifest.artifacts {
         if artifact.state.is_physical() {
             validate_evidence_file(bundle_root, artifact)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_physical_source_limits(manifest: &SccmBundleManifestV1) -> Result<(), AppError> {
+    let mut totals = BTreeMap::<String, (u64, u64)>::new();
+    for artifact in manifest
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.state.is_physical())
+    {
+        let canonical_basename = canonical_client_source(&artifact.basename, &artifact.rotation)
+            .expect("physical artifacts were catalog-validated before source limits");
+        let source = source_identity_digest(
+            artifact
+                .root_handle
+                .as_deref()
+                .expect("physical artifacts have validated root provenance"),
+            &canonical_basename,
+        )
+        .expect("physical artifacts have a validated root handle");
+        let entry = totals.entry(source).or_insert((0, 0));
+        entry.0 = entry
+            .0
+            .checked_add(1)
+            .ok_or_else(|| AppError::InvalidInput("SCCM source file cap is exceeded".to_owned()))?;
+        entry.1 = entry
+            .1
+            .checked_add(artifact.bytes_copied)
+            .ok_or_else(|| AppError::InvalidInput("SCCM source byte cap is exceeded".to_owned()))?;
+        if entry.0 > manifest.max_files_per_source as u64 {
+            return Err(AppError::InvalidInput(
+                "SCCM source file cap is exceeded".to_owned(),
+            ));
+        }
+        if entry.1 > manifest.max_bytes_per_source {
+            return Err(AppError::InvalidInput(
+                "SCCM source byte cap is exceeded".to_owned(),
+            ));
         }
     }
     Ok(())
@@ -534,30 +574,15 @@ fn validate_relative_path(
 }
 
 fn validate_evidence_file(
-    bundle_root: &Path,
+    bundle_root: &VerifiedBundleRoot,
     artifact: &SccmManifestArtifact,
 ) -> Result<(), AppError> {
     let relative_path = artifact
         .relative_path
         .as_deref()
         .ok_or_else(|| AppError::InvalidInput("physical SCCM artifact has no path".to_owned()))?;
-    let candidate = bundle_root.join(relative_path);
-    let metadata = fs::symlink_metadata(&candidate)
-        .map_err(|_| AppError::InvalidInput("SCCM evidence file is unavailable".to_owned()))?;
-    if is_reparse_point(&metadata) || !metadata.is_file() {
-        return Err(AppError::InvalidInput(
-            "SCCM evidence must be a real file".to_owned(),
-        ));
-    }
-    let canonical = candidate.canonicalize().map_err(|_| {
-        AppError::InvalidInput("SCCM evidence cannot be resolved safely".to_owned())
-    })?;
-    if !canonical.starts_with(bundle_root) || metadata.len() != artifact.bytes_copied {
-        return Err(AppError::InvalidInput(
-            "SCCM evidence violates path or size coherence".to_owned(),
-        ));
-    }
-    let mut input = open_file_no_follow(&candidate)
+    let mut input = bundle_root
+        .open_relative_file(Path::new(relative_path))
         .map_err(|_| AppError::InvalidInput("SCCM evidence cannot be opened safely".to_owned()))?;
     let opened_metadata = input.metadata().map_err(|_| {
         AppError::InvalidInput("SCCM evidence metadata cannot be verified".to_owned())
@@ -640,7 +665,9 @@ fn sha256_exact_file(input: &mut File, expected_bytes: u64) -> Result<String, Ap
         .collect())
 }
 
-fn read_legacy_manifest(bundle_root: &Path) -> Result<SccmBundleManifestV1, AppError> {
+fn read_legacy_manifest(
+    bundle_root: &VerifiedBundleRoot,
+) -> Result<SccmBundleManifestV1, AppError> {
     let legacy = read_legacy_value(bundle_root)?;
     let values = legacy
         .get("artifacts")
@@ -680,17 +707,18 @@ fn read_legacy_manifest(bundle_root: &Path) -> Result<SccmBundleManifestV1, AppE
     })
 }
 
-fn read_legacy_value(bundle_root: &Path) -> Result<Value, AppError> {
-    let legacy_path = bundle_root.join(LEGACY_MANIFEST_FILE_NAME);
-    let input = open_file_no_follow(&legacy_path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            AppError::InvalidInput(format!(
+fn read_legacy_value(bundle_root: &VerifiedBundleRoot) -> Result<Value, AppError> {
+    let input = bundle_root
+        .open_relative_file(Path::new(LEGACY_MANIFEST_FILE_NAME))
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                AppError::InvalidInput(format!(
                 "bundle contains neither {SCCM_MANIFEST_FILE_NAME} nor {LEGACY_MANIFEST_FILE_NAME}"
             ))
-        } else {
-            AppError::InvalidInput("legacy manifest cannot be opened safely".to_owned())
-        }
-    })?;
+            } else {
+                AppError::InvalidInput("legacy manifest cannot be opened safely".to_owned())
+            }
+        })?;
     let bytes = read_bounded_file(input, MAX_SCCM_MANIFEST_BYTES, "legacy manifest")?;
     serde_json::from_slice(&bytes).map_err(|error| AppError::Parse {
         file: LEGACY_MANIFEST_FILE_NAME.to_owned(),
@@ -709,7 +737,7 @@ fn legacy_gaps(legacy: &Value) -> Result<&[Value], AppError> {
 }
 
 fn read_legacy_client_intake_bundle(
-    bundle_root: &Path,
+    bundle_root: &VerifiedBundleRoot,
 ) -> Result<SccmClientIntakeBundle, AppError> {
     let legacy = read_legacy_value(bundle_root)?;
     let supported_profile = legacy

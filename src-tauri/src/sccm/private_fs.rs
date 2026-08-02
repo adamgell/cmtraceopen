@@ -1,22 +1,71 @@
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path};
 
 use crate::error::AppError;
 
-pub(super) fn verify_bundle_root(bundle_root: &Path) -> Result<PathBuf, AppError> {
-    let metadata = fs::symlink_metadata(bundle_root).map_err(|_| {
-        AppError::InvalidInput("SCCM bundle root is unavailable or unsafe".to_owned())
-    })?;
-    if is_reparse_point(&metadata) || !metadata.is_dir() {
-        return Err(AppError::InvalidInput(
-            "SCCM bundle root must be a real directory".to_owned(),
-        ));
+/// A bundle root whose identity remains bound for the lifetime of a native read.
+///
+/// Unix keeps an open directory descriptor and never re-resolves descendants by
+/// pathname. Windows rejects the native boundary rather than making a weaker
+/// pathname-based safety claim until it has equivalent handle-relative traversal.
+pub(super) struct VerifiedBundleRoot {
+    #[cfg(unix)]
+    directory: File,
+}
+
+pub(super) fn verify_bundle_root(bundle_root: &Path) -> Result<VerifiedBundleRoot, AppError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(bundle_root)
+            .map_err(|_| {
+                AppError::InvalidInput("SCCM bundle root is unavailable or unsafe".to_owned())
+            })?;
+        let metadata = directory.metadata().map_err(|_| {
+            AppError::InvalidInput("SCCM bundle root metadata cannot be verified".to_owned())
+        })?;
+        if is_reparse_point(&metadata) || !metadata.is_dir() {
+            return Err(AppError::InvalidInput(
+                "SCCM bundle root must be a real directory".to_owned(),
+            ));
+        }
+        verify_private_directory(bundle_root, &metadata)?;
+        Ok(VerifiedBundleRoot { directory })
     }
-    verify_private_directory(bundle_root, &metadata)?;
-    bundle_root.canonicalize().map_err(|_| {
-        AppError::InvalidInput("SCCM bundle root cannot be resolved safely".to_owned())
-    })
+
+    #[cfg(not(unix))]
+    {
+        let _ = bundle_root;
+        Err(AppError::InvalidInput(
+            "native SCCM manifest reading requires handle-bound directory traversal on this platform"
+                .to_owned(),
+        ))
+    }
+}
+
+impl VerifiedBundleRoot {
+    pub(super) fn open_relative_file(&self, relative: &Path) -> io::Result<File> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+
+            open_relative_file_no_follow(self.directory.as_raw_fd(), relative)
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = relative;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "handle-bound directory traversal is unavailable",
+            ))
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -258,7 +307,7 @@ fn verify_private_directory(_path: &Path, _metadata: &fs::Metadata) -> Result<()
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, test))]
 pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
@@ -279,6 +328,73 @@ pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
         return Err(io::Error::last_os_error());
     }
     Ok(file)
+}
+
+#[cfg(unix)]
+fn open_relative_file_no_follow(root_fd: std::os::fd::RawFd, relative: &Path) -> io::Result<File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let components = relative.components().collect::<Vec<_>>();
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SCCM bundle relative path is unsafe",
+        ));
+    }
+
+    // Duplicate the root so every descriptor remains owned locally while each
+    // `openat` call is bound to the directory identity opened above.
+    let duplicate = unsafe { libc::fcntl(root_fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if duplicate < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut directory = unsafe { File::from_raw_fd(duplicate) };
+    for (index, component) in components.iter().enumerate() {
+        let Component::Normal(name) = component else {
+            unreachable!("unsafe components were rejected above");
+        };
+        let name = CString::new(name.as_bytes()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SCCM bundle path contains an interior NUL",
+            )
+        })?;
+        let final_component = index + 1 == components.len();
+        let flags = if final_component {
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC
+        } else {
+            libc::O_RDONLY
+                | libc::O_DIRECTORY
+                | libc::O_NOFOLLOW
+                | libc::O_NONBLOCK
+                | libc::O_CLOEXEC
+        };
+        let descriptor = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
+        if descriptor < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let opened = unsafe { File::from_raw_fd(descriptor) };
+        if final_component {
+            return require_regular_file(opened);
+        }
+        let metadata = opened.metadata()?;
+        if is_reparse_point(&metadata) || !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SCCM bundle ancestor is not a real directory",
+            ));
+        }
+        #[cfg(test)]
+        invoke_open_component_hook(name.as_c_str());
+        directory = opened;
+    }
+    unreachable!("non-empty relative paths always return from their final component")
 }
 
 #[cfg(windows)]
@@ -307,7 +423,53 @@ fn require_regular_file(file: File) -> io::Result<File> {
             "SCCM bundle entry is not a regular file",
         ));
     }
+    require_single_link(&file)?;
     Ok(file)
+}
+
+#[cfg(unix)]
+fn require_single_link(file: &File) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    if file.metadata()?.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SCCM bundle entry must be a single-link file",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn require_single_link(file: &File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe {
+        GetFileInformationByHandle(
+            windows::Win32::Foundation::HANDLE(file.as_raw_handle()),
+            &mut information,
+        )
+    }
+    .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?;
+    if information.nNumberOfLinks != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SCCM bundle entry must be a single-link file",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn require_single_link(_file: &File) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "SCCM bundle link count cannot be verified",
+    ))
 }
 
 pub(super) fn is_reparse_point(metadata: &fs::Metadata) -> bool {
@@ -326,8 +488,34 @@ pub(super) fn is_reparse_point(metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(all(test, unix))]
+type OpenComponentHook = Box<dyn FnMut(&std::ffi::CStr)>;
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static OPEN_COMPONENT_HOOK: std::cell::RefCell<Option<OpenComponentHook>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(all(test, unix))]
+fn set_open_component_hook(hook: Option<OpenComponentHook>) {
+    OPEN_COMPONENT_HOOK.with(|slot| *slot.borrow_mut() = hook);
+}
+
+#[cfg(all(test, unix))]
+fn invoke_open_component_hook(component: &std::ffi::CStr) {
+    OPEN_COMPONENT_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            hook(component);
+        }
+    });
+}
+
+#[cfg(all(test, unix))]
 mod tests {
+    use std::cell::RefCell;
+    use std::io::Read;
     use std::os::fd::AsRawFd;
+    use std::rc::Rc;
 
     use tempfile::tempdir;
 
@@ -345,5 +533,74 @@ mod tests {
         assert_eq!(flags & libc::O_NONBLOCK, 0);
 
         open_file_no_follow(root.path()).expect_err("directories are rejected after opening");
+    }
+
+    #[test]
+    fn verified_root_keeps_reading_the_original_directory_after_root_replacement() {
+        let temp = tempdir().expect("temporary root");
+        let root = temp.path().join("bundle");
+        let replacement = temp.path().join("replacement");
+        fs::create_dir_all(root.join("nested")).expect("create original bundle");
+        fs::create_dir_all(replacement.join("nested")).expect("create replacement bundle");
+        fs::write(root.join("nested/evidence.log"), b"original").expect("original evidence");
+        fs::write(replacement.join("nested/evidence.log"), b"replacement")
+            .expect("replacement evidence");
+        for directory in [&root, &replacement] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
+                .expect("private root");
+        }
+
+        let verified = verify_bundle_root(&root).expect("open original root");
+        fs::rename(&root, temp.path().join("retired")).expect("move original root");
+        fs::rename(&replacement, &root).expect("install replacement root");
+
+        let mut opened = verified
+            .open_relative_file(Path::new("nested/evidence.log"))
+            .expect("bound root remains readable");
+        let mut contents = String::new();
+        opened
+            .read_to_string(&mut contents)
+            .expect("read bound evidence");
+        assert_eq!(contents, "original");
+    }
+
+    #[test]
+    fn verified_root_keeps_an_opened_ancestor_after_a_deterministic_swap() {
+        let temp = tempdir().expect("temporary root");
+        let root = temp.path().join("bundle");
+        let replacement = temp.path().join("replacement-evidence");
+        fs::create_dir_all(root.join("evidence/nested")).expect("create original evidence");
+        fs::create_dir_all(replacement.join("nested")).expect("create replacement evidence");
+        fs::write(root.join("evidence/nested/evidence.log"), b"original")
+            .expect("original evidence");
+        fs::write(replacement.join("nested/evidence.log"), b"replacement")
+            .expect("replacement evidence");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).expect("private root");
+
+        let verified = verify_bundle_root(&root).expect("open original root");
+        let retired = temp.path().join("retired-evidence");
+        let fired = Rc::new(RefCell::new(false));
+        let fired_in_hook = Rc::clone(&fired);
+        set_open_component_hook(Some(Box::new(move |component| {
+            if component.to_bytes() == b"evidence" && !*fired_in_hook.borrow() {
+                *fired_in_hook.borrow_mut() = true;
+                fs::rename(root.join("evidence"), &retired).expect("retire opened ancestor");
+                fs::rename(&replacement, root.join("evidence"))
+                    .expect("install replacement ancestor");
+            }
+        })));
+
+        let mut opened = verified
+            .open_relative_file(Path::new("evidence/nested/evidence.log"))
+            .expect("opened ancestor remains bound");
+        set_open_component_hook(None);
+        let mut contents = String::new();
+        opened
+            .read_to_string(&mut contents)
+            .expect("read bound evidence");
+        assert!(*fired.borrow(), "test hook ran after ancestor open");
+        assert_eq!(contents, "original");
     }
 }

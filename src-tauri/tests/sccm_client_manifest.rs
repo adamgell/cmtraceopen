@@ -2,9 +2,9 @@ use std::fs;
 use std::path::Path;
 
 use app_lib::sccm::{
-    manifest_to_client_intake_bundle, read_sccm_client_intake_bundle, read_sccm_manifest_or_legacy,
-    SccmBundleManifestV1, SccmManifestProvenance, SccmManifestSourceState,
-    MAX_SCCM_MANIFEST_ARTIFACTS, SCCM_MANIFEST_FILE_NAME,
+    read_sccm_client_intake_bundle, read_sccm_manifest_or_legacy, SccmBundleManifestV1,
+    SccmManifestProvenance, SccmManifestSourceState, MAX_SCCM_MANIFEST_ARTIFACTS,
+    SCCM_MANIFEST_FILE_NAME,
 };
 use cmtraceopen_parser::sccm::{assess_client_intake, SccmCoverageState, SccmRotation};
 use serde_json::{json, Value};
@@ -229,7 +229,7 @@ fn validated_v1_reader_projects_one_physical_client_artifact() {
     write_native_bundle(&bundle_root, std::slice::from_ref(&current), &[]);
 
     let manifest = read_sccm_manifest_or_legacy(&bundle_root).expect("validated manifest");
-    let bundle = manifest_to_client_intake_bundle(&manifest).expect("pure projection");
+    let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("verified pure projection");
 
     assert_eq!(manifest.sccm_manifest_version, 1);
     assert_eq!(
@@ -286,13 +286,16 @@ fn omitted_capped_rotation_projects_as_a_gap_without_a_fake_fragment() {
 
 #[test]
 fn parse_failed_omitted_rotation_remains_coverage_only() {
-    let manifest_value = native_manifest(
-        vec![physical_artifact(SccmRotation::Current, b"policy-current")],
-        vec![capture_gap(SccmRotation::Numbered(2), "parseFailed")],
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let current = physical_artifact(SccmRotation::Current, b"policy-current");
+    let failed = capture_gap(SccmRotation::Numbered(2), "parseFailed");
+    write_native_bundle(
+        &bundle_root,
+        std::slice::from_ref(&current),
+        std::slice::from_ref(&failed),
     );
-    let manifest: SccmBundleManifestV1 =
-        serde_json::from_value(manifest_value).expect("manifest shape");
-    let bundle = manifest_to_client_intake_bundle(&manifest).expect("pure projection");
+    let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("verified pure projection");
 
     assert_eq!(bundle.artifacts.len(), 1);
     assert_eq!(bundle.capture_gaps.len(), 1);
@@ -474,16 +477,24 @@ fn manifest_wire_and_debug_never_gain_raw_host_or_native_path_fields() {
 
 #[test]
 fn malformed_native_state_is_rejected_before_pure_projection() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
     let mut value = native_manifest(
         vec![physical_artifact(SccmRotation::Current, b"policy-current")],
         vec![],
     );
     value["artifacts"][0]["state"] = json!("absent");
-    let manifest: SccmBundleManifestV1 = serde_json::from_value(value).expect("wire shape");
+    make_private_directory(&bundle_root);
+    fs::write(
+        bundle_root.join(SCCM_MANIFEST_FILE_NAME),
+        serde_json::to_vec(&value).expect("serialize malformed native manifest"),
+    )
+    .expect("write malformed native manifest");
 
-    let error = manifest_to_client_intake_bundle(&manifest)
+    let error = read_sccm_client_intake_bundle(&bundle_root)
         .expect_err("nonphysical state cannot claim a file");
     assert!(error.to_string().contains("nonphysical"));
+    let manifest: SccmBundleManifestV1 = serde_json::from_value(value).expect("wire shape");
     assert_ne!(
         manifest.artifacts[0].state,
         SccmManifestSourceState::Captured
@@ -559,5 +570,5 @@ fn reader_rejects_hard_linked_physical_evidence() {
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
         .expect_err("hard-linked physical evidence is not a private capture artifact");
-    assert!(error.to_string().contains("single-link"));
+    assert!(error.to_string().contains("cannot be opened safely"));
 }
