@@ -1,5 +1,5 @@
 {
-  "contractState": "proposedPending318",
+  "contractState": "pureIntakeImplementedNativePending",
   "scenario": "access-denied",
   "workflowDiagnosisExpected": false,
   "coverage": [{"logicalArtifactId":"client-policy-agent","state":"accessDenied"},{"logicalArtifactId":"client-policy-state","state":"captured"}],

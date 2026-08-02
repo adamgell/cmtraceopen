@@ -235,15 +235,62 @@ fn public_assessment_deserialization_rejects_forged_coverage_and_identity() {
 
     let mut leaked_identity =
         serde_json::to_value(assessment("complete")).expect("assessment serializes");
+    let original_artifact_id = leaked_identity["physicalArtifacts"][0]["artifactId"]
+        .as_str()
+        .expect("physical artifact ID")
+        .to_owned();
     leaked_identity["physicalArtifacts"][0]["artifactId"] =
         serde_json::json!(r"C:\Users\RealUser\PolicyAgent.log");
     leaked_identity["physicalArtifacts"][0]["pathFingerprint"] =
         serde_json::json!("synthetic:realuser");
     leaked_identity["physicalArtifacts"][0]["relativePath"] =
         serde_json::json!(r"C:\Users\RealUser\PolicyAgent.log");
+    for group in leaked_identity["groups"]
+        .as_array_mut()
+        .expect("assessment groups")
+    {
+        for fragment in group["fragments"].as_array_mut().expect("group fragments") {
+            if fragment["artifactId"] == original_artifact_id {
+                fragment["artifactId"] = serde_json::json!(r"C:\Users\RealUser\PolicyAgent.log");
+                fragment["pathFingerprint"] = serde_json::json!("synthetic:realuser");
+                fragment["relativePath"] = serde_json::json!(r"C:\Users\RealUser\PolicyAgent.log");
+            }
+        }
+    }
     assert!(
         serde_json::from_value::<SccmClientIntakeAssessment>(leaked_identity).is_err(),
         "a standalone assessment must not deserialize raw identity-bearing provenance"
+    );
+}
+
+#[test]
+fn public_assessment_serialization_rejects_post_build_invalid_mutation() {
+    let mut forged_coverage = assessment("missing-root");
+    forged_coverage.groups[0].coverage = SccmCoverageState::Captured;
+    assert!(
+        serde_json::to_string(&forged_coverage).is_err(),
+        "post-build coverage mutation must not cross the public wire boundary"
+    );
+
+    let mut leaked_identity = assessment("complete");
+    let original_artifact_id = leaked_identity.physical_artifacts[0].artifact_id.clone();
+    leaked_identity.physical_artifacts[0].artifact_id =
+        r"C:\Users\RealUser\PolicyAgent.log".to_owned();
+    leaked_identity.physical_artifacts[0].path_fingerprint = Some("synthetic:realuser".to_owned());
+    leaked_identity.physical_artifacts[0].relative_path =
+        Some(r"C:\Users\RealUser\PolicyAgent.log".to_owned());
+    for group in &mut leaked_identity.groups {
+        for fragment in &mut group.fragments {
+            if fragment.artifact_id == original_artifact_id {
+                fragment.artifact_id = r"C:\Users\RealUser\PolicyAgent.log".to_owned();
+                fragment.path_fingerprint = Some("synthetic:realuser".to_owned());
+                fragment.relative_path = Some(r"C:\Users\RealUser\PolicyAgent.log".to_owned());
+            }
+        }
+    }
+    assert!(
+        serde_json::to_string(&leaked_identity).is_err(),
+        "post-build identity mutation must not cross the public wire boundary"
     );
 }
 

@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::DateTime;
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, SecondsFormat, Utc};
+use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 use crate::sccm::catalog::{
@@ -174,15 +174,13 @@ pub struct SccmClientIntakeBundle {
     pub artifacts: Vec<SccmClientIntakeArtifact>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmClientIntakeFragment {
     pub artifact_id: String,
     pub basename: String,
     pub rotation: SccmRotation,
     pub coverage: SccmCoverageState,
     pub path_fingerprint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
     pub fragment_complete: Option<bool>,
@@ -191,27 +189,23 @@ pub struct SccmClientIntakeFragment {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmClientIntakeGroup {
     pub logical_artifact_id: String,
     pub coverage: SccmCoverageState,
     pub fragments: Vec<SccmClientIntakeFragment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmClientIntakeCoverageGap {
     pub logical_artifact_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_id: Option<String>,
     pub role: SccmRole,
     pub coverage: SccmCoverageState,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmClientUnsupportedArtifact {
     pub artifact_id: String,
     pub basename: String,
@@ -219,7 +213,6 @@ pub struct SccmClientUnsupportedArtifact {
     pub classification: SccmCoverageState,
     pub rotation: SccmRotation,
     pub path_fingerprint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
     pub fragment_complete: Option<bool>,
@@ -228,8 +221,7 @@ pub struct SccmClientUnsupportedArtifact {
     pub encoding: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmClientIntakeAssessment {
     pub schema_version: u32,
     pub groups: Vec<SccmClientIntakeGroup>,
@@ -239,6 +231,245 @@ pub struct SccmClientIntakeAssessment {
     pub physical_artifacts: Vec<SccmClientIntakeFragment>,
     pub unsupported_artifacts: Vec<SccmClientUnsupportedArtifact>,
     pub coverage_gaps: Vec<SccmClientIntakeCoverageGap>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmClientIntakeFragmentWire {
+    artifact_id: String,
+    basename: String,
+    rotation: SccmRotation,
+    coverage: SccmCoverageState,
+    path_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rotation_lineage: Option<String>,
+    relative_path: Option<String>,
+    fragment_complete: Option<bool>,
+    configmgr_version: Option<String>,
+    collected_at_utc: Option<String>,
+    encoding: Option<String>,
+}
+
+impl From<SccmClientIntakeFragmentWire> for SccmClientIntakeFragment {
+    fn from(wire: SccmClientIntakeFragmentWire) -> Self {
+        Self {
+            artifact_id: wire.artifact_id,
+            basename: wire.basename,
+            rotation: wire.rotation,
+            coverage: wire.coverage,
+            path_fingerprint: wire.path_fingerprint,
+            rotation_lineage: wire.rotation_lineage,
+            relative_path: wire.relative_path,
+            fragment_complete: wire.fragment_complete,
+            configmgr_version: wire.configmgr_version,
+            collected_at_utc: wire.collected_at_utc,
+            encoding: wire.encoding,
+        }
+    }
+}
+
+impl From<&SccmClientIntakeFragment> for SccmClientIntakeFragmentWire {
+    fn from(fragment: &SccmClientIntakeFragment) -> Self {
+        Self {
+            artifact_id: fragment.artifact_id.clone(),
+            basename: fragment.basename.clone(),
+            rotation: fragment.rotation.clone(),
+            coverage: fragment.coverage.clone(),
+            path_fingerprint: fragment.path_fingerprint.clone(),
+            rotation_lineage: fragment.rotation_lineage.clone(),
+            relative_path: fragment.relative_path.clone(),
+            fragment_complete: fragment.fragment_complete,
+            configmgr_version: fragment.configmgr_version.clone(),
+            collected_at_utc: fragment.collected_at_utc.clone(),
+            encoding: fragment.encoding.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmClientIntakeGroupWire {
+    logical_artifact_id: String,
+    coverage: SccmCoverageState,
+    fragments: Vec<SccmClientIntakeFragmentWire>,
+}
+
+impl From<SccmClientIntakeGroupWire> for SccmClientIntakeGroup {
+    fn from(wire: SccmClientIntakeGroupWire) -> Self {
+        Self {
+            logical_artifact_id: wire.logical_artifact_id,
+            coverage: wire.coverage,
+            fragments: wire.fragments.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&SccmClientIntakeGroup> for SccmClientIntakeGroupWire {
+    fn from(group: &SccmClientIntakeGroup) -> Self {
+        Self {
+            logical_artifact_id: group.logical_artifact_id.clone(),
+            coverage: group.coverage.clone(),
+            fragments: group.fragments.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmClientIntakeCoverageGapWire {
+    logical_artifact_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    artifact_id: Option<String>,
+    role: SccmRole,
+    coverage: SccmCoverageState,
+    reason: String,
+}
+
+impl From<SccmClientIntakeCoverageGapWire> for SccmClientIntakeCoverageGap {
+    fn from(wire: SccmClientIntakeCoverageGapWire) -> Self {
+        Self {
+            logical_artifact_id: wire.logical_artifact_id,
+            artifact_id: wire.artifact_id,
+            role: wire.role,
+            coverage: wire.coverage,
+            reason: wire.reason,
+        }
+    }
+}
+
+impl From<&SccmClientIntakeCoverageGap> for SccmClientIntakeCoverageGapWire {
+    fn from(gap: &SccmClientIntakeCoverageGap) -> Self {
+        Self {
+            logical_artifact_id: gap.logical_artifact_id.clone(),
+            artifact_id: gap.artifact_id.clone(),
+            role: gap.role.clone(),
+            coverage: gap.coverage.clone(),
+            reason: gap.reason.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmClientUnsupportedArtifactWire {
+    artifact_id: String,
+    basename: String,
+    declared_coverage: SccmCoverageState,
+    classification: SccmCoverageState,
+    rotation: SccmRotation,
+    path_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rotation_lineage: Option<String>,
+    relative_path: Option<String>,
+    fragment_complete: Option<bool>,
+    configmgr_version: Option<String>,
+    collected_at_utc: Option<String>,
+    encoding: Option<String>,
+}
+
+impl From<SccmClientUnsupportedArtifactWire> for SccmClientUnsupportedArtifact {
+    fn from(wire: SccmClientUnsupportedArtifactWire) -> Self {
+        Self {
+            artifact_id: wire.artifact_id,
+            basename: wire.basename,
+            declared_coverage: wire.declared_coverage,
+            classification: wire.classification,
+            rotation: wire.rotation,
+            path_fingerprint: wire.path_fingerprint,
+            rotation_lineage: wire.rotation_lineage,
+            relative_path: wire.relative_path,
+            fragment_complete: wire.fragment_complete,
+            configmgr_version: wire.configmgr_version,
+            collected_at_utc: wire.collected_at_utc,
+            encoding: wire.encoding,
+        }
+    }
+}
+
+impl From<&SccmClientUnsupportedArtifact> for SccmClientUnsupportedArtifactWire {
+    fn from(unsupported: &SccmClientUnsupportedArtifact) -> Self {
+        Self {
+            artifact_id: unsupported.artifact_id.clone(),
+            basename: unsupported.basename.clone(),
+            declared_coverage: unsupported.declared_coverage.clone(),
+            classification: unsupported.classification.clone(),
+            rotation: unsupported.rotation.clone(),
+            path_fingerprint: unsupported.path_fingerprint.clone(),
+            rotation_lineage: unsupported.rotation_lineage.clone(),
+            relative_path: unsupported.relative_path.clone(),
+            fragment_complete: unsupported.fragment_complete,
+            configmgr_version: unsupported.configmgr_version.clone(),
+            collected_at_utc: unsupported.collected_at_utc.clone(),
+            encoding: unsupported.encoding.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmClientIntakeAssessmentWire {
+    schema_version: u32,
+    groups: Vec<SccmClientIntakeGroupWire>,
+    physical_artifacts: Vec<SccmClientIntakeFragmentWire>,
+    unsupported_artifacts: Vec<SccmClientUnsupportedArtifactWire>,
+    coverage_gaps: Vec<SccmClientIntakeCoverageGapWire>,
+}
+
+impl From<&SccmClientIntakeAssessment> for SccmClientIntakeAssessmentWire {
+    fn from(assessment: &SccmClientIntakeAssessment) -> Self {
+        Self {
+            schema_version: assessment.schema_version,
+            groups: assessment.groups.iter().map(Into::into).collect(),
+            physical_artifacts: assessment
+                .physical_artifacts
+                .iter()
+                .map(Into::into)
+                .collect(),
+            unsupported_artifacts: assessment
+                .unsupported_artifacts
+                .iter()
+                .map(Into::into)
+                .collect(),
+            coverage_gaps: assessment.coverage_gaps.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl Serialize for SccmClientIntakeAssessment {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_assessment_projection(self).map_err(S::Error::custom)?;
+        SccmClientIntakeAssessmentWire::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SccmClientIntakeAssessment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SccmClientIntakeAssessmentWire::deserialize(deserializer)?;
+        let assessment = Self {
+            schema_version: wire.schema_version,
+            groups: wire.groups.into_iter().map(Into::into).collect(),
+            physical_artifacts: wire
+                .physical_artifacts
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            unsupported_artifacts: wire
+                .unsupported_artifacts
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            coverage_gaps: wire.coverage_gaps.into_iter().map(Into::into).collect(),
+        };
+
+        validate_assessment_projection(&assessment).map_err(D::Error::custom)?;
+        Ok(assessment)
+    }
 }
 
 impl SccmClientIntakeAssessment {
@@ -399,7 +630,9 @@ pub fn assess_client_intake(
                 relative_path: source.relative_path.clone(),
                 fragment_complete: source.fragment_complete,
                 configmgr_version: source.artifact.configmgr_version.clone(),
-                collected_at_utc: source.artifact.collected_at_utc.clone(),
+                collected_at_utc: normalized_collected_at(
+                    source.artifact.collected_at_utc.as_deref(),
+                ),
                 encoding: source.artifact.encoding.clone(),
             });
             continue;
@@ -467,6 +700,100 @@ pub fn assess_client_intake(
         unsupported_artifacts,
         coverage_gaps,
     })
+}
+
+fn validate_assessment_projection(assessment: &SccmClientIntakeAssessment) -> Result<(), String> {
+    let mut artifacts = assessment
+        .physical_artifacts
+        .iter()
+        .map(fragment_as_intake_artifact)
+        .collect::<Vec<_>>();
+    let mut nonphysical_fragments = BTreeMap::new();
+
+    for group in &assessment.groups {
+        for fragment in &group.fragments {
+            if is_physical_state(&fragment.coverage) {
+                continue;
+            }
+
+            if let Some(existing) =
+                nonphysical_fragments.insert(fragment.artifact_id.clone(), fragment.clone())
+            {
+                if existing != *fragment {
+                    return Err(
+                        "client intake assessment repeats one artifact ID with conflicting projections"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
+    }
+
+    artifacts.extend(
+        nonphysical_fragments
+            .values()
+            .map(fragment_as_intake_artifact),
+    );
+    artifacts.extend(
+        assessment
+            .unsupported_artifacts
+            .iter()
+            .map(unsupported_as_intake_artifact),
+    );
+
+    let canonical = assess_client_intake(&SccmClientIntakeBundle { artifacts })
+        .map_err(|error| format!("invalid client intake assessment projection: {error}"))?;
+    if canonical != *assessment {
+        return Err(
+            "client intake assessment is not the canonical projection of its artifacts".to_owned(),
+        );
+    }
+
+    Ok(())
+}
+
+fn fragment_as_intake_artifact(fragment: &SccmClientIntakeFragment) -> SccmClientIntakeArtifact {
+    SccmClientIntakeArtifact {
+        artifact: SccmArtifact {
+            artifact_id: fragment.artifact_id.clone(),
+            display_name: fragment.basename.clone(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: fragment.configmgr_version.clone(),
+            collected_at_utc: fragment.collected_at_utc.clone(),
+            rotation: fragment.rotation.clone(),
+            coverage: fragment.coverage.clone(),
+            encoding: fragment.encoding.clone(),
+        },
+        path_fingerprint: fragment.path_fingerprint.clone(),
+        rotation_lineage: fragment.rotation_lineage.clone(),
+        relative_path: fragment.relative_path.clone(),
+        fragment_complete: fragment.fragment_complete,
+    }
+}
+
+fn unsupported_as_intake_artifact(
+    unsupported: &SccmClientUnsupportedArtifact,
+) -> SccmClientIntakeArtifact {
+    SccmClientIntakeArtifact {
+        artifact: SccmArtifact {
+            artifact_id: unsupported.artifact_id.clone(),
+            display_name: unsupported.basename.clone(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: unsupported.configmgr_version.clone(),
+            collected_at_utc: unsupported.collected_at_utc.clone(),
+            rotation: unsupported.rotation.clone(),
+            coverage: unsupported.declared_coverage.clone(),
+            encoding: unsupported.encoding.clone(),
+        },
+        path_fingerprint: unsupported.path_fingerprint.clone(),
+        rotation_lineage: unsupported.rotation_lineage.clone(),
+        relative_path: unsupported.relative_path.clone(),
+        fragment_complete: unsupported.fragment_complete,
+    }
 }
 
 fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientIntakeError> {
@@ -724,9 +1051,18 @@ fn intake_fragment(source: &SccmClientIntakeArtifact) -> SccmClientIntakeFragmen
         relative_path: source.relative_path.clone(),
         fragment_complete: source.fragment_complete,
         configmgr_version: source.artifact.configmgr_version.clone(),
-        collected_at_utc: source.artifact.collected_at_utc.clone(),
+        collected_at_utc: normalized_collected_at(source.artifact.collected_at_utc.as_deref()),
         encoding: source.artifact.encoding.clone(),
     }
+}
+
+fn normalized_collected_at(value: Option<&str>) -> Option<String> {
+    value.map(|value| {
+        DateTime::parse_from_rfc3339(value)
+            .expect("client intake validates collection timestamps before projection")
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::AutoSi, true)
+    })
 }
 
 fn group_coverage(fragments: &[SccmClientIntakeFragment]) -> SccmCoverageState {

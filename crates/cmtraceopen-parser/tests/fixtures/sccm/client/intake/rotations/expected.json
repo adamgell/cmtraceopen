@@ -1,5 +1,5 @@
 {
-  "contractState": "proposedPending318",
+  "contractState": "pureIntakeImplementedNativePending",
   "scenario": "rotations",
   "workflowDiagnosisExpected": false,
   "coverage": [{"logicalArtifactId":"client-app-enforce","state":"captured","fragmentCount":3,"rotationOrder":["current","lo","numbered:2"],"distinctPathFingerprints":1,"rotationLineages":["synthetic:app-enforce-root-a"]}],

@@ -1,5 +1,5 @@
 {
-  "contractState": "proposedPending318",
+  "contractState": "pureIntakeImplementedNativePending",
   "scenario": "complete",
   "workflowDiagnosisExpected": false,
   "coverage": [

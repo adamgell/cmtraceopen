@@ -1,5 +1,5 @@
 {
-  "contractState": "proposedPending318",
+  "contractState": "pureIntakeImplementedNativePending",
   "scenario": "capped",
   "workflowDiagnosisExpected": false,
   "coverage": [{"logicalArtifactId":"client-content","state":"capped","fragmentComplete":false,"truncated":true}],

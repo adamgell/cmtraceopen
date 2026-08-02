@@ -203,9 +203,11 @@ separate acceptance gate.
   incomplete 128-byte fragment, and non-CCM supplemental fixtures use it as
   plain text. A production collector must not treat the marker as a real SCCM
   file format.
-- `expected.json` asserts explicit coverage and requests. Its `contractState`
-  is `proposedPending318`, so no fixture suggests that interface names, enum
-  spellings, or schema fields are final.
+- `expected.json` asserts explicit coverage and request design. Its
+  `contractState` is `pureIntakeImplementedNativePending`: the public pure
+  intake projection is now executable and checked against these fixtures,
+  while request wording, native manifest emission, discovery/capture, and
+  Windows acceptance remain design-only gates rather than delivered claims.
 
 ## Exact dependency blockers
 
