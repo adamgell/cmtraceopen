@@ -4,8 +4,8 @@ use std::fmt;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{
-    de::{Error as _, IgnoredAny, SeqAccess, Visitor},
-    ser::Error as _,
+    de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor},
+    ser::{Error as _, SerializeStruct},
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use thiserror::Error;
@@ -187,17 +187,102 @@ pub struct SccmClientIntakeArtifact {
     pub fragment_complete: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SccmClientIntakeBundle {
-    pub artifacts: Vec<SccmClientIntakeArtifact>,
+/// A coverage-only declaration for a recognized client source rotation that
+/// was intentionally not retained. This is distinct from a physical artifact:
+/// it never contains a bundle-relative path, bytes, or fragment-boundary
+/// claim. The versioned opaque identity, configured-source fingerprint, and
+/// rotation lineage retain only the provenance needed to prevent collisions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SccmClientIntakeCaptureGap {
+    pub artifact_id: String,
+    pub basename: String,
+    pub rotation: SccmRotation,
+    pub coverage: SccmCoverageState,
+    pub path_fingerprint: String,
+    pub rotation_lineage: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SccmClientIntakeBundleWire {
-    #[serde(deserialize_with = "deserialize_bounded_client_artifacts")]
-    artifacts: Vec<SccmClientIntakeArtifact>,
+struct SccmClientIntakeCaptureGapWire {
+    artifact_id: String,
+    basename: String,
+    rotation: SccmRotation,
+    coverage: SccmCoverageState,
+    path_fingerprint: String,
+    rotation_lineage: String,
+}
+
+impl From<SccmClientIntakeCaptureGapWire> for SccmClientIntakeCaptureGap {
+    fn from(wire: SccmClientIntakeCaptureGapWire) -> Self {
+        Self {
+            artifact_id: wire.artifact_id,
+            basename: wire.basename,
+            rotation: wire.rotation,
+            coverage: wire.coverage,
+            path_fingerprint: wire.path_fingerprint,
+            rotation_lineage: wire.rotation_lineage,
+        }
+    }
+}
+
+impl From<&SccmClientIntakeCaptureGap> for SccmClientIntakeCaptureGapWire {
+    fn from(capture_gap: &SccmClientIntakeCaptureGap) -> Self {
+        Self {
+            artifact_id: capture_gap.artifact_id.clone(),
+            basename: capture_gap.basename.clone(),
+            rotation: capture_gap.rotation.clone(),
+            coverage: capture_gap.coverage.clone(),
+            path_fingerprint: capture_gap.path_fingerprint.clone(),
+            rotation_lineage: capture_gap.rotation_lineage.clone(),
+        }
+    }
+}
+
+impl Serialize for SccmClientIntakeCaptureGap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_capture_gap_shape(self).map_err(S::Error::custom)?;
+        SccmClientIntakeCaptureGapWire::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SccmClientIntakeCaptureGap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let capture_gap = Self::from(SccmClientIntakeCaptureGapWire::deserialize(deserializer)?);
+        validate_capture_gap_shape(&capture_gap).map_err(D::Error::custom)?;
+        Ok(capture_gap)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SccmClientIntakeBundle {
+    pub artifacts: Vec<SccmClientIntakeArtifact>,
+    /// Additive v1 coverage-only declarations. Empty remains omitted on the
+    /// wire so pre-gap bundle JSON round-trips unchanged.
+    pub capture_gaps: Vec<SccmClientIntakeCaptureGap>,
+}
+
+impl Serialize for SccmClientIntakeBundle {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_bundle(self).map_err(S::Error::custom)?;
+
+        let field_count = 1 + usize::from(!self.capture_gaps.is_empty());
+        let mut state = serializer.serialize_struct("SccmClientIntakeBundle", field_count)?;
+        state.serialize_field("artifacts", &self.artifacts)?;
+        if !self.capture_gaps.is_empty() {
+            state.serialize_field("captureGaps", &self.capture_gaps)?;
+        }
+        state.end()
+    }
 }
 
 impl<'de> Deserialize<'de> for SccmClientIntakeBundle {
@@ -205,67 +290,178 @@ impl<'de> Deserialize<'de> for SccmClientIntakeBundle {
     where
         D: Deserializer<'de>,
     {
-        let wire = SccmClientIntakeBundleWire::deserialize(deserializer)?;
-        Ok(Self {
-            artifacts: wire.artifacts,
-        })
+        const FIELDS: &[&str] = &["artifacts", "captureGaps"];
+        deserializer.deserialize_struct(
+            "SccmClientIntakeBundle",
+            FIELDS,
+            SccmClientIntakeBundleVisitor,
+        )
     }
 }
 
-fn deserialize_bounded_client_artifacts<'de, D>(
-    deserializer: D,
-) -> Result<Vec<SccmClientIntakeArtifact>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct BoundedArtifactVisitor;
+#[derive(Deserialize)]
+#[serde(field_identifier, rename_all = "camelCase")]
+enum SccmClientIntakeBundleField {
+    Artifacts,
+    CaptureGaps,
+}
 
-    impl<'de> Visitor<'de> for BoundedArtifactVisitor {
-        type Value = Vec<SccmClientIntakeArtifact>;
+struct SccmClientIntakeBundleVisitor;
 
-        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(
-                formatter,
-                "at most {MAX_SCCM_CLIENT_INTAKE_ARTIFACTS} SCCM client artifacts"
-            )
-        }
+impl<'de> Visitor<'de> for SccmClientIntakeBundleVisitor {
+    type Value = SccmClientIntakeBundle;
 
-        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-        where
-            A: SeqAccess<'de>,
-        {
-            if sequence
-                .size_hint()
-                .is_some_and(|size| size > MAX_SCCM_CLIENT_INTAKE_ARTIFACTS)
-            {
-                return Err(A::Error::custom(
-                    SccmClientIntakeError::ArtifactLimitExceeded,
-                ));
-            }
-
-            let initial_capacity = sequence
-                .size_hint()
-                .unwrap_or_default()
-                .min(MAX_SCCM_CLIENT_INTAKE_ARTIFACTS);
-            let mut artifacts = Vec::with_capacity(initial_capacity);
-            while artifacts.len() < MAX_SCCM_CLIENT_INTAKE_ARTIFACTS {
-                let Some(artifact) = sequence.next_element()? else {
-                    return Ok(artifacts);
-                };
-                artifacts.push(artifact);
-            }
-
-            if sequence.next_element::<IgnoredAny>()?.is_some() {
-                return Err(A::Error::custom(
-                    SccmClientIntakeError::ArtifactLimitExceeded,
-                ));
-            }
-
-            Ok(artifacts)
-        }
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an SCCM client intake bundle")
     }
 
-    deserializer.deserialize_seq(BoundedArtifactVisitor)
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut artifacts = None;
+        let mut capture_gaps = None;
+        let mut remaining = MAX_SCCM_CLIENT_INTAKE_ARTIFACTS;
+
+        while let Some(field) = map.next_key()? {
+            match field {
+                SccmClientIntakeBundleField::Artifacts => {
+                    if artifacts.is_some() {
+                        return Err(A::Error::duplicate_field("artifacts"));
+                    }
+                    let decoded = map.next_value_seed(BoundedArtifactsSeed { limit: remaining })?;
+                    remaining -= decoded.len();
+                    artifacts = Some(decoded);
+                }
+                SccmClientIntakeBundleField::CaptureGaps => {
+                    if capture_gaps.is_some() {
+                        return Err(A::Error::duplicate_field("captureGaps"));
+                    }
+                    let decoded =
+                        map.next_value_seed(BoundedCaptureGapsSeed { limit: remaining })?;
+                    remaining -= decoded.len();
+                    capture_gaps = Some(decoded);
+                }
+            }
+        }
+
+        let bundle = SccmClientIntakeBundle {
+            artifacts: artifacts.ok_or_else(|| A::Error::missing_field("artifacts"))?,
+            capture_gaps: capture_gaps.unwrap_or_default(),
+        };
+        validate_bundle(&bundle).map_err(A::Error::custom)?;
+        Ok(bundle)
+    }
+}
+
+struct BoundedCaptureGapsSeed {
+    limit: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for BoundedCaptureGapsSeed {
+    type Value = Vec<SccmClientIntakeCaptureGap>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(BoundedCaptureGapVisitor { limit: self.limit })
+    }
+}
+
+struct BoundedCaptureGapVisitor {
+    limit: usize,
+}
+
+impl<'de> Visitor<'de> for BoundedCaptureGapVisitor {
+    type Value = Vec<SccmClientIntakeCaptureGap>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "at most {} SCCM client capture gaps", self.limit)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        if sequence.size_hint().is_some_and(|size| size > self.limit) {
+            return Err(A::Error::custom(
+                SccmClientIntakeError::ArtifactLimitExceeded,
+            ));
+        }
+
+        let initial_capacity = sequence.size_hint().unwrap_or_default().min(self.limit);
+        let mut capture_gaps = Vec::with_capacity(initial_capacity);
+        while capture_gaps.len() < self.limit {
+            let Some(capture_gap) = sequence.next_element()? else {
+                return Ok(capture_gaps);
+            };
+            capture_gaps.push(capture_gap);
+        }
+
+        if sequence.next_element::<IgnoredAny>()?.is_some() {
+            return Err(A::Error::custom(
+                SccmClientIntakeError::ArtifactLimitExceeded,
+            ));
+        }
+
+        Ok(capture_gaps)
+    }
+}
+
+struct BoundedArtifactsSeed {
+    limit: usize,
+}
+
+impl<'de> DeserializeSeed<'de> for BoundedArtifactsSeed {
+    type Value = Vec<SccmClientIntakeArtifact>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(BoundedArtifactVisitor { limit: self.limit })
+    }
+}
+
+struct BoundedArtifactVisitor {
+    limit: usize,
+}
+
+impl<'de> Visitor<'de> for BoundedArtifactVisitor {
+    type Value = Vec<SccmClientIntakeArtifact>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "at most {} SCCM client artifacts", self.limit)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        if sequence.size_hint().is_some_and(|size| size > self.limit) {
+            return Err(A::Error::custom(
+                SccmClientIntakeError::ArtifactLimitExceeded,
+            ));
+        }
+
+        let initial_capacity = sequence.size_hint().unwrap_or_default().min(self.limit);
+        let mut artifacts = Vec::with_capacity(initial_capacity);
+        while artifacts.len() < self.limit {
+            let Some(artifact) = sequence.next_element()? else {
+                return Ok(artifacts);
+            };
+            artifacts.push(artifact);
+        }
+
+        if sequence.next_element::<IgnoredAny>()?.is_some() {
+            return Err(A::Error::custom(
+                SccmClientIntakeError::ArtifactLimitExceeded,
+            ));
+        }
+
+        Ok(artifacts)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -327,6 +523,9 @@ pub struct SccmClientIntakeAssessment {
     /// but never masquerade as captured bundle artifacts.
     pub physical_artifacts: Vec<SccmClientIntakeFragment>,
     pub unsupported_artifacts: Vec<SccmClientUnsupportedArtifact>,
+    /// Canonical coverage-only declarations. They preserve capture-limit
+    /// provenance without becoming physical artifacts or log fragments.
+    pub capture_gaps: Vec<SccmClientIntakeCaptureGap>,
     pub coverage_gaps: Vec<SccmClientIntakeCoverageGap>,
 }
 
@@ -509,7 +708,30 @@ struct SccmClientIntakeAssessmentWire {
     groups: Vec<SccmClientIntakeGroupWire>,
     physical_artifacts: Vec<SccmClientIntakeFragmentWire>,
     unsupported_artifacts: Vec<SccmClientUnsupportedArtifactWire>,
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_bounded_assessment_capture_gaps"
+    )]
+    capture_gaps: Vec<SccmClientIntakeCaptureGap>,
     coverage_gaps: Vec<SccmClientIntakeCoverageGapWire>,
+}
+
+fn deserialize_bounded_assessment_capture_gaps<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SccmClientIntakeCaptureGap>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // Each assessment capture gap reconstructs one canonical bundle
+    // declaration in `validate_assessment_projection`. Decode no more than
+    // that authoritative shared ceiling; the final projection validation
+    // accounts for physical, nonphysical, unsupported, and gap declarations
+    // together.
+    BoundedCaptureGapsSeed {
+        limit: MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    }
+    .deserialize(deserializer)
 }
 
 impl From<&SccmClientIntakeAssessment> for SccmClientIntakeAssessmentWire {
@@ -527,6 +749,7 @@ impl From<&SccmClientIntakeAssessment> for SccmClientIntakeAssessmentWire {
                 .iter()
                 .map(Into::into)
                 .collect(),
+            capture_gaps: assessment.capture_gaps.clone(),
             coverage_gaps: assessment.coverage_gaps.iter().map(Into::into).collect(),
         }
     }
@@ -561,6 +784,7 @@ impl<'de> Deserialize<'de> for SccmClientIntakeAssessment {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            capture_gaps: wire.capture_gaps,
             coverage_gaps: wire.coverage_gaps.into_iter().map(Into::into).collect(),
         };
 
@@ -611,6 +835,8 @@ pub enum SccmClientIntakeError {
     MissingFragmentCompleteness,
     #[error("client intake fragment completeness contradicts its declared coverage state")]
     InvalidFragmentCompleteness,
+    #[error("client intake capture gap is malformed, unsupported, or not coverage-only")]
+    InvalidCaptureGap,
 }
 
 #[derive(Clone, Copy)]
@@ -713,6 +939,8 @@ pub fn assess_client_intake(
     let mut physical_artifacts = Vec::new();
     let mut unsupported_artifacts = Vec::new();
     let mut memberships: BTreeMap<&str, Vec<SccmClientIntakeFragment>> = BTreeMap::new();
+    let mut capture_gap_memberships: BTreeMap<&str, Vec<SccmClientIntakeCaptureGap>> =
+        BTreeMap::new();
 
     for source in &bundle.artifacts {
         let matching_groups =
@@ -749,12 +977,23 @@ pub fn assess_client_intake(
         }
     }
 
+    for capture_gap in &bundle.capture_gaps {
+        for group in matching_groups(&capture_gap.basename, &capture_gap.rotation) {
+            capture_gap_memberships
+                .entry(group.logical_artifact_id)
+                .or_default()
+                .push(capture_gap.clone());
+        }
+    }
+
     physical_artifacts.sort_by(compare_fragments);
     unsupported_artifacts.sort_by(|left, right| {
         left.artifact_id
             .cmp(&right.artifact_id)
             .then_with(|| left.basename.cmp(&right.basename))
     });
+    let mut capture_gaps = bundle.capture_gaps.clone();
+    capture_gaps.sort_by(compare_capture_gaps);
 
     let mut groups = Vec::with_capacity(CLIENT_SOURCE_GROUPS.len());
     let mut coverage_gaps = Vec::new();
@@ -763,8 +1002,12 @@ pub fn assess_client_intake(
             .remove(definition.logical_artifact_id)
             .unwrap_or_default();
         fragments.sort_by(compare_fragments);
-        let coverage = group_coverage(&fragments);
-        if fragments.is_empty() {
+        let mut group_capture_gaps = capture_gap_memberships
+            .remove(definition.logical_artifact_id)
+            .unwrap_or_default();
+        group_capture_gaps.sort_by(compare_capture_gaps);
+        let coverage = group_coverage(&fragments, &group_capture_gaps);
+        if fragments.is_empty() && group_capture_gaps.is_empty() {
             coverage_gaps.push(SccmClientIntakeCoverageGap {
                 logical_artifact_id: definition.logical_artifact_id.to_owned(),
                 artifact_id: None,
@@ -784,6 +1027,15 @@ pub fn assess_client_intake(
                     });
                 }
             }
+            for capture_gap in &group_capture_gaps {
+                coverage_gaps.push(SccmClientIntakeCoverageGap {
+                    logical_artifact_id: definition.logical_artifact_id.to_owned(),
+                    artifact_id: Some(capture_gap.artifact_id.clone()),
+                    role: SccmRole::Client,
+                    coverage: capture_gap.coverage.clone(),
+                    reason: capture_gap_coverage_reason(capture_gap),
+                });
+            }
         }
         groups.push(SccmClientIntakeGroup {
             logical_artifact_id: definition.logical_artifact_id.to_owned(),
@@ -797,6 +1049,7 @@ pub fn assess_client_intake(
         groups,
         physical_artifacts,
         unsupported_artifacts,
+        capture_gaps,
         coverage_gaps,
     })
 }
@@ -840,8 +1093,11 @@ fn validate_assessment_projection(assessment: &SccmClientIntakeAssessment) -> Re
             .map(unsupported_as_intake_artifact),
     );
 
-    let canonical = assess_client_intake(&SccmClientIntakeBundle { artifacts })
-        .map_err(|error| format!("invalid client intake assessment projection: {error}"))?;
+    let canonical = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts,
+        capture_gaps: assessment.capture_gaps.clone(),
+    })
+    .map_err(|error| format!("invalid client intake assessment projection: {error}"))?;
     if canonical != *assessment {
         return Err(
             "client intake assessment is not the canonical projection of its artifacts".to_owned(),
@@ -895,8 +1151,34 @@ fn unsupported_as_intake_artifact(
     }
 }
 
+fn validate_capture_gap_shape(
+    capture_gap: &SccmClientIntakeCaptureGap,
+) -> Result<(), SccmClientIntakeError> {
+    if !is_safe_artifact_id(&capture_gap.artifact_id)
+        || serde_json::to_value(&capture_gap.rotation).is_err()
+        || !is_safe_unknown_rotation(&capture_gap.rotation)
+        || !is_safe_basename(&capture_gap.basename, &capture_gap.rotation)
+        || !matches!(
+            capture_gap.coverage,
+            SccmCoverageState::Capped | SccmCoverageState::ParseFailed
+        )
+        || !is_safe_path_identity(&capture_gap.path_fingerprint)
+        || !is_safe_rotation_lineage(&capture_gap.rotation_lineage)
+        || matching_groups(&capture_gap.basename, &capture_gap.rotation).is_empty()
+    {
+        return Err(SccmClientIntakeError::InvalidCaptureGap);
+    }
+
+    Ok(())
+}
+
 fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientIntakeError> {
-    if bundle.artifacts.len() > MAX_SCCM_CLIENT_INTAKE_ARTIFACTS {
+    if bundle
+        .artifacts
+        .len()
+        .saturating_add(bundle.capture_gaps.len())
+        > MAX_SCCM_CLIENT_INTAKE_ARTIFACTS
+    {
         return Err(SccmClientIntakeError::ArtifactLimitExceeded);
     }
 
@@ -1086,6 +1368,52 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
         }
     }
 
+    for capture_gap in &bundle.capture_gaps {
+        validate_capture_gap_shape(capture_gap)?;
+        if !artifact_ids.insert(capture_gap.artifact_id.to_ascii_lowercase()) {
+            return Err(SccmClientIntakeError::DuplicateArtifactId);
+        }
+
+        let path_fingerprint = capture_gap.path_fingerprint.to_ascii_lowercase();
+        let lineage = capture_gap.rotation_lineage.clone();
+        let basename = source_basename_identity(&capture_gap.basename, &capture_gap.rotation);
+        if let Some((bound_basename, bound_fingerprint)) = rotation_lineage_bindings.get(&lineage) {
+            if bound_basename != &basename
+                || bound_fingerprint.as_deref() != Some(&path_fingerprint)
+            {
+                return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+            }
+        } else {
+            rotation_lineage_bindings.insert(
+                lineage.clone(),
+                (basename.clone(), Some(path_fingerprint.clone())),
+            );
+        }
+        if !lineage_rotation_identities
+            .insert((lineage.clone(), rotation_identity(&capture_gap.rotation)))
+        {
+            return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+        }
+        if let Some((bound_lineage, bound_basename)) =
+            path_fingerprint_bindings.get(&path_fingerprint)
+        {
+            if bound_lineage.as_deref() != Some(lineage.as_str()) || bound_basename != &basename {
+                return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
+            }
+        } else {
+            path_fingerprint_bindings.insert(path_fingerprint, (Some(lineage), basename));
+        }
+
+        let source_identity = (
+            capture_gap.basename.to_ascii_lowercase(),
+            rotation_identity(&capture_gap.rotation),
+        );
+        if unpinned_marker_identities.contains(&source_identity) {
+            return Err(SccmClientIntakeError::DuplicateArtifactId);
+        }
+        pinned_marker_identities.insert(source_identity);
+    }
+
     Ok(())
 }
 
@@ -1168,10 +1496,18 @@ fn normalized_collected_at(value: Option<&str>) -> Option<String> {
     })
 }
 
-fn group_coverage(fragments: &[SccmClientIntakeFragment]) -> SccmCoverageState {
+fn group_coverage(
+    fragments: &[SccmClientIntakeFragment],
+    capture_gaps: &[SccmClientIntakeCaptureGap],
+) -> SccmCoverageState {
     fragments
         .iter()
         .map(|fragment| fragment.coverage.clone())
+        .chain(
+            capture_gaps
+                .iter()
+                .map(|capture_gap| capture_gap.coverage.clone()),
+        )
         .max_by_key(coverage_rank)
         .unwrap_or(SccmCoverageState::Absent)
 }
@@ -1246,6 +1582,20 @@ fn source_coverage_reason(fragment: &SccmClientIntakeFragment) -> Option<String>
     }
 }
 
+fn capture_gap_coverage_reason(capture_gap: &SccmClientIntakeCaptureGap) -> String {
+    match capture_gap.coverage {
+        SccmCoverageState::Capped => format!(
+            "Client source rotation {} was omitted because its capture limit was reached.",
+            capture_gap.basename
+        ),
+        SccmCoverageState::ParseFailed => format!(
+            "Client source rotation {} was omitted because capture could not be completed.",
+            capture_gap.basename
+        ),
+        _ => unreachable!("capture gaps are validated as Capped or ParseFailed"),
+    }
+}
+
 /// Stable rotation discriminator for the canonical source identity shared
 /// by every declaration, physical or marker, so collisions intersect across
 /// all declaration shapes for a source.
@@ -1281,6 +1631,18 @@ fn compare_fragments(
                 .unwrap_or_default()
                 .cmp(right.rotation_lineage.as_deref().unwrap_or_default())
         })
+        .then_with(|| compare_rotation(&left.rotation, &right.rotation))
+        .then_with(|| left.basename.cmp(&right.basename))
+        .then_with(|| left.artifact_id.cmp(&right.artifact_id))
+}
+
+fn compare_capture_gaps(
+    left: &SccmClientIntakeCaptureGap,
+    right: &SccmClientIntakeCaptureGap,
+) -> Ordering {
+    left.path_fingerprint
+        .cmp(&right.path_fingerprint)
+        .then_with(|| left.rotation_lineage.cmp(&right.rotation_lineage))
         .then_with(|| compare_rotation(&left.rotation, &right.rotation))
         .then_with(|| left.basename.cmp(&right.basename))
         .then_with(|| left.artifact_id.cmp(&right.artifact_id))
