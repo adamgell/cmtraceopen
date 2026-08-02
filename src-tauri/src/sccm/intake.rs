@@ -1,20 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use cmtraceopen_parser::sccm::{
     classify_artifact_name, declared_client_source_groups, SccmCoverageState, SccmRole,
     SccmRotation,
 };
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 use crate::error::AppError;
 
-use super::manifest::SccmManifestSourceState;
+use super::bundle::{hmac_sha256, SccmHostPseudonymKey};
+use super::manifest::{SccmCaptureLimitKind, SccmManifestCoverageScope, SccmManifestSourceState};
 
 const MAX_CANDIDATE_ROOTS: usize = 32;
 const MAX_SOURCE_SPECS: usize = 128;
 const MAX_SAFE_ID_CHARS: usize = 160;
+const ROOT_HANDLE_HMAC_DOMAIN: &[u8] = b"cmtraceopen.sccm.root-handle.v1\0";
 
 /// A caller-selectable view of the authoritative pure client catalog.
 ///
@@ -35,11 +40,17 @@ pub struct SccmClientDiscoveryInput {
     pub source_catalog: Vec<SccmClientSourceSpec>,
     pub max_files_per_source: usize,
     pub max_bytes_per_source: u64,
+    /// Secret retention-scope key used to make public source provenance
+    /// unlinkable and resistant to native-path dictionary recovery.
+    pub provenance_pseudonym_key: SccmHostPseudonymKey,
     /// Testable status-provider boundary. Production callers leave this map
     /// empty and receive states from filesystem operations. A physical
     /// `ParseFailed` override retains the bounded bytes while pinning the
     /// normalization coverage state.
     pub access_status_overrides: BTreeMap<PathBuf, SccmCoverageState>,
+    /// Testable provider seam for a directory iterator that returned some
+    /// entries and then failed. Production callers leave this map empty.
+    pub enumeration_status_overrides: BTreeMap<PathBuf, SccmCoverageState>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,9 +64,10 @@ pub struct SccmClientSourceState {
     pub basename: String,
     pub rotation: SccmRotation,
     pub state: SccmManifestSourceState,
+    pub coverage_scope: SccmManifestCoverageScope,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct SccmClientDiscoveredArtifact {
     pub catalog_entry_id: String,
     pub logical_artifact_ids: Vec<String>,
@@ -69,8 +81,35 @@ pub struct SccmClientDiscoveredArtifact {
     pub state: SccmManifestSourceState,
     pub source_bytes: u64,
     pub copy_bytes: u64,
+    pub capture_limit_kind: Option<SccmCaptureLimitKind>,
+    pub(super) retained: bool,
+    pub(crate) source_snapshot: SccmSourceSnapshot,
     pub(crate) canonical_root: PathBuf,
     pub(crate) canonical_path: PathBuf,
+}
+
+impl fmt::Debug for SccmClientDiscoveredArtifact {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SccmClientDiscoveredArtifact")
+            .field("catalog_entry_id", &self.catalog_entry_id)
+            .field("logical_artifact_ids", &self.logical_artifact_ids)
+            .field("source_handle", &self.source_handle)
+            .field("root_handle", &self.root_handle)
+            .field("path_fingerprint", &self.path_fingerprint)
+            .field("rotation_lineage", &self.rotation_lineage)
+            .field("basename", &self.basename)
+            .field("canonical_basename", &self.canonical_basename)
+            .field("rotation", &self.rotation)
+            .field("state", &self.state)
+            .field("source_bytes", &self.source_bytes)
+            .field("copy_bytes", &self.copy_bytes)
+            .field("capture_limit_kind", &self.capture_limit_kind)
+            .field("retained", &self.retained)
+            .field("canonical_root", &"[REDACTED]")
+            .field("canonical_path", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -101,6 +140,19 @@ struct InspectedRoot {
     state: RootState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    volume: u64,
+    index: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SccmSourceSnapshot {
+    identity: Option<FileIdentity>,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
 pub fn authoritative_client_source_catalog() -> Vec<SccmClientSourceSpec> {
     declared_client_source_groups()
         .into_iter()
@@ -117,7 +169,10 @@ pub fn discover_client_sources(
     input: &SccmClientDiscoveryInput,
 ) -> Result<SccmClientDiscoveryResult, AppError> {
     let catalog = validated_catalog_view(input)?;
-    let roots = inspect_roots(&input.candidate_roots);
+    let roots = inspect_roots(
+        &input.candidate_roots,
+        input.provenance_pseudonym_key.as_bytes(),
+    );
     let mut artifacts = Vec::new();
     let mut source_states = Vec::new();
 
@@ -151,23 +206,61 @@ pub fn discover_client_sources(
         candidates.sort_by(discovered_artifact_order);
         let mut consumed_files = 0_usize;
         let mut consumed_bytes = 0_u64;
-        for mut candidate in candidates {
+        for candidate in &mut candidates {
             let remaining = input.max_bytes_per_source.saturating_sub(consumed_bytes);
             if consumed_files >= input.max_files_per_source {
-                candidate.state = SccmManifestSourceState::Capped;
+                if candidate.state != SccmManifestSourceState::ParseFailed {
+                    candidate.state = SccmManifestSourceState::Capped;
+                }
                 candidate.copy_bytes = 0;
-            } else if candidate.source_bytes > remaining
-                || candidate.state == SccmManifestSourceState::Capped
-            {
-                candidate.state = SccmManifestSourceState::Capped;
+                candidate.capture_limit_kind = Some(SccmCaptureLimitKind::FileCount);
+                candidate.retained = false;
+            } else if candidate.source_bytes > remaining {
+                if candidate.state != SccmManifestSourceState::ParseFailed {
+                    candidate.state = SccmManifestSourceState::Capped;
+                }
                 candidate.copy_bytes = candidate.source_bytes.min(remaining);
-                consumed_files += 1;
-                consumed_bytes = consumed_bytes.saturating_add(candidate.copy_bytes);
+                candidate.capture_limit_kind = Some(SccmCaptureLimitKind::Bytes);
+                candidate.retained = candidate.copy_bytes > 0;
+                if candidate.retained {
+                    consumed_files += 1;
+                    consumed_bytes = consumed_bytes.saturating_add(candidate.copy_bytes);
+                }
             } else {
                 candidate.copy_bytes = candidate.source_bytes;
+                candidate.retained = true;
                 consumed_files += 1;
                 consumed_bytes = consumed_bytes.saturating_add(candidate.copy_bytes);
             }
+        }
+
+        if let Some(limit_kind) = candidates
+            .iter()
+            .find(|candidate| candidate.is_unretained_cap_gap())
+            .and_then(|candidate| candidate.capture_limit_kind)
+        {
+            if let Some(retained) = candidates
+                .iter_mut()
+                .rev()
+                .find(|candidate| candidate.retained)
+            {
+                if retained.state != SccmManifestSourceState::ParseFailed {
+                    retained.state = SccmManifestSourceState::Capped;
+                }
+                retained.capture_limit_kind = Some(limit_kind);
+            } else {
+                for candidate in &mut candidates {
+                    if !candidate.is_unretained_cap_gap() && candidate.copy_bytes == 0 {
+                        if candidate.state != SccmManifestSourceState::ParseFailed {
+                            candidate.state = SccmManifestSourceState::Capped;
+                        }
+                        candidate.capture_limit_kind = Some(limit_kind);
+                    }
+                }
+            }
+        }
+
+        for candidate in candidates {
             source_states.push(source_state(
                 source,
                 &candidate.basename,
@@ -187,7 +280,7 @@ pub fn discover_client_sources(
     })
 }
 
-fn inspect_roots(candidate_roots: &[PathBuf]) -> Vec<InspectedRoot> {
+fn inspect_roots(candidate_roots: &[PathBuf], pseudonym_key: &[u8; 32]) -> Vec<InspectedRoot> {
     let mut seen = BTreeSet::new();
     let mut roots = Vec::new();
     for configured_root in candidate_roots {
@@ -196,7 +289,13 @@ fn inspect_roots(candidate_roots: &[PathBuf]) -> Vec<InspectedRoot> {
             RootState::Ready(canonical_root) => canonical_root.as_path(),
             _ => configured_root.as_path(),
         };
-        let root_handle = format!("root-{}", sha256_path(identity_path));
+        let path_bytes = native_path_bytes(identity_path);
+        let mut message = Zeroizing::new(Vec::with_capacity(
+            ROOT_HANDLE_HMAC_DOMAIN.len() + path_bytes.len(),
+        ));
+        message.extend_from_slice(ROOT_HANDLE_HMAC_DOMAIN);
+        message.extend_from_slice(&path_bytes);
+        let root_handle = format!("root-{}", hmac_sha256(pseudonym_key, &message));
         if seen.insert(root_handle.clone()) {
             roots.push(InspectedRoot { root_handle, state });
         }
@@ -288,9 +387,7 @@ fn discover_source_under_root(
     };
 
     let mut matched = false;
-    let mut enumeration_gap = None;
-    let initial_state_count = states.len();
-    let initial_candidate_count = candidates.len();
+    let mut enumeration_gap = enumeration_status_override(input, canonical_root);
     for entry in entries {
         let entry = match entry {
             Ok(entry) => entry,
@@ -351,6 +448,61 @@ fn discover_source_under_root(
                 continue;
             }
         };
+        let opened = match open_source_without_following_links(&canonical_path) {
+            Ok(file) => file,
+            Err(error) => {
+                states.push(source_state(
+                    source,
+                    &observed_basename,
+                    rotation,
+                    if error.kind() == std::io::ErrorKind::PermissionDenied {
+                        SccmManifestSourceState::AccessDenied
+                    } else {
+                        SccmManifestSourceState::FailedUnknownDetail
+                    },
+                    Some(&root.root_handle),
+                ));
+                continue;
+            }
+        };
+        let opened_metadata = match opened.metadata() {
+            Ok(metadata) if metadata.is_file() && !is_reparse_point(&metadata) => metadata,
+            _ => {
+                states.push(source_state(
+                    source,
+                    &observed_basename,
+                    rotation,
+                    SccmManifestSourceState::UnsafePath,
+                    Some(&root.root_handle),
+                ));
+                continue;
+            }
+        };
+        let source_snapshot = source_snapshot(&opened, &opened_metadata);
+        #[cfg(any(unix, windows))]
+        if source_snapshot.identity.is_none() {
+            states.push(source_state(
+                source,
+                &observed_basename,
+                rotation,
+                SccmManifestSourceState::FailedUnknownDetail,
+                Some(&root.root_handle),
+            ));
+            continue;
+        }
+        if canonical_path.canonicalize().ok().as_deref() != Some(canonical_path.as_path())
+            || !canonical_path.starts_with(canonical_root)
+            || source_snapshot.len != metadata.len()
+        {
+            states.push(source_state(
+                source,
+                &observed_basename,
+                rotation,
+                SccmManifestSourceState::UnsafePath,
+                Some(&root.root_handle),
+            ));
+            continue;
+        }
         let state = status_override(input, canonical_root, &observed_basename)
             .map(manifest_state)
             .unwrap_or(SccmManifestSourceState::Captured);
@@ -384,43 +536,48 @@ fn discover_source_under_root(
             canonical_basename: source.basename.clone(),
             rotation,
             state,
-            source_bytes: metadata.len(),
-            copy_bytes: metadata.len(),
+            source_bytes: source_snapshot.len,
+            copy_bytes: source_snapshot.len,
+            capture_limit_kind: (state == SccmManifestSourceState::Capped)
+                .then_some(SccmCaptureLimitKind::SourceDeclared),
+            retained: true,
+            source_snapshot,
             canonical_root: canonical_root.clone(),
             canonical_path,
         });
     }
 
     if !matched {
-        states.push(source_state(
-            source,
-            &source.basename,
-            SccmRotation::Current,
-            enumeration_gap.unwrap_or(SccmManifestSourceState::Absent),
-            Some(&root.root_handle),
-        ));
-    } else if let Some(gap) = enumeration_gap {
-        let current_already_described = states[initial_state_count..]
-            .iter()
-            .any(|state| state.rotation == SccmRotation::Current)
-            || candidates[initial_candidate_count..]
-                .iter()
-                .any(|artifact| artifact.rotation == SccmRotation::Current);
-        if !current_already_described {
+        if let Some(gap) = enumeration_gap {
+            states.push(enumeration_gap_state(source, gap, &root.root_handle));
+        } else {
             states.push(source_state(
                 source,
                 &source.basename,
                 SccmRotation::Current,
-                gap,
+                SccmManifestSourceState::Absent,
                 Some(&root.root_handle),
             ));
         }
+    } else if let Some(gap) = enumeration_gap {
+        states.push(enumeration_gap_state(source, gap, &root.root_handle));
+    }
+}
+
+impl SccmClientDiscoveredArtifact {
+    pub(super) fn is_unretained_cap_gap(&self) -> bool {
+        !self.retained && self.capture_limit_kind.is_some()
     }
 }
 
 fn validated_catalog_view(
     input: &SccmClientDiscoveryInput,
 ) -> Result<BTreeMap<String, CatalogSelection>, AppError> {
+    if input.max_files_per_source == 0 || input.max_bytes_per_source == 0 {
+        return Err(AppError::InvalidInput(
+            "SCCM client discovery requires positive capture limits".to_owned(),
+        ));
+    }
     if input.candidate_roots.len() > MAX_CANDIDATE_ROOTS {
         return Err(AppError::InvalidInput(
             "SCCM client discovery has too many candidate roots".to_owned(),
@@ -565,6 +722,33 @@ fn source_state(
         basename: basename.to_owned(),
         rotation,
         state,
+        coverage_scope: SccmManifestCoverageScope::Source,
+    }
+}
+
+fn enumeration_gap_state(
+    source: &CatalogSelection,
+    state: SccmManifestSourceState,
+    root_handle: &str,
+) -> SccmClientSourceState {
+    let root_digest = root_handle
+        .strip_prefix("root-")
+        .expect("inspected roots always have a versioned handle");
+    let source_digest = enumeration_identity_digest(root_digest, &source.basename);
+    SccmClientSourceState {
+        catalog_entry_id: catalog_entry_id(&source.basename),
+        logical_artifact_ids: source.logical_artifact_ids.clone(),
+        source_handle: Some(format!("cmtraceopen.source.sha256.v1:{source_digest}")),
+        root_handle: Some(root_handle.to_owned()),
+        path_fingerprint: Some(format!("sha256:{source_digest}")),
+        rotation_lineage: Some(format!(
+            "cmtraceopen.lineage.sha256.v1:{}",
+            sha256_bytes(format!("lineage:v1:{source_digest}").as_bytes())
+        )),
+        basename: source.basename.clone(),
+        rotation: SccmRotation::Current,
+        state,
+        coverage_scope: SccmManifestCoverageScope::RootEnumeration,
     }
 }
 
@@ -642,6 +826,24 @@ fn status_override(
         .map(|(_, state)| state.clone())
 }
 
+fn enumeration_status_override(
+    input: &SccmClientDiscoveryInput,
+    canonical_root: &Path,
+) -> Option<SccmManifestSourceState> {
+    input
+        .enumeration_status_overrides
+        .iter()
+        .find(|(path, _)| path.canonicalize().ok().as_deref() == Some(canonical_root))
+        .map(|(_, state)| manifest_state(state.clone()))
+        .filter(|state| {
+            matches!(
+                state,
+                SccmManifestSourceState::AccessDenied
+                    | SccmManifestSourceState::FailedUnknownDetail
+            )
+        })
+}
+
 fn state_rank(state: SccmManifestSourceState) -> u8 {
     match state {
         SccmManifestSourceState::Captured => 0,
@@ -696,27 +898,106 @@ fn source_identity_digest(root_digest: &str, basename: &str) -> String {
     hex_digest(digest.finalize().as_slice())
 }
 
-#[cfg(unix)]
-fn sha256_path(path: &Path) -> String {
-    use std::os::unix::ffi::OsStrExt;
-
-    sha256_bytes(path.as_os_str().as_bytes())
-}
-
-#[cfg(windows)]
-fn sha256_path(path: &Path) -> String {
-    use std::os::windows::ffi::OsStrExt;
-
+fn enumeration_identity_digest(root_digest: &str, basename: &str) -> String {
     let mut digest = Sha256::new();
-    for unit in path.as_os_str().encode_wide() {
-        digest.update(unit.to_le_bytes());
-    }
+    digest.update(b"cmtraceopen.sccm.root-enumeration.v1\0");
+    digest.update(root_digest.as_bytes());
+    digest.update(b"\0");
+    digest.update(basename.as_bytes());
     hex_digest(digest.finalize().as_slice())
 }
 
+pub(crate) fn source_snapshot(file: &File, metadata: &fs::Metadata) -> SccmSourceSnapshot {
+    SccmSourceSnapshot {
+        identity: file_identity(file, metadata),
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    }
+}
+
+#[cfg(unix)]
+fn file_identity(_file: &File, metadata: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some(FileIdentity {
+        volume: metadata.dev(),
+        index: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn file_identity(file: &File, _metadata: &fs::Metadata) -> Option<FileIdentity> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the handle is borrowed from the live file and the output points
+    // to an initialized structure for the duration of the call.
+    unsafe {
+        GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information).ok()?;
+    }
+    Some(FileIdentity {
+        volume: information.dwVolumeSerialNumber as u64,
+        index: ((information.nFileIndexHigh as u64) << 32) | information.nFileIndexLow as u64,
+    })
+}
+
 #[cfg(not(any(unix, windows)))]
-fn sha256_path(path: &Path) -> String {
-    sha256_bytes(path.to_string_lossy().as_bytes())
+fn file_identity(_file: &File, _metadata: &fs::Metadata) -> Option<FileIdentity> {
+    None
+}
+
+#[cfg(unix)]
+pub(super) fn open_source_without_following_links(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(windows)]
+pub(super) fn open_source_without_following_links(path: &Path) -> std::io::Result<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(super) fn open_source_without_following_links(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().read(true).open(path)
+}
+
+#[cfg(unix)]
+fn native_path_bytes(path: &Path) -> Zeroizing<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt;
+
+    Zeroizing::new(path.as_os_str().as_bytes().to_vec())
+}
+
+#[cfg(windows)]
+fn native_path_bytes(path: &Path) -> Zeroizing<Vec<u8>> {
+    use std::os::windows::ffi::OsStrExt;
+
+    Zeroizing::new(
+        path.as_os_str()
+            .encode_wide()
+            .flat_map(u16::to_le_bytes)
+            .collect(),
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn native_path_bytes(path: &Path) -> Zeroizing<Vec<u8>> {
+    Zeroizing::new(path.to_string_lossy().as_bytes().to_vec())
 }
 
 pub(super) fn sha256_bytes(value: &[u8]) -> String {
@@ -766,7 +1047,7 @@ mod tests {
         let path_a = PathBuf::from(OsString::from_vec(vec![b'r', 0x80]));
         let path_b = PathBuf::from(OsString::from_vec(vec![b'r', 0x81]));
         assert_eq!(path_a.to_string_lossy(), path_b.to_string_lossy());
-        assert_ne!(sha256_path(&path_a), sha256_path(&path_b));
+        assert_ne!(native_path_bytes(&path_a), native_path_bytes(&path_b));
     }
 
     #[cfg(windows)]
@@ -778,6 +1059,6 @@ mod tests {
         let path_a = PathBuf::from(OsString::from_wide(&[b'r' as u16, 0xd800]));
         let path_b = PathBuf::from(OsString::from_wide(&[b'r' as u16, 0xd801]));
         assert_eq!(path_a.to_string_lossy(), path_b.to_string_lossy());
-        assert_ne!(sha256_path(&path_a), sha256_path(&path_b));
+        assert_ne!(native_path_bytes(&path_a), native_path_bytes(&path_b));
     }
 }

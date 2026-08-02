@@ -63,7 +63,8 @@ font-kit = "0.14"
 evtx = { version = "=0.12.2", optional = true }
 quick-xml = { version = "0.38", optional = true }
 glob = "0.3"
-sha2 = "0.11"
+sha2 = { version = "0.11", features = ["zeroize"] }
+zeroize = "1.8"
 tempfile = { version = "3", optional = true }
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1"

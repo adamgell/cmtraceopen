@@ -271,6 +271,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
@@ -618,6 +619,7 @@ dependencies = [
  "windows 0.62.2",
  "windows-future 0.3.2",
  "winreg 0.56.0",
+ "zeroize",
  "zip",
 ]
 
@@ -1073,6 +1075,7 @@ dependencies = [
  "block-buffer 0.12.1",
  "const-oid",
  "crypto-common 0.2.2",
+ "zeroize",
 ]
 
 [[package]]
