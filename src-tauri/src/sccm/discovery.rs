@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use super::contract::{
     canonical_client_source, catalog_entry_id, expected_marker_artifact_id,
-    expected_physical_artifact_id, logical_artifact_ids_for_basename, rotation_order,
-    rotation_segment, source_identity_digest, SccmManifestSourceState,
+    expected_physical_artifact_id, logical_artifact_ids_for_basename, root_handle_digest,
+    rotation_order, rotation_segment, source_identity_digest, SccmManifestSourceState,
 };
 
 pub const MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS: usize = 4_096;
@@ -180,7 +180,7 @@ pub fn discover_client_sources(
 fn initial_observations(input: &SccmClientDiscoveryInput) -> BTreeSet<ObservationRef<'_>> {
     let mut observations = BTreeSet::new();
     for observation in &input.observations {
-        if canonical_client_source(&observation.basename, &observation.rotation).is_none() {
+        if !is_supported_observation(observation) {
             continue;
         }
         let candidate = ObservationRef(observation);
@@ -207,10 +207,11 @@ fn next_observation<'a>(
 ) -> Option<ObservationRef<'a>> {
     let mut next = None;
     for observation in &input.observations {
-        let Some(canonical) = canonical_client_source(&observation.basename, &observation.rotation)
-        else {
+        if !is_supported_observation(observation) {
             continue;
-        };
+        }
+        let canonical = canonical_client_source(&observation.basename, &observation.rotation)
+            .expect("supported observation has a canonical source");
         if observation.state == SccmClientDiscoveryObservationState::Found
             && capped_sources.contains(&(observation.root_handle.clone(), canonical))
         {
@@ -232,16 +233,24 @@ fn validate_all_observation_conflicts(
     input: &SccmClientDiscoveryInput,
 ) -> Result<(), SccmClientDiscoveryError> {
     for (index, left) in input.observations.iter().enumerate() {
-        if canonical_client_source(&left.basename, &left.rotation).is_none() {
+        if !is_supported_observation(left) {
             continue;
         }
         for right in input.observations.iter().skip(index + 1) {
-            if left.state != right.state && same_physical_observation(left, right) {
+            if is_supported_observation(right)
+                && left.state != right.state
+                && same_physical_observation(left, right)
+            {
                 return Err(SccmClientDiscoveryError::ConflictingObservation);
             }
         }
     }
     Ok(())
+}
+
+fn is_supported_observation(observation: &SccmClientDiscoveryObservation) -> bool {
+    root_handle_digest(&observation.root_handle).is_some()
+        && canonical_client_source(&observation.basename, &observation.rotation).is_some()
 }
 
 fn same_physical_observation(
