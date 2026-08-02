@@ -335,7 +335,13 @@ pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAna
             continue;
         };
         if let Some(reason_code) = evidence_record_rejection_reason(evidence, source.group) {
-            record_observations.push(rejected_record_observation(evidence, source, reason_code));
+            if is_profile_record_candidate(&evidence.message) {
+                record_observations.push(rejected_record_observation(
+                    evidence,
+                    source,
+                    reason_code,
+                ));
+            }
             continue;
         }
         if !source.fact_eligible || !context.evidence_identity_is_unique[position] {
@@ -483,7 +489,9 @@ fn evidence_source_rejections(
     intake: &SccmServerIntakeAssessment,
 ) -> (BTreeMap<String, &'static str>, Vec<SccmSiteCoreCoverageGap>) {
     let mut groups_by_artifact = BTreeMap::<&str, Vec<SiteCoreGroup>>::new();
+    let mut artifact_ids = BTreeSet::<&str>::new();
     for artifact in &intake.artifacts {
+        artifact_ids.insert(artifact.artifact_id.as_str());
         if let Some(group) = SiteCoreGroup::from_source_id(&artifact.source_id) {
             groups_by_artifact
                 .entry(artifact.artifact_id.as_str())
@@ -513,7 +521,10 @@ fn evidence_source_rejections(
                     continue;
                 };
                 unresolved_gaps.push(SccmSiteCoreCoverageGap {
-                    artifact_id: safe_coverage_artifact_id(evidence),
+                    artifact_id: unresolved_coverage_artifact_id(
+                        evidence,
+                        artifact_ids.contains(evidence.reference.artifact_id.as_str()),
+                    ),
                     source_id: group.source_id().to_owned(),
                     state: SccmCoverageState::ParseFailed,
                     reason_code: "evidence-source-unresolved".to_owned(),
@@ -550,8 +561,8 @@ fn evidence_component_group(component: Option<&str>) -> Option<SiteCoreGroup> {
     }
 }
 
-fn safe_coverage_artifact_id(evidence: &SccmEvidence) -> String {
-    if safe_site_core_opaque_id(&evidence.reference.artifact_id) {
+fn unresolved_coverage_artifact_id(evidence: &SccmEvidence, is_foreign_source: bool) -> String {
+    if !is_foreign_source && safe_site_core_opaque_id(&evidence.reference.artifact_id) {
         evidence.reference.artifact_id.clone()
     } else {
         stable_opaque_id(
@@ -1426,7 +1437,9 @@ fn request_scope_for_gap(
     let exact_artifacts = context
         .artifacts
         .iter()
-        .filter(|artifact| artifact.artifact_id == gap.artifact_id)
+        .filter(|artifact| {
+            artifact.artifact_id == gap.artifact_id && artifact.source_id == gap.source_id
+        })
         .collect::<Vec<_>>();
     let artifacts = if exact_artifacts.is_empty() {
         context
