@@ -398,3 +398,81 @@ fn discovery_rejects_conflicting_states_for_one_canonical_physical_source() {
 
     assert_eq!(error, reversed_error);
 }
+
+#[test]
+fn discovery_rejects_late_conflicts_after_the_global_declaration_frontier() {
+    let mut observations = Vec::new();
+    for number in 1..=2_049 {
+        observations.push(observation(
+            ROOT_A,
+            &format!("AppEnforce.log.{number}"),
+            SccmRotation::Numbered(number),
+            SccmClientDiscoveryObservationState::Found,
+        ));
+        observations.push(observation(
+            ROOT_B,
+            &format!("PolicyAgent.log.{number}"),
+            SccmRotation::Numbered(number),
+            SccmClientDiscoveryObservationState::Found,
+        ));
+    }
+    observations.extend([
+        observation(
+            ROOT_A,
+            "CIAgent.log",
+            SccmRotation::Current,
+            SccmClientDiscoveryObservationState::Found,
+        ),
+        observation(
+            ROOT_A,
+            "CIAgent.log",
+            SccmRotation::Current,
+            SccmClientDiscoveryObservationState::AccessDenied,
+        ),
+    ]);
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+        observations,
+    };
+
+    let error = discover_client_sources(&input)
+        .expect_err("a conflict beyond the output frontier fails closed");
+    let mut reversed = input;
+    reversed.observations.reverse();
+    assert_eq!(
+        error,
+        discover_client_sources(&reversed)
+            .expect_err("a late conflict fails closed regardless of input order")
+    );
+}
+
+#[test]
+fn discovery_rejects_conflicting_states_for_canonical_basename_aliases() {
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_A,
+                "appenforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::AccessDenied,
+            ),
+        ],
+    };
+
+    let error = discover_client_sources(&input)
+        .expect_err("canonical aliases with conflicting state fail closed");
+    let mut reversed = input;
+    reversed.observations.reverse();
+    assert_eq!(
+        error,
+        discover_client_sources(&reversed)
+            .expect_err("canonical alias conflict fails closed regardless of input order")
+    );
+}
