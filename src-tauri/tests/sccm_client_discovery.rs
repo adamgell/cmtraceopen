@@ -208,6 +208,69 @@ fn discovery_at_the_exact_global_boundary_does_not_manufacture_a_gap() {
 }
 
 #[test]
+fn discovery_global_capacity_preserves_explicit_states_and_reports_a_coverage_gap() {
+    let mut observations = (1..=MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS as u32)
+        .map(|number| {
+            observation(
+                ROOT_A,
+                &format!("AppEnforce.log.{number}"),
+                SccmRotation::Numbered(number),
+                SccmClientDiscoveryObservationState::AccessDenied,
+            )
+        })
+        .collect::<Vec<_>>();
+    observations.push(observation(
+        ROOT_B,
+        "ScanAgent.log",
+        SccmRotation::Current,
+        SccmClientDiscoveryObservationState::Skipped,
+    ));
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+        observations,
+    };
+
+    let result =
+        discover_client_sources(&input).expect("global capacity remains a bounded coverage result");
+    let mut reversed = input;
+    reversed.observations.reverse();
+    let reversed = discover_client_sources(&reversed)
+        .expect("capacity selection is independent of observation order");
+
+    assert_eq!(result, reversed);
+    assert_eq!(
+        result.declarations.len(),
+        MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
+    );
+    assert!(result.declarations.iter().any(|declaration| {
+        declaration.basename == "ScanAgent.log"
+            && declaration.state == SccmClientDiscoveryState::Skipped
+    }));
+    assert!(result
+        .declarations
+        .iter()
+        .all(|declaration| declaration.state != SccmClientDiscoveryState::Capped));
+    assert_eq!(
+        result.coverage_issues.len(),
+        1,
+        "one omitted explicit declaration becomes one coverage gap"
+    );
+    let capacity_gap = &result.coverage_issues[0];
+    assert!(
+        capacity_gap.state != SccmClientDiscoveryCoverageIssueState::InvalidProvenance
+            && capacity_gap.state != SccmClientDiscoveryCoverageIssueState::Unsupported,
+        "capacity needs a dedicated coverage state"
+    );
+    assert_eq!(capacity_gap.catalog_entry_id, "sccm-client-source:v1:none");
+    assert!(capacity_gap.logical_artifact_ids.is_empty());
+    assert_eq!(
+        capacity_gap.rotation_category,
+        SccmClientDiscoveryRotationCategory::Unknown
+    );
+    assert_eq!(capacity_gap.occurrence_count.get(), 1);
+}
+
+#[test]
 fn discovery_enforces_each_source_cap_and_retains_the_first_omitted_rotation_gap() {
     let result = discover_client_sources(&SccmClientDiscoveryInput {
         max_found_fragments_per_source: 2,
