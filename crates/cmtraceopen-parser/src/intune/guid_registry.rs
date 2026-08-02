@@ -1254,6 +1254,18 @@ mod tests {
     }
 
     #[test]
+    fn strip_guid_suffix_rejects_malformed_full_length_shape() {
+        assert_eq!(
+            strip_short_guid_suffix("Some Name (------------------------------------)"),
+            None
+        );
+        assert_eq!(
+            strip_short_guid_suffix("Some Name (a1b2c3d4e5f6-7890-abcd-ef12-34567890)"),
+            None
+        );
+    }
+
+    #[test]
     fn to_serializable_preserves_entries_and_sources() {
         let mut reg = GuidRegistry::new();
         reg.ingest_lines(&[
