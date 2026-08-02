@@ -356,6 +356,11 @@ impl<'a> SiteCoreContext<'a> {
                             == Some(producer_host_handle.as_str())
                         && source.artifact.workflow_subject_role.is_none()
                         && source.artifact.workflow_subject_handle.is_none()
+                        && (source.fact_eligible
+                            || self.coverage_gaps.iter().any(|gap| {
+                                gap.artifact_id == source.artifact.artifact_id
+                                    && gap.source_id == source.artifact.source_id
+                            }))
                 });
                 if compatible_source_exists {
                     continue;
@@ -788,8 +793,16 @@ fn collect_coverage_gaps(
         } else {
             artifact.state.clone()
         };
+        let artifact_id = if safe_site_core_opaque_id(&artifact.artifact_id) {
+            artifact.artifact_id.clone()
+        } else {
+            stable_opaque_id(
+                "site-core:rejected-artifact:v1:",
+                &[&artifact.artifact_id, &artifact.source_id],
+            )
+        };
         gaps.push(SccmSiteCoreCoverageGap {
-            artifact_id: artifact.artifact_id.clone(),
+            artifact_id,
             source_id: artifact.source_id.clone(),
             state,
             reason_code: reason_code.to_owned(),
