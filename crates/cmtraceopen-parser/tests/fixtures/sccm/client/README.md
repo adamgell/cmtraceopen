@@ -30,12 +30,17 @@ legacy generic-manifest mapping are intentionally documented native test
 designs in `docs/sccm/preparation/issue-319-client-intake.md` and remain
 pending.
 
-Expected arrays are stable-sorted by `logicalArtifactId`. `contractState` is
-`pureIntakeImplementedNativePending`: tests bind coverage and physical
-provenance to the public pure assessment, while request wording and native
-capture remain design-only. The harness asserts coverage directly, reorders
-artifacts and compares normalized output, and never interprets capped/split
-fragment text as a phase or terminal diagnosis.
+`contractState` is `pureIntakeImplementedNativePending`. Each `expected.json`
+separates three contracts: `pureAssessment` is a typed, exact normalized view
+of every public group, fragment, physical artifact, unsupported artifact, and
+coverage gap; `nativeDesignPending` retains bounded byte/digest expectations
+without claiming a native reader or collector exists; and
+`downstreamDesignPending` labels request wording and prohibited diagnostic
+claims that are not intake output. The pure arrays retain their deterministic
+production order, while the deduplicated fragment table and pending native
+artifact provenance are stable-sorted by artifact ID. Mutation tests reject
+unknown fields, omissions, reordered output, and forged provenance. No test
+interprets capped/split fragment text as a phase or terminal diagnosis.
 
 Every manifest artifact has one physical `artifactId` and a
 `designOnlyCatalog` object containing one catalog entry plus sorted logical
@@ -43,8 +48,9 @@ group memberships. These are preparation labels, not final #318 field names.
 For every `captured` or `capped` artifact, `bytesCopied` equals the physical
 evidence-file length, `encoding` is `utf-8`, and `collectionLimit` states both
 the byte limit and whether it applied; `expected.json` mirrors those values in
-`artifactProvenance`. Noncapture artifacts remain `bytesCopied: 0` with a null
-relative path and do not invent capture provenance. An applied cap counts
+`nativeDesignPending.artifactProvenance`, including an exact `bytesCopied` for
+every physical fixture. Noncapture artifacts remain `bytesCopied: 0` with a
+null relative path and do not invent capture provenance. An applied cap counts
 inclusive raw source bytes before decoding and retains that exact source
 prefix, even when the last byte splits a text or logical-record boundary. The
 collector never appends a truncation marker or repairs/replaces bytes. The

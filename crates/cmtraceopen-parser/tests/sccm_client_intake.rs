@@ -48,9 +48,17 @@ struct FixtureRotation {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExpectedIntakeContract {
-    contract_state: String,
+    contract_state: ExpectedContractState,
     scenario: String,
     pure_assessment: ExpectedPureAssessment,
+    native_design_pending: ExpectedNativeDesign,
+    downstream_design_pending: ExpectedDownstreamDesign,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+enum ExpectedContractState {
+    #[serde(rename = "pureIntakeImplementedNativePending")]
+    PureIntakeImplementedNativePending,
 }
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -115,6 +123,69 @@ struct ExpectedCoverageGap {
     role: SccmRole,
     coverage: SccmCoverageState,
     reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedNativeDesign {
+    artifact_provenance: Vec<ExpectedNativeArtifactProvenance>,
+    #[serde(default)]
+    capture_assertions: Option<ExpectedCaptureAssertions>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedNativeArtifactProvenance {
+    artifact_id: String,
+    byte_limit: u64,
+    limit_applied: bool,
+    bytes_copied: u64,
+    #[serde(default)]
+    sha256: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedCaptureAssertions {
+    truncated: bool,
+    raw_byte_counted_before_decoding: bool,
+    exact_source_prefix: bool,
+    collector_injected_marker: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedDownstreamDesign {
+    workflow_diagnosis_expected: bool,
+    requests: Vec<ExpectedRequestDesign>,
+    prohibited_claims: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ExpectedRequestDesign {
+    SourceGroup(ExpectedSourceGroupRequest),
+    IntakeCoverage(ExpectedIntakeCoverageRequest),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedSourceGroupRequest {
+    logical_artifact_id: String,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedIntakeCoverageRequest {
+    kind: ExpectedRequestKind,
+    reason: String,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+enum ExpectedRequestKind {
+    #[serde(rename = "intakeCoverage")]
+    IntakeCoverage,
 }
 
 fn fixture_directory(scenario: &str) -> PathBuf {
@@ -191,16 +262,6 @@ fn coverage(value: &str) -> SccmCoverageState {
 
 fn assessment(scenario: &str) -> cmtraceopen_parser::sccm::SccmClientIntakeAssessment {
     assess_client_intake(&load_bundle(scenario)).expect("fixture intake is valid")
-}
-
-fn rotation_label(rotation: &SccmRotation) -> String {
-    match rotation {
-        SccmRotation::Current => "current".to_owned(),
-        SccmRotation::LoUnderscore => "lo".to_owned(),
-        SccmRotation::Numbered(number) => format!("numbered:{number}"),
-        SccmRotation::Timestamped(timestamp) => format!("timestamped:{timestamp}"),
-        SccmRotation::Unknown(_) => "unknown".to_owned(),
-    }
 }
 
 fn lowercase_hex(bytes: &[u8]) -> String {
@@ -287,15 +348,30 @@ fn normalize_pure_assessment(assessment: &SccmClientIntakeAssessment) -> Expecte
         })
         .collect();
 
+    let mut physical_ids = BTreeSet::new();
+    let physical_artifact_ids = assessment
+        .physical_artifacts
+        .iter()
+        .map(|fragment| {
+            assert!(
+                physical_ids.insert(fragment.artifact_id.as_str()),
+                "physical artifact IDs must be unique"
+            );
+            let expected_fragment = ExpectedPureFragment::from(fragment);
+            assert_eq!(
+                fragments.get(&fragment.artifact_id),
+                Some(&expected_fragment),
+                "physical artifact provenance must equal its canonical group fragment"
+            );
+            fragment.artifact_id.clone()
+        })
+        .collect();
+
     ExpectedPureAssessment {
         schema_version: assessment.schema_version,
         groups,
         fragments: fragments.into_values().collect(),
-        physical_artifact_ids: assessment
-            .physical_artifacts
-            .iter()
-            .map(|fragment| fragment.artifact_id.clone())
-            .collect(),
+        physical_artifact_ids,
         unsupported_artifacts: assessment
             .unsupported_artifacts
             .iter()
@@ -534,7 +610,7 @@ fn expected_pure_assessments_are_complete_exact_and_deterministic() {
 
         assert_eq!(
             expected.contract_state,
-            "pureIntakeImplementedNativePending"
+            ExpectedContractState::PureIntakeImplementedNativePending
         );
         assert_eq!(expected.scenario, scenario);
         assert_eq!(
@@ -545,8 +621,98 @@ fn expected_pure_assessments_are_complete_exact_and_deterministic() {
     }
 }
 
+fn expected_contract_matches(value: Value, scenario: &str) -> bool {
+    serde_json::from_value::<ExpectedIntakeContract>(value).is_ok_and(|expected| {
+        expected.contract_state == ExpectedContractState::PureIntakeImplementedNativePending
+            && expected.scenario == scenario
+            && expected.pure_assessment == normalize_pure_assessment(&assessment(scenario))
+    })
+}
+
 #[test]
-fn expected_design_contracts_bind_to_pure_intake_without_claiming_native_capture() {
+fn exact_pure_oracle_rejects_unknown_omitted_reordered_and_forged_output() {
+    let complete = load_fixture_json("complete", "expected.json");
+
+    let mut unknown_root = complete.clone();
+    unknown_root["unexpected"] = serde_json::json!(true);
+    assert!(!expected_contract_matches(unknown_root, "complete"));
+
+    let mut unknown_fragment = complete.clone();
+    unknown_fragment["pureAssessment"]["fragments"][0]["unexpected"] = serde_json::json!(true);
+    assert!(!expected_contract_matches(unknown_fragment, "complete"));
+
+    let mut omitted_group = complete.clone();
+    omitted_group["pureAssessment"]["groups"]
+        .as_array_mut()
+        .expect("expected groups")
+        .pop();
+    assert!(!expected_contract_matches(omitted_group, "complete"));
+
+    let mut reordered_groups = complete.clone();
+    reordered_groups["pureAssessment"]["groups"]
+        .as_array_mut()
+        .expect("expected groups")
+        .swap(0, 1);
+    assert!(!expected_contract_matches(reordered_groups, "complete"));
+
+    let mut forged_fragment = complete.clone();
+    forged_fragment["pureAssessment"]["fragments"][0]["relativePath"] =
+        serde_json::json!("evidence/client-app-enforce/current/forged.log");
+    assert!(!expected_contract_matches(forged_fragment, "complete"));
+
+    let mut reordered_physical = complete;
+    reordered_physical["pureAssessment"]["physicalArtifactIds"]
+        .as_array_mut()
+        .expect("physical artifact IDs")
+        .swap(0, 1);
+    assert!(!expected_contract_matches(reordered_physical, "complete"));
+
+    let mut omitted_gap = load_fixture_json("rotations", "expected.json");
+    omitted_gap["pureAssessment"]["coverageGaps"]
+        .as_array_mut()
+        .expect("coverage gaps")
+        .pop();
+    assert!(!expected_contract_matches(omitted_gap, "rotations"));
+}
+
+#[test]
+fn pending_request_schema_rejects_missing_ambiguous_and_unknown_discriminators() {
+    let missing_root = load_fixture_json("missing-root", "expected.json");
+    assert!(serde_json::from_value::<ExpectedIntakeContract>(missing_root.clone()).is_ok());
+
+    let mut missing_discriminator = missing_root.clone();
+    missing_discriminator["downstreamDesignPending"]["requests"][0]
+        .as_object_mut()
+        .expect("pending request")
+        .remove("kind");
+    assert!(
+        serde_json::from_value::<ExpectedIntakeContract>(missing_discriminator).is_err(),
+        "a pending request without kind or logicalArtifactId must fail closed"
+    );
+
+    let mut ambiguous = missing_root.clone();
+    ambiguous["downstreamDesignPending"]["requests"][0]["logicalArtifactId"] =
+        serde_json::json!("client-policy-agent");
+    assert!(
+        serde_json::from_value::<ExpectedIntakeContract>(ambiguous).is_err(),
+        "a pending request cannot select both request variants"
+    );
+
+    let mut unknown = missing_root;
+    unknown["downstreamDesignPending"]["requests"][0]["unexpected"] = serde_json::json!(true);
+    assert!(
+        serde_json::from_value::<ExpectedIntakeContract>(unknown).is_err(),
+        "pending request variants must reject unknown fields"
+    );
+}
+
+#[test]
+fn pending_native_design_is_typed_bounded_and_fixture_backed() {
+    let declared_groups = declared_client_source_groups()
+        .into_iter()
+        .map(|group| group.logical_artifact_id)
+        .collect::<BTreeSet<_>>();
+
     for scenario in [
         "complete",
         "rotations",
@@ -555,181 +721,148 @@ fn expected_design_contracts_bind_to_pure_intake_without_claiming_native_capture
         "capped",
         "collision",
     ] {
-        let expected = load_fixture_json(scenario, "expected.json");
+        let expected: ExpectedIntakeContract = serde_json::from_str(
+            &fs::read_to_string(fixture_directory(scenario).join("expected.json"))
+                .expect("expected fixture is readable"),
+        )
+        .expect("expected fixture has the exact typed contract");
         let manifest = load_fixture_json(scenario, "manifest.json");
         let intake = assessment(scenario);
+        let provenance = &expected.native_design_pending.artifact_provenance;
 
-        assert_eq!(
-            expected["scenario"], scenario,
-            "{scenario}: scenario identity"
+        assert!(
+            provenance
+                .windows(2)
+                .all(|pair| pair[0].artifact_id < pair[1].artifact_id),
+            "{scenario}: pending native provenance must be stable-sorted and unique"
         );
         assert_eq!(
-            expected["contractState"], "pureIntakeImplementedNativePending",
-            "{scenario}: expected output must identify the implemented pure boundary and pending native gate"
-        );
-        assert_eq!(
-            expected["workflowDiagnosisExpected"], false,
-            "{scenario}: intake evidence alone must not claim a workflow diagnosis"
-        );
-
-        for expected_group in expected["coverage"]
-            .as_array()
-            .expect("expected coverage is an array")
-        {
-            let logical_id = expected_group["logicalArtifactId"]
-                .as_str()
-                .expect("expected logical artifact ID");
-            let group = intake
-                .group(logical_id)
-                .expect("expected intake group exists");
-            assert_eq!(
-                serde_json::to_value(&group.coverage).expect("coverage serializes"),
-                expected_group["state"],
-                "{scenario}: {logical_id} coverage"
-            );
-
-            if let Some(fragment_count) = expected_group["fragmentCount"].as_u64() {
-                assert_eq!(group.fragments.len() as u64, fragment_count);
-            }
-            if let Some(physical_count) = expected_group["physicalArtifactCount"].as_u64() {
-                assert_eq!(
-                    intake
-                        .physical_artifacts
-                        .iter()
-                        .filter(|fragment| {
-                            group
-                                .fragments
-                                .iter()
-                                .any(|member| member.artifact_id == fragment.artifact_id)
-                        })
-                        .count() as u64,
-                    physical_count
-                );
-            }
-            if let Some(fragment_complete) = expected_group["fragmentComplete"].as_bool() {
-                assert!(group
-                    .fragments
-                    .iter()
-                    .all(|fragment| fragment.fragment_complete == Some(fragment_complete)));
-            }
-            if let Some(rotation_order) = expected_group["rotationOrder"].as_array() {
-                assert_eq!(
-                    group
-                        .fragments
-                        .iter()
-                        .map(|fragment| rotation_label(&fragment.rotation))
-                        .collect::<Vec<_>>(),
-                    rotation_order
-                        .iter()
-                        .map(|value| value.as_str().expect("rotation label").to_owned())
-                        .collect::<Vec<_>>()
-                );
-            }
-            if let Some(distinct_fingerprints) = expected_group["distinctPathFingerprints"].as_u64()
-            {
-                assert_eq!(
-                    group
-                        .fragments
-                        .iter()
-                        .filter_map(|fragment| fragment.path_fingerprint.as_deref())
-                        .collect::<BTreeSet<_>>()
-                        .len() as u64,
-                    distinct_fingerprints
-                );
-            }
-            if let Some(lineages) = expected_group["rotationLineages"].as_array() {
-                assert_eq!(
-                    group
-                        .fragments
-                        .iter()
-                        .filter_map(|fragment| fragment.rotation_lineage.as_deref())
-                        .collect::<BTreeSet<_>>(),
-                    lineages
-                        .iter()
-                        .map(|value| value.as_str().expect("lineage string"))
-                        .collect::<BTreeSet<_>>()
-                );
-            }
-        }
-
-        let expected_provenance = expected["artifactProvenance"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        assert_eq!(
-            expected_provenance
+            provenance
                 .iter()
-                .map(|entry| entry["artifactId"]
-                    .as_str()
-                    .expect("provenance artifact ID"))
+                .map(|artifact| artifact.artifact_id.as_str())
                 .collect::<BTreeSet<_>>(),
             intake
                 .physical_artifacts
                 .iter()
-                .map(|fragment| fragment.artifact_id.as_str())
+                .map(|artifact| artifact.artifact_id.as_str())
                 .collect::<BTreeSet<_>>(),
-            "{scenario}: expected provenance must cover every physical artifact exactly"
+            "{scenario}: pending native provenance must cover every physical artifact exactly"
         );
 
-        for expected_artifact in expected_provenance {
-            let artifact_id = expected_artifact["artifactId"]
-                .as_str()
-                .expect("expected provenance artifact ID");
+        for artifact in provenance {
             let manifest_artifact = manifest["artifacts"]
                 .as_array()
                 .expect("manifest artifacts")
                 .iter()
-                .find(|artifact| artifact["artifactId"] == artifact_id)
-                .expect("expected provenance refers to a manifest artifact");
-            let fragment = intake
-                .physical_artifacts
-                .iter()
-                .find(|fragment| fragment.artifact_id == artifact_id)
-                .expect("expected provenance refers to a projected physical artifact");
+                .find(|candidate| candidate["artifactId"] == artifact.artifact_id)
+                .expect("pending provenance refers to a manifest artifact");
+            let manifest_byte_limit = manifest_artifact["collectionLimit"]["byteLimit"]
+                .as_u64()
+                .expect("physical manifest byteLimit is an unsigned integer");
+            let manifest_limit_applied = manifest_artifact["collectionLimit"]["limitApplied"]
+                .as_bool()
+                .expect("physical manifest limitApplied is a boolean");
+            let manifest_bytes_copied = manifest_artifact["bytesCopied"]
+                .as_u64()
+                .expect("physical manifest bytesCopied is an unsigned integer");
 
-            assert_eq!(
-                expected_artifact["encoding"].as_str(),
-                fragment.encoding.as_deref()
-            );
-            assert_eq!(
-                expected_artifact["byteLimit"],
-                manifest_artifact["collectionLimit"]["byteLimit"]
-            );
-            assert_eq!(
-                expected_artifact["limitApplied"],
-                manifest_artifact["collectionLimit"]["limitApplied"]
-            );
-
-            if let Some(bytes_copied) = expected_artifact["bytesCopied"].as_u64() {
-                assert_eq!(
-                    manifest_artifact["bytesCopied"].as_u64(),
-                    Some(bytes_copied)
+            assert_eq!(artifact.byte_limit, manifest_byte_limit);
+            assert_eq!(artifact.limit_applied, manifest_limit_applied);
+            assert_eq!(artifact.bytes_copied, manifest_bytes_copied);
+            assert!(artifact.byte_limit > 0, "capture limits must be bounded");
+            if artifact.limit_applied {
+                assert_eq!(artifact.bytes_copied, artifact.byte_limit);
+                assert!(artifact.bytes_copied > 0);
+                assert!(
+                    artifact.sha256.is_some(),
+                    "capped evidence must pin the exact retained prefix"
                 );
-                let relative_path = manifest_artifact["relativePath"]
-                    .as_str()
-                    .expect("physical manifest artifact has a relative path");
-                let bytes = fs::read(fixture_directory(scenario).join(relative_path))
-                    .expect("physical fixture evidence is readable");
-                assert_eq!(bytes.len() as u64, bytes_copied);
-                if let Some(expected_sha256) = expected_artifact["sha256"].as_str() {
-                    assert_eq!(
-                        lowercase_hex(Sha256::digest(&bytes).as_ref()),
-                        expected_sha256
-                    );
-                }
+            } else {
+                assert!(artifact.bytes_copied <= artifact.byte_limit);
+            }
+
+            let relative_path = manifest_artifact["relativePath"]
+                .as_str()
+                .expect("physical manifest artifact has a relative path");
+            let bytes = fs::read(fixture_directory(scenario).join(relative_path))
+                .expect("physical fixture evidence is readable");
+            assert_eq!(bytes.len() as u64, artifact.bytes_copied);
+            if let Some(expected_sha256) = artifact.sha256.as_deref() {
+                assert_eq!(
+                    lowercase_hex(Sha256::digest(&bytes).as_ref()),
+                    expected_sha256
+                );
             }
         }
 
-        assert!(
-            expected["requests"].is_array(),
-            "{scenario}: request design is explicit"
+        let expected_capture_assertions = if scenario == "capped" {
+            Some(ExpectedCaptureAssertions {
+                truncated: true,
+                raw_byte_counted_before_decoding: true,
+                exact_source_prefix: true,
+                collector_injected_marker: false,
+            })
+        } else {
+            None
+        };
+        assert_eq!(
+            expected.native_design_pending.capture_assertions, expected_capture_assertions,
+            "{scenario}: only the capped fixture carries pending native prefix assertions"
         );
-        if let Some(prohibited_claims) = expected.get("prohibitedClaims") {
-            assert!(
-                prohibited_claims.is_array(),
-                "{scenario}: prohibited-claim design is explicit"
+        if let Some(assertions) = expected_capture_assertions {
+            let capped_artifact = manifest["artifacts"]
+                .as_array()
+                .expect("manifest artifacts")
+                .iter()
+                .find(|artifact| artifact["captureState"] == "capped")
+                .expect("capped scenario declares a capped artifact");
+            assert_eq!(
+                capped_artifact["truncated"].as_bool(),
+                Some(assertions.truncated),
+                "capped native design must bind the manifest truncation marker"
             );
         }
+
+        let downstream = expected.downstream_design_pending;
+        assert!(
+            !downstream.workflow_diagnosis_expected,
+            "{scenario}: intake alone must not claim a workflow diagnosis"
+        );
+        for request in downstream.requests {
+            let reason = match request {
+                ExpectedRequestDesign::SourceGroup(request) => {
+                    assert!(
+                        declared_groups.contains(&request.logical_artifact_id),
+                        "{scenario}: request uses an undeclared client source group"
+                    );
+                    request.reason
+                }
+                ExpectedRequestDesign::IntakeCoverage(request) => {
+                    assert_eq!(request.kind, ExpectedRequestKind::IntakeCoverage);
+                    request.reason
+                }
+            };
+            assert!(
+                !reason.trim().is_empty(),
+                "{scenario}: request reason is empty"
+            );
+        }
+        assert_eq!(
+            downstream
+                .prohibited_claims
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len(),
+            downstream.prohibited_claims.len(),
+            "{scenario}: prohibited claims must be unique"
+        );
+        assert!(
+            downstream
+                .prohibited_claims
+                .iter()
+                .all(|claim| !claim.trim().is_empty()),
+            "{scenario}: prohibited claims must not be empty"
+        );
     }
 }
 

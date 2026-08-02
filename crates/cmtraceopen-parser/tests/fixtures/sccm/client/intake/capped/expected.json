@@ -1,13 +1,195 @@
 {
   "contractState": "pureIntakeImplementedNativePending",
   "scenario": "capped",
-  "workflowDiagnosisExpected": false,
-  "coverage": [{"logicalArtifactId":"client-content","state":"capped","fragmentComplete":false,"truncated":true}],
-  "artifactProvenance": [{"artifactId":"fixture-capped-content-root-a-current","encoding":"utf-8","byteLimit":128,"limitApplied":true,"bytesCopied":128,"sha256":"3253f6c4bc7d74bd2dbdadbe2f6543ff61a57161f85f650869b1292556270114"}],
-  "rawByteCountedBeforeDecoding": true,
-  "exactSourcePrefix": true,
-  "collectorInjectedMarker": false,
-  "logicalRecordParseable": false,
-  "requests": [{"logicalArtifactId":"client-content","reason":"Recapture the bounded content group with sufficient approved limits."}],
-  "prohibitedClaims": ["content transfer terminal failure", "distribution point failure"]
+  "pureAssessment": {
+    "schemaVersion": 1,
+    "groups": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "coverage": "capped",
+        "fragmentArtifactIds": [
+          "fixture-capped-content-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      }
+    ],
+    "fragments": [
+      {
+        "artifactId": "fixture-capped-content-root-a-current",
+        "basename": "DataTransferService.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "capped",
+        "pathFingerprint": "synthetic-content-capped",
+        "relativePath": "evidence/client-content/current/DataTransferService.log",
+        "fragmentComplete": false,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:03:00Z",
+        "encoding": "utf-8"
+      }
+    ],
+    "physicalArtifactIds": [
+      "fixture-capped-content-root-a-current"
+    ],
+    "unsupportedArtifacts": [],
+    "coverageGaps": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "artifactId": "fixture-capped-content-root-a-current",
+        "role": "client",
+        "coverage": "capped",
+        "reason": "Client source DataTransferService.log reached its capture limit."
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      }
+    ]
+  },
+  "nativeDesignPending": {
+    "artifactProvenance": [
+      {
+        "artifactId": "fixture-capped-content-root-a-current",
+        "byteLimit": 128,
+        "limitApplied": true,
+        "bytesCopied": 128,
+        "sha256": "3253f6c4bc7d74bd2dbdadbe2f6543ff61a57161f85f650869b1292556270114"
+      }
+    ],
+    "captureAssertions": {
+      "truncated": true,
+      "rawByteCountedBeforeDecoding": true,
+      "exactSourcePrefix": true,
+      "collectorInjectedMarker": false
+    }
+  },
+  "downstreamDesignPending": {
+    "workflowDiagnosisExpected": false,
+    "requests": [
+      {
+        "logicalArtifactId": "client-content",
+        "reason": "Recapture the bounded content group with sufficient approved limits."
+      }
+    ],
+    "prohibitedClaims": [
+      "content transfer terminal failure",
+      "distribution point failure"
+    ]
+  }
 }

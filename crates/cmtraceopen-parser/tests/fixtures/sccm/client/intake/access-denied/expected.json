@@ -1,9 +1,197 @@
 {
   "contractState": "pureIntakeImplementedNativePending",
   "scenario": "access-denied",
-  "workflowDiagnosisExpected": false,
-  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"accessDenied"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
-  "artifactProvenance": [{"artifactId":"fixture-access-policy-state-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}],
-  "requests": [{"logicalArtifactId":"client-policy-agent","reason":"Access must be provided for the bounded policy-agent source group."}],
-  "prohibitedClaims": ["policy failed", "management point failure"]
+  "pureAssessment": {
+    "schemaVersion": 1,
+    "groups": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "coverage": "accessDenied",
+        "fragmentArtifactIds": [
+          "fixture-access-policy-agent-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-access-policy-state-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      }
+    ],
+    "fragments": [
+      {
+        "artifactId": "fixture-access-policy-agent-root-a-current",
+        "basename": "PolicyAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "accessDenied",
+        "pathFingerprint": "synthetic-policy-agent-denied",
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:02:00Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-access-policy-state-root-a-current",
+        "basename": "CIAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-policy-state",
+        "relativePath": "evidence/client-policy-state/current/CIAgent.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:02:01Z",
+        "encoding": "utf-8"
+      }
+    ],
+    "physicalArtifactIds": [
+      "fixture-access-policy-state-root-a-current"
+    ],
+    "unsupportedArtifacts": [],
+    "coverageGaps": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "artifactId": "fixture-access-policy-agent-root-a-current",
+        "role": "client",
+        "coverage": "accessDenied",
+        "reason": "Access was denied for client source PolicyAgent.log."
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      }
+    ]
+  },
+  "nativeDesignPending": {
+    "artifactProvenance": [
+      {
+        "artifactId": "fixture-access-policy-state-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 194
+      }
+    ]
+  },
+  "downstreamDesignPending": {
+    "workflowDiagnosisExpected": false,
+    "requests": [
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "reason": "Access must be provided for the bounded policy-agent source group."
+      }
+    ],
+    "prohibitedClaims": [
+      "policy failed",
+      "management point failure"
+    ]
+  }
 }

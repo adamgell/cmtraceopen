@@ -1,13 +1,221 @@
 {
   "contractState": "pureIntakeImplementedNativePending",
   "scenario": "rotations",
-  "workflowDiagnosisExpected": false,
-  "coverage": [{"logicalArtifactId":"client-app-enforce","state":"captured","fragmentCount":3,"rotationOrder":["current","lo","numbered:2"],"distinctPathFingerprints":1,"rotationLineages":["synthetic:app-enforce-root-a"]}],
-  "artifactProvenance": [
-    {"artifactId":"fixture-rotations-app-enforce-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-rotations-app-enforce-root-a-lo","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-rotations-app-enforce-root-a-numbered-2","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
-  ],
-  "requests": [],
-  "assertions": ["Each rotation fragment retains its physical artifact ID, shared source fingerprint, and rotation lineage.", "No phase, key, or finding is inferred from rotation grouping alone."]
+  "pureAssessment": {
+    "schemaVersion": 1,
+    "groups": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-rotations-app-enforce-root-a-current",
+          "fixture-rotations-app-enforce-root-a-lo",
+          "fixture-rotations-app-enforce-root-a-numbered-2"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      }
+    ],
+    "fragments": [
+      {
+        "artifactId": "fixture-rotations-app-enforce-root-a-current",
+        "basename": "AppEnforce.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-root-a",
+        "rotationLineage": "synthetic:app-enforce-root-a",
+        "relativePath": "evidence/client-app-enforce/current/AppEnforce.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:01:02Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-rotations-app-enforce-root-a-lo",
+        "basename": "AppEnforce.lo_",
+        "rotation": {
+          "kind": "loUnderscore"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-root-a",
+        "rotationLineage": "synthetic:app-enforce-root-a",
+        "relativePath": "evidence/client-app-enforce/lo/AppEnforce.lo_",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:01:01Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-rotations-app-enforce-root-a-numbered-2",
+        "basename": "AppEnforce.log.2",
+        "rotation": {
+          "kind": "numbered",
+          "value": 2
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-root-a",
+        "rotationLineage": "synthetic:app-enforce-root-a",
+        "relativePath": "evidence/client-app-enforce/numbered-2/AppEnforce.log.2",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:01:00Z",
+        "encoding": "utf-8"
+      }
+    ],
+    "physicalArtifactIds": [
+      "fixture-rotations-app-enforce-root-a-current",
+      "fixture-rotations-app-enforce-root-a-lo",
+      "fixture-rotations-app-enforce-root-a-numbered-2"
+    ],
+    "unsupportedArtifacts": [],
+    "coverageGaps": [
+      {
+        "logicalArtifactId": "client-app-intent",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      }
+    ]
+  },
+  "nativeDesignPending": {
+    "artifactProvenance": [
+      {
+        "artifactId": "fixture-rotations-app-enforce-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 181
+      },
+      {
+        "artifactId": "fixture-rotations-app-enforce-root-a-lo",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 176
+      },
+      {
+        "artifactId": "fixture-rotations-app-enforce-root-a-numbered-2",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 182
+      }
+    ]
+  },
+  "downstreamDesignPending": {
+    "workflowDiagnosisExpected": false,
+    "requests": [],
+    "prohibitedClaims": []
+  }
 }

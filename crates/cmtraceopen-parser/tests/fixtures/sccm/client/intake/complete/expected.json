@@ -1,40 +1,333 @@
 {
   "contractState": "pureIntakeImplementedNativePending",
   "scenario": "complete",
-  "workflowDiagnosisExpected": false,
-  "coverage": [
-    {"logicalArtifactId":"client-app-enforce","state":"captured"},
-    {"logicalArtifactId":"client-app-intent","state":"captured"},
-    {"logicalArtifactId":"client-ccmsetup","state":"captured"},
-    {"logicalArtifactId":"client-content","state":"captured"},
-    {"logicalArtifactId":"client-evaluation","state":"captured"},
-    {"logicalArtifactId":"client-identity","state":"captured"},
-    {"logicalArtifactId":"client-location","state":"captured"},
-    {"logicalArtifactId":"client-policy-agent","state":"captured"},
-    {"logicalArtifactId":"client-policy-state","state":"captured"},
-    {"logicalArtifactId":"client-updates","state":"captured"},
-    {"logicalArtifactId":"client-windows-update-supplemental","state":"captured"}
-  ],
-  "artifactProvenance": [
-    {"artifactId":"fixture-complete-app-enforce-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-app-intent-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-ccmsetup-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-content-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-evaluation-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-identity-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-location-services-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-policy-agent-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-policy-state-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-updates-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"fixture-complete-update-supplemental-root-a-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
-  ],
-  "physicalArtifactAssertions": [
+  "pureAssessment": {
+    "schemaVersion": 1,
+    "groups": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-app-enforce-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-app-intent-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-ccmsetup-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-content-root-a-current",
+          "fixture-complete-location-services-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-evaluation-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-identity-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-location-services-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-policy-agent-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-policy-state-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-updates-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-update-supplemental-root-a-current"
+        ]
+      }
+    ],
+    "fragments": [
+      {
+        "artifactId": "fixture-complete-app-enforce-root-a-current",
+        "basename": "AppEnforce.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-app-enforce",
+        "relativePath": "evidence/client-app-enforce/current/AppEnforce.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:00Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-app-intent-root-a-current",
+        "basename": "AppIntentEval.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-app-intent",
+        "relativePath": "evidence/client-app-intent/current/AppIntentEval.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:01Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-ccmsetup-root-a-current",
+        "basename": "ccmsetup.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-ccmsetup",
+        "relativePath": "evidence/client-ccmsetup/current/ccmsetup.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:02Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-content-root-a-current",
+        "basename": "CAS.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-content",
+        "relativePath": "evidence/client-content/current/CAS.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:03Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-evaluation-root-a-current",
+        "basename": "CcmEval.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-evaluation",
+        "relativePath": "evidence/client-evaluation/current/CcmEval.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:04Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-identity-root-a-current",
+        "basename": "ClientIDManagerStartup.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-identity",
+        "relativePath": "evidence/client-identity/current/ClientIDManagerStartup.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:05Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-location-services-root-a-current",
+        "basename": "LocationServices.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-location",
+        "relativePath": "evidence/client-location-services-shared/current/LocationServices.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:06Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-policy-agent-root-a-current",
+        "basename": "PolicyAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-policy-agent",
+        "relativePath": "evidence/client-policy-agent/current/PolicyAgent.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:07Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-policy-state-root-a-current",
+        "basename": "CIAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-policy-state",
+        "relativePath": "evidence/client-policy-state/current/CIAgent.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:08Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-update-supplemental-root-a-current",
+        "basename": "ReportingEvents.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-update-supplemental",
+        "relativePath": "evidence/client-windows-update-supplemental/current/ReportingEvents.log",
+        "fragmentComplete": true,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:00:10Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-updates-root-a-current",
+        "basename": "ScanAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-updates",
+        "relativePath": "evidence/client-updates/current/ScanAgent.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:09Z",
+        "encoding": "utf-8"
+      }
+    ],
+    "physicalArtifactIds": [
+      "fixture-complete-app-enforce-root-a-current",
+      "fixture-complete-app-intent-root-a-current",
+      "fixture-complete-ccmsetup-root-a-current",
+      "fixture-complete-content-root-a-current",
+      "fixture-complete-evaluation-root-a-current",
+      "fixture-complete-identity-root-a-current",
+      "fixture-complete-location-services-root-a-current",
+      "fixture-complete-policy-agent-root-a-current",
+      "fixture-complete-policy-state-root-a-current",
+      "fixture-complete-update-supplemental-root-a-current",
+      "fixture-complete-updates-root-a-current"
+    ],
+    "unsupportedArtifacts": [],
+    "coverageGaps": []
+  },
+  "nativeDesignPending": {
+    "artifactProvenance": [
+      {
+        "artifactId": "fixture-complete-app-enforce-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 177
+      },
+      {
+        "artifactId": "fixture-complete-app-intent-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 177
+      },
+      {
+        "artifactId": "fixture-complete-ccmsetup-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 178
+      },
+      {
+        "artifactId": "fixture-complete-content-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 181
+      },
+      {
+        "artifactId": "fixture-complete-evaluation-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 184
+      },
+      {
+        "artifactId": "fixture-complete-identity-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 201
+      },
+      {
+        "artifactId": "fixture-complete-location-services-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 168
+      },
+      {
+        "artifactId": "fixture-complete-policy-agent-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 201
+      },
+      {
+        "artifactId": "fixture-complete-policy-state-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 177
+      },
     {
-      "artifactId": "fixture-complete-location-services-root-a-current",
-      "catalogEntryId": "client-location-services-shared",
-      "groupMemberships": ["client-content", "client-location"],
-      "physicalCaptureCount": 1
+      "artifactId": "fixture-complete-update-supplemental-root-a-current",
+      "byteLimit": 4096,
+      "limitApplied": false,
+      "bytesCopied": 86
+    },
+    {
+      "artifactId": "fixture-complete-updates-root-a-current",
+      "byteLimit": 4096,
+      "limitApplied": false,
+      "bytesCopied": 174
     }
-  ],
-  "requests": []
+    ]
+  },
+  "downstreamDesignPending": {
+    "workflowDiagnosisExpected": false,
+    "requests": [],
+    "prohibitedClaims": []
+  }
 }
