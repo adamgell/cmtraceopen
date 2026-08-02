@@ -680,6 +680,24 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
 }
 
 #[test]
+fn canonical_intake_adapter_admits_its_exact_synthetic_profile_version() {
+    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+    assert_eq!(
+        assessment.artifacts[0].source_version.as_deref(),
+        Some("5.00.TEST"),
+        "server intake owns the frozen synthetic source version"
+    );
+
+    let analysis = analyze_management_point_from_server_intake(&assessment)
+        .expect("the canonical intake profile must enter MP reduction");
+    assert_eq!(
+        analysis.transactions.len(),
+        1,
+        "profile-shaped canonical evidence must not be silently filtered by a second version"
+    );
+}
+
+#[test]
 fn canonical_intake_adapter_rejects_self_attested_line_authority() {
     let mut assessment = load_canonical_intake("canonical-intake-policy-scope");
     let evidence = assessment
