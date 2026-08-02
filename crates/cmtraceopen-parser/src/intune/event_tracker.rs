@@ -492,9 +492,13 @@ pub fn extract_events(
             continue;
         };
 
-        // Try primary extract_guid, fall back to guid_registry::extract_app_id
-        let guid =
-            extract_guid(&line.message).or_else(|| guid_registry::extract_app_id(&line.message));
+        let guid = match guid_registry::explicit_app_identity(&line.message) {
+            guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid),
+            guid_registry::ExplicitAppIdentity::Invalid => None,
+            guid_registry::ExplicitAppIdentity::Absent => {
+                extract_guid(&line.message).or_else(|| guid_registry::extract_app_id(&line.message))
+            }
+        };
         let status = determine_status(&line.message, source_kind);
         let raw_name = build_event_name(&event_type, &guid, &line.message, source_kind);
 
@@ -2269,7 +2273,10 @@ mod tests {
                 format!(r#"ESP status for tenant {unrelated_guid} {{"Id":"not-an-app-guid"}}"#),
                 None,
             ),
-            (format!("ESP status for tenant {unrelated_guid}"), Some(unrelated_guid)),
+            (
+                format!("ESP status for tenant {unrelated_guid}"),
+                Some(unrelated_guid),
+            ),
             (
                 format!(r#"ESP status for tenant {unrelated_guid} {{"AppId":"{app_guid}"}}"#),
                 Some(app_guid),
