@@ -457,6 +457,7 @@ pub enum SccmFindingValidationError {
     InvalidRole,
     InvalidEvidenceReference,
     ConflictingEvidenceReference,
+    OverlappingEvidenceReference,
     MissingEvidenceOrCoverageGap,
     MissingTerminalEvidence,
     InvalidTerminalEvidence,
@@ -644,11 +645,9 @@ fn validate_roles(finding: &SccmFinding) -> Result<(), SccmFindingValidationErro
     Ok(())
 }
 
-fn validate_all_evidence_references(
-    finding: &SccmFinding,
-) -> Result<(), SccmFindingValidationError> {
-    let mut ranges_by_identity = BTreeMap::new();
-    for reference in finding
+/// Every reference a finding cites, across all three citation surfaces.
+fn cited_evidence_references(finding: &SccmFinding) -> impl Iterator<Item = &SccmEvidenceRef> {
+    finding
         .evidence
         .iter()
         .chain(
@@ -663,15 +662,101 @@ fn validate_all_evidence_references(
                 .iter()
                 .filter_map(|key| key.evidence.as_ref()),
         )
-    {
+}
+
+fn validate_all_evidence_references(
+    finding: &SccmFinding,
+) -> Result<(), SccmFindingValidationError> {
+    let mut references_by_identity: BTreeMap<(&str, &str), &SccmEvidenceRef> = BTreeMap::new();
+    for reference in cited_evidence_references(finding) {
         validate_evidence_reference(reference)?;
-        let identity = (reference.artifact_id.as_str(), reference.entry_id.as_str());
-        let range = (reference.line_start, reference.line_end);
-        if ranges_by_identity
-            .insert(identity, range)
-            .is_some_and(|existing| existing != range)
+        if references_by_identity
+            .insert(evidence_identity(reference), reference)
+            .is_some_and(|existing| {
+                (existing.line_start, existing.line_end)
+                    != (reference.line_start, reference.line_end)
+            })
         {
             return Err(SccmFindingValidationError::ConflictingEvidenceReference);
+        }
+    }
+    validate_disjoint_evidence_spans(&references_by_identity)
+}
+
+/// Whether two references claim overlapping physical lines of one source.
+///
+/// Physical extent, not an identity tuple, is the question. Two logical
+/// records of one artifact occupy disjoint lines, so any overlap means at
+/// least one of them is not the record it claims to be. Bounds are inclusive,
+/// so equal spans are the degenerate overlap and abutting spans (`1-2` beside
+/// `3-4`) are not one. A reference that carries no bounds asserts no extent and
+/// therefore cannot be shown to claim another reference's lines.
+///
+/// This presumes bounds that already passed a validity gate. An inverted range
+/// reads as empty under an inclusive test and would be silently judged disjoint
+/// from everything, so the gate has to run first, not after: the spine calls
+/// [`validate_evidence_reference`] on every reference before any pair reaches
+/// this predicate, and a reducer that hands over unvalidated references is
+/// responsible for its own gate.
+pub(crate) fn evidence_references_overlap(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> bool {
+    if left.artifact_id != right.artifact_id {
+        return false;
+    }
+    matches!(
+        (
+            left.line_start,
+            left.line_end,
+            right.line_start,
+            right.line_end,
+        ),
+        (Some(left_start), Some(left_end), Some(right_start), Some(right_end))
+            if left_start <= right_end && right_start <= left_end
+    )
+}
+
+/// Rejects a finding whose citations claim the same physical records twice.
+///
+/// Identity equality only catches an exact repeat of one range. It leaves the
+/// wider hole open: `1-2` and `1-1` are different entry ids over the same
+/// physical line, so both survive, each cites the same record, and
+/// [`compare_evidence_refs`] then ranks one above the other on nothing but
+/// span width. Both the management-point and client-policy reducers had to
+/// close this in their own code; enforcing it here closes it for every finding
+/// regardless of which reducer, or none, assembled it.
+///
+/// References arrive keyed by identity, so each entry id contributes exactly
+/// one span and a repeated identity is already a
+/// [`SccmFindingValidationError::ConflictingEvidenceReference`]. Sorting each
+/// artifact's spans by start line lets one pass answer the question: a span
+/// that clears the widest span seen so far clears every earlier one, because
+/// no earlier span starts later or ends further.
+fn validate_disjoint_evidence_spans(
+    references_by_identity: &BTreeMap<(&str, &str), &SccmEvidenceRef>,
+) -> Result<(), SccmFindingValidationError> {
+    let mut by_artifact: BTreeMap<&str, Vec<&SccmEvidenceRef>> = BTreeMap::new();
+    for reference in references_by_identity.values() {
+        if reference.line_start.is_some() && reference.line_end.is_some() {
+            by_artifact
+                .entry(reference.artifact_id.as_str())
+                .or_default()
+                .push(reference);
+        }
+    }
+
+    for mut spans in by_artifact.into_values() {
+        spans.sort_by(|left, right| {
+            left.line_start
+                .cmp(&right.line_start)
+                .then_with(|| left.line_end.cmp(&right.line_end))
+        });
+        let mut widest: Option<&SccmEvidenceRef> = None;
+        for span in spans {
+            if widest.is_some_and(|widest| evidence_references_overlap(widest, span)) {
+                return Err(SccmFindingValidationError::OverlappingEvidenceReference);
+            }
+            if widest.is_none_or(|widest| widest.line_end < span.line_end) {
+                widest = Some(span);
+            }
         }
     }
     Ok(())
