@@ -32,6 +32,8 @@ pub enum SccmClientDiscoveryObservationState {
     Found,
     AccessDenied,
     NotFound,
+    /// An additive caller-observed state; exhaustive matches must handle it.
+    /// Discovery never infers this state from a rejected observation.
     Skipped,
 }
 
@@ -109,6 +111,8 @@ pub struct SccmClientDiscoveryDeclaration {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SccmClientDiscoveryResult {
     pub declarations: Vec<SccmClientDiscoveryDeclaration>,
+    /// Additive discovery-only diagnostics. Result struct literals must
+    /// initialize this field; coverage issues never become capture declarations.
     pub coverage_issues: Vec<SccmClientDiscoveryCoverageIssue>,
 }
 
@@ -140,13 +144,6 @@ struct Candidate {
     source_digest: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct PhysicalObservationKey {
-    root_handle: String,
-    canonical_basename: String,
-    rotation: String,
-}
-
 struct NormalizedObservation<'a> {
     observation: &'a SccmClientDiscoveryObservation,
     canonical_basename: String,
@@ -158,24 +155,24 @@ struct NormalizedDiscovery<'a> {
     coverage_issues: Vec<SccmClientDiscoveryCoverageIssue>,
 }
 
-#[derive(Debug, PartialEq)]
-enum PhysicalConsistencyBasename<'a> {
-    Validated(String),
-    Rejected(&'a str),
+#[derive(Debug)]
+enum PhysicalConsistencyKey<'a> {
+    Accepted {
+        root_handle: &'a str,
+        canonical_basename: String,
+        rotation: String,
+    },
+    /// Raw rejected metadata is borrowed only while this bounded map exists.
+    /// Caller-supplied rotation metadata is deliberately excluded.
+    Rejected {
+        root_handle: &'a str,
+        raw_basename: &'a str,
+    },
 }
 
-#[derive(Debug, PartialEq)]
-struct PhysicalConsistencyKey<'a> {
-    /// Rejected raw metadata is borrowed only for this bounded consistency
-    /// pass. It is never cloned, hashed, or returned.
-    root_handle: &'a str,
-    basename: PhysicalConsistencyBasename<'a>,
-    rotation: &'a SccmRotation,
-}
-
-struct PhysicalConsistencyObservation<'a> {
-    key: PhysicalConsistencyKey<'a>,
+struct ConsistentObservation<'a> {
     state: SccmClientDiscoveryObservationState,
+    normalized: Option<NormalizedObservation<'a>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -204,7 +201,6 @@ pub fn discover_client_sources(
         return Err(SccmClientDiscoveryError::ObservationLimitExceeded);
     }
 
-    validate_observation_consistency(&input.observations)?;
     let normalized = normalize_observations(input)?;
     let observations = normalized.observations;
     let mut found_per_source = BTreeMap::<(String, String), usize>::new();
@@ -259,148 +255,136 @@ pub fn discover_client_sources(
     })
 }
 
-fn validate_observation_consistency(
-    observations: &[SccmClientDiscoveryObservation],
-) -> Result<(), SccmClientDiscoveryError> {
-    let mut keyed = observations
-        .iter()
-        .map(|observation| PhysicalConsistencyObservation {
-            key: physical_consistency_key(observation),
-            state: observation.state,
-        })
-        .collect::<Vec<_>>();
-    debug_assert!(keyed.len() <= MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS);
-    keyed.sort_by(compare_physical_consistency_observations);
-
-    let mut group_start = 0;
-    while group_start < keyed.len() {
-        let mut group_end = group_start + 1;
-        while group_end < keyed.len()
-            && compare_physical_consistency_keys(&keyed[group_start].key, &keyed[group_end].key)
-                == Ordering::Equal
-        {
-            group_end += 1;
-        }
-
-        if matches!(keyed[group_start].key.rotation, SccmRotation::Unknown(_)) {
-            for current in group_start..group_end {
-                for previous in group_start..current {
-                    if exact_rotation_eq(keyed[previous].key.rotation, keyed[current].key.rotation)
-                        && keyed[previous].state != keyed[current].state
-                    {
-                        return Err(SccmClientDiscoveryError::ConflictingObservation);
-                    }
-                }
-            }
-        } else if keyed[group_start + 1..group_end]
-            .iter()
-            .any(|observation| observation.state != keyed[group_start].state)
-        {
-            return Err(SccmClientDiscoveryError::ConflictingObservation);
-        }
-
-        group_start = group_end;
-    }
-    Ok(())
-}
-
-fn physical_consistency_key(
-    observation: &SccmClientDiscoveryObservation,
-) -> PhysicalConsistencyKey<'_> {
-    #[cfg(test)]
-    CONSISTENCY_KEY_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
-    let basename = classify_observation_source(&observation.basename, &observation.rotation)
-        .map(PhysicalConsistencyBasename::Validated)
-        .unwrap_or_else(|| PhysicalConsistencyBasename::Rejected(&observation.basename));
-    PhysicalConsistencyKey {
-        root_handle: &observation.root_handle,
-        basename,
-        rotation: &observation.rotation,
+impl PartialEq for PhysicalConsistencyKey<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
     }
 }
 
-fn compare_physical_consistency_observations(
-    left: &PhysicalConsistencyObservation<'_>,
-    right: &PhysicalConsistencyObservation<'_>,
-) -> Ordering {
-    compare_physical_consistency_keys(&left.key, &right.key)
+impl Eq for PhysicalConsistencyKey<'_> {}
+
+impl PartialOrd for PhysicalConsistencyKey<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
-fn compare_physical_consistency_keys(
-    left: &PhysicalConsistencyKey<'_>,
-    right: &PhysicalConsistencyKey<'_>,
-) -> Ordering {
-    #[cfg(test)]
-    CONSISTENCY_COMPARISONS.with(|count| count.set(count.get() + 1));
-    left.root_handle
-        .cmp(right.root_handle)
-        .then_with(|| compare_physical_consistency_basenames(&left.basename, &right.basename))
-        .then_with(|| rotation_order(left.rotation, right.rotation))
-}
-
-fn exact_rotation_eq(left: &SccmRotation, right: &SccmRotation) -> bool {
-    #[cfg(test)]
-    CONSISTENCY_COMPARISONS.with(|count| count.set(count.get() + 1));
-    left == right
-}
-
-fn compare_physical_consistency_basenames(
-    left: &PhysicalConsistencyBasename<'_>,
-    right: &PhysicalConsistencyBasename<'_>,
-) -> Ordering {
-    match (left, right) {
-        (
-            PhysicalConsistencyBasename::Validated(left),
-            PhysicalConsistencyBasename::Validated(right),
-        ) => left.cmp(right),
-        (PhysicalConsistencyBasename::Validated(_), PhysicalConsistencyBasename::Rejected(_)) => {
-            Ordering::Less
+impl Ord for PhysicalConsistencyKey<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        #[cfg(test)]
+        CONSISTENCY_COMPARISONS.with(|count| count.set(count.get() + 1));
+        match (self, other) {
+            (
+                Self::Accepted {
+                    root_handle: left_root,
+                    canonical_basename: left_basename,
+                    rotation: left_rotation,
+                },
+                Self::Accepted {
+                    root_handle: right_root,
+                    canonical_basename: right_basename,
+                    rotation: right_rotation,
+                },
+            ) => left_root
+                .cmp(right_root)
+                .then_with(|| left_basename.cmp(right_basename))
+                .then_with(|| left_rotation.cmp(right_rotation)),
+            (Self::Accepted { .. }, Self::Rejected { .. }) => Ordering::Less,
+            (Self::Rejected { .. }, Self::Accepted { .. }) => Ordering::Greater,
+            (
+                Self::Rejected {
+                    root_handle: left_root,
+                    raw_basename: left_basename,
+                },
+                Self::Rejected {
+                    root_handle: right_root,
+                    raw_basename: right_basename,
+                },
+            ) => left_root
+                .cmp(right_root)
+                .then_with(|| left_basename.cmp(right_basename)),
         }
-        (PhysicalConsistencyBasename::Rejected(_), PhysicalConsistencyBasename::Validated(_)) => {
-            Ordering::Greater
-        }
-        (
-            PhysicalConsistencyBasename::Rejected(left),
-            PhysicalConsistencyBasename::Rejected(right),
-        ) => left.cmp(right),
     }
 }
 
 fn normalize_observations(
     input: &SccmClientDiscoveryInput,
 ) -> Result<NormalizedDiscovery<'_>, SccmClientDiscoveryError> {
-    let mut observations = BTreeMap::<PhysicalObservationKey, NormalizedObservation<'_>>::new();
+    let mut observations = BTreeMap::<PhysicalConsistencyKey<'_>, ConsistentObservation<'_>>::new();
     let mut coverage_issue_counts = BTreeMap::<CoverageIssueKey, u16>::new();
     for observation in &input.observations {
-        let Some(normalized) = normalize_observation(observation) else {
-            let count = coverage_issue_counts
-                .entry(coverage_issue_key(observation))
-                .or_insert(0_u16);
-            *count = count
-                .checked_add(1)
-                .expect("admitted discovery issue count fits in u16");
-            continue;
-        };
-        let key = PhysicalObservationKey {
-            root_handle: observation.root_handle.clone(),
-            canonical_basename: normalized.canonical_basename.clone(),
-            rotation: rotation_segment(&observation.rotation),
-        };
-        match observations.entry(key) {
+        #[cfg(test)]
+        NORMALIZATION_OPERATIONS.with(|count| count.set(count.get() + 1));
+        let root_is_valid = root_handle_digest(&observation.root_handle).is_some();
+        let canonical_basename =
+            classify_observation_source(&observation.basename, &observation.rotation);
+        #[cfg(test)]
+        CONSISTENCY_KEY_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
+
+        let (consistency_key, normalized, coverage_issue) =
+            match (root_is_valid, canonical_basename) {
+                (true, Some(canonical_basename)) => {
+                    let consistency_key = PhysicalConsistencyKey::Accepted {
+                        root_handle: &observation.root_handle,
+                        canonical_basename: canonical_basename.clone(),
+                        rotation: rotation_segment(&observation.rotation),
+                    };
+                    let normalized = NormalizedObservation {
+                        observation,
+                        logical_artifact_ids: logical_artifact_ids(&canonical_basename),
+                        canonical_basename,
+                    };
+                    (consistency_key, Some(normalized), None)
+                }
+                (root_is_valid, catalog_basename) => {
+                    let consistency_key = PhysicalConsistencyKey::Rejected {
+                        root_handle: &observation.root_handle,
+                        raw_basename: &observation.basename,
+                    };
+                    let coverage_issue = coverage_issue_key(
+                        root_is_valid,
+                        catalog_basename.as_deref(),
+                        &observation.rotation,
+                    );
+                    (consistency_key, None, Some(coverage_issue))
+                }
+            };
+
+        match observations.entry(consistency_key) {
             std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(normalized);
+                entry.insert(ConsistentObservation {
+                    state: observation.state,
+                    normalized,
+                });
             }
             std::collections::btree_map::Entry::Occupied(mut entry) => {
-                if entry.get().observation.state != observation.state {
+                if entry.get().state != observation.state {
                     return Err(SccmClientDiscoveryError::ConflictingObservation);
                 }
-                if compare_observation_order(&normalized, entry.get()) == Ordering::Less {
-                    entry.insert(normalized);
+                if let Some(normalized) = normalized {
+                    let retained = entry
+                        .get_mut()
+                        .normalized
+                        .as_mut()
+                        .expect("accepted consistency keys retain normalized observations");
+                    if compare_observation_order(&normalized, retained) == Ordering::Less {
+                        *retained = normalized;
+                    }
                 }
             }
         }
+
+        if let Some(coverage_issue) = coverage_issue {
+            let count = coverage_issue_counts.entry(coverage_issue).or_insert(0_u16);
+            *count = count
+                .checked_add(1)
+                .expect("admitted discovery issue count fits in u16");
+        }
     }
-    let mut observations = observations.into_values().collect::<Vec<_>>();
+    let mut observations = observations
+        .into_values()
+        .filter_map(|observation| observation.normalized)
+        .collect::<Vec<_>>();
     observations.sort_by(compare_observation_order);
     debug_assert!(coverage_issue_counts.len() <= MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES);
     Ok(NormalizedDiscovery {
@@ -412,45 +396,30 @@ fn normalize_observations(
     })
 }
 
-fn normalize_observation(
-    observation: &SccmClientDiscoveryObservation,
-) -> Option<NormalizedObservation<'_>> {
-    #[cfg(test)]
-    NORMALIZATION_OPERATIONS.with(|count| count.set(count.get() + 1));
-    root_handle_digest(&observation.root_handle)?;
-    let canonical_basename =
-        classify_observation_source(&observation.basename, &observation.rotation)?;
-    let logical_artifact_ids = logical_artifact_ids(&canonical_basename);
-    Some(NormalizedObservation {
-        observation,
-        canonical_basename,
-        logical_artifact_ids,
-    })
-}
-
-fn coverage_issue_key(observation: &SccmClientDiscoveryObservation) -> CoverageIssueKey {
-    let root_is_valid = root_handle_digest(&observation.root_handle).is_some();
-    let catalog_basename =
-        classify_observation_source(&observation.basename, &observation.rotation);
+fn coverage_issue_key(
+    root_is_valid: bool,
+    catalog_basename: Option<&str>,
+    rotation: &SccmRotation,
+) -> CoverageIssueKey {
     let state = if root_is_valid {
         SccmClientDiscoveryCoverageIssueState::Unsupported
     } else {
         SccmClientDiscoveryCoverageIssueState::InvalidProvenance
     };
     let catalog_entry_id = catalog_basename
-        .as_deref()
         .map(catalog_entry_id)
         .unwrap_or_else(|| "sccm-client-source:v1:none".to_owned());
     let logical_artifact_ids = if state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance
     {
         catalog_basename
-            .as_deref()
             .map(logical_artifact_ids)
             .unwrap_or_default()
     } else {
         Vec::new()
     };
-    let rotation_category = rotation_category(&observation.rotation);
+    let rotation_category = catalog_basename
+        .map(|_| rotation_category(rotation))
+        .unwrap_or(SccmClientDiscoveryRotationCategory::Unknown);
     CoverageIssueKey {
         catalog_entry_id,
         logical_artifact_ids,
