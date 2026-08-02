@@ -546,12 +546,6 @@ fn open_relative_file_no_follow(root: &File, relative: &Path) -> io::Result<File
     unreachable!("non-empty relative paths always return from their final component")
 }
 
-#[cfg(not(any(unix, windows)))]
-pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
-    let file = OpenOptions::new().read(true).open(path)?;
-    require_regular_file(file)
-}
-
 fn require_regular_file(file: File) -> io::Result<File> {
     #[cfg(windows)]
     {
