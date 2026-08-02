@@ -1019,7 +1019,7 @@ fn discovery_does_not_conflict_distinct_rejected_alias_spellings() {
 }
 
 #[test]
-fn discovery_does_not_conflict_distinct_exact_rejected_rotations() {
+fn discovery_conflicts_rejected_states_even_when_untrusted_rotations_differ() {
     let raw_root = "C:\\private\\ccm\\logs";
     let input = SccmClientDiscoveryInput {
         max_found_fragments_per_source: 8,
@@ -1039,16 +1039,15 @@ fn discovery_does_not_conflict_distinct_exact_rejected_rotations() {
         ],
     };
 
-    let result = discover_client_sources(&input)
-        .expect("distinct exact rejected rotations are separate physical observations");
-    let reversed = discover_client_sources(&SccmClientDiscoveryInput {
-        max_found_fragments_per_source: input.max_found_fragments_per_source,
-        observations: input.observations.into_iter().rev().collect(),
-    })
-    .expect("distinct exact rejected rotations remain nonconflicting under reversal");
+    let error = discover_client_sources(&input)
+        .expect_err("rejected physical identity ignores caller-supplied rotation metadata");
+    let mut reversed = input;
+    reversed.observations.reverse();
+    let reversed_error = discover_client_sources(&reversed)
+        .expect_err("rejected rotation metadata cannot make conflicts order-dependent");
 
-    assert_eq!(result, reversed);
-    assert!(result.declarations.is_empty());
-    assert_eq!(result.coverage_issues.len(), 1);
-    assert_eq!(result.coverage_issues[0].occurrence_count.get(), 2);
+    assert_eq!(error, SccmClientDiscoveryError::ConflictingObservation);
+    assert_eq!(reversed_error, error);
+    assert!(!error.to_string().contains(raw_root));
+    assert!(!error.to_string().contains("PolicyAgent.log.backup"));
 }

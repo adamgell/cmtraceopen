@@ -193,6 +193,8 @@ thread_local! {
     static NORMALIZATION_OPERATIONS: Cell<usize> = const { Cell::new(0) };
     static LOGICAL_ARTIFACT_ID_LOOKUPS: Cell<usize> = const { Cell::new(0) };
     static CONSISTENCY_KEY_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
+    static CLASSIFIER_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
+    static CONSISTENCY_COMPARISONS: Cell<usize> = const { Cell::new(0) };
 }
 
 pub fn discover_client_sources(
@@ -283,7 +285,7 @@ fn validate_observation_consistency(
         if matches!(keyed[group_start].key.rotation, SccmRotation::Unknown(_)) {
             for current in group_start..group_end {
                 for previous in group_start..current {
-                    if keyed[previous].key.rotation == keyed[current].key.rotation
+                    if exact_rotation_eq(keyed[previous].key.rotation, keyed[current].key.rotation)
                         && keyed[previous].state != keyed[current].state
                     {
                         return Err(SccmClientDiscoveryError::ConflictingObservation);
@@ -307,7 +309,7 @@ fn physical_consistency_key(
 ) -> PhysicalConsistencyKey<'_> {
     #[cfg(test)]
     CONSISTENCY_KEY_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
-    let basename = canonical_client_source(&observation.basename, &observation.rotation)
+    let basename = classify_observation_source(&observation.basename, &observation.rotation)
         .map(PhysicalConsistencyBasename::Validated)
         .unwrap_or_else(|| PhysicalConsistencyBasename::Rejected(&observation.basename));
     PhysicalConsistencyKey {
@@ -328,10 +330,18 @@ fn compare_physical_consistency_keys(
     left: &PhysicalConsistencyKey<'_>,
     right: &PhysicalConsistencyKey<'_>,
 ) -> Ordering {
+    #[cfg(test)]
+    CONSISTENCY_COMPARISONS.with(|count| count.set(count.get() + 1));
     left.root_handle
         .cmp(right.root_handle)
         .then_with(|| compare_physical_consistency_basenames(&left.basename, &right.basename))
         .then_with(|| rotation_order(left.rotation, right.rotation))
+}
+
+fn exact_rotation_eq(left: &SccmRotation, right: &SccmRotation) -> bool {
+    #[cfg(test)]
+    CONSISTENCY_COMPARISONS.with(|count| count.set(count.get() + 1));
+    left == right
 }
 
 fn compare_physical_consistency_basenames(
@@ -408,7 +418,8 @@ fn normalize_observation(
     #[cfg(test)]
     NORMALIZATION_OPERATIONS.with(|count| count.set(count.get() + 1));
     root_handle_digest(&observation.root_handle)?;
-    let canonical_basename = canonical_client_source(&observation.basename, &observation.rotation)?;
+    let canonical_basename =
+        classify_observation_source(&observation.basename, &observation.rotation)?;
     let logical_artifact_ids = logical_artifact_ids(&canonical_basename);
     Some(NormalizedObservation {
         observation,
@@ -419,7 +430,8 @@ fn normalize_observation(
 
 fn coverage_issue_key(observation: &SccmClientDiscoveryObservation) -> CoverageIssueKey {
     let root_is_valid = root_handle_digest(&observation.root_handle).is_some();
-    let catalog_basename = canonical_client_source(&observation.basename, &observation.rotation);
+    let catalog_basename =
+        classify_observation_source(&observation.basename, &observation.rotation);
     let state = if root_is_valid {
         SccmClientDiscoveryCoverageIssueState::Unsupported
     } else {
@@ -467,6 +479,12 @@ fn coverage_issue_from_key(
         occurrence_count: NonZeroU16::new(occurrence_count)
             .expect("every coverage issue represents an admitted observation"),
     }
+}
+
+fn classify_observation_source(basename: &str, rotation: &SccmRotation) -> Option<String> {
+    #[cfg(test)]
+    CLASSIFIER_INVOCATIONS.with(|count| count.set(count.get() + 1));
+    canonical_client_source(basename, rotation)
 }
 
 fn rotation_category(rotation: &SccmRotation) -> SccmClientDiscoveryRotationCategory {
@@ -745,6 +763,27 @@ mod tests {
         CONSISTENCY_KEY_CONSTRUCTIONS.with(|count| count.set(0));
     }
 
+    fn classifier_invocation_count() -> usize {
+        CLASSIFIER_INVOCATIONS.with(Cell::get)
+    }
+
+    fn consistency_comparison_count() -> usize {
+        CONSISTENCY_COMPARISONS.with(Cell::get)
+    }
+
+    fn reset_classification_work_counts() {
+        CLASSIFIER_INVOCATIONS.with(|count| count.set(0));
+        CONSISTENCY_COMPARISONS.with(|count| count.set(0));
+    }
+
+    fn comparison_budget(observation_count: usize) -> usize {
+        let log_bound =
+            usize::BITS as usize - observation_count.saturating_sub(1).leading_zeros() as usize;
+        observation_count
+            .saturating_mul(log_bound.saturating_add(2))
+            .saturating_mul(4)
+    }
+
     #[test]
     fn defensive_observation_limit_rejects_before_any_normalization_or_construction() {
         let observations = (1..=MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS + 1)
@@ -764,6 +803,7 @@ mod tests {
         reset_construction_counts();
         reset_normalization_count();
         reset_consistency_key_count();
+        reset_classification_work_counts();
         assert_eq!(
             discover_client_sources(&input),
             Err(SccmClientDiscoveryError::ObservationLimitExceeded),
@@ -784,6 +824,8 @@ mod tests {
             0,
             "the defensive limit rejects before ephemeral consistency keys are built"
         );
+        assert_eq!(classifier_invocation_count(), 0);
+        assert_eq!(consistency_comparison_count(), 0);
     }
 
     #[test]
@@ -814,6 +856,7 @@ mod tests {
             reset_construction_counts();
             reset_normalization_count();
             reset_consistency_key_count();
+            reset_classification_work_counts();
             let result = discover_client_sources(&SccmClientDiscoveryInput {
                 max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
                 observations,
@@ -829,6 +872,18 @@ mod tests {
                 consistency_key_count(),
                 MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
                 "the bounded consistency pass builds exactly one borrowed key per observation"
+            );
+            assert_eq!(
+                classifier_invocation_count(),
+                MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+                "every admitted observation is classified at most once"
+            );
+            assert!(
+                consistency_comparison_count()
+                    <= comparison_budget(MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS),
+                "consistency work must remain O(n log n): {} comparisons exceeded {}",
+                consistency_comparison_count(),
+                comparison_budget(MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS),
             );
             assert!(
                 result.declarations.len() <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
@@ -860,6 +915,47 @@ mod tests {
             logical_artifact_id_lookup_count(),
             64,
             "sorting and declaration construction must reuse each normalized observation's cached logical IDs"
+        );
+    }
+
+    #[test]
+    fn rejected_duplicate_boundary_has_bounded_classification_and_consistency_work() {
+        let observations = (0..MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS)
+            .map(|_| SccmClientDiscoveryObservation {
+                root_handle: "unvalidated-root".to_owned(),
+                basename: "Unrelated.log.backup".to_owned(),
+                rotation: SccmRotation::Unknown(cmtraceopen_parser::sccm::SccmUnknownRotation {
+                    kind: "filenameSuffix".to_owned(),
+                    value: Some(serde_json::Value::String(".backup".to_owned())),
+                }),
+                state: SccmClientDiscoveryObservationState::Found,
+            })
+            .collect();
+
+        reset_classification_work_counts();
+        let result = discover_client_sources(&SccmClientDiscoveryInput {
+            max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+            observations,
+        })
+        .expect("same-state rejected duplicates remain countable at the admission boundary");
+
+        assert!(result.declarations.is_empty());
+        assert_eq!(result.coverage_issues.len(), 1);
+        assert_eq!(
+            result.coverage_issues[0].occurrence_count.get() as usize,
+            MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS
+        );
+        assert!(
+            consistency_comparison_count()
+                <= comparison_budget(MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS),
+            "rejected consistency work must remain O(n log n): {} comparisons exceeded {}",
+            consistency_comparison_count(),
+            comparison_budget(MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS),
+        );
+        assert_eq!(
+            classifier_invocation_count(),
+            MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+            "every rejected observation is classified at most once"
         );
     }
 
