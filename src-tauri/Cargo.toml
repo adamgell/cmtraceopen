@@ -33,6 +33,7 @@ esp-diagnostics = ["intune-diagnostics", "dep:cab", "dep:tempfile", "dep:zip"]
 intune-diagnostics = ["dep:evtx", "dep:quick-xml"]
 macos-diag = ["dep:plist"]
 secureboot = ["dep:tempfile"]
+sccm-diagnostics = []
 
 [dependencies]
 cmtraceopen-parser = { path = "../crates/cmtraceopen-parser", version = "0.1" }
@@ -126,6 +127,10 @@ required-features = ["esp-diagnostics"]
 [[test]]
 name = "sysmon_parser"
 required-features = ["sysmon"]
+
+[[test]]
+name = "sccm_client_manifest"
+required-features = ["sccm-diagnostics"]
 
 [[bench]]
 name = "intune_pipeline"
