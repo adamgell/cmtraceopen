@@ -41,6 +41,20 @@ const ROTATION_CURRENT_FRAGMENT: &str = include_str!(
 const ROTATION_LO_FRAGMENT: &str = include_str!(
     "fixtures/sccm/server/site_core/rotation-boundary/evidence/sccm/server/site-core/sitecomp/lo_/sitecomp.lo_"
 );
+const OUT_OF_ORDER_SITECOMP: &str = concat!(
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-ORDER-001 statusId=SC_COMPONENT_START_OK outcome=success terminal=false]LOG]!><time=\"14:00:04.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"101\" file=\"sitecomp.cpp:101\">\n",
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-ORDER-001 statusId=SC_COMPONENT_WORK_OK outcome=success terminal=false]LOG]!><time=\"14:00:01.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"101\" file=\"sitecomp.cpp:102\">\n",
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-ORDER-001 statusId=SC_INBOX_ACCEPTED outcome=success terminal=false]LOG]!><time=\"14:00:03.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"101\" file=\"sitecomp.cpp:103\">\n",
+);
+const OUT_OF_ORDER_STATUS: &str = concat!(
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-ORDER-001 statusId=SC_STATUS_PROCESSING_OK outcome=success terminal=false]LOG]!><time=\"14:00:02.000+000\" date=\"07-30-2026\" component=\"SMS_STATUS_MANAGER\" context=\"\" type=\"1\" thread=\"111\" file=\"statmgr.cpp:201\">\n",
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-ORDER-001 statusId=SC_COMPONENT_HEALTHY outcome=success terminal=true]LOG]!><time=\"14:00:05.000+000\" date=\"07-30-2026\" component=\"SMS_STATUS_MANAGER\" context=\"\" type=\"1\" thread=\"111\" file=\"statmgr.cpp:202\">\n",
+);
+const SUCCESS_AFTER_FAILURE: &str = concat!(
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-LATE-001 statusId=SC_COMPONENT_START_OK outcome=success terminal=false]LOG]!><time=\"14:10:01.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"201\" file=\"sitecomp.cpp:101\">\n",
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-LATE-001 statusId=SC_COMPONENT_TERMINAL_FAILURE outcome=failure terminal=true]LOG]!><time=\"14:10:02.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"3\" thread=\"201\" file=\"sitecomp.cpp:190\">\n",
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-LATE-001 statusId=SC_COMPONENT_WORK_OK outcome=success terminal=false]LOG]!><time=\"14:10:03.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"201\" file=\"sitecomp.cpp:102\">\n",
+);
 
 #[derive(Clone)]
 struct Source<'a> {
@@ -50,6 +64,7 @@ struct Source<'a> {
     path_fingerprint: &'static str,
     lineage_id: &'static str,
     rotation_kind: &'static str,
+    rotation_value: Option<Value>,
     content: Option<&'a str>,
     capture_state: &'static str,
     configured_state: &'static str,
@@ -69,6 +84,7 @@ impl<'a> Source<'a> {
             path_fingerprint: "synthetic:path:site-default",
             lineage_id: "sitecomp-lab",
             rotation_kind: "current",
+            rotation_value: None,
             content: Some(content),
             capture_state: "captured",
             configured_state: "configured",
@@ -88,6 +104,7 @@ impl<'a> Source<'a> {
             path_fingerprint: "synthetic:path:z-site",
             lineage_id: "site-status-z",
             rotation_kind: "current",
+            rotation_value: None,
             content: Some(content),
             capture_state: "captured",
             configured_state: "configured",
@@ -107,6 +124,7 @@ impl<'a> Source<'a> {
             path_fingerprint: "synthetic:path:z-site",
             lineage_id: "site-status-z",
             rotation_kind: "current",
+            rotation_value: None,
             content: None,
             capture_state: "absent",
             configured_state: "defaultCandidate",
@@ -126,6 +144,7 @@ impl<'a> Source<'a> {
             path_fingerprint: "synthetic:path:a-site",
             lineage_id: "sitecomp-a",
             rotation_kind: "current",
+            rotation_value: None,
             content: None,
             capture_state: "absent",
             configured_state: "defaultCandidate",
@@ -154,6 +173,7 @@ impl<'a> Source<'a> {
             path_fingerprint: "synthetic:path:site-default",
             lineage_id: "sitecomp-lab",
             rotation_kind: "lo_",
+            rotation_value: None,
             content: Some(content),
             capture_state: "captured",
             configured_state: "configured",
@@ -165,11 +185,20 @@ impl<'a> Source<'a> {
         }
     }
 
+    fn numbered_status(content: &'a str) -> Self {
+        let mut source = Self::status(content);
+        source.basename = "statmgr.log.2";
+        source.rotation_kind = "numbered";
+        source.rotation_value = Some(json!(2));
+        source
+    }
+
     fn relative_path(&self) -> Option<String> {
         self.content.map(|_| {
             let rotation = match self.rotation_kind {
                 "current" => "current",
                 "lo_" => "lo_",
+                "numbered" => "numbered-2",
                 other => panic!("unsupported test rotation {other}"),
             };
             format!(
@@ -208,6 +237,7 @@ impl<'a> Source<'a> {
             },
             "rotation": {
                 "kind": self.rotation_kind,
+                "value": self.rotation_value,
                 "lineageId": self.lineage_id,
             },
             "captureState": self.capture_state,
@@ -313,6 +343,42 @@ fn configured_nondefault_sources_supersede_absent_default_candidates() {
         .all(|gap| gap.artifact_id != "b-sitecomp"));
     assert!(analysis.findings.is_empty());
     assert!(analysis.artifact_requests.is_empty());
+}
+
+#[test]
+fn complete_catalogued_rotations_remain_profile_usable() {
+    let assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::numbered_status(HEALTHY_STATUS),
+    ]);
+    let analysis = analyze_site_core(&assessment);
+
+    assert_eq!(analysis.results.len(), 1);
+    assert_eq!(analysis.results[0].state, SccmSiteCoreState::Healthy);
+    assert_eq!(analysis.results[0].confidence, SccmSiteCoreConfidence::High);
+}
+
+#[test]
+fn phase_order_and_post_terminal_evidence_fail_closed() {
+    let out_of_order = analyze_site_core(&assess(&[
+        Source::sitecomp(OUT_OF_ORDER_SITECOMP),
+        Source::status(OUT_OF_ORDER_STATUS),
+    ]));
+    assert_eq!(out_of_order.results.len(), 1);
+    assert!(out_of_order.results.iter().all(|result| {
+        result.state != SccmSiteCoreState::Healthy
+            && result.confidence != SccmSiteCoreConfidence::High
+    }));
+
+    let later_success = analyze_site_core(&assess(&[
+        Source::sitecomp(SUCCESS_AFTER_FAILURE),
+        Source::absent_status(),
+    ]));
+    assert_eq!(later_success.results.len(), 1);
+    assert!(later_success.results.iter().all(|result| {
+        result.finding_class != Some(SccmFindingClass::ConfirmedFailure)
+            && result.confidence != SccmSiteCoreConfidence::High
+    }));
 }
 
 #[test]
@@ -431,6 +497,24 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
         result.transaction_key.producer_host_handle == "synthetic:host:site-01"
             || result.transaction_key.producer_host_handle == "synthetic:host:site-02"
     }));
+
+    let mut foreign_gap = assess(&[Source::sitecomp(HEALTHY_SITECOMP), Source::absent_status()]);
+    foreign_gap
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-status")
+        .expect("status artifact")
+        .producer_host_handle = Some("synthetic:host:site-02".to_owned());
+    let foreign_gap_analysis = analyze_site_core(&foreign_gap);
+    assert_eq!(foreign_gap_analysis.results.len(), 1);
+    assert!(foreign_gap_analysis.results[0]
+        .coverage_gap_artifact_ids
+        .is_empty());
+    assert!(foreign_gap_analysis.results[0]
+        .next_artifacts
+        .iter()
+        .all(|request| request.scope.producer_host_handle.as_deref()
+            == Some("synthetic:host:site-01")));
 }
 
 #[test]
@@ -469,6 +553,16 @@ fn encoding_profile_coverage_fragment_cap_and_time_provenance_fail_closed() {
         .expect("sitecomp artifact")
         .fragment_complete = Some(false);
 
+    let mut missing_content_provenance =
+        assess(&[Source::sitecomp(COMPONENT_FAILURE), Source::absent_status()]);
+    let missing_content = missing_content_provenance
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-sitecomp")
+        .expect("sitecomp artifact");
+    missing_content.content_sha256 = None;
+    missing_content.relative_path = None;
+
     let capped = assess(&[
         Source::capped_sitecomp(COMPONENT_FAILURE),
         Source::absent_status(),
@@ -486,6 +580,7 @@ fn encoding_profile_coverage_fragment_cap_and_time_provenance_fail_closed() {
         ("profile", unknown_profile),
         ("coverage", denied),
         ("fragment", incomplete_fragment),
+        ("content", missing_content_provenance),
         ("cap", capped),
         ("time", invalid_time),
     ] {
