@@ -256,7 +256,9 @@ struct ArtifactIntegrityIdentity(String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CoverageIntegrityIdentity {
     producer_role: String,
+    producer_host_handle: String,
     workflow_subject_role: String,
+    workflow_subject_handle: String,
     source_id: String,
     state: String,
 }
@@ -298,7 +300,9 @@ impl SccmServerIntakeIntegrity {
                 .iter()
                 .map(|(identity, record)| {
                     identity.producer_role.len()
+                        + identity.producer_host_handle.len()
                         + identity.workflow_subject_role.len()
+                        + identity.workflow_subject_handle.len()
                         + identity.source_id.len()
                         + identity.state.len()
                         + std::mem::size_of_val(&record.payload_len)
@@ -1330,10 +1334,12 @@ fn coverage_string_bytes(coverage: &[SccmServerCoverage]) -> Option<usize> {
     let mut total = 0usize;
     for record in coverage {
         checked_add_string_bytes(&mut total, role_sort_key(&record.producer_role))?;
+        checked_add_optional_string_bytes(&mut total, record.producer_host_handle.as_deref())?;
         checked_add_optional_string_bytes(
             &mut total,
             record.workflow_subject_role.as_ref().map(role_sort_key),
         )?;
+        checked_add_optional_string_bytes(&mut total, record.workflow_subject_handle.as_deref())?;
         checked_add_string_bytes(&mut total, &record.source_id)?;
         checked_add_string_bytes(&mut total, coverage_sort_key(&record.state))?;
         for artifact_id in &record.artifact_ids {
@@ -1506,12 +1512,14 @@ fn canonical_intake_integrity_with_structure(
     for record in &normalized_coverage {
         let identity = CoverageIntegrityIdentity {
             producer_role: role_sort_key(&record.producer_role).to_owned(),
+            producer_host_handle: record.producer_host_handle.clone().unwrap_or_default(),
             workflow_subject_role: record
                 .workflow_subject_role
                 .as_ref()
                 .map(role_sort_key)
                 .unwrap_or_default()
                 .to_owned(),
+            workflow_subject_handle: record.workflow_subject_handle.clone().unwrap_or_default(),
             source_id: record.source_id.clone(),
             state: coverage_sort_key(&record.state).to_owned(),
         };
