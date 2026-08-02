@@ -6,15 +6,12 @@
     "sameBasename": "MP_GetPolicy.log",
     "distinctPathFingerprints": true,
     "distinctOpaqueRootSegments": true,
-    "destinationsPrecomputed": true,
-    "atomicCreateNoOverwrite": true,
-    "neitherOverwritten": true,
     "notMerged": true,
     "normalizedArtifactCount": 2,
     "exactReferencesResolve": true
   },
   "artifactProvenance": [
-    { "artifactId": "mp-policy-root-a-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 173 },
-    { "artifactId": "mp-policy-root-b-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 172 }
+    { "artifactId": "mp-policy-root-a-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 173, "relativePath": "evidence/sccm/server/management-point/server-mp-policy/root-7d4a9c2e/current/MP_GetPolicy.log", "sha256": "021ea9b3a82c25f42095ee2fe460ed25718193b3798f624041a0621a62ed6cd0" },
+    { "artifactId": "mp-policy-root-b-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 172, "relativePath": "evidence/sccm/server/management-point/server-mp-policy/root-b83f10d6/current/MP_GetPolicy.log", "sha256": "b95b8b26b4d87f9a6a9b708a8290a4ac9bb30b9c95849e20d6b434d14d91f909" }
   ]
 }

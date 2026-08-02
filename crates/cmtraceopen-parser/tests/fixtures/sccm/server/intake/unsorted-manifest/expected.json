@@ -5,7 +5,7 @@
   "artifactIdDerivationIgnoresDiscoveryOrder": true,
   "artifactIdUniquenessScope": "manifest",
   "crossBundleArtifactIdReuseAllowed": true,
-  "deterministicEvidenceIds": "pending #318 deterministic evidence contract",
+  "deterministicEvidenceIds": true,
   "coverage": [
     { "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
     { "producerRole": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },

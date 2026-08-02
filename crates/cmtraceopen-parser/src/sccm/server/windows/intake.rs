@@ -1,16 +1,32 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::{Deserialize, Serialize};
+use serde::de::{Error as _, MapAccess, SeqAccess, Visitor};
+use serde::ser::Error as _;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::sccm::rotation::is_canonical_rotation_timestamp;
 use crate::sccm::{
     classify_artifact_name, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
     SccmArtifactRequest, SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
 };
 
 use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
+
+/// Keep parser-side work bounded even when the manifest did not come from the
+/// native collector. These match the existing bounded bundle intake envelope.
+pub const MAX_SCCM_SERVER_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_SCCM_SERVER_MANIFEST_ARTIFACTS: usize = 512;
+pub const MAX_SCCM_SERVER_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_SCCM_SERVER_OPAQUE_EXTENSIONS: usize = 32;
+const MAX_SCCM_SERVER_OPAQUE_EXTENSION_BYTES_PER_SCOPE: usize = 8 * 1024;
+const MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSIONS: usize = 1_024;
+const MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSION_BYTES: usize = 256 * 1024;
 
 type PathFingerprintKey = (
     String,
@@ -38,8 +54,7 @@ pub struct SccmServerArtifactPayload {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmServerIntakeAssessment {
     pub schema_version: u32,
     pub topology: SccmServerTopologyAssessment,
@@ -48,6 +63,167 @@ pub struct SccmServerIntakeAssessment {
     pub evidence: Vec<SccmEvidence>,
     pub findings: Vec<SccmFinding>,
     pub next_artifact_requests: Vec<SccmArtifactRequest>,
+    /// Versioned opaque manifest extensions retained without interpreting them.
+    extensions: Vec<SccmServerOpaqueExtension>,
+    privacy_extensions: Vec<SccmServerOpaqueExtension>,
+}
+
+/// A public, deterministic representation of a recognized opaque manifest extension.
+///
+/// Extension names use `x-cmtraceopen-opaque-v1-<token>` and values use
+/// `cmtraceopen.extension.sha256.v1:<64 lowercase hexadecimal characters>`.
+/// The parser retains this provenance but never interprets it as diagnostic input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SccmServerOpaqueExtension {
+    schema_version: u32,
+    name: String,
+    value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum SccmServerOpaqueExtensionError {
+    #[error("unsupported opaque extension schema version {schema_version}")]
+    UnsupportedSchemaVersion { schema_version: u32 },
+    #[error("opaque extension name is invalid or unsafe")]
+    InvalidName,
+    #[error("opaque extension value is invalid or unsafe")]
+    InvalidValue,
+}
+
+impl SccmServerOpaqueExtension {
+    pub fn try_new(
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<Self, SccmServerOpaqueExtensionError> {
+        let extension = Self {
+            schema_version: 1,
+            name: name.into(),
+            value: value.into(),
+        };
+        extension.validate()?;
+        Ok(extension)
+    }
+
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+
+    fn validate(&self) -> Result<(), SccmServerOpaqueExtensionError> {
+        if self.schema_version != 1 {
+            return Err(SccmServerOpaqueExtensionError::UnsupportedSchemaVersion {
+                schema_version: self.schema_version,
+            });
+        }
+        if !safe_opaque_extension_name(&self.name) {
+            return Err(SccmServerOpaqueExtensionError::InvalidName);
+        }
+        if !opaque_sha256_handle(&self.value, "cmtraceopen.extension.sha256.v1:") {
+            return Err(SccmServerOpaqueExtensionError::InvalidValue);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmServerOpaqueExtensionSerializeWire<'a> {
+    schema_version: u32,
+    name: &'a str,
+    value: &'a str,
+}
+
+impl Serialize for SccmServerOpaqueExtension {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.validate().map_err(S::Error::custom)?;
+        SccmServerOpaqueExtensionSerializeWire {
+            schema_version: self.schema_version,
+            name: &self.name,
+            value: &self.value,
+        }
+        .serialize(serializer)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmServerOpaqueExtensionDeserializeWire {
+    schema_version: u32,
+    name: String,
+    value: String,
+}
+
+impl<'de> Deserialize<'de> for SccmServerOpaqueExtension {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SccmServerOpaqueExtensionDeserializeWire::deserialize(deserializer)?;
+        let extension = Self {
+            schema_version: wire.schema_version,
+            name: wire.name,
+            value: wire.value,
+        };
+        extension.validate().map_err(D::Error::custom)?;
+        Ok(extension)
+    }
+}
+
+impl SccmServerIntakeAssessment {
+    pub fn extensions(&self) -> &[SccmServerOpaqueExtension] {
+        &self.extensions
+    }
+
+    pub fn privacy_extensions(&self) -> &[SccmServerOpaqueExtension] {
+        &self.privacy_extensions
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmServerIntakeAssessmentSerializeWire<'a> {
+    schema_version: u32,
+    topology: &'a SccmServerTopologyAssessment,
+    artifacts: &'a [SccmServerArtifactAssessment],
+    coverage: &'a [SccmServerCoverage],
+    evidence: &'a [SccmEvidence],
+    findings: &'a [SccmFinding],
+    next_artifact_requests: &'a [SccmArtifactRequest],
+    #[serde(skip_serializing_if = "<[SccmServerOpaqueExtension]>::is_empty")]
+    extensions: &'a [SccmServerOpaqueExtension],
+    #[serde(skip_serializing_if = "<[SccmServerOpaqueExtension]>::is_empty")]
+    privacy_extensions: &'a [SccmServerOpaqueExtension],
+}
+
+impl Serialize for SccmServerIntakeAssessment {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_assessment_extensions(self).map_err(S::Error::custom)?;
+        SccmServerIntakeAssessmentSerializeWire {
+            schema_version: self.schema_version,
+            topology: &self.topology,
+            artifacts: &self.artifacts,
+            coverage: &self.coverage,
+            evidence: &self.evidence,
+            findings: &self.findings,
+            next_artifact_requests: &self.next_artifact_requests,
+            extensions: &self.extensions,
+            privacy_extensions: &self.privacy_extensions,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -56,6 +232,17 @@ pub struct SccmServerTopologyAssessment {
     pub capture_host_handle: String,
     pub site_handle: String,
     pub roles_observed: Vec<SccmRole>,
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "serialize_opaque_extensions"
+    )]
+    extensions: Vec<SccmServerOpaqueExtension>,
+}
+
+impl SccmServerTopologyAssessment {
+    pub fn extensions(&self) -> &[SccmServerOpaqueExtension] {
+        &self.extensions
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -67,6 +254,7 @@ pub struct SccmServerArtifactAssessment {
     pub workflow_subject_role: Option<SccmRole>,
     pub workflow_subject_handle: Option<String>,
     pub source_id: String,
+    pub source_kind: String,
     pub family: SccmArtifactFamily,
     pub original_basename: Option<String>,
     pub rotation: Option<SccmRotation>,
@@ -80,8 +268,58 @@ pub struct SccmServerArtifactAssessment {
     pub collected_at_utc: String,
     pub relative_path: Option<String>,
     pub bytes_copied: u64,
+    pub content_sha256: Option<String>,
+    pub truncated: Option<bool>,
+    pub fragment_complete: Option<bool>,
     pub capture_provenance: Option<SccmServerCaptureProvenance>,
     pub parser_eligible: bool,
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "serialize_opaque_extensions"
+    )]
+    extensions: Vec<SccmServerOpaqueExtension>,
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "serialize_opaque_extensions"
+    )]
+    workflow_subject_extensions: Vec<SccmServerOpaqueExtension>,
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "serialize_opaque_extensions"
+    )]
+    configured_path_provenance_extensions: Vec<SccmServerOpaqueExtension>,
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "serialize_opaque_extensions"
+    )]
+    rotation_extensions: Vec<SccmServerOpaqueExtension>,
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "serialize_opaque_extensions"
+    )]
+    collection_limit_extensions: Vec<SccmServerOpaqueExtension>,
+}
+
+impl SccmServerArtifactAssessment {
+    pub fn extensions(&self) -> &[SccmServerOpaqueExtension] {
+        &self.extensions
+    }
+
+    pub fn workflow_subject_extensions(&self) -> &[SccmServerOpaqueExtension] {
+        &self.workflow_subject_extensions
+    }
+
+    pub fn configured_path_provenance_extensions(&self) -> &[SccmServerOpaqueExtension] {
+        &self.configured_path_provenance_extensions
+    }
+
+    pub fn rotation_extensions(&self) -> &[SccmServerOpaqueExtension] {
+        &self.rotation_extensions
+    }
+
+    pub fn collection_limit_extensions(&self) -> &[SccmServerOpaqueExtension] {
+        &self.collection_limit_extensions
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -140,6 +378,8 @@ pub enum SccmServerIntakeError {
     PayloadLengthMismatch,
     #[error("server artifact payload encoding is unsupported or malformed")]
     InvalidPayloadEncoding,
+    #[error("server manifest exceeds a bounded intake limit")]
+    ManifestLimitExceeded,
 }
 
 pub fn normalize_server_bundle(
@@ -153,6 +393,10 @@ pub fn assess_server_intake(
     manifest_json: &str,
     payloads: &[SccmServerArtifactPayload],
 ) -> Result<SccmServerIntakeAssessment, SccmServerIntakeError> {
+    if manifest_json.len() > MAX_SCCM_SERVER_MANIFEST_BYTES {
+        return Err(SccmServerIntakeError::ManifestLimitExceeded);
+    }
+    preflight_server_manifest_extensions(manifest_json)?;
     let manifest: RawServerManifest = serde_json::from_str(manifest_json)
         .map_err(|_| SccmServerIntakeError::MalformedManifest)?;
     if manifest.sccm_manifest_version != 1 {
@@ -161,8 +405,19 @@ pub fn assess_server_intake(
     if manifest.bundle_role != "server" {
         return Err(SccmServerIntakeError::InvalidBundleRole);
     }
+    validate_manifest_metadata(&manifest)?;
+    validate_manifest_bounds(&manifest, payloads)?;
 
     let topology = normalize_topology(&manifest)?;
+    if topology.roles_observed.iter().any(|role| {
+        is_opaque_future_role(role)
+            && !manifest
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.producer_role == *role)
+    }) {
+        return Err(SccmServerIntakeError::InvalidTopology);
+    }
     let mut payload_by_id = BTreeMap::new();
     for payload in payloads {
         if !safe_manifest_artifact_id(&payload.manifest_artifact_id, manifest.synthetic_fixture)
@@ -301,6 +556,21 @@ pub fn assess_server_intake(
         evidence,
         findings: Vec::new(),
         next_artifact_requests,
+        extensions: normalize_opaque_extensions(
+            &manifest.extensions,
+            SccmServerIntakeError::MalformedManifest,
+        )?,
+        privacy_extensions: manifest
+            .privacy
+            .as_ref()
+            .map(|privacy| {
+                normalize_opaque_extensions(
+                    &privacy.extensions,
+                    SccmServerIntakeError::MalformedManifest,
+                )
+            })
+            .transpose()?
+            .unwrap_or_default(),
     })
 }
 
@@ -336,6 +606,84 @@ impl PreparedArtifact {
             self.assessment.artifact_id.as_str(),
         )
     }
+}
+
+fn validate_manifest_bounds(
+    manifest: &RawServerManifest,
+    payloads: &[SccmServerArtifactPayload],
+) -> Result<(), SccmServerIntakeError> {
+    if manifest.artifacts.len() > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS
+        || payloads.len() > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS
+    {
+        return Err(SccmServerIntakeError::ManifestLimitExceeded);
+    }
+
+    let mut declared_bytes = 0u64;
+    let mut copied_bytes = 0u64;
+    for artifact in &manifest.artifacts {
+        if artifact.bytes_copied > MAX_SCCM_SERVER_ARTIFACT_BYTES {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
+        copied_bytes = copied_bytes
+            .checked_add(artifact.bytes_copied)
+            .ok_or(SccmServerIntakeError::ManifestLimitExceeded)?;
+        if copied_bytes > MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
+        if let Some(limit) = &artifact.collection_limit {
+            if limit.byte_limit > MAX_SCCM_SERVER_ARTIFACT_BYTES {
+                return Err(SccmServerIntakeError::ManifestLimitExceeded);
+            }
+            declared_bytes = declared_bytes
+                .checked_add(limit.byte_limit)
+                .ok_or(SccmServerIntakeError::ManifestLimitExceeded)?;
+            if declared_bytes > MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES {
+                return Err(SccmServerIntakeError::ManifestLimitExceeded);
+            }
+        }
+    }
+
+    let mut payload_bytes = 0u64;
+    for payload in payloads {
+        payload_bytes = payload_bytes
+            .checked_add(
+                u64::try_from(payload.bytes.len())
+                    .map_err(|_| SccmServerIntakeError::ManifestLimitExceeded)?,
+            )
+            .ok_or(SccmServerIntakeError::ManifestLimitExceeded)?;
+        if payload_bytes > MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_manifest_metadata(manifest: &RawServerManifest) -> Result<(), SccmServerIntakeError> {
+    if manifest.synthetic_fixture {
+        let privacy = manifest
+            .privacy
+            .as_ref()
+            .ok_or(SccmServerIntakeError::MalformedManifest)?;
+        if manifest.proposal_only != Some(true)
+            || !privacy.synthetic
+            || privacy.raw_paths != "redacted"
+        {
+            return Err(SccmServerIntakeError::MalformedManifest);
+        }
+    } else if manifest.proposal_only == Some(true)
+        || manifest
+            .privacy
+            .as_ref()
+            .is_some_and(|privacy| privacy.synthetic || privacy.raw_paths != "redacted")
+    {
+        return Err(SccmServerIntakeError::MalformedManifest);
+    }
+
+    if manifest.input_order_is_deliberately_unsorted == Some(false) {
+        return Err(SccmServerIntakeError::MalformedManifest);
+    }
+    Ok(())
 }
 
 fn normalize_topology(
@@ -374,11 +722,10 @@ fn normalize_topology(
     };
 
     if manifest.topology.roles_observed.is_empty()
-        || manifest
-            .topology
-            .roles_observed
-            .iter()
-            .any(|role| !is_declared_server_role(role))
+        || manifest.topology.roles_observed.iter().any(|role| {
+            !is_declared_server_role(role)
+                && (manifest.synthetic_fixture || !is_opaque_future_role(role))
+        })
     {
         return Err(SccmServerIntakeError::InvalidTopology);
     }
@@ -392,6 +739,10 @@ fn normalize_topology(
         capture_host_handle,
         site_handle,
         roles_observed,
+        extensions: normalize_opaque_extensions(
+            &manifest.topology.extensions,
+            SccmServerIntakeError::InvalidTopology,
+        )?,
     })
 }
 
@@ -404,10 +755,43 @@ fn normalize_artifact(
     canonical_artifact_identities: &mut BTreeSet<CanonicalArtifactIdentity>,
     payload_by_id: &BTreeMap<&str, &[u8]>,
 ) -> Result<PreparedArtifact, SccmServerIntakeError> {
+    let extensions =
+        normalize_opaque_extensions(&artifact.extensions, SccmServerIntakeError::InvalidArtifact)?;
+    let workflow_subject_extensions = artifact
+        .workflow_subject
+        .as_ref()
+        .map(|subject| {
+            normalize_opaque_extensions(&subject.extensions, SccmServerIntakeError::InvalidArtifact)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let configured_path_provenance_extensions = normalize_opaque_extensions(
+        &artifact.configured_path_provenance.extensions,
+        SccmServerIntakeError::InvalidArtifact,
+    )?;
+    let rotation_extensions = normalize_opaque_extensions(
+        &artifact.rotation.extensions,
+        SccmServerIntakeError::InvalidArtifact,
+    )?;
+    let collection_limit_extensions = artifact
+        .collection_limit
+        .as_ref()
+        .map(|limit| {
+            normalize_opaque_extensions(&limit.extensions, SccmServerIntakeError::InvalidArtifact)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let unclassified_producer =
+        artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
+    let opaque_future_role = !synthetic_fixture && is_opaque_future_role(&artifact.producer_role);
+    let retained_unknown = opaque_future_role
+        || (unclassified_producer && artifact.capture_state == SccmCoverageState::Unsupported);
+    validate_artifact_annotations(&artifact, synthetic_fixture)?;
     let source_version =
         normalize_source_version(artifact.source_version.as_deref(), synthetic_fixture)?;
     if !safe_manifest_artifact_id(&artifact.artifact_id, synthetic_fixture)
-        || !safe_source_id(&artifact.source_id)
+        || !safe_source_id(&artifact.source_id, retained_unknown, synthetic_fixture)
+        || !safe_source_kind(&artifact.source_kind, retained_unknown, synthetic_fixture)
         || !safe_lineage_id(&artifact.rotation.lineage_id, synthetic_fixture)
         || !safe_path_fingerprint(
             &artifact.configured_path_provenance.path_fingerprint,
@@ -427,15 +811,17 @@ fn normalize_artifact(
             synthetic_fixture,
             "subject",
         )
+        || ((!retained_unknown || is_physical_state(&artifact.capture_state))
+            && artifact.producer_host_handle.is_none())
+        || (retained_unknown
+            && !safe_public_basename(&artifact.original_basename, synthetic_fixture))
     {
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
 
     let producer_is_observed = roles_observed.contains(&artifact.producer_role);
-    let unsupported_unknown = artifact.capture_state == SccmCoverageState::Unsupported
-        && artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
-    if (!producer_is_observed && !unsupported_unknown)
-        || (producer_is_observed && !is_declared_server_role(&artifact.producer_role))
+    if (!producer_is_observed && !unclassified_producer)
+        || (!is_declared_server_role(&artifact.producer_role) && !retained_unknown)
     {
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
@@ -459,7 +845,7 @@ fn normalize_artifact(
         &artifact.original_basename,
     );
 
-    let (family, original_basename, rotation, parser_eligible) =
+    let (family, original_basename, rotation, mut parser_eligible) =
         if let Some((spec, classified)) = classification {
             let family =
                 expected_family(spec.source_id).ok_or(SccmServerIntakeError::InvalidArtifact)?;
@@ -480,11 +866,11 @@ fn normalize_artifact(
             } else {
                 (family, None, None, false)
             }
-        } else if unsupported_unknown {
+        } else if retained_unknown {
             (
-                SccmArtifactFamily::Unknown("unsupported".to_owned()),
-                None,
-                None,
+                SccmArtifactFamily::Unknown(artifact.source_id.clone()),
+                Some(artifact.original_basename.clone()),
+                parse_retained_rotation(&artifact.rotation)?,
                 false,
             )
         } else {
@@ -555,6 +941,11 @@ fn normalize_artifact(
         Some("nonDefault") => Some(SccmServerConfiguredPathClass::NonDefault),
         Some(_) => return Err(SccmServerIntakeError::InvalidArtifact),
     };
+    if configured_path_class.is_some()
+        && configured_path_state != SccmServerConfiguredPathState::Configured
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
     let collected_at_utc = normalize_collected_utc(&artifact.collected_utc)?;
     let relative_path = validate_relative_path(
         artifact.relative_path.clone(),
@@ -565,6 +956,7 @@ fn normalize_artifact(
     )?;
     let (bytes, capture_provenance) =
         validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id)?;
+    let content_sha256 = bytes.map(payload_sha256);
     let profile_eligible = source_version
         .as_deref()
         .is_some_and(|version| source_version_is_profile_eligible(version, synthetic_fixture));
@@ -573,32 +965,50 @@ fn normalize_artifact(
     let mut state = artifact.capture_state.clone();
     if artifact.capture_state == SccmCoverageState::Captured && parser_eligible {
         let bytes = bytes.ok_or(SccmServerIntakeError::MissingPayload)?;
-        if artifact.encoding.as_deref() != Some("utf-8") {
-            return Err(SccmServerIntakeError::InvalidPayloadEncoding);
-        }
-        let content = std::str::from_utf8(bytes)
-            .map_err(|_| SccmServerIntakeError::InvalidPayloadEncoding)?;
-        evidence = normalize_ccm_artifact(
-            SccmArtifact {
-                artifact_id: artifact.artifact_id.clone(),
-                display_name: original_basename
-                    .clone()
-                    .ok_or(SccmServerIntakeError::InvalidArtifact)?,
-                original_path: None,
-                host: artifact.producer_host_handle.clone(),
-                role: artifact.producer_role.clone(),
-                configmgr_version: source_version.clone(),
-                collected_at_utc: Some(collected_at_utc.clone()),
-                rotation: rotation
-                    .clone()
-                    .ok_or(SccmServerIntakeError::InvalidArtifact)?,
-                coverage: artifact.capture_state.clone(),
-                encoding: artifact.encoding.clone(),
-            },
-            content,
-        );
-        if evidence.is_empty() {
-            state = SccmCoverageState::ParseFailed;
+        let encoding = artifact
+            .encoding
+            .as_deref()
+            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+        if let Some(content) = decode_server_payload(bytes, encoding)? {
+            let display_name = original_basename
+                .clone()
+                .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+            let (_, parse_errors) =
+                crate::parser::ccm::parse_content(&content, &display_name, None);
+            evidence = normalize_ccm_artifact(
+                SccmArtifact {
+                    artifact_id: artifact.artifact_id.clone(),
+                    display_name,
+                    original_path: None,
+                    host: artifact.producer_host_handle.clone(),
+                    role: artifact.producer_role.clone(),
+                    configmgr_version: source_version.clone(),
+                    collected_at_utc: Some(collected_at_utc.clone()),
+                    rotation: rotation
+                        .clone()
+                        .ok_or(SccmServerIntakeError::InvalidArtifact)?,
+                    coverage: artifact.capture_state.clone(),
+                    encoding: artifact.encoding.clone(),
+                },
+                &content,
+            );
+            let collected_utc_millis = DateTime::parse_from_rfc3339(&collected_at_utc)
+                .map_err(|_| SccmServerIntakeError::InvalidArtifact)?
+                .timestamp_millis();
+            if evidence.iter().any(|record| {
+                record
+                    .timestamp
+                    .utc_millis
+                    .is_some_and(|instant| instant > collected_utc_millis)
+            }) {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+            if parse_errors > 0 {
+                state = SccmCoverageState::ParseFailed;
+            }
+        } else {
+            state = SccmCoverageState::Unsupported;
+            parser_eligible = false;
         }
     }
 
@@ -611,11 +1021,8 @@ fn normalize_artifact(
             workflow_subject_handle: artifact
                 .workflow_subject
                 .and_then(|subject| subject.instance_handle),
-            source_id: if unsupported_unknown {
-                "unsupported".to_owned()
-            } else {
-                artifact.source_id
-            },
+            source_id: artifact.source_id,
+            source_kind: artifact.source_kind,
             family,
             original_basename,
             rotation,
@@ -629,11 +1036,31 @@ fn normalize_artifact(
             collected_at_utc,
             relative_path,
             bytes_copied: artifact.bytes_copied,
+            content_sha256,
+            truncated: artifact.truncated,
+            fragment_complete: artifact.fragment_complete,
             capture_provenance,
             parser_eligible,
+            extensions,
+            workflow_subject_extensions,
+            configured_path_provenance_extensions,
+            rotation_extensions,
+            collection_limit_extensions,
         },
         evidence,
     })
+}
+
+fn payload_sha256(bytes: &[u8]) -> String {
+    const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn validate_payload_contract<'a>(
@@ -702,6 +1129,41 @@ fn validate_payload_contract<'a>(
     Ok((None, None))
 }
 
+fn decode_server_payload(
+    bytes: &[u8],
+    encoding: &str,
+) -> Result<Option<String>, SccmServerIntakeError> {
+    match encoding {
+        "utf-8" => {
+            let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+            std::str::from_utf8(bytes)
+                .map(|content| Some(content.to_owned()))
+                .map_err(|_| SccmServerIntakeError::InvalidPayloadEncoding)
+        }
+        "utf-16le" => {
+            let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(bytes);
+            if !bytes.len().is_multiple_of(2) {
+                return Err(SccmServerIntakeError::InvalidPayloadEncoding);
+            }
+            let units = bytes
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect::<Vec<_>>();
+            String::from_utf16(&units)
+                .map(Some)
+                .map_err(|_| SccmServerIntakeError::InvalidPayloadEncoding)
+        }
+        "windows-1252" => Ok(Some(
+            encoding_rs::WINDOWS_1252
+                .decode_without_bom_handling(bytes)
+                .0
+                .into_owned(),
+        )),
+        "unknown" => Ok(None),
+        _ => Err(SccmServerIntakeError::InvalidPayloadEncoding),
+    }
+}
+
 fn validate_relative_path(
     relative_path: Option<String>,
     original_basename: Option<&str>,
@@ -719,16 +1181,18 @@ fn validate_relative_path(
     let components = relative_path.split('/').collect::<Vec<_>>();
     let expected_role =
         role_path_segment(&artifact.producer_role).ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let expected_source = source_path_segment(&artifact.source_id);
     let expected_rotation =
         rotation_path_segment(rotation).ok_or(SccmServerIntakeError::InvalidArtifact)?;
     let basename = original_basename.ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let expected_basename = basename_path_segment(basename);
     let mut cursor = 0;
     let fixed_prefix = [
         "evidence",
         "sccm",
         "server",
-        expected_role,
-        artifact.source_id.as_str(),
+        expected_role.as_str(),
+        expected_source.as_str(),
     ];
     if components.get(..fixed_prefix.len()) != Some(fixed_prefix.as_slice()) {
         return Err(SccmServerIntakeError::InvalidArtifact);
@@ -763,7 +1227,7 @@ fn validate_relative_path(
     }
 
     if components.get(cursor).copied() != Some(expected_rotation.as_str())
-        || components.get(cursor + 1).copied() != Some(basename)
+        || components.get(cursor + 1).copied() != Some(expected_basename.as_str())
         || components.len() != cursor + 2
         || relative_path.contains('\\')
         || relative_path.split('/').any(|segment| {
@@ -792,17 +1256,33 @@ fn safe_encoding(encoding: &str) -> bool {
     matches!(encoding, "utf-8" | "utf-16le" | "windows-1252" | "unknown")
 }
 
-fn role_path_segment(role: &SccmRole) -> Option<&'static str> {
-    match role {
-        SccmRole::SiteServer => Some("site-server"),
-        SccmRole::ManagementPoint => Some("management-point"),
-        SccmRole::DistributionPoint => Some("distribution-point"),
-        SccmRole::SoftwareUpdatePoint => Some("software-update-point"),
-        SccmRole::WsUs => Some("wsus"),
-        SccmRole::Provider => Some("provider"),
-        SccmRole::AdminService => Some("admin-service"),
-        SccmRole::Client | SccmRole::Unknown(_) => None,
-    }
+fn role_path_segment(role: &SccmRole) -> Option<String> {
+    Some(match role {
+        SccmRole::SiteServer => "site-server".to_owned(),
+        SccmRole::ManagementPoint => "management-point".to_owned(),
+        SccmRole::DistributionPoint => "distribution-point".to_owned(),
+        SccmRole::SoftwareUpdatePoint => "software-update-point".to_owned(),
+        SccmRole::WsUs => "wsus".to_owned(),
+        SccmRole::Provider => "provider".to_owned(),
+        SccmRole::AdminService => "admin-service".to_owned(),
+        SccmRole::Unknown(value) => format!(
+            "role-{}",
+            opaque_sha256_digest(value, "cmtraceopen.role.sha256.v1:")?
+        ),
+        SccmRole::Client => return None,
+    })
+}
+
+fn source_path_segment(source_id: &str) -> String {
+    opaque_sha256_digest(source_id, "cmtraceopen.source.sha256.v1:")
+        .map(|digest| format!("source-{digest}"))
+        .unwrap_or_else(|| source_id.to_owned())
+}
+
+fn basename_path_segment(basename: &str) -> String {
+    opaque_sha256_digest(basename, "cmtraceopen.basename.sha256.v1:")
+        .map(|digest| format!("basename-{digest}"))
+        .unwrap_or_else(|| basename.to_owned())
 }
 
 fn rotation_path_segment(rotation: Option<&SccmRotation>) -> Option<String> {
@@ -845,12 +1325,24 @@ fn parse_declared_rotation(
                 .value
                 .as_ref()
                 .and_then(Value::as_str)
+                .filter(|value| is_canonical_rotation_timestamp(value))
                 .ok_or(SccmServerIntakeError::InvalidArtifact)?;
             SccmRotation::Timestamped(timestamp.to_owned())
         }
         _ => return Ok(None),
     };
     Ok(Some(parsed))
+}
+
+fn parse_retained_rotation(
+    rotation: &RawServerRotation,
+) -> Result<Option<SccmRotation>, SccmServerIntakeError> {
+    if rotation.kind == "none" && rotation.value.is_none() {
+        return Ok(None);
+    }
+    parse_declared_rotation(rotation)?
+        .ok_or(SccmServerIntakeError::InvalidArtifact)
+        .map(Some)
 }
 
 fn parse_configured_path_state(
@@ -913,6 +1405,7 @@ fn request_for_gap(
         SccmCoverageState::Absent
             | SccmCoverageState::AccessDenied
             | SccmCoverageState::Capped
+            | SccmCoverageState::Unsupported
             | SccmCoverageState::ParseFailed
     ) {
         return None;
@@ -953,6 +1446,73 @@ fn normalize_source_version(
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
     Ok(Some(value.to_owned()))
+}
+
+fn validate_artifact_annotations(
+    artifact: &RawServerArtifact,
+    synthetic_fixture: bool,
+) -> Result<(), SccmServerIntakeError> {
+    if artifact
+        .workflow_subject
+        .as_ref()
+        .and_then(|subject| subject.basis.as_deref())
+        .is_some_and(|basis| {
+            if synthetic_fixture {
+                basis != "incidentScopeOnly"
+            } else {
+                !opaque_sha256_handle(basis, "cmtraceopen.subject-basis.sha256.v1:")
+            }
+        })
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+    if artifact
+        .default_candidate_state
+        .as_deref()
+        .is_some_and(|value| value != "absentCandidateOnly")
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+
+    for (detail, expected_state, synthetic_value, domain) in [
+        (
+            artifact.collection_detail.as_deref(),
+            SccmCoverageState::AccessDenied,
+            "synthetic permission denial",
+            "collection-detail",
+        ),
+        (
+            artifact.skip_reason.as_deref(),
+            SccmCoverageState::Skipped,
+            "optional supplemental source not requested",
+            "skip-reason",
+        ),
+        (
+            artifact.unsupported_reason.as_deref(),
+            SccmCoverageState::Unsupported,
+            "no approved server source contract",
+            "unsupported-reason",
+        ),
+    ] {
+        if let Some(detail) = detail {
+            if artifact.capture_state != expected_state
+                || if synthetic_fixture {
+                    detail != synthetic_value
+                } else {
+                    !opaque_sha256_handle(detail, &format!("cmtraceopen.{domain}.sha256.v1:"))
+                }
+            {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+        }
+    }
+
+    match (artifact.truncated, artifact.fragment_complete) {
+        (None, None) => {}
+        (Some(true), Some(false)) if artifact.capture_state == SccmCoverageState::Capped => {}
+        _ => return Err(SccmServerIntakeError::InvalidArtifact),
+    }
+    Ok(())
 }
 
 fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> bool {
@@ -1006,7 +1566,7 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
 }
 
-fn safe_source_id(value: &str) -> bool {
+fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
     matches!(
         value,
         "server-sitecomp"
@@ -1017,7 +1577,26 @@ fn safe_source_id(value: &str) -> bool {
             | "server-dp-distribution"
             | "server-sup-sync"
             | "unknown-db-supplement"
-    )
+    ) || (allow_unknown
+        && !synthetic_fixture
+        && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
+}
+
+fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
+    matches!(
+        value,
+        "ccmLog" | "iisW3c" | "structuredSupplement" | "unknown"
+    ) || (allow_unknown
+        && !synthetic_fixture
+        && opaque_sha256_handle(value, "cmtraceopen.source-kind.sha256.v1:"))
+}
+
+fn safe_public_basename(value: &str, synthetic_fixture: bool) -> bool {
+    if synthetic_fixture {
+        value == "synthetic-db-export.txt"
+    } else {
+        opaque_sha256_handle(value, "cmtraceopen.basename.sha256.v1:")
+    }
 }
 
 fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
@@ -1076,7 +1655,108 @@ fn safe_original_path_marker(value: &str, synthetic_fixture: bool) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
     }
-    !value.is_empty() && value.len() <= 1024 && !value.chars().any(char::is_control)
+    value == "REDACTED" || opaque_sha256_handle(value, "cmtraceopen.original-path.sha256.v1:")
+}
+
+fn normalize_opaque_extensions(
+    extensions: &BTreeMap<String, Value>,
+    scope_error: SccmServerIntakeError,
+) -> Result<Vec<SccmServerOpaqueExtension>, SccmServerIntakeError> {
+    let normalized = extensions
+        .iter()
+        .map(|(name, value)| {
+            let value = value.as_str().ok_or_else(|| scope_error.clone())?;
+            SccmServerOpaqueExtension::try_new(name.clone(), value.to_owned())
+                .map_err(|_| scope_error.clone())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    validate_opaque_extension_collection(&normalized).map_err(|_| scope_error)?;
+    Ok(normalized)
+}
+
+fn validate_opaque_extension_collection(
+    extensions: &[SccmServerOpaqueExtension],
+) -> Result<(usize, usize), &'static str> {
+    if extensions.len() > MAX_SCCM_SERVER_OPAQUE_EXTENSIONS {
+        return Err("opaque extension scope exceeds its count bound");
+    }
+    let mut bytes = 0usize;
+    let mut previous_name: Option<&str> = None;
+    for extension in extensions {
+        extension
+            .validate()
+            .map_err(|_| "opaque extension record is invalid")?;
+        if previous_name.is_some_and(|previous| previous >= extension.name()) {
+            return Err("opaque extensions are duplicated or not canonically sorted");
+        }
+        previous_name = Some(extension.name());
+        bytes = bytes
+            .checked_add(extension.name().len())
+            .and_then(|bytes| bytes.checked_add(extension.value().len()))
+            .ok_or("opaque extension byte count overflowed")?;
+    }
+    if bytes > MAX_SCCM_SERVER_OPAQUE_EXTENSION_BYTES_PER_SCOPE {
+        return Err("opaque extension scope exceeds its byte bound");
+    }
+    Ok((extensions.len(), bytes))
+}
+
+fn serialize_opaque_extensions<S>(
+    extensions: &[SccmServerOpaqueExtension],
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    validate_opaque_extension_collection(extensions).map_err(S::Error::custom)?;
+    extensions.serialize(serializer)
+}
+
+fn validate_assessment_extensions(
+    assessment: &SccmServerIntakeAssessment,
+) -> Result<(), &'static str> {
+    let mut total_count = 0usize;
+    let mut total_bytes = 0usize;
+    let mut add_scope = |extensions: &[SccmServerOpaqueExtension]| {
+        let (count, bytes) = validate_opaque_extension_collection(extensions)?;
+        total_count = total_count
+            .checked_add(count)
+            .ok_or("opaque extension aggregate count overflowed")?;
+        total_bytes = total_bytes
+            .checked_add(bytes)
+            .ok_or("opaque extension aggregate bytes overflowed")?;
+        if total_count > MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSIONS
+            || total_bytes > MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSION_BYTES
+        {
+            return Err("opaque extension aggregate exceeds its bound");
+        }
+        Ok(())
+    };
+
+    add_scope(&assessment.extensions)?;
+    add_scope(&assessment.privacy_extensions)?;
+    add_scope(&assessment.topology.extensions)?;
+    for artifact in &assessment.artifacts {
+        add_scope(&artifact.extensions)?;
+        add_scope(&artifact.workflow_subject_extensions)?;
+        add_scope(&artifact.configured_path_provenance_extensions)?;
+        add_scope(&artifact.rotation_extensions)?;
+        add_scope(&artifact.collection_limit_extensions)?;
+    }
+    Ok(())
+}
+
+fn safe_opaque_extension_name(value: &str) -> bool {
+    value
+        .strip_prefix("x-cmtraceopen-opaque-v1-")
+        .is_some_and(|token| {
+            (1..=64).contains(&token.len())
+                && token.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                && !token.ends_with('-')
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &str) -> bool {
@@ -1100,13 +1780,17 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
     opaque_sha256_handle(value, &format!("cmtraceopen.{domain}.sha256.v1:"))
 }
 
-fn opaque_sha256_handle(value: &str, prefix: &str) -> bool {
-    value.strip_prefix(prefix).is_some_and(|digest| {
+fn opaque_sha256_digest<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    value.strip_prefix(prefix).filter(|digest| {
         digest.len() == 64
             && digest
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     })
+}
+
+fn opaque_sha256_handle(value: &str, prefix: &str) -> bool {
+    opaque_sha256_digest(value, prefix).is_some()
 }
 
 fn is_declared_server_role(role: &SccmRole) -> bool {
@@ -1120,6 +1804,11 @@ fn is_declared_server_role(role: &SccmRole) -> bool {
             | SccmRole::Provider
             | SccmRole::AdminService
     )
+}
+
+fn is_opaque_future_role(role: &SccmRole) -> bool {
+    matches!(role, SccmRole::Unknown(value)
+        if opaque_sha256_handle(value, "cmtraceopen.role.sha256.v1:"))
 }
 
 fn role_sort_key(role: &SccmRole) -> &str {
@@ -1150,82 +1839,632 @@ fn coverage_sort_key(state: &SccmCoverageState) -> &'static str {
 
 fn rotation_sort_key(rotation: Option<&SccmRotation>) -> String {
     match rotation {
-        Some(SccmRotation::LoUnderscore) => "0-lo-underscore".to_owned(),
-        Some(SccmRotation::Numbered(value)) => format!("1-numbered-{value:010}"),
-        Some(SccmRotation::Timestamped(value)) => format!("2-timestamped-{value}"),
+        Some(SccmRotation::Timestamped(value)) => format!("0-timestamped-{value}"),
+        Some(SccmRotation::Numbered(value)) => {
+            format!("1-numbered-{:010}", u32::MAX - value)
+        }
+        Some(SccmRotation::LoUnderscore) => "2-lo-underscore".to_owned(),
         Some(SccmRotation::Current) => "3-current".to_owned(),
         Some(SccmRotation::Unknown(_)) => "4-unknown".to_owned(),
         None => "5-not-applicable".to_owned(),
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawServerManifest {
-    sccm_manifest_version: u32,
-    #[serde(default)]
-    synthetic_fixture: bool,
-    bundle_role: String,
-    topology: RawServerTopology,
-    artifacts: Vec<RawServerArtifact>,
+#[derive(Debug)]
+enum PreservedJsonValue {
+    Unsigned(u64),
+    String(String),
+    Array(Vec<Self>),
+    Object(Vec<(String, Self)>),
+    Other,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawServerTopology {
-    capture_host: String,
-    site_code: String,
-    roles_observed: Vec<SccmRole>,
+struct PreservedJsonValueVisitor;
+
+impl<'de> Visitor<'de> for PreservedJsonValueVisitor {
+    type Value = PreservedJsonValue;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("any JSON value while preserving duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(PreservedJsonValue::Other)
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+        Ok(PreservedJsonValue::Other)
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(PreservedJsonValue::Unsigned(value))
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(PreservedJsonValue::Other)
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(PreservedJsonValue::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(PreservedJsonValue::String(value))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(PreservedJsonValue::Other)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(PreservedJsonValue::Other)
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(Self)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element()? {
+            values.push(value);
+        }
+        Ok(PreservedJsonValue::Array(values))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut fields = Vec::new();
+        while let Some(name) = map.next_key()? {
+            fields.push((name, map.next_value()?));
+        }
+        Ok(PreservedJsonValue::Object(fields))
+    }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawServerArtifact {
-    artifact_id: String,
-    producer_role: SccmRole,
-    producer_host_handle: Option<String>,
-    workflow_subject: Option<RawWorkflowSubject>,
-    source_id: String,
-    source_kind: String,
-    source_version: Option<String>,
-    original_path: String,
-    original_basename: String,
-    configured_path_provenance: RawConfiguredPathProvenance,
-    rotation: RawServerRotation,
-    capture_state: SccmCoverageState,
-    encoding: Option<String>,
-    collection_limit: Option<RawCollectionLimit>,
-    collected_utc: String,
-    relative_path: Option<String>,
-    bytes_copied: u64,
+impl<'de> Deserialize<'de> for PreservedJsonValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(PreservedJsonValueVisitor)
+    }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawWorkflowSubject {
-    role: SccmRole,
-    instance_handle: Option<String>,
+#[derive(Default)]
+struct OpaqueExtensionTotals {
+    count: usize,
+    bytes: usize,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawConfiguredPathProvenance {
-    state: String,
-    path_class: Option<String>,
-    path_fingerprint: String,
+impl OpaqueExtensionTotals {
+    fn add(&mut self, name: &str, value: &str) -> Result<(), SccmServerIntakeError> {
+        self.count = self
+            .count
+            .checked_add(1)
+            .ok_or(SccmServerIntakeError::ManifestLimitExceeded)?;
+        self.bytes = self
+            .bytes
+            .checked_add(name.len())
+            .and_then(|bytes| bytes.checked_add(value.len()))
+            .ok_or(SccmServerIntakeError::ManifestLimitExceeded)?;
+        if self.count > MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSIONS
+            || self.bytes > MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSION_BYTES
+        {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
+        Ok(())
+    }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawServerRotation {
-    kind: String,
-    value: Option<Value>,
-    lineage_id: String,
+fn preflight_server_manifest_extensions(manifest_json: &str) -> Result<(), SccmServerIntakeError> {
+    let document: PreservedJsonValue = serde_json::from_str(manifest_json)
+        .map_err(|_| SccmServerIntakeError::MalformedManifest)?;
+    let PreservedJsonValue::Object(manifest) = &document else {
+        return Err(SccmServerIntakeError::MalformedManifest);
+    };
+    validate_unique_object_fields(manifest, SccmServerIntakeError::MalformedManifest)?;
+    if !matches!(
+        preserved_field(manifest, "sccmManifestVersion"),
+        Some(PreservedJsonValue::Unsigned(1))
+    ) {
+        return Ok(());
+    }
+    let mut totals = OpaqueExtensionTotals::default();
+    validate_preserved_extensions(
+        manifest,
+        RawServerManifest::KNOWN_FIELDS,
+        SccmServerIntakeError::MalformedManifest,
+        &mut totals,
+    )?;
+
+    if let Some(PreservedJsonValue::Object(privacy)) = preserved_field(manifest, "privacy") {
+        validate_unique_object_fields(privacy, SccmServerIntakeError::MalformedManifest)?;
+        validate_preserved_extensions(
+            privacy,
+            RawServerPrivacy::KNOWN_FIELDS,
+            SccmServerIntakeError::MalformedManifest,
+            &mut totals,
+        )?;
+    }
+    if let Some(PreservedJsonValue::Object(topology)) = preserved_field(manifest, "topology") {
+        validate_unique_object_fields(topology, SccmServerIntakeError::InvalidTopology)?;
+        validate_preserved_extensions(
+            topology,
+            RawServerTopology::KNOWN_FIELDS,
+            SccmServerIntakeError::InvalidTopology,
+            &mut totals,
+        )?;
+    }
+    if let Some(PreservedJsonValue::Array(artifacts)) = preserved_field(manifest, "artifacts") {
+        if artifacts.len() > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
+        for artifact in artifacts {
+            let PreservedJsonValue::Object(artifact) = artifact else {
+                continue;
+            };
+            validate_unique_object_fields(artifact, SccmServerIntakeError::InvalidArtifact)?;
+            validate_preserved_extensions(
+                artifact,
+                RawServerArtifact::KNOWN_FIELDS,
+                SccmServerIntakeError::InvalidArtifact,
+                &mut totals,
+            )?;
+            for (field, known) in [
+                ("workflowSubject", RawWorkflowSubject::KNOWN_FIELDS),
+                (
+                    "configuredPathProvenance",
+                    RawConfiguredPathProvenance::KNOWN_FIELDS,
+                ),
+                ("rotation", RawServerRotation::KNOWN_FIELDS),
+                ("collectionLimit", RawCollectionLimit::KNOWN_FIELDS),
+            ] {
+                if let Some(PreservedJsonValue::Object(nested)) = preserved_field(artifact, field) {
+                    validate_unique_object_fields(nested, SccmServerIntakeError::InvalidArtifact)?;
+                    validate_preserved_extensions(
+                        nested,
+                        known,
+                        SccmServerIntakeError::InvalidArtifact,
+                        &mut totals,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawCollectionLimit {
-    byte_limit: u64,
-    limit_applied: bool,
+fn validate_unique_object_fields(
+    object: &[(String, PreservedJsonValue)],
+    scope_error: SccmServerIntakeError,
+) -> Result<(), SccmServerIntakeError> {
+    let mut seen = BTreeSet::new();
+    if object.iter().any(|(name, _)| !seen.insert(name.as_str())) {
+        return Err(scope_error);
+    }
+    Ok(())
+}
+
+fn preserved_field<'a>(
+    object: &'a [(String, PreservedJsonValue)],
+    name: &str,
+) -> Option<&'a PreservedJsonValue> {
+    object
+        .iter()
+        .find_map(|(field, value)| (field == name).then_some(value))
+}
+
+fn validate_preserved_extensions(
+    object: &[(String, PreservedJsonValue)],
+    known_fields: &[&str],
+    scope_error: SccmServerIntakeError,
+    totals: &mut OpaqueExtensionTotals,
+) -> Result<(), SccmServerIntakeError> {
+    let mut seen = BTreeSet::new();
+    let mut count = 0usize;
+    let mut bytes = 0usize;
+    for (name, value) in object {
+        if known_fields.contains(&name.as_str()) {
+            continue;
+        }
+        let PreservedJsonValue::String(value) = value else {
+            return Err(scope_error);
+        };
+        if !seen.insert(name.as_str())
+            || !safe_opaque_extension_name(name)
+            || !opaque_sha256_handle(value, "cmtraceopen.extension.sha256.v1:")
+        {
+            return Err(scope_error);
+        }
+        count += 1;
+        bytes += name.len() + value.len();
+        if count > MAX_SCCM_SERVER_OPAQUE_EXTENSIONS
+            || bytes > MAX_SCCM_SERVER_OPAQUE_EXTENSION_BYTES_PER_SCOPE
+        {
+            return Err(scope_error);
+        }
+        totals.add(name, value)?;
+    }
+    Ok(())
+}
+
+macro_rules! define_raw_server_wire {
+    (
+        struct $name:ident {
+            $(
+                $(#[$field_meta:meta])*
+                $wire_name:literal => $field_name:ident: $field_type:ty
+            ),* $(,)?
+        }
+    ) => {
+        #[derive(Debug, Deserialize)]
+        struct $name {
+            $(
+                $(#[$field_meta])*
+                #[serde(rename = $wire_name)]
+                $field_name: $field_type,
+            )*
+            #[serde(flatten)]
+            extensions: BTreeMap<String, Value>,
+        }
+
+        impl $name {
+            const KNOWN_FIELDS: &'static [&'static str] = &[$($wire_name),*];
+        }
+    };
+}
+
+define_raw_server_wire! {
+    struct RawServerManifest {
+        "sccmManifestVersion" => sccm_manifest_version: u32,
+        #[serde(default)]
+        "syntheticFixture" => synthetic_fixture: bool,
+        "proposalOnly" => proposal_only: Option<bool>,
+        "privacy" => privacy: Option<RawServerPrivacy>,
+        "bundleRole" => bundle_role: String,
+        "topology" => topology: RawServerTopology,
+        "inputOrderIsDeliberatelyUnsorted" => input_order_is_deliberately_unsorted: Option<bool>,
+        "artifacts" => artifacts: Vec<RawServerArtifact>,
+    }
+}
+
+define_raw_server_wire! {
+    struct RawServerPrivacy {
+        "synthetic" => synthetic: bool,
+        "rawPaths" => raw_paths: String,
+    }
+}
+
+define_raw_server_wire! {
+    struct RawServerTopology {
+        "captureHost" => capture_host: String,
+        "siteCode" => site_code: String,
+        "rolesObserved" => roles_observed: Vec<SccmRole>,
+    }
+}
+
+define_raw_server_wire! {
+    struct RawServerArtifact {
+        "artifactId" => artifact_id: String,
+        "producerRole" => producer_role: SccmRole,
+        "producerHostHandle" => producer_host_handle: Option<String>,
+        "workflowSubject" => workflow_subject: Option<RawWorkflowSubject>,
+        "sourceId" => source_id: String,
+        "sourceKind" => source_kind: String,
+        "sourceVersion" => source_version: Option<String>,
+        "originalPath" => original_path: String,
+        "originalBasename" => original_basename: String,
+        "configuredPathProvenance" => configured_path_provenance: RawConfiguredPathProvenance,
+        "defaultCandidateState" => default_candidate_state: Option<String>,
+        "rotation" => rotation: RawServerRotation,
+        "captureState" => capture_state: SccmCoverageState,
+        "collectionDetail" => collection_detail: Option<String>,
+        "skipReason" => skip_reason: Option<String>,
+        "unsupportedReason" => unsupported_reason: Option<String>,
+        "encoding" => encoding: Option<String>,
+        "collectionLimit" => collection_limit: Option<RawCollectionLimit>,
+        "truncated" => truncated: Option<bool>,
+        "fragmentComplete" => fragment_complete: Option<bool>,
+        "collectedUtc" => collected_utc: String,
+        "relativePath" => relative_path: Option<String>,
+        "bytesCopied" => bytes_copied: u64,
+    }
+}
+
+define_raw_server_wire! {
+    struct RawWorkflowSubject {
+        "role" => role: SccmRole,
+        "instanceHandle" => instance_handle: Option<String>,
+        "basis" => basis: Option<String>,
+    }
+}
+
+define_raw_server_wire! {
+    struct RawConfiguredPathProvenance {
+        "state" => state: String,
+        "pathClass" => path_class: Option<String>,
+        "pathFingerprint" => path_fingerprint: String,
+    }
+}
+
+define_raw_server_wire! {
+    struct RawServerRotation {
+        "kind" => kind: String,
+        "value" => value: Option<Value>,
+        "lineageId" => lineage_id: String,
+    }
+}
+
+define_raw_server_wire! {
+    struct RawCollectionLimit {
+        "byteLimit" => byte_limit: u64,
+        "limitApplied" => limit_applied: bool,
+    }
+}
+
+#[cfg(test)]
+mod opaque_extension_boundary_tests {
+    use super::*;
+
+    const EXPECTED_MAX_TOTAL_OPAQUE_EXTENSIONS: usize = 1_024;
+
+    fn valid_extension(name: &str, ordinal: usize) -> SccmServerOpaqueExtension {
+        SccmServerOpaqueExtension {
+            schema_version: 1,
+            name: name.to_owned(),
+            value: format!("cmtraceopen.extension.sha256.v1:{ordinal:064x}"),
+        }
+    }
+
+    #[test]
+    fn opaque_extension_validation_distinguishes_unsupported_schema_version() {
+        let extension = SccmServerOpaqueExtension {
+            schema_version: 2,
+            name: "x-cmtraceopen-opaque-v1-safe".to_owned(),
+            value: "cmtraceopen.extension.sha256.v1:0000000000000000000000000000000000000000000000000000000000000001"
+                .to_owned(),
+        };
+
+        assert_eq!(
+            extension.validate(),
+            Err(SccmServerOpaqueExtensionError::UnsupportedSchemaVersion { schema_version: 2 })
+        );
+    }
+
+    #[test]
+    fn raw_manifest_known_fields_match_the_generated_wire_contracts() {
+        assert_eq!(
+            RawServerManifest::KNOWN_FIELDS,
+            [
+                "sccmManifestVersion",
+                "syntheticFixture",
+                "proposalOnly",
+                "privacy",
+                "bundleRole",
+                "topology",
+                "inputOrderIsDeliberatelyUnsorted",
+                "artifacts",
+            ]
+        );
+        assert_eq!(RawServerPrivacy::KNOWN_FIELDS, ["synthetic", "rawPaths"]);
+        assert_eq!(
+            RawServerTopology::KNOWN_FIELDS,
+            ["captureHost", "siteCode", "rolesObserved"]
+        );
+        assert_eq!(
+            RawWorkflowSubject::KNOWN_FIELDS,
+            ["role", "instanceHandle", "basis"]
+        );
+        assert_eq!(
+            RawConfiguredPathProvenance::KNOWN_FIELDS,
+            ["state", "pathClass", "pathFingerprint"]
+        );
+        assert_eq!(
+            RawServerRotation::KNOWN_FIELDS,
+            ["kind", "value", "lineageId"]
+        );
+        assert_eq!(
+            RawCollectionLimit::KNOWN_FIELDS,
+            ["byteLimit", "limitApplied"]
+        );
+        assert_eq!(
+            RawServerArtifact::KNOWN_FIELDS,
+            [
+                "artifactId",
+                "producerRole",
+                "producerHostHandle",
+                "workflowSubject",
+                "sourceId",
+                "sourceKind",
+                "sourceVersion",
+                "originalPath",
+                "originalBasename",
+                "configuredPathProvenance",
+                "defaultCandidateState",
+                "rotation",
+                "captureState",
+                "collectionDetail",
+                "skipReason",
+                "unsupportedReason",
+                "encoding",
+                "collectionLimit",
+                "truncated",
+                "fragmentComplete",
+                "collectedUtc",
+                "relativePath",
+                "bytesCopied",
+            ]
+        );
+    }
+
+    fn empty_assessment() -> SccmServerIntakeAssessment {
+        assess_server_intake(
+            r#"{
+                "sccmManifestVersion": 1,
+                "bundleRole": "server",
+                "topology": {
+                    "captureHost": "cmtraceopen.host.sha256.v1:0000000000000000000000000000000000000000000000000000000000000001",
+                    "siteCode": "cmtraceopen.site.sha256.v1:0000000000000000000000000000000000000000000000000000000000000001",
+                    "rolesObserved": ["managementPoint"]
+                },
+                "artifacts": []
+            }"#,
+            &[],
+        )
+        .expect("minimal production assessment is valid")
+    }
+
+    #[test]
+    fn opaque_extension_serialize_rejects_unsafe_internal_mutation() {
+        let extension = SccmServerOpaqueExtension {
+            schema_version: 1,
+            name: "real-user-extension".to_owned(),
+            value: "Real User <real.user@example.com>".repeat(512),
+        };
+
+        assert!(
+            serde_json::to_string(&extension).is_err(),
+            "unsafe identity-bearing extensions cannot cross public serialization"
+        );
+    }
+
+    #[test]
+    fn opaque_extension_public_construction_and_serde_are_validated() {
+        assert_eq!(
+            SccmServerOpaqueExtension::try_new(
+                "real-user-extension",
+                "cmtraceopen.extension.sha256.v1:0000000000000000000000000000000000000000000000000000000000000001",
+            ),
+            Err(SccmServerOpaqueExtensionError::InvalidName)
+        );
+        let extension = SccmServerOpaqueExtension::try_new(
+            "x-cmtraceopen-opaque-v1-safe",
+            "cmtraceopen.extension.sha256.v1:0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        .expect("safe extension construction succeeds");
+        let public = serde_json::to_value(&extension).expect("safe extension serializes");
+        let round_trip = serde_json::from_value::<SccmServerOpaqueExtension>(public)
+            .expect("safe extension deserializes");
+        assert_eq!(round_trip, extension);
+
+        for invalid in [
+            serde_json::json!({
+                "schemaVersion": 2,
+                "name": "x-cmtraceopen-opaque-v1-safe",
+                "value": "cmtraceopen.extension.sha256.v1:0000000000000000000000000000000000000000000000000000000000000001",
+            }),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "name": "real-user-extension",
+                "value": "cmtraceopen.extension.sha256.v1:0000000000000000000000000000000000000000000000000000000000000001",
+            }),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "name": "x-cmtraceopen-opaque-v1-safe",
+                "value": "Real User <real.user@example.com>",
+            }),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "name": "x-cmtraceopen-opaque-v1-safe",
+                "value": "cmtraceopen.extension.sha256.v1:0000000000000000000000000000000000000000000000000000000000000001",
+                "extra": "cmtraceopen.extension.sha256.v1:0000000000000000000000000000000000000000000000000000000000000002",
+            }),
+        ] {
+            assert!(serde_json::from_value::<SccmServerOpaqueExtension>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn assessment_serialize_rejects_duplicate_or_unsorted_extensions() {
+        let mut duplicate = empty_assessment();
+        duplicate.extensions = vec![
+            valid_extension("x-cmtraceopen-opaque-v1-same", 1),
+            valid_extension("x-cmtraceopen-opaque-v1-same", 2),
+        ];
+        assert!(serde_json::to_string(&duplicate).is_err());
+
+        let mut unsorted = empty_assessment();
+        unsorted.extensions = vec![
+            valid_extension("x-cmtraceopen-opaque-v1-zulu", 3),
+            valid_extension("x-cmtraceopen-opaque-v1-alpha", 4),
+        ];
+        assert!(serde_json::to_string(&unsorted).is_err());
+    }
+
+    #[test]
+    fn assessment_serialize_bounds_per_scope_and_aggregate_extensions() {
+        assert_eq!(
+            EXPECTED_MAX_TOTAL_OPAQUE_EXTENSIONS, MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSIONS,
+            "the pinned aggregate extension bound must track the production contract"
+        );
+        let mut per_scope = empty_assessment();
+        per_scope.extensions = (0..=MAX_SCCM_SERVER_OPAQUE_EXTENSIONS)
+            .map(|ordinal| {
+                valid_extension(
+                    &format!("x-cmtraceopen-opaque-v1-item-{ordinal:02}"),
+                    ordinal,
+                )
+            })
+            .collect();
+        assert!(serde_json::to_string(&per_scope).is_err());
+
+        let mut aggregate = empty_assessment();
+        let mut artifact = SccmServerArtifactAssessment {
+            artifact_id: "unused".to_owned(),
+            producer_role: SccmRole::ManagementPoint,
+            producer_host_handle: None,
+            workflow_subject_role: None,
+            workflow_subject_handle: None,
+            source_id: "unused".to_owned(),
+            source_kind: "unused".to_owned(),
+            family: SccmArtifactFamily::Unknown("unused".to_owned()),
+            original_basename: None,
+            rotation: None,
+            rotation_lineage_handle: "unused".to_owned(),
+            state: SccmCoverageState::Unsupported,
+            configured_path_state: SccmServerConfiguredPathState::Supplied,
+            configured_path_class: None,
+            path_fingerprint: "unused".to_owned(),
+            source_version: None,
+            profile_eligible: false,
+            collected_at_utc: "2026-07-30T00:00:00Z".to_owned(),
+            relative_path: None,
+            bytes_copied: 0,
+            content_sha256: None,
+            truncated: None,
+            fragment_complete: None,
+            capture_provenance: None,
+            parser_eligible: false,
+            extensions: (0..MAX_SCCM_SERVER_OPAQUE_EXTENSIONS)
+                .map(|ordinal| {
+                    valid_extension(
+                        &format!("x-cmtraceopen-opaque-v1-item-{ordinal:02}"),
+                        ordinal,
+                    )
+                })
+                .collect(),
+            workflow_subject_extensions: Vec::new(),
+            configured_path_provenance_extensions: Vec::new(),
+            rotation_extensions: Vec::new(),
+            collection_limit_extensions: Vec::new(),
+        };
+        for ordinal in 0..=EXPECTED_MAX_TOTAL_OPAQUE_EXTENSIONS / MAX_SCCM_SERVER_OPAQUE_EXTENSIONS
+        {
+            artifact.artifact_id = format!("unused-{ordinal}");
+            aggregate.artifacts.push(artifact.clone());
+        }
+        assert!(serde_json::to_string(&aggregate).is_err());
+    }
 }
