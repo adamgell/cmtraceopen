@@ -45,6 +45,77 @@ fn serialize_manifest(manifest: &Value) -> String {
     serde_json::to_string(manifest).expect("manifest serializes")
 }
 
+fn load_expected(scenario: &str) -> Value {
+    let path = intake_root().join(scenario).join("expected.json");
+    let json = std::fs::read_to_string(path).expect("expected intake output is readable");
+    serde_json::from_str(&json).expect("expected intake output is valid JSON")
+}
+
+fn opaque_handle(prefix: &str, ordinal: usize) -> String {
+    format!("{prefix}{ordinal:064x}")
+}
+
+fn bounded_manifest(
+    artifact_count: usize,
+    byte_limit: u64,
+) -> (String, Vec<SccmServerArtifactPayload>) {
+    let capture_host = opaque_handle("cmtraceopen.host.sha256.v1:", 1);
+    let site_code = opaque_handle("cmtraceopen.site.sha256.v1:", 1);
+    let producer_host = opaque_handle("cmtraceopen.host.sha256.v1:", 2);
+    let mut artifacts = Vec::with_capacity(artifact_count);
+    let mut payloads = Vec::with_capacity(artifact_count);
+
+    for ordinal in 0..artifact_count {
+        let artifact_id = opaque_handle("cmtraceopen.artifact.sha256.v1:", ordinal);
+        artifacts.push(json!({
+            "artifactId": artifact_id.clone(),
+            "producerRole": "managementPoint",
+            "producerHostHandle": producer_host.clone(),
+            "sourceId": "server-mp-policy",
+            "sourceKind": "ccmLog",
+            "sourceVersion": "5.00.9999.9999",
+            "originalPath": "REDACTED",
+            "originalBasename": "MP_GetPolicy.log",
+            "configuredPathProvenance": {
+                "state": "configured",
+                "pathFingerprint": opaque_handle("cmtraceopen.path.sha256.v1:", ordinal),
+            },
+            "rotation": {
+                "kind": "current",
+                "lineageId": opaque_handle("cmtraceopen.lineage.sha256.v1:", ordinal),
+            },
+            "captureState": "captured",
+            "encoding": "utf-8",
+            "collectionLimit": { "byteLimit": byte_limit, "limitApplied": false },
+            "collectedUtc": "2026-07-30T00:03:00Z",
+            "relativePath": format!(
+                "evidence/sccm/server/management-point/server-mp-policy/root-{ordinal:08x}/current/MP_GetPolicy.log"
+            ),
+            "bytesCopied": 0,
+        }));
+        payloads.push(SccmServerArtifactPayload {
+            manifest_artifact_id: artifact_id,
+            bytes: Vec::new(),
+        });
+    }
+
+    (
+        serde_json::to_string(&json!({
+            "sccmManifestVersion": 1,
+            "syntheticFixture": false,
+            "bundleRole": "server",
+            "topology": {
+                "captureHost": capture_host,
+                "siteCode": site_code,
+                "rolesObserved": ["managementPoint"],
+            },
+            "artifacts": artifacts,
+        }))
+        .expect("bounded manifest serializes"),
+        payloads,
+    )
+}
+
 fn assert_unsafe_mutation_is_rejected(
     scenario: &str,
     marker: &str,
@@ -756,9 +827,9 @@ fn server_intake_exercises_role_state_rotation_and_privacy_matrix() {
             .map(|artifact| artifact.rotation.clone())
             .collect::<Vec<_>>(),
         vec![
-            Some(SccmRotation::LoUnderscore),
-            Some(SccmRotation::Numbered(2)),
             Some(SccmRotation::Timestamped("20260729-235700".to_owned())),
+            Some(SccmRotation::Numbered(2)),
+            Some(SccmRotation::LoUnderscore),
             Some(SccmRotation::Current),
         ]
     );
@@ -787,4 +858,371 @@ fn server_intake_exercises_role_state_rotation_and_privacy_matrix() {
             SccmRole::SoftwareUpdatePoint,
         ]
     );
+}
+
+#[test]
+fn server_intake_marks_an_incomplete_tail_as_a_parse_gap_even_after_valid_evidence() {
+    let (manifest_json, mut payloads) = load_bundle("multiline");
+    let mut manifest = manifest_value(&manifest_json);
+    payloads[0]
+        .bytes
+        .extend_from_slice(b"\n<![LOG[SYNTHETIC FIXTURE incomplete rotation tail");
+    manifest["artifacts"][0]["bytesCopied"] = Value::from(payloads[0].bytes.len() as u64);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("complete evidence plus a partial tail remains assessable");
+
+    assert_eq!(
+        assessment.evidence.len(),
+        1,
+        "the complete record is retained"
+    );
+    assert_eq!(
+        assessment.artifacts[0].state,
+        SccmCoverageState::ParseFailed,
+        "the unmatched tail is an explicit parse gap"
+    );
+    assert_eq!(assessment.next_artifact_requests.len(), 1);
+}
+
+#[test]
+fn server_intake_keeps_a_zero_byte_capture_distinct_from_parse_failure() {
+    let (manifest_json, mut payloads) = load_bundle("multiline");
+    let mut manifest = manifest_value(&manifest_json);
+    payloads[0].bytes.clear();
+    manifest["artifacts"][0]["bytesCopied"] = Value::from(0);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("a bounded zero-byte capture remains valid capture provenance");
+
+    assert_eq!(assessment.artifacts[0].state, SccmCoverageState::Captured);
+    assert_eq!(assessment.coverage[0].state, SccmCoverageState::Captured);
+    assert!(assessment.evidence.is_empty());
+    assert!(assessment.next_artifact_requests.is_empty());
+}
+
+#[test]
+fn server_intake_decodes_declared_utf16le_ccm_payloads() {
+    let (manifest_json, mut payloads) = load_bundle("multiline");
+    let mut manifest = manifest_value(&manifest_json);
+    let content = String::from_utf8(payloads[0].bytes.clone()).expect("fixture is UTF-8");
+    let mut utf16le = vec![0xff, 0xfe];
+    for unit in content.encode_utf16() {
+        utf16le.extend_from_slice(&unit.to_le_bytes());
+    }
+    payloads[0].bytes = utf16le;
+    manifest["artifacts"][0]["encoding"] = Value::String("utf-16le".to_owned());
+    manifest["artifacts"][0]["bytesCopied"] = Value::from(payloads[0].bytes.len() as u64);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the declared UTF-16LE contract is decoded");
+
+    assert_eq!(assessment.artifacts[0].state, SccmCoverageState::Captured);
+    assert_eq!(assessment.evidence.len(), 1);
+    assert!(assessment.evidence[0].message.contains("SYNTHETIC FIXTURE"));
+}
+
+#[test]
+fn server_intake_decodes_declared_windows_1252_ccm_payloads() {
+    let (manifest_json, mut payloads) = load_bundle("multiline");
+    let mut manifest = manifest_value(&manifest_json);
+    let marker = b"SYNTHETIC FIXTURE";
+    let marker_start = payloads[0]
+        .bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("fixture contains its synthetic marker");
+    let marker_end = marker_start + marker.len();
+    let mut windows_1252 = payloads[0].bytes[..marker_end].to_vec();
+    windows_1252.extend_from_slice(b" caf");
+    windows_1252.push(0xe9);
+    windows_1252.push(b' ');
+    windows_1252.push(0x80);
+    windows_1252.extend_from_slice(&payloads[0].bytes[marker_end..]);
+    payloads[0].bytes = windows_1252;
+    manifest["artifacts"][0]["encoding"] = Value::String("windows-1252".to_owned());
+    manifest["artifacts"][0]["bytesCopied"] = Value::from(payloads[0].bytes.len() as u64);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the declared Windows-1252 contract is decoded");
+
+    assert_eq!(assessment.artifacts[0].state, SccmCoverageState::Captured);
+    assert_eq!(assessment.evidence.len(), 1);
+    assert!(assessment.evidence[0].message.contains("café €"));
+}
+
+#[test]
+fn server_intake_keeps_unknown_encoding_as_unsupported_coverage() {
+    let (manifest_json, payloads) = load_bundle("multiline");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["encoding"] = Value::String("unknown".to_owned());
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("unknown encoding is retained without guessing a decoder");
+
+    assert_eq!(
+        assessment.artifacts[0].state,
+        SccmCoverageState::Unsupported
+    );
+    assert!(!assessment.artifacts[0].parser_eligible);
+    assert!(assessment.evidence.is_empty());
+    assert_eq!(assessment.next_artifact_requests.len(), 1);
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    assert_eq!(
+        serialized["artifacts"][0]["captureProvenance"]["encoding"],
+        "unknown"
+    );
+}
+
+#[test]
+fn server_intake_retains_unsupported_source_provenance() {
+    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
+    let assessment = assess_server_intake(&manifest_json, &payloads)
+        .expect("unsupported source remains assessable");
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    let artifact = artifact_json(&serialized, "unknown-db-export");
+
+    assert_eq!(artifact["sourceId"], "unknown-db-supplement");
+    assert_eq!(artifact["sourceKind"], "unknown");
+    assert_eq!(artifact["family"], "unknown-db-supplement");
+    assert_eq!(artifact["originalBasename"], "synthetic-db-export.txt");
+    assert_eq!(artifact["rotationLineageHandle"], "unknown-db-export");
+    assert_eq!(
+        serialized["coverage"][0]["sourceId"],
+        "unknown-db-supplement"
+    );
+}
+
+#[test]
+fn server_intake_tolerates_future_safe_unsupported_source_labels() {
+    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["sourceId"] = Value::String("future-server-supplement".to_owned());
+    manifest["artifacts"][0]["sourceKind"] = Value::String("futureSupplement".to_owned());
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("a privacy-safe future unsupported label remains forward-compatible");
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    let artifact = artifact_json(&serialized, "unknown-db-export");
+
+    assert_eq!(artifact["sourceId"], "future-server-supplement");
+    assert_eq!(artifact["sourceKind"], "futureSupplement");
+    assert_eq!(artifact["family"], "future-server-supplement");
+}
+
+#[test]
+fn server_intake_bounds_each_declared_artifact_limit() {
+    let (manifest_json, payloads) = bounded_manifest(1, 268_435_457);
+
+    assert!(
+        assess_server_intake(&manifest_json, &payloads).is_err(),
+        "a single artifact may not declare more than 256 MiB"
+    );
+}
+
+#[test]
+fn server_intake_bounds_manifest_artifact_count() {
+    let (manifest_json, payloads) = bounded_manifest(513, 4_096);
+
+    assert!(
+        assess_server_intake(&manifest_json, &payloads).is_err(),
+        "a manifest may not force unbounded per-artifact work"
+    );
+}
+
+#[test]
+fn server_intake_bounds_aggregate_declared_bytes() {
+    let (manifest_json, payloads) = bounded_manifest(5, 268_435_456);
+
+    assert!(
+        assess_server_intake(&manifest_json, &payloads).is_err(),
+        "aggregate declared collection work may not exceed 1 GiB"
+    );
+}
+
+#[test]
+fn server_intake_rejects_evidence_later_than_collection_time() {
+    let (manifest_json, payloads) = load_bundle("multiline");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["collectedUtc"] = Value::String("2026-07-30T00:02:58Z".to_owned());
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+        "a comparable record instant cannot be later than collection"
+    );
+}
+
+#[test]
+fn server_intake_rejects_incoherent_configured_path_class() {
+    let (manifest_json, payloads) = load_bundle("absent-dp");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["configuredPathProvenance"]["pathClass"] =
+        Value::String("nonDefault".to_owned());
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+        "a default candidate cannot claim non-default configured provenance"
+    );
+}
+
+#[test]
+fn server_intake_requires_producer_host_for_declared_sources() {
+    let (manifest_json, payloads) = load_bundle("multiline");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["producerHostHandle"] = Value::Null;
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+        "declared server evidence must retain its producer-host provenance"
+    );
+}
+
+#[test]
+fn server_intake_exercises_committed_expected_contracts() {
+    let mut scenarios = std::fs::read_dir(intake_root())
+        .expect("intake fixture root is readable")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("expected.json").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    scenarios.sort();
+
+    for scenario in scenarios {
+        let expected = load_expected(&scenario);
+        let (manifest_json, payloads) = load_bundle(&scenario);
+        let assessment = assess_server_intake(&manifest_json, &payloads)
+            .unwrap_or_else(|error| panic!("{scenario} should be assessed: {error}"));
+        let actual = serde_json::to_value(&assessment).expect("assessment serializes");
+
+        assert_eq!(
+            actual["schemaVersion"], expected["pre318ExpectedVersion"],
+            "{scenario}: expected contract version"
+        );
+
+        for key in [
+            "canonicalArtifactIds",
+            "canonicalRotationArtifactIds",
+            "retainedUnclassifiedArtifactIds",
+        ] {
+            if let Some(expected_ids) = expected.get(key) {
+                let actual_ids = Value::Array(
+                    actual["artifacts"]
+                        .as_array()
+                        .expect("assessment artifacts are an array")
+                        .iter()
+                        .map(|artifact| artifact["artifactId"].clone())
+                        .collect(),
+                );
+                assert_eq!(actual_ids, *expected_ids, "{scenario}: {key}");
+            }
+        }
+
+        let expected_coverage = expected["coverage"]
+            .as_array()
+            .expect("expected coverage is an array");
+        let actual_coverage = actual["coverage"]
+            .as_array()
+            .expect("assessment coverage is an array");
+        assert_eq!(
+            actual_coverage.len(),
+            expected_coverage.len(),
+            "{scenario}: coverage row count"
+        );
+        for (actual_row, expected_row) in actual_coverage.iter().zip(expected_coverage) {
+            for key in ["producerRole", "workflowSubjectRole", "sourceId", "state"] {
+                if let Some(expected_value) = expected_row.get(key) {
+                    assert_eq!(
+                        &actual_row[key], expected_value,
+                        "{scenario}: coverage {key}"
+                    );
+                }
+            }
+        }
+
+        if let Some(expected_provenance) = expected.get("artifactProvenance") {
+            for expected_artifact in expected_provenance
+                .as_array()
+                .expect("artifact provenance is an array")
+            {
+                let artifact_id = expected_artifact["artifactId"]
+                    .as_str()
+                    .expect("expected artifactId is a string");
+                let actual_artifact = artifact_json(&actual, artifact_id);
+                for (expected_key, actual_value) in [
+                    (
+                        "encoding",
+                        &actual_artifact["captureProvenance"]["encoding"],
+                    ),
+                    (
+                        "byteLimit",
+                        &actual_artifact["captureProvenance"]["byteLimit"],
+                    ),
+                    (
+                        "limitApplied",
+                        &actual_artifact["captureProvenance"]["limitApplied"],
+                    ),
+                    ("bytesCopied", &actual_artifact["bytesCopied"]),
+                    ("relativePath", &actual_artifact["relativePath"]),
+                ] {
+                    if let Some(expected_value) = expected_artifact.get(expected_key) {
+                        assert_eq!(
+                            actual_value, expected_value,
+                            "{scenario}: {artifact_id} {expected_key}"
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(expected_evidence) = expected.get("evidence") {
+            for expected_row in expected_evidence
+                .as_array()
+                .expect("expected evidence is an array")
+            {
+                let artifact_id = expected_row["artifactId"]
+                    .as_str()
+                    .expect("expected evidence artifactId is a string");
+                let records = actual["evidence"]
+                    .as_array()
+                    .expect("assessment evidence is an array")
+                    .iter()
+                    .filter(|row| row["reference"]["artifactId"] == artifact_id)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    records.len() as u64,
+                    expected_row["logicalRecordCount"]
+                        .as_u64()
+                        .expect("logicalRecordCount is an integer"),
+                    "{scenario}: logical record count"
+                );
+                if let Some(line_range) = expected_row.get("lineRange") {
+                    assert_eq!(records[0]["reference"]["lineStart"], line_range["start"]);
+                    assert_eq!(records[0]["reference"]["lineEnd"], line_range["end"]);
+                }
+            }
+        }
+
+        if let Some(expected_path) = expected.get("configuredPathProvenance") {
+            let artifact_id = expected["artifactId"]
+                .as_str()
+                .expect("configured-path expected artifactId is a string");
+            let actual_artifact = artifact_json(&actual, artifact_id);
+            assert_eq!(
+                actual_artifact["configuredPathState"],
+                expected_path["state"]
+            );
+            assert_eq!(
+                actual_artifact["configuredPathClass"],
+                expected_path["pathClass"]
+            );
+            assert_eq!(
+                actual_artifact["pathFingerprint"],
+                expected_path["pathFingerprint"]
+            );
+        }
+
+        if let Some(expected_roles) = expected.get("rolesObserved") {
+            assert_eq!(actual["topology"]["rolesObserved"], *expected_roles);
+        }
+    }
 }

@@ -12,6 +12,13 @@ use crate::sccm::{
 
 use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
 
+/// Keep parser-side work bounded even when the manifest did not come from the
+/// native collector. These match the existing bounded bundle intake envelope.
+pub const MAX_SCCM_SERVER_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_SCCM_SERVER_MANIFEST_ARTIFACTS: usize = 512;
+pub const MAX_SCCM_SERVER_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES: u64 = 1024 * 1024 * 1024;
+
 type PathFingerprintKey = (
     String,
     Option<String>,
@@ -67,6 +74,7 @@ pub struct SccmServerArtifactAssessment {
     pub workflow_subject_role: Option<SccmRole>,
     pub workflow_subject_handle: Option<String>,
     pub source_id: String,
+    pub source_kind: String,
     pub family: SccmArtifactFamily,
     pub original_basename: Option<String>,
     pub rotation: Option<SccmRotation>,
@@ -140,6 +148,8 @@ pub enum SccmServerIntakeError {
     PayloadLengthMismatch,
     #[error("server artifact payload encoding is unsupported or malformed")]
     InvalidPayloadEncoding,
+    #[error("server manifest exceeds a bounded intake limit")]
+    ManifestLimitExceeded,
 }
 
 pub fn normalize_server_bundle(
@@ -153,6 +163,9 @@ pub fn assess_server_intake(
     manifest_json: &str,
     payloads: &[SccmServerArtifactPayload],
 ) -> Result<SccmServerIntakeAssessment, SccmServerIntakeError> {
+    if manifest_json.len() > MAX_SCCM_SERVER_MANIFEST_BYTES {
+        return Err(SccmServerIntakeError::ManifestLimitExceeded);
+    }
     let manifest: RawServerManifest = serde_json::from_str(manifest_json)
         .map_err(|_| SccmServerIntakeError::MalformedManifest)?;
     if manifest.sccm_manifest_version != 1 {
@@ -161,6 +174,7 @@ pub fn assess_server_intake(
     if manifest.bundle_role != "server" {
         return Err(SccmServerIntakeError::InvalidBundleRole);
     }
+    validate_manifest_bounds(&manifest, payloads)?;
 
     let topology = normalize_topology(&manifest)?;
     let mut payload_by_id = BTreeMap::new();
@@ -338,6 +352,50 @@ impl PreparedArtifact {
     }
 }
 
+fn validate_manifest_bounds(
+    manifest: &RawServerManifest,
+    payloads: &[SccmServerArtifactPayload],
+) -> Result<(), SccmServerIntakeError> {
+    if manifest.artifacts.len() > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS
+        || payloads.len() > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS
+    {
+        return Err(SccmServerIntakeError::ManifestLimitExceeded);
+    }
+
+    let mut declared_bytes = 0u64;
+    for artifact in &manifest.artifacts {
+        if artifact.bytes_copied > MAX_SCCM_SERVER_ARTIFACT_BYTES {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
+        if let Some(limit) = &artifact.collection_limit {
+            if limit.byte_limit > MAX_SCCM_SERVER_ARTIFACT_BYTES {
+                return Err(SccmServerIntakeError::ManifestLimitExceeded);
+            }
+            declared_bytes = declared_bytes
+                .checked_add(limit.byte_limit)
+                .ok_or(SccmServerIntakeError::ManifestLimitExceeded)?;
+            if declared_bytes > MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES {
+                return Err(SccmServerIntakeError::ManifestLimitExceeded);
+            }
+        }
+    }
+
+    let mut payload_bytes = 0u64;
+    for payload in payloads {
+        payload_bytes = payload_bytes
+            .checked_add(
+                u64::try_from(payload.bytes.len())
+                    .map_err(|_| SccmServerIntakeError::ManifestLimitExceeded)?,
+            )
+            .ok_or(SccmServerIntakeError::ManifestLimitExceeded)?;
+        if payload_bytes > MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES {
+            return Err(SccmServerIntakeError::ManifestLimitExceeded);
+        }
+    }
+
+    Ok(())
+}
+
 fn normalize_topology(
     manifest: &RawServerManifest,
 ) -> Result<SccmServerTopologyAssessment, SccmServerIntakeError> {
@@ -404,10 +462,13 @@ fn normalize_artifact(
     canonical_artifact_identities: &mut BTreeSet<CanonicalArtifactIdentity>,
     payload_by_id: &BTreeMap<&str, &[u8]>,
 ) -> Result<PreparedArtifact, SccmServerIntakeError> {
+    let unsupported_unknown = artifact.capture_state == SccmCoverageState::Unsupported
+        && artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
     let source_version =
         normalize_source_version(artifact.source_version.as_deref(), synthetic_fixture)?;
     if !safe_manifest_artifact_id(&artifact.artifact_id, synthetic_fixture)
-        || !safe_source_id(&artifact.source_id)
+        || !safe_source_id(&artifact.source_id, unsupported_unknown)
+        || !safe_source_kind(&artifact.source_kind, unsupported_unknown)
         || !safe_lineage_id(&artifact.rotation.lineage_id, synthetic_fixture)
         || !safe_path_fingerprint(
             &artifact.configured_path_provenance.path_fingerprint,
@@ -427,13 +488,13 @@ fn normalize_artifact(
             synthetic_fixture,
             "subject",
         )
+        || (!unsupported_unknown && artifact.producer_host_handle.is_none())
+        || (unsupported_unknown && !safe_public_basename(&artifact.original_basename))
     {
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
 
     let producer_is_observed = roles_observed.contains(&artifact.producer_role);
-    let unsupported_unknown = artifact.capture_state == SccmCoverageState::Unsupported
-        && artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
     if (!producer_is_observed && !unsupported_unknown)
         || (producer_is_observed && !is_declared_server_role(&artifact.producer_role))
     {
@@ -459,7 +520,7 @@ fn normalize_artifact(
         &artifact.original_basename,
     );
 
-    let (family, original_basename, rotation, parser_eligible) =
+    let (family, original_basename, rotation, mut parser_eligible) =
         if let Some((spec, classified)) = classification {
             let family =
                 expected_family(spec.source_id).ok_or(SccmServerIntakeError::InvalidArtifact)?;
@@ -482,9 +543,9 @@ fn normalize_artifact(
             }
         } else if unsupported_unknown {
             (
-                SccmArtifactFamily::Unknown("unsupported".to_owned()),
-                None,
-                None,
+                SccmArtifactFamily::Unknown(artifact.source_id.clone()),
+                Some(artifact.original_basename.clone()),
+                parse_retained_rotation(&artifact.rotation)?,
                 false,
             )
         } else {
@@ -555,6 +616,11 @@ fn normalize_artifact(
         Some("nonDefault") => Some(SccmServerConfiguredPathClass::NonDefault),
         Some(_) => return Err(SccmServerIntakeError::InvalidArtifact),
     };
+    if configured_path_class.is_some()
+        && configured_path_state != SccmServerConfiguredPathState::Configured
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
     let collected_at_utc = normalize_collected_utc(&artifact.collected_utc)?;
     let relative_path = validate_relative_path(
         artifact.relative_path.clone(),
@@ -573,32 +639,50 @@ fn normalize_artifact(
     let mut state = artifact.capture_state.clone();
     if artifact.capture_state == SccmCoverageState::Captured && parser_eligible {
         let bytes = bytes.ok_or(SccmServerIntakeError::MissingPayload)?;
-        if artifact.encoding.as_deref() != Some("utf-8") {
-            return Err(SccmServerIntakeError::InvalidPayloadEncoding);
-        }
-        let content = std::str::from_utf8(bytes)
-            .map_err(|_| SccmServerIntakeError::InvalidPayloadEncoding)?;
-        evidence = normalize_ccm_artifact(
-            SccmArtifact {
-                artifact_id: artifact.artifact_id.clone(),
-                display_name: original_basename
-                    .clone()
-                    .ok_or(SccmServerIntakeError::InvalidArtifact)?,
-                original_path: None,
-                host: artifact.producer_host_handle.clone(),
-                role: artifact.producer_role.clone(),
-                configmgr_version: source_version.clone(),
-                collected_at_utc: Some(collected_at_utc.clone()),
-                rotation: rotation
-                    .clone()
-                    .ok_or(SccmServerIntakeError::InvalidArtifact)?,
-                coverage: artifact.capture_state.clone(),
-                encoding: artifact.encoding.clone(),
-            },
-            content,
-        );
-        if evidence.is_empty() {
-            state = SccmCoverageState::ParseFailed;
+        let encoding = artifact
+            .encoding
+            .as_deref()
+            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+        if let Some(content) = decode_server_payload(bytes, encoding)? {
+            let display_name = original_basename
+                .clone()
+                .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+            let (_, parse_errors) =
+                crate::parser::ccm::parse_content(&content, &display_name, None);
+            evidence = normalize_ccm_artifact(
+                SccmArtifact {
+                    artifact_id: artifact.artifact_id.clone(),
+                    display_name,
+                    original_path: None,
+                    host: artifact.producer_host_handle.clone(),
+                    role: artifact.producer_role.clone(),
+                    configmgr_version: source_version.clone(),
+                    collected_at_utc: Some(collected_at_utc.clone()),
+                    rotation: rotation
+                        .clone()
+                        .ok_or(SccmServerIntakeError::InvalidArtifact)?,
+                    coverage: artifact.capture_state.clone(),
+                    encoding: artifact.encoding.clone(),
+                },
+                &content,
+            );
+            let collected_utc_millis = DateTime::parse_from_rfc3339(&collected_at_utc)
+                .map_err(|_| SccmServerIntakeError::InvalidArtifact)?
+                .timestamp_millis();
+            if evidence.iter().any(|record| {
+                record
+                    .timestamp
+                    .utc_millis
+                    .is_some_and(|instant| instant > collected_utc_millis)
+            }) {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+            if parse_errors > 0 {
+                state = SccmCoverageState::ParseFailed;
+            }
+        } else {
+            state = SccmCoverageState::Unsupported;
+            parser_eligible = false;
         }
     }
 
@@ -611,11 +695,8 @@ fn normalize_artifact(
             workflow_subject_handle: artifact
                 .workflow_subject
                 .and_then(|subject| subject.instance_handle),
-            source_id: if unsupported_unknown {
-                "unsupported".to_owned()
-            } else {
-                artifact.source_id
-            },
+            source_id: artifact.source_id,
+            source_kind: artifact.source_kind,
             family,
             original_basename,
             rotation,
@@ -700,6 +781,43 @@ fn validate_payload_contract<'a>(
         return Err(SccmServerIntakeError::UnexpectedPayload);
     }
     Ok((None, None))
+}
+
+fn decode_server_payload(
+    bytes: &[u8],
+    encoding: &str,
+) -> Result<Option<String>, SccmServerIntakeError> {
+    match encoding {
+        "utf-8" => {
+            let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+            std::str::from_utf8(bytes)
+                .map(|content| Some(content.to_owned()))
+                .map_err(|_| SccmServerIntakeError::InvalidPayloadEncoding)
+        }
+        "utf-16le" => {
+            let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(bytes);
+            if bytes.len() % 2 != 0 {
+                return Err(SccmServerIntakeError::InvalidPayloadEncoding);
+            }
+            let units = bytes
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect::<Vec<_>>();
+            String::from_utf16(&units)
+                .map(Some)
+                .map_err(|_| SccmServerIntakeError::InvalidPayloadEncoding)
+        }
+        "windows-1252" => {
+            let (content, _, had_errors) = encoding_rs::WINDOWS_1252.decode(bytes);
+            if had_errors {
+                Err(SccmServerIntakeError::InvalidPayloadEncoding)
+            } else {
+                Ok(Some(content.into_owned()))
+            }
+        }
+        "unknown" => Ok(None),
+        _ => Err(SccmServerIntakeError::InvalidPayloadEncoding),
+    }
 }
 
 fn validate_relative_path(
@@ -853,6 +971,15 @@ fn parse_declared_rotation(
     Ok(Some(parsed))
 }
 
+fn parse_retained_rotation(
+    rotation: &RawServerRotation,
+) -> Result<Option<SccmRotation>, SccmServerIntakeError> {
+    if rotation.kind == "none" && rotation.value.is_none() {
+        return Ok(None);
+    }
+    parse_declared_rotation(rotation)
+}
+
 fn parse_configured_path_state(
     value: &str,
 ) -> Result<SccmServerConfiguredPathState, SccmServerIntakeError> {
@@ -913,6 +1040,7 @@ fn request_for_gap(
         SccmCoverageState::Absent
             | SccmCoverageState::AccessDenied
             | SccmCoverageState::Capped
+            | SccmCoverageState::Unsupported
             | SccmCoverageState::ParseFailed
     ) {
         return None;
@@ -1006,7 +1134,7 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
 }
 
-fn safe_source_id(value: &str) -> bool {
+fn safe_source_id(value: &str, allow_unknown: bool) -> bool {
     matches!(
         value,
         "server-sitecomp"
@@ -1017,7 +1145,27 @@ fn safe_source_id(value: &str) -> bool {
             | "server-dp-distribution"
             | "server-sup-sync"
             | "unknown-db-supplement"
-    )
+    ) || (allow_unknown
+        && (1..=64).contains(&value.len())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        }))
+}
+
+fn safe_source_kind(value: &str, allow_unknown: bool) -> bool {
+    matches!(value, "ccmLog" | "iisW3c" | "structuredSupplement")
+        || (allow_unknown
+            && (1..=64).contains(&value.len())
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+}
+
+fn safe_public_basename(value: &str) -> bool {
+    (1..=255).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
@@ -1150,9 +1298,11 @@ fn coverage_sort_key(state: &SccmCoverageState) -> &'static str {
 
 fn rotation_sort_key(rotation: Option<&SccmRotation>) -> String {
     match rotation {
-        Some(SccmRotation::LoUnderscore) => "0-lo-underscore".to_owned(),
-        Some(SccmRotation::Numbered(value)) => format!("1-numbered-{value:010}"),
-        Some(SccmRotation::Timestamped(value)) => format!("2-timestamped-{value}"),
+        Some(SccmRotation::Timestamped(value)) => format!("0-timestamped-{value}"),
+        Some(SccmRotation::Numbered(value)) => {
+            format!("1-numbered-{:010}", u32::MAX - value)
+        }
+        Some(SccmRotation::LoUnderscore) => "2-lo-underscore".to_owned(),
         Some(SccmRotation::Current) => "3-current".to_owned(),
         Some(SccmRotation::Unknown(_)) => "4-unknown".to_owned(),
         None => "5-not-applicable".to_owned(),
