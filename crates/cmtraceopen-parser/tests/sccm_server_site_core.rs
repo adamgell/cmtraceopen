@@ -11,40 +11,40 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const HEALTHY_SITECOMP: &str = include_str!(
-    "fixtures/sccm/server/site_core/healthy/evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
+    "fixtures/sccm/server/site_core/healthy/evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log"
 );
 const HEALTHY_STATUS: &str = include_str!(
-    "fixtures/sccm/server/site_core/healthy/evidence/sccm/server/site-core/status/current/statmgr.log"
+    "fixtures/sccm/server/site_core/healthy/evidence/sccm/server/site-server/server-status/current/statmgr.log"
 );
 const COMPONENT_FAILURE: &str = include_str!(
-    "fixtures/sccm/server/site_core/component-failure/evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
+    "fixtures/sccm/server/site_core/component-failure/evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log"
 );
 const INBOX_BACKLOG: &str = include_str!(
-    "fixtures/sccm/server/site_core/inbox-backlog/evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
+    "fixtures/sccm/server/site_core/inbox-backlog/evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log"
 );
 const STATUS_FAILURE_SITECOMP: &str = include_str!(
-    "fixtures/sccm/server/site_core/status-processing-failure/evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
+    "fixtures/sccm/server/site_core/status-processing-failure/evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log"
 );
 const STATUS_FAILURE_STATUS: &str = include_str!(
-    "fixtures/sccm/server/site_core/status-processing-failure/evidence/sccm/server/site-core/status/current/statmgr.log"
+    "fixtures/sccm/server/site_core/status-processing-failure/evidence/sccm/server/site-server/server-status/current/statmgr.log"
 );
 const RECOVERY_SITECOMP: &str = include_str!(
-    "fixtures/sccm/server/site_core/recovery/evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
+    "fixtures/sccm/server/site_core/recovery/evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log"
 );
 const RECOVERY_STATUS: &str = include_str!(
-    "fixtures/sccm/server/site_core/recovery/evidence/sccm/server/site-core/status/current/statmgr.log"
+    "fixtures/sccm/server/site_core/recovery/evidence/sccm/server/site-server/server-status/current/statmgr.log"
 );
 const CONTRADICTORY_SITECOMP: &str = include_str!(
-    "fixtures/sccm/server/site_core/contradictory/evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
+    "fixtures/sccm/server/site_core/contradictory/evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log"
 );
 const CONTRADICTORY_STATUS: &str = include_str!(
-    "fixtures/sccm/server/site_core/contradictory/evidence/sccm/server/site-core/status/current/statmgr.log"
+    "fixtures/sccm/server/site_core/contradictory/evidence/sccm/server/site-server/server-status/current/statmgr.log"
 );
 const ROTATION_CURRENT_FRAGMENT: &str = include_str!(
-    "fixtures/sccm/server/site_core/rotation-boundary/evidence/sccm/server/site-core/sitecomp/current/sitecomp.log"
+    "fixtures/sccm/server/site_core/rotation-boundary/evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log"
 );
 const ROTATION_LO_FRAGMENT: &str = include_str!(
-    "fixtures/sccm/server/site_core/rotation-boundary/evidence/sccm/server/site-core/sitecomp/lo_/sitecomp.lo_"
+    "fixtures/sccm/server/site_core/rotation-boundary/evidence/sccm/server/site-server/server-sitecomp/lo_/sitecomp.lo_"
 );
 const OUT_OF_ORDER_SITECOMP: &str = concat!(
     "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-ORDER-001 statusId=SC_COMPONENT_START_OK outcome=success terminal=false]LOG]!><time=\"14:00:04.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"101\" file=\"sitecomp.cpp:101\">\n",
@@ -468,8 +468,13 @@ fn terminal_component_and_status_outcomes_require_exact_cited_facts() {
         component.results[0].finding_class,
         Some(SccmFindingClass::ConfirmedFailure)
     );
-    assert_eq!(component.findings.len(), 1);
-    assert_eq!(component.findings[0].finding.terminal_evidence.len(), 1);
+    assert_eq!(component.findings.len(), 2);
+    let component_failure = component
+        .findings
+        .iter()
+        .find(|finding| finding.finding.class == SccmFindingClass::ConfirmedFailure)
+        .expect("confirmed component failure finding");
+    assert_eq!(component_failure.finding.terminal_evidence.len(), 1);
     assert!(component.results[0]
         .evidence
         .iter()
@@ -858,10 +863,38 @@ fn closed_profile_schema_rejects_arbitrary_keys_and_retains_safe_unknown_facts()
     let unknown = analyze_site_core(&unknown_status);
     let unknown_wire = serde_json::to_string(&unknown).expect("analysis serializes");
     assert!(unknown_wire.contains(&rejected_id));
-    assert!(unknown.unlinked_observations.iter().any(|observation| {
-        observation.finding_class == SccmFindingClass::Symptom
-            || observation.finding_class == SccmFindingClass::InsufficientEvidence
-    }));
+    let observation = unknown
+        .unlinked_observations
+        .iter()
+        .find(|observation| {
+            observation
+                .evidence
+                .iter()
+                .any(|evidence| evidence.entry_id == rejected_id)
+        })
+        .expect("rejected record remains a source-local observation");
+    assert_eq!(observation.finding_class, SccmFindingClass::Symptom);
+    assert_eq!(observation.coverage_gap_artifact_ids, Vec::<String>::new());
+    assert_eq!(observation.next_artifacts.len(), 1);
+    assert_eq!(observation.next_artifacts[0].candidates.len(), 1);
+    assert_eq!(
+        observation.next_artifacts[0].candidates[0].basename,
+        "sitecomp.log"
+    );
+    assert_eq!(
+        observation.next_artifacts[0].candidates[0].rotation,
+        "current"
+    );
+    let finding = unknown
+        .findings
+        .iter()
+        .find(|finding| finding.subject_id == observation.observation_id)
+        .expect("rejected record has a conservative finding");
+    assert_eq!(
+        finding.finding.title,
+        "Unrecognized site core profile record"
+    );
+    assert!(finding.finding.coverage_gaps.is_empty());
 }
 
 #[test]
@@ -972,7 +1005,7 @@ fn invalid_finding_inputs_become_explicit_gaps_instead_of_clearing_class() {
 
 #[test]
 fn committed_site_core_corpus_exactly_matches_every_serialized_output() {
-    for scenario in [
+    let scenarios = [
         "healthy",
         "component-failure",
         "inbox-backlog",
@@ -982,8 +1015,12 @@ fn committed_site_core_corpus_exactly_matches_every_serialized_output() {
         "rotation-boundary",
         "incomplete",
         "malformed",
-    ] {
-        let (assessment, expected) = load_corpus_scenario(scenario);
+    ];
+    let corpus = scenarios
+        .iter()
+        .map(|scenario| load_corpus_scenario(scenario))
+        .collect::<Vec<_>>();
+    for (scenario, (assessment, expected)) in scenarios.into_iter().zip(corpus) {
         assert_eq!(
             serde_json::to_value(analyze_site_core(&assessment))
                 .expect("site-core analysis serializes"),
