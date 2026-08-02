@@ -698,6 +698,26 @@ fn canonical_intake_adapter_admits_its_exact_synthetic_profile_version() {
 }
 
 #[test]
+fn canonical_intake_adapter_maps_captured_unspecified_fragment_to_complete() {
+    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let artifact = &assessment.artifacts[0];
+    assert_eq!(artifact.state, SccmCoverageState::Captured);
+    assert_eq!(artifact.truncated, None);
+    assert_eq!(
+        artifact.fragment_complete, None,
+        "canonical intake represents a full captured artifact without fragment flags"
+    );
+
+    let analysis = analyze_management_point_from_server_intake(&assessment)
+        .expect("the canonical captured artifact must enter MP reduction");
+    assert_eq!(
+        analysis.transactions.len(),
+        1,
+        "canonical captured completeness must not be mistaken for a partial fragment"
+    );
+}
+
+#[test]
 fn canonical_intake_adapter_rejects_self_attested_line_authority() {
     let mut assessment = load_canonical_intake("canonical-intake-policy-scope");
     let evidence = assessment
