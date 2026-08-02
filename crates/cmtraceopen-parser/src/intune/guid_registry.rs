@@ -10,7 +10,12 @@ use std::sync::OnceLock;
 
 pub(crate) fn app_id_json_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r#"\"AppId\"\s*:\s*\"([0-9a-fA-F-]{36})\""#).unwrap())
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"\"AppId\"\s*:\s*\"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\""#,
+        )
+        .unwrap()
+    })
 }
 pub(crate) fn app_name_json_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -801,5 +806,40 @@ mod tests {
             r#"Processing app: {"AppId":"script-你好","ApplicationName":"Contoso Script"}"#,
         )]);
         assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn spaced_app_id_fallback_rejects_malformed_guid_shapes() {
+        let malformed_values = [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "a1b2c3d-e5f67-890a-abcd-ef1234567890",
+        ];
+
+        for value in malformed_values {
+            let message = format!(
+                r#"Processing app: {{"AppId" : "{value}","ApplicationName":"Contoso App"}}"#
+            );
+            assert_eq!(extract_app_id(&message), None, "accepted {value}");
+
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert!(registry.is_empty(), "registered {value}");
+        }
+    }
+
+    #[test]
+    fn spaced_app_id_and_named_context_guid_fallback_remain_supported() {
+        let valid_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+
+        assert_eq!(
+            extract_app_id(&format!(r#"launch {{"AppId" : "{valid_guid}"}}"#)),
+            Some(valid_guid.to_string())
+        );
+        assert_eq!(
+            extract_app_id(&format!(
+                r#"Processing identity {valid_guid} for {{"ApplicationName":"Contoso App"}}"#
+            )),
+            Some(valid_guid.to_string())
+        );
     }
 }

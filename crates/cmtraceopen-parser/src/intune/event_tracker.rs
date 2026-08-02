@@ -591,7 +591,7 @@ fn extract_appworkload_event(
             .map(|m| m.as_str().to_string());
         let short = guid
             .as_deref()
-            .map(|g| g.get(..8).unwrap_or(g))
+            .map(|g| utf8_prefix(g, 8))
             .unwrap_or("unknown");
         let phase = if flags.sidecar_script_complete {
             "Complete"
@@ -1494,6 +1494,13 @@ fn short_guid(value: &str) -> &str {
     value
 }
 
+fn utf8_prefix(value: &str, max_chars: usize) -> &str {
+    value
+        .char_indices()
+        .nth(max_chars)
+        .map_or(value, |(byte_index, _)| &value[..byte_index])
+}
+
 fn contains_case_insensitive(value: &str, needle: &str) -> bool {
     contains_ascii_case_insensitive(value, needle)
 }
@@ -2035,7 +2042,7 @@ mod tests {
     }
 
     #[test]
-    fn sidecar_non_guid_multibyte_app_id_is_not_an_identity_or_panic() {
+    fn sidecar_non_guid_multibyte_app_id_is_not_an_identity() {
         let events = extract_events(
             &[line(
                 r#"SidecarScriptDetectionManager launch {"AppId":"aaaaaa你好"}"#,
@@ -2050,5 +2057,12 @@ mod tests {
         assert_eq!(events[0].event_type, IntuneEventType::PowerShellScript);
         assert_eq!(events[0].guid, None);
         assert_eq!(events[0].name, "Script Detection Running (unknown)");
+    }
+
+    #[test]
+    fn utf8_prefix_counts_characters_without_splitting_them() {
+        assert_eq!(utf8_prefix("aaaaaa你好世界", 8), "aaaaaa你好");
+        assert_eq!(utf8_prefix("a1b2c3d4-e5f6", 8), "a1b2c3d4");
+        assert_eq!(utf8_prefix("short", 8), "short");
     }
 }
