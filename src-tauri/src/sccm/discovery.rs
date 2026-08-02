@@ -237,10 +237,7 @@ fn validate_all_observation_conflicts(
             continue;
         }
         for right in input.observations.iter().skip(index + 1) {
-            if is_supported_observation(right)
-                && left.state != right.state
-                && same_physical_observation(left, right)
-            {
+            if left.state != right.state && same_physical_observation(left, right) {
                 return Err(SccmClientDiscoveryError::ConflictingObservation);
             }
         }
