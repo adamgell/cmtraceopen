@@ -478,7 +478,11 @@ pub enum SccmServerConfiguredPathClass {
 #[serde(rename_all = "camelCase")]
 pub struct SccmServerCoverage {
     pub producer_role: SccmRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer_host_handle: Option<String>,
     pub workflow_subject_role: Option<SccmRole>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_subject_handle: Option<String>,
     pub source_id: String,
     pub state: SccmCoverageState,
     pub artifact_ids: Vec<String>,
@@ -592,8 +596,10 @@ pub fn assess_server_intake(
 
     let mut artifacts = Vec::with_capacity(prepared.len());
     let mut evidence = Vec::new();
-    let mut coverage_by_key: BTreeMap<(String, String, String, String), SccmServerCoverage> =
-        BTreeMap::new();
+    let mut coverage_by_key: BTreeMap<
+        (String, String, String, String, String, String),
+        SccmServerCoverage,
+    > = BTreeMap::new();
     let mut request_keys = BTreeSet::new();
     let mut next_artifact_requests = Vec::new();
     let usable_source_keys = prepared
@@ -608,6 +614,7 @@ pub fn assess_server_intake(
         let artifact = prepared_artifact.assessment;
         let coverage_key = (
             role_sort_key(&artifact.producer_role).to_owned(),
+            artifact.producer_host_handle.clone().unwrap_or_default(),
             artifact.source_id.clone(),
             artifact
                 .workflow_subject_role
@@ -615,6 +622,7 @@ pub fn assess_server_intake(
                 .map(role_sort_key)
                 .unwrap_or_default()
                 .to_owned(),
+            artifact.workflow_subject_handle.clone().unwrap_or_default(),
             coverage_sort_key(&artifact.state).to_owned(),
         );
         coverage_by_key
@@ -622,7 +630,9 @@ pub fn assess_server_intake(
             .and_modify(|row| row.artifact_ids.push(artifact.artifact_id.clone()))
             .or_insert_with(|| SccmServerCoverage {
                 producer_role: artifact.producer_role.clone(),
+                producer_host_handle: artifact.producer_host_handle.clone(),
                 workflow_subject_role: artifact.workflow_subject_role.clone(),
+                workflow_subject_handle: artifact.workflow_subject_handle.clone(),
                 source_id: artifact.source_id.clone(),
                 state: artifact.state.clone(),
                 artifact_ids: vec![artifact.artifact_id.clone()],

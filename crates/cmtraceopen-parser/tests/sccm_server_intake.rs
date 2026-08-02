@@ -1078,6 +1078,7 @@ fn server_intake_coverage_binds_each_row_to_its_producer_host() {
             {
                 "producerRole": "managementPoint",
                 "producerHostHandle": "synthetic:host:mp-01",
+                "workflowSubjectRole": null,
                 "sourceId": "server-mp-policy",
                 "state": "captured",
                 "artifactIds": ["mp-policy-root-b-current"],
@@ -1085,6 +1086,7 @@ fn server_intake_coverage_binds_each_row_to_its_producer_host() {
             {
                 "producerRole": "managementPoint",
                 "producerHostHandle": "synthetic:host:site-01",
+                "workflowSubjectRole": null,
                 "sourceId": "server-mp-policy",
                 "state": "captured",
                 "artifactIds": ["mp-policy-root-a-current"],
@@ -1202,6 +1204,7 @@ fn server_intake_coverage_binds_each_row_to_its_workflow_subject() {
             {
                 "producerRole": "managementPoint",
                 "producerHostHandle": "synthetic:host:mp-01",
+                "workflowSubjectRole": null,
                 "sourceId": "server-mp-policy",
                 "state": "captured",
                 "artifactIds": ["mp-policy-current"],
@@ -1227,6 +1230,7 @@ fn server_intake_coverage_binds_each_row_to_its_workflow_subject() {
             {
                 "producerRole": "siteServer",
                 "producerHostHandle": "synthetic:host:site-01",
+                "workflowSubjectRole": null,
                 "sourceId": "server-sitecomp",
                 "state": "captured",
                 "artifactIds": ["sitecomp-current"],
@@ -1252,8 +1256,8 @@ fn server_intake_coverage_binds_each_row_to_its_workflow_subject() {
 #[test]
 fn server_intake_coverage_omits_absent_optional_topology_handles() {
     let (manifest_json, payloads) = load_bundle("complete-multi-role");
-    let assessment = assess_server_intake(&manifest_json, &payloads)
-        .expect("complete bundle is assessed");
+    let assessment =
+        assess_server_intake(&manifest_json, &payloads).expect("complete bundle is assessed");
     let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
     let management_point = serialized["coverage"]
         .as_array()
