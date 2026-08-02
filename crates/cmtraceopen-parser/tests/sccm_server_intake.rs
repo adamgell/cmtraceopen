@@ -1058,6 +1058,56 @@ fn server_intake_scopes_canonical_identity_to_producer_host() {
 }
 
 #[test]
+fn server_intake_coverage_binds_each_row_to_its_producer_host() {
+    let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
+    let mut manifest = manifest_value(&manifest_json);
+    let fingerprint =
+        manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
+    let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
+    manifest["artifacts"][0]["producerHostHandle"] =
+        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+    manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the same source captured on distinct producer hosts is assessed");
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    assert_eq!(
+        serialized["coverage"],
+        json!([
+            {
+                "producerRole": "managementPoint",
+                "producerHostHandle": "synthetic:host:mp-01",
+                "sourceId": "server-mp-policy",
+                "state": "captured",
+                "artifactIds": ["mp-policy-root-b-current"],
+            },
+            {
+                "producerRole": "managementPoint",
+                "producerHostHandle": "synthetic:host:site-01",
+                "sourceId": "server-mp-policy",
+                "state": "captured",
+                "artifactIds": ["mp-policy-root-a-current"],
+            },
+        ]),
+        "coverage membership must retain the physical producer that supplied each artifact",
+    );
+
+    let mut reordered_manifest = manifest.clone();
+    reordered_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .reverse();
+    let reordered = assess_server_intake(&serialize_manifest(&reordered_manifest), &payloads)
+        .expect("reordered distinct-host artifacts are assessed");
+    assert_eq!(
+        serde_json::to_vec(&assessment).expect("assessment serializes"),
+        serde_json::to_vec(&reordered).expect("reordered assessment serializes"),
+        "topology-bound coverage must be byte-stable across manifest ordering",
+    );
+}
+
+#[test]
 fn server_intake_scopes_path_fingerprint_lineage_to_producer_host() {
     let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
     let mut manifest = manifest_value(&manifest_json);
@@ -1134,6 +1184,92 @@ fn server_intake_scopes_canonical_identity_to_workflow_subject() {
         serde_json::to_vec(&assessment).expect("assessment serializes"),
         serde_json::to_vec(&reordered).expect("reordered assessment serializes"),
         "distinct-subject output is independent of manifest order",
+    );
+}
+
+#[test]
+fn server_intake_coverage_binds_each_row_to_its_workflow_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-02", false);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the same source captured for distinct workflow subjects is assessed");
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    assert_eq!(
+        serialized["coverage"],
+        json!([
+            {
+                "producerRole": "managementPoint",
+                "producerHostHandle": "synthetic:host:mp-01",
+                "sourceId": "server-mp-policy",
+                "state": "captured",
+                "artifactIds": ["mp-policy-current"],
+            },
+            {
+                "producerRole": "siteServer",
+                "producerHostHandle": "synthetic:host:site-01",
+                "workflowSubjectRole": "distributionPoint",
+                "workflowSubjectHandle": "synthetic:subject:dp-01",
+                "sourceId": "server-dp-distribution",
+                "state": "captured",
+                "artifactIds": ["dp-dist-current"],
+            },
+            {
+                "producerRole": "siteServer",
+                "producerHostHandle": "synthetic:host:site-01",
+                "workflowSubjectRole": "distributionPoint",
+                "workflowSubjectHandle": "synthetic:subject:dp-02",
+                "sourceId": "server-dp-distribution",
+                "state": "captured",
+                "artifactIds": ["sup-sync-current"],
+            },
+            {
+                "producerRole": "siteServer",
+                "producerHostHandle": "synthetic:host:site-01",
+                "sourceId": "server-sitecomp",
+                "state": "captured",
+                "artifactIds": ["sitecomp-current"],
+            },
+        ]),
+        "coverage membership must retain the exact workflow subject for each DP artifact",
+    );
+
+    let mut reordered_manifest = manifest.clone();
+    reordered_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .reverse();
+    let reordered = assess_server_intake(&serialize_manifest(&reordered_manifest), &payloads)
+        .expect("reordered distinct-subject artifacts are assessed");
+    assert_eq!(
+        serde_json::to_vec(&assessment).expect("assessment serializes"),
+        serde_json::to_vec(&reordered).expect("reordered assessment serializes"),
+        "topology-bound coverage must be byte-stable across manifest ordering",
+    );
+}
+
+#[test]
+fn server_intake_coverage_omits_absent_optional_topology_handles() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let assessment = assess_server_intake(&manifest_json, &payloads)
+        .expect("complete bundle is assessed");
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    let management_point = serialized["coverage"]
+        .as_array()
+        .expect("coverage is an array")
+        .iter()
+        .find(|row| row["sourceId"] == "server-mp-policy")
+        .expect("management-point coverage is present");
+
+    assert_eq!(
+        management_point["producerHostHandle"],
+        Value::String("synthetic:host:mp-01".to_owned()),
+        "present producer topology stays additive in coverage JSON",
+    );
+    assert!(
+        management_point.get("workflowSubjectHandle").is_none(),
+        "an absent optional workflow handle must not alter legacy coverage JSON",
     );
 }
 
