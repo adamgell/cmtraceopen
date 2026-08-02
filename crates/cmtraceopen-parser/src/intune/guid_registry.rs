@@ -1397,6 +1397,21 @@ mod tests {
         let context = explicit_app_identity_context(&format!("Processing identity {upper}"));
         assert_eq!(context.identity, ExplicitAppIdentity::Absent);
         assert_eq!(context.fallback_app_id, None);
+
+        let valid = explicit_app_identity_context(&format!(
+            r#"Processing identity {upper} for {{"AppId":"{lower}","Name":"Contoso"}}"#
+        ));
+        assert_eq!(
+            valid.identity,
+            ExplicitAppIdentity::Valid(lower.to_string())
+        );
+        assert_eq!(valid.fallback_app_id, None);
+
+        let invalid = explicit_app_identity_context(&format!(
+            r#"Processing identity {upper} for {{"AppId":"invalid","Name":"Contoso"}}"#
+        ));
+        assert_eq!(invalid.identity, ExplicitAppIdentity::Invalid);
+        assert_eq!(invalid.fallback_app_id, None);
     }
 
     #[test]

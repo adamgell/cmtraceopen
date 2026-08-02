@@ -496,9 +496,7 @@ pub fn extract_events(
         let guid = match &identity_context.identity {
             guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
             guid_registry::ExplicitAppIdentity::Invalid => None,
-            guid_registry::ExplicitAppIdentity::Absent => {
-                extract_guid(&line.message).or_else(|| identity_context.fallback_app_id.clone())
-            }
+            guid_registry::ExplicitAppIdentity::Absent => extract_guid(&line.message),
         };
         let status = determine_status(&line.message, source_kind);
         let raw_name = build_event_name(&event_type, &guid, &line.message, source_kind);
@@ -612,7 +610,7 @@ fn extract_appworkload_event(
         guid_registry::ExplicitAppIdentity::Absent => {
             // Preserve the established AppWorkload heuristics only when the
             // line does not claim an explicit JSON identity field.
-            extract_guid(msg).or_else(|| identity_context.fallback_app_id.clone())
+            extract_guid(msg)
         }
     };
 
@@ -2153,10 +2151,13 @@ mod tests {
         let message = format!(
             r#"SidecarScriptDetectionManager launch identity {app_guid} {{"ApplicationName":"Contoso"}}"#
         );
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[line(&message, "01-15-2024 10:00:04.000", 1)]);
+        assert_eq!(registry.resolve(app_guid), Some("Contoso"));
         let events = extract_events(
-            &[line(&message, "01-15-2024 10:00:05.000", 1)],
+            &[line(&message, "01-15-2024 10:00:05.000", 2)],
             "C:/Logs/AppWorkload.log",
-            &empty_registry(),
+            &registry,
         );
 
         assert_eq!(events.len(), 1);
@@ -2399,15 +2400,12 @@ mod tests {
         let explicit = format!(
             r#"AppWorkload download {{"AppId":"{app_guid}","ApplicationName":"Local Name"}}"#
         );
-        let fallback = format!("ESP status for app {app_guid}");
+        let fallback =
+            format!(r#"ESP status correlation {app_guid} {{"ApplicationName":"Fallback Name"}}"#);
         let mut explicit_registry = GuidRegistry::new();
         explicit_registry.ingest_lines(&[line(&explicit, "01-15-2024 10:00:04.000", 1)]);
         let mut fallback_registry = GuidRegistry::new();
-        fallback_registry.ingest_lines(&[line(
-            &format!(r#"Observed identity {app_guid} {{"ApplicationName":"Fallback Name"}}"#),
-            "01-15-2024 10:00:04.000",
-            2,
-        )]);
+        fallback_registry.ingest_lines(&[line(&fallback, "01-15-2024 10:00:04.000", 2)]);
 
         let explicit_events = extract_events(
             &[line(&explicit, "01-15-2024 10:00:05.000", 3)],
@@ -2423,6 +2421,7 @@ mod tests {
         assert_eq!(explicit_events.len(), 1);
         assert!(explicit_events[0].name.contains("Local Name"));
         assert_eq!(fallback_events.len(), 1);
+        assert_eq!(fallback_events[0].guid.as_deref(), Some(app_guid));
         assert!(fallback_events[0].name.contains("Fallback Name"));
     }
 }
