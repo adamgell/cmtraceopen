@@ -1,8 +1,9 @@
 use app_lib::sccm::{
     discover_client_sources, SccmClientDiscoveryCoverageIssueState, SccmClientDiscoveryError,
     SccmClientDiscoveryInput, SccmClientDiscoveryObservation, SccmClientDiscoveryObservationState,
-    SccmClientDiscoveryState, MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES,
-    MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS, MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+    SccmClientDiscoveryRotationCategory, SccmClientDiscoveryState,
+    MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES, MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+    MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
 };
 use cmtraceopen_parser::sccm::{SccmRotation, SccmUnknownRotation};
 use serde_json::Value;
@@ -931,6 +932,7 @@ fn discovery_never_assigns_catalog_memberships_to_rejected_rotation_candidates()
     assert!(result.coverage_issues.iter().all(|issue| {
         issue.catalog_entry_id == "sccm-client-source:v1:none"
             && issue.logical_artifact_ids.is_empty()
+            && issue.rotation_category == SccmClientDiscoveryRotationCategory::Unknown
             && !format!("{issue:?}").contains(raw_root)
             && !format!("{issue:?}").contains("PolicyAgent.log.backup")
             && !format!("{issue:?}").contains("PolicyAgent.log.1")
