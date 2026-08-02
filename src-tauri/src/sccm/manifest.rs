@@ -35,17 +35,17 @@ const MAX_SAFE_TEXT_CHARS: usize = 160;
 const MAX_SCCM_CLIENT_PHYSICAL_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_SCCM_CLIENT_TOTAL_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 thread_local! {
     static INTAKE_PROJECTION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn reset_intake_projection_count() {
     INTAKE_PROJECTION_COUNT.with(|count| count.set(0));
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn intake_projection_count() -> usize {
     INTAKE_PROJECTION_COUNT.with(std::cell::Cell::get)
 }
@@ -97,7 +97,7 @@ pub fn read_sccm_manifest_or_legacy(bundle_root: &Path) -> Result<SccmBundleMani
 fn manifest_to_client_intake_bundle(
     manifest: &SccmBundleManifestV1,
 ) -> Result<SccmClientIntakeBundle, AppError> {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     INTAKE_PROJECTION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
 
     validate_native_manifest_structure(manifest)?;
