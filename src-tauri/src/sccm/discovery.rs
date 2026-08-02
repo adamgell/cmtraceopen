@@ -1,7 +1,8 @@
 //! Read-only normalization of already-observed SCCM client source candidates.
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -66,11 +67,51 @@ pub struct SccmClientDiscoveryResult {
     pub declarations: Vec<SccmClientDiscoveryDeclaration>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SccmClientDiscoveryError {
+    ConflictingObservation,
+}
+
+impl fmt::Display for SccmClientDiscoveryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ConflictingObservation => {
+                formatter.write_str("conflicting SCCM client discovery observations")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SccmClientDiscoveryError {}
+
 struct Candidate {
     observation: SccmClientDiscoveryObservation,
     catalog_entry_id: String,
     logical_artifact_ids: Vec<String>,
     source_digest: String,
+}
+
+#[derive(Clone, Copy)]
+struct ObservationRef<'a>(&'a SccmClientDiscoveryObservation);
+
+impl PartialEq for ObservationRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        compare_observation_order(self.0, other.0) == Ordering::Equal
+    }
+}
+
+impl Eq for ObservationRef<'_> {}
+
+impl PartialOrd for ObservationRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ObservationRef<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        compare_observation_order(self.0, other.0)
+    }
 }
 
 #[cfg(test)]
@@ -79,58 +120,156 @@ thread_local! {
     static DECLARATION_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
 }
 
-pub fn discover_client_sources(input: &SccmClientDiscoveryInput) -> SccmClientDiscoveryResult {
-    let mut candidates = input
-        .observations
-        .iter()
-        .filter_map(candidate_from_observation)
-        .collect::<Vec<_>>();
-    candidates.sort_by(compare_candidates);
+pub fn discover_client_sources(
+    input: &SccmClientDiscoveryInput,
+) -> Result<SccmClientDiscoveryResult, SccmClientDiscoveryError> {
+    let mut found_per_source = BTreeMap::<(String, String), usize>::new();
+    let mut capped_sources = BTreeSet::<(String, String)>::new();
+    let mut declarations = Vec::with_capacity(MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS);
+    let mut cursor = None;
+    let mut first_omitted: Option<(ObservationRef<'_>, SccmClientDiscoveryState)> = None;
+    let mut initial = initial_observations(input)
+        .into_iter()
+        .collect::<VecDeque<_>>();
 
-    let mut found_per_source = BTreeMap::<String, usize>::new();
-    let mut capped_sources = BTreeSet::<String>::new();
-    let mut declarations = Vec::new();
-    for candidate in candidates {
-        let source_key = format!(
-            "{}:{}",
-            candidate.observation.root_handle, candidate.source_digest
-        );
-        let state = match candidate.observation.state {
-            SccmClientDiscoveryObservationState::Found => {
-                let count = found_per_source.entry(source_key.clone()).or_default();
-                if *count < input.max_found_fragments_per_source {
-                    *count += 1;
-                    SccmClientDiscoveryState::Discovered
-                } else if capped_sources.insert(source_key) {
-                    SccmClientDiscoveryState::Capped
-                } else {
-                    continue;
-                }
-            }
-            SccmClientDiscoveryObservationState::AccessDenied => {
-                SccmClientDiscoveryState::AccessDenied
-            }
-            SccmClientDiscoveryObservationState::NotFound => SccmClientDiscoveryState::NotFound,
+    while let Some(observation) = initial
+        .pop_front()
+        .or_else(|| next_observation(input, cursor, &capped_sources))
+    {
+        validate_observation_conflict(input, observation.0)?;
+        cursor = Some(observation);
+
+        let Some(state) = selection_state(
+            observation.0,
+            input.max_found_fragments_per_source,
+            &mut found_per_source,
+            &mut capped_sources,
+        ) else {
+            continue;
         };
-        declarations.push(declaration_from_candidate(candidate, state));
+
+        if declarations.len() < MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS - 1 {
+            declarations.push(declaration_from_candidate(
+                candidate_from_observation(observation.0).expect("prevalidated observation"),
+                state,
+            ));
+        } else if let Some((first_omitted, _)) = first_omitted {
+            declarations.push(declaration_from_candidate(
+                candidate_from_observation(first_omitted.0).expect("prevalidated observation"),
+                SccmClientDiscoveryState::Capped,
+            ));
+            return Ok(SccmClientDiscoveryResult { declarations });
+        } else {
+            first_omitted = Some((observation, state));
+        }
     }
 
-    if declarations.len() > MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS {
-        let first_omitted = declarations[MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS - 1].clone();
-        declarations.truncate(MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS - 1);
-        declarations.push(SccmClientDiscoveryDeclaration {
-            state: SccmClientDiscoveryState::Capped,
-            artifact_id: marker_id(
-                &first_omitted.catalog_entry_id,
-                SccmManifestSourceState::Capped,
-                &first_omitted.rotation,
-                &first_omitted.basename,
-                &first_omitted.path_fingerprint,
-            ),
-            ..first_omitted
-        });
+    if let Some((last, state)) = first_omitted {
+        declarations.push(declaration_from_candidate(
+            candidate_from_observation(last.0).expect("prevalidated observation"),
+            state,
+        ));
     }
-    SccmClientDiscoveryResult { declarations }
+
+    Ok(SccmClientDiscoveryResult { declarations })
+}
+
+fn initial_observations(input: &SccmClientDiscoveryInput) -> BTreeSet<ObservationRef<'_>> {
+    let mut observations = BTreeSet::new();
+    for observation in &input.observations {
+        if canonical_client_source(&observation.basename, &observation.rotation).is_none() {
+            continue;
+        }
+        let candidate = ObservationRef(observation);
+        if observations.len() < MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS + 1 {
+            observations.insert(candidate);
+        } else if candidate
+            < *observations
+                .iter()
+                .next_back()
+                .expect("nonempty candidate set")
+        {
+            observations.insert(candidate);
+            observations.pop_last();
+        }
+    }
+    observations
+}
+
+fn next_observation<'a>(
+    input: &'a SccmClientDiscoveryInput,
+    cursor: Option<ObservationRef<'a>>,
+    capped_sources: &BTreeSet<(String, String)>,
+) -> Option<ObservationRef<'a>> {
+    let mut next = None;
+    for observation in &input.observations {
+        let Some(canonical) = canonical_client_source(&observation.basename, &observation.rotation)
+        else {
+            continue;
+        };
+        if observation.state == SccmClientDiscoveryObservationState::Found
+            && capped_sources.contains(&(observation.root_handle.clone(), canonical))
+        {
+            continue;
+        }
+
+        let candidate = ObservationRef(observation);
+        if cursor.is_some_and(|last| candidate <= last) {
+            continue;
+        }
+        if next.is_none_or(|current| candidate < current) {
+            next = Some(candidate);
+        }
+    }
+    next
+}
+
+fn validate_observation_conflict(
+    input: &SccmClientDiscoveryInput,
+    selected: &SccmClientDiscoveryObservation,
+) -> Result<(), SccmClientDiscoveryError> {
+    if input.observations.iter().any(|observation| {
+        observation.state != selected.state && same_physical_observation(observation, selected)
+    }) {
+        return Err(SccmClientDiscoveryError::ConflictingObservation);
+    }
+    Ok(())
+}
+
+fn same_physical_observation(
+    left: &SccmClientDiscoveryObservation,
+    right: &SccmClientDiscoveryObservation,
+) -> bool {
+    left.root_handle == right.root_handle
+        && left.basename == right.basename
+        && left.rotation == right.rotation
+        && canonical_client_source(&left.basename, &left.rotation)
+            == canonical_client_source(&right.basename, &right.rotation)
+}
+
+fn selection_state(
+    observation: &SccmClientDiscoveryObservation,
+    max_found_fragments_per_source: usize,
+    found_per_source: &mut BTreeMap<(String, String), usize>,
+    capped_sources: &mut BTreeSet<(String, String)>,
+) -> Option<SccmClientDiscoveryState> {
+    let canonical = canonical_client_source(&observation.basename, &observation.rotation)?;
+    let source_key = (observation.root_handle.clone(), canonical);
+    Some(match observation.state {
+        SccmClientDiscoveryObservationState::Found => {
+            let count = found_per_source.entry(source_key.clone()).or_default();
+            if *count < max_found_fragments_per_source {
+                *count += 1;
+                SccmClientDiscoveryState::Discovered
+            } else if capped_sources.insert(source_key) {
+                SccmClientDiscoveryState::Capped
+            } else {
+                return None;
+            }
+        }
+        SccmClientDiscoveryObservationState::AccessDenied => SccmClientDiscoveryState::AccessDenied,
+        SccmClientDiscoveryObservationState::NotFound => SccmClientDiscoveryState::NotFound,
+    })
 }
 
 fn candidate_from_observation(observation: &SccmClientDiscoveryObservation) -> Option<Candidate> {
@@ -237,17 +376,20 @@ fn evidence_id(
     )
 }
 
-fn compare_candidates(left: &Candidate, right: &Candidate) -> Ordering {
-    left.logical_artifact_ids
-        .cmp(&right.logical_artifact_ids)
-        .then_with(|| {
-            left.observation
-                .root_handle
-                .cmp(&right.observation.root_handle)
-        })
-        .then_with(|| rotation_order(&left.observation.rotation, &right.observation.rotation))
-        .then_with(|| left.observation.basename.cmp(&right.observation.basename))
-        .then_with(|| state_rank(left.observation.state).cmp(&state_rank(right.observation.state)))
+fn compare_observation_order(
+    left: &SccmClientDiscoveryObservation,
+    right: &SccmClientDiscoveryObservation,
+) -> Ordering {
+    let left_canonical =
+        canonical_client_source(&left.basename, &left.rotation).expect("prevalidated observation");
+    let right_canonical = canonical_client_source(&right.basename, &right.rotation)
+        .expect("prevalidated observation");
+    logical_artifact_ids_for_basename(&left_canonical)
+        .cmp(&logical_artifact_ids_for_basename(&right_canonical))
+        .then_with(|| left.root_handle.cmp(&right.root_handle))
+        .then_with(|| rotation_order(&left.rotation, &right.rotation))
+        .then_with(|| left.basename.cmp(&right.basename))
+        .then_with(|| state_rank(left.state).cmp(&state_rank(right.state)))
 }
 
 fn state_rank(state: SccmClientDiscoveryObservationState) -> u8 {
