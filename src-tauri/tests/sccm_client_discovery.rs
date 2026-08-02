@@ -752,7 +752,7 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
         ],
         "skipped, absent, and found remain separate coverage states"
     );
-    assert_eq!(result.coverage_issues.len(), 3);
+    assert_eq!(result.coverage_issues.len(), 2);
     assert!(result.coverage_issues.iter().any(|issue| {
         issue.state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance
             && issue.catalog_entry_id == expected_catalog_entry_id("AppEnforce.log")
@@ -801,11 +801,10 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
         distinct_malformed_root.coverage_issues[0].artifact_id, invalid_provenance.artifact_id,
         "invalid-root identities must not hash or otherwise depend on raw root input"
     );
-    assert!(result.declarations.iter().all(|declaration| {
-        declaration.artifact_id != result.coverage_issues[0].artifact_id
-            && declaration.artifact_id != result.coverage_issues[1].artifact_id
-            && declaration.artifact_id != result.coverage_issues[2].artifact_id
-    }));
+    assert!(result.declarations.iter().all(|declaration| result
+        .coverage_issues
+        .iter()
+        .all(|issue| declaration.artifact_id != issue.artifact_id)));
 }
 
 #[test]
@@ -934,6 +933,7 @@ fn discovery_never_assigns_catalog_memberships_to_rejected_rotation_candidates()
             && issue.logical_artifact_ids.is_empty()
             && !format!("{issue:?}").contains(raw_root)
             && !format!("{issue:?}").contains("PolicyAgent.log.backup")
+            && !format!("{issue:?}").contains("PolicyAgent.log.1")
     }));
 }
 
@@ -1016,4 +1016,39 @@ fn discovery_does_not_conflict_distinct_rejected_alias_spellings() {
         "sccm-client-source:v1:none"
     );
     assert!(result.coverage_issues[0].logical_artifact_ids.is_empty());
+}
+
+#[test]
+fn discovery_does_not_conflict_distinct_exact_rejected_rotations() {
+    let raw_root = "C:\\private\\ccm\\logs";
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                raw_root,
+                "PolicyAgent.log.backup",
+                unsupported_rotation(".backup"),
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                raw_root,
+                "PolicyAgent.log.backup",
+                unsupported_rotation(".archive"),
+                SccmClientDiscoveryObservationState::AccessDenied,
+            ),
+        ],
+    };
+
+    let result = discover_client_sources(&input)
+        .expect("distinct exact rejected rotations are separate physical observations");
+    let reversed = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: input.max_found_fragments_per_source,
+        observations: input.observations.into_iter().rev().collect(),
+    })
+    .expect("distinct exact rejected rotations remain nonconflicting under reversal");
+
+    assert_eq!(result, reversed);
+    assert!(result.declarations.is_empty());
+    assert_eq!(result.coverage_issues.len(), 1);
+    assert_eq!(result.coverage_issues[0].occurrence_count.get(), 2);
 }
