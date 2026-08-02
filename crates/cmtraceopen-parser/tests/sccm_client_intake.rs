@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::sccm::{
     assess_client_intake, classify_artifact_name, declared_client_source_groups, SccmArtifact,
     SccmClientIntakeArtifact, SccmClientIntakeAssessment, SccmClientIntakeBundle,
-    SccmClientIntakeCoverageGap, SccmClientIntakeError, SccmClientIntakeFragment,
-    SccmClientUnsupportedArtifact, SccmCoverageState, SccmRole, SccmRotation, SccmUnknownRotation,
-    MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    SccmClientIntakeCaptureGap, SccmClientIntakeCoverageGap, SccmClientIntakeError,
+    SccmClientIntakeFragment, SccmClientUnsupportedArtifact, SccmCoverageState, SccmRole,
+    SccmRotation, SccmUnknownRotation, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -227,6 +227,7 @@ fn load_bundle(scenario: &str) -> SccmClientIntakeBundle {
                 }
             })
             .collect(),
+        capture_gaps: Vec::new(),
     }
 }
 
@@ -434,8 +435,11 @@ fn intake_rejects_more_than_the_v1_artifact_limit_before_validation_indexes() {
     let duplicate = synthetic_artifact("limit", "PolicyAgent.log");
     let artifacts = vec![duplicate; MAX_SCCM_CLIENT_INTAKE_ARTIFACTS + 1];
 
-    let error = assess_client_intake(&SccmClientIntakeBundle { artifacts })
-        .expect_err("the v1 client intake artifact ceiling must fail closed");
+    let error = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts,
+        capture_gaps: Vec::new(),
+    })
+    .expect_err("the v1 client intake artifact ceiling must fail closed");
 
     assert_eq!(
         error.to_string(),
@@ -479,6 +483,265 @@ fn intake_wire_rejects_more_than_the_v1_artifact_limit_from_json_text() {
         error.to_string().contains("artifact count exceeds"),
         "the streaming fallback must report the bounded-contract violation: {error}"
     );
+}
+
+#[test]
+fn capped_omitted_rotation_degrades_group_coverage_without_relabeling_current_capture() {
+    let current = synthetic_artifact("current", "PolicyAgent.log");
+    let omitted_rotation = SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-capped-rotation".to_owned(),
+        basename: "PolicyAgent.log.1".to_owned(),
+        rotation: SccmRotation::Numbered(1),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: "synthetic-capped-rotation".to_owned(),
+        rotation_lineage: "synthetic:capped-rotation".to_owned(),
+    };
+
+    let assessment = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![current],
+        capture_gaps: vec![omitted_rotation],
+    })
+    .expect("a coverage-only omitted rotation is a valid client intake declaration");
+
+    let group = assessment
+        .group("client-policy-agent")
+        .expect("policy agent group");
+    assert_eq!(group.coverage, SccmCoverageState::Capped);
+    assert_eq!(group.fragments.len(), 1);
+    assert_eq!(group.fragments[0].coverage, SccmCoverageState::Captured);
+    assert_eq!(assessment.physical_artifacts.len(), 1);
+    assert_eq!(
+        assessment.physical_artifacts[0].coverage,
+        SccmCoverageState::Captured
+    );
+    assert_eq!(assessment.capture_gaps.len(), 1);
+    assert_eq!(
+        assessment.capture_gaps[0].artifact_id,
+        "fixture-capped-rotation"
+    );
+    assert!(assessment.coverage_gaps.iter().any(|gap| {
+        gap.logical_artifact_id == "client-policy-agent"
+            && gap.artifact_id.as_deref() == Some("fixture-capped-rotation")
+            && gap.coverage == SccmCoverageState::Capped
+    }));
+
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    let gap = &serialized["captureGaps"][0];
+    assert!(gap.get("relativePath").is_none());
+    assert!(gap.get("bytesCopied").is_none());
+    assert!(gap.get("bytesRetained").is_none());
+}
+
+#[test]
+fn intake_wire_rejects_a_combined_artifact_and_capture_gap_count_above_the_v1_limit() {
+    let artifact = serde_json::to_value(synthetic_artifact("wire-current", "PolicyAgent.log"))
+        .expect("synthetic intake artifact serializes");
+    let capture_gap = serde_json::to_value(SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-capped-rotation".to_owned(),
+        basename: "PolicyAgent.log.1".to_owned(),
+        rotation: SccmRotation::Numbered(1),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: "synthetic-capped-rotation".to_owned(),
+        rotation_lineage: "synthetic:capped-rotation".to_owned(),
+    })
+    .expect("synthetic capture gap serializes");
+    let oversized = serde_json::json!({
+        "artifacts": [artifact],
+        "captureGaps": vec![capture_gap; MAX_SCCM_CLIENT_INTAKE_ARTIFACTS],
+    });
+
+    let error = serde_json::from_value::<SccmClientIntakeBundle>(oversized)
+        .expect_err("the shared v1 declaration ceiling must reject a combined oversized wire");
+    assert!(
+        error.to_string().contains("artifact count exceeds"),
+        "the wire must report the shared declaration bound: {error}"
+    );
+}
+
+#[test]
+fn intake_accepts_the_shared_v1_boundary_across_physical_and_coverage_only_declarations() {
+    let artifacts = (1..MAX_SCCM_CLIENT_INTAKE_ARTIFACTS)
+        .map(|number| SccmClientIntakeArtifact {
+            artifact: SccmArtifact {
+                artifact_id: format!("sccm-artifact:v1:sha256:{number:064x}"),
+                display_name: format!("PolicyAgent.log.{number}"),
+                original_path: None,
+                host: None,
+                role: SccmRole::Client,
+                configmgr_version: Some("5.00.TEST.0000".to_owned()),
+                collected_at_utc: Some("2026-07-30T00:00:00Z".to_owned()),
+                rotation: SccmRotation::Numbered(number as u32),
+                coverage: SccmCoverageState::Captured,
+                encoding: Some("utf-8".to_owned()),
+            },
+            path_fingerprint: Some(format!("sha256:{number:064x}")),
+            rotation_lineage: None,
+            relative_path: Some(format!(
+                "evidence/client-policy-agent/numbered-{number}/PolicyAgent.log.{number}"
+            )),
+            fragment_complete: Some(true),
+        })
+        .collect();
+    let capture_gap = SccmClientIntakeCaptureGap {
+        artifact_id: format!("sccm-artifact:v1:sha256:{MAX_SCCM_CLIENT_INTAKE_ARTIFACTS:064x}"),
+        basename: format!("PolicyAgent.log.{MAX_SCCM_CLIENT_INTAKE_ARTIFACTS}"),
+        rotation: SccmRotation::Numbered(MAX_SCCM_CLIENT_INTAKE_ARTIFACTS as u32),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: format!("sha256:{MAX_SCCM_CLIENT_INTAKE_ARTIFACTS:064x}"),
+        rotation_lineage: format!(
+            "cmtraceopen.lineage.sha256.v1:{MAX_SCCM_CLIENT_INTAKE_ARTIFACTS:064x}"
+        ),
+    };
+
+    let assessment = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts,
+        capture_gaps: vec![capture_gap],
+    })
+    .expect("the shared v1 declaration boundary is accepted exactly");
+    assert_eq!(
+        assessment.physical_artifacts.len(),
+        MAX_SCCM_CLIENT_INTAKE_ARTIFACTS - 1
+    );
+    assert_eq!(assessment.capture_gaps.len(), 1);
+}
+
+#[test]
+fn legacy_bundle_wire_omits_the_additive_empty_capture_gap_field() {
+    let artifact = serde_json::to_value(synthetic_artifact("legacy-wire", "PolicyAgent.log"))
+        .expect("synthetic intake artifact serializes");
+    let legacy_wire = serde_json::json!({ "artifacts": [artifact] });
+
+    let decoded: SccmClientIntakeBundle =
+        serde_json::from_value(legacy_wire).expect("pre-gap bundle wire remains accepted");
+    assert!(decoded.capture_gaps.is_empty());
+    let reserialized = serde_json::to_value(decoded).expect("bundle reserializes");
+    assert!(
+        reserialized.get("captureGaps").is_none(),
+        "an empty additive field must preserve the existing wire shape"
+    );
+}
+
+#[test]
+fn intake_rejects_malformed_coverage_only_capture_gap() {
+    let malformed = SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-captured-rotation".to_owned(),
+        basename: "PolicyAgent.log.1".to_owned(),
+        rotation: SccmRotation::Numbered(1),
+        coverage: SccmCoverageState::Captured,
+        path_fingerprint: "synthetic-captured-rotation".to_owned(),
+        rotation_lineage: "synthetic:captured-rotation".to_owned(),
+    };
+
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: Vec::new(),
+            capture_gaps: vec![malformed],
+        }),
+        Err(SccmClientIntakeError::InvalidCaptureGap),
+        "coverage-only gaps must not be able to claim captured physical evidence"
+    );
+}
+
+#[test]
+fn capture_gap_wire_rejects_physical_path_or_byte_claims() {
+    let capture_gap = serde_json::to_value(SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-capped-rotation".to_owned(),
+        basename: "PolicyAgent.log.1".to_owned(),
+        rotation: SccmRotation::Numbered(1),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: "synthetic-capped-rotation".to_owned(),
+        rotation_lineage: "synthetic:capped-rotation".to_owned(),
+    })
+    .expect("synthetic capture gap serializes");
+    let mut with_path = capture_gap.clone();
+    with_path["relativePath"] =
+        serde_json::json!("evidence/client-policy-agent/numbered-1/PolicyAgent.log.1");
+    let mut with_bytes = capture_gap;
+    with_bytes["bytesCopied"] = serde_json::json!(1);
+
+    for malformed_gap in [with_path, with_bytes] {
+        assert!(
+            serde_json::from_value::<SccmClientIntakeBundle>(serde_json::json!({
+                "artifacts": [],
+                "captureGaps": [malformed_gap],
+            }))
+            .is_err(),
+            "a coverage-only gap must reject physical evidence fields"
+        );
+    }
+}
+
+#[test]
+fn intake_rejects_capture_gap_that_conflicts_with_physical_lineage() {
+    let mut current = synthetic_artifact("current", "PolicyAgent.log");
+    current.path_fingerprint = Some("synthetic-current-rotation".to_owned());
+    current.rotation_lineage = Some("synthetic:current-rotation".to_owned());
+    let colliding_gap = SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-capped-rotation".to_owned(),
+        basename: "PolicyAgent.log.1".to_owned(),
+        rotation: SccmRotation::Numbered(1),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: "synthetic-current-rotation".to_owned(),
+        rotation_lineage: "synthetic:capped-rotation".to_owned(),
+    };
+
+    assert_eq!(
+        assess_client_intake(&SccmClientIntakeBundle {
+            artifacts: vec![current],
+            capture_gaps: vec![colliding_gap],
+        }),
+        Err(SccmClientIntakeError::CollidingPhysicalIdentity),
+        "a coverage-only rotation must remain bound to the same collision and lineage rules"
+    );
+}
+
+#[test]
+fn capture_gap_projection_is_deterministic_and_round_trips() {
+    let current = synthetic_artifact("current", "PolicyAgent.log");
+    let first = SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-capped-rotation-numbered-1".to_owned(),
+        basename: "PolicyAgent.log.1".to_owned(),
+        rotation: SccmRotation::Numbered(1),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: "synthetic-capped-rotation".to_owned(),
+        rotation_lineage: "synthetic:capped-rotation".to_owned(),
+    };
+    let second = SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-capped-rotation-numbered-2".to_owned(),
+        basename: "PolicyAgent.log.2".to_owned(),
+        rotation: SccmRotation::Numbered(2),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: "synthetic-capped-rotation".to_owned(),
+        rotation_lineage: "synthetic:capped-rotation".to_owned(),
+    };
+
+    let ordered = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![current.clone()],
+        capture_gaps: vec![first.clone(), second.clone()],
+    })
+    .expect("ordered capture gaps are valid");
+    let reversed = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![current],
+        capture_gaps: vec![second, first],
+    })
+    .expect("reversed capture gaps are equally valid");
+
+    assert_eq!(ordered, reversed);
+    assert_eq!(
+        ordered
+            .capture_gaps
+            .iter()
+            .map(|gap| gap.artifact_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "fixture-capped-rotation-numbered-1",
+            "fixture-capped-rotation-numbered-2",
+        ]
+    );
+    let serialized = serde_json::to_value(&ordered).expect("assessment serializes");
+    let decoded: SccmClientIntakeAssessment =
+        serde_json::from_value(serialized).expect("canonical capture gaps round trip");
+    assert_eq!(decoded, ordered);
 }
 
 /// Every assertion that a serialized projection did not leak an identity must
@@ -603,6 +866,7 @@ fn collection_timestamp_is_projected_as_canonical_utc() {
 
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![artifact],
+        capture_gaps: Vec::new(),
     })
     .expect("a valid RFC 3339 collection instant remains representable");
     assert_eq!(
@@ -1085,6 +1349,7 @@ fn fragment_order_is_source_identity_then_rotation_rank() {
 
     let bundle = SccmClientIntakeBundle {
         artifacts: vec![root_b_lo, root_a_current, root_b_current, root_a_lo],
+        capture_gaps: Vec::new(),
     };
     let assessment = assess_client_intake(&bundle).expect("two source lineages are valid");
     let ordered_ids = assessment
@@ -1196,6 +1461,7 @@ fn capped_cas_fragment_cannot_claim_complete() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![contradictory],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidFragmentCompleteness),
         "a capped physical fragment cannot claim complete public provenance"
@@ -1210,6 +1476,7 @@ fn captured_incomplete_fragment_retains_a_boundary_without_becoming_capped() {
 
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![boundary],
+        capture_gaps: Vec::new(),
     })
     .expect("a fully copied rotation may still end on an incomplete logical record");
     let content = intake.group("client-content").expect("content group");
@@ -1240,6 +1507,7 @@ fn parse_failed_fragment_completeness_is_intentionally_two_valued() {
 
         let intake = assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![unparseable],
+            capture_gaps: Vec::new(),
         })
         .unwrap_or_else(|error| {
             panic!("parse-failed completeness {fragment_complete} was rejected: {error}")
@@ -1279,6 +1547,7 @@ fn mixed_captured_and_absent_group_preserves_partial_coverage_and_names_the_abse
 
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![captured, absent],
+        capture_gaps: Vec::new(),
     })
     .expect("a mixed captured and absent client-content group is representable");
 
@@ -1331,6 +1600,7 @@ fn mixed_captured_and_access_denied_group_preserves_partial_coverage_and_names_t
 
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![captured, denied],
+        capture_gaps: Vec::new(),
     })
     .expect("a mixed captured and access-denied client-content group is representable");
 
@@ -1372,6 +1642,7 @@ fn mixed_capped_and_absent_group_keeps_the_capped_capture_and_names_the_absent_s
 
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![capped, absent],
+        capture_gaps: Vec::new(),
     })
     .expect("a mixed capped and absent client-content group is representable");
 
@@ -1425,6 +1696,7 @@ fn duplicate_nonphysical_markers_for_the_same_source_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![first, second],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::DuplicateArtifactId),
         "the same missing source must not be double-declared under differing caller labels"
@@ -1439,6 +1711,7 @@ fn duplicate_nonphysical_markers_for_the_same_source_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![absent, denied],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::DuplicateArtifactId),
         "contradictory marker states for the same source must not both project as fragments"
@@ -1462,6 +1735,7 @@ fn absent_markers_with_distinct_path_fingerprints_remain_distinct_sources() {
 
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![root_a, root_b],
+        capture_gaps: Vec::new(),
     })
     .expect("markers distinguished by explicit path fingerprints stay representable");
 
@@ -1499,6 +1773,7 @@ fn unpinned_marker_for_a_physically_declared_source_fails_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![captured.clone(), absent.clone()],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::CollidingPhysicalIdentity),
         "an unpinned absent marker for a captured source is a self-contradiction"
@@ -1506,6 +1781,7 @@ fn unpinned_marker_for_a_physically_declared_source_fails_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![absent, captured],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::CollidingPhysicalIdentity),
         "declaration order must not reopen the marker-versus-physical collision"
@@ -1528,6 +1804,7 @@ fn pinned_markers_for_distinct_roots_coexist_with_physical_evidence() {
 
         let intake = assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![captured.clone(), pinned.clone()],
+            capture_gaps: Vec::new(),
         })
         .expect("distinct configured roots remain distinct sources");
         assert_eq!(intake.physical_artifacts.len(), 1);
@@ -1541,6 +1818,7 @@ fn pinned_markers_for_distinct_roots_coexist_with_physical_evidence() {
 
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![pinned, captured],
+            capture_gaps: Vec::new(),
         })
         .expect("declaration order must not collapse distinct roots");
     }
@@ -1552,6 +1830,7 @@ fn pinned_markers_for_distinct_roots_coexist_with_physical_evidence() {
     pinned.path_fingerprint = Some("synthetic:policy-root-b".to_owned());
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![capped, pinned],
+        capture_gaps: Vec::new(),
     })
     .expect("a capped root and absent sibling root are both preserved");
     assert_eq!(
@@ -1572,6 +1851,7 @@ fn a_marker_cannot_reuse_the_physical_source_fingerprint() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![captured, marker],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::CollidingPhysicalIdentity)
     );
@@ -1596,6 +1876,7 @@ fn unpinned_and_pinned_markers_for_the_same_source_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![unpinned.clone(), pinned.clone()],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::DuplicateArtifactId),
         "an unpinned and a pinned marker must not double-declare one source"
@@ -1603,6 +1884,7 @@ fn unpinned_and_pinned_markers_for_the_same_source_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![pinned, unpinned],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::DuplicateArtifactId),
         "declaration order must not reopen the marker double-declaration"
@@ -1625,6 +1907,7 @@ fn markers_for_distinct_rotations_of_a_captured_source_remain_representable() {
 
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![captured, rotated_absent],
+        capture_gaps: Vec::new(),
     })
     .expect("a marker for a distinct rotation of a captured source stays representable");
 
@@ -1681,6 +1964,7 @@ fn unknown_and_lookalike_names_are_retained_as_unsupported_not_reclassified() {
             synthetic_artifact("lookalike", "PolicyAgent.log.backup"),
             synthetic_artifact("unknown-lo", "CustomVendorHook.lo_"),
         ],
+        capture_gaps: Vec::new(),
     };
     let intake = assess_client_intake(&bundle).expect("unknown intake");
 
@@ -1707,6 +1991,7 @@ fn malformed_rotation_and_public_provenance_values_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![invalid_rotation],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidRotation),
         "a malformed rotation timestamp must fail on the rotation contract"
@@ -1719,6 +2004,7 @@ fn malformed_rotation_and_public_provenance_values_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![unsafe_basename],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidBasename),
         "a path-bearing basename must fail on the basename contract"
@@ -1730,6 +2016,7 @@ fn malformed_rotation_and_public_provenance_values_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![invalid_time],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidCollectedAt),
         "a non-RFC-3339 collection timestamp must fail on the timestamp contract"
@@ -1741,6 +2028,7 @@ fn malformed_rotation_and_public_provenance_values_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![invalid_version],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidConfigMgrVersion),
         "an unsafe ConfigMgr version must fail on the version contract"
@@ -1755,6 +2043,7 @@ fn configmgr_version_and_encoding_use_bounded_public_grammars() {
         assert!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             })
             .is_ok(),
             "documented ConfigMgr version {version} should remain representable"
@@ -1773,6 +2062,7 @@ fn configmgr_version_and_encoding_use_bounded_public_grammars() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidConfigMgrVersion),
             "unsafe ConfigMgr version {version:?} must fail closed"
@@ -1785,6 +2075,7 @@ fn configmgr_version_and_encoding_use_bounded_public_grammars() {
         assert!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             })
             .is_ok(),
             "supported encoding {encoding} should remain representable"
@@ -1803,6 +2094,7 @@ fn configmgr_version_and_encoding_use_bounded_public_grammars() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidEncoding),
             "unsafe encoding {encoding:?} must fail closed"
@@ -1830,6 +2122,7 @@ fn unknown_rotation_public_metadata_is_versioned_and_opaque() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidRotation)
         );
@@ -1854,6 +2147,7 @@ fn unknown_rotation_public_metadata_is_versioned_and_opaque() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidRotation)
         );
@@ -1867,6 +2161,7 @@ fn unknown_rotation_public_metadata_is_versioned_and_opaque() {
     future.relative_path = Some("evidence/unknown/PolicyAgent.log".to_owned());
     let assessed = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![future],
+        capture_gaps: Vec::new(),
     })
     .expect("versioned opaque future rotation remains representable");
     assert_eq!(assessed.unsupported_artifacts.len(), 1);
@@ -1893,6 +2188,7 @@ fn distinct_opaque_unknown_rotations_do_not_collapse_to_one_source_identity() {
 
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![captured, unavailable],
+        capture_gaps: Vec::new(),
     })
     .expect("distinct opaque rotations remain distinct declarations");
 
@@ -1917,6 +2213,7 @@ fn caller_controlled_public_identity_channels_fail_closed() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidArtifactId),
             "identity-bearing artifact ID {artifact_id:?} reached public output"
@@ -1933,6 +2230,7 @@ fn caller_controlled_public_identity_channels_fail_closed() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidBasename),
             "identity-bearing unsupported basename {basename:?} reached public output"
@@ -1950,6 +2248,7 @@ fn caller_controlled_public_identity_channels_fail_closed() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidRelativePath),
             "relative path was not bound to its canonical source: {relative_path:?}"
@@ -1962,6 +2261,7 @@ fn caller_controlled_public_identity_channels_fail_closed() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![mixed_case],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidBasename),
         "supported source names must use their exact canonical spelling"
@@ -1974,6 +2274,7 @@ fn public_identity_contract_retains_only_reviewed_synthetic_and_opaque_forms() {
     native.artifact.artifact_id = format!("sccm-artifact:v1:sha256:{}", "a".repeat(64));
     assert!(assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![native],
+        capture_gaps: Vec::new(),
     })
     .is_ok());
 
@@ -1982,6 +2283,7 @@ fn public_identity_contract_retains_only_reviewed_synthetic_and_opaque_forms() {
     unknown.relative_path = Some(format!("evidence/unknown/current/{opaque_basename}"));
     let unknown = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![unknown],
+        capture_gaps: Vec::new(),
     })
     .expect("opaque unsupported source remains representable");
     assert_eq!(unknown.unsupported_artifacts.len(), 1);
@@ -1992,6 +2294,7 @@ fn public_identity_contract_retains_only_reviewed_synthetic_and_opaque_forms() {
     let serialized = serde_json::to_string(
         &assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![raw_context],
+            capture_gaps: Vec::new(),
         })
         .expect("raw native context is intentionally not projected"),
     )
@@ -2009,6 +2312,7 @@ fn public_identity_contract_retains_only_reviewed_synthetic_and_opaque_forms() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![oversized_timestamp],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidCollectedAt)
     );
@@ -2023,6 +2327,7 @@ fn fragment_completeness_and_every_path_fingerprint_are_explicit_and_unambiguous
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![missing_completeness],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::MissingFragmentCompleteness),
         "fragment completeness must be an explicit declaration"
@@ -2037,6 +2342,7 @@ fn fragment_completeness_and_every_path_fingerprint_are_explicit_and_unambiguous
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![invented_physical_state],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidFragmentCompleteness),
         "a marker claiming a complete fragment invents a physical capture"
@@ -2049,6 +2355,7 @@ fn fragment_completeness_and_every_path_fingerprint_are_explicit_and_unambiguous
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![missing_provenance],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::MissingPhysicalProvenance),
         "a physical capture without its bundle path lacks required provenance"
@@ -2066,6 +2373,7 @@ fn fragment_completeness_and_every_path_fingerprint_are_explicit_and_unambiguous
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![first, second],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::CollidingPhysicalIdentity),
         "two markers must not share one path fingerprint"
@@ -2079,6 +2387,7 @@ fn unsupported_physical_artifacts_retain_safe_provenance_without_raw_host_or_pat
     artifact.artifact.host = Some("real-user-host.example".to_owned());
     let intake = assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![artifact],
+        capture_gaps: Vec::new(),
     })
     .expect("unknown physical artifact remains representable");
     let serialized = serde_json::to_string(&intake).expect("intake JSON");
@@ -2236,6 +2545,7 @@ fn identity_bearing_relative_paths_fail_before_public_projection() {
 
         let result = assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![artifact],
+            capture_gaps: Vec::new(),
         });
         assert!(
             matches!(result, Err(SccmClientIntakeError::InvalidRelativePath)),
@@ -2254,6 +2564,7 @@ fn identity_bearing_relative_paths_fail_before_public_projection() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![malformed_timestamp],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidRotation),
         "malformed timestamp rotation must fail on its own metadata contract"
@@ -2267,6 +2578,7 @@ fn rotation_lineage_is_versioned_privacy_safe_and_bound_to_one_source() {
     opaque.rotation_lineage = Some(format!("cmtraceopen.lineage.sha256.v1:{digest}"));
     assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![opaque],
+        capture_gaps: Vec::new(),
     })
     .expect("the versioned opaque lineage form is accepted");
 
@@ -2283,6 +2595,7 @@ fn rotation_lineage_is_versioned_privacy_safe_and_bound_to_one_source() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidRotationLineage),
             "unsafe lineage reached the public projection: {lineage:?}"
@@ -2296,6 +2609,7 @@ fn rotation_lineage_is_versioned_privacy_safe_and_bound_to_one_source() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![policy, state],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::CollidingPhysicalIdentity),
         "one immutable lineage cannot be rebound to a different catalog source"
@@ -2329,6 +2643,7 @@ fn shared_location_services_path_binding_preserves_every_canonical_rotation() {
 
         let assessment = assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![artifact],
+            capture_gaps: Vec::new(),
         })
         .unwrap_or_else(|error| {
             panic!(
@@ -2389,6 +2704,7 @@ fn unsafe_path_fingerprints_fail_before_public_projection() {
 
         let result = assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![artifact],
+            capture_gaps: Vec::new(),
         });
         assert!(
             matches!(result, Err(SccmClientIntakeError::InvalidPathFingerprint)),
@@ -2412,6 +2728,7 @@ fn sha256_path_fingerprints_require_exactly_64_lowercase_hex_characters() {
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
+                capture_gaps: Vec::new(),
             }),
             Err(SccmClientIntakeError::InvalidPathFingerprint),
             "invalid SHA-256 digest was accepted: {digest:?}"
@@ -2422,6 +2739,7 @@ fn sha256_path_fingerprints_require_exactly_64_lowercase_hex_characters() {
     artifact.path_fingerprint = Some(format!("sha256:{}", "a".repeat(64)));
     assert!(assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![artifact],
+        capture_gaps: Vec::new(),
     })
     .is_ok());
 }
@@ -2435,6 +2753,7 @@ fn numbered_synthetic_path_fingerprints_accept_only_a_short_numeric_suffix() {
         Some("evidence/client-app-enforce/numbered-3/AppEnforce.log.3".to_owned());
     assert!(assess_client_intake(&SccmClientIntakeBundle {
         artifacts: vec![numbered],
+        capture_gaps: Vec::new(),
     })
     .is_ok());
 
@@ -2443,6 +2762,7 @@ fn numbered_synthetic_path_fingerprints_accept_only_a_short_numeric_suffix() {
     assert_eq!(
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![oversized],
+            capture_gaps: Vec::new(),
         }),
         Err(SccmClientIntakeError::InvalidPathFingerprint)
     );
@@ -2465,6 +2785,7 @@ fn approved_namespaced_path_fingerprints_remain_accepted() {
 
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![artifact],
+            capture_gaps: Vec::new(),
         })
         .unwrap_or_else(|error| panic!("approved fingerprint {fingerprint:?} failed: {error}"));
     }
@@ -2528,6 +2849,7 @@ fn approved_collision_safe_relative_layouts_remain_accepted() {
 
         assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![artifact],
+            capture_gaps: Vec::new(),
         })
         .unwrap_or_else(|error| panic!("approved path {relative_path:?} failed: {error}"));
     }
