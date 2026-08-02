@@ -272,6 +272,15 @@ struct JsonFieldScan<'a> {
     scopes: Vec<JsonObjectScope<'a>>,
 }
 
+enum ExplicitAppIdentitySelection<'scan, 'msg> {
+    Absent,
+    Valid {
+        guid: String,
+        scope: &'scan JsonObjectScope<'msg>,
+    },
+    Invalid,
+}
+
 impl JsonFieldScan<'_> {
     fn has_explicit_identity_fields(&self) -> bool {
         self.root
@@ -553,14 +562,19 @@ fn scope_name(scope: &JsonObjectScope<'_>) -> Option<(String, GuidNameSource)> {
         JsonFieldKind::Name,
         JsonFieldKind::SetUpFilePath,
     ] {
-        let Some(value) = scope
+        let mut values = scope
             .fields
             .iter()
             .filter(|field| field.kind == kind)
-            .find_map(|field| field.value)
-        else {
+            .filter_map(|field| field.value);
+        let Some(value) = values.next() else {
             continue;
         };
+        // Repeated identical values are deterministic. Conflicting values of
+        // the highest-priority available name kind make the scope ambiguous.
+        if values.any(|candidate| candidate != value) {
+            return None;
+        }
         return Some(match kind {
             JsonFieldKind::ApplicationName => (value.to_string(), GuidNameSource::ApplicationName),
             JsonFieldKind::Name => (value.to_string(), GuidNameSource::NameField),
@@ -597,15 +611,13 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
 /// Extract an explicit app identity together with a name from that identity's
 /// own JSON object. Names in a sibling or nested object are not associated.
 pub(crate) fn extract_explicit_identity_name_pair(msg: &str) -> Option<(String, String)> {
-    let guid = match explicit_app_identity(msg) {
-        ExplicitAppIdentity::Valid(guid) => guid,
-        ExplicitAppIdentity::Absent | ExplicitAppIdentity::Invalid => return None,
-    };
     let scan = scan_json_fields(msg).ok()?;
-    extract_all_identity_name_pairs(&scan)
-        .into_iter()
-        .find(|(candidate, _, _)| candidate == &guid)
-        .map(|(_, name, _)| (guid, name))
+    match select_explicit_app_identity(&scan) {
+        ExplicitAppIdentitySelection::Valid { guid, scope } => {
+            scope_name(scope).map(|(name, _)| (guid, name))
+        }
+        ExplicitAppIdentitySelection::Absent | ExplicitAppIdentitySelection::Invalid => None,
+    }
 }
 
 /// Classify explicit JSON `AppId`/`Id` fields without falling back to other
@@ -616,8 +628,19 @@ pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
         return ExplicitAppIdentity::Invalid;
     };
 
+    match select_explicit_app_identity(&scan) {
+        ExplicitAppIdentitySelection::Absent => ExplicitAppIdentity::Absent,
+        ExplicitAppIdentitySelection::Valid { guid, .. } => ExplicitAppIdentity::Valid(guid),
+        ExplicitAppIdentitySelection::Invalid => ExplicitAppIdentity::Invalid,
+    }
+}
+
+fn select_explicit_app_identity<'scan, 'msg>(
+    scan: &'scan JsonFieldScan<'msg>,
+) -> ExplicitAppIdentitySelection<'scan, 'msg> {
     let root_identity = classify_scope_identity(&scan.root);
-    let mut selected = (root_identity != ExplicitAppIdentity::Absent).then_some(root_identity);
+    let mut selected =
+        (root_identity != ExplicitAppIdentity::Absent).then_some((&scan.root, root_identity));
     let mut start = 0;
     while start < scan.scopes.len() {
         let tree_start = scan.scopes[start].tree_start;
@@ -631,7 +654,7 @@ pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
                 match identity_span {
                     None => {
                         identity_span = Some((scan.scopes[end].start, scan.scopes[end].end));
-                        tree_identity = Some(identity);
+                        tree_identity = Some((&scan.scopes[end], identity));
                     }
                     Some((outer_start, outer_end))
                         if scan.scopes[end].start >= outer_start
@@ -642,19 +665,26 @@ pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
             end += 1;
         }
 
-        if let Some(mut identity) = tree_identity {
+        if let Some((scope, mut identity)) = tree_identity {
             if ambiguous {
                 identity = ExplicitAppIdentity::Invalid;
             }
             if selected.is_some() {
-                return ExplicitAppIdentity::Invalid;
+                return ExplicitAppIdentitySelection::Invalid;
             }
-            selected = Some(identity);
+            selected = Some((scope, identity));
         }
         start = end;
     }
 
-    selected.unwrap_or(ExplicitAppIdentity::Absent)
+    match selected {
+        None => ExplicitAppIdentitySelection::Absent,
+        Some((scope, ExplicitAppIdentity::Valid(guid))) => {
+            ExplicitAppIdentitySelection::Valid { guid, scope }
+        }
+        Some((_, ExplicitAppIdentity::Invalid)) => ExplicitAppIdentitySelection::Invalid,
+        Some((_, ExplicitAppIdentity::Absent)) => unreachable!(),
+    }
 }
 
 fn classify_scope_identity(scope: &JsonObjectScope<'_>) -> ExplicitAppIdentity {
