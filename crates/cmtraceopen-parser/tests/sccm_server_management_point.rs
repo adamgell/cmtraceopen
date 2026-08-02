@@ -148,3 +148,18 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
         "the contract must exercise at least one selected exact synthetic MP artifact"
     );
 }
+
+#[test]
+#[deny(unreachable_patterns)]
+fn public_management_point_intake_errors_allow_future_variants() {
+    let category = match SccmManagementPointIntakeError::TopologyMismatch {
+        SccmManagementPointIntakeError::TopologyMismatch => "topology",
+        SccmManagementPointIntakeError::RoleMismatch { .. } => "role",
+        SccmManagementPointIntakeError::ProfileMismatch { .. } => "profile",
+        SccmManagementPointIntakeError::SourceMismatch { .. } => "source",
+        SccmManagementPointIntakeError::IncompleteSource { .. } => "incomplete",
+        _ => "future",
+    };
+
+    assert_eq!(category, "topology");
+}
