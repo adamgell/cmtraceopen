@@ -206,6 +206,21 @@ fn write_native_bundle(root: &Path, artifacts: &[Value], capture_gaps: &[Value])
     .expect("write fixture manifest");
 }
 
+fn set_native_limits(root: &Path, max_files: u64, max_bytes: u64) {
+    let manifest_path = root.join(SCCM_MANIFEST_FILE_NAME);
+    let mut manifest: Value = serde_json::from_slice(
+        &fs::read(&manifest_path).expect("read synthetic manifest for limit mutation"),
+    )
+    .expect("synthetic manifest is JSON");
+    manifest["maxFilesPerSource"] = json!(max_files);
+    manifest["maxBytesPerSource"] = json!(max_bytes);
+    fs::write(
+        manifest_path,
+        serde_json::to_vec_pretty(&manifest).expect("serialize limit-mutated manifest"),
+    )
+    .expect("write limit-mutated manifest");
+}
+
 #[test]
 fn validated_v1_reader_projects_one_physical_client_artifact() {
     let temp = tempdir().expect("temporary root");
@@ -473,4 +488,76 @@ fn malformed_native_state_is_rejected_before_pure_projection() {
         manifest.artifacts[0].state,
         SccmManifestSourceState::Captured
     );
+}
+
+#[test]
+fn reader_enforces_the_physical_file_cap_per_canonical_source_before_evidence_reads() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let current = physical_artifact(SccmRotation::Current, b"policy-current");
+    let rotated = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
+    write_native_bundle(&bundle_root, &[current, rotated], &[]);
+    set_native_limits(&bundle_root, 1, 4096);
+
+    let error = read_sccm_manifest_or_legacy(&bundle_root)
+        .expect_err("two rotations cannot bypass one-file source cap");
+    assert!(error.to_string().contains("source file cap"));
+}
+
+#[test]
+fn reader_accepts_the_exact_physical_byte_cap_boundary() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let content = b"policy-current";
+    let current = physical_artifact(SccmRotation::Current, content);
+    write_native_bundle(&bundle_root, std::slice::from_ref(&current), &[]);
+    set_native_limits(&bundle_root, 1, content.len() as u64);
+
+    read_sccm_manifest_or_legacy(&bundle_root)
+        .expect("an artifact exactly at the source byte cap remains valid");
+}
+
+#[test]
+fn reader_rejects_multi_rotation_physical_bytes_over_the_source_cap() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let current = physical_artifact(SccmRotation::Current, b"policy-current");
+    let rotated = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
+    write_native_bundle(&bundle_root, &[current, rotated], &[]);
+    set_native_limits(&bundle_root, 2, b"policy-current".len() as u64);
+
+    let error = read_sccm_manifest_or_legacy(&bundle_root)
+        .expect_err("rotations cannot collectively exceed their source byte cap");
+    assert!(error.to_string().contains("source byte cap"));
+}
+
+#[test]
+fn reader_rejects_overflowing_physical_byte_totals_before_hashing_evidence() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let mut current = physical_artifact(SccmRotation::Current, b"policy-current");
+    current["bytesCopied"] = json!(u64::MAX);
+    let rotated = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
+    write_native_bundle(&bundle_root, &[current, rotated], &[]);
+    set_native_limits(&bundle_root, 2, u64::MAX);
+
+    let error = read_sccm_manifest_or_legacy(&bundle_root)
+        .expect_err("overflowing source bytes fail before unbounded evidence verification");
+    assert!(error.to_string().contains("source byte cap"));
+}
+
+#[cfg(unix)]
+#[test]
+fn reader_rejects_hard_linked_physical_evidence() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let current = physical_artifact(SccmRotation::Current, b"policy-current");
+    write_native_bundle(&bundle_root, std::slice::from_ref(&current), &[]);
+    let evidence = bundle_root.join(relative_path(&SccmRotation::Current));
+    fs::hard_link(&evidence, bundle_root.join("duplicate-evidence-link"))
+        .expect("create a second name for the evidence inode");
+
+    let error = read_sccm_manifest_or_legacy(&bundle_root)
+        .expect_err("hard-linked physical evidence is not a private capture artifact");
+    assert!(error.to_string().contains("single-link"));
 }
