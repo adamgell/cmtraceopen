@@ -1,7 +1,7 @@
 use app_lib::sccm::{
-    discover_client_sources, SccmClientDiscoveryInput, SccmClientDiscoveryObservation,
-    SccmClientDiscoveryObservationState, SccmClientDiscoveryState,
-    MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+    discover_client_sources, SccmClientDiscoveryError, SccmClientDiscoveryInput,
+    SccmClientDiscoveryObservation, SccmClientDiscoveryObservationState, SccmClientDiscoveryState,
+    MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS, MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
 };
 use cmtraceopen_parser::sccm::SccmRotation;
 use sha2::{Digest, Sha256};
@@ -408,7 +408,7 @@ fn discovery_rejects_conflicting_states_for_one_canonical_physical_source() {
 #[test]
 fn discovery_rejects_late_conflicts_after_the_global_declaration_frontier() {
     let mut observations = Vec::new();
-    for number in 1..=2_049 {
+    for number in 1..=2_047 {
         observations.push(observation(
             ROOT_A,
             &format!("AppEnforce.log.{number}"),
@@ -422,6 +422,12 @@ fn discovery_rejects_late_conflicts_after_the_global_declaration_frontier() {
             SccmClientDiscoveryObservationState::Found,
         ));
     }
+    observations.push(observation(
+        ROOT_A,
+        "AppEnforce.log.2048",
+        SccmRotation::Numbered(2_048),
+        SccmClientDiscoveryObservationState::Found,
+    ));
     observations.extend([
         observation(
             ROOT_A,
@@ -443,6 +449,7 @@ fn discovery_rejects_late_conflicts_after_the_global_declaration_frontier() {
 
     let error = discover_client_sources(&input)
         .expect_err("a conflict beyond the output frontier fails closed");
+    assert_eq!(error, SccmClientDiscoveryError::ConflictingObservation);
     let mut reversed = input;
     reversed.observations.reverse();
     assert_eq!(
@@ -481,6 +488,68 @@ fn discovery_rejects_conflicting_states_for_canonical_basename_aliases() {
         discover_client_sources(&reversed)
             .expect_err("canonical alias conflict fails closed regardless of input order")
     );
+}
+
+#[test]
+fn discovery_coalesces_same_state_canonical_aliases_to_the_stable_basename() {
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                ROOT_A,
+                "appenforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+        ],
+    };
+
+    let result = discover_client_sources(&input).expect("same-state aliases are one source");
+    let reversed = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: input.max_found_fragments_per_source,
+        observations: input.observations.into_iter().rev().collect(),
+    })
+    .expect("same-state aliases remain order independent");
+
+    assert_eq!(result, reversed);
+    assert_eq!(result.declarations.len(), 1);
+    assert_eq!(result.declarations[0].basename, "AppEnforce.log");
+    assert_eq!(
+        result.declarations[0].state,
+        SccmClientDiscoveryState::Discovered
+    );
+}
+
+#[test]
+fn discovery_rejects_observations_beyond_its_defensive_contract() {
+    let observations = (1..=MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS + 1)
+        .map(|number| {
+            observation(
+                ROOT_A,
+                &format!("AppEnforce.log.{number}"),
+                SccmRotation::Numbered(number as u32),
+                SccmClientDiscoveryObservationState::Found,
+            )
+        })
+        .collect();
+    let error = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+        observations,
+    })
+    .expect_err("the API must not silently ignore input beyond its defensive contract");
+
+    assert_eq!(error, SccmClientDiscoveryError::ObservationLimitExceeded);
+    assert_eq!(
+        error.to_string(),
+        "SCCM client discovery observation limit exceeded"
+    );
+    assert!(!error.to_string().contains(ROOT_A));
 }
 
 #[test]
