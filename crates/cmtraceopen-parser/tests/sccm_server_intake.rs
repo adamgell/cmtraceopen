@@ -52,6 +52,21 @@ fn load_expected(scenario: &str) -> Value {
     serde_json::from_str(&json).expect("expected intake output is valid JSON")
 }
 
+fn intake_scenarios() -> Vec<String> {
+    let mut scenarios = std::fs::read_dir(intake_root())
+        .expect("intake fixture root is readable")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("expected.json").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    scenarios.sort();
+    assert!(
+        !scenarios.is_empty(),
+        "the intake fixture root must contain committed expected.json oracles"
+    );
+    scenarios
+}
+
 fn opaque_handle(prefix: &str, ordinal: usize) -> String {
     format!("{prefix}{ordinal:064x}")
 }
@@ -186,9 +201,21 @@ fn assert_collision_contract(scenario: &str, expected: &Value, actual: &Value) {
         .expect("collision assertions are an object")
     {
         match key.as_str() {
-            "sameBasename" => assert!(artifacts
-                .iter()
-                .all(|artifact| { artifact["originalBasename"].as_str() == value.as_str() })),
+            "sameBasename" => {
+                let expected_basename = value
+                    .as_str()
+                    .expect("sameBasename expectation is a string");
+                let actual_basenames = artifacts
+                    .iter()
+                    .map(|artifact| artifact["originalBasename"].as_str())
+                    .collect::<Vec<_>>();
+                assert!(
+                    actual_basenames
+                        .iter()
+                        .all(|basename| *basename == Some(expected_basename)),
+                    "{scenario}: expected every basename to be {expected_basename:?}, got {actual_basenames:?}"
+                );
+            }
             "distinctPathFingerprints" => {
                 let fingerprints = artifacts
                     .iter()
@@ -411,12 +438,31 @@ fn assert_remaining_expected_contracts(
             }
             "crossBundleArtifactIdReuseAllowed" => {
                 assert_eq!(value, true);
-                let repeated = assess_server_intake(manifest_json, payloads)
-                    .expect("a separate assessment may reuse manifest-scoped IDs");
+                let mut second_manifest = manifest_value(manifest_json);
+                second_manifest["topology"]["captureHost"] =
+                    if second_manifest["syntheticFixture"] == true {
+                        Value::String("LAB-MP01".to_owned())
+                    } else {
+                        Value::String(opaque_handle("cmtraceopen.host.sha256.v1:", 999))
+                    };
+                let repeated =
+                    assess_server_intake(&serialize_manifest(&second_manifest), payloads)
+                        .expect("a distinct bundle may reuse manifest-scoped IDs");
+                let repeated = serde_json::to_value(repeated).expect("repeat serializes");
                 assert_eq!(
-                    serde_json::to_value(repeated).expect("repeat serializes"),
-                    *actual
+                    repeated["artifacts"]
+                        .as_array()
+                        .expect("repeat artifacts are an array")
+                        .iter()
+                        .map(|artifact| artifact["artifactId"].clone())
+                        .collect::<Vec<_>>(),
+                    actual_artifacts
+                        .iter()
+                        .map(|artifact| artifact["artifactId"].clone())
+                        .collect::<Vec<_>>(),
+                    "{scenario}: distinct bundles may reuse manifest-scoped IDs"
                 );
+                assert_ne!(repeated["topology"], actual["topology"]);
             }
             "deterministicEvidenceIds" => {
                 assert_eq!(value, true);
@@ -1424,12 +1470,9 @@ fn server_intake_expected_oracle_has_no_unhandled_contract_keys() {
     .into_iter()
     .map(str::to_owned)
     .collect::<BTreeSet<_>>();
-    let all_expected = std::fs::read_dir(intake_root())
-        .expect("intake fixture root is readable")
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().join("expected.json").is_file())
-        .flat_map(|entry| {
-            let scenario = entry.file_name().to_string_lossy().into_owned();
+    let all_expected = intake_scenarios()
+        .into_iter()
+        .flat_map(|scenario| {
             load_expected(&scenario)
                 .as_object()
                 .expect("expected contract is an object")
@@ -1453,13 +1496,7 @@ fn server_intake_expected_oracles_do_not_claim_native_collection_acceptance() {
         "neitherOverwritten",
     ]);
 
-    for entry in std::fs::read_dir(intake_root()).expect("intake fixture root is readable") {
-        let entry = entry.expect("fixture directory entry is readable");
-        let expected_path = entry.path().join("expected.json");
-        if !expected_path.is_file() {
-            continue;
-        }
-        let scenario = entry.file_name().to_string_lossy().into_owned();
+    for scenario in intake_scenarios() {
         let expected = load_expected(&scenario);
         let asserted_collision_keys = expected["collisionAssertions"]
             .as_object()
@@ -1497,9 +1534,20 @@ fn server_intake_rejects_ambiguous_retained_unknown_rotations() {
 fn server_intake_bounds_each_declared_artifact_limit() {
     let (manifest_json, payloads) = bounded_manifest(1, 268_435_457);
 
-    assert!(
-        assess_server_intake(&manifest_json, &payloads).is_err(),
+    assert_eq!(
+        assess_server_intake(&manifest_json, &payloads),
+        Err(SccmServerIntakeError::ManifestLimitExceeded),
         "a single artifact may not declare more than 256 MiB"
+    );
+}
+
+#[test]
+fn server_intake_accepts_a_manifest_within_all_resource_limits() {
+    let (manifest_json, payloads) = bounded_manifest(1, 4_096);
+
+    assert!(
+        assess_server_intake(&manifest_json, &payloads).is_ok(),
+        "the bounded-manifest helper must represent a valid baseline"
     );
 }
 
@@ -1507,8 +1555,9 @@ fn server_intake_bounds_each_declared_artifact_limit() {
 fn server_intake_bounds_manifest_artifact_count() {
     let (manifest_json, payloads) = bounded_manifest(513, 4_096);
 
-    assert!(
-        assess_server_intake(&manifest_json, &payloads).is_err(),
+    assert_eq!(
+        assess_server_intake(&manifest_json, &payloads),
+        Err(SccmServerIntakeError::ManifestLimitExceeded),
         "a manifest may not force unbounded per-artifact work"
     );
 }
@@ -1517,8 +1566,9 @@ fn server_intake_bounds_manifest_artifact_count() {
 fn server_intake_bounds_aggregate_declared_bytes() {
     let (manifest_json, payloads) = bounded_manifest(5, 268_435_456);
 
-    assert!(
-        assess_server_intake(&manifest_json, &payloads).is_err(),
+    assert_eq!(
+        assess_server_intake(&manifest_json, &payloads),
+        Err(SccmServerIntakeError::ManifestLimitExceeded),
         "aggregate declared collection work may not exceed 1 GiB"
     );
 }
@@ -1581,15 +1631,7 @@ fn server_intake_requires_producer_host_for_declared_sources() {
 
 #[test]
 fn server_intake_exercises_committed_expected_contracts() {
-    let mut scenarios = std::fs::read_dir(intake_root())
-        .expect("intake fixture root is readable")
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().join("expected.json").is_file())
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    scenarios.sort();
-
-    for scenario in scenarios {
+    for scenario in intake_scenarios() {
         let expected = load_expected(&scenario);
         let (manifest_json, payloads) = load_bundle(&scenario);
         let assessment = assess_server_intake(&manifest_json, &payloads)
@@ -1601,22 +1643,46 @@ fn server_intake_exercises_committed_expected_contracts() {
             "{scenario}: expected contract version"
         );
 
-        for key in [
-            "canonicalArtifactIds",
-            "canonicalRotationArtifactIds",
-            "retainedUnclassifiedArtifactIds",
-        ] {
-            if let Some(expected_ids) = expected.get(key) {
-                let actual_ids = Value::Array(
-                    actual["artifacts"]
-                        .as_array()
-                        .expect("assessment artifacts are an array")
-                        .iter()
-                        .map(|artifact| artifact["artifactId"].clone())
-                        .collect(),
-                );
-                assert_eq!(actual_ids, *expected_ids, "{scenario}: {key}");
-            }
+        let actual_artifacts = actual["artifacts"]
+            .as_array()
+            .expect("assessment artifacts are an array");
+        if let Some(expected_ids) = expected.get("canonicalArtifactIds") {
+            let actual_ids = Value::Array(
+                actual_artifacts
+                    .iter()
+                    .map(|artifact| artifact["artifactId"].clone())
+                    .collect(),
+            );
+            assert_eq!(
+                actual_ids, *expected_ids,
+                "{scenario}: canonicalArtifactIds"
+            );
+        }
+        if let Some(expected_ids) = expected.get("canonicalRotationArtifactIds") {
+            let actual_ids = Value::Array(
+                actual_artifacts
+                    .iter()
+                    .filter(|artifact| !artifact["rotation"].is_null())
+                    .map(|artifact| artifact["artifactId"].clone())
+                    .collect(),
+            );
+            assert_eq!(
+                actual_ids, *expected_ids,
+                "{scenario}: canonicalRotationArtifactIds"
+            );
+        }
+        if let Some(expected_ids) = expected.get("retainedUnclassifiedArtifactIds") {
+            let actual_ids = Value::Array(
+                actual_artifacts
+                    .iter()
+                    .filter(|artifact| artifact["producerRole"] == "unclassified")
+                    .map(|artifact| artifact["artifactId"].clone())
+                    .collect(),
+            );
+            assert_eq!(
+                actual_ids, *expected_ids,
+                "{scenario}: retainedUnclassifiedArtifactIds"
+            );
         }
 
         let expected_coverage = expected["coverage"]
@@ -1737,10 +1803,18 @@ fn server_intake_exercises_committed_expected_contracts() {
                         .expect("logicalRecordCount is an integer"),
                     "{scenario}: logical record count"
                 );
-                if let Some(line_range) = expected_row.get("lineRange") {
-                    assert_eq!(records[0]["reference"]["lineStart"], line_range["start"]);
-                    assert_eq!(records[0]["reference"]["lineEnd"], line_range["end"]);
-                }
+                let line_range = &expected_row["lineRange"];
+                let first = records.first().unwrap_or_else(|| {
+                    panic!("{scenario}: {artifact_id} has no evidence record for lineRange")
+                });
+                assert_eq!(
+                    first["reference"]["lineStart"], line_range["start"],
+                    "{scenario}: {artifact_id} line start"
+                );
+                assert_eq!(
+                    first["reference"]["lineEnd"], line_range["end"],
+                    "{scenario}: {artifact_id} line end"
+                );
                 let keys = expected_row
                     .as_object()
                     .expect("expected evidence row is an object")
