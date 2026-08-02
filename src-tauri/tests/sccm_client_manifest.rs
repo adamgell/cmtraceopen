@@ -556,6 +556,7 @@ fn reader_enforces_the_physical_file_cap_per_canonical_source_before_evidence_re
     let rotated = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
     write_native_bundle(&bundle_root, &[&current, &rotated], &[]);
     set_native_limits(&bundle_root, 1, 4096);
+    remove_written_evidence(&bundle_root, &rotated);
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
         .expect_err("two rotations cannot bypass one-file source cap");
