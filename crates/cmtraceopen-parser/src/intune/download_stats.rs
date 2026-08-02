@@ -1160,6 +1160,24 @@ mod tests {
     }
 
     #[test]
+    fn named_guid_fallback_is_shared_by_identity_and_download_extraction() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let message = format!(
+            r#"Download completed successfully correlation {app_guid} {{"Name":"Local Fallback Name"}}"#
+        );
+        assert_eq!(extract_content_id(&message).as_deref(), Some(app_guid));
+
+        let lines = vec![test_line(1, message)];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].content_id, app_guid);
+        assert_eq!(downloads[0].name, "Local Fallback Name");
+    }
+
+    #[test]
     fn explicit_same_scope_name_remains_valid_with_ingested_registry() {
         let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         let lines = vec![test_line(
