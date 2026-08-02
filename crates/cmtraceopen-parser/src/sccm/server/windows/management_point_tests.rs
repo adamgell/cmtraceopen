@@ -591,6 +591,14 @@ fn management_point_reducer_matches_the_frozen_terminal_and_coverage_contracts()
 #[test]
 fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
     let assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let assert_unbound =
+        |mutated: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment| {
+            assert!(matches!(
+                analyze_management_point_from_server_intake(mutated),
+                Err(SccmManagementPointIntakeError::SourceMismatch { artifact_id })
+                    if artifact_id == "management-point-intake-projection"
+            ));
+        };
     let analysis = analyze_management_point_from_server_intake(&assessment)
         .expect("complete canonical MP source must enter the reducer");
 
@@ -615,72 +623,45 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
     iis_artifact.fragment_complete = None;
     iis_artifact.truncated = None;
     supplemental_iis.artifacts.push(iis_artifact);
-    assert!(
-        analyze_management_point_from_server_intake(&supplemental_iis).is_err(),
-        "a caller cannot append even supplemental metadata after canonical intake"
-    );
+    assert_unbound(&supplemental_iis);
 
     let mut missing_role = assessment.clone();
     missing_role
         .topology
         .roles_observed
         .retain(|role| *role != SccmRole::ManagementPoint);
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&missing_role),
-        Err(SccmManagementPointIntakeError::TopologyMismatch)
-    ));
+    assert_unbound(&missing_role);
 
     let mut opaque_site_handle = assessment.clone();
     opaque_site_handle.topology.site_handle = format!("cmtraceopen.site.sha256.v1:{:064x}", 1);
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&opaque_site_handle),
-        Err(SccmManagementPointIntakeError::TopologyMismatch)
-    ));
+    assert_unbound(&opaque_site_handle);
 
     let mut wrong_role = assessment.clone();
     wrong_role.artifacts[0].producer_role = SccmRole::SiteServer;
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&wrong_role),
-        Err(SccmManagementPointIntakeError::RoleMismatch { .. })
-    ));
+    assert_unbound(&wrong_role);
 
     let mut wrong_profile = assessment.clone();
     wrong_profile.artifacts[0].source_version = Some("5.00.TEST.9999".to_owned());
     wrong_profile.artifacts[0].profile_eligible = true;
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&wrong_profile),
-        Err(SccmManagementPointIntakeError::ProfileMismatch { .. })
-    ));
+    assert_unbound(&wrong_profile);
 
     let mut wrong_source = assessment.clone();
     wrong_source.artifacts[0].source_id = "server-sitecomp".to_owned();
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&wrong_source),
-        Err(SccmManagementPointIntakeError::SourceMismatch { .. })
-    ));
+    assert_unbound(&wrong_source);
 
     let mut missing_coverage = assessment.clone();
     missing_coverage.coverage.clear();
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&missing_coverage),
-        Err(SccmManagementPointIntakeError::SourceMismatch { .. })
-    ));
+    assert_unbound(&missing_coverage);
 
     let mut capped = assessment.clone();
     capped.artifacts[0].state = SccmCoverageState::Capped;
     capped.artifacts[0].truncated = Some(true);
     capped.artifacts[0].fragment_complete = Some(false);
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&capped),
-        Err(SccmManagementPointIntakeError::IncompleteSource { .. })
-    ));
+    assert_unbound(&capped);
 
     let mut fragment = assessment;
     fragment.artifacts[0].fragment_complete = Some(false);
-    assert!(matches!(
-        analyze_management_point_from_server_intake(&fragment),
-        Err(SccmManagementPointIntakeError::IncompleteSource { .. })
-    ));
+    assert_unbound(&fragment);
 }
 
 #[test]

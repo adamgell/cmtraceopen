@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io::{self, Write};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::de::{Error as _, MapAccess, SeqAccess, Visitor};
@@ -194,6 +195,13 @@ impl SccmServerIntakeAssessment {
     }
 
     pub(crate) fn adapter_authority_is_intake_bound(&self) -> bool {
+        if self.topology.roles_observed.len() != self.intake_integrity.topology_role_count
+            || self.artifacts.len() != self.intake_integrity.artifacts.len()
+            || self.coverage.len() != self.intake_integrity.coverage.len()
+            || self.evidence.len() != self.intake_integrity.evidence.len()
+        {
+            return false;
+        }
         canonical_intake_integrity(
             self.schema_version,
             &self.topology,
@@ -212,20 +220,56 @@ impl SccmServerIntakeAssessment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SccmServerIntakeIntegrity {
     schema_version: u32,
-    topology: Vec<u8>,
-    artifacts: BTreeSet<Vec<u8>>,
-    coverage: BTreeSet<Vec<u8>>,
-    evidence: BTreeSet<Vec<u8>>,
+    topology_role_count: usize,
+    topology: IntakeIntegrityDigest,
+    artifacts: BTreeMap<ArtifactIntegrityIdentity, IntakeIntegrityDigest>,
+    coverage: BTreeMap<CoverageIntegrityIdentity, IntakeIntegrityDigest>,
+    evidence: BTreeMap<EvidenceIntegrityIdentity, IntakeIntegrityDigest>,
 }
+
+type IntakeIntegrityDigest = [u8; 32];
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ArtifactIntegrityIdentity(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CoverageIntegrityIdentity {
+    producer_role: String,
+    workflow_subject_role: String,
+    source_id: String,
+    state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct EvidenceIntegrityIdentity(String);
 
 #[cfg(test)]
 impl SccmServerIntakeIntegrity {
     fn retained_material_bytes(&self) -> usize {
         std::mem::size_of_val(&self.schema_version)
+            + std::mem::size_of_val(&self.topology_role_count)
             + self.topology.len()
-            + self.artifacts.iter().map(Vec::len).sum::<usize>()
-            + self.coverage.iter().map(Vec::len).sum::<usize>()
-            + self.evidence.iter().map(Vec::len).sum::<usize>()
+            + self
+                .artifacts
+                .iter()
+                .map(|(identity, digest)| identity.0.len() + digest.len())
+                .sum::<usize>()
+            + self
+                .coverage
+                .iter()
+                .map(|(identity, digest)| {
+                    identity.producer_role.len()
+                        + identity.workflow_subject_role.len()
+                        + identity.source_id.len()
+                        + identity.state.len()
+                        + digest.len()
+                })
+                .sum::<usize>()
+            + self
+                .evidence
+                .iter()
+                .map(|(identity, digest)| identity.0.len() + digest.len())
+                .sum::<usize>()
     }
 }
 
@@ -1142,23 +1186,127 @@ fn canonical_intake_integrity(
         return None;
     }
 
-    Some(SccmServerIntakeIntegrity {
-        schema_version,
-        topology: serde_json::to_vec(&normalized_topology).ok()?,
-        artifacts: canonical_record_set(artifacts)?,
-        coverage: canonical_record_set(&normalized_coverage)?,
-        evidence: canonical_record_set(evidence)?,
-    })
-}
-
-fn canonical_record_set<T: Serialize>(records: &[T]) -> Option<BTreeSet<Vec<u8>>> {
-    let mut canonical = BTreeSet::new();
-    for record in records {
-        if !canonical.insert(serde_json::to_vec(record).ok()?) {
+    let mut artifact_integrity = BTreeMap::new();
+    for artifact in artifacts {
+        if artifact_integrity
+            .insert(
+                ArtifactIntegrityIdentity(artifact.artifact_id.clone()),
+                canonical_record_digest(b"artifact", artifact)?,
+            )
+            .is_some()
+        {
             return None;
         }
     }
-    Some(canonical)
+
+    let mut coverage_integrity = BTreeMap::new();
+    for record in &normalized_coverage {
+        let identity = CoverageIntegrityIdentity {
+            producer_role: role_sort_key(&record.producer_role).to_owned(),
+            workflow_subject_role: record
+                .workflow_subject_role
+                .as_ref()
+                .map(role_sort_key)
+                .unwrap_or_default()
+                .to_owned(),
+            source_id: record.source_id.clone(),
+            state: coverage_sort_key(&record.state).to_owned(),
+        };
+        if coverage_integrity
+            .insert(identity, canonical_record_digest(b"coverage", record)?)
+            .is_some()
+        {
+            return None;
+        }
+    }
+
+    let mut evidence_integrity = BTreeMap::new();
+    for record in evidence {
+        if evidence_integrity
+            .insert(
+                EvidenceIntegrityIdentity(record.evidence_id.clone()),
+                canonical_record_digest(b"evidence", record)?,
+            )
+            .is_some()
+        {
+            return None;
+        }
+    }
+
+    Some(SccmServerIntakeIntegrity {
+        schema_version,
+        topology_role_count: normalized_topology.roles_observed.len(),
+        topology: canonical_record_digest(b"topology", &normalized_topology)?,
+        artifacts: artifact_integrity,
+        coverage: coverage_integrity,
+        evidence: evidence_integrity,
+    })
+}
+
+const INTAKE_INTEGRITY_DOMAIN: &[u8] = b"cmtraceopen.sccm.server-intake.integrity.v1";
+
+struct IntakeIntegrityWriter(Sha256);
+
+impl Write for IntakeIntegrityWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct IntakeIntegrityLengthWriter(u64);
+
+impl Write for IntakeIntegrityLengthWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(u64::try_from(bytes.len()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "integrity input length overflow",
+                )
+            })?)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "integrity input length overflow",
+                )
+            })?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn framed_integrity_hasher(domain: &[u8], payload_len: u64) -> Option<Sha256> {
+    let domain_len = u64::try_from(domain.len()).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(INTAKE_INTEGRITY_DOMAIN);
+    hasher.update(domain_len.to_be_bytes());
+    hasher.update(domain);
+    hasher.update(payload_len.to_be_bytes());
+    Some(hasher)
+}
+
+fn canonical_record_digest<T: Serialize>(
+    domain: &[u8],
+    record: &T,
+) -> Option<IntakeIntegrityDigest> {
+    let mut length = IntakeIntegrityLengthWriter::default();
+    serde_json::to_writer(&mut length, record).ok()?;
+    let mut writer = IntakeIntegrityWriter(framed_integrity_hasher(domain, length.0)?);
+    serde_json::to_writer(&mut writer, record).ok()?;
+    let digest = writer.0.finalize();
+    let mut encoded = [0; 32];
+    encoded.copy_from_slice(&digest);
+    Some(encoded)
 }
 
 #[cfg(test)]
@@ -1239,13 +1387,24 @@ mod intake_integrity_tests {
 
         let mut evidence_mutation = assessment.clone();
         evidence_mutation.evidence[0].message.push_str(" changed");
-        assert_ne!(integrity(&evidence_mutation), Some(baseline));
+        assert_ne!(integrity(&evidence_mutation), Some(baseline.clone()));
 
         let mut duplicate = assessment.clone();
         duplicate.evidence.push(duplicate.evidence[0].clone());
         assert_eq!(integrity(&duplicate), None);
 
-        let mut collision = assessment;
+        let mut removed = assessment.clone();
+        removed.evidence.clear();
+        assert_ne!(integrity(&removed), Some(baseline.clone()));
+
+        let mut appended = assessment.clone();
+        let mut appended_record = appended.evidence[0].clone();
+        appended_record.evidence_id = "mp-policy-current:replayed".to_owned();
+        appended_record.reference.entry_id = "mp-policy-current:replayed".to_owned();
+        appended.evidence.push(appended_record);
+        assert_ne!(integrity(&appended), Some(baseline.clone()));
+
+        let mut collision = assessment.clone();
         let mut colliding_record = collision.evidence[0].clone();
         colliding_record.message.push_str(" different content");
         collision.evidence.push(colliding_record);
@@ -1253,6 +1412,59 @@ mod intake_integrity_tests {
             integrity(&collision),
             None,
             "one semantic evidence identity cannot retain two bodies"
+        );
+
+        let mut artifact_collision = assessment.clone();
+        let mut colliding_artifact = artifact_collision.artifacts[0].clone();
+        colliding_artifact.path_fingerprint.push_str("-different");
+        artifact_collision.artifacts.push(colliding_artifact);
+        assert_eq!(integrity(&artifact_collision), None);
+
+        let mut coverage_collision = assessment.clone();
+        let mut colliding_coverage = coverage_collision.coverage[0].clone();
+        colliding_coverage.artifact_ids = vec!["different-artifact".to_owned()];
+        coverage_collision.coverage.push(colliding_coverage);
+        assert_eq!(integrity(&coverage_collision), None);
+
+        let mut duplicate_membership = assessment.clone();
+        let artifact_id = duplicate_membership.coverage[0].artifact_ids[0].clone();
+        duplicate_membership.coverage[0]
+            .artifact_ids
+            .push(artifact_id);
+        assert_eq!(integrity(&duplicate_membership), None);
+
+        let mut duplicate_topology_role = assessment;
+        duplicate_topology_role
+            .topology
+            .roles_observed
+            .push(SccmRole::ManagementPoint);
+        assert_eq!(integrity(&duplicate_topology_role), None);
+    }
+
+    #[test]
+    fn intake_integrity_hash_framing_separates_domains_and_boundaries() {
+        fn framed_digest(domain: &[u8], payload: &[u8]) -> IntakeIntegrityDigest {
+            let mut hasher = framed_integrity_hasher(
+                domain,
+                u64::try_from(payload.len()).expect("test payload length"),
+            )
+            .expect("test hash framing");
+            hasher.update(payload);
+            let digest = hasher.finalize();
+            let mut encoded = [0; 32];
+            encoded.copy_from_slice(&digest);
+            encoded
+        }
+
+        assert_ne!(
+            framed_digest(b"artifact", b"same-body"),
+            framed_digest(b"evidence", b"same-body"),
+            "record domains must not share a digest namespace"
+        );
+        assert_ne!(
+            framed_digest(b"a", b"bc"),
+            framed_digest(b"ab", b"c"),
+            "domain and payload boundaries must be length-framed"
         );
     }
 }

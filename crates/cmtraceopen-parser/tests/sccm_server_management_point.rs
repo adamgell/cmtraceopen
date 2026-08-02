@@ -62,6 +62,7 @@ fn canonical_intake_adapter_derives_assessed_mp_evidence_and_fails_closed() {
     capped.artifacts[0].fragment_complete = Some(false);
     assert!(matches!(
         analyze_management_point_from_server_intake(&capped),
-        Err(SccmManagementPointIntakeError::IncompleteSource { .. })
+        Err(SccmManagementPointIntakeError::SourceMismatch { artifact_id })
+            if artifact_id == "management-point-intake-projection"
     ));
 }

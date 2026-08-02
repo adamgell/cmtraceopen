@@ -303,6 +303,11 @@ struct ReducedTransaction {
 pub fn analyze_management_point_from_server_intake(
     assessment: &SccmServerIntakeAssessment,
 ) -> Result<SccmManagementPointAnalysis, SccmManagementPointIntakeError> {
+    if !assessment.adapter_authority_is_intake_bound() {
+        return Err(SccmManagementPointIntakeError::SourceMismatch {
+            artifact_id: "management-point-intake-projection".to_owned(),
+        });
+    }
     if !assessment
         .topology
         .roles_observed
@@ -429,12 +434,6 @@ pub fn analyze_management_point_from_server_intake(
         .cloned()
         .collect::<Vec<_>>();
     evidence.sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
-
-    if !assessment.adapter_authority_is_intake_bound() {
-        return Err(SccmManagementPointIntakeError::SourceMismatch {
-            artifact_id: "management-point-intake-projection".to_owned(),
-        });
-    }
 
     Ok(analyze_management_point_fixture(
         &SccmManagementPointBundle {
