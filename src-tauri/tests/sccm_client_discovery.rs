@@ -391,6 +391,12 @@ fn discovery_rejects_conflicting_states_for_one_canonical_physical_source() {
 
     let error =
         discover_client_sources(&input).expect_err("contradictory physical evidence fails closed");
+    assert_eq!(
+        error.to_string(),
+        "conflicting SCCM client discovery observations"
+    );
+    assert!(!error.to_string().contains(ROOT_A));
+    assert!(!error.to_string().contains("AppEnforce.log"));
     let mut reversed = input;
     reversed.observations.reverse();
     let reversed_error = discover_client_sources(&reversed)
