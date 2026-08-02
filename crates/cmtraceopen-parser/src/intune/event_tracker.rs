@@ -492,8 +492,9 @@ pub fn extract_events(
             continue;
         };
 
-        let guid = match guid_registry::explicit_app_identity(&line.message) {
-            guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid),
+        let identity_context = guid_registry::explicit_app_identity_context(&line.message);
+        let guid = match &identity_context.identity {
+            guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
             guid_registry::ExplicitAppIdentity::Invalid => None,
             guid_registry::ExplicitAppIdentity::Absent => {
                 extract_guid(&line.message).or_else(|| guid_registry::extract_app_id(&line.message))
@@ -503,10 +504,8 @@ pub fn extract_events(
         let raw_name = build_event_name(&event_type, &guid, &line.message, source_kind);
 
         // Inline enrichment: resolve GUID suffix immediately if possible
-        let name = match guid.as_deref() {
-            Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
-            None => raw_name,
-        };
+        let name =
+            enrich_event_name_for_identity(raw_name, guid.as_deref(), &identity_context, registry);
 
         let detail = line.message.clone();
 
@@ -536,6 +535,28 @@ pub fn extract_events(
 
     pair_events(&mut events);
     events
+}
+
+fn enrich_event_name_for_identity(
+    current_name: String,
+    guid: Option<&str>,
+    identity_context: &guid_registry::ExplicitAppIdentityContext,
+    registry: &GuidRegistry,
+) -> String {
+    let Some(guid) = guid else {
+        return current_name;
+    };
+    let enriched = match &identity_context.identity {
+        guid_registry::ExplicitAppIdentity::Valid(_) => identity_context
+            .local_name
+            .as_deref()
+            .and_then(|name| guid_registry::enrich_event_name_with_name(&current_name, name)),
+        guid_registry::ExplicitAppIdentity::Absent => {
+            registry.enrich_event_name(&current_name, guid)
+        }
+        guid_registry::ExplicitAppIdentity::Invalid => None,
+    };
+    enriched.unwrap_or(current_name)
 }
 
 fn extract_appworkload_event(
@@ -584,8 +605,9 @@ fn extract_appworkload_event(
         return None;
     };
 
-    let guid = match guid_registry::explicit_app_identity(msg) {
-        guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid),
+    let identity_context = guid_registry::explicit_app_identity_context(msg);
+    let guid = match &identity_context.identity {
+        guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
         guid_registry::ExplicitAppIdentity::Invalid => None,
         guid_registry::ExplicitAppIdentity::Absent => {
             // Preserve the established AppWorkload heuristics only when the
@@ -613,10 +635,8 @@ fn extract_appworkload_event(
         };
         let raw_name = format!("Script Detection {phase} ({short})");
 
-        let name = match guid.as_deref() {
-            Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
-            None => raw_name,
-        };
+        let name =
+            enrich_event_name_for_identity(raw_name, guid.as_deref(), &identity_context, registry);
 
         return Some(IntuneEvent {
             id: next_id,
@@ -645,10 +665,8 @@ fn extract_appworkload_event(
     let raw_name = build_appworkload_name(&event_type, &guid, msg, flags);
 
     // Inline enrichment: resolve GUID suffix immediately if possible
-    let name = match guid.as_deref() {
-        Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
-        None => raw_name,
-    };
+    let name =
+        enrich_event_name_for_identity(raw_name, guid.as_deref(), &identity_context, registry);
     let detail = build_appworkload_detail(lines, index, guid.as_deref(), msg, status);
 
     Some(IntuneEvent {
@@ -2382,25 +2400,24 @@ mod tests {
             r#"AppWorkload download {{"AppId":"{app_guid}","ApplicationName":"Local Name"}}"#
         );
         let fallback = format!("ESP status for app {app_guid}");
-        let mut registry = GuidRegistry::new();
-        registry.ingest_lines(&[
-            line(&explicit, "01-15-2024 10:00:04.000", 1),
-            line(
-                &format!(r#"Observed identity {app_guid} {{"ApplicationName":"Fallback Name"}}"#),
-                "01-15-2024 10:00:04.000",
-                2,
-            ),
-        ]);
+        let mut explicit_registry = GuidRegistry::new();
+        explicit_registry.ingest_lines(&[line(&explicit, "01-15-2024 10:00:04.000", 1)]);
+        let mut fallback_registry = GuidRegistry::new();
+        fallback_registry.ingest_lines(&[line(
+            &format!(r#"Observed identity {app_guid} {{"ApplicationName":"Fallback Name"}}"#),
+            "01-15-2024 10:00:04.000",
+            2,
+        )]);
 
         let explicit_events = extract_events(
             &[line(&explicit, "01-15-2024 10:00:05.000", 3)],
             "C:/Logs/AppWorkload.log",
-            &registry,
+            &explicit_registry,
         );
         let fallback_events = extract_events(
             &[line(&fallback, "01-15-2024 10:00:05.000", 4)],
             "C:/Logs/IntuneManagementExtension.log",
-            &registry,
+            &fallback_registry,
         );
 
         assert_eq!(explicit_events.len(), 1);

@@ -40,6 +40,12 @@ pub(crate) enum ExplicitAppIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExplicitAppIdentityContext {
+    pub identity: ExplicitAppIdentity,
+    pub local_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum IdentityFieldState {
     Absent,
     Valid(String),
@@ -186,8 +192,7 @@ impl GuidRegistry {
     /// Returns `None` if the name doesn't match the pattern or the GUID is unknown.
     pub fn enrich_event_name(&self, current_name: &str, guid: &str) -> Option<String> {
         let resolved = self.resolve(guid)?;
-        // Strip the trailing "(shortguid...)" suffix and replace with the resolved name
-        strip_short_guid_suffix(current_name).map(|prefix| format!("{prefix}{resolved}"))
+        enrich_event_name_with_name(current_name, resolved)
     }
 
     /// Number of entries in the registry.
@@ -608,15 +613,30 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
     }
 }
 
-/// Extract an explicit app identity together with a name from that identity's
-/// own JSON object. Names in a sibling or nested object are not associated.
-pub(crate) fn extract_explicit_identity_name_pair(msg: &str) -> Option<(String, String)> {
-    let scan = scan_json_fields(msg).ok()?;
+/// Resolve one explicit identity selection and its object-local name in a
+/// single bounded scan. A valid identity without a local unambiguous name is
+/// an enrichment boundary; callers must not substitute a global registry name.
+pub(crate) fn explicit_app_identity_context(msg: &str) -> ExplicitAppIdentityContext {
+    let Ok(scan) = scan_json_fields(msg) else {
+        return ExplicitAppIdentityContext {
+            identity: ExplicitAppIdentity::Invalid,
+            local_name: None,
+        };
+    };
+
     match select_explicit_app_identity(&scan) {
-        ExplicitAppIdentitySelection::Valid { guid, scope } => {
-            scope_name(scope).map(|(name, _)| (guid, name))
-        }
-        ExplicitAppIdentitySelection::Absent | ExplicitAppIdentitySelection::Invalid => None,
+        ExplicitAppIdentitySelection::Absent => ExplicitAppIdentityContext {
+            identity: ExplicitAppIdentity::Absent,
+            local_name: None,
+        },
+        ExplicitAppIdentitySelection::Valid { guid, scope } => ExplicitAppIdentityContext {
+            identity: ExplicitAppIdentity::Valid(guid),
+            local_name: scope_name(scope).map(|(name, _)| name),
+        },
+        ExplicitAppIdentitySelection::Invalid => ExplicitAppIdentityContext {
+            identity: ExplicitAppIdentity::Invalid,
+            local_name: None,
+        },
     }
 }
 
@@ -624,15 +644,7 @@ pub(crate) fn extract_explicit_identity_name_pair(msg: &str) -> Option<(String, 
 /// GUIDs on the line. An invalid explicit field is an identity boundary: its
 /// presence suppresses line-wide GUID inference.
 pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
-    let Ok(scan) = scan_json_fields(msg) else {
-        return ExplicitAppIdentity::Invalid;
-    };
-
-    match select_explicit_app_identity(&scan) {
-        ExplicitAppIdentitySelection::Absent => ExplicitAppIdentity::Absent,
-        ExplicitAppIdentitySelection::Valid { guid, .. } => ExplicitAppIdentity::Valid(guid),
-        ExplicitAppIdentitySelection::Invalid => ExplicitAppIdentity::Invalid,
-    }
+    explicit_app_identity_context(msg).identity
 }
 
 fn select_explicit_app_identity<'scan, 'msg>(
@@ -860,6 +872,13 @@ fn strip_short_guid_suffix(name: &str) -> Option<String> {
     }
     let prefix = trimmed[..paren_open].trim_end();
     Some(format!("{prefix} — "))
+}
+
+pub(crate) fn enrich_event_name_with_name(
+    current_name: &str,
+    resolved_name: &str,
+) -> Option<String> {
+    strip_short_guid_suffix(current_name).map(|prefix| format!("{prefix}{resolved_name}"))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
