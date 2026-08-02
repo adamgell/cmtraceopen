@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::slice;
 
 use serde::de::Error as _;
 use serde::ser::Error as _;
@@ -16,7 +17,27 @@ use super::models::{
 
 pub const MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS: usize = 240;
 pub const MAX_SCCM_NEXT_ARTIFACT_REQUESTS: usize = 16;
-const MAX_SCCM_COVERAGE_GAP_ARTIFACT_ID_CHARS: usize = 256;
+// Shared wire bound for every opaque identifier a finding carries: finding
+// ids, evidence artifact and entry ids, coverage-gap artifact ids, request
+// logical ids, and extraction profile ids. Enforced inside
+// is_canonical_opaque_id so no identifier path can skip it.
+const MAX_SCCM_OPAQUE_ID_CHARS: usize = 256;
+// Single-line display heading; twice the opaque id bound covers generated
+// "<subject> <outcome>" headings without admitting unbounded text.
+const MAX_SCCM_FINDING_TITLE_CHARS: usize = 512;
+// Multi-sentence display paragraph shown in the finding detail pane.
+const MAX_SCCM_FINDING_SUMMARY_CHARS: usize = 2048;
+// Correlation-key raw and normalized values. The widest canonical form is a
+// 253-character server-host FQDN; 256 leaves room for braces and prefixes
+// while excluding unbounded decimal ids.
+// Do not lower this. normalize_server_host self-caps a host at 253 chars, so
+// a worst-case ServerHost key normalizes to 254 with a trailing-dot source
+// against this 256 limit, roughly 99% of the bound and the tightest headroom
+// any bound in this module carries.
+// Shared with the extraction producer in keys.rs so extract_keys cannot emit a
+// key this validator would reject. Crate-visible rather than public: it is an
+// internal agreement between the producer and the validator, not wire surface.
+pub(crate) const MAX_SCCM_CORRELATION_KEY_VALUE_CHARS: usize = 256;
 // Intentionally empty: no extraction profile is verified as stable enough to
 // authorize key-only High confidence. Adding one requires contract review.
 const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] = &[];
@@ -152,8 +173,7 @@ impl<'de> Deserialize<'de> for SccmTerminalEvidenceKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SccmTerminalEvidence {
     pub reference: SccmEvidenceRef,
     pub kind: SccmTerminalEvidenceKind,
@@ -168,20 +188,44 @@ impl SccmTerminalEvidence {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmFindingCoverageGap {
     pub artifact_id: String,
     pub role: SccmRole,
     pub coverage: SccmCoverageState,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmArtifactRequest {
     pub logical_id: String,
     pub role: SccmRole,
     pub reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmArtifactRequestSerializeWire<'a> {
+    logical_id: &'a str,
+    role: &'a SccmRole,
+    reason: &'a str,
+}
+
+impl Serialize for SccmArtifactRequest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_artifact_requests(slice::from_ref(self)).map_err(|error| {
+            S::Error::custom(format!("invalid SCCM artifact request contract: {error:?}"))
+        })?;
+        let reason = self.reason.trim();
+        SccmArtifactRequestSerializeWire {
+            logical_id: &self.logical_id,
+            role: &self.role,
+            reason,
+        }
+        .serialize(serializer)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -269,6 +313,35 @@ struct SccmFindingWire {
     next_artifacts: Vec<SccmArtifactRequestWire>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmEvidenceRefSerializeWire<'a> {
+    artifact_id: &'a str,
+    entry_id: &'a str,
+    line_start: Option<u32>,
+    line_end: Option<u32>,
+}
+
+impl Serialize for SccmEvidenceRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_evidence_reference(self).map_err(|error| {
+            S::Error::custom(format!(
+                "invalid SCCM evidence reference contract: {error:?}"
+            ))
+        })?;
+        SccmEvidenceRefSerializeWire {
+            artifact_id: &self.artifact_id,
+            entry_id: &self.entry_id,
+            line_start: self.line_start,
+            line_end: self.line_end,
+        }
+        .serialize(serializer)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SccmEvidenceRefWire {
@@ -289,6 +362,54 @@ impl From<SccmEvidenceRefWire> for SccmEvidenceRef {
     }
 }
 
+// SccmEvidenceRef is declared in models.rs, but its wire contract belongs
+// here next to the validator it must satisfy. Every reference the crate
+// accepts, whether standalone or nested in SccmEvidence or an extraction gap,
+// clears the same bar a finding's own citations clear.
+impl<'de> Deserialize<'de> for SccmEvidenceRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let reference = Self::from(SccmEvidenceRefWire::deserialize(deserializer)?);
+        validate_evidence_reference(&reference).map_err(|error| {
+            D::Error::custom(format!(
+                "invalid SCCM evidence reference contract: {error:?}"
+            ))
+        })?;
+        Ok(reference)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmTerminalEvidenceSerializeWire<'a> {
+    reference: &'a SccmEvidenceRef,
+    kind: &'a SccmTerminalEvidenceKind,
+}
+
+impl Serialize for SccmTerminalEvidence {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_evidence_reference(&self.reference)
+            .and_then(|()| {
+                validate_terminal_evidence(slice::from_ref(&self.reference), slice::from_ref(self))
+            })
+            .map_err(|error| {
+                S::Error::custom(format!(
+                    "invalid SCCM terminal evidence contract: {error:?}"
+                ))
+            })?;
+        SccmTerminalEvidenceSerializeWire {
+            reference: &self.reference,
+            kind: &self.kind,
+        }
+        .serialize(serializer)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SccmTerminalEvidenceWire {
@@ -302,6 +423,56 @@ impl From<SccmTerminalEvidenceWire> for SccmTerminalEvidence {
             reference: wire.reference.into(),
             kind: wire.kind,
         }
+    }
+}
+
+// A standalone terminal evidence has no surrounding finding to cite, so it
+// stands as its own citation set. That trivially satisfies the "must be cited"
+// rule while still enforcing the kind gate: only observedFailure is terminal.
+impl<'de> Deserialize<'de> for SccmTerminalEvidence {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let terminal = Self::from(SccmTerminalEvidenceWire::deserialize(deserializer)?);
+        validate_evidence_reference(&terminal.reference)
+            .and_then(|()| {
+                validate_terminal_evidence(
+                    slice::from_ref(&terminal.reference),
+                    slice::from_ref(&terminal),
+                )
+            })
+            .map_err(|error| {
+                D::Error::custom(format!(
+                    "invalid SCCM terminal evidence contract: {error:?}"
+                ))
+            })?;
+        Ok(terminal)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmFindingCoverageGapSerializeWire<'a> {
+    artifact_id: &'a str,
+    role: &'a SccmRole,
+    coverage: &'a SccmCoverageState,
+}
+
+impl Serialize for SccmFindingCoverageGap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_coverage_gaps(slice::from_ref(self)).map_err(|error| {
+            S::Error::custom(format!("invalid SCCM coverage gap contract: {error:?}"))
+        })?;
+        SccmFindingCoverageGapSerializeWire {
+            artifact_id: &self.artifact_id,
+            role: &self.role,
+            coverage: &self.coverage,
+        }
+        .serialize(serializer)
     }
 }
 
@@ -320,6 +491,58 @@ impl From<SccmFindingCoverageGapWire> for SccmFindingCoverageGap {
             role: wire.role,
             coverage: wire.coverage,
         }
+    }
+}
+
+// A coverage gap deserialized on its own must clear the same bar it clears
+// as a member of SccmFinding::coverage_gaps, so route it through the same
+// deny_unknown_fields wire struct and the same validator.
+impl<'de> Deserialize<'de> for SccmFindingCoverageGap {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let gap = Self::from(SccmFindingCoverageGapWire::deserialize(deserializer)?);
+        validate_coverage_gaps(slice::from_ref(&gap)).map_err(|error| {
+            D::Error::custom(format!("invalid SCCM coverage gap contract: {error:?}"))
+        })?;
+        Ok(gap)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmCorrelationKeySerializeWire<'a> {
+    kind: &'a SccmCorrelationKeyKind,
+    raw: &'a str,
+    normalized: &'a str,
+    confidence: &'a SccmKeyConfidence,
+    extraction_profile_id: Option<&'a str>,
+    evidence: Option<&'a SccmEvidenceRef>,
+    start: Option<usize>,
+    end: Option<usize>,
+}
+
+impl Serialize for SccmCorrelationKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_correlation_key_evidence(self.evidence.as_slice(), slice::from_ref(self))
+            .map_err(|error| {
+                S::Error::custom(format!("invalid SCCM correlation key contract: {error:?}"))
+            })?;
+        SccmCorrelationKeySerializeWire {
+            kind: &self.kind,
+            raw: &self.raw,
+            normalized: &self.normalized,
+            confidence: &self.confidence,
+            extraction_profile_id: self.extraction_profile_id.as_deref(),
+            evidence: self.evidence.as_ref(),
+            start: self.start,
+            end: self.end,
+        }
+        .serialize(serializer)
     }
 }
 
@@ -351,6 +574,28 @@ impl From<SccmCorrelationKeyWire> for SccmCorrelationKey {
     }
 }
 
+// The key's own evidence reference stands in as its citation set, exactly as
+// it would inside a finding. Containment is therefore self-satisfying here, so
+// validate_correlation_key_evidence validates the reference itself before it
+// checks containment; the wire struct nests SccmEvidenceRefWire and cannot
+// rely on the SccmEvidenceRef deserializer to do it. Crucially this keeps the
+// confidence gate in force: while REGISTERED_STABLE_CORRELATION_PROFILE_IDS is
+// empty, no payload can deserialize a Strong or Exact key and forge
+// corroboration strength.
+impl<'de> Deserialize<'de> for SccmCorrelationKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let key = Self::from(SccmCorrelationKeyWire::deserialize(deserializer)?);
+        let citations = key.evidence.as_slice();
+        validate_correlation_key_evidence(citations, slice::from_ref(&key)).map_err(|error| {
+            D::Error::custom(format!("invalid SCCM correlation key contract: {error:?}"))
+        })?;
+        Ok(key)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SccmArtifactRequestWire {
@@ -366,6 +611,23 @@ impl From<SccmArtifactRequestWire> for SccmArtifactRequest {
             role: wire.role,
             reason: wire.reason,
         }
+    }
+}
+
+// Same contract as a request carried inside SccmFinding::next_artifacts: the
+// logical id must name a declared catalog source for the requested role and
+// the reason must stay bounded and scoped to that artifact.
+impl<'de> Deserialize<'de> for SccmArtifactRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut request = Self::from(SccmArtifactRequestWire::deserialize(deserializer)?);
+        validate_artifact_requests(slice::from_ref(&request)).map_err(|error| {
+            D::Error::custom(format!("invalid SCCM artifact request contract: {error:?}"))
+        })?;
+        request.reason = request.reason.trim().to_owned();
+        Ok(request)
     }
 }
 
@@ -393,6 +655,9 @@ impl<'de> Deserialize<'de> for SccmFinding {
             correlation_keys: wire.correlation_keys.into_iter().map(Into::into).collect(),
             next_artifacts: wire.next_artifacts.into_iter().map(Into::into).collect(),
         };
+        validate_raw_text_bounds(&finding).map_err(|error| {
+            D::Error::custom(format!("invalid SCCM finding contract: {error:?}"))
+        })?;
         normalize_finding(&mut finding);
         finding.validate().map_err(|error| {
             D::Error::custom(format!("invalid SCCM finding contract: {error:?}"))
@@ -403,6 +668,7 @@ impl<'de> Deserialize<'de> for SccmFinding {
 
 impl SccmFinding {
     pub fn validate(&self) -> Result<(), SccmFindingValidationError> {
+        validate_raw_text_bounds(self)?;
         validate_required_text(self)?;
         validate_roles(self)?;
         validate_all_evidence_references(self)?;
@@ -457,6 +723,7 @@ pub enum SccmFindingValidationError {
     InvalidRole,
     InvalidEvidenceReference,
     ConflictingEvidenceReference,
+    OverlappingEvidenceReference,
     MissingEvidenceOrCoverageGap,
     MissingTerminalEvidence,
     InvalidTerminalEvidence,
@@ -611,16 +878,35 @@ impl SccmFindingBuilder {
             correlation_keys: self.correlation_keys,
             next_artifacts: self.next_artifacts,
         };
+        validate_raw_text_bounds(&finding)?;
         normalize_finding(&mut finding);
         finding.validate()?;
         Ok(finding)
     }
 }
 
+fn validate_raw_text_bounds(finding: &SccmFinding) -> Result<(), SccmFindingValidationError> {
+    if !has_at_most_chars(&finding.title, MAX_SCCM_FINDING_TITLE_CHARS)
+        || !has_at_most_chars(&finding.summary, MAX_SCCM_FINDING_SUMMARY_CHARS)
+    {
+        return Err(SccmFindingValidationError::MissingRequiredField);
+    }
+    if finding
+        .next_artifacts
+        .iter()
+        .any(|request| !has_at_most_chars(&request.reason, MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS))
+    {
+        return Err(SccmFindingValidationError::InvalidArtifactRequestReason);
+    }
+    Ok(())
+}
+
 fn validate_required_text(finding: &SccmFinding) -> Result<(), SccmFindingValidationError> {
+    let title = finding.title.trim();
+    let summary = finding.summary.trim();
     if !is_canonical_opaque_id(&finding.finding_id)
-        || finding.title.trim().is_empty()
-        || finding.summary.trim().is_empty()
+        || title.is_empty()
+        || summary.is_empty()
         || !finding.phase.has_canonical_serialized_form()
     {
         return Err(SccmFindingValidationError::MissingRequiredField);
@@ -644,11 +930,9 @@ fn validate_roles(finding: &SccmFinding) -> Result<(), SccmFindingValidationErro
     Ok(())
 }
 
-fn validate_all_evidence_references(
-    finding: &SccmFinding,
-) -> Result<(), SccmFindingValidationError> {
-    let mut ranges_by_identity = BTreeMap::new();
-    for reference in finding
+/// Every reference a finding cites, across all three citation surfaces.
+fn cited_evidence_references(finding: &SccmFinding) -> impl Iterator<Item = &SccmEvidenceRef> {
+    finding
         .evidence
         .iter()
         .chain(
@@ -663,15 +947,101 @@ fn validate_all_evidence_references(
                 .iter()
                 .filter_map(|key| key.evidence.as_ref()),
         )
-    {
+}
+
+fn validate_all_evidence_references(
+    finding: &SccmFinding,
+) -> Result<(), SccmFindingValidationError> {
+    let mut references_by_identity: BTreeMap<(&str, &str), &SccmEvidenceRef> = BTreeMap::new();
+    for reference in cited_evidence_references(finding) {
         validate_evidence_reference(reference)?;
-        let identity = (reference.artifact_id.as_str(), reference.entry_id.as_str());
-        let range = (reference.line_start, reference.line_end);
-        if ranges_by_identity
-            .insert(identity, range)
-            .is_some_and(|existing| existing != range)
+        if references_by_identity
+            .insert(evidence_identity(reference), reference)
+            .is_some_and(|existing| {
+                (existing.line_start, existing.line_end)
+                    != (reference.line_start, reference.line_end)
+            })
         {
             return Err(SccmFindingValidationError::ConflictingEvidenceReference);
+        }
+    }
+    validate_disjoint_evidence_spans(&references_by_identity)
+}
+
+/// Whether two references claim overlapping physical lines of one source.
+///
+/// Physical extent, not an identity tuple, is the question. Two logical
+/// records of one artifact occupy disjoint lines, so any overlap means at
+/// least one of them is not the record it claims to be. Bounds are inclusive,
+/// so equal spans are the degenerate overlap and abutting spans (`1-2` beside
+/// `3-4`) are not one. A reference that carries no bounds asserts no extent and
+/// therefore cannot be shown to claim another reference's lines.
+///
+/// This presumes bounds that already passed a validity gate. An inverted range
+/// reads as empty under an inclusive test and would be silently judged disjoint
+/// from everything, so the gate has to run first, not after: the spine calls
+/// [`validate_evidence_reference`] on every reference before any pair reaches
+/// this predicate, and a reducer that hands over unvalidated references is
+/// responsible for its own gate.
+pub(crate) fn evidence_references_overlap(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> bool {
+    if left.artifact_id != right.artifact_id {
+        return false;
+    }
+    matches!(
+        (
+            left.line_start,
+            left.line_end,
+            right.line_start,
+            right.line_end,
+        ),
+        (Some(left_start), Some(left_end), Some(right_start), Some(right_end))
+            if left_start <= right_end && right_start <= left_end
+    )
+}
+
+/// Rejects a finding whose citations claim the same physical records twice.
+///
+/// Identity equality only catches an exact repeat of one range. It leaves the
+/// wider hole open: `1-2` and `1-1` are different entry ids over the same
+/// physical line, so both survive, each cites the same record, and
+/// [`compare_evidence_refs`] then ranks one above the other on nothing but
+/// span width. Both the management-point and client-policy reducers had to
+/// close this in their own code; enforcing it here closes it for every finding
+/// regardless of which reducer, or none, assembled it.
+///
+/// References arrive keyed by identity, so each entry id contributes exactly
+/// one span and a repeated identity is already a
+/// [`SccmFindingValidationError::ConflictingEvidenceReference`]. Sorting each
+/// artifact's spans by start line lets one pass answer the question: a span
+/// that clears the widest span seen so far clears every earlier one, because
+/// no earlier span starts later or ends further.
+fn validate_disjoint_evidence_spans(
+    references_by_identity: &BTreeMap<(&str, &str), &SccmEvidenceRef>,
+) -> Result<(), SccmFindingValidationError> {
+    let mut by_artifact: BTreeMap<&str, Vec<&SccmEvidenceRef>> = BTreeMap::new();
+    for reference in references_by_identity.values() {
+        if reference.line_start.is_some() && reference.line_end.is_some() {
+            by_artifact
+                .entry(reference.artifact_id.as_str())
+                .or_default()
+                .push(reference);
+        }
+    }
+
+    for mut spans in by_artifact.into_values() {
+        spans.sort_by(|left, right| {
+            left.line_start
+                .cmp(&right.line_start)
+                .then_with(|| left.line_end.cmp(&right.line_end))
+        });
+        let mut widest: Option<&SccmEvidenceRef> = None;
+        for span in spans {
+            if widest.is_some_and(|widest| evidence_references_overlap(widest, span)) {
+                return Err(SccmFindingValidationError::OverlappingEvidenceReference);
+            }
+            if widest.is_none_or(|widest| widest.line_end < span.line_end) {
+                widest = Some(span);
+            }
         }
     }
     Ok(())
@@ -699,9 +1069,7 @@ fn validate_coverage_gaps(
 ) -> Result<(), SccmFindingValidationError> {
     let mut coverage_by_artifact: BTreeMap<&str, &SccmFindingCoverageGap> = BTreeMap::new();
     for gap in coverage_gaps {
-        if !is_canonical_opaque_id(&gap.artifact_id)
-            || gap.artifact_id.chars().count() > MAX_SCCM_COVERAGE_GAP_ARTIFACT_ID_CHARS
-            || gap.coverage == SccmCoverageState::Captured
+        if !is_canonical_opaque_id(&gap.artifact_id) || gap.coverage == SccmCoverageState::Captured
         {
             return Err(SccmFindingValidationError::InvalidCoverageGap);
         }
@@ -760,11 +1128,11 @@ fn is_bounded_request_reason(
     requested_logical_id: &str,
 ) -> bool {
     let trimmed = reason.trim();
-    if trimmed.is_empty()
+    if !has_at_most_chars(reason, MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS)
+        || trimmed.is_empty()
         || !trimmed
             .chars()
             .any(|character| character.is_ascii_alphanumeric())
-        || trimmed.chars().count() > MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS
         || contains_rooted_path(trimmed)
         || trimmed.contains(['*', '?', '[', ']'])
     {
@@ -2072,8 +2440,10 @@ fn validate_correlation_key_evidence(
         let normalized = normalize_key(key.kind.clone(), &key.raw);
         let has_canonical_value = !key.raw.is_empty()
             && key.raw.trim() == key.raw
+            && has_at_most_chars(&key.raw, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS)
             && !key.normalized.is_empty()
             && key.normalized.trim() == key.normalized
+            && has_at_most_chars(&key.normalized, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS)
             && normalized.confidence == SccmKeyConfidence::Exact
             && normalized.normalized == key.normalized;
         let has_valid_span = match (key.start, key.end) {
@@ -2103,6 +2473,12 @@ fn validate_correlation_key_evidence(
         let Some(reference) = &key.evidence else {
             return Err(SccmFindingValidationError::CorrelationKeyMissingEvidence);
         };
+        // The containment check below only proves the reference is cited, and
+        // a standalone key is its own citation set, which makes containment
+        // self-satisfying. Validate the reference here rather than at the call
+        // sites so no caller can reach the trivially satisfied check with an
+        // unvalidated reference.
+        validate_evidence_reference(reference)?;
         if !evidence.contains(reference) {
             return Err(SccmFindingValidationError::CorrelationKeyEvidenceNotCited);
         }
@@ -2169,7 +2545,11 @@ fn evidence_identity(reference: &SccmEvidenceRef) -> (&str, &str) {
 }
 
 fn is_canonical_opaque_id(value: &str) -> bool {
-    !value.is_empty() && value.trim() == value
+    !value.is_empty() && value.trim() == value && has_at_most_chars(value, MAX_SCCM_OPAQUE_ID_CHARS)
+}
+
+pub(crate) fn has_at_most_chars(value: &str, maximum: usize) -> bool {
+    value.chars().nth(maximum).is_none()
 }
 
 fn normalize_finding(finding: &mut SccmFinding) {

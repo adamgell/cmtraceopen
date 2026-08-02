@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use crate::models::log_entry::Severity;
+use crate::sccm::findings::evidence_references_overlap;
 use crate::sccm::{
     classify_artifact_name, SccmArtifact, SccmArtifactFamily, SccmArtifactRequest, SccmConfidence,
     SccmCoverageState, SccmEvidence, SccmEvidenceRef, SccmFinding, SccmFindingBuilder,
@@ -1125,22 +1126,6 @@ fn evidence_identity_is_unique(
         .take(2)
         .count()
         == 1
-}
-
-fn evidence_references_overlap(left: &SccmEvidenceRef, right: &SccmEvidenceRef) -> bool {
-    if left.artifact_id != right.artifact_id {
-        return false;
-    }
-    matches!(
-        (
-            left.line_start,
-            left.line_end,
-            right.line_start,
-            right.line_end,
-        ),
-        (Some(left_start), Some(left_end), Some(right_start), Some(right_end))
-            if left_start <= right_end && right_start <= left_end
-    )
 }
 
 fn safe_evidence_reference(reference: &SccmEvidenceRef) -> bool {

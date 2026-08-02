@@ -80,6 +80,52 @@ fn finding_key(
     }
 }
 
+/// Evidence-reference payloads that `validate_evidence_reference` rejects.
+///
+/// Every door that admits a reference, standalone or nested, must reject all
+/// of them. Shared so a nested door cannot be tested against a weaker list
+/// than the standalone door.
+fn noncanonical_evidence_ref_payloads() -> Vec<(&'static str, serde_json::Value)> {
+    let canonical = serde_json::to_value(finding_evidence_ref("artifact-a", "entry-a")).unwrap();
+    let mut payloads: Vec<(&'static str, serde_json::Value)> = Vec::new();
+
+    for (label, field, value) in [
+        ("a 5000-char artifact ID", "artifactId", "a".repeat(5000)),
+        ("an empty artifact ID", "artifactId", String::new()),
+        ("an untrimmed entry ID", "entryId", " entry-a ".to_owned()),
+        ("an empty entry ID", "entryId", String::new()),
+    ] {
+        let mut json = canonical.clone();
+        json[field] = serde_json::json!(value);
+        payloads.push((label, json));
+    }
+
+    for (label, start, end) in [
+        (
+            "an inverted line range",
+            serde_json::json!(9),
+            serde_json::json!(2),
+        ),
+        (
+            "a half-set line range",
+            serde_json::json!(7),
+            serde_json::Value::Null,
+        ),
+        (
+            "a zero line start",
+            serde_json::json!(0),
+            serde_json::json!(1),
+        ),
+    ] {
+        let mut json = canonical.clone();
+        json["lineStart"] = start;
+        json["lineEnd"] = end;
+        payloads.push((label, json));
+    }
+
+    payloads
+}
+
 fn finding_client_gap(artifact_id: &str, coverage: SccmCoverageState) -> SccmFindingCoverageGap {
     SccmFindingCoverageGap {
         artifact_id: artifact_id.into(),
@@ -781,8 +827,18 @@ fn finding_review_invalid_profiled_keys_fail_at_every_public_boundary() {
             accepted.push(format!("serializer: {label}"));
         }
 
+        let key_json = serde_json::json!({
+            "kind": &key.kind,
+            "raw": &key.raw,
+            "normalized": &key.normalized,
+            "confidence": &key.confidence,
+            "extractionProfileId": &key.extraction_profile_id,
+            "evidence": &key.evidence,
+            "start": key.start,
+            "end": key.end,
+        });
         let mut json = serde_json::to_value(&canonical).unwrap();
-        json["correlationKeys"] = serde_json::to_value([key]).unwrap();
+        json["correlationKeys"] = serde_json::json!([key_json]);
         if serde_json::from_value::<SccmFinding>(json).is_ok() {
             accepted.push(format!("deserializer: {label}"));
         }
@@ -908,7 +964,16 @@ fn finding_unregistered_strong_or_exact_key_profiles_are_rejected() {
 #[test]
 fn finding_rejects_key_or_terminal_refs_that_are_not_cited() {
     let cited = finding_evidence_ref("client-policy-agent", "policy:1-1");
-    let missing = finding_evidence_ref("client-policy-agent", "policy:2-2");
+    // `finding_evidence_ref` pins every span to line 1, so this reference used
+    // to claim line 1 while calling itself `policy:2-2`. Two entry ids over one
+    // physical line is the shape this suite now rejects outright, and it would
+    // mask the uncited-reference rule under test. The span is spelled out to
+    // match the entry id it advertises.
+    let missing = SccmEvidenceRef {
+        line_start: Some(2),
+        line_end: Some(2),
+        ..finding_evidence_ref("client-policy-agent", "policy:2-2")
+    };
 
     let key_result = SccmFindingBuilder::new("uncited-key")
         .class(SccmFindingClass::Symptom)
@@ -1250,6 +1315,223 @@ fn finding_serialization_prioritizes_conflicting_evidence_identity_ranges() {
     assert!(error.contains("ConflictingEvidenceReference"), "{error}");
 }
 
+/// Builds one finding per citation surface, carrying `second` on that surface
+/// only, so a validator that scans a single surface cannot pass by accident.
+fn evidence_surface_findings(
+    label: &str,
+    first: &SccmEvidenceRef,
+    second: &SccmEvidenceRef,
+) -> Vec<(String, Result<SccmFinding, SccmFindingValidationError>)> {
+    fn scaffold(finding_id: String) -> SccmFindingBuilder {
+        SccmFindingBuilder::new(finding_id)
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+    }
+
+    vec![
+        (
+            format!("{label}/top-level"),
+            scaffold(format!("{label}-top-level"))
+                .evidence(vec![first.clone(), second.clone()])
+                .build(),
+        ),
+        (
+            format!("{label}/terminal"),
+            scaffold(format!("{label}-terminal"))
+                .evidence(vec![first.clone()])
+                .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(second.clone())])
+                .build(),
+        ),
+        (
+            format!("{label}/correlation-key"),
+            scaffold(format!("{label}-correlation-key"))
+                .evidence(vec![first.clone()])
+                .correlation_keys(vec![finding_key(
+                    SccmCorrelationKeyKind::AssignmentId,
+                    "{ABCDEFAB-0000-0000-0000-000000000001}",
+                    "abcdefab-0000-0000-0000-000000000001",
+                    SccmKeyConfidence::Low,
+                    Some("sccm-keys-experimental-v1"),
+                    second.clone(),
+                )])
+                .build(),
+        ),
+    ]
+}
+
+#[test]
+fn finding_rejects_overlapping_ranges_across_distinct_evidence_identities() {
+    let first = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    // Every case claims at least one physical line of `first` under a second
+    // entry id, so the two references cannot both be the record they claim.
+    let cases = [
+        ("identical-span", Some(4), Some(6)),
+        ("shared-start-line", Some(1), Some(4)),
+        ("shared-end-line", Some(6), Some(9)),
+        ("contained-span", Some(5), Some(5)),
+        ("containing-span", Some(1), Some(9)),
+        ("straddling-span", Some(5), Some(9)),
+    ];
+
+    for (label, line_start, line_end) in cases {
+        let second = SccmEvidenceRef {
+            entry_id: "entry-b".into(),
+            line_start,
+            line_end,
+            ..first.clone()
+        };
+        for (surface, result) in evidence_surface_findings(label, &first, &second) {
+            assert_eq!(
+                result.unwrap_err(),
+                SccmFindingValidationError::OverlappingEvidenceReference,
+                "{surface}"
+            );
+        }
+    }
+}
+
+#[test]
+fn finding_overlap_rejection_survives_evidence_serde_round_trips() {
+    let first = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    let mut finding = SccmFindingBuilder::new("overlapping-serde-ranges")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![
+            first.clone(),
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(7),
+                line_end: Some(9),
+                ..first
+            },
+        ])
+        .build()
+        .unwrap();
+
+    let mut json = serde_json::to_value(&finding).unwrap();
+    json["evidence"][1]["lineStart"] = serde_json::json!(6);
+    let error = serde_json::from_value::<SccmFinding>(json)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("OverlappingEvidenceReference"), "{error}");
+
+    finding.evidence[1].line_start = Some(6);
+    assert_eq!(
+        finding.validate().unwrap_err(),
+        SccmFindingValidationError::OverlappingEvidenceReference
+    );
+    let error = serde_json::to_string(&finding).unwrap_err().to_string();
+    assert!(error.contains("OverlappingEvidenceReference"), "{error}");
+}
+
+#[test]
+fn finding_accepts_disjoint_and_unbounded_evidence_ranges() {
+    let anchor = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    // Overlap is a claim about physical extent within one artifact. Adjacent
+    // spans, other artifacts, and references that assert no extent at all are
+    // all citations nine lanes already emit, and must keep validating.
+    let cases = [
+        (
+            "adjacent-below",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(1),
+                line_end: Some(3),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "adjacent-above",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(7),
+                line_end: Some(9),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "same-span-other-artifact",
+            SccmEvidenceRef {
+                artifact_id: "artifact-b".into(),
+                entry_id: "entry-b".into(),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "unbounded-second",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: None,
+                line_end: None,
+                ..anchor.clone()
+            },
+        ),
+    ];
+
+    for (label, second) in cases {
+        let finding = SccmFindingBuilder::new(format!("disjoint-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![anchor.clone(), second])
+            .build()
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        let json = serde_json::to_value(&finding).unwrap();
+        assert_eq!(
+            serde_json::from_value::<SccmFinding>(json).unwrap(),
+            finding,
+            "{label}"
+        );
+    }
+
+    // Two references that both assert no extent stay indistinguishable by span
+    // and must not be treated as claiming the same lines.
+    let unbounded = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: None,
+        line_end: None,
+    };
+    SccmFindingBuilder::new("disjoint-both-unbounded")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![
+            unbounded.clone(),
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                ..unbounded
+            },
+        ])
+        .build()
+        .expect("unbounded references assert no physical extent");
+}
+
 #[test]
 fn finding_rejects_top_level_evidence_identity_whitespace_aliases() {
     assert_evidence_alias_is_rejected(FindingEvidenceAliasSurface::TopLevel);
@@ -1352,6 +1634,997 @@ fn finding_rejects_noncanonical_opaque_ids_across_public_boundaries() {
         serde_json::json!(" Confirm the bounded policy request outcome. ");
     if serde_json::from_value::<SccmFinding>(request_json).is_ok() {
         mismatches.push("deserializer accepted a noncanonical request logical ID");
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+fn bounded_finding_with_id(finding_id: &str) -> Result<SccmFinding, SccmFindingValidationError> {
+    SccmFindingBuilder::new(finding_id)
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build()
+}
+
+#[test]
+fn finding_rejects_overlong_opaque_ids_across_public_boundaries() {
+    let mut mismatches: Vec<String> = Vec::new();
+    let overlong_id = "a".repeat(257);
+    let bounded_id = "a".repeat(256);
+
+    if bounded_finding_with_id(&overlong_id).err()
+        != Some(SccmFindingValidationError::MissingRequiredField)
+    {
+        mismatches.push("builder accepted an overlong finding ID".into());
+    }
+
+    for (label, artifact_id, entry_id) in [
+        ("artifact ID", overlong_id.as_str(), "entry-a"),
+        ("entry ID", "artifact-a", overlong_id.as_str()),
+    ] {
+        let result = SccmFindingBuilder::new("overlong-evidence-id")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![finding_evidence_ref(artifact_id, entry_id)])
+            .build();
+        if result.err() != Some(SccmFindingValidationError::InvalidEvidenceReference) {
+            mismatches.push(format!("builder accepted an overlong evidence {label}"));
+        }
+    }
+
+    let gap_result = SccmFindingBuilder::new("overlong-gap-artifact-id")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .coverage_gap(finding_client_gap(
+            &overlong_id,
+            SccmCoverageState::AccessDenied,
+        ))
+        .build();
+    if gap_result.err() != Some(SccmFindingValidationError::InvalidCoverageGap) {
+        mismatches.push("builder accepted an overlong coverage-gap artifact ID".into());
+    }
+
+    let key_evidence = finding_evidence_ref("artifact-a", "entry-a");
+    let key_result = SccmFindingBuilder::new("overlong-key-profile-id")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![key_evidence.clone()])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::AssignmentId,
+            "{ABCDEFAB-0000-0000-0000-000000000001}",
+            "abcdefab-0000-0000-0000-000000000001",
+            SccmKeyConfidence::Low,
+            Some(overlong_id.as_str()),
+            key_evidence,
+        )])
+        .build();
+    if key_result.err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+        mismatches.push("builder accepted an overlong correlation-key profile ID".into());
+    }
+
+    let mut direct = bounded_finding_with_id("overlong-direct").unwrap();
+    direct.finding_id = overlong_id.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+        mismatches.push("direct validate accepted an overlong finding ID".into());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("serializer accepted an overlong finding ID".into());
+    }
+
+    let canonical_json =
+        serde_json::to_value(bounded_finding_with_id("overlong-json").unwrap()).unwrap();
+    let mut finding_id_json = canonical_json.clone();
+    finding_id_json["findingId"] = serde_json::json!(overlong_id);
+    if serde_json::from_value::<SccmFinding>(finding_id_json).is_ok() {
+        mismatches.push("deserializer accepted an overlong finding ID".into());
+    }
+    for field in ["artifactId", "entryId"] {
+        let mut evidence_json = canonical_json.clone();
+        evidence_json["evidence"][0][field] = serde_json::json!(overlong_id);
+        if serde_json::from_value::<SccmFinding>(evidence_json).is_ok() {
+            mismatches.push(format!(
+                "deserializer accepted an overlong evidence {field}"
+            ));
+        }
+    }
+
+    let bounded = SccmFindingBuilder::new(bounded_id.as_str())
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref(&bounded_id, &bounded_id)])
+        .build();
+    match bounded {
+        Ok(bounded) => {
+            let json = serde_json::to_value(&bounded).unwrap();
+            if serde_json::from_value::<SccmFinding>(json).ok().as_ref() != Some(&bounded) {
+                mismatches.push("bound-length opaque IDs did not round trip".into());
+            }
+        }
+        Err(error) => {
+            mismatches.push(format!(
+                "builder rejected bound-length opaque IDs: {error:?}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn finding_rejects_overlong_display_text_across_public_boundaries() {
+    let mut mismatches: Vec<String> = Vec::new();
+    let overlong_title = "t".repeat(513);
+    let overlong_summary = "s".repeat(2049);
+
+    for (label, title, summary) in [
+        ("title", overlong_title.as_str(), "bounded summary"),
+        ("summary", "bounded title", overlong_summary.as_str()),
+    ] {
+        let result = SccmFindingBuilder::new("overlong-display-text")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .title(title)
+            .summary(summary)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .build();
+        if result.err() != Some(SccmFindingValidationError::MissingRequiredField) {
+            mismatches.push(format!("builder accepted an overlong {label}"));
+        }
+    }
+
+    let mut direct = bounded_finding_with_id("overlong-title-direct").unwrap();
+    direct.title = overlong_title.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+        mismatches.push("direct validate accepted an overlong title".into());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("serializer accepted an overlong title".into());
+    }
+    let mut direct = bounded_finding_with_id("overlong-summary-direct").unwrap();
+    direct.summary = overlong_summary.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+        mismatches.push("direct validate accepted an overlong summary".into());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        mismatches.push("serializer accepted an overlong summary".into());
+    }
+
+    let canonical_json =
+        serde_json::to_value(bounded_finding_with_id("overlong-text-json").unwrap()).unwrap();
+    for (field, value) in [("title", &overlong_title), ("summary", &overlong_summary)] {
+        let mut json = canonical_json.clone();
+        json[field] = serde_json::json!(value);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            mismatches.push(format!("deserializer accepted an overlong {field}"));
+        }
+    }
+
+    let bounded = SccmFindingBuilder::new("bound-length-display-text")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .title("t".repeat(512))
+        .summary("s".repeat(2048))
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .build();
+    match bounded {
+        Ok(bounded) => {
+            let json = serde_json::to_value(&bounded).unwrap();
+            if serde_json::from_value::<SccmFinding>(json).ok().as_ref() != Some(&bounded) {
+                mismatches.push("bound-length display text did not round trip".into());
+            }
+        }
+        Err(error) => {
+            mismatches.push(format!(
+                "builder rejected bound-length display text: {error:?}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn finding_rejects_display_text_whose_stored_form_exceeds_the_bound() {
+    let mut accepted = Vec::new();
+
+    for (label, title, summary) in [
+        (
+            "title",
+            format!("{}bounded title", " ".repeat(512)),
+            "bounded summary".to_owned(),
+        ),
+        (
+            "summary",
+            "bounded title".to_owned(),
+            format!("{}bounded summary", " ".repeat(2048)),
+        ),
+    ] {
+        let builder = SccmFindingBuilder::new("padded-display-text")
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .title(&title)
+            .summary(&summary)
+            .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+            .build();
+        if builder.err() != Some(SccmFindingValidationError::MissingRequiredField) {
+            accepted.push(format!("builder accepted padded {label}"));
+        }
+
+        let mut direct = bounded_finding_with_id("padded-display-direct").unwrap();
+        direct.title = title.clone();
+        direct.summary = summary.clone();
+        if direct.validate().err() != Some(SccmFindingValidationError::MissingRequiredField) {
+            accepted.push(format!("direct validation accepted padded {label}"));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            accepted.push(format!("serialization accepted padded {label}"));
+        }
+
+        let mut json =
+            serde_json::to_value(bounded_finding_with_id("padded-display-json").unwrap()).unwrap();
+        json["title"] = serde_json::json!(title);
+        json["summary"] = serde_json::json!(summary);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            accepted.push(format!("deserialization accepted padded {label}"));
+        }
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted display text with an oversized stored form: {accepted:#?}"
+    );
+}
+
+fn finding_with_ci_key_value(
+    finding_id: &str,
+    digits: &str,
+) -> Result<SccmFinding, SccmFindingValidationError> {
+    let key_evidence = finding_evidence_ref("artifact-a", "entry-a");
+    SccmFindingBuilder::new(finding_id)
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![key_evidence.clone()])
+        .correlation_keys(vec![finding_key(
+            SccmCorrelationKeyKind::CiId,
+            digits,
+            digits,
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            key_evidence,
+        )])
+        .build()
+}
+
+#[test]
+fn finding_rejects_overlong_correlation_key_values() {
+    let mut mismatches: Vec<String> = Vec::new();
+    let overlong_digits = "1".repeat(257);
+    let bounded_digits = "1".repeat(256);
+
+    if finding_with_ci_key_value("overlong-key-value", &overlong_digits).err()
+        != Some(SccmFindingValidationError::InvalidCorrelationKey)
+    {
+        mismatches.push("builder accepted an overlong correlation-key value".into());
+    }
+
+    for field in ["raw", "normalized"] {
+        let mut direct = finding_with_ci_key_value("overlong-key-value-direct", "71").unwrap();
+        match field {
+            "raw" => direct.correlation_keys[0].raw = overlong_digits.clone(),
+            "normalized" => direct.correlation_keys[0].normalized = overlong_digits.clone(),
+            _ => unreachable!(),
+        }
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+            mismatches.push(format!(
+                "direct validate accepted an overlong {field} value"
+            ));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            mismatches.push(format!("serializer accepted an overlong {field} value"));
+        }
+
+        let mut json = serde_json::to_value(
+            finding_with_ci_key_value("overlong-key-value-json", "71").unwrap(),
+        )
+        .unwrap();
+        json["correlationKeys"][0][field] = serde_json::json!(overlong_digits);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            mismatches.push(format!("deserializer accepted an overlong {field} value"));
+        }
+    }
+
+    match finding_with_ci_key_value("bound-length-key-value", &bounded_digits) {
+        Ok(bounded) => {
+            let json = serde_json::to_value(&bounded).unwrap();
+            if serde_json::from_value::<SccmFinding>(json).ok().as_ref() != Some(&bounded) {
+                mismatches.push("bound-length correlation-key value did not round trip".into());
+            }
+        }
+        Err(error) => {
+            mismatches.push(format!(
+                "builder rejected a bound-length correlation-key value: {error:?}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn coverage_gap_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let gap = finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied);
+    let canonical = serde_json::to_value(&gap).unwrap();
+    if serde_json::from_value::<SccmFindingCoverageGap>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&gap)
+    {
+        mismatches.push("a canonical coverage gap did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmFindingCoverageGap>(unknown_field).is_ok() {
+        mismatches.push("coverage gap deserializer accepted an unknown field".into());
+    }
+
+    let mut captured = canonical.clone();
+    captured["coverage"] = serde_json::json!("captured");
+    if serde_json::from_value::<SccmFindingCoverageGap>(captured).is_ok() {
+        mismatches.push("coverage gap deserializer accepted captured coverage".into());
+    }
+
+    for (label, artifact_id) in [
+        ("an empty artifact ID", String::new()),
+        (
+            "an untrimmed artifact ID",
+            " client-policy-agent ".to_owned(),
+        ),
+        ("an overlong artifact ID", "a".repeat(257)),
+    ] {
+        let mut json = canonical.clone();
+        json["artifactId"] = serde_json::json!(artifact_id);
+        if serde_json::from_value::<SccmFindingCoverageGap>(json).is_ok() {
+            mismatches.push(format!("coverage gap deserializer accepted {label}"));
+        }
+    }
+
+    let mut untrimmed_role = canonical.clone();
+    untrimmed_role["role"] = serde_json::json!(" client ");
+    if serde_json::from_value::<SccmFindingCoverageGap>(untrimmed_role).is_ok() {
+        mismatches.push("coverage gap deserializer accepted a nested untrimmed role".into());
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn coverage_gap_serialization_enforces_the_full_standalone_contract() {
+    let mut empty_artifact =
+        finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied);
+    empty_artifact.artifact_id.clear();
+    let mut overlong_artifact =
+        finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied);
+    overlong_artifact.artifact_id = "a".repeat(257);
+    let captured = finding_client_gap("client-policy-agent", SccmCoverageState::Captured);
+    let mut mismatches = Vec::new();
+
+    for (label, gap) in [
+        ("an empty artifact ID", empty_artifact),
+        ("an overlong artifact ID", overlong_artifact),
+        ("captured coverage", captured),
+    ] {
+        match serde_json::to_value(gap) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains("InvalidCoverageGap") => {
+                mismatches.push(format!(
+                    "serializer rejected {label} with the wrong contract error: {error}"
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn artifact_request_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let request = finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        "Confirm the bounded policy request outcome.",
+    );
+    let canonical = serde_json::to_value(&request).unwrap();
+    if serde_json::from_value::<SccmArtifactRequest>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&request)
+    {
+        mismatches.push("a canonical artifact request did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmArtifactRequest>(unknown_field).is_ok() {
+        mismatches.push("artifact request deserializer accepted an unknown field".into());
+    }
+
+    for (label, logical_id) in [
+        ("an empty logical ID", String::new()),
+        ("an untrimmed logical ID", " policyAgent ".to_owned()),
+        ("an overlong logical ID", "a".repeat(257)),
+        (
+            "an undeclared logical ID",
+            "not-a-declared-source".to_owned(),
+        ),
+    ] {
+        let mut json = canonical.clone();
+        json["logicalId"] = serde_json::json!(logical_id);
+        if serde_json::from_value::<SccmArtifactRequest>(json).is_ok() {
+            mismatches.push(format!("artifact request deserializer accepted {label}"));
+        }
+    }
+
+    for (label, reason) in [
+        ("an empty reason", String::new()),
+        (
+            "a rooted-path reason",
+            ROOTED_ARTIFACT_REQUEST_REASONS[1].to_owned(),
+        ),
+        (
+            "an overlong reason",
+            "a".repeat(MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS + 1),
+        ),
+    ] {
+        let mut json = canonical.clone();
+        json["reason"] = serde_json::json!(reason);
+        if serde_json::from_value::<SccmArtifactRequest>(json).is_ok() {
+            mismatches.push(format!("artifact request deserializer accepted {label}"));
+        }
+    }
+
+    for (label, role) in [
+        ("a nested untrimmed role", " client "),
+        ("a nested mismatched role", "distributionPoint"),
+    ] {
+        let mut json = canonical.clone();
+        json["role"] = serde_json::json!(role);
+        if serde_json::from_value::<SccmArtifactRequest>(json).is_ok() {
+            mismatches.push(format!("artifact request deserializer accepted {label}"));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn artifact_request_serialization_enforces_the_full_standalone_contract() {
+    let cases = [
+        (
+            "an undeclared logical ID",
+            finding_request(
+                "not-a-declared-source",
+                SccmRole::Client,
+                "Confirm the not-a-declared-source request outcome.",
+            ),
+            "UndeclaredArtifactRequest",
+        ),
+        (
+            "a role mismatch",
+            finding_request(
+                "policyAgent",
+                SccmRole::DistributionPoint,
+                "Confirm the bounded policy request outcome.",
+            ),
+            "ArtifactRequestRoleMismatch",
+        ),
+        (
+            "a rooted-path reason",
+            finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                ROOTED_ARTIFACT_REQUEST_REASONS[1],
+            ),
+            "InvalidArtifactRequestReason",
+        ),
+        (
+            "an out-of-scope reason",
+            finding_request(
+                "policyAgent",
+                SccmRole::Client,
+                "Collect the complete CAS.log file.",
+            ),
+            "InvalidArtifactRequestReason",
+        ),
+    ];
+    let mut mismatches = Vec::new();
+
+    for (label, request, expected_error) in cases {
+        match serde_json::to_value(request) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains(expected_error) => mismatches.push(format!(
+                "serializer rejected {label} with the wrong contract error: {error}"
+            )),
+            Err(_) => {}
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn artifact_request_deserialization_returns_a_canonical_reason() {
+    let mut json = serde_json::to_value(finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        "Confirm the bounded policy request outcome.",
+    ))
+    .unwrap();
+    json["reason"] = serde_json::json!(" Confirm the bounded policy request outcome. ");
+
+    let request = serde_json::from_value::<SccmArtifactRequest>(json).unwrap();
+
+    assert_eq!(
+        request.reason,
+        "Confirm the bounded policy request outcome."
+    );
+
+    let serialized = serde_json::to_value(finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        " Confirm the bounded policy request outcome. ",
+    ))
+    .unwrap();
+    assert_eq!(
+        serialized["reason"],
+        "Confirm the bounded policy request outcome."
+    );
+}
+
+#[test]
+fn artifact_request_rejects_padding_that_exceeds_the_reason_bound() {
+    let reason = format!(
+        "{}Confirm the bounded policy request outcome.",
+        " ".repeat(MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS)
+    );
+    let mut accepted = Vec::new();
+
+    let builder = SccmFindingBuilder::new("padded-request-builder")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![finding_evidence_ref("artifact-a", "entry-a")])
+        .next_artifact(finding_request("policyAgent", SccmRole::Client, &reason))
+        .build();
+    if builder.err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+        accepted.push("builder".to_owned());
+    }
+
+    let mut direct = finding_with_gap_and_request("padded-request-direct");
+    direct.next_artifacts[0].reason = reason.clone();
+    if direct.validate().err() != Some(SccmFindingValidationError::InvalidArtifactRequestReason) {
+        accepted.push("direct validation".to_owned());
+    }
+    if serde_json::to_value(&direct).is_ok() {
+        accepted.push("serialization".to_owned());
+    }
+
+    let mut finding_json =
+        serde_json::to_value(finding_with_gap_and_request("padded-request-json")).unwrap();
+    finding_json["nextArtifacts"][0]["reason"] = serde_json::json!(&reason);
+    if serde_json::from_value::<SccmFinding>(finding_json).is_ok() {
+        accepted.push("finding deserialization".to_owned());
+    }
+
+    let mut request_json = serde_json::to_value(finding_request(
+        "policyAgent",
+        SccmRole::Client,
+        "Confirm the bounded policy request outcome.",
+    ))
+    .unwrap();
+    request_json["reason"] = serde_json::json!(reason);
+    if serde_json::from_value::<SccmArtifactRequest>(request_json).is_ok() {
+        accepted.push("standalone request deserialization".to_owned());
+    }
+    if serde_json::to_value(finding_request("policyAgent", SccmRole::Client, &reason)).is_ok() {
+        accepted.push("standalone request serialization".to_owned());
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "accepted an artifact request whose stored reason exceeds the bound: {accepted:#?}"
+    );
+}
+
+#[test]
+fn evidence_ref_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let reference = finding_evidence_ref("artifact-a", "entry-a");
+    let canonical = serde_json::to_value(&reference).unwrap();
+    if serde_json::from_value::<SccmEvidenceRef>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&reference)
+    {
+        mismatches.push("a canonical evidence ref did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmEvidenceRef>(unknown_field).is_ok() {
+        mismatches.push("evidence ref deserializer accepted an unknown field".into());
+    }
+
+    for (label, json) in noncanonical_evidence_ref_payloads() {
+        if serde_json::from_value::<SccmEvidenceRef>(json).is_ok() {
+            mismatches.push(format!("evidence ref deserializer accepted {label}"));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn evidence_ref_serialization_enforces_the_full_standalone_contract() {
+    let canonical = finding_evidence_ref("artifact-a", "entry-a");
+    let mut empty_artifact = canonical.clone();
+    empty_artifact.artifact_id.clear();
+    let mut overlong_entry = canonical.clone();
+    overlong_entry.entry_id = "e".repeat(257);
+    let mut half_set_range = canonical.clone();
+    half_set_range.line_end = None;
+    let mut zero_start = canonical.clone();
+    zero_start.line_start = Some(0);
+    let mut inverted_range = canonical;
+    inverted_range.line_start = Some(9);
+    inverted_range.line_end = Some(2);
+
+    let mut mismatches = Vec::new();
+    for (label, reference) in [
+        ("an empty artifact ID", empty_artifact),
+        ("an overlong entry ID", overlong_entry),
+        ("a half-set line range", half_set_range),
+        ("a zero line start", zero_start),
+        ("an inverted line range", inverted_range),
+    ] {
+        match serde_json::to_value(reference) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains("InvalidEvidenceReference") => {
+                mismatches.push(format!(
+                    "serializer rejected {label} with the wrong contract error: {error}"
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn terminal_evidence_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let terminal =
+        SccmTerminalEvidence::observed_failure(finding_evidence_ref("artifact-a", "entry-a"));
+    let canonical = serde_json::to_value(&terminal).unwrap();
+    if serde_json::from_value::<SccmTerminalEvidence>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&terminal)
+    {
+        mismatches.push("a canonical terminal evidence did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmTerminalEvidence>(unknown_field).is_ok() {
+        mismatches.push("terminal evidence deserializer accepted an unknown field".into());
+    }
+
+    let mut nested_unknown = canonical.clone();
+    nested_unknown["reference"]["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmTerminalEvidence>(nested_unknown).is_ok() {
+        mismatches.push("terminal evidence deserializer accepted a nested unknown field".into());
+    }
+
+    for (label, reference) in noncanonical_evidence_ref_payloads() {
+        let mut json = canonical.clone();
+        json["reference"] = reference;
+        if serde_json::from_value::<SccmTerminalEvidence>(json).is_ok() {
+            mismatches.push(format!(
+                "terminal evidence deserializer accepted nested {label}"
+            ));
+        }
+    }
+
+    let mut non_terminal_kind = canonical.clone();
+    non_terminal_kind["kind"] = serde_json::json!("observedRecovery");
+    if serde_json::from_value::<SccmTerminalEvidence>(non_terminal_kind).is_ok() {
+        mismatches.push("terminal evidence deserializer accepted a non-failure kind".into());
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn terminal_evidence_serialization_enforces_the_full_standalone_contract() {
+    let mut invalid_reference =
+        SccmTerminalEvidence::observed_failure(finding_evidence_ref("artifact-a", "entry-a"));
+    invalid_reference.reference.artifact_id.clear();
+    let non_terminal_kind = SccmTerminalEvidence {
+        reference: finding_evidence_ref("artifact-a", "entry-a"),
+        kind: SccmTerminalEvidenceKind::Unknown("observedRecovery".to_owned()),
+    };
+    let mut mismatches = Vec::new();
+
+    for (label, terminal, expected_error) in [
+        (
+            "an invalid nested reference",
+            invalid_reference,
+            "InvalidEvidenceReference",
+        ),
+        (
+            "a non-failure terminal kind",
+            non_terminal_kind,
+            "InvalidTerminalEvidence",
+        ),
+    ] {
+        match serde_json::to_value(terminal) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains(expected_error) => mismatches.push(format!(
+                "serializer rejected {label} with the wrong contract error: {error}"
+            )),
+            Err(_) => {}
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn correlation_key_deserializes_through_the_same_wire_contract_as_a_finding() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let key = finding_key(
+        SccmCorrelationKeyKind::CiId,
+        "71",
+        "71",
+        SccmKeyConfidence::Low,
+        Some("sccm-keys-experimental-v1"),
+        finding_evidence_ref("artifact-a", "entry-a"),
+    );
+    let canonical = serde_json::to_value(&key).unwrap();
+    if serde_json::from_value::<SccmCorrelationKey>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&key)
+    {
+        mismatches.push("a canonical correlation key did not round trip".into());
+    }
+
+    let mut unknown_field = canonical.clone();
+    unknown_field["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmCorrelationKey>(unknown_field).is_ok() {
+        mismatches.push("correlation key deserializer accepted an unknown field".into());
+    }
+
+    // The trust-signal bypass. REGISTERED_STABLE_CORRELATION_PROFILE_IDS is
+    // deliberately empty, so validate_correlation_key_evidence holds every key
+    // at Low; standalone deserialization must not let a payload forge a
+    // stronger confidence than any registered profile can authorize.
+    for forged in ["exact", "strong"] {
+        let mut json = canonical.clone();
+        json["confidence"] = serde_json::json!(forged);
+        if serde_json::from_value::<SccmCorrelationKey>(json).is_ok() {
+            mismatches.push(format!(
+                "correlation key deserializer accepted forged {forged} confidence"
+            ));
+        }
+    }
+
+    for (label, field, value) in [
+        ("a 5000-char raw value", "raw", "1".repeat(5000)),
+        (
+            "a 5000-char normalized value",
+            "normalized",
+            "1".repeat(5000),
+        ),
+        ("an empty raw value", "raw", String::new()),
+    ] {
+        let mut json = canonical.clone();
+        json[field] = serde_json::json!(value);
+        if serde_json::from_value::<SccmCorrelationKey>(json).is_ok() {
+            mismatches.push(format!("correlation key deserializer accepted {label}"));
+        }
+    }
+
+    let mut incoherent_span = canonical.clone();
+    incoherent_span["start"] = serde_json::json!(99999);
+    incoherent_span["end"] = serde_json::json!(1);
+    if serde_json::from_value::<SccmCorrelationKey>(incoherent_span).is_ok() {
+        mismatches.push("correlation key deserializer accepted an incoherent span".into());
+    }
+
+    let mut overlong_profile = canonical.clone();
+    overlong_profile["extractionProfileId"] = serde_json::json!("p".repeat(257));
+    if serde_json::from_value::<SccmCorrelationKey>(overlong_profile).is_ok() {
+        mismatches.push("correlation key deserializer accepted an overlong profile ID".into());
+    }
+
+    let mut no_evidence = canonical.clone();
+    no_evidence["evidence"] = serde_json::Value::Null;
+    if serde_json::from_value::<SccmCorrelationKey>(no_evidence).is_ok() {
+        mismatches.push("correlation key deserializer accepted a key with no evidence".into());
+    }
+
+    // The key's own evidence reference is the citation set the contract checks
+    // it against, so `evidence.contains(reference)` is self-satisfying here. It
+    // proves nothing about the reference itself, which must still clear the
+    // same bar a standalone SccmEvidenceRef clears.
+    let mut nested_unknown = canonical.clone();
+    nested_unknown["evidence"]["unexpectedField"] = serde_json::json!("surplus");
+    if serde_json::from_value::<SccmCorrelationKey>(nested_unknown).is_ok() {
+        mismatches.push("correlation key deserializer accepted a nested unknown field".into());
+    }
+
+    for (label, evidence) in noncanonical_evidence_ref_payloads() {
+        let mut json = canonical.clone();
+        json["evidence"] = evidence;
+        if serde_json::from_value::<SccmCorrelationKey>(json).is_ok() {
+            mismatches.push(format!(
+                "correlation key deserializer accepted nested {label}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn correlation_key_serialization_enforces_the_full_standalone_contract() {
+    let canonical = finding_key(
+        SccmCorrelationKeyKind::CiId,
+        "71",
+        "71",
+        SccmKeyConfidence::Low,
+        Some("sccm-keys-experimental-v1"),
+        finding_evidence_ref("artifact-a", "entry-a"),
+    );
+    let mut overlong_raw = canonical.clone();
+    overlong_raw.raw = "1".repeat(257);
+    let mut overlong_normalized = canonical.clone();
+    overlong_normalized.normalized = "1".repeat(257);
+    let mut forged_confidence = canonical.clone();
+    forged_confidence.confidence = SccmKeyConfidence::Strong;
+    let mut invalid_evidence = canonical.clone();
+    invalid_evidence
+        .evidence
+        .as_mut()
+        .unwrap()
+        .artifact_id
+        .clear();
+    let mut missing_evidence = canonical.clone();
+    missing_evidence.evidence = None;
+    let mut incoherent_span = canonical;
+    incoherent_span.start = Some(8);
+    incoherent_span.end = Some(9);
+
+    let mut mismatches = Vec::new();
+    for (label, key, expected_error) in [
+        (
+            "an overlong raw value",
+            overlong_raw,
+            "InvalidCorrelationKey",
+        ),
+        (
+            "an overlong normalized value",
+            overlong_normalized,
+            "InvalidCorrelationKey",
+        ),
+        (
+            "forged strong confidence",
+            forged_confidence,
+            "InvalidCorrelationKey",
+        ),
+        (
+            "an invalid evidence reference",
+            invalid_evidence,
+            "InvalidEvidenceReference",
+        ),
+        (
+            "a missing evidence reference",
+            missing_evidence,
+            "CorrelationKeyMissingEvidence",
+        ),
+        (
+            "an incoherent UTF-16 span",
+            incoherent_span,
+            "InvalidCorrelationKey",
+        ),
+    ] {
+        match serde_json::to_value(key) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains(expected_error) => mismatches.push(format!(
+                "serializer rejected {label} with the wrong contract error: {error}"
+            )),
+            Err(_) => {}
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn key_extraction_result_deserializes_keys_through_the_same_wire_contract() {
+    let mut mismatches: Vec<String> = Vec::new();
+
+    let result = SccmKeyExtractionResult {
+        profile_id: "sccm-keys-experimental-v1".into(),
+        keys: vec![finding_key(
+            SccmCorrelationKeyKind::CiId,
+            "71",
+            "71",
+            SccmKeyConfidence::Low,
+            Some("sccm-keys-experimental-v1"),
+            finding_evidence_ref("artifact-a", "entry-a"),
+        )],
+        gaps: Vec::new(),
+    };
+    let canonical = serde_json::to_value(&result).unwrap();
+    if serde_json::from_value::<SccmKeyExtractionResult>(canonical.clone())
+        .ok()
+        .as_ref()
+        != Some(&result)
+    {
+        mismatches.push("a canonical key extraction result did not round trip".into());
+    }
+
+    for (label, evidence) in noncanonical_evidence_ref_payloads() {
+        let mut json = canonical.clone();
+        json["keys"][0]["evidence"] = evidence;
+        if serde_json::from_value::<SccmKeyExtractionResult>(json).is_ok() {
+            mismatches.push(format!(
+                "key extraction result deserializer accepted nested {label}"
+            ));
+        }
     }
 
     assert!(mismatches.is_empty(), "{mismatches:#?}");
@@ -2402,8 +3675,11 @@ fn finding_review_passive_unbounded_confirmation_requests_fail_at_every_public_b
         }
 
         let mut json = serde_json::to_value(&canonical).unwrap();
-        json["nextArtifacts"][0] =
-            serde_json::to_value(finding_request(logical_id, SccmRole::Client, reason)).unwrap();
+        json["nextArtifacts"][0] = serde_json::json!({
+            "logicalId": logical_id,
+            "role": "client",
+            "reason": reason,
+        });
         if serde_json::from_value::<SccmFinding>(json).is_ok() {
             accepted.push(format!("deserializer: {reason}"));
         }
@@ -4466,6 +5742,69 @@ fn key_profile_and_extraction_result_have_deterministic_json_round_trips() {
         serde_json::from_str::<SccmKeyExtractionResult>(&result_json).unwrap(),
         first
     );
+}
+
+#[test]
+fn key_extraction_never_emits_a_key_its_own_contract_rejects() {
+    let mut mismatches: Vec<String> = Vec::new();
+    let profile = SccmExtractionProfile::for_version(Some("5.00.9128.1010"));
+
+    // Both raws are inside the regexes' token grammar but outside the
+    // correlation-key value bound. The KB case is bounded as a raw and only
+    // crosses the bound once normalization prepends "KB", so the producer has
+    // to weigh the normalized value too.
+    for (label, message, raw) in [
+        (
+            "an overlong CI ID",
+            format!("CI ID={} status=71", "1".repeat(300)),
+            "1".repeat(300),
+        ),
+        (
+            "a KB ID that normalizes past the bound",
+            format!("KB ID={}", "9".repeat(255)),
+            "9".repeat(255),
+        ),
+    ] {
+        let evidence = evidence_with_message(&message);
+        let result = extract_keys(&evidence, &profile);
+
+        for key in &result.keys {
+            let key_json = serde_json::to_value(key).unwrap();
+            if serde_json::from_value::<SccmCorrelationKey>(key_json)
+                .ok()
+                .as_ref()
+                != Some(key)
+            {
+                mismatches.push(format!(
+                    "extract_keys emitted a key its own validator rejects for {label}"
+                ));
+            }
+        }
+
+        let result_json = serde_json::to_value(&result).unwrap();
+        if serde_json::from_value::<SccmKeyExtractionResult>(result_json)
+            .ok()
+            .as_ref()
+            != Some(&result)
+        {
+            mismatches.push(format!(
+                "extract_keys emitted a result that does not round trip for {label}"
+            ));
+        }
+
+        // An out-of-bound candidate must stay visible as a gap rather than
+        // disappear, exactly as a candidate that fails to normalize does.
+        if !result.gaps.iter().any(|gap| {
+            gap.kind == SccmExtractionGapKind::MalformedCandidate
+                && gap.candidate_raw.as_deref() == Some(raw.as_str())
+        }) {
+            mismatches.push(format!(
+                "extract_keys dropped the out-of-bound candidate for {label}"
+            ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
 }
 
 #[test]

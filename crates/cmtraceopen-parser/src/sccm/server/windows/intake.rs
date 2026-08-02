@@ -6,14 +6,31 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::sccm::{
-    normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily, SccmArtifactRequest,
-    SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
+    classify_artifact_name, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
+    SccmArtifactRequest, SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
 };
 
 use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
 
-type PathFingerprintKey = (String, String, String, String);
-type CanonicalArtifactIdentity = (String, String, String, String, String, String, String);
+type PathFingerprintKey = (
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    String,
+);
+type CanonicalArtifactIdentity = (
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SccmServerArtifactPayload {
@@ -293,10 +310,23 @@ struct PreparedArtifact {
 }
 
 impl PreparedArtifact {
-    fn sort_key(&self) -> (&str, &str, &str, String, &str, &str) {
+    fn sort_key(&self) -> (&str, &str, &str, &str, &str, &str, String, &str, &str) {
         (
             role_sort_key(&self.assessment.producer_role),
+            self.assessment
+                .producer_host_handle
+                .as_deref()
+                .unwrap_or_default(),
             self.assessment.source_id.as_str(),
+            self.assessment
+                .workflow_subject_role
+                .as_ref()
+                .map(role_sort_key)
+                .unwrap_or_default(),
+            self.assessment
+                .workflow_subject_handle
+                .as_deref()
+                .unwrap_or_default(),
             self.assessment.path_fingerprint.as_str(),
             rotation_sort_key(self.assessment.rotation.as_ref()),
             self.assessment
@@ -463,12 +493,17 @@ fn normalize_artifact(
 
     let path_fingerprint_key = (
         role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.producer_host_handle.clone(),
         artifact.source_id.clone(),
         workflow_subject_role
             .as_ref()
             .map(role_sort_key)
             .unwrap_or_default()
             .to_owned(),
+        artifact
+            .workflow_subject
+            .as_ref()
+            .and_then(|subject| subject.instance_handle.clone()),
         artifact
             .configured_path_provenance
             .path_fingerprint
@@ -487,12 +522,17 @@ fn normalize_artifact(
 
     let canonical_identity = (
         role_sort_key(&artifact.producer_role).to_owned(),
+        artifact.producer_host_handle.clone(),
         artifact.source_id.clone(),
         workflow_subject_role
             .as_ref()
             .map(role_sort_key)
             .unwrap_or_default()
             .to_owned(),
+        artifact
+            .workflow_subject
+            .as_ref()
+            .and_then(|subject| subject.instance_handle.clone()),
         artifact
             .configured_path_provenance
             .path_fingerprint
@@ -833,14 +873,26 @@ fn normalize_collected_utc(value: &str) -> Result<String, SccmServerIntakeError>
         .to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
-fn logical_source_key(artifact: &SccmServerArtifactAssessment) -> (String, String, String) {
+fn logical_source_key(
+    artifact: &SccmServerArtifactAssessment,
+) -> (String, String, String, String, String) {
     (
         role_sort_key(&artifact.producer_role).to_owned(),
+        artifact
+            .producer_host_handle
+            .as_deref()
+            .unwrap_or_default()
+            .to_owned(),
         artifact.source_id.clone(),
         artifact
             .workflow_subject_role
             .as_ref()
             .map(role_sort_key)
+            .unwrap_or_default()
+            .to_owned(),
+        artifact
+            .workflow_subject_handle
+            .as_deref()
             .unwrap_or_default()
             .to_owned(),
     )
@@ -856,22 +908,31 @@ fn request_for_gap(
     {
         return None;
     }
-    let reason = match artifact.state {
-        SccmCoverageState::Absent => "source was absent; role outcome remains unknown",
-        SccmCoverageState::AccessDenied => "source access was denied; role outcome remains unknown",
-        SccmCoverageState::Capped => "source was capped; terminal role evidence is incomplete",
-        SccmCoverageState::ParseFailed => {
-            "source parsing failed; terminal role evidence is unavailable"
-        }
-        _ => return None,
-    };
+    if !matches!(
+        artifact.state,
+        SccmCoverageState::Absent
+            | SccmCoverageState::AccessDenied
+            | SccmCoverageState::Capped
+            | SccmCoverageState::ParseFailed
+    ) {
+        return None;
+    }
+
+    let classified = classify_artifact_name(
+        artifact.original_basename.as_deref()?,
+        artifact.producer_role.clone(),
+    );
+    if !classified.uses_ccm_records
+        || !classified.supported_for_diagnosis
+        || classified.family != artifact.family
+    {
+        return None;
+    }
+
     Some(SccmArtifactRequest {
-        logical_id: artifact.source_id.clone(),
-        role: artifact
-            .workflow_subject_role
-            .clone()
-            .unwrap_or_else(|| artifact.producer_role.clone()),
-        reason: reason.to_owned(),
+        logical_id: classified.logical_name,
+        role: classified.role,
+        reason: format!("Collect the complete {} file.", classified.basename),
     })
 }
 
@@ -1028,7 +1089,9 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
             "subject" => {
                 matches!(
                     value,
-                    "synthetic:subject:dp-01" | "synthetic:subject:sup-01"
+                    "synthetic:subject:dp-01"
+                        | "synthetic:subject:dp-02"
+                        | "synthetic:subject:sup-01"
                 )
             }
             _ => false,
