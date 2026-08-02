@@ -1,5 +1,8 @@
 use super::canonical_fragment_complete;
 use crate as cmtraceopen_parser;
+use crate::sccm::server::windows::intake::{
+    intake_integrity_work_probe, reset_intake_integrity_work_probe,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -662,6 +665,47 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
     let mut fragment = assessment;
     fragment.artifacts[0].fragment_complete = Some(false);
     assert_unbound(&fragment);
+}
+
+#[test]
+fn canonical_intake_adapter_preflights_huge_same_count_coverage_membership() {
+    let mut assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let coverage_rows = assessment.coverage.len();
+    assessment.coverage[0].artifact_ids =
+        std::iter::repeat_n("mp-policy-current".to_owned(), 65_536).collect();
+    assert_eq!(assessment.coverage.len(), coverage_rows);
+
+    reset_intake_integrity_work_probe();
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&assessment),
+        Err(SccmManagementPointIntakeError::SourceMismatch { artifact_id })
+            if artifact_id == "management-point-intake-projection"
+    ));
+    assert_eq!(
+        intake_integrity_work_probe(),
+        (0, 0),
+        "nested membership inflation must fail before canonical cloning or JSON hashing"
+    );
+}
+
+#[test]
+fn canonical_intake_adapter_preflights_huge_same_count_evidence_string() {
+    let mut assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let evidence_rows = assessment.evidence.len();
+    assessment.evidence[0].message = "x".repeat(4 * 1024 * 1024);
+    assert_eq!(assessment.evidence.len(), evidence_rows);
+
+    reset_intake_integrity_work_probe();
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&assessment),
+        Err(SccmManagementPointIntakeError::SourceMismatch { artifact_id })
+            if artifact_id == "management-point-intake-projection"
+    ));
+    assert_eq!(
+        intake_integrity_work_probe(),
+        (0, 0),
+        "nested string inflation must fail before canonical cloning or JSON hashing"
+    );
 }
 
 #[test]

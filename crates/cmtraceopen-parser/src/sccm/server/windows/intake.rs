@@ -1159,6 +1159,9 @@ fn canonical_intake_integrity(
     coverage: &[SccmServerCoverage],
     evidence: &[SccmEvidence],
 ) -> Option<SccmServerIntakeIntegrity> {
+    #[cfg(test)]
+    INTAKE_CANONICALIZATION_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+
     let mut normalized_topology = topology.clone();
     normalized_topology
         .roles_observed
@@ -1245,10 +1248,33 @@ fn canonical_intake_integrity(
 
 const INTAKE_INTEGRITY_DOMAIN: &[u8] = b"cmtraceopen.sccm.server-intake.integrity.v1";
 
+#[cfg(test)]
+std::thread_local! {
+    static INTAKE_CANONICALIZATION_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static INTAKE_CANONICAL_JSON_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_intake_integrity_work_probe() {
+    INTAKE_CANONICALIZATION_CALLS.with(|calls| calls.set(0));
+    INTAKE_CANONICAL_JSON_BYTES.with(|bytes| bytes.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn intake_integrity_work_probe() -> (usize, usize) {
+    let calls = INTAKE_CANONICALIZATION_CALLS.with(std::cell::Cell::get);
+    let bytes = INTAKE_CANONICAL_JSON_BYTES.with(std::cell::Cell::get);
+    (calls, bytes)
+}
+
 struct IntakeIntegrityWriter(Sha256);
 
 impl Write for IntakeIntegrityWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        #[cfg(test)]
+        INTAKE_CANONICAL_JSON_BYTES.with(|total| {
+            total.set(total.get().saturating_add(bytes.len()));
+        });
         self.0.update(bytes);
         Ok(bytes.len())
     }
