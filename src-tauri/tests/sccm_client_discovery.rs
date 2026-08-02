@@ -685,6 +685,18 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
                 SccmClientDiscoveryObservationState::Found,
             ),
             observation(
+                ROOT_A,
+                "AnotherUnrelated.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_B,
+                "Unrelated.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
                 ROOT_B,
                 "AppEnforce.log.1",
                 SccmRotation::Current,
@@ -747,6 +759,16 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
     assert!(unsupported
         .iter()
         .all(|issue| issue.logical_artifact_ids.is_empty()));
+    assert_eq!(
+        unsupported
+            .iter()
+            .find(|issue| issue.catalog_entry_id == "sccm-client-source:v1:none")
+            .expect("arbitrary supplied names have one privacy-safe unsupported category")
+            .occurrence_count
+            .get(),
+        3,
+        "coalesced unsupported metadata retains the bounded count of supplied observations"
+    );
     assert!(result.coverage_issues.iter().all(|issue| {
         !format!("{issue:?}").contains(malformed_root)
             && !issue.artifact_id.contains(malformed_root)
@@ -813,8 +835,37 @@ fn discovery_retains_coverage_issues_past_the_declaration_cap_without_admitting_
         result.coverage_issues[0].state,
         SccmClientDiscoveryCoverageIssueState::InvalidProvenance
     );
+    assert_eq!(result.coverage_issues[0].occurrence_count.get(), 1);
     assert!(result
         .declarations
         .iter()
         .all(|declaration| declaration.artifact_id != result.coverage_issues[0].artifact_id));
+}
+
+#[test]
+fn discovery_preserves_coverage_issue_cardinality_at_the_exact_admission_boundary() {
+    let observations = (0..MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS)
+        .map(|_| {
+            observation(
+                ROOT_A,
+                "Unrelated.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            )
+        })
+        .collect();
+
+    let result = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+        observations,
+    })
+    .expect("the admission boundary retains every coverage-only observation");
+
+    assert!(result.declarations.is_empty());
+    assert_eq!(result.coverage_issues.len(), 1);
+    assert_eq!(
+        result.coverage_issues[0].occurrence_count.get() as usize,
+        MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+        "privacy-safe issue coalescing must retain exact duplicate cardinality"
+    );
 }
