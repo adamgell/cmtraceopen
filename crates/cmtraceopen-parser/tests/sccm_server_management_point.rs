@@ -13,7 +13,9 @@ const SYNTHETIC_MP_SOURCE_VERSION: &str = "5.00.TEST";
 const SYNTHETIC_MP_PROFILE_ID: &str = "mp-server-5.00.test-v1";
 const EXPECTED_MP_FIXTURE_SCENARIOS: usize = 9;
 const SELECTED_MP_FIXTURE_SCENARIOS: usize = 8;
-const SELECTED_MP_FIXTURE_ARTIFACTS: usize = 22;
+const SELECTED_MP_JOINED_PROVENANCE_ROWS: usize = 22;
+const SELECTED_MP_PROFILE_VALIDATED_ROWS: usize = 20;
+const OPTIONAL_IIS_SOURCE_VERSION: &str = "IIS.TEST.0000";
 
 fn fixture_directory(scenario: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -77,7 +79,9 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
     let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_ROOT);
     let mut expected_scenarios = 0;
     let mut selected_scenarios = 0;
-    let mut selected_artifacts = 0;
+    let mut joined_provenance_rows = 0;
+    let mut profile_validated_rows = 0;
+    let mut optional_iis_version_verified = false;
 
     for entry in fs::read_dir(&fixture_root).expect("MP fixture root must be readable") {
         let scenario_directory = entry
@@ -116,6 +120,12 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
             "{}: selected fixture must retain the synthetic MP profile",
             scenario_directory.display()
         );
+        let validated_families = profile["validatedArtifactFamilies"]
+            .as_array()
+            .expect("selected MP profile must declare validated artifact families");
+        let validated_role = profile["validatedRole"]
+            .as_str()
+            .expect("selected MP profile must declare a validated role");
         assert_eq!(
             prefix,
             SYNTHETIC_MP_SOURCE_VERSION,
@@ -147,17 +157,6 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
             let source_version = expected_artifact["sourceVersion"]
                 .as_str()
                 .expect("selected MP artifact provenance must declare a source version");
-            assert!(
-                source_version.starts_with(prefix),
-                "{}: {artifact_id} source version {source_version:?} must match profile prefix {prefix:?}",
-                scenario_directory.display()
-            );
-            assert_eq!(
-                source_version,
-                SYNTHETIC_MP_SOURCE_VERSION,
-                "{}: {artifact_id} must retain the exact admitted synthetic ConfigMgr version",
-                scenario_directory.display()
-            );
             let manifest_artifact = manifest_artifacts
                 .iter()
                 .find(|artifact| artifact["artifactId"] == artifact_id)
@@ -168,7 +167,49 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
                 "{}: {artifact_id} manifest provenance must exactly match expected source version",
                 scenario_directory.display()
             );
-            selected_artifacts += 1;
+            joined_provenance_rows += 1;
+
+            let catalog_entry_id = manifest_artifact["designOnlyCatalog"]["entryId"]
+                .as_str()
+                .expect("selected MP manifest artifact must declare its catalog entry");
+            let profile_validated = expected_artifact["role"].as_str() == Some(validated_role)
+                && validated_families
+                    .iter()
+                    .any(|family| family.as_str() == Some(catalog_entry_id));
+            if profile_validated {
+                assert!(
+                    source_version.starts_with(prefix),
+                    "{}: {artifact_id} source version {source_version:?} must match profile prefix {prefix:?}",
+                    scenario_directory.display()
+                );
+                assert_eq!(
+                    source_version,
+                    SYNTHETIC_MP_SOURCE_VERSION,
+                    "{}: {artifact_id} must retain the exact admitted synthetic ConfigMgr version",
+                    scenario_directory.display()
+                );
+                profile_validated_rows += 1;
+            }
+
+            if artifact_id == "mp-iis-control-current" {
+                assert!(
+                    !profile_validated,
+                    "site-server mpcontrol provenance must not enter the Management Point profile"
+                );
+            }
+            if artifact_id == "mp-iis-optional-skipped" {
+                assert!(
+                    !profile_validated,
+                    "optional IIS provenance must stay outside the Management Point profile"
+                );
+                assert_eq!(source_version, OPTIONAL_IIS_SOURCE_VERSION);
+                assert_eq!(
+                    manifest_artifact["sourceVersion"].as_str(),
+                    Some(OPTIONAL_IIS_SOURCE_VERSION),
+                    "optional IIS manifest provenance must retain its IIS-specific version"
+                );
+                optional_iis_version_verified = true;
+            }
         }
     }
 
@@ -181,8 +222,16 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
         "selected MP fixture scenario cardinality drifted"
     );
     assert_eq!(
-        selected_artifacts, SELECTED_MP_FIXTURE_ARTIFACTS,
-        "selected MP fixture artifact cardinality drifted"
+        joined_provenance_rows, SELECTED_MP_JOINED_PROVENANCE_ROWS,
+        "selected MP joined provenance cardinality drifted"
+    );
+    assert_eq!(
+        profile_validated_rows, SELECTED_MP_PROFILE_VALIDATED_ROWS,
+        "selected MP profile-validated provenance cardinality drifted"
+    );
+    assert!(
+        optional_iis_version_verified,
+        "optional IIS provenance regression assertion did not run"
     );
 }
 
