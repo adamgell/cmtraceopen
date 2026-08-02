@@ -16,7 +16,9 @@ use crate::sccm::{
     SccmArtifactRequest, SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
 };
 
-use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
+use super::catalog::{
+    classify_declared_server_source, expected_family, SccmServerSourceKind, SccmServerSourceSpec,
+};
 
 /// Keep parser-side work bounded even when the manifest did not come from the
 /// native collector. These match the existing bounded bundle intake envelope.
@@ -1074,6 +1076,13 @@ fn normalize_artifact(
 
     let (family, original_basename, rotation, mut parser_eligible) =
         if let Some((spec, classified)) = classification {
+            validate_declared_source_tuple(
+                &artifact,
+                spec,
+                source_version.as_deref(),
+                synthetic_fixture,
+                roles_observed,
+            )?;
             let family =
                 expected_family(spec.source_id).ok_or(SccmServerIntakeError::InvalidArtifact)?;
             if let Some(classified) = classified {
@@ -2293,6 +2302,47 @@ fn normalize_source_version(
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
     Ok(Some(value.to_owned()))
+}
+
+fn validate_declared_source_tuple(
+    artifact: &RawServerArtifact,
+    spec: &SccmServerSourceSpec,
+    source_version: Option<&str>,
+    synthetic_fixture: bool,
+    roles_observed: &[SccmRole],
+) -> Result<(), SccmServerIntakeError> {
+    if spec.source_id != "server-sup-wsus" {
+        return Ok(());
+    }
+
+    let subject = artifact
+        .workflow_subject
+        .as_ref()
+        .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    if spec.source_kind != SccmServerSourceKind::ProfileDefined
+        || artifact.producer_role != SccmRole::WsUs
+        || subject.role != SccmRole::SoftwareUpdatePoint
+        || !roles_observed.contains(&SccmRole::WsUs)
+        || !roles_observed.contains(&SccmRole::SoftwareUpdatePoint)
+        || artifact.producer_host_handle.is_none()
+        || subject.instance_handle.is_none()
+        || source_version.is_none()
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+
+    if synthetic_fixture
+        && (artifact.producer_host_handle.as_deref() != Some("synthetic:host:wsus-01")
+            || subject.instance_handle.as_deref() != Some("synthetic:subject:sup-01")
+            || source_version != Some("5.00.TEST")
+            || artifact.configured_path_provenance.path_fingerprint
+                != "synthetic:path:sup-wsus-health"
+            || artifact.rotation.lineage_id != "sup-wsus-health")
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+
+    Ok(())
 }
 
 fn validate_artifact_annotations(

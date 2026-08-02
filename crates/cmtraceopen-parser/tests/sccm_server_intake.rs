@@ -1788,8 +1788,10 @@ fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() 
 
 #[test]
 fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
+    type ManifestMutation = (&'static str, fn(&mut Value));
+
     let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
-    let mutations: [(&str, fn(&mut Value)); 8] = [
+    let mutations: [ManifestMutation; 8] = [
         ("subject role not observed", |manifest| {
             manifest["topology"]["rolesObserved"] = json!(["wsUs"]);
         }),
@@ -1843,6 +1845,49 @@ fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
         "WSUS supplemental tuple mutations must fail closed:\n{}",
         unexpected.join("\n")
     );
+}
+
+#[test]
+fn server_intake_accepts_profile_validated_production_wsus_tuple_with_opaque_provenance() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let mut manifest = manifest_value(&manifest_json);
+    let artifact_id = opaque_handle("cmtraceopen.artifact.sha256.v1:", 201);
+
+    manifest["syntheticFixture"] = Value::Bool(false);
+    manifest
+        .as_object_mut()
+        .expect("manifest is an object")
+        .remove("proposalOnly");
+    manifest
+        .as_object_mut()
+        .expect("manifest is an object")
+        .remove("privacy");
+    manifest["topology"]["captureHost"] =
+        Value::String(opaque_handle("cmtraceopen.host.sha256.v1:", 202));
+    manifest["topology"]["siteCode"] =
+        Value::String(opaque_handle("cmtraceopen.site.sha256.v1:", 203));
+    manifest["artifacts"][0]["artifactId"] = Value::String(artifact_id.clone());
+    manifest["artifacts"][0]["producerHostHandle"] =
+        Value::String(opaque_handle("cmtraceopen.host.sha256.v1:", 204));
+    manifest["artifacts"][0]["workflowSubject"]["instanceHandle"] =
+        Value::String(opaque_handle("cmtraceopen.subject.sha256.v1:", 205));
+    manifest["artifacts"][0]["sourceVersion"] = Value::String("5.00.9999.9999".to_owned());
+    manifest["artifacts"][0]["originalPath"] = Value::String("REDACTED".to_owned());
+    manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"] =
+        Value::String(opaque_handle("cmtraceopen.path.sha256.v1:", 206));
+    manifest["artifacts"][0]["rotation"]["lineageId"] =
+        Value::String(opaque_handle("cmtraceopen.lineage.sha256.v1:", 207));
+    manifest["artifacts"][0]["skipReason"] =
+        Value::String(opaque_handle("cmtraceopen.skip-reason.sha256.v1:", 208));
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("profile-validated production WSUS provenance remains assessable");
+    let public = serde_json::to_value(assessment).expect("assessment serializes");
+    let artifact = artifact_json(&public, &artifact_id);
+    assert_eq!(artifact["producerRole"], "wsUs");
+    assert_eq!(artifact["workflowSubjectRole"], "softwareUpdatePoint");
+    assert_eq!(artifact["sourceVersion"], "5.00.9999.9999");
+    assert_eq!(artifact["state"], "skipped");
 }
 
 #[test]
