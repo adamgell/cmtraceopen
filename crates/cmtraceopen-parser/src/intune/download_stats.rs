@@ -3,9 +3,11 @@ use std::path::Path;
 
 use regex::Regex;
 
+#[cfg(test)]
+use super::guid_registry::explicit_app_identity_context;
 use super::guid_registry::{
-    explicit_app_identity_context, extract_app_name, is_fallback_name, ExplicitAppIdentity,
-    GuidRegistry,
+    explicit_app_identity_context_with_named_guid_fallback, extract_app_name, is_fallback_name,
+    ExplicitAppIdentity, GuidRegistry,
 };
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
@@ -385,7 +387,7 @@ struct DownloadIdentityAnalysis {
 }
 
 fn extract_download_identity(msg: &str) -> DownloadIdentityAnalysis {
-    let context = explicit_app_identity_context(msg);
+    let context = explicit_app_identity_context_with_named_guid_fallback(msg);
     match context.identity {
         ExplicitAppIdentity::Valid(guid) => {
             let display_name = context.local_name;

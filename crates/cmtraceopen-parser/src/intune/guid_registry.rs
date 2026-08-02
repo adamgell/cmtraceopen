@@ -46,6 +46,26 @@ pub(crate) struct ExplicitAppIdentityContext {
     pub fallback_app_id: Option<String>,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static NAMED_GUID_FALLBACK_EXTRACTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_named_guid_fallback_extraction_count() {
+    NAMED_GUID_FALLBACK_EXTRACTIONS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn named_guid_fallback_extraction_count() -> usize {
+    NAMED_GUID_FALLBACK_EXTRACTIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn record_named_guid_fallback_extraction() {
+    NAMED_GUID_FALLBACK_EXTRACTIONS.with(|count| count.set(count.get().saturating_add(1)));
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum IdentityFieldState {
     Absent,
@@ -596,7 +616,7 @@ fn scope_name(scope: &JsonObjectScope<'_>) -> Option<(String, GuidNameSource)> {
 /// Checks (in order): `"AppId"`, `"Id"`, then falls back to a generic
 /// GUID regex when a name field is also present on the same line.
 pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
-    let context = explicit_app_identity_context(msg);
+    let context = explicit_app_identity_context_with_named_guid_fallback(msg);
     match context.identity {
         ExplicitAppIdentity::Valid(guid) => Some(guid),
         ExplicitAppIdentity::Invalid => None,
@@ -608,6 +628,22 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
 /// single bounded scan. A valid identity without a local unambiguous name is
 /// an enrichment boundary; callers must not substitute a global registry name.
 pub(crate) fn explicit_app_identity_context(msg: &str) -> ExplicitAppIdentityContext {
+    explicit_app_identity_context_impl(msg, false)
+}
+
+/// Resolve explicit identity context and opt into the legacy named-GUID
+/// fallback. Callers that already apply their own GUID heuristics should use
+/// `explicit_app_identity_context` so this fallback is not computed twice.
+pub(crate) fn explicit_app_identity_context_with_named_guid_fallback(
+    msg: &str,
+) -> ExplicitAppIdentityContext {
+    explicit_app_identity_context_impl(msg, true)
+}
+
+fn explicit_app_identity_context_impl(
+    msg: &str,
+    include_named_guid_fallback: bool,
+) -> ExplicitAppIdentityContext {
     let Ok(scan) = scan_json_fields(msg) else {
         return ExplicitAppIdentityContext {
             identity: ExplicitAppIdentity::Invalid,
@@ -622,7 +658,9 @@ pub(crate) fn explicit_app_identity_context(msg: &str) -> ExplicitAppIdentityCon
             local_name: None,
             // Preserve the established named-context fallback without running
             // the structural scanner a second time.
-            fallback_app_id: if scan_has_name_field(&scan) {
+            fallback_app_id: if include_named_guid_fallback && scan_has_name_field(&scan) {
+                #[cfg(test)]
+                record_named_guid_fallback_extraction();
                 guid_re()
                     .captures(msg)
                     .and_then(|captures| captures.get(1))
@@ -1393,8 +1431,7 @@ mod tests {
             assert_eq!(context.identity, ExplicitAppIdentity::Absent);
             assert_eq!(context.fallback_app_id, None);
 
-            let context =
-                explicit_app_identity_context_with_named_guid_fallback(&message);
+            let context = explicit_app_identity_context_with_named_guid_fallback(&message);
             assert_eq!(context.identity, ExplicitAppIdentity::Absent);
             assert_eq!(context.fallback_app_id.as_deref(), Some(lower));
         }
