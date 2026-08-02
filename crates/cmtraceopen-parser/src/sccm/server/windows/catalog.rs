@@ -5,6 +5,7 @@ pub enum SccmServerSourceKind {
     CcmLog,
     IisW3c,
     StructuredSupplement,
+    ProfileDefined,
 }
 
 #[derive(Debug)]
@@ -13,6 +14,9 @@ pub struct SccmServerSourceSpec {
     pub producer_role: SccmRole,
     pub workflow_subject_role: Option<SccmRole>,
     pub logical_names: &'static [&'static str],
+    /// Exact basename required for a bounded, profile-defined supplemental
+    /// source. CCM sources use `logical_names` instead.
+    pub explicit_basename: Option<&'static str>,
     pub source_kind: SccmServerSourceKind,
     pub supplemental: bool,
 }
@@ -23,6 +27,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::SiteServer,
         workflow_subject_role: None,
         logical_names: &["sitecomp", "hman"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
     },
@@ -31,6 +36,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::SiteServer,
         workflow_subject_role: None,
         logical_names: &["statmgr", "statesys"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
     },
@@ -39,6 +45,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::ManagementPoint,
         workflow_subject_role: None,
         logical_names: &["mpGetAuth", "mpCliReg", "mpRegistrationManager"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
     },
@@ -47,6 +54,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::ManagementPoint,
         workflow_subject_role: None,
         logical_names: &["mpGetPolicy", "mpLocation"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
     },
@@ -55,6 +63,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::SiteServer,
         workflow_subject_role: Some(SccmRole::ManagementPoint),
         logical_names: &["mpcontrol"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
     },
@@ -63,6 +72,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::ManagementPoint,
         workflow_subject_role: None,
         logical_names: &[],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::IisW3c,
         supplemental: true,
     },
@@ -71,6 +81,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::SiteServer,
         workflow_subject_role: Some(SccmRole::DistributionPoint),
         logical_names: &["distmgr", "pkgXferMgr"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
     },
@@ -79,6 +90,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::DistributionPoint,
         workflow_subject_role: None,
         logical_names: &["smsDpProv", "pullDp"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
     },
@@ -87,6 +99,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::SiteServer,
         workflow_subject_role: Some(SccmRole::SoftwareUpdatePoint),
         logical_names: &["wcm", "wsyncmgr"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
     },
@@ -95,8 +108,18 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         producer_role: SccmRole::SoftwareUpdatePoint,
         workflow_subject_role: None,
         logical_names: &["wsusCtrl", "supSetup"],
+        explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
         supplemental: false,
+    },
+    SccmServerSourceSpec {
+        source_id: "server-sup-wsus",
+        producer_role: SccmRole::WsUs,
+        workflow_subject_role: Some(SccmRole::SoftwareUpdatePoint),
+        logical_names: &[],
+        explicit_basename: Some("WsusHealth.json"),
+        source_kind: SccmServerSourceKind::ProfileDefined,
+        supplemental: true,
     },
 ];
 
@@ -122,6 +145,12 @@ pub(crate) fn classify_declared_server_source(
     })?;
 
     if spec.source_kind != SccmServerSourceKind::CcmLog {
+        if spec
+            .explicit_basename
+            .is_some_and(|declared| declared != basename)
+        {
+            return None;
+        }
         return Some((spec, None));
     }
 
@@ -146,7 +175,7 @@ pub(crate) fn expected_family(source_id: &str) -> Option<SccmArtifactFamily> {
             SccmArtifactFamily::ManagementPoint
         }
         "server-dp-distribution" => SccmArtifactFamily::DistributionPoint,
-        "server-sup-sync" => SccmArtifactFamily::SoftwareUpdatePoint,
+        "server-sup-sync" | "server-sup-wsus" => SccmArtifactFamily::SoftwareUpdatePoint,
         _ => return None,
     })
 }
@@ -160,5 +189,6 @@ fn source_kind_matches(expected: SccmServerSourceKind, actual: &str) -> bool {
                 SccmServerSourceKind::StructuredSupplement,
                 "structuredSupplement"
             )
+            | (SccmServerSourceKind::ProfileDefined, "profileDefined")
     )
 }

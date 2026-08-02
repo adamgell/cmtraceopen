@@ -1,6 +1,7 @@
 use cmtraceopen_parser::models::log_entry::Severity;
 use cmtraceopen_parser::sccm::server::windows::{
-    assess_server_intake, SccmServerArtifactPayload, SccmServerIntakeError,
+    assess_server_intake, declared_server_source_catalog, SccmServerArtifactPayload,
+    SccmServerIntakeError, SccmServerSourceKind,
 };
 use cmtraceopen_parser::sccm::{
     SccmConfidence, SccmCoverageState, SccmFinding, SccmFindingBuilder, SccmFindingClass,
@@ -1710,6 +1711,78 @@ fn server_intake_rejects_unversioned_future_unsupported_source_labels() {
     assert!(
         assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
         "future provenance needs a versioned opaque handle, not an arbitrary public label"
+    );
+}
+
+#[test]
+fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let assessment = assess_server_intake(&manifest_json, &payloads)
+        .expect("the catalogued optional WSUS supplement is assessable");
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    let artifact = artifact_json(&serialized, "sup-wsus-health-skipped");
+
+    let source = declared_server_source_catalog()
+        .iter()
+        .find(|source| source.source_id == "server-sup-wsus")
+        .expect("WSUS supplemental source is declared");
+    assert_eq!(source.producer_role, SccmRole::WsUs);
+    assert_eq!(
+        source.workflow_subject_role,
+        Some(SccmRole::SoftwareUpdatePoint)
+    );
+    assert_eq!(source.source_kind, SccmServerSourceKind::ProfileDefined);
+    assert!(source.supplemental);
+
+    assert_eq!(
+        serialized["topology"]["rolesObserved"],
+        json!(["softwareUpdatePoint", "wsUs"])
+    );
+    assert_eq!(artifact["producerRole"], "wsUs");
+    assert_eq!(artifact["workflowSubjectRole"], "softwareUpdatePoint");
+    assert_eq!(artifact["sourceId"], "server-sup-wsus");
+    assert_eq!(artifact["sourceKind"], "profileDefined");
+    assert_eq!(artifact["sourceVersion"], "5.00.TEST");
+    assert_eq!(
+        artifact["pathFingerprint"],
+        "synthetic:path:sup-wsus-health"
+    );
+    assert_eq!(artifact["rotationLineageHandle"], "sup-wsus-health");
+    assert_eq!(artifact["state"], "skipped");
+    assert_eq!(artifact["family"], "softwareUpdatePoint");
+    assert!(!artifact["parserEligible"]
+        .as_bool()
+        .expect("parser eligibility"));
+    assert!(serialized["findings"]
+        .as_array()
+        .expect("findings")
+        .is_empty());
+    assert!(serialized["nextArtifactRequests"]
+        .as_array()
+        .expect("requests")
+        .is_empty());
+
+    for (field, replacement) in [
+        ("artifactId", "free-form-wsus-artifact"),
+        ("sourceId", "free-form-wsus-source"),
+        ("sourceKind", "structuredSupplement"),
+        ("originalBasename", "WSUSHealth.json"),
+    ] {
+        let mut manifest = manifest_value(&manifest_json);
+        manifest["artifacts"][0][field] = Value::String(replacement.to_owned());
+        assert_eq!(
+            assess_server_intake(&serialize_manifest(&manifest), &payloads),
+            Err(SccmServerIntakeError::InvalidArtifact),
+            "{field} must remain in the frozen WSUS supplemental vocabulary"
+        );
+    }
+
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["sourceVersion"] = Value::String("5.00.TEST.0001".to_owned());
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact),
+        "synthetic WSUS supplemental evidence accepts only version 5.00.TEST"
     );
 }
 

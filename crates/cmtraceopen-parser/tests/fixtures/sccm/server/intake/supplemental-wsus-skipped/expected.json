@@ -1,0 +1,9 @@
+{
+  "pre318ExpectedVersion": 1,
+  "coverage": [{ "producerRole": "wsUs", "workflowSubjectRole": "softwareUpdatePoint", "sourceId": "server-sup-wsus", "state": "skipped", "requiredness": "optionalSupplemental" }],
+  "nonCapturedProvenance": { "encoding": "omitted", "collectionLimit": "omitted" },
+  "requiredSourceFailure": false,
+  "terminalSoftwareUpdatePointHealth": false,
+  "roleHealthFinding": "none",
+  "privacy": "synthetic"
+}

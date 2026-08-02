@@ -2406,6 +2406,7 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "sitecomp-current"
                 | "sup-sync-capped"
                 | "sup-sync-current"
+                | "sup-wsus-health-skipped"
                 | "unknown-db-export"
                 | "z-site-status"
         );
@@ -2423,6 +2424,7 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
             | "server-mp-iis"
             | "server-dp-distribution"
             | "server-sup-sync"
+            | "server-sup-wsus"
             | "unknown-db-supplement"
     ) || (allow_unknown
         && !synthetic_fixture
@@ -2432,7 +2434,7 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
 fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
     matches!(
         value,
-        "ccmLog" | "iisW3c" | "structuredSupplement" | "unknown"
+        "ccmLog" | "iisW3c" | "structuredSupplement" | "profileDefined" | "unknown"
     ) || (allow_unknown
         && !synthetic_fixture
         && opaque_sha256_handle(value, "cmtraceopen.source-kind.sha256.v1:"))
@@ -2466,6 +2468,7 @@ fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "sitecomp-lab"
                 | "sup-sync-cap"
                 | "sup-sync-lab"
+                | "sup-wsus-health"
                 | "unknown-db-export"
         );
     }
@@ -2487,6 +2490,7 @@ fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
                 | "synthetic:path:site-default"
                 | "synthetic:path:site-dp-control"
                 | "synthetic:path:site-sup-control"
+                | "synthetic:path:sup-wsus-health"
                 | "synthetic:path:unsupported-db"
                 | "synthetic:path:z-site"
         );
@@ -2612,7 +2616,10 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
     };
     if synthetic_fixture {
         return match domain {
-            "host" => matches!(value, "synthetic:host:mp-01" | "synthetic:host:site-01"),
+            "host" => matches!(
+                value,
+                "synthetic:host:mp-01" | "synthetic:host:site-01" | "synthetic:host:wsus-01"
+            ),
             "subject" => {
                 matches!(
                     value,
