@@ -89,6 +89,7 @@ windows = { version = "=0.62.2", features = [
     "Win32_Security_Cryptography",
     "Win32_Security_Authorization",
     "Win32_System_EventLog",
+    "Win32_System_IO",
     "Win32_Storage_FileSystem",
     "Win32_Security",
     "Win32_System_Com",
@@ -105,6 +106,8 @@ windows = { version = "=0.62.2", features = [
     "Foundation",
     "Foundation_Collections",
     "Win32_System_WinRT",
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
 ] }
 windows-future = "=0.3.2"
 # ureq 3.3 uses Cargo's 2024 edition and requires Rust 1.85, which the old

@@ -7,10 +7,12 @@ use crate::error::AppError;
 /// A bundle root whose identity remains bound for the lifetime of a native read.
 ///
 /// Unix keeps an open directory descriptor and never re-resolves descendants by
-/// pathname. Windows rejects the native boundary rather than making a weaker
-/// pathname-based safety claim until it has equivalent handle-relative traversal.
+/// pathname. Windows keeps a non-followed directory handle and opens each
+/// component relative to that handle.
 pub(super) struct VerifiedBundleRoot {
     #[cfg(unix)]
+    directory: File,
+    #[cfg(windows)]
     directory: File,
 }
 
@@ -38,7 +40,30 @@ pub(super) fn verify_bundle_root(bundle_root: &Path) -> Result<VerifiedBundleRoo
         Ok(VerifiedBundleRoot { directory })
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let directory = OpenOptions::new()
+            .read(true)
+            .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
+            .custom_flags((FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).0)
+            .open(bundle_root)
+            .map_err(|_| {
+                AppError::InvalidInput("SCCM bundle root is unavailable or unsafe".to_owned())
+            })?;
+        require_real_windows_directory(&directory).map_err(|_| {
+            AppError::InvalidInput("SCCM bundle root must be a real directory".to_owned())
+        })?;
+        verify_private_directory(&directory)?;
+        Ok(VerifiedBundleRoot { directory })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = bundle_root;
         Err(AppError::InvalidInput(
@@ -57,7 +82,12 @@ impl VerifiedBundleRoot {
             open_relative_file_no_follow(self.directory.as_raw_fd(), relative)
         }
 
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            open_relative_file_no_follow(&self.directory, relative)
+        }
+
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = relative;
             Err(io::Error::new(
@@ -108,14 +138,13 @@ fn windows_allow_ace_is_restricted(trustee: WindowsAclTrustee, inherit_only: boo
 }
 
 #[cfg(windows)]
-fn verify_private_directory(path: &Path, _metadata: &fs::Metadata) -> Result<(), AppError> {
-    use std::os::windows::ffi::OsStrExt;
+fn verify_private_directory(directory: &File) -> Result<(), AppError> {
+    use std::os::windows::io::AsRawHandle;
 
-    use windows::core::PCWSTR;
     use windows::Win32::Foundation::{CloseHandle, LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL};
     use windows::Win32::Security::Authorization::{
-        GetExplicitEntriesFromAclW, GetNamedSecurityInfoW, GRANT_ACCESS, SET_ACCESS,
-        SE_FILE_OBJECT, TRUSTEE_IS_SID,
+        GetExplicitEntriesFromAclW, GetSecurityInfo, GRANT_ACCESS, SET_ACCESS, SE_FILE_OBJECT,
+        TRUSTEE_IS_SID,
     };
     use windows::Win32::Security::{
         EqualSid, GetTokenInformation, IsValidSid, IsWellKnownSid, TokenUser,
@@ -201,24 +230,19 @@ fn verify_private_directory(path: &Path, _metadata: &fs::Metadata) -> Result<(),
         Ok(unsafe { EqualSid(owner, token_sid).is_ok() })
     }
 
-    let path_wide = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
     let mut owner = PSID::default();
     let mut dacl: *mut ACL = std::ptr::null_mut();
     let mut descriptor = PSECURITY_DESCRIPTOR::default();
     let status = unsafe {
-        GetNamedSecurityInfoW(
-            PCWSTR(path_wide.as_ptr()),
+        GetSecurityInfo(
+            HANDLE(directory.as_raw_handle()),
             SE_FILE_OBJECT,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             Some(&mut owner),
             None,
             Some(&mut dacl),
             None,
-            &mut descriptor,
+            Some(&mut descriptor),
         )
     };
     let _descriptor = LocalAllocation(descriptor.0);
@@ -299,11 +323,6 @@ fn verify_private_directory(path: &Path, _metadata: &fs::Metadata) -> Result<(),
             ));
         }
     }
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn verify_private_directory(_path: &Path, _metadata: &fs::Metadata) -> Result<(), AppError> {
     Ok(())
 }
 
@@ -409,6 +428,115 @@ pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
     require_regular_file(file)
 }
 
+#[cfg(windows)]
+fn open_relative_file_no_follow(root: &File, relative: &Path) -> io::Result<File> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    use windows::core::PWSTR;
+    use windows::Wdk::Foundation::OBJECT_ATTRIBUTES;
+    use windows::Wdk::Storage::FileSystem::{
+        NtCreateFile, FILE_DIRECTORY_FILE, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
+        FILE_OPEN_REPARSE_POINT, FILE_SYNCHRONOUS_IO_NONALERT,
+    };
+    use windows::Win32::Foundation::{HANDLE, OBJ_CASE_INSENSITIVE, UNICODE_STRING};
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    use windows::Win32::System::IO::IO_STATUS_BLOCK;
+
+    let components = relative.components().collect::<Vec<_>>();
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SCCM bundle relative path is unsafe",
+        ));
+    }
+
+    let mut held_directories = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        let Component::Normal(name) = component else {
+            unreachable!("unsafe components were rejected above");
+        };
+        let mut wide_name = name.encode_wide().collect::<Vec<_>>();
+        let wide_bytes = wide_name
+            .len()
+            .checked_mul(std::mem::size_of::<u16>())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "SCCM bundle path component is too long",
+                )
+            })?;
+        if wide_name.is_empty() || wide_name.contains(&0) || wide_bytes > u16::MAX as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SCCM bundle path contains an invalid component",
+            ));
+        }
+        let mut object_name = UNICODE_STRING {
+            Length: wide_bytes as u16,
+            MaximumLength: wide_bytes as u16,
+            Buffer: PWSTR(wide_name.as_mut_ptr()),
+        };
+        let object_attributes = OBJECT_ATTRIBUTES {
+            Length: std::mem::size_of::<OBJECT_ATTRIBUTES>() as u32,
+            RootDirectory: held_directories.last().map_or_else(
+                || HANDLE(root.as_raw_handle()),
+                |directory: &File| HANDLE(directory.as_raw_handle()),
+            ),
+            ObjectName: &mut object_name,
+            Attributes: OBJ_CASE_INSENSITIVE,
+            SecurityDescriptor: std::ptr::null(),
+            SecurityQualityOfService: std::ptr::null(),
+        };
+        let final_component = index + 1 == components.len();
+        let options = if final_component {
+            FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT
+        } else {
+            FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT
+        };
+        let mut handle = HANDLE::default();
+        let mut io_status = IO_STATUS_BLOCK::default();
+        let status = unsafe {
+            NtCreateFile(
+                &mut handle,
+                FILE_GENERIC_READ,
+                &object_attributes,
+                &mut io_status,
+                None,
+                FILE_ATTRIBUTE_NORMAL,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                FILE_OPEN,
+                options,
+                None,
+                0,
+            )
+        };
+        if status.0 < 0 || handle.0.is_null() || handle.is_invalid() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "SCCM bundle entry could not be opened safely",
+            ));
+        }
+        // SAFETY: a successful NtCreateFile returns an owned handle. This File
+        // owns it until it is returned or replaced by the next live ancestor.
+        let opened = unsafe { File::from_raw_handle(handle.0) };
+        if final_component {
+            return require_regular_file(opened);
+        }
+        require_real_windows_directory(&opened)?;
+        held_directories.push(opened);
+        #[cfg(test)]
+        invoke_open_component_hook(name);
+    }
+    unreachable!("non-empty relative paths always return from their final component")
+}
+
 #[cfg(not(any(unix, windows)))]
 pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
     let file = OpenOptions::new().read(true).open(path)?;
@@ -416,15 +544,24 @@ pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
 }
 
 fn require_regular_file(file: File) -> io::Result<File> {
-    let metadata = file.metadata()?;
-    if is_reparse_point(&metadata) || !metadata.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "SCCM bundle entry is not a regular file",
-        ));
+    #[cfg(windows)]
+    {
+        require_real_windows_file(&file)?;
+        return Ok(file);
     }
-    require_single_link(&file)?;
-    Ok(file)
+
+    #[cfg(not(windows))]
+    {
+        let metadata = file.metadata()?;
+        if is_reparse_point(&metadata) || !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SCCM bundle entry is not a regular file",
+            ));
+        }
+        require_single_link(&file)?;
+        Ok(file)
+    }
 }
 
 #[cfg(unix)]
@@ -441,7 +578,9 @@ fn require_single_link(file: &File) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn require_single_link(file: &File) -> io::Result<()> {
+fn windows_file_information(
+    file: &File,
+) -> io::Result<windows::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION> {
     use std::os::windows::io::AsRawHandle;
     use windows::Win32::Storage::FileSystem::{
         GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
@@ -455,6 +594,43 @@ fn require_single_link(file: &File) -> io::Result<()> {
         )
     }
     .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?;
+    Ok(information)
+}
+
+#[cfg(windows)]
+fn require_real_windows_directory(file: &File) -> io::Result<()> {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let information = windows_file_information(file)?;
+    let attributes = information.dwFileAttributes;
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+        || attributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SCCM bundle ancestor is not a real directory",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn require_real_windows_file(file: &File) -> io::Result<()> {
+    use windows::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let information = windows_file_information(file)?;
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+        || information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SCCM bundle entry is not a regular file",
+        ));
+    }
     if information.nNumberOfLinks != 1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -503,6 +679,29 @@ fn set_open_component_hook(hook: Option<OpenComponentHook>) {
 
 #[cfg(all(test, unix))]
 fn invoke_open_component_hook(component: &std::ffi::CStr) {
+    OPEN_COMPONENT_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            hook(component);
+        }
+    });
+}
+
+#[cfg(all(test, windows))]
+type OpenComponentHook = Box<dyn FnMut(&std::ffi::OsStr)>;
+
+#[cfg(all(test, windows))]
+thread_local! {
+    static OPEN_COMPONENT_HOOK: std::cell::RefCell<Option<OpenComponentHook>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(all(test, windows))]
+fn set_open_component_hook(hook: Option<OpenComponentHook>) {
+    OPEN_COMPONENT_HOOK.with(|slot| *slot.borrow_mut() = hook);
+}
+
+#[cfg(all(test, windows))]
+fn invoke_open_component_hook(component: &std::ffi::OsStr) {
     OPEN_COMPONENT_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow_mut().as_mut() {
             hook(component);
@@ -607,7 +806,9 @@ mod tests {
 
 #[cfg(all(test, windows))]
 mod windows_tests {
+    use std::cell::RefCell;
     use std::io::Read;
+    use std::rc::Rc;
 
     use tempfile::tempdir;
 
@@ -635,6 +836,43 @@ mod windows_tests {
         opened
             .read_to_string(&mut contents)
             .expect("read bound evidence");
+        assert_eq!(contents, "original");
+    }
+
+    #[test]
+    fn verified_root_keeps_an_opened_ancestor_after_a_deterministic_swap() {
+        let temp = tempdir().expect("temporary root");
+        let root = temp.path().join("bundle");
+        let replacement = temp.path().join("replacement-evidence");
+        fs::create_dir_all(root.join("evidence/nested")).expect("create original evidence");
+        fs::create_dir_all(replacement.join("nested")).expect("create replacement evidence");
+        fs::write(root.join("evidence/nested/evidence.log"), b"original")
+            .expect("original evidence");
+        fs::write(replacement.join("nested/evidence.log"), b"replacement")
+            .expect("replacement evidence");
+
+        let verified = verify_bundle_root(&root).expect("open original root");
+        let retired = temp.path().join("retired-evidence");
+        let fired = Rc::new(RefCell::new(false));
+        let fired_in_hook = Rc::clone(&fired);
+        set_open_component_hook(Some(Box::new(move |component| {
+            if component.eq_ignore_ascii_case("evidence") && !*fired_in_hook.borrow() {
+                *fired_in_hook.borrow_mut() = true;
+                fs::rename(root.join("evidence"), &retired).expect("retire opened ancestor");
+                fs::rename(&replacement, root.join("evidence"))
+                    .expect("install replacement ancestor");
+            }
+        })));
+
+        let mut opened = verified
+            .open_relative_file(Path::new("evidence/nested/evidence.log"))
+            .expect("opened ancestor remains bound");
+        set_open_component_hook(None);
+        let mut contents = String::new();
+        opened
+            .read_to_string(&mut contents)
+            .expect("read bound evidence");
+        assert!(*fired.borrow(), "test hook ran after ancestor open");
         assert_eq!(contents, "original");
     }
 
