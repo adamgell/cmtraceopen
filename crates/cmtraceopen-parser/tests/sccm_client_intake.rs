@@ -428,6 +428,30 @@ fn synthetic_marker(
     artifact
 }
 
+fn opaque_numbered_artifact(number: usize) -> SccmClientIntakeArtifact {
+    let rotation_number = u32::try_from(number).expect("test artifact number fits u32");
+    SccmClientIntakeArtifact {
+        artifact: SccmArtifact {
+            artifact_id: format!("sccm-artifact:v1:sha256:{number:064x}"),
+            display_name: format!("PolicyAgent.log.{number}"),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: Some("5.00.TEST.0000".to_owned()),
+            collected_at_utc: Some("2026-07-30T00:00:00Z".to_owned()),
+            rotation: SccmRotation::Numbered(rotation_number),
+            coverage: SccmCoverageState::Captured,
+            encoding: Some("utf-8".to_owned()),
+        },
+        path_fingerprint: Some(format!("sha256:{number:064x}")),
+        rotation_lineage: None,
+        relative_path: Some(format!(
+            "evidence/client-policy-agent/numbered-{number}/PolicyAgent.log.{number}"
+        )),
+        fragment_complete: Some(true),
+    }
+}
+
 #[test]
 fn intake_rejects_more_than_the_v1_artifact_limit_before_validation_indexes() {
     // Keep the input otherwise invalid (all declarations collide) so this
@@ -449,15 +473,18 @@ fn intake_rejects_more_than_the_v1_artifact_limit_before_validation_indexes() {
 
 #[test]
 fn intake_wire_rejects_more_than_the_v1_artifact_limit_while_deserializing() {
-    let artifact = serde_json::to_value(synthetic_artifact("wire-limit", "PolicyAgent.log"))
-        .expect("synthetic intake artifact serializes");
+    let boundary_artifacts = (1..=MAX_SCCM_CLIENT_INTAKE_ARTIFACTS)
+        .map(opaque_numbered_artifact)
+        .collect::<Vec<_>>();
     let boundary = serde_json::json!({
-        "artifacts": vec![artifact.clone(); MAX_SCCM_CLIENT_INTAKE_ARTIFACTS],
+        "artifacts": boundary_artifacts,
     });
     let decoded: SccmClientIntakeBundle =
         serde_json::from_value(boundary).expect("the declared v1 boundary is accepted");
     assert_eq!(decoded.artifacts.len(), MAX_SCCM_CLIENT_INTAKE_ARTIFACTS);
 
+    let artifact = serde_json::to_value(synthetic_artifact("wire-limit", "PolicyAgent.log"))
+        .expect("synthetic intake artifact serializes");
     let oversized = serde_json::json!({
         "artifacts": vec![artifact; MAX_SCCM_CLIENT_INTAKE_ARTIFACTS + 1],
     });
@@ -569,26 +596,7 @@ fn intake_wire_rejects_a_combined_artifact_and_capture_gap_count_above_the_v1_li
 #[test]
 fn intake_accepts_the_shared_v1_boundary_across_physical_and_coverage_only_declarations() {
     let artifacts = (1..MAX_SCCM_CLIENT_INTAKE_ARTIFACTS)
-        .map(|number| SccmClientIntakeArtifact {
-            artifact: SccmArtifact {
-                artifact_id: format!("sccm-artifact:v1:sha256:{number:064x}"),
-                display_name: format!("PolicyAgent.log.{number}"),
-                original_path: None,
-                host: None,
-                role: SccmRole::Client,
-                configmgr_version: Some("5.00.TEST.0000".to_owned()),
-                collected_at_utc: Some("2026-07-30T00:00:00Z".to_owned()),
-                rotation: SccmRotation::Numbered(number as u32),
-                coverage: SccmCoverageState::Captured,
-                encoding: Some("utf-8".to_owned()),
-            },
-            path_fingerprint: Some(format!("sha256:{number:064x}")),
-            rotation_lineage: None,
-            relative_path: Some(format!(
-                "evidence/client-policy-agent/numbered-{number}/PolicyAgent.log.{number}"
-            )),
-            fragment_complete: Some(true),
-        })
+        .map(opaque_numbered_artifact)
         .collect();
     let capture_gap = SccmClientIntakeCaptureGap {
         artifact_id: format!("sccm-artifact:v1:sha256:{MAX_SCCM_CLIENT_INTAKE_ARTIFACTS:064x}"),
@@ -611,6 +619,12 @@ fn intake_accepts_the_shared_v1_boundary_across_physical_and_coverage_only_decla
         MAX_SCCM_CLIENT_INTAKE_ARTIFACTS - 1
     );
     assert_eq!(assessment.capture_gaps.len(), 1);
+
+    let wire = serde_json::to_value(&assessment)
+        .expect("the canonical shared boundary assessment serializes");
+    let decoded = serde_json::from_value::<SccmClientIntakeAssessment>(wire)
+        .expect("the canonical shared boundary assessment deserializes");
+    assert_eq!(decoded, assessment);
 }
 
 #[test]
@@ -786,6 +800,75 @@ fn bundle_serialization_rejects_colliding_standalone_valid_capture_gaps() {
         serde_json::to_value(&bundle).is_err(),
         "bundle serialization must validate cross-declaration collisions"
     );
+}
+
+fn assert_bundle_wire_rejected_at_both_json_boundaries(label: &str, wire: Value) {
+    let value_rejected = serde_json::from_value::<SccmClientIntakeBundle>(wire.clone()).is_err();
+    let text_rejected = serde_json::from_str::<SccmClientIntakeBundle>(&wire.to_string()).is_err();
+    assert!(
+        value_rejected && text_rejected,
+        "invalid bundle declaration was accepted: {label}; \
+         from_value rejected={value_rejected}, from_str rejected={text_rejected}"
+    );
+}
+
+#[test]
+fn bundle_deserialization_revalidates_unsafe_collision_and_capture_gap_inputs() {
+    let artifact = serde_json::to_value(synthetic_artifact("policy-current", "PolicyAgent.log"))
+        .expect("valid artifact serializes");
+
+    let mut unsafe_identity = serde_json::json!({ "artifacts": [artifact.clone()] });
+    unsafe_identity["artifacts"][0]["artifact"]["artifactId"] =
+        serde_json::json!(r"C:\Users\RealUser\PolicyAgent.log");
+
+    let duplicate_artifact = serde_json::json!({
+        "artifacts": [artifact.clone(), artifact.clone()],
+    });
+
+    let first_gap = SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-capped-rotation-numbered-1".to_owned(),
+        basename: "PolicyAgent.log.1".to_owned(),
+        rotation: SccmRotation::Numbered(1),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: "synthetic-capped-rotation".to_owned(),
+        rotation_lineage: "synthetic:capped-rotation".to_owned(),
+    };
+    let mut second_gap = first_gap.clone();
+    second_gap.artifact_id = "fixture-capped-rotation-numbered-2".to_owned();
+    let colliding_gaps = serde_json::json!({
+        "artifacts": [],
+        "captureGaps": [
+            capture_gap_wire_value(&first_gap),
+            capture_gap_wire_value(&second_gap),
+        ],
+    });
+
+    let mut invalid_gap = first_gap.clone();
+    invalid_gap.coverage = SccmCoverageState::Captured;
+    let invalid_gap_shape = serde_json::json!({
+        "artifacts": [],
+        "captureGaps": [capture_gap_wire_value(&invalid_gap)],
+    });
+
+    let mut duplicate_across_declaration_kinds = first_gap;
+    duplicate_across_declaration_kinds.artifact_id = "fixture-policy-current".to_owned();
+    let duplicate_artifact_and_gap = serde_json::json!({
+        "artifacts": [artifact],
+        "captureGaps": [capture_gap_wire_value(&duplicate_across_declaration_kinds)],
+    });
+
+    for (label, wire) in [
+        ("unsafe artifact identity", unsafe_identity),
+        ("duplicate artifact identity", duplicate_artifact),
+        ("colliding capture gaps", colliding_gaps),
+        ("invalid capture-gap shape", invalid_gap_shape),
+        (
+            "duplicate artifact and capture-gap identity",
+            duplicate_artifact_and_gap,
+        ),
+    ] {
+        assert_bundle_wire_rejected_at_both_json_boundaries(label, wire);
+    }
 }
 
 #[test]
@@ -976,6 +1059,36 @@ fn public_assessment_deserialization_rejects_forged_coverage_and_identity() {
     assert!(
         serde_json::from_value::<SccmClientIntakeAssessment>(leaked_identity).is_err(),
         "a standalone assessment must not deserialize raw identity-bearing provenance"
+    );
+}
+
+#[test]
+fn public_assessment_capture_gaps_are_bounded_before_projection_validation() {
+    let mut wire =
+        serde_json::to_value(assessment("missing-root")).expect("canonical assessment serializes");
+    let gap = capture_gap_wire_value(&SccmClientIntakeCaptureGap {
+        artifact_id: "fixture-capped-rotation".to_owned(),
+        basename: "PolicyAgent.log.1".to_owned(),
+        rotation: SccmRotation::Numbered(1),
+        coverage: SccmCoverageState::Capped,
+        path_fingerprint: "synthetic-capped-rotation".to_owned(),
+        rotation_lineage: "synthetic:capped-rotation".to_owned(),
+    });
+    wire["captureGaps"] = serde_json::json!(vec![gap; MAX_SCCM_CLIENT_INTAKE_ARTIFACTS + 1]);
+
+    let value_error = serde_json::from_value::<SccmClientIntakeAssessment>(wire.clone())
+        .expect_err("from_value must reject capture gap 4097 before projection validation");
+    let text = wire.to_string();
+    let text_error = serde_json::from_str::<SccmClientIntakeAssessment>(&text)
+        .expect_err("from_str must reject capture gap 4097 before projection validation");
+    let limit_error = SccmClientIntakeError::ArtifactLimitExceeded.to_string();
+    let value_stopped_early = value_error.to_string().starts_with(&limit_error);
+    let text_stopped_early = text_error.to_string().starts_with(&limit_error);
+    assert!(
+        value_stopped_early && text_stopped_early,
+        "oversized assessment capture gaps reached canonical projection validation; \
+         from_value early={value_stopped_early} ({value_error}); \
+         from_str early={text_stopped_early} ({text_error})"
     );
 }
 

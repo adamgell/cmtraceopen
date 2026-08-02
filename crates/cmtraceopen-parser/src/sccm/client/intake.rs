@@ -345,10 +345,12 @@ impl<'de> Visitor<'de> for SccmClientIntakeBundleVisitor {
             }
         }
 
-        Ok(SccmClientIntakeBundle {
+        let bundle = SccmClientIntakeBundle {
             artifacts: artifacts.ok_or_else(|| A::Error::missing_field("artifacts"))?,
             capture_gaps: capture_gaps.unwrap_or_default(),
-        })
+        };
+        validate_bundle(&bundle).map_err(A::Error::custom)?;
+        Ok(bundle)
     }
 }
 
@@ -706,9 +708,30 @@ struct SccmClientIntakeAssessmentWire {
     groups: Vec<SccmClientIntakeGroupWire>,
     physical_artifacts: Vec<SccmClientIntakeFragmentWire>,
     unsupported_artifacts: Vec<SccmClientUnsupportedArtifactWire>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_bounded_assessment_capture_gaps"
+    )]
     capture_gaps: Vec<SccmClientIntakeCaptureGap>,
     coverage_gaps: Vec<SccmClientIntakeCoverageGapWire>,
+}
+
+fn deserialize_bounded_assessment_capture_gaps<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SccmClientIntakeCaptureGap>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    // Each assessment capture gap reconstructs one canonical bundle
+    // declaration in `validate_assessment_projection`. Decode no more than
+    // that authoritative shared ceiling; the final projection validation
+    // accounts for physical, nonphysical, unsupported, and gap declarations
+    // together.
+    BoundedCaptureGapsSeed {
+        limit: MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    }
+    .deserialize(deserializer)
 }
 
 impl From<&SccmClientIntakeAssessment> for SccmClientIntakeAssessmentWire {
