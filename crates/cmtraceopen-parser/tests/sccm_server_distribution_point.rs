@@ -57,6 +57,34 @@ fn dp_evidence_index(
         .expect("fixture contains the DP evidence")
 }
 
+fn add_dp_peer(
+    assessment: &mut cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
+) {
+    let artifact_index = dp_artifact_index(assessment);
+    let mut peer = assessment.artifacts[artifact_index].clone();
+    peer.artifact_id = "dp-dist-peer".to_owned();
+    peer.rotation_lineage_handle = "synthetic:lineage:dp-dist-peer".to_owned();
+    peer.path_fingerprint = "synthetic:path:site-dp-control-peer".to_owned();
+    assessment.artifacts.push(peer);
+
+    let evidence_index = dp_evidence_index(assessment);
+    let mut peer_evidence = assessment.evidence[evidence_index].clone();
+    peer_evidence.evidence_id = "dp-dist-peer:1-1".to_owned();
+    peer_evidence.reference.artifact_id = "dp-dist-peer".to_owned();
+    peer_evidence.reference.entry_id = "dp-dist-peer:1-1".to_owned();
+    peer_evidence.reference.line_start = Some(1);
+    peer_evidence.reference.line_end = Some(1);
+    assessment.evidence.push(peer_evidence);
+
+    assessment
+        .coverage
+        .iter_mut()
+        .find(|coverage| coverage.source_id == "server-dp-distribution")
+        .expect("fixture contains DP coverage")
+        .artifact_ids
+        .push("dp-dist-peer".to_owned());
+}
+
 fn assert_dp_coverage_only(
     assessment: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
 ) -> Value {
@@ -173,6 +201,93 @@ fn missing_duplicate_and_overlapping_evidence_ranges_are_coverage_only() {
     overlapping.reference.line_end = Some(2);
     overlap.evidence.push(overlapping);
     assert_dp_coverage_only(&overlap);
+}
+
+#[test]
+fn evidence_ranges_with_a_physical_line_hole_are_coverage_only() {
+    let mut assessment = load_assessment("complete-multi-role");
+    let evidence_index = dp_evidence_index(&assessment);
+    assessment.evidence[evidence_index].evidence_id = "dp-dist-current:1-1".to_owned();
+    assessment.evidence[evidence_index].reference.entry_id = "dp-dist-current:1-1".to_owned();
+    assessment.evidence[evidence_index].reference.line_start = Some(1);
+    assessment.evidence[evidence_index].reference.line_end = Some(1);
+
+    let mut after_hole = assessment.evidence[evidence_index].clone();
+    after_hole.evidence_id = "dp-dist-current:3-3".to_owned();
+    after_hole.reference.entry_id = "dp-dist-current:3-3".to_owned();
+    after_hole.reference.line_start = Some(3);
+    after_hole.reference.line_end = Some(3);
+    assessment.evidence.push(after_hole);
+
+    assert_dp_coverage_only(&assessment);
+}
+
+#[test]
+fn coverage_gap_preserves_every_declared_member_when_a_peer_is_not_admitted() {
+    for defect in [
+        "profile-ineligible",
+        "parser-ineligible",
+        "incomplete-fragment",
+        "invalid-evidence",
+    ] {
+        let mut assessment = load_assessment("complete-multi-role");
+        add_dp_peer(&mut assessment);
+        let peer_index = assessment
+            .artifacts
+            .iter()
+            .position(|artifact| artifact.artifact_id == "dp-dist-peer")
+            .expect("peer artifact exists");
+
+        match defect {
+            "profile-ineligible" => assessment.artifacts[peer_index].profile_eligible = false,
+            "parser-ineligible" => assessment.artifacts[peer_index].parser_eligible = false,
+            "incomplete-fragment" => {
+                assessment.artifacts[peer_index].fragment_complete = Some(false)
+            }
+            "invalid-evidence" => {
+                assessment
+                    .evidence
+                    .iter_mut()
+                    .find(|evidence| evidence.reference.artifact_id == "dp-dist-peer")
+                    .expect("peer evidence exists")
+                    .reference
+                    .line_start = None
+            }
+            _ => unreachable!("test defect is declared above"),
+        }
+
+        let analysis = analyze_distribution_point(&assessment);
+        assert_eq!(
+            analysis
+                .source_observations
+                .iter()
+                .map(|observation| observation.artifact_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dp-dist-current"],
+            "{defect} peer must not be admitted"
+        );
+        assert_eq!(analysis.coverage_gaps.len(), 1, "{defect}");
+        assert_eq!(
+            analysis.coverage_gaps[0].artifact_ids,
+            vec!["dp-dist-current", "dp-dist-peer"],
+            "{defect} coverage gap must preserve every declared member"
+        );
+        assert_eq!(analysis.artifact_requests.len(), 1, "{defect}");
+
+        let expected = serde_json::to_value(&analysis).expect("analysis serializes");
+        assessment.artifacts.reverse();
+        assessment.evidence.reverse();
+        assessment.coverage.reverse();
+        for coverage in &mut assessment.coverage {
+            coverage.artifact_ids.reverse();
+        }
+        assert_eq!(
+            expected,
+            serde_json::to_value(analyze_distribution_point(&assessment))
+                .expect("reordered analysis serializes"),
+            "{defect} output must be deterministic"
+        );
+    }
 }
 
 #[test]
