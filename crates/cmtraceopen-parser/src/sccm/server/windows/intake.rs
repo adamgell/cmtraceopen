@@ -474,6 +474,16 @@ pub enum SccmServerConfiguredPathClass {
     NonDefault,
 }
 
+/// A deterministic artifact-membership row in server intake assessment schema v1.
+///
+/// Rows emitted by [`assess_server_intake`] bind membership to the validated,
+/// privacy-safe producer and workflow-subject topology. The two handle fields
+/// are optional additive schema-v1 JSON fields and are omitted when absent;
+/// neither contains a raw host name or path.
+///
+/// Adding these public fields is not Rust struct-literal source compatible,
+/// and strict JSON consumers that reject unknown fields must recognize them
+/// before consuming rows where they are present.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmServerCoverage {

@@ -158,6 +158,19 @@ Deferred native tests must make the write/privacy boundaries observable:
 
 ## Intake assessment rules
 
+- Normalized schema-v1 coverage rows group by producer role, optional opaque
+  producer-host handle, source ID, optional workflow-subject role and opaque
+  instance handle, and capture state. Every `artifactId` in a row is therefore
+  bound to the exact topology retained by its normalized artifact; a role,
+  source, and state match alone cannot merge physical producers or workflow
+  subjects.
+- `producerHostHandle` and `workflowSubjectHandle` are additive optional fields
+  on normalized schema-v1 coverage JSON and are omitted when absent. They retain
+  only intake-validated opaque handles, never raw host names or paths. This
+  additive change does not silently advance `schemaVersion`: Rust consumers
+  constructing `SccmServerCoverage` with struct literals must supply the new
+  fields, and strict JSON readers that reject unknown fields must add them to
+  their accepted schema before reading rows where they are present.
 - Classify by `(producer role/topology, source ID/basename, supported rotation,
   provenance)`, not filename, workflow subject, or default path alone.
 - Stable-normalize artifacts by producer role/host handle, source ID,

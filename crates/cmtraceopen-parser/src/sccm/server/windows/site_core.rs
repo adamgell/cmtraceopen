@@ -1934,7 +1934,14 @@ fn evidence_collision_artifact_ids(
 }
 
 fn site_core_coverage_is_congruent(intake: &SccmServerIntakeAssessment) -> bool {
-    type CoverageKey = (String, String, String, String);
+    type CoverageKey = (
+        String,
+        Option<String>,
+        String,
+        String,
+        Option<String>,
+        String,
+    );
 
     let mut expected = BTreeMap::<CoverageKey, Vec<String>>::new();
     for artifact in &intake.artifacts {
@@ -1944,13 +1951,15 @@ fn site_core_coverage_is_congruent(intake: &SccmServerIntakeAssessment) -> bool 
         expected
             .entry((
                 role_sort_key(&artifact.producer_role).to_owned(),
+                artifact.producer_host_handle.clone(),
+                artifact.source_id.clone(),
                 artifact
                     .workflow_subject_role
                     .as_ref()
                     .map(role_sort_key)
                     .unwrap_or_default()
                     .to_owned(),
-                artifact.source_id.clone(),
+                artifact.workflow_subject_handle.clone(),
                 coverage_sort_key(&artifact.state).to_owned(),
             ))
             .or_default()
@@ -1965,13 +1974,15 @@ fn site_core_coverage_is_congruent(intake: &SccmServerIntakeAssessment) -> bool 
         observed
             .entry((
                 role_sort_key(&coverage.producer_role).to_owned(),
+                coverage.producer_host_handle.clone(),
+                coverage.source_id.clone(),
                 coverage
                     .workflow_subject_role
                     .as_ref()
                     .map(role_sort_key)
                     .unwrap_or_default()
                     .to_owned(),
-                coverage.source_id.clone(),
+                coverage.workflow_subject_handle.clone(),
                 coverage_sort_key(&coverage.state).to_owned(),
             ))
             .or_default()

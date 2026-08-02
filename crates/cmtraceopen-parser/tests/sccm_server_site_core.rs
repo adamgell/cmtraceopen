@@ -319,6 +319,25 @@ fn replace_source_artifact_id(
     }
 }
 
+fn replace_source_producer_host(
+    assessment: &mut SccmServerIntakeAssessment,
+    source_id: &str,
+    replacement: &str,
+) {
+    let artifact = assessment
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == source_id)
+        .expect("source artifact");
+    artifact.producer_host_handle = Some(replacement.to_owned());
+    let coverage = assessment
+        .coverage
+        .iter_mut()
+        .find(|coverage| coverage.artifact_ids.contains(&artifact.artifact_id))
+        .expect("source coverage");
+    coverage.producer_host_handle = Some(replacement.to_owned());
+}
+
 fn assert_bounded_request_has_specific_scope(request: &SccmSiteCoreArtifactRequest) {
     assert!((1..=2).contains(&request.max_artifacts));
     assert!(!request.candidates.is_empty());
@@ -797,12 +816,7 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
         Source::sitecomp(HEALTHY_SITECOMP),
         Source::status(HEALTHY_STATUS),
     ]);
-    split_hosts
-        .artifacts
-        .iter_mut()
-        .find(|artifact| artifact.source_id == "server-status")
-        .expect("status artifact")
-        .producer_host_handle = Some("synthetic:host:site-02".to_owned());
+    replace_source_producer_host(&mut split_hosts, "server-status", "synthetic:host:site-02");
     let split = analyze_site_core(&split_hosts);
     assert_eq!(split.results.len(), 2);
     assert_ne!(
@@ -823,12 +837,7 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
         .any(|result| { result.transaction_key.producer_host_handle == "synthetic:host:site-02" }));
 
     let mut foreign_gap = assess(&[Source::sitecomp(HEALTHY_SITECOMP), Source::absent_status()]);
-    foreign_gap
-        .artifacts
-        .iter_mut()
-        .find(|artifact| artifact.source_id == "server-status")
-        .expect("status artifact")
-        .producer_host_handle = Some("synthetic:host:site-02".to_owned());
+    replace_source_producer_host(&mut foreign_gap, "server-status", "synthetic:host:site-02");
     let foreign_gap_analysis = analyze_site_core(&foreign_gap);
     assert_eq!(foreign_gap_analysis.results.len(), 1);
     assert_eq!(
@@ -1210,12 +1219,7 @@ fn undeclared_component_gap_does_not_attach_across_producer_hosts() {
         Source::status(HEALTHY_STATUS),
         Source::sitecomp(HEALTHY_SITECOMP),
     ]);
-    assessment
-        .artifacts
-        .iter_mut()
-        .find(|artifact| artifact.source_id == "server-sitecomp")
-        .expect("component artifact")
-        .producer_host_handle = Some("synthetic:host:site-02".to_owned());
+    replace_source_producer_host(&mut assessment, "server-sitecomp", "synthetic:host:site-02");
 
     let analysis = analyze_site_core(&assessment);
     let status_only_result = analysis
@@ -1926,12 +1930,7 @@ fn swapped_coverage_producer_hosts_fail_site_core_congruence_closed() {
         Source::sitecomp(HEALTHY_SITECOMP),
         Source::status(HEALTHY_STATUS),
     ]);
-    assessment
-        .artifacts
-        .iter_mut()
-        .find(|artifact| artifact.source_id == "server-status")
-        .expect("status artifact")
-        .producer_host_handle = Some("synthetic:host:site-02".to_owned());
+    replace_source_producer_host(&mut assessment, "server-status", "synthetic:host:site-02");
     assessment
         .coverage
         .iter_mut()
