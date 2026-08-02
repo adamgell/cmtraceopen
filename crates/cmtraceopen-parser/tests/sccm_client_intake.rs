@@ -1303,7 +1303,7 @@ fn mixed_capped_and_absent_group_keeps_the_capped_capture_and_names_the_absent_s
     assert_eq!(
         group.coverage,
         SccmCoverageState::Capped,
-        "the physical capped capture defines the group coverage, not the absent sibling"
+        "Capped outranks Absent in the group coverage severity order"
     );
     assert_eq!(group.fragments.len(), 2);
 

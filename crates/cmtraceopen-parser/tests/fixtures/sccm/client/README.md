@@ -49,8 +49,10 @@ For every `captured` or `capped` artifact, `bytesCopied` equals the physical
 evidence-file length, `encoding` is `utf-8`, and `collectionLimit` states both
 the byte limit and whether it applied; `expected.json` mirrors those values in
 `nativeDesignPending.artifactProvenance`, including an exact `bytesCopied` for
-every physical fixture. Noncapture artifacts remain `bytesCopied: 0` with a
-null relative path and do not invent capture provenance. An applied cap counts
+every physical fixture. In `manifest.json`, noncapture artifacts remain
+`bytesCopied: 0` with a null relative path; they are omitted from
+`expected.json`'s `nativeDesignPending.artifactProvenance` and do not invent
+capture provenance. An applied cap counts
 inclusive raw source bytes before decoding and retains that exact source
 prefix, even when the last byte splits a text or logical-record boundary. The
 collector never appends a truncation marker or repairs/replaces bytes. The
