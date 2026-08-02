@@ -135,6 +135,10 @@ required-features = ["sysmon"]
 name = "sccm_client_manifest"
 required-features = ["sccm-diagnostics"]
 
+[[test]]
+name = "sccm_client_discovery"
+required-features = ["sccm-diagnostics"]
+
 [[bench]]
 name = "intune_pipeline"
 harness = false
