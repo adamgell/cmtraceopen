@@ -2521,7 +2521,7 @@ fn is_canonical_opaque_id(value: &str) -> bool {
     !value.is_empty() && value.trim() == value && has_at_most_chars(value, MAX_SCCM_OPAQUE_ID_CHARS)
 }
 
-fn has_at_most_chars(value: &str, maximum: usize) -> bool {
+pub(crate) fn has_at_most_chars(value: &str, maximum: usize) -> bool {
     value.chars().nth(maximum).is_none()
 }
 

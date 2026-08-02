@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::findings::MAX_SCCM_CORRELATION_KEY_VALUE_CHARS;
+use super::findings::{has_at_most_chars, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS};
 use super::models::{
     SccmCorrelationKey, SccmCorrelationKeyKind, SccmEvidence, SccmExtractionGap,
     SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmKeyConfidence,
@@ -210,8 +210,8 @@ pub fn extract_keys(
 // so a raw that fits the bound can still normalize past it. Both are on the
 // wire, so both have to clear the bound the validator applies to both.
 fn is_bounded_key_value(key: &SccmCorrelationKey) -> bool {
-    key.raw.chars().count() <= MAX_SCCM_CORRELATION_KEY_VALUE_CHARS
-        && key.normalized.chars().count() <= MAX_SCCM_CORRELATION_KEY_VALUE_CHARS
+    has_at_most_chars(&key.raw, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS)
+        && has_at_most_chars(&key.normalized, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS)
 }
 
 fn profile_gap_kind(profile: &SccmExtractionProfile) -> Option<SccmExtractionGapKind> {
