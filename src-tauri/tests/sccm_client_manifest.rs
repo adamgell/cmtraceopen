@@ -282,11 +282,7 @@ fn omitted_capped_rotation_projects_as_a_gap_without_a_fake_fragment() {
     let bundle_root = temp.path().join("bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
     let omitted = capture_gap(SccmRotation::Numbered(1), "capped");
-    write_native_bundle(
-        &bundle_root,
-        &[&current],
-        std::slice::from_ref(&omitted),
-    );
+    write_native_bundle(&bundle_root, &[&current], std::slice::from_ref(&omitted));
 
     let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("projected bundle");
     assert_eq!(
@@ -316,11 +312,7 @@ fn parse_failed_omitted_rotation_remains_coverage_only() {
     let bundle_root = temp.path().join("bundle");
     let current = physical_artifact(SccmRotation::Current, b"policy-current");
     let failed = capture_gap(SccmRotation::Numbered(2), "parseFailed");
-    write_native_bundle(
-        &bundle_root,
-        &[&current],
-        std::slice::from_ref(&failed),
-    );
+    write_native_bundle(&bundle_root, &[&current], std::slice::from_ref(&failed));
     let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("verified pure projection");
 
     assert_eq!(bundle.artifacts.len(), 1);
@@ -416,13 +408,14 @@ fn legacy_projection_never_invents_native_capture_gaps() {
     let expected_artifact_id = format!(
         "sccm-artifact:v1:sha256:{}",
         sha256(
-            format!(
-                "marker:v1:{expected_catalog_id}:absent:current:ccmsetup.log:unscoped"
-            )
-            .as_bytes()
+            format!("marker:v1:{expected_catalog_id}:absent:current:ccmsetup.log:unscoped")
+                .as_bytes()
         )
     );
-    assert_eq!(bundle.artifacts[0].artifact.artifact_id, expected_artifact_id);
+    assert_eq!(
+        bundle.artifacts[0].artifact.artifact_id,
+        expected_artifact_id
+    );
 }
 
 #[test]
@@ -598,7 +591,7 @@ fn reader_rejects_physical_byte_metadata_overflow_before_evidence_reads() {
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
         .expect_err("overflowing source bytes fail before unbounded evidence verification");
-    assert!(error.to_string().contains("source byte cap"));
+    assert!(error.to_string().contains("physical artifact byte cap"));
 }
 
 #[test]

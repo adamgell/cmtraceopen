@@ -30,9 +30,10 @@ const LEGACY_GENERIC_PROFILE_NAME: &str = "cmtrace-full-diagnostics-v1";
 const LEGACY_GENERIC_PROFILE_VERSION: &str = "1.1.0";
 const LEGACY_CONFIGMGR_CCM_LOGS_ID: &str = "configmgr-ccm-logs";
 const LEGACY_CONFIGMGR_LOG_CATEGORY: &str = "logs";
-const LEGACY_CCMSETUP_GROUP: &str = "client-ccmsetup";
 const LEGACY_CCMSETUP_BASENAME: &str = "ccmsetup.log";
 const MAX_SAFE_TEXT_CHARS: usize = 160;
+const MAX_SCCM_CLIENT_PHYSICAL_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_SCCM_CLIENT_TOTAL_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
 
 pub fn read_sccm_manifest_or_legacy(bundle_root: &Path) -> Result<SccmBundleManifestV1, AppError> {
     let verified_root = verify_bundle_root(bundle_root)?;
@@ -123,7 +124,6 @@ fn validate_native_manifest(
     bundle_root: &VerifiedBundleRoot,
     manifest: &SccmBundleManifestV1,
 ) -> Result<(), AppError> {
-    validate_native_manifest_structure(manifest)?;
     manifest_to_client_intake_bundle(manifest)?;
     validate_physical_source_limits(manifest)?;
     for artifact in &manifest.artifacts {
@@ -136,11 +136,13 @@ fn validate_native_manifest(
 
 fn validate_physical_source_limits(manifest: &SccmBundleManifestV1) -> Result<(), AppError> {
     let mut totals = BTreeMap::<String, (u64, u64)>::new();
+    let mut total_physical_bytes = 0_u64;
     for artifact in manifest
         .artifacts
         .iter()
         .filter(|artifact| artifact.state.is_physical())
     {
+        add_to_client_physical_byte_budget(artifact.bytes_copied, &mut total_physical_bytes)?;
         let canonical_basename = canonical_client_source(&artifact.basename, &artifact.rotation)
             .expect("physical artifacts were catalog-validated before source limits");
         let source = source_identity_digest(
@@ -170,6 +172,28 @@ fn validate_physical_source_limits(manifest: &SccmBundleManifestV1) -> Result<()
                 "SCCM source byte cap is exceeded".to_owned(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn add_to_client_physical_byte_budget(
+    artifact_bytes: u64,
+    total_physical_bytes: &mut u64,
+) -> Result<(), AppError> {
+    if artifact_bytes > MAX_SCCM_CLIENT_PHYSICAL_ARTIFACT_BYTES {
+        return Err(AppError::InvalidInput(
+            "SCCM physical artifact byte cap is exceeded".to_owned(),
+        ));
+    }
+    *total_physical_bytes = total_physical_bytes
+        .checked_add(artifact_bytes)
+        .ok_or_else(|| {
+            AppError::InvalidInput("SCCM aggregate physical byte cap is exceeded".to_owned())
+        })?;
+    if *total_physical_bytes > MAX_SCCM_CLIENT_TOTAL_PHYSICAL_BYTES {
+        return Err(AppError::InvalidInput(
+            "SCCM aggregate physical byte cap is exceeded".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -780,7 +804,7 @@ fn read_legacy_client_intake_bundle(
             ));
         }
         known_gap_seen = true;
-        let catalog_id = catalog_entry_id(LEGACY_CCMSETUP_GROUP);
+        let catalog_id = catalog_entry_id(LEGACY_CCMSETUP_BASENAME);
         artifacts.push(SccmClientIntakeArtifact {
             artifact: SccmArtifact {
                 artifact_id: expected_marker_artifact_id(
@@ -822,7 +846,7 @@ fn legacy_gap(index: usize, gap: &Value) -> Result<SccmManifestArtifact, AppErro
     let legacy_id = legacy_identity(gap, "gap")?;
     let state = match gap.get("status").and_then(Value::as_str) {
         Some("Missing") => SccmManifestSourceState::Absent,
-        Some("Failed") | Some(_) | None => SccmManifestSourceState::FailedUnknownDetail,
+        _ => SccmManifestSourceState::FailedUnknownDetail,
     };
     Ok(legacy_unscoped_artifact("gap", index, legacy_id, state))
 }
@@ -834,9 +858,9 @@ fn legacy_artifact(index: usize, artifact: &Value) -> Result<SccmManifestArtifac
     }
     let state = match artifact.get("status").and_then(Value::as_str) {
         Some("missing") => SccmManifestSourceState::Absent,
-        Some("collected") | Some("failed") | Some(_) | None => {
-            SccmManifestSourceState::FailedUnknownDetail
-        }
+        // Legacy manifests provide no verifiable evidence binding, so even a
+        // collected status remains a conservative unknown-detail failure.
+        _ => SccmManifestSourceState::FailedUnknownDetail,
     };
     Ok(legacy_unscoped_artifact(
         "artifact", index, legacy_id, state,
@@ -936,4 +960,23 @@ fn is_safe_configmgr_version(value: &str) -> bool {
 
 fn is_four_ascii_digits(value: &str) -> bool {
     value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_owned_physical_byte_budget_accepts_exact_ceilings_without_opening_evidence() {
+        let mut total = 0;
+        for _ in 0..4 {
+            add_to_client_physical_byte_budget(MAX_SCCM_CLIENT_PHYSICAL_ARTIFACT_BYTES, &mut total)
+                .expect("the exact reader-owned ceilings are admitted before any file is opened");
+        }
+        assert_eq!(total, MAX_SCCM_CLIENT_TOTAL_PHYSICAL_BYTES);
+
+        let error = add_to_client_physical_byte_budget(1, &mut total)
+            .expect_err("one byte beyond the aggregate ceiling is rejected before a file open");
+        assert!(error.to_string().contains("aggregate physical byte cap"));
+    }
 }

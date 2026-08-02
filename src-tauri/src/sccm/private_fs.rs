@@ -328,7 +328,6 @@ fn verify_private_directory(directory: &File) -> Result<(), AppError> {
 
 #[cfg(all(unix, test))]
 pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
-    use std::os::fd::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
 
     let file = OpenOptions::new()
@@ -336,6 +335,14 @@ pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)?;
     let file = require_regular_file(file)?;
+    clear_nonblock(&file)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn clear_nonblock(file: &File) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
     let descriptor = file.as_raw_fd();
     // SAFETY: `descriptor` is borrowed from the live `File`; both fcntl calls
     // operate only on its status flags and preserve every flag except NONBLOCK.
@@ -346,7 +353,7 @@ pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
     if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags & !libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(file)
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -400,7 +407,9 @@ fn open_relative_file_no_follow(root_fd: std::os::fd::RawFd, relative: &Path) ->
         }
         let opened = unsafe { File::from_raw_fd(descriptor) };
         if final_component {
-            return require_regular_file(opened);
+            let opened = require_regular_file(opened)?;
+            clear_nonblock(&opened)?;
+            return Ok(opened);
         }
         let metadata = opened.metadata()?;
         if is_reparse_point(&metadata) || !metadata.is_dir() {
@@ -414,18 +423,6 @@ fn open_relative_file_no_follow(root_fd: std::os::fd::RawFd, relative: &Path) ->
         directory = opened;
     }
     unreachable!("non-empty relative paths always return from their final component")
-}
-
-#[cfg(windows)]
-pub(super) fn open_file_no_follow(path: &Path) -> io::Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)?;
-    require_regular_file(file)
 }
 
 #[cfg(windows)]
@@ -531,8 +528,7 @@ fn open_relative_file_no_follow(root: &File, relative: &Path) -> io::Result<File
                     RtlNtStatusToDosError(status) as i32
                 }));
             }
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 "SCCM bundle entry could not be opened safely",
             ));
         }
@@ -560,7 +556,7 @@ fn require_regular_file(file: File) -> io::Result<File> {
     #[cfg(windows)]
     {
         require_real_windows_file(&file)?;
-        return Ok(file);
+        Ok(file)
     }
 
     #[cfg(not(windows))]
@@ -606,7 +602,7 @@ fn windows_file_information(
             &mut information,
         )
     }
-    .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?;
+    .map_err(|error| io::Error::other(error.to_string()))?;
     Ok(information)
 }
 
@@ -690,6 +686,24 @@ fn set_open_component_hook(hook: Option<OpenComponentHook>) {
     OPEN_COMPONENT_HOOK.with(|slot| *slot.borrow_mut() = hook);
 }
 
+#[cfg(all(test, any(unix, windows)))]
+struct OpenComponentHookGuard;
+
+#[cfg(all(test, any(unix, windows)))]
+impl OpenComponentHookGuard {
+    fn install(hook: OpenComponentHook) -> Self {
+        set_open_component_hook(Some(hook));
+        Self
+    }
+}
+
+#[cfg(all(test, any(unix, windows)))]
+impl Drop for OpenComponentHookGuard {
+    fn drop(&mut self) {
+        set_open_component_hook(None);
+    }
+}
+
 #[cfg(all(test, unix))]
 fn invoke_open_component_hook(component: &std::ffi::CStr) {
     OPEN_COMPONENT_HOOK.with(|slot| {
@@ -753,8 +767,7 @@ mod tests {
         let bundle = root.path().join("bundle");
         fs::create_dir_all(bundle.join("evidence")).expect("private bundle");
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&bundle, fs::Permissions::from_mode(0o700))
-            .expect("private root");
+        fs::set_permissions(&bundle, fs::Permissions::from_mode(0o700)).expect("private root");
         fs::write(bundle.join("evidence/manifest.json"), b"{}").expect("synthetic manifest");
 
         let verified = verify_bundle_root(&bundle).expect("verified root");
@@ -764,6 +777,20 @@ mod tests {
         let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
         assert!(flags >= 0, "opened descriptor flags are readable");
         assert_eq!(flags & libc::O_NONBLOCK, 0);
+    }
+
+    #[test]
+    fn open_component_hook_guard_clears_the_hook_after_unwinding() {
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _hook = OpenComponentHookGuard::install(Box::new(|_| {
+                panic!("stale hook must not survive this scope")
+            }));
+            panic!("test unwind");
+        }));
+        assert!(unwind.is_err());
+
+        let component = std::ffi::CString::new("evidence").expect("test component");
+        invoke_open_component_hook(component.as_c_str());
     }
 
     #[test]
@@ -814,19 +841,18 @@ mod tests {
         let retired = temp.path().join("retired-evidence");
         let fired = Rc::new(RefCell::new(false));
         let fired_in_hook = Rc::clone(&fired);
-        set_open_component_hook(Some(Box::new(move |component| {
+        let _hook = OpenComponentHookGuard::install(Box::new(move |component| {
             if component.to_bytes() == b"evidence" && !*fired_in_hook.borrow() {
                 *fired_in_hook.borrow_mut() = true;
                 fs::rename(root.join("evidence"), &retired).expect("retire opened ancestor");
                 fs::rename(&replacement, root.join("evidence"))
                     .expect("install replacement ancestor");
             }
-        })));
+        }));
 
         let mut opened = verified
             .open_relative_file(Path::new("evidence/nested/evidence.log"))
             .expect("opened ancestor remains bound");
-        set_open_component_hook(None);
         let mut contents = String::new();
         opened
             .read_to_string(&mut contents)
@@ -846,11 +872,80 @@ mod windows_tests {
 
     use super::*;
 
+    fn make_private_directory(path: &Path) {
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+
+        use windows::core::PWSTR;
+        use windows::Win32::Foundation::{LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL};
+        use windows::Win32::Security::Authorization::{
+            GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, GRANT_ACCESS,
+            NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+        };
+        use windows::Win32::Security::{
+            ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+            PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+        };
+        use windows::Win32::Storage::FileSystem::{FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS};
+
+        fs::create_dir_all(path).expect("create bundle directory");
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+            .open(path)
+            .expect("open bundle directory for DACL fixture");
+        let mut owner = PSID::default();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        let status = unsafe {
+            GetSecurityInfo(
+                HANDLE(directory.as_raw_handle()),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                Some(&mut owner),
+                None,
+                None,
+                None,
+                Some(&mut descriptor),
+            )
+        };
+        assert_eq!(status, ERROR_SUCCESS, "read fixture owner");
+        let fixture_access = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS.0,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: windows::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: std::ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: PWSTR(owner.0.cast()),
+            },
+        };
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let status = unsafe { SetEntriesInAclW(Some(&[fixture_access]), None, &mut dacl) };
+        assert_eq!(status, ERROR_SUCCESS, "build restrictive fixture DACL");
+        let status = unsafe {
+            SetSecurityInfo(
+                HANDLE(directory.as_raw_handle()),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                None,
+                None,
+                Some(dacl),
+                None,
+            )
+        };
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+            let _ = LocalFree(Some(HLOCAL(dacl.cast())));
+        }
+        assert_eq!(status, ERROR_SUCCESS, "install restrictive fixture DACL");
+    }
+
     #[test]
     fn missing_final_component_preserves_not_found_for_legacy_fallback() {
         let temp = tempdir().expect("temporary root");
         let root = temp.path().join("bundle");
-        fs::create_dir_all(&root).expect("create bundle");
+        make_private_directory(&root);
 
         let verified = verify_bundle_root(&root).expect("open private root");
         let error = verified
@@ -864,7 +959,7 @@ mod windows_tests {
     fn relative_component_rejects_alternate_data_streams() {
         let temp = tempdir().expect("temporary root");
         let root = temp.path().join("bundle");
-        fs::create_dir_all(&root).expect("create bundle");
+        make_private_directory(&root);
         fs::write(root.join("manifest.json"), b"{}\n").expect("create manifest");
 
         let verified = verify_bundle_root(&root).expect("open private root");
@@ -880,6 +975,8 @@ mod windows_tests {
         let temp = tempdir().expect("temporary root");
         let root = temp.path().join("bundle");
         let replacement = temp.path().join("replacement");
+        make_private_directory(&root);
+        make_private_directory(&replacement);
         fs::create_dir_all(root.join("nested")).expect("create original bundle");
         fs::create_dir_all(replacement.join("nested")).expect("create replacement bundle");
         fs::write(root.join("nested/evidence.log"), b"original").expect("original evidence");
@@ -905,6 +1002,8 @@ mod windows_tests {
         let temp = tempdir().expect("temporary root");
         let root = temp.path().join("bundle");
         let replacement = temp.path().join("replacement-evidence");
+        make_private_directory(&root);
+        make_private_directory(&replacement);
         fs::create_dir_all(root.join("evidence/nested")).expect("create original evidence");
         fs::create_dir_all(replacement.join("nested")).expect("create replacement evidence");
         fs::write(root.join("evidence/nested/evidence.log"), b"original")
@@ -916,19 +1015,18 @@ mod windows_tests {
         let retired = temp.path().join("retired-evidence");
         let fired = Rc::new(RefCell::new(false));
         let fired_in_hook = Rc::clone(&fired);
-        set_open_component_hook(Some(Box::new(move |component| {
+        let _hook = OpenComponentHookGuard::install(Box::new(move |component| {
             if component.eq_ignore_ascii_case("evidence") && !*fired_in_hook.borrow() {
                 *fired_in_hook.borrow_mut() = true;
                 fs::rename(root.join("evidence"), &retired).expect("retire opened ancestor");
                 fs::rename(&replacement, root.join("evidence"))
                     .expect("install replacement ancestor");
             }
-        })));
+        }));
 
         let mut opened = verified
             .open_relative_file(Path::new("evidence/nested/evidence.log"))
             .expect("opened ancestor remains bound");
-        set_open_component_hook(None);
         let mut contents = String::new();
         opened
             .read_to_string(&mut contents)
