@@ -790,7 +790,7 @@ fn normalize_artifact(
     let source_version =
         normalize_source_version(artifact.source_version.as_deref(), synthetic_fixture)?;
     if !safe_manifest_artifact_id(&artifact.artifact_id, synthetic_fixture)
-        || !safe_source_id(&artifact.source_id, retained_unknown)
+        || !safe_source_id(&artifact.source_id, retained_unknown, synthetic_fixture)
         || !safe_source_kind(&artifact.source_kind, retained_unknown, synthetic_fixture)
         || !safe_lineage_id(&artifact.rotation.lineage_id, synthetic_fixture)
         || !safe_path_fingerprint(
@@ -1561,7 +1561,7 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
 }
 
-fn safe_source_id(value: &str, allow_unknown: bool) -> bool {
+fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
     matches!(
         value,
         "server-sitecomp"
@@ -1572,7 +1572,9 @@ fn safe_source_id(value: &str, allow_unknown: bool) -> bool {
             | "server-dp-distribution"
             | "server-sup-sync"
             | "unknown-db-supplement"
-    ) || (allow_unknown && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
+    ) || (allow_unknown
+        && !synthetic_fixture
+        && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
 }
 
 fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {

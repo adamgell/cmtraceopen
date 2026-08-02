@@ -1543,6 +1543,20 @@ fn server_intake_rejects_unversioned_future_unsupported_source_labels() {
 }
 
 #[test]
+fn server_intake_rejects_opaque_future_source_ids_in_synthetic_fixtures() {
+    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["sourceId"] =
+        Value::String(opaque_handle("cmtraceopen.source.sha256.v1:", 77));
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact),
+        "synthetic fixtures must use the frozen public source vocabulary"
+    );
+}
+
+#[test]
 fn server_intake_rejects_identity_bearing_unsupported_public_provenance() {
     for (field, marker) in [
         ("sourceId", "realuser-example"),
