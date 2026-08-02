@@ -1,8 +1,13 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::{de::Error as _, ser::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{
+    de::{Error as _, IgnoredAny, SeqAccess, Visitor},
+    ser::Error as _,
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 use thiserror::Error;
 
 use crate::sccm::catalog::{
@@ -11,6 +16,13 @@ use crate::sccm::catalog::{
 use crate::sccm::{
     SccmArtifact, SccmCoverageState, SccmRole, SccmRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
 };
+
+/// Maximum artifact declarations admitted by one SCCM client intake bundle.
+///
+/// This is the shared v1 manifest ceiling. Validate it before allocating
+/// per-artifact indexes so a malformed bundle cannot turn validation into an
+/// unbounded allocation path.
+pub const MAX_SCCM_CLIENT_INTAKE_ARTIFACTS: usize = 4096;
 
 const MAX_ARTIFACT_ID_CHARS: usize = 160;
 const MAX_BASENAME_CHARS: usize = 160;
@@ -172,10 +184,85 @@ pub struct SccmClientIntakeArtifact {
     pub fragment_complete: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SccmClientIntakeBundle {
     pub artifacts: Vec<SccmClientIntakeArtifact>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SccmClientIntakeBundleWire {
+    #[serde(deserialize_with = "deserialize_bounded_client_artifacts")]
+    artifacts: Vec<SccmClientIntakeArtifact>,
+}
+
+impl<'de> Deserialize<'de> for SccmClientIntakeBundle {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SccmClientIntakeBundleWire::deserialize(deserializer)?;
+        Ok(Self {
+            artifacts: wire.artifacts,
+        })
+    }
+}
+
+fn deserialize_bounded_client_artifacts<'de, D>(
+    deserializer: D,
+) -> Result<Vec<SccmClientIntakeArtifact>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BoundedArtifactVisitor;
+
+    impl<'de> Visitor<'de> for BoundedArtifactVisitor {
+        type Value = Vec<SccmClientIntakeArtifact>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                formatter,
+                "at most {MAX_SCCM_CLIENT_INTAKE_ARTIFACTS} SCCM client artifacts"
+            )
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            if sequence
+                .size_hint()
+                .is_some_and(|size| size > MAX_SCCM_CLIENT_INTAKE_ARTIFACTS)
+            {
+                return Err(A::Error::custom(
+                    "client intake artifact count exceeds the supported limit",
+                ));
+            }
+
+            let initial_capacity = sequence
+                .size_hint()
+                .unwrap_or_default()
+                .min(MAX_SCCM_CLIENT_INTAKE_ARTIFACTS);
+            let mut artifacts = Vec::with_capacity(initial_capacity);
+            while artifacts.len() < MAX_SCCM_CLIENT_INTAKE_ARTIFACTS {
+                let Some(artifact) = sequence.next_element()? else {
+                    return Ok(artifacts);
+                };
+                artifacts.push(artifact);
+            }
+
+            if sequence.next_element::<IgnoredAny>()?.is_some() {
+                return Err(A::Error::custom(
+                    "client intake artifact count exceeds the supported limit",
+                ));
+            }
+
+            Ok(artifacts)
+        }
+    }
+
+    deserializer.deserialize_seq(BoundedArtifactVisitor)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -489,6 +576,8 @@ impl SccmClientIntakeAssessment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SccmClientIntakeError {
+    #[error("client intake artifact count exceeds the supported limit")]
+    ArtifactLimitExceeded,
     #[error("client intake artifact identity is empty, unsafe, or too long")]
     InvalidArtifactId,
     #[error("client intake artifact basename is empty, unsafe, or too long")]
@@ -804,6 +893,10 @@ fn unsupported_as_intake_artifact(
 }
 
 fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientIntakeError> {
+    if bundle.artifacts.len() > MAX_SCCM_CLIENT_INTAKE_ARTIFACTS {
+        return Err(SccmClientIntakeError::ArtifactLimitExceeded);
+    }
+
     let mut artifact_ids = BTreeSet::new();
     let mut path_fingerprint_bindings: BTreeMap<String, (Option<String>, String)> = BTreeMap::new();
     let mut rotation_lineage_bindings = BTreeMap::new();
