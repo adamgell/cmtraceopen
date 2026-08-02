@@ -3,6 +3,9 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
 use cmtraceopen_parser::sccm::SccmRotation;
 use sha2::{Digest, Sha256};
 
@@ -70,6 +73,12 @@ struct Candidate {
     source_digest: String,
 }
 
+#[cfg(test)]
+static CANDIDATE_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+static DECLARATION_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+
 pub fn discover_client_sources(input: &SccmClientDiscoveryInput) -> SccmClientDiscoveryResult {
     let mut candidates = input
         .observations
@@ -127,6 +136,9 @@ pub fn discover_client_sources(input: &SccmClientDiscoveryInput) -> SccmClientDi
 fn candidate_from_observation(observation: &SccmClientDiscoveryObservation) -> Option<Candidate> {
     let canonical = canonical_client_source(&observation.basename, &observation.rotation)?;
     let source_digest = source_identity_digest(&observation.root_handle, &canonical)?;
+    #[cfg(test)]
+    CANDIDATE_CONSTRUCTIONS.fetch_add(1, AtomicOrdering::Relaxed);
+
     Some(Candidate {
         observation: observation.clone(),
         catalog_entry_id: catalog_entry_id(&canonical),
@@ -139,6 +151,9 @@ fn declaration_from_candidate(
     candidate: Candidate,
     state: SccmClientDiscoveryState,
 ) -> SccmClientDiscoveryDeclaration {
+    #[cfg(test)]
+    DECLARATION_CONSTRUCTIONS.fetch_add(1, AtomicOrdering::Relaxed);
+
     let path_fingerprint = format!("sha256:{}", candidate.source_digest);
     let artifact_id = match state {
         SccmClientDiscoveryState::Discovered => expected_physical_artifact_id(
@@ -240,5 +255,88 @@ fn state_rank(state: SccmClientDiscoveryObservationState) -> u8 {
         SccmClientDiscoveryObservationState::Found => 0,
         SccmClientDiscoveryObservationState::AccessDenied => 1,
         SccmClientDiscoveryObservationState::NotFound => 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ROOT_A: &str = "root-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const ROOT_B: &str = "root-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn observation(
+        root_handle: &str,
+        basename: String,
+        rotation: SccmRotation,
+    ) -> SccmClientDiscoveryObservation {
+        SccmClientDiscoveryObservation {
+            root_handle: root_handle.to_owned(),
+            basename,
+            rotation,
+            state: SccmClientDiscoveryObservationState::Found,
+        }
+    }
+
+    fn construction_counts() -> (usize, usize) {
+        (
+            CANDIDATE_CONSTRUCTIONS.load(AtomicOrdering::Relaxed),
+            DECLARATION_CONSTRUCTIONS.load(AtomicOrdering::Relaxed),
+        )
+    }
+
+    fn reset_construction_counts() {
+        CANDIDATE_CONSTRUCTIONS.store(0, AtomicOrdering::Relaxed);
+        DECLARATION_CONSTRUCTIONS.store(0, AtomicOrdering::Relaxed);
+    }
+
+    #[test]
+    fn oversized_discovery_constructs_only_the_bounded_retained_candidates_and_declarations() {
+        let mut observations = Vec::new();
+        for number in 1..=6_000 {
+            observations.push(observation(
+                ROOT_A,
+                format!("AppEnforce.log.{number}"),
+                SccmRotation::Numbered(number),
+            ));
+            observations.push(observation(
+                ROOT_B,
+                format!("PolicyAgent.log.{number}"),
+                SccmRotation::Numbered(number),
+            ));
+        }
+        let input = SccmClientDiscoveryInput {
+            max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+            observations,
+        };
+
+        reset_construction_counts();
+        let result = discover_client_sources(&input);
+        let counts = construction_counts();
+
+        let mut reversed = input.clone();
+        reversed.observations.reverse();
+        reset_construction_counts();
+        let reversed_result = discover_client_sources(&reversed);
+        let reversed_counts = construction_counts();
+
+        assert_eq!(
+            result, reversed_result,
+            "input order must not change the result"
+        );
+        assert!(
+            result.declarations.len() <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+            "the global result remains bounded"
+        );
+        for (candidate_constructions, declaration_constructions) in [counts, reversed_counts] {
+            assert!(
+                candidate_constructions <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+                "candidate construction must stop at the retained global budget"
+            );
+            assert!(
+                declaration_constructions <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
+                "declaration and identity construction must stop at the retained global budget"
+            );
+        }
     }
 }

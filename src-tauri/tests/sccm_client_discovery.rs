@@ -337,3 +337,59 @@ fn discovery_preserves_denied_and_not_found_coverage_with_stable_collision_safe_
             && !declaration.path_fingerprint.contains(ROOT_B)
     }));
 }
+
+#[test]
+fn discovery_coalesces_exact_duplicate_observations_without_spending_global_quota() {
+    let duplicate = observation(
+        ROOT_A,
+        "AppEnforce.log",
+        SccmRotation::Current,
+        SccmClientDiscoveryObservationState::Found,
+    );
+    let result = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 1,
+        observations: vec![duplicate.clone(), duplicate],
+    });
+
+    assert_eq!(result.declarations.len(), 1);
+    assert_eq!(
+        result.declarations[0].state,
+        SccmClientDiscoveryState::Discovered
+    );
+}
+
+#[test]
+fn discovery_rejects_conflicting_states_for_one_canonical_physical_source() {
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::AccessDenied,
+            ),
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::NotFound,
+            ),
+        ],
+    };
+
+    let error =
+        discover_client_sources(&input).expect_err("contradictory physical evidence fails closed");
+    let mut reversed = input;
+    reversed.observations.reverse();
+    let reversed_error = discover_client_sources(&reversed)
+        .expect_err("contradictory physical evidence fails closed regardless of order");
+
+    assert_eq!(error, reversed_error);
+}
