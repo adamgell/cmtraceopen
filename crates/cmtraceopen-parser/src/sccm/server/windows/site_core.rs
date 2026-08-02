@@ -294,6 +294,7 @@ struct AdmittedSource<'a> {
 }
 
 struct SiteCoreContext<'a> {
+    artifacts: &'a [SccmServerArtifactAssessment],
     sources: BTreeMap<&'a str, AdmittedSource<'a>>,
     evidence_identity_is_unique: Vec<bool>,
     coverage_gaps: Vec<SccmSiteCoreCoverageGap>,
@@ -304,10 +305,20 @@ impl<'a> SiteCoreContext<'a> {
         let evidence_identity_is_unique = unique_evidence_identities(&intake.evidence);
         let collision_artifact_ids =
             evidence_collision_artifact_ids(&intake.evidence, &evidence_identity_is_unique);
+        let (evidence_source_rejections, unresolved_evidence_gaps) =
+            evidence_source_rejections(intake);
         let coverage_congruent = site_core_coverage_is_congruent(intake);
-        let sources = admitted_sources(intake, &collision_artifact_ids, coverage_congruent);
-        let coverage_gaps = collect_coverage_gaps(intake, &sources);
+        let sources = admitted_sources(
+            intake,
+            &collision_artifact_ids,
+            &evidence_source_rejections,
+            coverage_congruent,
+        );
+        let mut coverage_gaps = collect_coverage_gaps(intake, &sources);
+        coverage_gaps.extend(unresolved_evidence_gaps);
+        sort_and_dedup_coverage_gaps(&mut coverage_gaps);
         Self {
+            artifacts: &intake.artifacts,
             sources,
             evidence_identity_is_unique,
             coverage_gaps,
@@ -323,11 +334,11 @@ pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAna
         let Some(source) = context.sources.get(evidence.reference.artifact_id.as_str()) else {
             continue;
         };
-        if !source.fact_eligible
-            || evidence.role != SccmRole::SiteServer
-            || !context.evidence_identity_is_unique[position]
-            || !reference_is_complete(evidence)
-        {
+        if let Some(reason_code) = evidence_record_rejection_reason(evidence, source.group) {
+            record_observations.push(rejected_record_observation(evidence, source, reason_code));
+            continue;
+        }
+        if !source.fact_eligible || !context.evidence_identity_is_unique[position] {
             continue;
         }
         match parse_fact(evidence, source, &intake.topology.site_handle) {
@@ -415,6 +426,7 @@ pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAna
 fn admitted_sources<'a>(
     intake: &'a SccmServerIntakeAssessment,
     collision_artifact_ids: &BTreeSet<String>,
+    evidence_source_rejections: &BTreeMap<String, &'static str>,
     coverage_congruent: bool,
 ) -> BTreeMap<&'a str, AdmittedSource<'a>> {
     let mut occurrences = BTreeMap::<&str, usize>::new();
@@ -442,6 +454,9 @@ fn admitted_sources<'a>(
                 Some("intake-coverage-incongruent")
             } else if collision_artifact_ids.contains(&artifact.artifact_id) {
                 Some("evidence-identity-collision")
+            } else if let Some(reason_code) = evidence_source_rejections.get(&artifact.artifact_id)
+            {
+                Some(*reason_code)
             } else if !shape_valid {
                 Some("source-shape-invalid")
             } else if artifact.state != SccmCoverageState::Captured {
@@ -462,6 +477,88 @@ fn admitted_sources<'a>(
             ))
         })
         .collect()
+}
+
+fn evidence_source_rejections(
+    intake: &SccmServerIntakeAssessment,
+) -> (BTreeMap<String, &'static str>, Vec<SccmSiteCoreCoverageGap>) {
+    let mut groups_by_artifact = BTreeMap::<&str, Vec<SiteCoreGroup>>::new();
+    for artifact in &intake.artifacts {
+        if let Some(group) = SiteCoreGroup::from_source_id(&artifact.source_id) {
+            groups_by_artifact
+                .entry(artifact.artifact_id.as_str())
+                .or_default()
+                .push(group);
+        }
+    }
+
+    let mut source_rejections = BTreeMap::<String, &'static str>::new();
+    let mut unresolved_gaps = Vec::new();
+    for evidence in &intake.evidence {
+        match groups_by_artifact.get(evidence.reference.artifact_id.as_str()) {
+            Some(groups) if groups.len() == 1 => {
+                if let Some(reason_code) = evidence_record_rejection_reason(evidence, groups[0]) {
+                    source_rejections
+                        .entry(evidence.reference.artifact_id.clone())
+                        .and_modify(|current| {
+                            if reason_code < *current {
+                                *current = reason_code;
+                            }
+                        })
+                        .or_insert(reason_code);
+                }
+            }
+            None if is_profile_record_candidate(&evidence.message) => {
+                let Some(group) = evidence_component_group(evidence.component.as_deref()) else {
+                    continue;
+                };
+                unresolved_gaps.push(SccmSiteCoreCoverageGap {
+                    artifact_id: safe_coverage_artifact_id(evidence),
+                    source_id: group.source_id().to_owned(),
+                    state: SccmCoverageState::ParseFailed,
+                    reason_code: "evidence-source-unresolved".to_owned(),
+                    diagnostic_meaning: SccmSiteCoreDiagnosticMeaning::CoverageOnly,
+                });
+            }
+            _ => {}
+        }
+    }
+    sort_and_dedup_coverage_gaps(&mut unresolved_gaps);
+    (source_rejections, unresolved_gaps)
+}
+
+fn evidence_record_rejection_reason(
+    evidence: &SccmEvidence,
+    source_group: SiteCoreGroup,
+) -> Option<&'static str> {
+    if evidence.role != SccmRole::SiteServer {
+        return Some("evidence-role-rejected");
+    }
+    if !reference_is_complete(evidence) {
+        return Some("evidence-reference-rejected");
+    }
+    evidence_component_group(evidence.component.as_deref())
+        .is_some_and(|evidence_group| evidence_group != source_group)
+        .then_some("evidence-source-attribution-rejected")
+}
+
+fn evidence_component_group(component: Option<&str>) -> Option<SiteCoreGroup> {
+    match component? {
+        "SMS_SITE_COMPONENT_MANAGER" | "SMS_HIERARCHY_MANAGER" => Some(SiteCoreGroup::Component),
+        "SMS_STATUS_MANAGER" | "SMS_STATE_SYSTEM" => Some(SiteCoreGroup::Status),
+        _ => None,
+    }
+}
+
+fn safe_coverage_artifact_id(evidence: &SccmEvidence) -> String {
+    if safe_site_core_opaque_id(&evidence.reference.artifact_id) {
+        evidence.reference.artifact_id.clone()
+    } else {
+        stable_opaque_id(
+            "site-core:rejected-artifact:v1:",
+            &[&evidence.reference.artifact_id, &evidence.evidence_id],
+        )
+    }
 }
 
 fn coverage_rejection_reason(state: &SccmCoverageState) -> &'static str {
@@ -606,6 +703,9 @@ fn collect_coverage_gaps(
                 "source-role-or-subject-rejected"
                     | "intake-coverage-incongruent"
                     | "evidence-identity-collision"
+                    | "evidence-reference-rejected"
+                    | "evidence-role-rejected"
+                    | "evidence-source-attribution-rejected"
                     | "source-shape-invalid"
                     | "source-contract-rejected"
             ) {
@@ -627,6 +727,11 @@ fn collect_coverage_gaps(
             diagnostic_meaning: SccmSiteCoreDiagnosticMeaning::CoverageOnly,
         });
     }
+    sort_and_dedup_coverage_gaps(&mut gaps);
+    gaps
+}
+
+fn sort_and_dedup_coverage_gaps(gaps: &mut Vec<SccmSiteCoreCoverageGap>) {
     gaps.sort_by(|left, right| {
         left.artifact_id
             .cmp(&right.artifact_id)
@@ -640,7 +745,6 @@ fn collect_coverage_gaps(
             && left.state == right.state
             && left.reason_code == right.reason_code
     });
-    gaps
 }
 
 fn absent_default_is_superseded(
@@ -1100,7 +1204,7 @@ fn next_artifacts_for_state(
     if state == SccmSiteCoreState::BlockedOrDeferred {
         return vec![status_request(
             "matching-status-terminal-evidence-missing",
-            Some(key),
+            key,
         )];
     }
     if state != SccmSiteCoreState::Incomplete {
@@ -1124,17 +1228,14 @@ fn next_artifacts_for_state(
             .iter()
             .any(|fact| fact.marker.group == SiteCoreGroup::Status)
     {
-        return vec![status_request(
-            "matching-status-evidence-missing",
-            Some(key),
-        )];
+        return vec![status_request("matching-status-evidence-missing", key)];
     }
     Vec::new()
 }
 
 fn status_request(
     reason_code: &str,
-    key: Option<&SccmSiteCoreTransactionKey>,
+    key: &SccmSiteCoreTransactionKey,
 ) -> SccmSiteCoreArtifactRequest {
     SccmSiteCoreArtifactRequest {
         logical_name: SCCM_SITE_CORE_STATUS_GROUP.to_owned(),
@@ -1153,9 +1254,9 @@ fn status_request(
         max_artifacts: MAX_SITE_CORE_REQUEST_ARTIFACTS,
         max_bytes_per_artifact: None,
         scope: SccmSiteCoreRequestScope {
-            producer_host_handle: key.map(|key| key.producer_host_handle.clone()),
-            component_id: key.map(|key| key.component_id.clone()),
-            work_item_id: key.map(|key| key.work_item_id.clone()),
+            producer_host_handle: Some(key.producer_host_handle.clone()),
+            component_id: Some(key.component_id.clone()),
+            work_item_id: Some(key.work_item_id.clone()),
             rotation_lineage_handle: None,
         },
     }
@@ -1166,6 +1267,7 @@ fn recapture_request(
     key: Option<&SccmSiteCoreTransactionKey>,
 ) -> Option<SccmSiteCoreArtifactRequest> {
     let candidate = request_candidate(artifact)?;
+    let scope = request_scope_for_artifact(artifact, key)?;
     let current_limit = artifact
         .capture_provenance
         .as_ref()
@@ -1180,14 +1282,7 @@ fn recapture_request(
         candidates: vec![candidate],
         max_artifacts: 1,
         max_bytes_per_artifact: Some(bounded),
-        scope: SccmSiteCoreRequestScope {
-            producer_host_handle: key
-                .map(|key| key.producer_host_handle.clone())
-                .or_else(|| artifact.producer_host_handle.clone()),
-            component_id: key.map(|key| key.component_id.clone()),
-            work_item_id: key.map(|key| key.work_item_id.clone()),
-            rotation_lineage_handle: Some(artifact.rotation_lineage_handle.clone()),
-        },
+        scope,
     })
 }
 
@@ -1224,14 +1319,21 @@ fn rejected_record_observation(
     source: &AdmittedSource<'_>,
     reason_code: &str,
 ) -> SccmSiteCoreObservation {
-    let line_start = evidence.reference.line_start.unwrap_or_default();
-    let line_end = evidence.reference.line_end.unwrap_or_default();
-    let request = complete_source_request(source.artifact, reason_code).unwrap_or_else(|| {
-        group_request(
-            source.group,
-            reason_code,
-            source.artifact.producer_host_handle.clone(),
-        )
+    let retained_evidence = reference_is_complete(evidence).then(|| SccmSiteCoreEvidence {
+        artifact_id: evidence.reference.artifact_id.clone(),
+        entry_id: evidence.reference.entry_id.clone(),
+        line_start: evidence
+            .reference
+            .line_start
+            .expect("complete reference start"),
+        line_end: evidence.reference.line_end.expect("complete reference end"),
+        terminal: None,
+        recovery: None,
+        complete_logical_record: Some(true),
+    });
+    let request = complete_source_request(source.artifact, reason_code).or_else(|| {
+        request_scope_for_artifact(source.artifact, None)
+            .map(|scope| group_request(source.group, reason_code, scope))
     });
     SccmSiteCoreObservation {
         observation_id: stable_opaque_id(
@@ -1245,17 +1347,9 @@ fn rejected_record_observation(
         state: SccmSiteCoreState::ParseGap,
         finding_class: SccmFindingClass::Symptom,
         confidence: SccmSiteCoreConfidence::Low,
-        evidence: vec![SccmSiteCoreEvidence {
-            artifact_id: evidence.reference.artifact_id.clone(),
-            entry_id: evidence.reference.entry_id.clone(),
-            line_start,
-            line_end,
-            terminal: None,
-            recovery: None,
-            complete_logical_record: Some(true),
-        }],
+        evidence: retained_evidence.into_iter().collect(),
         coverage_gap_artifact_ids: Vec::new(),
-        next_artifacts: vec![request],
+        next_artifacts: request.into_iter().collect(),
     }
 }
 
@@ -1263,6 +1357,7 @@ fn coverage_request(
     gap: &SccmSiteCoreCoverageGap,
     context: &SiteCoreContext<'_>,
 ) -> Option<SccmSiteCoreArtifactRequest> {
+    let group = SiteCoreGroup::from_source_id(&gap.source_id)?;
     if let Some(source) = context.sources.get(gap.artifact_id.as_str()) {
         if gap.state == SccmCoverageState::Capped {
             if let Some(request) = recapture_request(source.artifact, None) {
@@ -1271,9 +1366,11 @@ fn coverage_request(
         } else if let Some(request) = complete_source_request(source.artifact, &gap.reason_code) {
             return Some(request);
         }
+        let scope = request_scope_for_artifact(source.artifact, None)?;
+        return Some(group_request(group, &gap.reason_code, scope));
     }
-    SiteCoreGroup::from_source_id(&gap.source_id)
-        .map(|group| group_request(group, &gap.reason_code, None))
+    let scope = request_scope_for_gap(gap, context)?;
+    Some(group_request(group, &gap.reason_code, scope))
 }
 
 fn complete_source_request(
@@ -1281,6 +1378,7 @@ fn complete_source_request(
     reason_code: &str,
 ) -> Option<SccmSiteCoreArtifactRequest> {
     let candidate = request_candidate(artifact)?;
+    let scope = request_scope_for_artifact(artifact, None)?;
     Some(SccmSiteCoreArtifactRequest {
         logical_name: artifact.source_id.clone(),
         role: SccmRole::SiteServer,
@@ -1288,19 +1386,14 @@ fn complete_source_request(
         candidates: vec![candidate],
         max_artifacts: 1,
         max_bytes_per_artifact: None,
-        scope: SccmSiteCoreRequestScope {
-            producer_host_handle: artifact.producer_host_handle.clone(),
-            component_id: None,
-            work_item_id: None,
-            rotation_lineage_handle: Some(artifact.rotation_lineage_handle.clone()),
-        },
+        scope,
     })
 }
 
 fn group_request(
     group: SiteCoreGroup,
     reason_code: &str,
-    producer_host_handle: Option<String>,
+    scope: SccmSiteCoreRequestScope,
 ) -> SccmSiteCoreArtifactRequest {
     let stem = match group {
         SiteCoreGroup::Component => "sitecomp",
@@ -1322,13 +1415,105 @@ fn group_request(
         ],
         max_artifacts: MAX_SITE_CORE_REQUEST_ARTIFACTS,
         max_bytes_per_artifact: None,
-        scope: SccmSiteCoreRequestScope {
-            producer_host_handle,
-            component_id: None,
-            work_item_id: None,
-            rotation_lineage_handle: None,
-        },
+        scope,
     }
+}
+
+fn request_scope_for_gap(
+    gap: &SccmSiteCoreCoverageGap,
+    context: &SiteCoreContext<'_>,
+) -> Option<SccmSiteCoreRequestScope> {
+    let exact_artifacts = context
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.artifact_id == gap.artifact_id)
+        .collect::<Vec<_>>();
+    let artifacts = if exact_artifacts.is_empty() {
+        context
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.source_id == gap.source_id)
+            .collect()
+    } else {
+        exact_artifacts
+    };
+    consensus_request_scope(&artifacts)
+}
+
+fn request_scope_for_artifact(
+    artifact: &SccmServerArtifactAssessment,
+    key: Option<&SccmSiteCoreTransactionKey>,
+) -> Option<SccmSiteCoreRequestScope> {
+    let producer_host_handle = key
+        .map(|key| key.producer_host_handle.as_str())
+        .or(artifact.producer_host_handle.as_deref())
+        .filter(|value| safe_site_core_opaque_id(value))
+        .map(str::to_owned);
+    let component_id = key
+        .and_then(|key| validated_component_id(&key.component_id))
+        .filter(|value| safe_site_core_opaque_id(value));
+    let work_item_id = key
+        .and_then(|key| validated_work_item_id(&key.work_item_id))
+        .filter(|value| safe_site_core_opaque_id(value));
+    let rotation_lineage_handle = safe_site_core_opaque_id(&artifact.rotation_lineage_handle)
+        .then(|| artifact.rotation_lineage_handle.clone());
+    let scope = SccmSiteCoreRequestScope {
+        producer_host_handle,
+        component_id,
+        work_item_id,
+        rotation_lineage_handle,
+    };
+    request_scope_is_specific(&scope).then_some(scope)
+}
+
+fn consensus_request_scope(
+    artifacts: &[&SccmServerArtifactAssessment],
+) -> Option<SccmSiteCoreRequestScope> {
+    let producer_host_handle = consensus_scope_value(artifacts, |artifact| {
+        artifact.producer_host_handle.as_deref()
+    });
+    let rotation_lineage_handle = consensus_scope_value(artifacts, |artifact| {
+        Some(artifact.rotation_lineage_handle.as_str())
+    });
+    let scope = SccmSiteCoreRequestScope {
+        producer_host_handle,
+        component_id: None,
+        work_item_id: None,
+        rotation_lineage_handle,
+    };
+    request_scope_is_specific(&scope).then_some(scope)
+}
+
+fn consensus_scope_value(
+    artifacts: &[&SccmServerArtifactAssessment],
+    value: impl Fn(&SccmServerArtifactAssessment) -> Option<&str>,
+) -> Option<String> {
+    let first = value(*artifacts.first()?)?;
+    (safe_site_core_opaque_id(first)
+        && artifacts.iter().all(|artifact| {
+            value(artifact)
+                .is_some_and(|candidate| candidate == first && safe_site_core_opaque_id(candidate))
+        }))
+    .then(|| first.to_owned())
+}
+
+fn request_scope_is_specific(scope: &SccmSiteCoreRequestScope) -> bool {
+    scope
+        .producer_host_handle
+        .as_deref()
+        .is_some_and(safe_site_core_opaque_id)
+        || scope
+            .component_id
+            .as_deref()
+            .is_some_and(safe_site_core_opaque_id)
+        || scope
+            .work_item_id
+            .as_deref()
+            .is_some_and(safe_site_core_opaque_id)
+        || scope
+            .rotation_lineage_handle
+            .as_deref()
+            .is_some_and(safe_site_core_opaque_id)
 }
 
 fn request_candidate(

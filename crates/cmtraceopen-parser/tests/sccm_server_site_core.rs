@@ -346,6 +346,17 @@ fn assert_explicit_gap_and_request(
         .find(|request| request.logical_name == source_id)
         .expect("coverage gap has a source-specific artifact request");
     assert_bounded_request_has_specific_scope(request);
+    for request in &analysis.artifact_requests {
+        assert_bounded_request_has_specific_scope(request);
+    }
+}
+
+fn assert_gap_reason(analysis: &SccmSiteCoreAnalysis, artifact_id: &str, reason_code: &str) {
+    assert!(analysis.coverage_gaps.iter().any(|gap| {
+        gap.artifact_id == artifact_id
+            && gap.state == SccmCoverageState::ParseFailed
+            && gap.reason_code == reason_code
+    }));
 }
 
 fn assert_delimiter_attached_unknown_label_fails_closed(delimiter: char) {
@@ -940,6 +951,14 @@ fn rejected_evidence_contracts_become_source_gaps_with_scoped_requests() {
     wrong_role.evidence[0].role = SccmRole::ManagementPoint;
     let analysis = analyze_site_core(&wrong_role);
     assert_explicit_gap_and_request(&analysis, "sitecomp-current", "server-sitecomp");
+    assert_gap_reason(&analysis, "sitecomp-current", "evidence-role-rejected");
+    assert!(analysis.unlinked_observations.iter().any(|observation| {
+        observation.finding_class == SccmFindingClass::Symptom
+            && observation
+                .evidence
+                .iter()
+                .any(|evidence| evidence.entry_id == wrong_role.evidence[0].evidence_id)
+    }));
     assert_eq!(analysis.results.len(), 1);
     assert!(analysis.results.iter().all(|result| {
         result.state != SccmSiteCoreState::Healthy
@@ -950,6 +969,10 @@ fn rejected_evidence_contracts_become_source_gaps_with_scoped_requests() {
     incomplete_reference.evidence[0].reference.line_end = None;
     let analysis = analyze_site_core(&incomplete_reference);
     assert_explicit_gap_and_request(&analysis, "sitecomp-current", "server-sitecomp");
+    assert_gap_reason(&analysis, "sitecomp-current", "evidence-reference-rejected");
+    assert!(analysis.unlinked_observations.iter().any(|observation| {
+        observation.finding_class == SccmFindingClass::Symptom && observation.evidence.is_empty()
+    }));
     assert_eq!(analysis.results.len(), 1);
     assert!(analysis.results.iter().all(|result| {
         result.state != SccmSiteCoreState::Healthy
@@ -958,8 +981,22 @@ fn rejected_evidence_contracts_become_source_gaps_with_scoped_requests() {
 
     let mut cross_source_reference = healthy.clone();
     cross_source_reference.evidence[0].reference.artifact_id = "z-site-status".to_owned();
+    cross_source_reference.evidence[0].reference.line_start = Some(10_001);
+    cross_source_reference.evidence[0].reference.line_end = Some(10_001);
     let analysis = analyze_site_core(&cross_source_reference);
     assert_explicit_gap_and_request(&analysis, "z-site-status", "server-status");
+    assert_gap_reason(
+        &analysis,
+        "z-site-status",
+        "evidence-source-attribution-rejected",
+    );
+    assert!(analysis.unlinked_observations.iter().any(|observation| {
+        observation.finding_class == SccmFindingClass::Symptom
+            && observation
+                .evidence
+                .iter()
+                .any(|evidence| evidence.entry_id == cross_source_reference.evidence[0].evidence_id)
+    }));
     assert_eq!(analysis.results.len(), 1);
     assert!(analysis.results.iter().all(|result| {
         result.state != SccmSiteCoreState::Healthy
@@ -970,6 +1007,11 @@ fn rejected_evidence_contracts_become_source_gaps_with_scoped_requests() {
     unresolved_reference.evidence[0].reference.artifact_id = "orphan-sitecomp-record".to_owned();
     let analysis = analyze_site_core(&unresolved_reference);
     assert_explicit_gap_and_request(&analysis, "orphan-sitecomp-record", "server-sitecomp");
+    assert_gap_reason(
+        &analysis,
+        "orphan-sitecomp-record",
+        "evidence-source-unresolved",
+    );
     assert_eq!(analysis.results.len(), 1);
     assert!(analysis.results.iter().all(|result| {
         result.state != SccmSiteCoreState::Healthy
