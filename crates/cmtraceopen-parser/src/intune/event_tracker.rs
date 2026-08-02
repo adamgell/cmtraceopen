@@ -492,17 +492,18 @@ pub fn extract_events(
             continue;
         };
 
-        // Try primary extract_guid, fall back to guid_registry::extract_app_id
-        let guid =
-            extract_guid(&line.message).or_else(|| guid_registry::extract_app_id(&line.message));
+        let identity_context = guid_registry::explicit_app_identity_context(&line.message);
+        let guid = match &identity_context.identity {
+            guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
+            guid_registry::ExplicitAppIdentity::Invalid => None,
+            guid_registry::ExplicitAppIdentity::Absent => extract_guid(&line.message),
+        };
         let status = determine_status(&line.message, source_kind);
         let raw_name = build_event_name(&event_type, &guid, &line.message, source_kind);
 
         // Inline enrichment: resolve GUID suffix immediately if possible
-        let name = match guid.as_deref() {
-            Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
-            None => raw_name,
-        };
+        let name =
+            enrich_event_name_for_identity(raw_name, guid.as_deref(), &identity_context, registry);
 
         let detail = line.message.clone();
 
@@ -532,6 +533,28 @@ pub fn extract_events(
 
     pair_events(&mut events);
     events
+}
+
+fn enrich_event_name_for_identity(
+    current_name: String,
+    guid: Option<&str>,
+    identity_context: &guid_registry::ExplicitAppIdentityContext,
+    registry: &GuidRegistry,
+) -> String {
+    let Some(guid) = guid else {
+        return current_name;
+    };
+    let enriched = match &identity_context.identity {
+        guid_registry::ExplicitAppIdentity::Valid(_) => identity_context
+            .local_name
+            .as_deref()
+            .and_then(|name| guid_registry::enrich_event_name_with_name(&current_name, name)),
+        guid_registry::ExplicitAppIdentity::Absent => {
+            registry.enrich_event_name(&current_name, guid)
+        }
+        guid_registry::ExplicitAppIdentity::Invalid => None,
+    };
+    enriched.unwrap_or(current_name)
 }
 
 fn extract_appworkload_event(
@@ -580,13 +603,14 @@ fn extract_appworkload_event(
         return None;
     };
 
-    let guid = match guid_registry::explicit_app_identity(msg) {
-        guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid),
+    let identity_context = guid_registry::explicit_app_identity_context(msg);
+    let guid = match &identity_context.identity {
+        guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
         guid_registry::ExplicitAppIdentity::Invalid => None,
         guid_registry::ExplicitAppIdentity::Absent => {
             // Preserve the established AppWorkload heuristics only when the
             // line does not claim an explicit JSON identity field.
-            extract_guid(msg).or_else(|| guid_registry::extract_app_id(msg))
+            extract_guid(msg)
         }
     };
 
@@ -609,10 +633,8 @@ fn extract_appworkload_event(
         };
         let raw_name = format!("Script Detection {phase} ({short})");
 
-        let name = match guid.as_deref() {
-            Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
-            None => raw_name,
-        };
+        let name =
+            enrich_event_name_for_identity(raw_name, guid.as_deref(), &identity_context, registry);
 
         return Some(IntuneEvent {
             id: next_id,
@@ -641,10 +663,8 @@ fn extract_appworkload_event(
     let raw_name = build_appworkload_name(&event_type, &guid, msg, flags);
 
     // Inline enrichment: resolve GUID suffix immediately if possible
-    let name = match guid.as_deref() {
-        Some(g) => registry.enrich_event_name(&raw_name, g).unwrap_or(raw_name),
-        None => raw_name,
-    };
+    let name =
+        enrich_event_name_for_identity(raw_name, guid.as_deref(), &identity_context, registry);
     let detail = build_appworkload_detail(lines, index, guid.as_deref(), msg, status);
 
     Some(IntuneEvent {
@@ -2129,17 +2149,23 @@ mod tests {
     fn appworkload_named_context_fallback_remains_without_identity_field() {
         let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
         let message = format!(
-            r#"SidecarScriptDetectionManager launch identity {app_guid} {{"ApplicationName":"Contoso"}}"#
+            r#"AppWorkload download stalled with no progress correlation {app_guid} {{"ApplicationName":"Contoso"}}"#
         );
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[line(&message, "01-15-2024 10:00:04.000", 1)]);
+        assert_eq!(registry.resolve(app_guid), Some("Contoso"));
+        guid_registry::reset_named_guid_fallback_extraction_count();
         let events = extract_events(
-            &[line(&message, "01-15-2024 10:00:05.000", 1)],
+            &[line(&message, "01-15-2024 10:00:05.000", 2)],
             "C:/Logs/AppWorkload.log",
-            &empty_registry(),
+            &registry,
         );
 
         assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, IntuneEventType::ContentDownload);
         assert_eq!(events[0].guid.as_deref(), Some(app_guid));
-        assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
+        assert!(events[0].name.contains("Contoso"));
+        assert_eq!(guid_registry::named_guid_fallback_extraction_count(), 0);
     }
 
     #[test]
@@ -2254,5 +2280,153 @@ mod tests {
             assert_eq!(events[0].guid, None, "attributed sibling from {payload}");
             assert_eq!(events[0].parent_app_guid, None);
         }
+    }
+
+    #[test]
+    fn non_appworkload_events_respect_explicit_identity_boundaries() {
+        let unrelated_guid = "11111111-2222-3333-4444-555555555555";
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let cases = [
+            (
+                format!(r#"ESP status for tenant {unrelated_guid} {{"AppId":"not-an-app-guid"}}"#),
+                None,
+            ),
+            (
+                format!(r#"ESP status for tenant {unrelated_guid} {{"Id":"not-an-app-guid"}}"#),
+                None,
+            ),
+            (
+                format!("ESP status for tenant {unrelated_guid}"),
+                Some(unrelated_guid),
+            ),
+            (
+                format!(r#"ESP status for tenant {unrelated_guid} {{"AppId":"{app_guid}"}}"#),
+                Some(app_guid),
+            ),
+        ];
+
+        for (message, expected_guid) in cases {
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/IntuneManagementExtension.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1, "missing event for {message}");
+            assert_eq!(
+                events[0].guid.as_deref(),
+                expected_guid,
+                "wrong GUID attribution for {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn appworkload_events_do_not_enrich_names_outside_selected_identity_scope() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let messages = [
+            format!(
+                r#"AppWorkload download {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+            ),
+            format!(
+                r#"AppWorkload download {{"AppId":"{app_guid}","Name":"First Name","Name":"Second Name"}}"#
+            ),
+            format!(
+                r#"SidecarScriptDetectionManager launch {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+            ),
+        ];
+
+        for message in messages {
+            let registry_lines = vec![
+                line(
+                    &format!(
+                        r#"Observed identity {{"AppId":"{app_guid}","ApplicationName":"Trusted Registry Name"}}"#
+                    ),
+                    "01-15-2024 10:00:04.000",
+                    1,
+                ),
+                line(&message, "01-15-2024 10:00:05.000", 2),
+            ];
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&registry_lines);
+
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 2)],
+                "C:/Logs/AppWorkload.log",
+                &registry,
+            );
+
+            assert_eq!(events.len(), 1, "missing event for {message}");
+            assert_eq!(events[0].guid.as_deref(), Some(app_guid));
+            assert!(!events[0].name.contains("Trusted Registry Name"));
+            assert!(!events[0].name.contains("Descendant Name"));
+        }
+    }
+
+    #[test]
+    fn non_appworkload_events_do_not_enrich_ambiguous_explicit_names() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let messages = [
+            format!(
+                r#"ESP status {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+            ),
+            format!(
+                r#"ESP status {{"AppId":"{app_guid}","Name":"First Name","Name":"Second Name"}}"#
+            ),
+        ];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[line(
+            &format!(
+                r#"Observed identity {{"AppId":"{app_guid}","ApplicationName":"Trusted Registry Name"}}"#
+            ),
+            "01-15-2024 10:00:04.000",
+            1,
+        )]);
+
+        for message in messages {
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 2)],
+                "C:/Logs/IntuneManagementExtension.log",
+                &registry,
+            );
+
+            assert_eq!(events.len(), 1, "missing event for {message}");
+            assert_eq!(events[0].guid.as_deref(), Some(app_guid));
+            assert!(!events[0].name.contains("Trusted Registry Name"));
+            assert!(!events[0].name.contains("Descendant Name"));
+        }
+    }
+
+    #[test]
+    fn event_name_enrichment_remains_for_safe_identity_contexts() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let explicit = format!(
+            r#"AppWorkload download {{"AppId":"{app_guid}","ApplicationName":"Local Name"}}"#
+        );
+        let fallback =
+            format!(r#"ESP status correlation {app_guid} {{"ApplicationName":"Fallback Name"}}"#);
+        let mut explicit_registry = GuidRegistry::new();
+        explicit_registry.ingest_lines(&[line(&explicit, "01-15-2024 10:00:04.000", 1)]);
+        let mut fallback_registry = GuidRegistry::new();
+        fallback_registry.ingest_lines(&[line(&fallback, "01-15-2024 10:00:04.000", 2)]);
+
+        let explicit_events = extract_events(
+            &[line(&explicit, "01-15-2024 10:00:05.000", 3)],
+            "C:/Logs/AppWorkload.log",
+            &explicit_registry,
+        );
+        guid_registry::reset_named_guid_fallback_extraction_count();
+        let fallback_events = extract_events(
+            &[line(&fallback, "01-15-2024 10:00:05.000", 4)],
+            "C:/Logs/IntuneManagementExtension.log",
+            &fallback_registry,
+        );
+
+        assert_eq!(explicit_events.len(), 1);
+        assert!(explicit_events[0].name.contains("Local Name"));
+        assert_eq!(fallback_events.len(), 1);
+        assert_eq!(fallback_events[0].guid.as_deref(), Some(app_guid));
+        assert!(fallback_events[0].name.contains("Fallback Name"));
+        assert_eq!(guid_registry::named_guid_fallback_extraction_count(), 0);
     }
 }

@@ -3,9 +3,11 @@ use std::path::Path;
 
 use regex::Regex;
 
+#[cfg(test)]
+use super::guid_registry::explicit_app_identity_context;
 use super::guid_registry::{
-    explicit_app_identity, extract_app_id, extract_app_name, is_fallback_name, ExplicitAppIdentity,
-    GuidRegistry,
+    explicit_app_identity_context_with_named_guid_fallback, extract_app_name, is_fallback_name,
+    ExplicitAppIdentity, GuidRegistry,
 };
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
@@ -139,8 +141,12 @@ pub fn extract_downloads(
         let display_name = analysis.display_name.clone();
 
         if analysis.is_retry {
+            let previous = active.remove(&content_id);
+            let inherited_suppression = previous
+                .as_ref()
+                .is_some_and(|download| download.suppress_registry_enrichment);
             if let Some(stat) = finalize_download(
-                active.remove(&content_id),
+                previous,
                 Some(content_id.clone()),
                 display_name.clone(),
                 &analysis,
@@ -153,7 +159,12 @@ pub fn extract_downloads(
 
             active.insert(
                 content_id.clone(),
-                PartialDownload::new(Some(content_id), display_name, timestamp_owned.clone()),
+                PartialDownload::new(
+                    Some(content_id),
+                    display_name,
+                    timestamp_owned.clone(),
+                    inherited_suppression || analysis.suppress_registry_enrichment,
+                ),
             );
             continue;
         }
@@ -164,6 +175,7 @@ pub fn extract_downloads(
                     Some(content_id.clone()),
                     display_name.clone(),
                     timestamp_owned.clone(),
+                    analysis.suppress_registry_enrichment,
                 )
             });
             apply_download_analysis(entry, &analysis, timestamp);
@@ -209,7 +221,7 @@ pub fn extract_downloads(
                 .display_name
                 .clone()
                 .unwrap_or_else(|| short_id(&cid));
-            let name = if is_fallback_name(&raw_name) {
+            let name = if is_fallback_name(&raw_name) && !partial.suppress_registry_enrichment {
                 registry
                     .resolve(&cid)
                     .map(|n| n.to_string())
@@ -246,6 +258,7 @@ struct DownloadLineAnalysis {
     speed_bps: Option<f64>,
     do_percentage: Option<f64>,
     duration_secs: Option<f64>,
+    suppress_registry_enrichment: bool,
     is_retry: bool,
     is_start: bool,
     is_progress: bool,
@@ -276,13 +289,16 @@ impl DownloadLineAnalysis {
             }
         });
 
+        let identity = extract_download_identity(msg);
+
         Some(Self {
-            content_id: extract_content_id(msg),
-            display_name: extract_display_name(msg),
+            content_id: identity.content_id,
+            display_name: identity.display_name,
             size_bytes,
             speed_bps,
             do_percentage,
             duration_secs,
+            suppress_registry_enrichment: identity.suppress_registry_enrichment,
             is_retry: appworkload_retry_re().is_match(msg),
             is_start: download_start_re().is_match(msg),
             is_progress: download_progress_re().is_match(msg),
@@ -302,6 +318,7 @@ struct PartialDownload {
     speed_bps: Option<f64>,
     do_percentage: Option<f64>,
     duration_secs: Option<f64>,
+    suppress_registry_enrichment: bool,
     saw_progress: bool,
     saw_failure_signal: bool,
     saw_retry_signal: bool,
@@ -312,6 +329,7 @@ impl PartialDownload {
         content_id: Option<String>,
         display_name: Option<String>,
         start_time: Option<String>,
+        suppress_registry_enrichment: bool,
     ) -> Self {
         Self {
             content_id,
@@ -322,6 +340,7 @@ impl PartialDownload {
             speed_bps: None,
             do_percentage: None,
             duration_secs: None,
+            suppress_registry_enrichment,
             saw_progress: false,
             saw_failure_signal: false,
             saw_retry_signal: false,
@@ -351,26 +370,55 @@ fn classify_download_source(source_file: &str) -> DownloadSourceKind {
     }
 }
 
+#[cfg(test)]
 fn extract_content_id(msg: &str) -> Option<String> {
-    match explicit_app_identity(msg) {
-        ExplicitAppIdentity::Valid(guid) => Some(guid),
-        ExplicitAppIdentity::Invalid => None,
+    extract_download_identity(msg).content_id
+}
+
+#[cfg(test)]
+fn extract_display_name(msg: &str) -> Option<String> {
+    extract_download_identity(msg).display_name
+}
+
+struct DownloadIdentityAnalysis {
+    content_id: Option<String>,
+    display_name: Option<String>,
+    suppress_registry_enrichment: bool,
+}
+
+fn extract_download_identity(msg: &str) -> DownloadIdentityAnalysis {
+    let context = explicit_app_identity_context_with_named_guid_fallback(msg);
+    match context.identity {
+        ExplicitAppIdentity::Valid(guid) => {
+            let display_name = context.local_name;
+            let suppress_registry_enrichment = display_name.is_none();
+            DownloadIdentityAnalysis {
+                content_id: Some(guid),
+                display_name,
+                suppress_registry_enrichment,
+            }
+        }
+        ExplicitAppIdentity::Invalid => DownloadIdentityAnalysis {
+            content_id: None,
+            display_name: None,
+            suppress_registry_enrichment: true,
+        },
         ExplicitAppIdentity::Absent => {
             // Preserve named-context and download-specific heuristics only
             // when the line has no explicit JSON identity field.
-            extract_app_id(msg).or_else(|| {
+            let content_id = context.fallback_app_id.or_else(|| {
                 content_id_re()
                     .captures(msg)
                     .and_then(|captures| captures.get(1))
                     .map(|value| value.as_str().to_string())
-            })
+            });
+            DownloadIdentityAnalysis {
+                content_id,
+                display_name: extract_app_name(msg),
+                suppress_registry_enrichment: false,
+            }
         }
     }
-}
-
-fn extract_display_name(msg: &str) -> Option<String> {
-    // Delegates to shared extraction in guid_registry (handles ApplicationName, Name, SetUpFilePath)
-    extract_app_name(msg)
 }
 
 fn apply_download_analysis(
@@ -391,6 +439,7 @@ fn apply_download_analysis(
     if download.display_name.is_none() {
         download.display_name = analysis.display_name.clone();
     }
+    download.suppress_registry_enrichment |= analysis.suppress_registry_enrichment;
 
     if analysis.is_progress {
         download.saw_progress = true;
@@ -462,6 +511,7 @@ fn finalize_download(
             content_id.clone(),
             display_name.clone(),
             timestamp.map(|value| value.to_string()),
+            analysis.suppress_registry_enrichment,
         )
     });
     apply_download_analysis(&mut partial, analysis, timestamp);
@@ -484,7 +534,7 @@ fn finalize_download(
         .display_name
         .clone()
         .unwrap_or_else(|| short_id(&resolved_content_id));
-    let name = if is_fallback_name(&raw_name) {
+    let name = if is_fallback_name(&raw_name) && !partial.suppress_registry_enrichment {
         registry
             .resolve(&resolved_content_id)
             .map(|n| n.to_string())
@@ -524,6 +574,36 @@ mod tests {
 
     fn empty_registry() -> GuidRegistry {
         GuidRegistry::new()
+    }
+
+    fn completed_json_download(payload: &str) -> DownloadStat {
+        let mut downloads = extract_downloads(
+            &[ImeLine {
+                line_number: 1,
+                timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
+                message: format!("Download completed successfully {payload}"),
+                component: None,
+                thread: None,
+                timezone_offset: None,
+            }],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+        assert_eq!(downloads.len(), 1, "missing coverage record for {payload}");
+        downloads.remove(0)
+    }
+
+    fn test_line(line_number: u32, message: impl Into<String>) -> ImeLine {
+        ImeLine {
+            line_number,
+            timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+            timestamp_utc: None,
+            message: message.into(),
+            component: None,
+            thread: None,
+            timezone_offset: None,
+        }
     }
 
     #[test]
@@ -731,7 +811,8 @@ mod tests {
     fn escaped_json_fields_are_extracted_without_normalization() {
         let message = r#"Download completed successfully RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"ApplicationName\":\"Contoso App\",\"SetUpFilePath\":\"C:\\Cache\\setup.exe\"}"#;
 
-        // extract_content_id delegates to guid_registry::extract_app_id + content_id_re() fallback
+        // extract_content_id reuses the shared explicit-identity context before
+        // the download-specific content-ID fallback.
         assert_eq!(
             extract_content_id(message).as_deref(),
             Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
@@ -909,5 +990,310 @@ mod tests {
                 "attributed sibling from {payload}"
             );
         }
+    }
+
+    #[test]
+    fn downloads_do_not_take_names_outside_the_selected_identity_object() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payloads = [
+            format!(r#"[{{"AppId":"{app_guid}"}},{{"Name":"Sibling Name"}}]"#),
+            format!(r#"{{"AppId":"{app_guid}","Metadata":{{"Name":"Nested Name"}}}}"#),
+        ];
+
+        for payload in payloads {
+            let downloads = extract_downloads(
+                &[ImeLine {
+                    line_number: 1,
+                    timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Download completed successfully {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                }],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(downloads.len(), 1, "missing coverage record for {payload}");
+            assert_eq!(downloads[0].content_id, app_guid);
+            assert_eq!(
+                downloads[0].name,
+                format!("Download ({app_guid})"),
+                "accepted out-of-scope name for {payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_ancestor_does_not_take_a_repeated_descendant_identity_name() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payload = format!(
+            r#"{{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+        );
+
+        let download = completed_json_download(&payload);
+
+        assert_eq!(download.content_id, app_guid);
+        assert_eq!(download.name, format!("Download ({app_guid})"));
+        assert_eq!(explicit_app_identity_context(&payload).local_name, None);
+    }
+
+    #[test]
+    fn conflicting_duplicate_names_in_the_selected_object_fail_closed() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","Name":"First Name","Name":"Second Name"}}"#),
+            format!(r#"{{"AppId":"{app_guid}","Name":"Second Name","Name":"First Name"}}"#),
+        ];
+
+        for payload in payloads {
+            let download = completed_json_download(&payload);
+
+            assert_eq!(download.content_id, app_guid);
+            assert_eq!(
+                download.name,
+                format!("Download ({app_guid})"),
+                "accepted conflicting name from {payload}"
+            );
+            assert_eq!(explicit_app_identity_context(&payload).local_name, None);
+        }
+    }
+
+    #[test]
+    fn identical_duplicate_names_are_deterministic() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payload = format!(r#"{{"AppId":"{app_guid}","Name":"Same Name","Name":"Same Name"}}"#);
+
+        let download = completed_json_download(&payload);
+
+        assert_eq!(download.name, "Same Name");
+    }
+
+    #[test]
+    fn application_name_precedes_name_in_either_field_order() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","ApplicationName":"Preferred","Name":"Fallback"}}"#),
+            format!(r#"{{"AppId":"{app_guid}","Name":"Fallback","ApplicationName":"Preferred"}}"#),
+        ];
+
+        for payload in payloads {
+            assert_eq!(completed_json_download(&payload).name, "Preferred");
+        }
+    }
+
+    #[test]
+    fn ingested_descendant_name_does_not_enrich_outer_selected_download() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let lines = vec![test_line(
+            1,
+            format!(
+                r#"Download completed successfully {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+            ),
+        )];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+        assert_eq!(registry.resolve(app_guid), Some("Descendant Name"));
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].content_id, app_guid);
+        assert_eq!(downloads[0].name, format!("Download ({app_guid})"));
+    }
+
+    #[test]
+    fn explicit_name_ambiguity_suppresses_existing_registry_enrichment() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","Name":"First Name","Name":"Second Name"}}"#),
+            format!(r#"[{{"AppId":"{app_guid}"}},{{"Name":"Sibling Name"}}]"#),
+        ];
+
+        for payload in payloads {
+            let lines = vec![
+                test_line(
+                    1,
+                    format!(
+                        r#"Observed identity {{"AppId":"{app_guid}","ApplicationName":"Trusted Registry Name"}}"#
+                    ),
+                ),
+                test_line(2, format!("Download completed successfully {payload}")),
+            ];
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&lines);
+            assert_eq!(registry.resolve(app_guid), Some("Trusted Registry Name"));
+
+            let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+            assert_eq!(downloads.len(), 1, "missing download for {payload}");
+            assert_eq!(downloads[0].content_id, app_guid);
+            assert_eq!(
+                downloads[0].name,
+                format!("Download ({app_guid})"),
+                "enriched explicit ambiguous name for {payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_explicit_download_keeps_registry_fallback() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let lines = vec![
+            test_line(
+                1,
+                format!(
+                    r#"Observed identity {app_guid} {{"ApplicationName":"Trusted Registry Name"}}"#
+                ),
+            ),
+            test_line(
+                2,
+                format!("Download completed successfully for app id: {app_guid}"),
+            ),
+        ];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].name, "Trusted Registry Name");
+    }
+
+    #[test]
+    fn named_guid_fallback_is_shared_by_identity_and_download_extraction() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let message = format!(
+            r#"Download completed successfully correlation {app_guid} {{"Name":"Local Fallback Name"}}"#
+        );
+        assert_eq!(extract_content_id(&message).as_deref(), Some(app_guid));
+
+        let lines = vec![test_line(1, message)];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].content_id, app_guid);
+        assert_eq!(downloads[0].name, "Local Fallback Name");
+    }
+
+    #[test]
+    fn explicit_same_scope_name_remains_valid_with_ingested_registry() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let lines = vec![test_line(
+            1,
+            format!(
+                r#"Download completed successfully {{"AppId":"{app_guid}","Name":"Local Name"}}"#
+            ),
+        )];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].name, "Local Name");
+    }
+
+    #[test]
+    fn retry_keeps_explicit_name_suppression_across_attempts() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let lines = vec![
+            test_line(
+                1,
+                format!(
+                    r#"Observed identity {{"AppId":"{app_guid}","ApplicationName":"Trusted Registry Name"}}"#
+                ),
+            ),
+            test_line(
+                2,
+                format!(
+                    r#"Starting content download {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Unsafe Descendant"}}}}"#
+                ),
+            ),
+            test_line(
+                3,
+                format!("Download failed, retrying content download for app id: {app_guid}"),
+            ),
+            test_line(
+                4,
+                format!("Download completed successfully for app id: {app_guid}"),
+            ),
+        ];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+        assert_eq!(registry.resolve(app_guid), Some("Trusted Registry Name"));
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 2);
+        assert!(
+            downloads.iter().all(|download| {
+                download.content_id == app_guid && download.name == format!("Download ({app_guid})")
+            }),
+            "retry outputs were not safely attributed: {downloads:#?}"
+        );
+    }
+
+    #[test]
+    fn retry_suppression_is_isolated_between_concurrent_content_ids() {
+        let unsafe_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let safe_guid = "11111111-2222-3333-4444-555555555555";
+        let lines = vec![
+            test_line(
+                1,
+                format!(
+                    r#"Observed identity {{"AppId":"{unsafe_guid}","ApplicationName":"Unsafe Registry Name"}}"#
+                ),
+            ),
+            test_line(
+                2,
+                format!(
+                    r#"Starting content download {{"AppId":"{unsafe_guid}","Metadata":{{"AppId":"{unsafe_guid}","Name":"Unsafe Descendant"}}}}"#
+                ),
+            ),
+            test_line(
+                3,
+                format!(
+                    r#"Starting content download {{"AppId":"{safe_guid}","Name":"Safe Local Name"}}"#
+                ),
+            ),
+            test_line(
+                4,
+                format!("Download failed, retrying content download for app id: {unsafe_guid}"),
+            ),
+            test_line(
+                5,
+                format!("Download completed successfully for app id: {safe_guid}"),
+            ),
+            test_line(
+                6,
+                format!("Download completed successfully for app id: {unsafe_guid}"),
+            ),
+        ];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 3);
+        let unsafe_fallback = format!("Download ({unsafe_guid})");
+        assert_eq!(
+            downloads
+                .iter()
+                .filter(|download| download.content_id == unsafe_guid)
+                .map(|download| download.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![unsafe_fallback.as_str(), unsafe_fallback.as_str()]
+        );
+        assert_eq!(
+            downloads
+                .iter()
+                .find(|download| download.content_id == safe_guid)
+                .map(|download| download.name.as_str()),
+            Some("Safe Local Name")
+        );
     }
 }

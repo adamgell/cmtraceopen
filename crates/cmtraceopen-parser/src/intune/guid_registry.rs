@@ -40,6 +40,35 @@ pub(crate) enum ExplicitAppIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExplicitAppIdentityContext {
+    pub identity: ExplicitAppIdentity,
+    pub local_name: Option<String>,
+    /// Populated only for an absent explicit identity when the caller enables
+    /// the legacy named-GUID fallback; valid and invalid identities keep this `None`.
+    pub fallback_app_id: Option<String>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static NAMED_GUID_FALLBACK_EXTRACTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_named_guid_fallback_extraction_count() {
+    NAMED_GUID_FALLBACK_EXTRACTIONS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn named_guid_fallback_extraction_count() -> usize {
+    NAMED_GUID_FALLBACK_EXTRACTIONS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+fn record_named_guid_fallback_extraction() {
+    NAMED_GUID_FALLBACK_EXTRACTIONS.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum IdentityFieldState {
     Absent,
     Valid(String),
@@ -186,8 +215,7 @@ impl GuidRegistry {
     /// Returns `None` if the name doesn't match the pattern or the GUID is unknown.
     pub fn enrich_event_name(&self, current_name: &str, guid: &str) -> Option<String> {
         let resolved = self.resolve(guid)?;
-        // Strip the trailing "(shortguid...)" suffix and replace with the resolved name
-        strip_short_guid_suffix(current_name).map(|prefix| format!("{prefix}{resolved}"))
+        enrich_event_name_with_name(current_name, resolved)
     }
 
     /// Number of entries in the registry.
@@ -270,6 +298,15 @@ struct JsonObjectScope<'a> {
 struct JsonFieldScan<'a> {
     root: JsonObjectScope<'a>,
     scopes: Vec<JsonObjectScope<'a>>,
+}
+
+enum ExplicitAppIdentitySelection<'scan, 'msg> {
+    Absent,
+    Valid {
+        guid: String,
+        scope: &'scan JsonObjectScope<'msg>,
+    },
+    Invalid,
 }
 
 impl JsonFieldScan<'_> {
@@ -553,14 +590,19 @@ fn scope_name(scope: &JsonObjectScope<'_>) -> Option<(String, GuidNameSource)> {
         JsonFieldKind::Name,
         JsonFieldKind::SetUpFilePath,
     ] {
-        let Some(value) = scope
+        let mut values = scope
             .fields
             .iter()
             .filter(|field| field.kind == kind)
-            .find_map(|field| field.value)
-        else {
+            .filter_map(|field| field.value);
+        let Some(value) = values.next() else {
             continue;
         };
+        // Repeated identical values are deterministic. Conflicting values of
+        // the highest-priority available name kind make the scope ambiguous.
+        if values.any(|candidate| candidate != value) {
+            return None;
+        }
         return Some(match kind {
             JsonFieldKind::ApplicationName => (value.to_string(), GuidNameSource::ApplicationName),
             JsonFieldKind::Name => (value.to_string(), GuidNameSource::NameField),
@@ -576,34 +618,86 @@ fn scope_name(scope: &JsonObjectScope<'_>) -> Option<(String, GuidNameSource)> {
 /// Checks (in order): `"AppId"`, `"Id"`, then falls back to a generic
 /// GUID regex when a name field is also present on the same line.
 pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
-    match explicit_app_identity(msg) {
+    let context = explicit_app_identity_context_with_named_guid_fallback(msg);
+    match context.identity {
         ExplicitAppIdentity::Valid(guid) => Some(guid),
         ExplicitAppIdentity::Invalid => None,
-        ExplicitAppIdentity::Absent => {
-            // Only fall back to generic GUID if a name field is present
-            // (avoids polluting registry with context-free GUIDs)
-            if scan_json_fields(msg).is_ok_and(|scan| scan_has_name_field(&scan)) {
+        ExplicitAppIdentity::Absent => context.fallback_app_id,
+    }
+}
+
+/// Resolve one explicit identity selection and its object-local name in a
+/// single bounded scan. A valid identity without a local unambiguous name is
+/// an enrichment boundary; callers must not substitute a global registry name.
+pub(crate) fn explicit_app_identity_context(msg: &str) -> ExplicitAppIdentityContext {
+    explicit_app_identity_context_impl(msg, false)
+}
+
+/// Resolve explicit identity context and opt into the legacy named-GUID
+/// fallback. Callers that already apply their own GUID heuristics should use
+/// `explicit_app_identity_context` so this fallback is not computed twice.
+pub(crate) fn explicit_app_identity_context_with_named_guid_fallback(
+    msg: &str,
+) -> ExplicitAppIdentityContext {
+    explicit_app_identity_context_impl(msg, true)
+}
+
+fn explicit_app_identity_context_impl(
+    msg: &str,
+    include_named_guid_fallback: bool,
+) -> ExplicitAppIdentityContext {
+    let Ok(scan) = scan_json_fields(msg) else {
+        return ExplicitAppIdentityContext {
+            identity: ExplicitAppIdentity::Invalid,
+            local_name: None,
+            fallback_app_id: None,
+        };
+    };
+
+    match select_explicit_app_identity(&scan) {
+        ExplicitAppIdentitySelection::Absent => ExplicitAppIdentityContext {
+            identity: ExplicitAppIdentity::Absent,
+            local_name: None,
+            // Preserve the established named-context fallback without running
+            // the structural scanner a second time.
+            fallback_app_id: if include_named_guid_fallback && scan_has_name_field(&scan) {
+                #[cfg(test)]
+                record_named_guid_fallback_extraction();
                 guid_re()
                     .captures(msg)
-                    .and_then(|c| c.get(1))
-                    .map(|m| m.as_str().to_ascii_lowercase())
+                    .and_then(|captures| captures.get(1))
+                    .map(|matched| matched.as_str().to_ascii_lowercase())
             } else {
                 None
-            }
-        }
+            },
+        },
+        ExplicitAppIdentitySelection::Valid { guid, scope } => ExplicitAppIdentityContext {
+            identity: ExplicitAppIdentity::Valid(guid),
+            local_name: scope_name(scope).map(|(name, _)| name),
+            fallback_app_id: None,
+        },
+        ExplicitAppIdentitySelection::Invalid => ExplicitAppIdentityContext {
+            identity: ExplicitAppIdentity::Invalid,
+            local_name: None,
+            fallback_app_id: None,
+        },
     }
 }
 
 /// Classify explicit JSON `AppId`/`Id` fields without falling back to other
 /// GUIDs on the line. An invalid explicit field is an identity boundary: its
 /// presence suppresses line-wide GUID inference.
+#[cfg(test)]
 pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
-    let Ok(scan) = scan_json_fields(msg) else {
-        return ExplicitAppIdentity::Invalid;
-    };
+    explicit_app_identity_context(msg).identity
+}
 
+fn select_explicit_app_identity<'scan, 'msg>(
+    scan: &'scan JsonFieldScan<'msg>,
+) -> ExplicitAppIdentitySelection<'scan, 'msg> {
     let root_identity = classify_scope_identity(&scan.root);
-    let mut selected = (root_identity != ExplicitAppIdentity::Absent).then_some(root_identity);
+    let mut selected =
+        (root_identity != ExplicitAppIdentity::Absent).then_some((&scan.root, root_identity));
     let mut start = 0;
     while start < scan.scopes.len() {
         let tree_start = scan.scopes[start].tree_start;
@@ -617,7 +711,7 @@ pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
                 match identity_span {
                     None => {
                         identity_span = Some((scan.scopes[end].start, scan.scopes[end].end));
-                        tree_identity = Some(identity);
+                        tree_identity = Some((&scan.scopes[end], identity));
                     }
                     Some((outer_start, outer_end))
                         if scan.scopes[end].start >= outer_start
@@ -628,19 +722,26 @@ pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
             end += 1;
         }
 
-        if let Some(mut identity) = tree_identity {
+        if let Some((scope, mut identity)) = tree_identity {
             if ambiguous {
                 identity = ExplicitAppIdentity::Invalid;
             }
             if selected.is_some() {
-                return ExplicitAppIdentity::Invalid;
+                return ExplicitAppIdentitySelection::Invalid;
             }
-            selected = Some(identity);
+            selected = Some((scope, identity));
         }
         start = end;
     }
 
-    selected.unwrap_or(ExplicitAppIdentity::Absent)
+    match selected {
+        None => ExplicitAppIdentitySelection::Absent,
+        Some((scope, ExplicitAppIdentity::Valid(guid))) => {
+            ExplicitAppIdentitySelection::Valid { guid, scope }
+        }
+        Some((_, ExplicitAppIdentity::Invalid)) => ExplicitAppIdentitySelection::Invalid,
+        Some((_, ExplicitAppIdentity::Absent)) => unreachable!(),
+    }
 }
 
 fn classify_scope_identity(scope: &JsonObjectScope<'_>) -> ExplicitAppIdentity {
@@ -802,9 +903,8 @@ fn strip_short_guid_suffix(name: &str) -> Option<String> {
     if inner.is_empty() {
         return None;
     }
-    // Accept full GUID: hex + dashes, 36 chars
-    let is_full_guid =
-        inner.len() == 36 && inner.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    // Accept only a complete 8-4-4-4-12 GUID shape.
+    let is_full_guid = exact_guid(inner).is_some();
     // Accept legacy short format: hex chars followed by "..."
     let is_short_guid = inner.ends_with("...")
         && inner[..inner.len() - 3]
@@ -816,6 +916,13 @@ fn strip_short_guid_suffix(name: &str) -> Option<String> {
     }
     let prefix = trimmed[..paren_open].trim_end();
     Some(format!("{prefix} — "))
+}
+
+pub(crate) fn enrich_event_name_with_name(
+    current_name: &str,
+    resolved_name: &str,
+) -> Option<String> {
+    strip_short_guid_suffix(current_name).map(|prefix| format!("{prefix}{resolved_name}"))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -1146,6 +1253,18 @@ mod tests {
     }
 
     #[test]
+    fn strip_guid_suffix_rejects_malformed_full_length_shape() {
+        assert_eq!(
+            strip_short_guid_suffix("Some Name (------------------------------------)"),
+            None
+        );
+        assert_eq!(
+            strip_short_guid_suffix("Some Name (a1b2c3d4e5f6-7890-abcd-ef12-34567890)"),
+            None
+        );
+    }
+
+    #[test]
     fn to_serializable_preserves_entries_and_sources() {
         let mut reg = GuidRegistry::new();
         reg.ingest_lines(&[
@@ -1309,6 +1428,45 @@ mod tests {
             )),
             Some(lower.to_string())
         );
+    }
+
+    #[test]
+    fn explicit_identity_context_carries_the_named_guid_fallback_from_its_scan() {
+        let upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+        let lower = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let messages = [
+            format!(r#"Processing identity {upper} for {{"ApplicationName":"Contoso"}}"#),
+            format!(r#"Processing identity {upper} for {{\"Name\":\"Contoso\"}}"#),
+        ];
+
+        for message in messages {
+            let context = explicit_app_identity_context(&message);
+            assert_eq!(context.identity, ExplicitAppIdentity::Absent);
+            assert_eq!(context.fallback_app_id, None);
+
+            let context = explicit_app_identity_context_with_named_guid_fallback(&message);
+            assert_eq!(context.identity, ExplicitAppIdentity::Absent);
+            assert_eq!(context.fallback_app_id.as_deref(), Some(lower));
+        }
+
+        let context = explicit_app_identity_context(&format!("Processing identity {upper}"));
+        assert_eq!(context.identity, ExplicitAppIdentity::Absent);
+        assert_eq!(context.fallback_app_id, None);
+
+        let valid = explicit_app_identity_context_with_named_guid_fallback(&format!(
+            r#"Processing identity {upper} for {{"AppId":"{lower}","Name":"Contoso"}}"#
+        ));
+        assert_eq!(
+            valid.identity,
+            ExplicitAppIdentity::Valid(lower.to_string())
+        );
+        assert_eq!(valid.fallback_app_id, None);
+
+        let invalid = explicit_app_identity_context_with_named_guid_fallback(&format!(
+            r#"Processing identity {upper} for {{"AppId":"invalid","Name":"Contoso"}}"#
+        ));
+        assert_eq!(invalid.identity, ExplicitAppIdentity::Invalid);
+        assert_eq!(invalid.fallback_app_id, None);
     }
 
     #[test]
@@ -1649,6 +1807,50 @@ mod tests {
             assert_eq!(registry.resolve(app), Some("App Name"));
             assert_eq!(registry.resolve(policy), Some("Policy Name"));
             assert_eq!(registry.len(), 2);
+        }
+    }
+
+    #[test]
+    fn registry_rejects_conflicting_duplicate_names() {
+        let app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let messages = [
+            format!(r#"{{"AppId":"{app}","Name":"First Name","Name":"Second Name"}}"#),
+            format!(r#"{{"AppId":"{app}","Name":"Second Name","Name":"First Name"}}"#),
+        ];
+
+        for message in messages {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert_eq!(
+                registry.resolve(app),
+                None,
+                "accepted conflicting name from {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn registry_keeps_identical_names_and_application_name_precedence() {
+        let app = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let cases = [
+            (
+                format!(r#"{{"AppId":"{app}","Name":"Same Name","Name":"Same Name"}}"#),
+                "Same Name",
+            ),
+            (
+                format!(r#"{{"AppId":"{app}","ApplicationName":"Preferred","Name":"Fallback"}}"#),
+                "Preferred",
+            ),
+            (
+                format!(r#"{{"AppId":"{app}","Name":"Fallback","ApplicationName":"Preferred"}}"#),
+                "Preferred",
+            ),
+        ];
+
+        for (message, expected) in cases {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+            assert_eq!(registry.resolve(app), Some(expected));
         }
     }
 
