@@ -303,6 +303,11 @@ struct ReducedTransaction {
 pub fn analyze_management_point_from_server_intake(
     assessment: &SccmServerIntakeAssessment,
 ) -> Result<SccmManagementPointAnalysis, SccmManagementPointIntakeError> {
+    if !assessment.evidence_projection_is_intake_bound() {
+        return Err(SccmManagementPointIntakeError::SourceMismatch {
+            artifact_id: "management-point-evidence-set".to_owned(),
+        });
+    }
     if !assessment
         .topology
         .roles_observed

@@ -63,6 +63,10 @@ pub struct SccmServerIntakeAssessment {
     pub evidence: Vec<SccmEvidence>,
     pub findings: Vec<SccmFinding>,
     pub next_artifact_requests: Vec<SccmArtifactRequest>,
+    /// Private integrity binding for the normalized evidence projection. Public
+    /// fields remain inspectable and cloneable, but downstream reducers can
+    /// reject a clone whose evidence was rewritten after canonical intake.
+    evidence_integrity: BTreeMap<String, String>,
     /// Versioned opaque manifest extensions retained without interpreting them.
     extensions: Vec<SccmServerOpaqueExtension>,
     privacy_extensions: Vec<SccmServerOpaqueExtension>,
@@ -186,6 +190,12 @@ impl SccmServerIntakeAssessment {
 
     pub fn privacy_extensions(&self) -> &[SccmServerOpaqueExtension] {
         &self.privacy_extensions
+    }
+
+    pub(crate) fn evidence_projection_is_intake_bound(&self) -> bool {
+        canonical_evidence_integrity(&self.evidence)
+            .as_ref()
+            .is_some_and(|integrity| integrity == &self.evidence_integrity)
     }
 }
 
@@ -547,6 +557,8 @@ pub fn assess_server_intake(
                 right.reason.as_str(),
             ))
     });
+    let evidence_integrity =
+        canonical_evidence_integrity(&evidence).ok_or(SccmServerIntakeError::InvalidArtifact)?;
 
     Ok(SccmServerIntakeAssessment {
         schema_version: 1,
@@ -556,6 +568,7 @@ pub fn assess_server_intake(
         evidence,
         findings: Vec::new(),
         next_artifact_requests,
+        evidence_integrity,
         extensions: normalize_opaque_extensions(
             &manifest.extensions,
             SccmServerIntakeError::MalformedManifest,
@@ -1061,6 +1074,23 @@ fn payload_sha256(bytes: &[u8]) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+fn canonical_evidence_integrity(evidence: &[SccmEvidence]) -> Option<BTreeMap<String, String>> {
+    let mut integrity = BTreeMap::new();
+    for record in evidence {
+        if record.evidence_id != record.reference.entry_id {
+            return None;
+        }
+        let encoded = serde_json::to_vec(record).ok()?;
+        if integrity
+            .insert(record.evidence_id.clone(), payload_sha256(&encoded))
+            .is_some()
+        {
+            return None;
+        }
+    }
+    Some(integrity)
 }
 
 fn validate_payload_contract<'a>(
