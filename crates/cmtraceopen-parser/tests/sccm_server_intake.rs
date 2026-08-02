@@ -2287,6 +2287,20 @@ fn server_intake_bounds_manifest_artifact_count() {
 }
 
 #[test]
+fn server_intake_artifact_count_limit_precedes_per_artifact_extension_work() {
+    let (manifest_json, payloads) = bounded_manifest(513, 4_096);
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["unsafeIdentityField"] =
+        Value::String("Real User <real.user@example.com>".to_owned());
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::ManifestLimitExceeded),
+        "the artifact-count gate must stop nested preflight work before artifact validation"
+    );
+}
+
+#[test]
 fn server_intake_bounds_aggregate_declared_bytes() {
     let (manifest_json, payloads) = bounded_manifest(5, 268_435_456);
 
