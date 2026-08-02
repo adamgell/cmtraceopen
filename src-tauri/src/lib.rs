@@ -20,6 +20,8 @@ mod menu;
 pub use cmtraceopen_parser::models;
 pub mod parser;
 pub mod process_util;
+#[cfg(feature = "sccm-diagnostics")]
+pub mod sccm;
 #[cfg(feature = "secureboot")]
 pub mod secureboot;
 mod state;
