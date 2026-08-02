@@ -67,6 +67,8 @@ const DEFERRED_THEN_ACCEPTED: &str = concat!(
     "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-DEFER-001 statusId=SC_INBOX_BACKLOG outcome=deferred terminal=false queueDepth=17]LOG]!><time=\"14:20:03.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"2\" thread=\"301\" file=\"sitecomp.cpp:150\">\n",
     "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-DEFER-001 statusId=SC_INBOX_ACCEPTED outcome=success terminal=false]LOG]!><time=\"14:20:04.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"1\" thread=\"301\" file=\"sitecomp.cpp:151\">\n",
 );
+const TERMINAL_FAILURE_WITHOUT_SUCCESS: &str =
+    "<![LOG[profileId=sccm-site-core profileVersion=1 site=LAB componentId=SMS_EXECUTIVE workItemId=SC-UNCONFIRMED-001 statusId=SC_COMPONENT_TERMINAL_FAILURE outcome=failure terminal=true]LOG]!><time=\"14:30:01.000+000\" date=\"07-30-2026\" component=\"SMS_SITE_COMPONENT_MANAGER\" context=\"\" type=\"3\" thread=\"401\" file=\"sitecomp.cpp:190\">\n";
 
 #[derive(Clone)]
 struct Source<'a> {
@@ -743,6 +745,31 @@ fn backlog_is_deferred_and_same_component_terminal_recovery_is_cited() {
         .evidence
         .iter()
         .any(|evidence| evidence.recovery == Some(true)));
+}
+
+#[test]
+fn result_without_confirmed_success_uses_unconfirmed_finding_phase() {
+    let analysis = analyze_site_core(&assess(&[
+        Source::sitecomp(TERMINAL_FAILURE_WITHOUT_SUCCESS),
+        Source::absent_status(),
+    ]));
+
+    assert_eq!(analysis.results.len(), 1);
+    let result = &analysis.results[0];
+    assert_eq!(result.last_successful_phase, None);
+    assert_eq!(
+        result.finding_class,
+        Some(SccmFindingClass::InsufficientEvidence)
+    );
+    let finding = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.subject_id == result.result_id)
+        .expect("unconfirmed result has a conservative finding");
+    assert_eq!(
+        serde_json::to_value(&finding.finding).expect("finding serializes")["phase"],
+        "siteCoreUnconfirmed"
+    );
 }
 
 #[test]
