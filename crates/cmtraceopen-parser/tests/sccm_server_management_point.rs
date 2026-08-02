@@ -10,6 +10,10 @@ use serde_json::Value;
 
 const FIXTURE_ROOT: &str = "tests/fixtures/sccm/server/management-point";
 const SYNTHETIC_MP_SOURCE_VERSION: &str = "5.00.TEST";
+const SYNTHETIC_MP_PROFILE_ID: &str = "mp-server-5.00.test-v1";
+const EXPECTED_MP_FIXTURE_SCENARIOS: usize = 9;
+const SELECTED_MP_FIXTURE_SCENARIOS: usize = 8;
+const SELECTED_MP_FIXTURE_ARTIFACTS: usize = 22;
 
 fn fixture_directory(scenario: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -71,7 +75,9 @@ fn canonical_intake_adapter_derives_assessed_mp_evidence_and_fails_closed() {
 #[test]
 fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
     let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_ROOT);
-    let mut checked_artifacts = 0;
+    let mut expected_scenarios = 0;
+    let mut selected_scenarios = 0;
+    let mut selected_artifacts = 0;
 
     for entry in fs::read_dir(&fixture_root).expect("MP fixture root must be readable") {
         let scenario_directory = entry
@@ -84,6 +90,7 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
         if !expected_path.is_file() {
             continue;
         }
+        expected_scenarios += 1;
 
         let expected: Value = serde_json::from_str(
             &fs::read_to_string(expected_path).expect("MP expected fixture must be readable"),
@@ -97,22 +104,31 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
         if !selected {
             continue;
         }
+        selected_scenarios += 1;
+
+        let prefix = profile["sourceVersionPrefix"]
+            .as_str()
+            .filter(|prefix| !prefix.is_empty())
+            .expect("selected MP profile must declare a nonempty source version prefix");
+        assert_eq!(
+            profile["profileId"].as_str(),
+            Some(SYNTHETIC_MP_PROFILE_ID),
+            "{}: selected fixture must retain the synthetic MP profile",
+            scenario_directory.display()
+        );
+        assert_eq!(
+            prefix,
+            SYNTHETIC_MP_SOURCE_VERSION,
+            "{}: selected synthetic profile must retain its exact source version prefix",
+            scenario_directory.display()
+        );
 
         let expected_artifacts = expected["artifactProvenance"]
             .as_array()
             .expect("MP expected artifact provenance must be an array");
-        let exact_version_artifacts = expected_artifacts
-            .iter()
-            .filter(|artifact| artifact["sourceVersion"] == SYNTHETIC_MP_SOURCE_VERSION)
-            .collect::<Vec<_>>();
-        if exact_version_artifacts.is_empty() {
-            continue;
-        }
-
-        assert_eq!(
-            profile["sourceVersionPrefix"].as_str(),
-            Some(SYNTHETIC_MP_SOURCE_VERSION),
-            "{}: selected synthetic profile must admit its exact source version",
+        assert!(
+            !expected_artifacts.is_empty(),
+            "{}: selected MP fixture must retain artifact provenance",
             scenario_directory.display()
         );
 
@@ -124,27 +140,49 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
         let manifest_artifacts = manifest["artifacts"]
             .as_array()
             .expect("MP manifest artifacts must be an array");
-        for expected_artifact in exact_version_artifacts {
+        for expected_artifact in expected_artifacts {
             let artifact_id = expected_artifact["artifactId"]
                 .as_str()
                 .expect("MP expected artifact ID must be a string");
+            let source_version = expected_artifact["sourceVersion"]
+                .as_str()
+                .expect("selected MP artifact provenance must declare a source version");
+            assert!(
+                source_version.starts_with(prefix),
+                "{}: {artifact_id} source version {source_version:?} must match profile prefix {prefix:?}",
+                scenario_directory.display()
+            );
+            assert_eq!(
+                source_version,
+                SYNTHETIC_MP_SOURCE_VERSION,
+                "{}: {artifact_id} must retain the exact admitted synthetic ConfigMgr version",
+                scenario_directory.display()
+            );
             let manifest_artifact = manifest_artifacts
                 .iter()
                 .find(|artifact| artifact["artifactId"] == artifact_id)
                 .expect("MP expected artifact must exist in its manifest");
             assert_eq!(
                 manifest_artifact["sourceVersion"].as_str(),
-                Some(SYNTHETIC_MP_SOURCE_VERSION),
-                "{}: {artifact_id} must retain the exact admitted ConfigMgr version",
+                Some(source_version),
+                "{}: {artifact_id} manifest provenance must exactly match expected source version",
                 scenario_directory.display()
             );
-            checked_artifacts += 1;
+            selected_artifacts += 1;
         }
     }
 
-    assert!(
-        checked_artifacts > 0,
-        "the contract must exercise at least one selected exact synthetic MP artifact"
+    assert_eq!(
+        expected_scenarios, EXPECTED_MP_FIXTURE_SCENARIOS,
+        "MP fixture scenario cardinality drifted"
+    );
+    assert_eq!(
+        selected_scenarios, SELECTED_MP_FIXTURE_SCENARIOS,
+        "selected MP fixture scenario cardinality drifted"
+    );
+    assert_eq!(
+        selected_artifacts, SELECTED_MP_FIXTURE_ARTIFACTS,
+        "selected MP fixture artifact cardinality drifted"
     );
 }
 

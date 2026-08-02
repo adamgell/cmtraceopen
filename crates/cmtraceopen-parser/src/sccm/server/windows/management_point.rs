@@ -302,9 +302,9 @@ struct ReducedTransaction {
 /// version; canonical non-synthetic intake bundles intentionally return
 /// [`SccmManagementPointIntakeError::TopologyMismatch`].
 ///
-/// This is the production entry point for server-intake callers. It preserves
-/// the intake artifact IDs and producer-host handles exactly; it never
-/// reconstructs role facts from a caller-supplied path or raw log payload.
+/// This is the server-intake entry point. It preserves the intake artifact IDs
+/// and producer-host handles exactly; it never reconstructs role facts from a
+/// caller-supplied path or raw log payload.
 pub fn analyze_management_point_from_server_intake(
     assessment: &SccmServerIntakeAssessment,
 ) -> Result<SccmManagementPointAnalysis, SccmManagementPointIntakeError> {
