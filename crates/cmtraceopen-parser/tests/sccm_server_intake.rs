@@ -46,6 +46,56 @@ fn serialize_manifest(manifest: &Value) -> String {
     serde_json::to_string(manifest).expect("manifest serializes")
 }
 
+fn manifest_with_duplicate_extension(
+    manifest_json: &str,
+    scope: &str,
+    extension_name: &str,
+    first_value: &str,
+    second_value: &str,
+) -> String {
+    let needle = match scope {
+        "manifest" => "{",
+        "privacy" => "\"privacy\":{",
+        "topology" => "\"topology\":{",
+        "artifact" => "\"artifacts\":[{",
+        "workflowSubject" => "\"workflowSubject\":{",
+        "configuredPathProvenance" => "\"configuredPathProvenance\":{",
+        "rotation" => "\"rotation\":{",
+        "collectionLimit" => "\"collectionLimit\":{",
+        _ => panic!("unknown extension scope: {scope}"),
+    };
+    let prefix = format!(
+        "{needle}\"{extension_name}\":\"{first_value}\",\"{extension_name}\":\"{second_value}\","
+    );
+    let mutated = manifest_json.replacen(needle, &prefix, 1);
+    assert_ne!(mutated, manifest_json, "scope marker must be present");
+    mutated
+}
+
+fn manifest_with_duplicate_known_field(
+    manifest_json: &str,
+    scope: &str,
+    field_name: &str,
+    field_value: &Value,
+) -> String {
+    let needle = match scope {
+        "manifest" => "{",
+        "privacy" => "\"privacy\":{",
+        "topology" => "\"topology\":{",
+        "artifact" => "\"artifacts\":[{",
+        "workflowSubject" => "\"workflowSubject\":{",
+        "configuredPathProvenance" => "\"configuredPathProvenance\":{",
+        "rotation" => "\"rotation\":{",
+        "collectionLimit" => "\"collectionLimit\":{",
+        _ => panic!("unknown extension scope: {scope}"),
+    };
+    let field_value = serde_json::to_string(field_value).expect("duplicate field value serializes");
+    let prefix = format!("{needle}\"{field_name}\":{field_value},");
+    let mutated = manifest_json.replacen(needle, &prefix, 1);
+    assert_ne!(mutated, manifest_json, "scope marker must be present");
+    mutated
+}
+
 fn load_expected(scenario: &str) -> Value {
     let path = intake_root().join(scenario).join("expected.json");
     let json = std::fs::read_to_string(path).expect("expected intake output is readable");
@@ -1401,7 +1451,7 @@ fn server_intake_accepts_only_opaque_future_unsupported_provenance() {
 
     let assessment = assess_server_intake(&serialize_manifest(&manifest), &[])
         .expect("opaque future unsupported provenance remains retainable");
-    let public = serde_json::to_value(assessment).expect("assessment serializes");
+    let public = serde_json::to_value(&assessment).expect("assessment serializes");
     assert_eq!(public["artifacts"][0]["sourceId"], source_id);
     assert_eq!(public["artifacts"][0]["sourceKind"], source_kind);
     assert_eq!(public["artifacts"][0]["originalBasename"], basename);
@@ -1447,6 +1497,20 @@ fn server_manifest_v1_retains_only_versioned_opaque_extensions_deterministically
 }
 
 #[test]
+fn server_manifest_version_gate_precedes_v1_extension_validation() {
+    let (manifest_json, payloads) = bounded_manifest(1, 4_096);
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["sccmManifestVersion"] = Value::from(2);
+    manifest["futureManifestField"] = json!({ "shape": "belongs-to-v2" });
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::UnsupportedManifestVersion),
+        "unsupported versions are rejected by the version gate before applying the v1 extension grammar"
+    );
+}
+
+#[test]
 fn server_manifest_v1_rejects_unversioned_or_nonopaque_unknown_fields() {
     let (manifest_json, payloads) = bounded_manifest(1, 4_096);
 
@@ -1465,12 +1529,266 @@ fn server_manifest_v1_rejects_unversioned_or_nonopaque_unknown_fields() {
                 "artifact" => manifest["artifacts"][0][name] = value,
                 _ => unreachable!(),
             }
-            assert!(
-                assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
-                "{path} must reject arbitrary extension {name}"
+            let expected = match path {
+                "manifest" => SccmServerIntakeError::MalformedManifest,
+                "topology" => SccmServerIntakeError::InvalidTopology,
+                "artifact" => SccmServerIntakeError::InvalidArtifact,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                assess_server_intake(&serialize_manifest(&manifest), &payloads),
+                Err(expected),
+                "{path} must reject arbitrary extension {name} in its own scope"
             );
         }
     }
+}
+
+#[test]
+fn server_manifest_v1_rejects_duplicate_opaque_fields_in_every_scope() {
+    let (production_json, production_payloads) = bounded_manifest(1, 4_096);
+    let (synthetic_json, synthetic_payloads) = load_bundle("complete-multi-role");
+    let synthetic_json = serialize_manifest(&manifest_value(&synthetic_json));
+    let extension_name = "x-cmtraceopen-opaque-v1-duplicate";
+    let first_value = opaque_handle("cmtraceopen.extension.sha256.v1:", 31);
+    let second_value = opaque_handle("cmtraceopen.extension.sha256.v1:", 32);
+    let mut wrong_results = Vec::new();
+
+    for (scope, manifest_json, payloads, expected) in [
+        (
+            "manifest",
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::MalformedManifest,
+        ),
+        (
+            "privacy",
+            synthetic_json.as_str(),
+            synthetic_payloads.as_slice(),
+            SccmServerIntakeError::MalformedManifest,
+        ),
+        (
+            "topology",
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidTopology,
+        ),
+        (
+            "artifact",
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        (
+            "workflowSubject",
+            synthetic_json.as_str(),
+            synthetic_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        (
+            "configuredPathProvenance",
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        (
+            "rotation",
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        (
+            "collectionLimit",
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+    ] {
+        let manifest = manifest_with_duplicate_extension(
+            manifest_json,
+            scope,
+            extension_name,
+            &first_value,
+            &second_value,
+        );
+        let actual = assess_server_intake(&manifest, payloads);
+        if actual != Err(expected.clone()) {
+            wrong_results.push((scope, actual, expected));
+        }
+    }
+
+    assert!(
+        wrong_results.is_empty(),
+        "duplicate extension results must be scope exact: {wrong_results:?}"
+    );
+}
+
+#[test]
+fn server_manifest_v1_rejects_duplicate_known_fields_in_every_extension_scope() {
+    let (production_json, production_payloads) = bounded_manifest(1, 4_096);
+    let (synthetic_json, synthetic_payloads) = load_bundle("complete-multi-role");
+    let synthetic_json = serialize_manifest(&manifest_value(&synthetic_json));
+    let mut wrong_results = Vec::new();
+
+    for (scope, field, value, manifest_json, payloads, expected) in [
+        (
+            "manifest",
+            "sccmManifestVersion",
+            json!(1),
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::MalformedManifest,
+        ),
+        (
+            "privacy",
+            "synthetic",
+            json!(true),
+            synthetic_json.as_str(),
+            synthetic_payloads.as_slice(),
+            SccmServerIntakeError::MalformedManifest,
+        ),
+        (
+            "topology",
+            "captureHost",
+            json!("duplicate-host"),
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidTopology,
+        ),
+        (
+            "artifact",
+            "sourceId",
+            json!("server-mp-policy"),
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        (
+            "workflowSubject",
+            "role",
+            json!("distributionPoint"),
+            synthetic_json.as_str(),
+            synthetic_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        (
+            "configuredPathProvenance",
+            "state",
+            json!("configured"),
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        (
+            "rotation",
+            "kind",
+            json!("current"),
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        (
+            "collectionLimit",
+            "byteLimit",
+            json!(4_096),
+            production_json.as_str(),
+            production_payloads.as_slice(),
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+    ] {
+        let manifest = manifest_with_duplicate_known_field(manifest_json, scope, field, &value);
+        let actual = assess_server_intake(&manifest, payloads);
+        if actual != Err(expected.clone()) {
+            wrong_results.push((scope, actual, expected));
+        }
+    }
+
+    assert!(
+        wrong_results.is_empty(),
+        "duplicate known-field results must be scope exact: {wrong_results:?}"
+    );
+}
+
+#[test]
+fn server_manifest_v1_retains_safe_nested_extensions_without_interpreting_them() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    let extension_name = "x-cmtraceopen-opaque-v1-nested";
+    let extension_value = opaque_handle("cmtraceopen.extension.sha256.v1:", 41);
+    manifest["privacy"][extension_name] = Value::String(extension_value.clone());
+    let artifact = &mut manifest["artifacts"][2];
+    artifact["workflowSubject"][extension_name] = Value::String(extension_value.clone());
+    artifact["configuredPathProvenance"][extension_name] = Value::String(extension_value.clone());
+    artifact["rotation"][extension_name] = Value::String(extension_value.clone());
+    artifact["collectionLimit"][extension_name] = Value::String(extension_value.clone());
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("safe nested extensions are retained as inert provenance");
+    let public = serde_json::to_value(&assessment).expect("assessment serializes");
+    let expected = json!([{
+        "schemaVersion": 1,
+        "name": extension_name,
+        "value": extension_value,
+    }]);
+    assert_eq!(public["privacyExtensions"], expected);
+    let artifact = artifact_json(&public, "dp-dist-current");
+    assert_eq!(artifact["workflowSubjectExtensions"], expected);
+    assert_eq!(artifact["configuredPathProvenanceExtensions"], expected);
+    assert_eq!(artifact["rotationExtensions"], expected);
+    assert_eq!(artifact["collectionLimitExtensions"], expected);
+    assert!(assessment.evidence.iter().all(|evidence| {
+        !evidence.message.contains(extension_name) && !evidence.message.contains(&extension_value)
+    }));
+    assert!(assessment.findings.is_empty());
+}
+
+#[test]
+fn server_manifest_v1_rejects_unsafe_nested_extensions_in_their_scope() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let extension_name = "x-cmtraceopen-opaque-v1-nested-unsafe";
+    let mut wrong_results = Vec::new();
+
+    for (scope, expected) in [
+        ("privacy", SccmServerIntakeError::MalformedManifest),
+        ("workflowSubject", SccmServerIntakeError::InvalidArtifact),
+        (
+            "configuredPathProvenance",
+            SccmServerIntakeError::InvalidArtifact,
+        ),
+        ("rotation", SccmServerIntakeError::InvalidArtifact),
+        ("collectionLimit", SccmServerIntakeError::InvalidArtifact),
+    ] {
+        let mut manifest = manifest_value(&manifest_json);
+        match scope {
+            "privacy" => manifest["privacy"][extension_name] = json!({ "identity": "real-user" }),
+            "workflowSubject" => {
+                manifest["artifacts"][2]["workflowSubject"][extension_name] =
+                    json!({ "identity": "real-user" });
+            }
+            "configuredPathProvenance" => {
+                manifest["artifacts"][2]["configuredPathProvenance"][extension_name] =
+                    json!({ "identity": "real-user" });
+            }
+            "rotation" => {
+                manifest["artifacts"][2]["rotation"][extension_name] =
+                    json!({ "identity": "real-user" });
+            }
+            "collectionLimit" => {
+                manifest["artifacts"][2]["collectionLimit"][extension_name] =
+                    json!({ "identity": "real-user" });
+            }
+            _ => unreachable!(),
+        }
+        let actual = assess_server_intake(&serialize_manifest(&manifest), &payloads);
+        if actual != Err(expected.clone()) {
+            wrong_results.push((scope, actual, expected));
+        }
+    }
+
+    assert!(
+        wrong_results.is_empty(),
+        "unsafe nested extension results must be scope exact: {wrong_results:?}"
+    );
 }
 
 #[test]
@@ -1545,6 +1863,21 @@ fn server_intake_rejects_future_roles_without_unsupported_capture() {
     assert!(
         assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
         "future roles are valid only when retained by an unsupported capture"
+    );
+}
+
+#[test]
+fn server_intake_rejects_hashed_future_roles_in_synthetic_fixtures() {
+    let (manifest_json, _) = load_bundle("unsupported-db-supplement");
+    let mut manifest = manifest_value(&manifest_json);
+    let future_role = opaque_handle("cmtraceopen.role.sha256.v1:", 42);
+    manifest["topology"]["rolesObserved"] = json!(["managementPoint", future_role]);
+    manifest["artifacts"][0]["producerRole"] = Value::String(future_role);
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &[]),
+        Err(SccmServerIntakeError::InvalidTopology),
+        "synthetic fixtures keep the finite committed role vocabulary"
     );
 }
 
