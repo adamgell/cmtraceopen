@@ -35,7 +35,17 @@ const MAX_SAFE_TEXT_CHARS: usize = 160;
 const MAX_SCCM_CLIENT_PHYSICAL_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_SCCM_CLIENT_TOTAL_PHYSICAL_BYTES: u64 = 1024 * 1024 * 1024;
 
-pub fn read_sccm_manifest_or_legacy(bundle_root: &Path) -> Result<SccmBundleManifestV1, AppError> {
+enum ValidatedManifestRead {
+    Native {
+        manifest: SccmBundleManifestV1,
+        intake_bundle: SccmClientIntakeBundle,
+    },
+    Legacy(SccmBundleManifestV1),
+}
+
+fn read_validated_manifest_or_legacy(
+    bundle_root: &Path,
+) -> Result<ValidatedManifestRead, AppError> {
     let verified_root = verify_bundle_root(bundle_root)?;
     match verified_root.open_relative_file(Path::new(SCCM_MANIFEST_FILE_NAME)) {
         Ok(input) => {
@@ -47,15 +57,25 @@ pub fn read_sccm_manifest_or_legacy(bundle_root: &Path) -> Result<SccmBundleMani
                         reason: error.to_string(),
                     }
                 })?;
-            validate_native_manifest(&verified_root, &manifest)?;
-            Ok(manifest)
+            let intake_bundle = validate_native_manifest(&verified_root, &manifest)?;
+            Ok(ValidatedManifestRead::Native {
+                manifest,
+                intake_bundle,
+            })
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            read_legacy_manifest(&verified_root)
+            read_legacy_manifest(&verified_root).map(ValidatedManifestRead::Legacy)
         }
         Err(_) => Err(AppError::InvalidInput(
             "SCCM manifest cannot be opened safely".to_owned(),
         )),
+    }
+}
+
+pub fn read_sccm_manifest_or_legacy(bundle_root: &Path) -> Result<SccmBundleManifestV1, AppError> {
+    match read_validated_manifest_or_legacy(bundle_root)? {
+        ValidatedManifestRead::Native { manifest, .. }
+        | ValidatedManifestRead::Legacy(manifest) => Ok(manifest),
     }
 }
 
@@ -112,26 +132,27 @@ fn manifest_to_client_intake_bundle(
 pub fn read_sccm_client_intake_bundle(
     bundle_root: &Path,
 ) -> Result<SccmClientIntakeBundle, AppError> {
-    let manifest = read_sccm_manifest_or_legacy(bundle_root)?;
-    if manifest.provenance == SccmManifestProvenance::LegacyGenericUnscoped {
-        let verified_root = verify_bundle_root(bundle_root)?;
-        return read_legacy_client_intake_bundle(&verified_root);
+    match read_validated_manifest_or_legacy(bundle_root)? {
+        ValidatedManifestRead::Native { intake_bundle, .. } => Ok(intake_bundle),
+        ValidatedManifestRead::Legacy(_) => {
+            let verified_root = verify_bundle_root(bundle_root)?;
+            read_legacy_client_intake_bundle(&verified_root)
+        }
     }
-    manifest_to_client_intake_bundle(&manifest)
 }
 
 fn validate_native_manifest(
     bundle_root: &VerifiedBundleRoot,
     manifest: &SccmBundleManifestV1,
-) -> Result<(), AppError> {
-    manifest_to_client_intake_bundle(manifest)?;
+) -> Result<SccmClientIntakeBundle, AppError> {
+    let intake_bundle = manifest_to_client_intake_bundle(manifest)?;
     validate_physical_source_limits(manifest)?;
     for artifact in &manifest.artifacts {
         if artifact.state.is_physical() {
             validate_evidence_file(bundle_root, artifact)?;
         }
     }
-    Ok(())
+    Ok(intake_bundle)
 }
 
 fn validate_physical_source_limits(manifest: &SccmBundleManifestV1) -> Result<(), AppError> {
