@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "review_state.py"
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_PATH = SKILL_ROOT / "scripts" / "review_state.py"
+SKILL_PATH = SKILL_ROOT / "SKILL.md"
+LICENSE_PATH = SKILL_ROOT / "LICENSE.txt"
+UPSTREAM_COMMIT = "72ef3d3322ee0ac8db02cf324c2030f13d3bb68d"
+UPSTREAM_SCRIPT_SHA256 = (
+    "71703606bcf171b9e7f8035466d41806622be7a6f04b8157ef86f16fb3ecdfad"
+)
 SPEC = importlib.util.spec_from_file_location("review_state", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
 review_state = importlib.util.module_from_spec(SPEC)
@@ -121,6 +129,20 @@ class CopilotReviewSummaryTests(unittest.TestCase):
             result["summary"]["latest_copilot_review"],
             submitted,
         )
+
+
+class ProvenanceTests(unittest.TestCase):
+    def test_modified_script_provenance_is_explicit(self) -> None:
+        script_digest = hashlib.sha256(SCRIPT_PATH.read_bytes()).hexdigest()
+        skill_text = SKILL_PATH.read_text(encoding="utf-8")
+        license_text = LICENSE_PATH.read_text(encoding="utf-8")
+
+        self.assertNotEqual(script_digest, UPSTREAM_SCRIPT_SHA256)
+        self.assertIn(UPSTREAM_COMMIT, skill_text)
+        self.assertIn(UPSTREAM_COMMIT, license_text)
+        self.assertIn(UPSTREAM_SCRIPT_SHA256, license_text)
+        self.assertIn("modified downstream derivative", skill_text)
+        self.assertIn("not byte-identical", skill_text)
 
 
 if __name__ == "__main__":
