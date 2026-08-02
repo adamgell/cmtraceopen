@@ -754,11 +754,24 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
         "skipped, absent, and found remain separate coverage states"
     );
     assert_eq!(result.coverage_issues.len(), 2);
-    assert!(result.coverage_issues.iter().any(|issue| {
-        issue.state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance
-            && issue.catalog_entry_id == expected_catalog_entry_id("AppEnforce.log")
-            && issue.logical_artifact_ids == ["client-app-enforce"]
-    }));
+    let invalid_provenance = result
+        .coverage_issues
+        .iter()
+        .find(|issue| issue.state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance)
+        .expect("known source with malformed provenance is explicit");
+    assert_eq!(
+        invalid_provenance.catalog_entry_id,
+        expected_catalog_entry_id("AppEnforce.log")
+    );
+    assert!(
+        invalid_provenance.logical_artifact_ids.is_empty(),
+        "rejected provenance cannot assert derived workflow membership"
+    );
+    assert_eq!(
+        invalid_provenance.rotation_category,
+        SccmClientDiscoveryRotationCategory::Unknown,
+        "rejected provenance cannot retain caller-supplied rotation trust"
+    );
     let unsupported = result
         .coverage_issues
         .iter()
@@ -793,11 +806,6 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
         )],
     })
     .expect("invalid provenance remains coverage-only");
-    let invalid_provenance = result
-        .coverage_issues
-        .iter()
-        .find(|issue| issue.state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance)
-        .expect("known source with malformed provenance is explicit");
     assert_eq!(
         distinct_malformed_root.coverage_issues[0].artifact_id, invalid_provenance.artifact_id,
         "invalid-root identities must not hash or otherwise depend on raw root input"
