@@ -1850,3 +1850,138 @@ fn intake_coverage_must_be_congruent_before_facts_can_shape_results() {
     assert!(!analysis.unlinked_observations.is_empty());
     assert!(!analysis.artifact_requests.is_empty());
 }
+
+fn assert_topology_incongruence_fails_closed(
+    analysis: &SccmSiteCoreAnalysis,
+    expected_gaps: &[(&str, &str, &str)],
+) {
+    assert!(
+        analysis.results.is_empty(),
+        "incongruent topology-bound coverage must not shape a result"
+    );
+    assert_eq!(analysis.coverage_gaps.len(), expected_gaps.len());
+    assert_eq!(
+        analysis.unlinked_observations.len(),
+        expected_gaps.len(),
+        "every topology mismatch stays visible as a coverage observation"
+    );
+    assert_eq!(
+        analysis.findings.len(),
+        expected_gaps.len(),
+        "every topology mismatch stays visible as a validated finding"
+    );
+
+    for (artifact_id, source_id, producer_host_handle) in expected_gaps {
+        let gap = analysis
+            .coverage_gaps
+            .iter()
+            .find(|gap| gap.artifact_id == *artifact_id)
+            .expect("topology-specific coverage gap");
+        assert_eq!(gap.source_id, *source_id);
+        assert_eq!(gap.state, SccmCoverageState::ParseFailed);
+        assert_eq!(gap.reason_code, "intake-coverage-incongruent");
+
+        let observation = analysis
+            .unlinked_observations
+            .iter()
+            .find(|observation| observation.coverage_gap_artifact_ids == [artifact_id.to_string()])
+            .expect("coverage gap has an explicit observation");
+        assert_eq!(
+            observation.finding_class,
+            SccmFindingClass::InsufficientEvidence
+        );
+
+        let finding = analysis
+            .findings
+            .iter()
+            .find(|finding| finding.subject_id == observation.observation_id)
+            .expect("coverage observation has a validated finding");
+        assert_eq!(
+            finding.finding.class,
+            SccmFindingClass::InsufficientEvidence
+        );
+        assert!(finding
+            .finding
+            .coverage_gaps
+            .iter()
+            .any(|finding_gap| finding_gap.artifact_id == *artifact_id));
+
+        let request = analysis
+            .artifact_requests
+            .iter()
+            .find(|request| request.logical_name == *source_id)
+            .expect("topology-specific gap has a bounded request");
+        assert_eq!(
+            request.scope.producer_host_handle.as_deref(),
+            Some(*producer_host_handle),
+            "the request stays scoped to artifact topology, not mutated coverage topology"
+        );
+        assert_bounded_request_has_specific_scope(request);
+    }
+}
+
+#[test]
+fn swapped_coverage_producer_hosts_fail_site_core_congruence_closed() {
+    let mut assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    assessment
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-status")
+        .expect("status artifact")
+        .producer_host_handle = Some("synthetic:host:site-02".to_owned());
+    assessment
+        .coverage
+        .iter_mut()
+        .find(|coverage| coverage.source_id == "server-sitecomp")
+        .expect("sitecomp coverage")
+        .producer_host_handle = Some("synthetic:host:site-02".to_owned());
+    assessment
+        .coverage
+        .iter_mut()
+        .find(|coverage| coverage.source_id == "server-status")
+        .expect("status coverage")
+        .producer_host_handle = Some("synthetic:host:site-01".to_owned());
+
+    let analysis = analyze_site_core(&assessment);
+    assert_topology_incongruence_fails_closed(
+        &analysis,
+        &[
+            (
+                "sitecomp-current",
+                "server-sitecomp",
+                "synthetic:host:site-01",
+            ),
+            ("z-site-status", "server-status", "synthetic:host:site-02"),
+        ],
+    );
+}
+
+#[test]
+fn changed_coverage_workflow_subject_handle_fails_site_core_congruence_closed() {
+    let mut assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    assessment
+        .coverage
+        .iter_mut()
+        .find(|coverage| coverage.source_id == "server-sitecomp")
+        .expect("sitecomp coverage")
+        .workflow_subject_handle = Some("synthetic:subject:site-core-01".to_owned());
+
+    let analysis = analyze_site_core(&assessment);
+    assert_topology_incongruence_fails_closed(
+        &analysis,
+        &[
+            (
+                "sitecomp-current",
+                "server-sitecomp",
+                "synthetic:host:site-01",
+            ),
+            ("z-site-status", "server-status", "synthetic:host:site-01"),
+        ],
+    );
+}
