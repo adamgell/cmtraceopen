@@ -827,8 +827,18 @@ fn finding_review_invalid_profiled_keys_fail_at_every_public_boundary() {
             accepted.push(format!("serializer: {label}"));
         }
 
+        let key_json = serde_json::json!({
+            "kind": &key.kind,
+            "raw": &key.raw,
+            "normalized": &key.normalized,
+            "confidence": &key.confidence,
+            "extractionProfileId": &key.extraction_profile_id,
+            "evidence": &key.evidence,
+            "start": key.start,
+            "end": key.end,
+        });
         let mut json = serde_json::to_value(&canonical).unwrap();
-        json["correlationKeys"] = serde_json::to_value([key]).unwrap();
+        json["correlationKeys"] = serde_json::json!([key_json]);
         if serde_json::from_value::<SccmFinding>(json).is_ok() {
             accepted.push(format!("deserializer: {label}"));
         }
@@ -1926,23 +1936,30 @@ fn finding_rejects_overlong_correlation_key_values() {
         mismatches.push("builder accepted an overlong correlation-key value".into());
     }
 
-    let mut direct = finding_with_ci_key_value("overlong-key-value-direct", "71").unwrap();
-    direct.correlation_keys[0].raw = overlong_digits.clone();
-    direct.correlation_keys[0].normalized = overlong_digits.clone();
-    if direct.validate().err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
-        mismatches.push("direct validate accepted an overlong correlation-key value".into());
-    }
-    if serde_json::to_value(&direct).is_ok() {
-        mismatches.push("serializer accepted an overlong correlation-key value".into());
-    }
+    for field in ["raw", "normalized"] {
+        let mut direct = finding_with_ci_key_value("overlong-key-value-direct", "71").unwrap();
+        match field {
+            "raw" => direct.correlation_keys[0].raw = overlong_digits.clone(),
+            "normalized" => direct.correlation_keys[0].normalized = overlong_digits.clone(),
+            _ => unreachable!(),
+        }
+        if direct.validate().err() != Some(SccmFindingValidationError::InvalidCorrelationKey) {
+            mismatches.push(format!(
+                "direct validate accepted an overlong {field} value"
+            ));
+        }
+        if serde_json::to_value(&direct).is_ok() {
+            mismatches.push(format!("serializer accepted an overlong {field} value"));
+        }
 
-    let mut json =
-        serde_json::to_value(finding_with_ci_key_value("overlong-key-value-json", "71").unwrap())
-            .unwrap();
-    json["correlationKeys"][0]["raw"] = serde_json::json!(overlong_digits);
-    json["correlationKeys"][0]["normalized"] = serde_json::json!(overlong_digits);
-    if serde_json::from_value::<SccmFinding>(json).is_ok() {
-        mismatches.push("deserializer accepted an overlong correlation-key value".into());
+        let mut json = serde_json::to_value(
+            finding_with_ci_key_value("overlong-key-value-json", "71").unwrap(),
+        )
+        .unwrap();
+        json["correlationKeys"][0][field] = serde_json::json!(overlong_digits);
+        if serde_json::from_value::<SccmFinding>(json).is_ok() {
+            mismatches.push(format!("deserializer accepted an overlong {field} value"));
+        }
     }
 
     match finding_with_ci_key_value("bound-length-key-value", &bounded_digits) {
@@ -1982,11 +1999,8 @@ fn coverage_gap_deserializes_through_the_same_wire_contract_as_a_finding() {
         mismatches.push("coverage gap deserializer accepted an unknown field".into());
     }
 
-    let captured = serde_json::to_value(finding_client_gap(
-        "client-policy-agent",
-        SccmCoverageState::Captured,
-    ))
-    .unwrap();
+    let mut captured = canonical.clone();
+    captured["coverage"] = serde_json::json!("captured");
     if serde_json::from_value::<SccmFindingCoverageGap>(captured).is_ok() {
         mismatches.push("coverage gap deserializer accepted captured coverage".into());
     }
@@ -2010,6 +2024,36 @@ fn coverage_gap_deserializes_through_the_same_wire_contract_as_a_finding() {
     untrimmed_role["role"] = serde_json::json!(" client ");
     if serde_json::from_value::<SccmFindingCoverageGap>(untrimmed_role).is_ok() {
         mismatches.push("coverage gap deserializer accepted a nested untrimmed role".into());
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn coverage_gap_serialization_enforces_the_full_standalone_contract() {
+    let mut empty_artifact =
+        finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied);
+    empty_artifact.artifact_id.clear();
+    let mut overlong_artifact =
+        finding_client_gap("client-policy-agent", SccmCoverageState::AccessDenied);
+    overlong_artifact.artifact_id = "a".repeat(257);
+    let captured = finding_client_gap("client-policy-agent", SccmCoverageState::Captured);
+    let mut mismatches = Vec::new();
+
+    for (label, gap) in [
+        ("an empty artifact ID", empty_artifact),
+        ("an overlong artifact ID", overlong_artifact),
+        ("captured coverage", captured),
+    ] {
+        match serde_json::to_value(gap) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains("InvalidCoverageGap") => {
+                mismatches.push(format!(
+                    "serializer rejected {label} with the wrong contract error: {error}"
+                ));
+            }
+            Err(_) => {}
+        }
     }
 
     assert!(mismatches.is_empty(), "{mismatches:#?}");
@@ -2258,6 +2302,43 @@ fn evidence_ref_deserializes_through_the_same_wire_contract_as_a_finding() {
 }
 
 #[test]
+fn evidence_ref_serialization_enforces_the_full_standalone_contract() {
+    let canonical = finding_evidence_ref("artifact-a", "entry-a");
+    let mut empty_artifact = canonical.clone();
+    empty_artifact.artifact_id.clear();
+    let mut overlong_entry = canonical.clone();
+    overlong_entry.entry_id = "e".repeat(257);
+    let mut half_set_range = canonical.clone();
+    half_set_range.line_end = None;
+    let mut zero_start = canonical.clone();
+    zero_start.line_start = Some(0);
+    let mut inverted_range = canonical;
+    inverted_range.line_start = Some(9);
+    inverted_range.line_end = Some(2);
+
+    let mut mismatches = Vec::new();
+    for (label, reference) in [
+        ("an empty artifact ID", empty_artifact),
+        ("an overlong entry ID", overlong_entry),
+        ("a half-set line range", half_set_range),
+        ("a zero line start", zero_start),
+        ("an inverted line range", inverted_range),
+    ] {
+        match serde_json::to_value(reference) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains("InvalidEvidenceReference") => {
+                mismatches.push(format!(
+                    "serializer rejected {label} with the wrong contract error: {error}"
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
 fn terminal_evidence_deserializes_through_the_same_wire_contract_as_a_finding() {
     let mut mismatches: Vec<String> = Vec::new();
 
@@ -2298,6 +2379,41 @@ fn terminal_evidence_deserializes_through_the_same_wire_contract_as_a_finding() 
     non_terminal_kind["kind"] = serde_json::json!("observedRecovery");
     if serde_json::from_value::<SccmTerminalEvidence>(non_terminal_kind).is_ok() {
         mismatches.push("terminal evidence deserializer accepted a non-failure kind".into());
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn terminal_evidence_serialization_enforces_the_full_standalone_contract() {
+    let mut invalid_reference =
+        SccmTerminalEvidence::observed_failure(finding_evidence_ref("artifact-a", "entry-a"));
+    invalid_reference.reference.artifact_id.clear();
+    let non_terminal_kind = SccmTerminalEvidence {
+        reference: finding_evidence_ref("artifact-a", "entry-a"),
+        kind: SccmTerminalEvidenceKind::Unknown("observedRecovery".to_owned()),
+    };
+    let mut mismatches = Vec::new();
+
+    for (label, terminal, expected_error) in [
+        (
+            "an invalid nested reference",
+            invalid_reference,
+            "InvalidEvidenceReference",
+        ),
+        (
+            "a non-failure terminal kind",
+            non_terminal_kind,
+            "InvalidTerminalEvidence",
+        ),
+    ] {
+        match serde_json::to_value(terminal) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains(expected_error) => mismatches.push(format!(
+                "serializer rejected {label} with the wrong contract error: {error}"
+            )),
+            Err(_) => {}
+        }
     }
 
     assert!(mismatches.is_empty(), "{mismatches:#?}");
@@ -2396,6 +2512,80 @@ fn correlation_key_deserializes_through_the_same_wire_contract_as_a_finding() {
             mismatches.push(format!(
                 "correlation key deserializer accepted nested {label}"
             ));
+        }
+    }
+
+    assert!(mismatches.is_empty(), "{mismatches:#?}");
+}
+
+#[test]
+fn correlation_key_serialization_enforces_the_full_standalone_contract() {
+    let canonical = finding_key(
+        SccmCorrelationKeyKind::CiId,
+        "71",
+        "71",
+        SccmKeyConfidence::Low,
+        Some("sccm-keys-experimental-v1"),
+        finding_evidence_ref("artifact-a", "entry-a"),
+    );
+    let mut overlong_raw = canonical.clone();
+    overlong_raw.raw = "1".repeat(257);
+    let mut overlong_normalized = canonical.clone();
+    overlong_normalized.normalized = "1".repeat(257);
+    let mut forged_confidence = canonical.clone();
+    forged_confidence.confidence = SccmKeyConfidence::Strong;
+    let mut invalid_evidence = canonical.clone();
+    invalid_evidence
+        .evidence
+        .as_mut()
+        .unwrap()
+        .artifact_id
+        .clear();
+    let mut missing_evidence = canonical.clone();
+    missing_evidence.evidence = None;
+    let mut incoherent_span = canonical;
+    incoherent_span.start = Some(8);
+    incoherent_span.end = Some(9);
+
+    let mut mismatches = Vec::new();
+    for (label, key, expected_error) in [
+        (
+            "an overlong raw value",
+            overlong_raw,
+            "InvalidCorrelationKey",
+        ),
+        (
+            "an overlong normalized value",
+            overlong_normalized,
+            "InvalidCorrelationKey",
+        ),
+        (
+            "forged strong confidence",
+            forged_confidence,
+            "InvalidCorrelationKey",
+        ),
+        (
+            "an invalid evidence reference",
+            invalid_evidence,
+            "InvalidEvidenceReference",
+        ),
+        (
+            "a missing evidence reference",
+            missing_evidence,
+            "CorrelationKeyMissingEvidence",
+        ),
+        (
+            "an incoherent UTF-16 span",
+            incoherent_span,
+            "InvalidCorrelationKey",
+        ),
+    ] {
+        match serde_json::to_value(key) {
+            Ok(_) => mismatches.push(format!("serializer accepted {label}")),
+            Err(error) if !error.to_string().contains(expected_error) => mismatches.push(format!(
+                "serializer rejected {label} with the wrong contract error: {error}"
+            )),
+            Err(_) => {}
         }
     }
 

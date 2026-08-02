@@ -173,8 +173,7 @@ impl<'de> Deserialize<'de> for SccmTerminalEvidenceKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SccmTerminalEvidence {
     pub reference: SccmEvidenceRef,
     pub kind: SccmTerminalEvidenceKind,
@@ -189,8 +188,7 @@ impl SccmTerminalEvidence {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SccmFindingCoverageGap {
     pub artifact_id: String,
     pub role: SccmRole,
@@ -315,6 +313,35 @@ struct SccmFindingWire {
     next_artifacts: Vec<SccmArtifactRequestWire>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmEvidenceRefSerializeWire<'a> {
+    artifact_id: &'a str,
+    entry_id: &'a str,
+    line_start: Option<u32>,
+    line_end: Option<u32>,
+}
+
+impl Serialize for SccmEvidenceRef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_evidence_reference(self).map_err(|error| {
+            S::Error::custom(format!(
+                "invalid SCCM evidence reference contract: {error:?}"
+            ))
+        })?;
+        SccmEvidenceRefSerializeWire {
+            artifact_id: &self.artifact_id,
+            entry_id: &self.entry_id,
+            line_start: self.line_start,
+            line_end: self.line_end,
+        }
+        .serialize(serializer)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SccmEvidenceRefWire {
@@ -351,6 +378,35 @@ impl<'de> Deserialize<'de> for SccmEvidenceRef {
             ))
         })?;
         Ok(reference)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmTerminalEvidenceSerializeWire<'a> {
+    reference: &'a SccmEvidenceRef,
+    kind: &'a SccmTerminalEvidenceKind,
+}
+
+impl Serialize for SccmTerminalEvidence {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_evidence_reference(&self.reference)
+            .and_then(|()| {
+                validate_terminal_evidence(slice::from_ref(&self.reference), slice::from_ref(self))
+            })
+            .map_err(|error| {
+                S::Error::custom(format!(
+                    "invalid SCCM terminal evidence contract: {error:?}"
+                ))
+            })?;
+        SccmTerminalEvidenceSerializeWire {
+            reference: &self.reference,
+            kind: &self.kind,
+        }
+        .serialize(serializer)
     }
 }
 
@@ -395,6 +451,31 @@ impl<'de> Deserialize<'de> for SccmTerminalEvidence {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmFindingCoverageGapSerializeWire<'a> {
+    artifact_id: &'a str,
+    role: &'a SccmRole,
+    coverage: &'a SccmCoverageState,
+}
+
+impl Serialize for SccmFindingCoverageGap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_coverage_gaps(slice::from_ref(self)).map_err(|error| {
+            S::Error::custom(format!("invalid SCCM coverage gap contract: {error:?}"))
+        })?;
+        SccmFindingCoverageGapSerializeWire {
+            artifact_id: &self.artifact_id,
+            role: &self.role,
+            coverage: &self.coverage,
+        }
+        .serialize(serializer)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SccmFindingCoverageGapWire {
@@ -426,6 +507,42 @@ impl<'de> Deserialize<'de> for SccmFindingCoverageGap {
             D::Error::custom(format!("invalid SCCM coverage gap contract: {error:?}"))
         })?;
         Ok(gap)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SccmCorrelationKeySerializeWire<'a> {
+    kind: &'a SccmCorrelationKeyKind,
+    raw: &'a str,
+    normalized: &'a str,
+    confidence: &'a SccmKeyConfidence,
+    extraction_profile_id: Option<&'a str>,
+    evidence: Option<&'a SccmEvidenceRef>,
+    start: Option<usize>,
+    end: Option<usize>,
+}
+
+impl Serialize for SccmCorrelationKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        validate_correlation_key_evidence(self.evidence.as_slice(), slice::from_ref(self))
+            .map_err(|error| {
+                S::Error::custom(format!("invalid SCCM correlation key contract: {error:?}"))
+            })?;
+        SccmCorrelationKeySerializeWire {
+            kind: &self.kind,
+            raw: &self.raw,
+            normalized: &self.normalized,
+            confidence: &self.confidence,
+            extraction_profile_id: self.extraction_profile_id.as_deref(),
+            evidence: self.evidence.as_ref(),
+            start: self.start,
+            end: self.end,
+        }
+        .serialize(serializer)
     }
 }
 
