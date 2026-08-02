@@ -271,6 +271,56 @@ fn discovery_global_capacity_preserves_explicit_states_and_reports_a_coverage_ga
 }
 
 #[test]
+fn discovery_capacity_gap_retains_an_omitted_per_source_capped_state() {
+    let mut observations = (1..=MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS as u32)
+        .map(|number| {
+            observation(
+                ROOT_A,
+                &format!("AppEnforce.log.{number}"),
+                SccmRotation::Numbered(number),
+                SccmClientDiscoveryObservationState::Found,
+            )
+        })
+        .collect::<Vec<_>>();
+    observations.push(observation(
+        ROOT_B,
+        "ScanAgent.log",
+        SccmRotation::Current,
+        SccmClientDiscoveryObservationState::Skipped,
+    ));
+    let input = SccmClientDiscoveryInput {
+        max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS - 1,
+        observations,
+    };
+
+    let result = discover_client_sources(&input)
+        .expect("per-source and global capacity remain explicit coverage");
+    let mut reversed_input = input;
+    reversed_input.observations.reverse();
+    let reversed = discover_client_sources(&reversed_input)
+        .expect("capacity coverage remains order independent");
+
+    assert_eq!(result, reversed);
+    assert_eq!(
+        result.coverage_issues.len(),
+        1,
+        "the globally omitted per-source marker needs an explicit capacity issue"
+    );
+    assert!(
+        format!("{:?}", result.coverage_issues[0]).contains("Capped"),
+        "the capacity issue must retain the omitted declaration's Capped state"
+    );
+    assert!(result.declarations.iter().any(|declaration| {
+        declaration.basename == "ScanAgent.log"
+            && declaration.state == SccmClientDiscoveryState::Skipped
+    }));
+    assert!(result
+        .declarations
+        .iter()
+        .all(|declaration| declaration.state != SccmClientDiscoveryState::Capped));
+}
+
+#[test]
 fn discovery_enforces_each_source_cap_and_retains_the_first_omitted_rotation_gap() {
     let result = discover_client_sources(&SccmClientDiscoveryInput {
         max_found_fragments_per_source: 2,
