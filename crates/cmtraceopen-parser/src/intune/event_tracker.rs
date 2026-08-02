@@ -2298,4 +2298,114 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn appworkload_events_do_not_enrich_names_outside_selected_identity_scope() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let messages = [
+            format!(
+                r#"AppWorkload download {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+            ),
+            format!(
+                r#"AppWorkload download {{"AppId":"{app_guid}","Name":"First Name","Name":"Second Name"}}"#
+            ),
+            format!(
+                r#"SidecarScriptDetectionManager launch {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+            ),
+        ];
+
+        for message in messages {
+            let registry_lines = vec![
+                line(
+                    &format!(
+                        r#"Observed identity {{"AppId":"{app_guid}","ApplicationName":"Trusted Registry Name"}}"#
+                    ),
+                    "01-15-2024 10:00:04.000",
+                    1,
+                ),
+                line(&message, "01-15-2024 10:00:05.000", 2),
+            ];
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&registry_lines);
+
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 2)],
+                "C:/Logs/AppWorkload.log",
+                &registry,
+            );
+
+            assert_eq!(events.len(), 1, "missing event for {message}");
+            assert_eq!(events[0].guid.as_deref(), Some(app_guid));
+            assert!(!events[0].name.contains("Trusted Registry Name"));
+            assert!(!events[0].name.contains("Descendant Name"));
+        }
+    }
+
+    #[test]
+    fn non_appworkload_events_do_not_enrich_ambiguous_explicit_names() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let messages = [
+            format!(
+                r#"ESP status {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+            ),
+            format!(
+                r#"ESP status {{"AppId":"{app_guid}","Name":"First Name","Name":"Second Name"}}"#
+            ),
+        ];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[line(
+            &format!(
+                r#"Observed identity {{"AppId":"{app_guid}","ApplicationName":"Trusted Registry Name"}}"#
+            ),
+            "01-15-2024 10:00:04.000",
+            1,
+        )]);
+
+        for message in messages {
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 2)],
+                "C:/Logs/IntuneManagementExtension.log",
+                &registry,
+            );
+
+            assert_eq!(events.len(), 1, "missing event for {message}");
+            assert_eq!(events[0].guid.as_deref(), Some(app_guid));
+            assert!(!events[0].name.contains("Trusted Registry Name"));
+            assert!(!events[0].name.contains("Descendant Name"));
+        }
+    }
+
+    #[test]
+    fn event_name_enrichment_remains_for_safe_identity_contexts() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let explicit = format!(
+            r#"AppWorkload download {{"AppId":"{app_guid}","ApplicationName":"Local Name"}}"#
+        );
+        let fallback = format!("ESP status for app {app_guid}");
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[
+            line(&explicit, "01-15-2024 10:00:04.000", 1),
+            line(
+                &format!(r#"Observed identity {app_guid} {{"ApplicationName":"Fallback Name"}}"#),
+                "01-15-2024 10:00:04.000",
+                2,
+            ),
+        ]);
+
+        let explicit_events = extract_events(
+            &[line(&explicit, "01-15-2024 10:00:05.000", 3)],
+            "C:/Logs/AppWorkload.log",
+            &registry,
+        );
+        let fallback_events = extract_events(
+            &[line(&fallback, "01-15-2024 10:00:05.000", 4)],
+            "C:/Logs/IntuneManagementExtension.log",
+            &registry,
+        );
+
+        assert_eq!(explicit_events.len(), 1);
+        assert!(explicit_events[0].name.contains("Local Name"));
+        assert_eq!(fallback_events.len(), 1);
+        assert!(fallback_events[0].name.contains("Fallback Name"));
+    }
 }

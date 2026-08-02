@@ -1170,4 +1170,41 @@ mod tests {
         assert_eq!(downloads.len(), 1);
         assert_eq!(downloads[0].name, "Local Name");
     }
+
+    #[test]
+    fn retry_keeps_explicit_name_suppression_across_attempts() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let lines = vec![
+            test_line(
+                1,
+                format!(
+                    r#"Observed identity {{"AppId":"{app_guid}","ApplicationName":"Trusted Registry Name"}}"#
+                ),
+            ),
+            test_line(
+                2,
+                format!(
+                    r#"Download started {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Unsafe Descendant"}}}}"#
+                ),
+            ),
+            test_line(
+                3,
+                format!("Download failed, retrying content download for app id: {app_guid}"),
+            ),
+            test_line(
+                4,
+                format!("Download completed successfully for app id: {app_guid}"),
+            ),
+        ];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+        assert_eq!(registry.resolve(app_guid), Some("Trusted Registry Name"));
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 2);
+        assert!(downloads.iter().all(|download| {
+            download.content_id == app_guid && download.name == format!("Download ({app_guid})")
+        }));
+    }
 }
