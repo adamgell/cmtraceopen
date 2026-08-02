@@ -46,14 +46,8 @@ fn serialize_manifest(manifest: &Value) -> String {
     serde_json::to_string(manifest).expect("manifest serializes")
 }
 
-fn manifest_with_duplicate_extension(
-    manifest_json: &str,
-    scope: &str,
-    extension_name: &str,
-    first_value: &str,
-    second_value: &str,
-) -> String {
-    let needle = match scope {
+fn manifest_scope_needle(scope: &str) -> &'static str {
+    match scope {
         "manifest" => "{",
         "privacy" => "\"privacy\":{",
         "topology" => "\"topology\":{",
@@ -63,7 +57,17 @@ fn manifest_with_duplicate_extension(
         "rotation" => "\"rotation\":{",
         "collectionLimit" => "\"collectionLimit\":{",
         _ => panic!("unknown extension scope: {scope}"),
-    };
+    }
+}
+
+fn manifest_with_duplicate_extension(
+    manifest_json: &str,
+    scope: &str,
+    extension_name: &str,
+    first_value: &str,
+    second_value: &str,
+) -> String {
+    let needle = manifest_scope_needle(scope);
     let prefix = format!(
         "{needle}\"{extension_name}\":\"{first_value}\",\"{extension_name}\":\"{second_value}\","
     );
@@ -78,21 +82,37 @@ fn manifest_with_duplicate_known_field(
     field_name: &str,
     field_value: &Value,
 ) -> String {
-    let needle = match scope {
-        "manifest" => "{",
-        "privacy" => "\"privacy\":{",
-        "topology" => "\"topology\":{",
-        "artifact" => "\"artifacts\":[{",
-        "workflowSubject" => "\"workflowSubject\":{",
-        "configuredPathProvenance" => "\"configuredPathProvenance\":{",
-        "rotation" => "\"rotation\":{",
-        "collectionLimit" => "\"collectionLimit\":{",
-        _ => panic!("unknown extension scope: {scope}"),
-    };
+    let needle = manifest_scope_needle(scope);
     let field_value = serde_json::to_string(field_value).expect("duplicate field value serializes");
     let prefix = format!("{needle}\"{field_name}\":{field_value},");
     let mutated = manifest_json.replacen(needle, &prefix, 1);
     assert_ne!(mutated, manifest_json, "scope marker must be present");
+    mutated
+}
+
+fn manifest_with_ordered_extensions(
+    manifest_json: &str,
+    scopes: &[&str],
+    extensions: &[(&str, &str)],
+) -> String {
+    let fields = extensions
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "{}:{},",
+                serde_json::to_string(name).expect("extension name serializes"),
+                serde_json::to_string(value).expect("extension value serializes")
+            )
+        })
+        .collect::<String>();
+    let mut mutated = manifest_json.to_owned();
+    for scope in scopes {
+        let needle = manifest_scope_needle(scope);
+        let replacement = format!("{needle}{fields}");
+        let next = mutated.replacen(needle, &replacement, 1);
+        assert_ne!(next, mutated, "scope marker must be present: {scope}");
+        mutated = next;
+    }
     mutated
 }
 
@@ -383,8 +403,7 @@ fn assert_collision_contract(scenario: &str, expected: &Value, actual: &Value) {
                             .as_str()
                             .expect("relative path")
                             .split('/')
-                            .nth(5)
-                            .filter(|segment| segment.starts_with("root-"))
+                            .find(|segment| segment.starts_with("root-"))
                             .expect("opaque configured-root segment")
                     })
                     .collect::<BTreeSet<_>>();
@@ -591,7 +610,17 @@ fn assert_remaining_expected_contracts(
                 let mut second_manifest = manifest_value(manifest_json);
                 second_manifest["topology"]["captureHost"] =
                     if second_manifest["syntheticFixture"] == true {
-                        Value::String("LAB-MP01".to_owned())
+                        let current_host = second_manifest["topology"]["captureHost"]
+                            .as_str()
+                            .expect("synthetic capture host is a string");
+                        Value::String(
+                            if current_host == "LAB-MP01" {
+                                "LAB-CM01"
+                            } else {
+                                "LAB-MP01"
+                            }
+                            .to_owned(),
+                        )
                     } else {
                         Value::String(opaque_handle("cmtraceopen.host.sha256.v1:", 999))
                     };
@@ -1560,20 +1589,51 @@ fn server_intake_accepts_only_opaque_future_unsupported_provenance() {
 #[test]
 fn server_manifest_v1_retains_only_versioned_opaque_extensions_deterministically() {
     let (manifest_json, payloads) = bounded_manifest(1, 4_096);
-    let mut manifest = manifest_value(&manifest_json);
     let extension_name_a = "x-cmtraceopen-opaque-v1-alpha";
     let extension_name_b = "x-cmtraceopen-opaque-v1-beta";
     let extension_value_a = opaque_handle("cmtraceopen.extension.sha256.v1:", 1);
     let extension_value_b = opaque_handle("cmtraceopen.extension.sha256.v1:", 2);
+    let scopes = ["manifest", "topology", "artifact"];
+    let beta_then_alpha = manifest_with_ordered_extensions(
+        &manifest_json,
+        &scopes,
+        &[
+            (extension_name_b, extension_value_b.as_str()),
+            (extension_name_a, extension_value_a.as_str()),
+        ],
+    );
+    let alpha_then_beta = manifest_with_ordered_extensions(
+        &manifest_json,
+        &scopes,
+        &[
+            (extension_name_a, extension_value_a.as_str()),
+            (extension_name_b, extension_value_b.as_str()),
+        ],
+    );
+    assert_ne!(
+        beta_then_alpha, alpha_then_beta,
+        "the test inputs must preserve genuinely different extension arrival orders"
+    );
+    assert!(
+        beta_then_alpha
+            .find(extension_name_b)
+            .expect("beta extension is present")
+            < beta_then_alpha
+                .find(extension_name_a)
+                .expect("alpha extension is present"),
+        "the first raw manifest must place beta before alpha"
+    );
+    assert!(
+        alpha_then_beta
+            .find(extension_name_a)
+            .expect("alpha extension is present")
+            < alpha_then_beta
+                .find(extension_name_b)
+                .expect("beta extension is present"),
+        "the reordered raw manifest must place alpha before beta"
+    );
 
-    manifest[extension_name_b] = Value::String(extension_value_b.clone());
-    manifest[extension_name_a] = Value::String(extension_value_a.clone());
-    manifest["topology"][extension_name_b] = Value::String(extension_value_b.clone());
-    manifest["topology"][extension_name_a] = Value::String(extension_value_a.clone());
-    manifest["artifacts"][0][extension_name_b] = Value::String(extension_value_b.clone());
-    manifest["artifacts"][0][extension_name_a] = Value::String(extension_value_a.clone());
-
-    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+    let assessment = assess_server_intake(&beta_then_alpha, &payloads)
         .expect("versioned opaque extensions are retained");
     let public = serde_json::to_value(&assessment).expect("assessment serializes");
     let expected = json!([
@@ -1584,14 +1644,7 @@ fn server_manifest_v1_retains_only_versioned_opaque_extensions_deterministically
     assert_eq!(public["topology"]["extensions"], expected);
     assert_eq!(public["artifacts"][0]["extensions"], expected);
 
-    let mut reordered = manifest_value(&manifest_json);
-    reordered[extension_name_a] = Value::String(extension_value_a.clone());
-    reordered[extension_name_b] = Value::String(extension_value_b.clone());
-    reordered["topology"][extension_name_a] = Value::String(extension_value_a.clone());
-    reordered["topology"][extension_name_b] = Value::String(extension_value_b.clone());
-    reordered["artifacts"][0][extension_name_a] = Value::String(extension_value_a.clone());
-    reordered["artifacts"][0][extension_name_b] = Value::String(extension_value_b.clone());
-    let reordered_assessment = assess_server_intake(&serialize_manifest(&reordered), &payloads)
+    let reordered_assessment = assess_server_intake(&alpha_then_beta, &payloads)
         .expect("extension arrival order does not change normalized output");
     assert_eq!(assessment, reordered_assessment);
 }
