@@ -2149,7 +2149,7 @@ mod tests {
     fn appworkload_named_context_fallback_remains_without_identity_field() {
         let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
         let message = format!(
-            r#"SidecarScriptDetectionManager launch identity {app_guid} {{"ApplicationName":"Contoso"}}"#
+            r#"AppWorkload download stalled with no progress correlation {app_guid} {{"ApplicationName":"Contoso"}}"#
         );
         let mut registry = GuidRegistry::new();
         registry.ingest_lines(&[line(&message, "01-15-2024 10:00:04.000", 1)]);
@@ -2161,8 +2161,9 @@ mod tests {
         );
 
         assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, IntuneEventType::ContentDownload);
         assert_eq!(events[0].guid.as_deref(), Some(app_guid));
-        assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
+        assert!(events[0].name.contains("Contoso"));
     }
 
     #[test]
