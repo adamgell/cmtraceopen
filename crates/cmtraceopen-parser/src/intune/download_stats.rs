@@ -910,4 +910,37 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn downloads_do_not_take_names_outside_the_selected_identity_object() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payloads = [
+            format!(r#"[{{"AppId":"{app_guid}"}},{{"Name":"Sibling Name"}}]"#),
+            format!(r#"{{"AppId":"{app_guid}","Metadata":{{"Name":"Nested Name"}}}}"#),
+        ];
+
+        for payload in payloads {
+            let downloads = extract_downloads(
+                &[ImeLine {
+                    line_number: 1,
+                    timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Download completed successfully {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                }],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(downloads.len(), 1, "missing coverage record for {payload}");
+            assert_eq!(downloads[0].content_id, app_guid);
+            assert_eq!(
+                downloads[0].name,
+                format!("Download ({app_guid})"),
+                "accepted out-of-scope name for {payload}"
+            );
+        }
+    }
 }
