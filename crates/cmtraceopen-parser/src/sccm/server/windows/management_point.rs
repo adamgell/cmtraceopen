@@ -39,6 +39,7 @@ const MP_IIS_GROUP: &str = "server-mp-iis";
 /// its coverage output rather than attempting a role diagnosis from a partial
 /// substitute bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum SccmManagementPointIntakeError {
     #[error("canonical server intake has no compatible Management Point topology")]
     TopologyMismatch,
@@ -295,7 +296,11 @@ struct ReducedTransaction {
 }
 
 /// Reduce Management Point evidence only after canonical server intake has
-/// admitted its topology, artifact provenance, and CCM records.
+/// admitted its topology, artifact provenance, and CCM records for the
+/// synthetic `mp-server-5.00.test-v1` profile. This adapter admits only the
+/// literal `synthetic:site:lab` site handle and exact `5.00.TEST` source
+/// version; canonical non-synthetic intake bundles intentionally return
+/// [`SccmManagementPointIntakeError::TopologyMismatch`].
 ///
 /// This is the production entry point for server-intake callers. It preserves
 /// the intake artifact IDs and producer-host handles exactly; it never
@@ -374,6 +379,12 @@ pub fn analyze_management_point_from_server_intake(
                 artifact_id: artifact.artifact_id.clone(),
             }
         })?;
+        // Intake seals every logical-record range before this adapter runs.
+        // The assessment has no independent physical line count, so this bound
+        // is derived from that sealed evidence; `evidence_reference_fits_source`
+        // cannot reject an otherwise-admitted range against its own maximum.
+        // Relaxing the seal would make this caller-controlled and requires
+        // re-review.
         let physical_line_end = assessment
             .evidence
             .iter()
@@ -458,6 +469,8 @@ fn canonical_fragment_complete(artifact: &SccmServerArtifactAssessment) -> Optio
     }
 }
 
+/// Maps the sole synthetic site handle admitted by this adapter. Opaque
+/// production handles intentionally do not select the test-only profile.
 fn canonical_intake_site_code(site_handle: &str) -> Option<String> {
     (site_handle == "synthetic:site:lab").then(|| "LAB".to_owned())
 }

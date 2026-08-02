@@ -27,7 +27,7 @@ pub enum SccmArtifactFamily {
 }
 
 impl SccmArtifactFamily {
-    fn serialized_name(&self) -> &str {
+    pub(crate) fn serialized_name(&self) -> &str {
         match self {
             Self::ClientSetup => "clientSetup",
             Self::ClientHealth => "clientHealth",

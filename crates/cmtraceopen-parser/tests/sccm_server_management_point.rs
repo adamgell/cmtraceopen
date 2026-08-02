@@ -86,8 +86,7 @@ fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
         }
 
         let expected: Value = serde_json::from_str(
-            &fs::read_to_string(expected_path)
-                .expect("MP expected fixture must be readable"),
+            &fs::read_to_string(expected_path).expect("MP expected fixture must be readable"),
         )
         .expect("MP expected fixture must be valid JSON");
         let profile = &expected["extractionProfile"];

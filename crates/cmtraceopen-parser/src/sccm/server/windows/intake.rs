@@ -1220,26 +1220,7 @@ fn checked_add_opaque_extension_bytes(
 }
 
 fn artifact_family_integrity_key(family: &SccmArtifactFamily) -> &str {
-    match family {
-        SccmArtifactFamily::ClientSetup => "clientSetup",
-        SccmArtifactFamily::ClientHealth => "clientHealth",
-        SccmArtifactFamily::ClientIdentity => "clientIdentity",
-        SccmArtifactFamily::ClientLocation => "clientLocation",
-        SccmArtifactFamily::ClientPolicy => "clientPolicy",
-        SccmArtifactFamily::ClientContent => "clientContent",
-        SccmArtifactFamily::ClientApplication => "clientApplication",
-        SccmArtifactFamily::ClientUpdates => "clientUpdates",
-        SccmArtifactFamily::ClientTaskSequence => "clientTaskSequence",
-        SccmArtifactFamily::SiteComponent => "siteComponent",
-        SccmArtifactFamily::SiteStatus => "siteStatus",
-        SccmArtifactFamily::ManagementPoint => "managementPoint",
-        SccmArtifactFamily::DistributionPoint => "distributionPoint",
-        SccmArtifactFamily::SoftwareUpdatePoint => "softwareUpdatePoint",
-        SccmArtifactFamily::Hierarchy => "hierarchy",
-        SccmArtifactFamily::Provider => "provider",
-        SccmArtifactFamily::AdminService => "adminService",
-        SccmArtifactFamily::Unknown(value) => value,
-    }
+    family.serialized_name()
 }
 
 fn topology_string_bytes(topology: &SccmServerTopologyAssessment) -> Option<usize> {
@@ -3001,6 +2982,49 @@ define_raw_server_wire! {
     struct RawCollectionLimit {
         "byteLimit" => byte_limit: u64,
         "limitApplied" => limit_applied: bool,
+    }
+}
+
+#[cfg(test)]
+mod artifact_family_integrity_key_tests {
+    use super::*;
+
+    #[test]
+    fn artifact_family_integrity_keys_match_the_frozen_serialized_mapping() {
+        let cases = [
+            (SccmArtifactFamily::ClientSetup, "clientSetup"),
+            (SccmArtifactFamily::ClientHealth, "clientHealth"),
+            (SccmArtifactFamily::ClientIdentity, "clientIdentity"),
+            (SccmArtifactFamily::ClientLocation, "clientLocation"),
+            (SccmArtifactFamily::ClientPolicy, "clientPolicy"),
+            (SccmArtifactFamily::ClientContent, "clientContent"),
+            (SccmArtifactFamily::ClientApplication, "clientApplication"),
+            (SccmArtifactFamily::ClientUpdates, "clientUpdates"),
+            (SccmArtifactFamily::ClientTaskSequence, "clientTaskSequence"),
+            (SccmArtifactFamily::SiteComponent, "siteComponent"),
+            (SccmArtifactFamily::SiteStatus, "siteStatus"),
+            (SccmArtifactFamily::ManagementPoint, "managementPoint"),
+            (SccmArtifactFamily::DistributionPoint, "distributionPoint"),
+            (
+                SccmArtifactFamily::SoftwareUpdatePoint,
+                "softwareUpdatePoint",
+            ),
+            (SccmArtifactFamily::Hierarchy, "hierarchy"),
+            (SccmArtifactFamily::Provider, "provider"),
+            (SccmArtifactFamily::AdminService, "adminService"),
+            (
+                SccmArtifactFamily::Unknown("opaqueFamily".to_owned()),
+                "opaqueFamily",
+            ),
+        ];
+
+        for (family, expected) in cases {
+            assert_eq!(artifact_family_integrity_key(&family), expected);
+            assert_eq!(
+                serde_json::to_value(family).expect("family must serialize"),
+                Value::String(expected.to_owned())
+            );
+        }
     }
 }
 
