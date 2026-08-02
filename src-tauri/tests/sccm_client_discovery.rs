@@ -476,3 +476,29 @@ fn discovery_rejects_conflicting_states_for_canonical_basename_aliases() {
             .expect_err("canonical alias conflict fails closed regardless of input order")
     );
 }
+
+#[test]
+fn discovery_skips_supported_observations_with_malformed_root_handles() {
+    let result = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![
+            observation(
+                "root-not-a-sha256-handle",
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_B,
+                "PolicyAgent.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+        ],
+    })
+    .expect("malformed roots are skipped rather than becoming a discovery failure");
+
+    assert_eq!(result.declarations.len(), 1);
+    assert_eq!(result.declarations[0].root_handle, ROOT_B);
+    assert_eq!(result.declarations[0].basename, "PolicyAgent.log");
+}
