@@ -191,10 +191,9 @@ fn initial_observations(input: &SccmClientDiscoveryInput) -> BTreeSet<Observatio
                 .iter()
                 .next_back()
                 .expect("nonempty candidate set")
+            && observations.insert(candidate)
         {
-            if observations.insert(candidate) {
-                observations.pop_last();
-            }
+            observations.pop_last();
         }
     }
     observations
