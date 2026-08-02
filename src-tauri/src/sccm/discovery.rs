@@ -13,7 +13,7 @@ use super::contract::{
     rotation_order, rotation_segment, sha256_bytes, source_identity_digest,
     SccmManifestSourceState,
 };
-use cmtraceopen_parser::sccm::SccmRotation;
+use cmtraceopen_parser::sccm::{classify_artifact_name, SccmRole, SccmRotation};
 
 pub const MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS: usize = 4_096;
 /// Defensive bound for supplied observations. Native enumeration must report
@@ -21,12 +21,17 @@ pub const MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS: usize = 4_096;
 /// discard observations beyond the contract.
 pub const MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS: usize =
     MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS + 1;
+/// Coverage issues are derived only from admitted observations. They remain
+/// separately bounded without sharing the declaration budget, so a capture
+/// frontier cannot hide coverage loss.
+pub const MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES: usize = MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SccmClientDiscoveryObservationState {
     Found,
     AccessDenied,
     NotFound,
+    Skipped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +40,37 @@ pub enum SccmClientDiscoveryState {
     AccessDenied,
     NotFound,
     Capped,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SccmClientDiscoveryCoverageIssueState {
+    InvalidProvenance,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SccmClientDiscoveryRotationCategory {
+    Current,
+    LoUnderscore,
+    Numbered,
+    Timestamped,
+    Unknown,
+}
+
+/// Coverage-only metadata intentionally kept out of declarations. These
+/// issues cannot be captured or interpreted as workflow evidence.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SccmClientDiscoveryCoverageIssue {
+    pub artifact_id: String,
+    /// A validated catalog identity or the fixed `none` category. It never
+    /// derives from an unvalidated basename or root handle.
+    pub catalog_entry_id: String,
+    /// Invalid provenance can affect a known workflow group; unsupported
+    /// observations always have zero memberships.
+    pub logical_artifact_ids: Vec<String>,
+    pub rotation_category: SccmClientDiscoveryRotationCategory,
+    pub state: SccmClientDiscoveryCoverageIssueState,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +105,7 @@ pub struct SccmClientDiscoveryDeclaration {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SccmClientDiscoveryResult {
     pub declarations: Vec<SccmClientDiscoveryDeclaration>,
+    pub coverage_issues: Vec<SccmClientDiscoveryCoverageIssue>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +149,11 @@ struct NormalizedObservation<'a> {
     logical_artifact_ids: Vec<String>,
 }
 
+struct NormalizedDiscovery<'a> {
+    observations: Vec<NormalizedObservation<'a>>,
+    coverage_issues: Vec<SccmClientDiscoveryCoverageIssue>,
+}
+
 #[cfg(test)]
 thread_local! {
     static CANDIDATE_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
@@ -127,7 +169,8 @@ pub fn discover_client_sources(
         return Err(SccmClientDiscoveryError::ObservationLimitExceeded);
     }
 
-    let observations = normalize_observations(input)?;
+    let normalized = normalize_observations(input)?;
+    let observations = normalized.observations;
     let mut found_per_source = BTreeMap::<(String, String), usize>::new();
     let mut capped_sources = BTreeSet::<(String, String)>::new();
     let mut declarations = Vec::with_capacity(
@@ -158,7 +201,10 @@ pub fn discover_client_sources(
                 candidate_from_observation(&first_omitted).expect("prevalidated observation"),
                 SccmClientDiscoveryState::Capped,
             ));
-            return Ok(SccmClientDiscoveryResult { declarations });
+            return Ok(SccmClientDiscoveryResult {
+                declarations,
+                coverage_issues: normalized.coverage_issues,
+            });
         } else {
             first_omitted = Some((observation, state));
         }
@@ -171,15 +217,20 @@ pub fn discover_client_sources(
         ));
     }
 
-    Ok(SccmClientDiscoveryResult { declarations })
+    Ok(SccmClientDiscoveryResult {
+        declarations,
+        coverage_issues: normalized.coverage_issues,
+    })
 }
 
 fn normalize_observations(
     input: &SccmClientDiscoveryInput,
-) -> Result<Vec<NormalizedObservation<'_>>, SccmClientDiscoveryError> {
+) -> Result<NormalizedDiscovery<'_>, SccmClientDiscoveryError> {
     let mut observations = BTreeMap::<PhysicalObservationKey, NormalizedObservation<'_>>::new();
+    let mut coverage_issues = BTreeSet::new();
     for observation in &input.observations {
         let Some(normalized) = normalize_observation(observation) else {
+            coverage_issues.insert(coverage_issue_from_observation(observation));
             continue;
         };
         let key = PhysicalObservationKey {
@@ -203,7 +254,11 @@ fn normalize_observations(
     }
     let mut observations = observations.into_values().collect::<Vec<_>>();
     observations.sort_by(compare_observation_order);
-    Ok(observations)
+    debug_assert!(coverage_issues.len() <= MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES);
+    Ok(NormalizedDiscovery {
+        observations,
+        coverage_issues: coverage_issues.into_iter().collect(),
+    })
 }
 
 fn normalize_observation(
@@ -219,6 +274,81 @@ fn normalize_observation(
         canonical_basename,
         logical_artifact_ids,
     })
+}
+
+fn coverage_issue_from_observation(
+    observation: &SccmClientDiscoveryObservation,
+) -> SccmClientDiscoveryCoverageIssue {
+    let root_is_valid = root_handle_digest(&observation.root_handle).is_some();
+    let catalog_basename = catalogued_basename(&observation.basename);
+    let state = if root_is_valid {
+        SccmClientDiscoveryCoverageIssueState::Unsupported
+    } else {
+        SccmClientDiscoveryCoverageIssueState::InvalidProvenance
+    };
+    let catalog_entry_id = catalog_basename
+        .as_deref()
+        .map(catalog_entry_id)
+        .unwrap_or_else(|| "sccm-client-source:v1:none".to_owned());
+    let logical_artifact_ids = if state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance
+    {
+        catalog_basename
+            .as_deref()
+            .map(logical_artifact_ids)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let rotation_category = rotation_category(&observation.rotation);
+    let artifact_id = coverage_issue_id(&catalog_entry_id, rotation_category, state);
+    SccmClientDiscoveryCoverageIssue {
+        artifact_id,
+        catalog_entry_id,
+        logical_artifact_ids,
+        rotation_category,
+        state,
+    }
+}
+
+fn catalogued_basename(basename: &str) -> Option<String> {
+    let classified = classify_artifact_name(basename, SccmRole::Client);
+    (!logical_artifact_ids_for_basename(&classified.basename).is_empty())
+        .then_some(classified.basename)
+}
+
+fn rotation_category(rotation: &SccmRotation) -> SccmClientDiscoveryRotationCategory {
+    match rotation {
+        SccmRotation::Current => SccmClientDiscoveryRotationCategory::Current,
+        SccmRotation::LoUnderscore => SccmClientDiscoveryRotationCategory::LoUnderscore,
+        SccmRotation::Numbered(_) => SccmClientDiscoveryRotationCategory::Numbered,
+        SccmRotation::Timestamped(_) => SccmClientDiscoveryRotationCategory::Timestamped,
+        SccmRotation::Unknown(_) => SccmClientDiscoveryRotationCategory::Unknown,
+    }
+}
+
+fn coverage_issue_id(
+    catalog_entry_id: &str,
+    rotation_category: SccmClientDiscoveryRotationCategory,
+    state: SccmClientDiscoveryCoverageIssueState,
+) -> String {
+    let rotation = match rotation_category {
+        SccmClientDiscoveryRotationCategory::Current => "current",
+        SccmClientDiscoveryRotationCategory::LoUnderscore => "lo",
+        SccmClientDiscoveryRotationCategory::Numbered => "numbered",
+        SccmClientDiscoveryRotationCategory::Timestamped => "timestamped",
+        SccmClientDiscoveryRotationCategory::Unknown => "unknown",
+    };
+    let state = match state {
+        SccmClientDiscoveryCoverageIssueState::InvalidProvenance => "invalid-provenance",
+        SccmClientDiscoveryCoverageIssueState::Unsupported => "unsupported",
+    };
+    let value = format!(
+        "cmtraceopen.sccm.discovery.coverage.v1\\0{catalog_entry_id}\\0{rotation}\\0{state}"
+    );
+    format!(
+        "sccm-discovery-coverage:v1:sha256:{}",
+        sha256_bytes(value.as_bytes())
+    )
 }
 
 fn selection_state(
@@ -245,6 +375,7 @@ fn selection_state(
         }
         SccmClientDiscoveryObservationState::AccessDenied => SccmClientDiscoveryState::AccessDenied,
         SccmClientDiscoveryObservationState::NotFound => SccmClientDiscoveryState::NotFound,
+        SccmClientDiscoveryObservationState::Skipped => SccmClientDiscoveryState::Skipped,
     })
 }
 
@@ -300,6 +431,13 @@ fn declaration_from_candidate(
         SccmClientDiscoveryState::Capped => marker_id(
             &candidate.catalog_entry_id,
             SccmManifestSourceState::Capped,
+            &candidate.observation.rotation,
+            &candidate.observation.basename,
+            &path_fingerprint,
+        ),
+        SccmClientDiscoveryState::Skipped => marker_id(
+            &candidate.catalog_entry_id,
+            SccmManifestSourceState::Skipped,
             &candidate.observation.rotation,
             &candidate.observation.basename,
             &path_fingerprint,
@@ -394,6 +532,7 @@ fn state_rank(state: SccmClientDiscoveryObservationState) -> u8 {
         SccmClientDiscoveryObservationState::Found => 0,
         SccmClientDiscoveryObservationState::AccessDenied => 1,
         SccmClientDiscoveryObservationState::NotFound => 2,
+        SccmClientDiscoveryObservationState::Skipped => 3,
     }
 }
 

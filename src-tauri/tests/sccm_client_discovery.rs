@@ -1,9 +1,8 @@
 use app_lib::sccm::{
     discover_client_sources, SccmClientDiscoveryCoverageIssueState, SccmClientDiscoveryError,
-    SccmClientDiscoveryInput, SccmClientDiscoveryObservation,
-    SccmClientDiscoveryObservationState, SccmClientDiscoveryState,
-    MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES, MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
-    MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+    SccmClientDiscoveryInput, SccmClientDiscoveryObservation, SccmClientDiscoveryObservationState,
+    SccmClientDiscoveryState, MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES,
+    MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS, MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
 };
 use cmtraceopen_parser::sccm::SccmRotation;
 use sha2::{Digest, Sha256};
@@ -89,7 +88,10 @@ fn expected_marker_artifact_id(
 }
 
 fn expected_catalog_entry_id(canonical_basename: &str) -> String {
-    format!("sccm-client-source:v1:sha256:{}", sha256(canonical_basename))
+    format!(
+        "sccm-client-source:v1:sha256:{}",
+        sha256(canonical_basename)
+    )
 }
 
 fn expected_evidence_identity(
@@ -724,8 +726,8 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
             .map(|declaration| (declaration.basename.as_str(), declaration.state))
             .collect::<Vec<_>>(),
         vec![
-            ("CIAgent.log", SccmClientDiscoveryState::Skipped),
             ("PolicyAgent.log", SccmClientDiscoveryState::Discovered),
+            ("CIAgent.log", SccmClientDiscoveryState::Skipped),
             ("ScanAgent.log", SccmClientDiscoveryState::NotFound),
         ],
         "skipped, absent, and found remain separate coverage states"
@@ -750,6 +752,25 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
             && !issue.artifact_id.contains(malformed_root)
             && !issue.catalog_entry_id.contains(malformed_root)
     }));
+    let distinct_malformed_root = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 8,
+        observations: vec![observation(
+            "root-also-not-validated",
+            "AppEnforce.log",
+            SccmRotation::Current,
+            SccmClientDiscoveryObservationState::Found,
+        )],
+    })
+    .expect("invalid provenance remains coverage-only");
+    let invalid_provenance = result
+        .coverage_issues
+        .iter()
+        .find(|issue| issue.state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance)
+        .expect("known source with malformed provenance is explicit");
+    assert_eq!(
+        distinct_malformed_root.coverage_issues[0].artifact_id, invalid_provenance.artifact_id,
+        "invalid-root identities must not hash or otherwise depend on raw root input"
+    );
     assert!(result.declarations.iter().all(|declaration| {
         declaration.artifact_id != result.coverage_issues[0].artifact_id
             && declaration.artifact_id != result.coverage_issues[1].artifact_id
@@ -782,7 +803,10 @@ fn discovery_retains_coverage_issues_past_the_declaration_cap_without_admitting_
     })
     .expect("a malformed observation cannot hide coverage behind declaration capping");
 
-    assert_eq!(result.declarations.len(), MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS);
+    assert_eq!(
+        result.declarations.len(),
+        MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
+    );
     assert_eq!(result.coverage_issues.len(), 1);
     assert!(result.coverage_issues.len() <= MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES);
     assert_eq!(
