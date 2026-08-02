@@ -1408,22 +1408,164 @@ fn server_intake_accepts_only_opaque_future_unsupported_provenance() {
 }
 
 #[test]
-fn server_manifest_v1_rejects_unknown_fields_instead_of_dropping_them() {
-    let (manifest_json, payloads) = load_bundle("multiline");
+fn server_manifest_v1_retains_only_versioned_opaque_extensions_deterministically() {
+    let (manifest_json, payloads) = bounded_manifest(1, 4_096);
+    let mut manifest = manifest_value(&manifest_json);
+    let extension_name_a = "x-cmtraceopen-opaque-v1-alpha";
+    let extension_name_b = "x-cmtraceopen-opaque-v1-beta";
+    let extension_value_a = opaque_handle("cmtraceopen.extension.sha256.v1:", 1);
+    let extension_value_b = opaque_handle("cmtraceopen.extension.sha256.v1:", 2);
+
+    manifest[extension_name_b] = Value::String(extension_value_b.clone());
+    manifest[extension_name_a] = Value::String(extension_value_a.clone());
+    manifest["topology"][extension_name_b] = Value::String(extension_value_b.clone());
+    manifest["topology"][extension_name_a] = Value::String(extension_value_a.clone());
+    manifest["artifacts"][0][extension_name_b] = Value::String(extension_value_b.clone());
+    manifest["artifacts"][0][extension_name_a] = Value::String(extension_value_a.clone());
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("versioned opaque extensions are retained");
+    let public = serde_json::to_value(&assessment).expect("assessment serializes");
+    let expected = json!([
+        { "schemaVersion": 1, "name": extension_name_a, "value": extension_value_a },
+        { "schemaVersion": 1, "name": extension_name_b, "value": extension_value_b },
+    ]);
+    assert_eq!(public["extensions"], expected);
+    assert_eq!(public["topology"]["extensions"], expected);
+    assert_eq!(public["artifacts"][0]["extensions"], expected);
+
+    let mut reordered = manifest_value(&manifest_json);
+    reordered[extension_name_a] = Value::String(extension_value_a.clone());
+    reordered[extension_name_b] = Value::String(extension_value_b.clone());
+    reordered["topology"][extension_name_a] = Value::String(extension_value_a.clone());
+    reordered["topology"][extension_name_b] = Value::String(extension_value_b.clone());
+    reordered["artifacts"][0][extension_name_a] = Value::String(extension_value_a.clone());
+    reordered["artifacts"][0][extension_name_b] = Value::String(extension_value_b.clone());
+    let reordered_assessment = assess_server_intake(&serialize_manifest(&reordered), &payloads)
+        .expect("extension arrival order does not change normalized output");
+    assert_eq!(assessment, reordered_assessment);
+}
+
+#[test]
+fn server_manifest_v1_rejects_unversioned_or_nonopaque_unknown_fields() {
+    let (manifest_json, payloads) = bounded_manifest(1, 4_096);
 
     for path in ["manifest", "topology", "artifact"] {
-        let mut manifest = manifest_value(&manifest_json);
-        match path {
-            "manifest" => manifest["unexpectedEvidence"] = Value::Bool(true),
-            "topology" => manifest["topology"]["unexpectedEvidence"] = Value::Bool(true),
-            "artifact" => manifest["artifacts"][0]["unexpectedEvidence"] = Value::Bool(true),
-            _ => unreachable!(),
+        for (name, value) in [
+            ("unexpectedEvidence", Value::Bool(true)),
+            (
+                "x-cmtraceopen-opaque-v1-arbitrary",
+                Value::String("identity-bearing text".to_owned()),
+            ),
+        ] {
+            let mut manifest = manifest_value(&manifest_json);
+            match path {
+                "manifest" => manifest[name] = value,
+                "topology" => manifest["topology"][name] = value,
+                "artifact" => manifest["artifacts"][0][name] = value,
+                _ => unreachable!(),
+            }
+            assert!(
+                assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+                "{path} must reject arbitrary extension {name}"
+            );
         }
-        assert!(
-            assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
-            "unknown {path} fields require a schema change; they cannot be silently discarded"
-        );
     }
+}
+
+#[test]
+fn server_intake_retains_only_opaque_future_roles_as_unsupported_coverage() {
+    let (manifest_json, _) = bounded_manifest(1, 4_096);
+    let mut manifest = manifest_value(&manifest_json);
+    let future_role = opaque_handle("cmtraceopen.role.sha256.v1:", 9);
+    manifest["topology"]["rolesObserved"] = json!(["managementPoint", future_role]);
+    let artifact = &mut manifest["artifacts"][0];
+    artifact["producerRole"] = Value::String(future_role.clone());
+    artifact["producerHostHandle"] = Value::Null;
+    artifact["sourceId"] = Value::String(opaque_handle("cmtraceopen.source.sha256.v1:", 1));
+    artifact["sourceKind"] = Value::String(opaque_handle("cmtraceopen.source-kind.sha256.v1:", 2));
+    artifact["originalBasename"] =
+        Value::String(opaque_handle("cmtraceopen.basename.sha256.v1:", 3));
+    artifact["originalPath"] =
+        Value::String(opaque_handle("cmtraceopen.original-path.sha256.v1:", 4));
+    artifact["rotation"] = json!({
+        "kind": "none",
+        "lineageId": opaque_handle("cmtraceopen.lineage.sha256.v1:", 5),
+    });
+    artifact["captureState"] = Value::String("unsupported".to_owned());
+    artifact["encoding"] = Value::Null;
+    artifact["collectionLimit"] = Value::Null;
+    artifact["relativePath"] = Value::Null;
+    artifact["bytesCopied"] = Value::from(0);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &[])
+        .expect("opaque future role is retained as unsupported provenance");
+    let public = serde_json::to_value(&assessment).expect("assessment serializes");
+    assert!(public["topology"]["rolesObserved"]
+        .as_array()
+        .expect("roles observed is an array")
+        .contains(&Value::String(future_role.clone())));
+    assert_eq!(public["artifacts"][0]["producerRole"], future_role);
+    assert_eq!(public["coverage"][0]["state"], "unsupported");
+    assert!(!assessment.artifacts[0].parser_eligible);
+    assert!(assessment.evidence.is_empty());
+    assert!(assessment.findings.is_empty());
+    assert!(assessment.next_artifact_requests.is_empty());
+}
+
+#[test]
+fn server_intake_rejects_identity_bearing_future_roles() {
+    let (manifest_json, _) = bounded_manifest(1, 4_096);
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["topology"]["rolesObserved"] = json!(["managementPoint", "real-server-role"]);
+    let artifact = &mut manifest["artifacts"][0];
+    artifact["producerRole"] = Value::String("real-server-role".to_owned());
+    artifact["producerHostHandle"] = Value::Null;
+    artifact["captureState"] = Value::String("unsupported".to_owned());
+    artifact["encoding"] = Value::Null;
+    artifact["collectionLimit"] = Value::Null;
+    artifact["relativePath"] = Value::Null;
+    artifact["bytesCopied"] = Value::from(0);
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &[]).is_err(),
+        "identity-bearing future roles are not public provenance"
+    );
+}
+
+#[test]
+fn server_intake_rejects_future_roles_without_unsupported_capture() {
+    let (manifest_json, payloads) = bounded_manifest(1, 4_096);
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["topology"]["rolesObserved"] = json!([
+        "managementPoint",
+        opaque_handle("cmtraceopen.role.sha256.v1:", 10),
+    ]);
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+        "future roles are valid only when retained by an unsupported capture"
+    );
+}
+
+#[test]
+fn server_intake_production_original_path_must_be_redacted_or_opaque() {
+    let (manifest_json, payloads) = bounded_manifest(1, 4_096);
+    let mut arbitrary = manifest_value(&manifest_json);
+    arbitrary["artifacts"][0]["originalPath"] =
+        Value::String("C:/Users/real-user/SMS_CCM/Logs/MP_GetPolicy.log".to_owned());
+    assert!(
+        assess_server_intake(&serialize_manifest(&arbitrary), &payloads).is_err(),
+        "production originalPath cannot contradict the redacted privacy declaration"
+    );
+
+    let mut opaque = manifest_value(&manifest_json);
+    let path_handle = opaque_handle("cmtraceopen.original-path.sha256.v1:", 6);
+    opaque["artifacts"][0]["originalPath"] = Value::String(path_handle.clone());
+    let assessment = assess_server_intake(&serialize_manifest(&opaque), &payloads)
+        .expect("an opaque production originalPath marker is safe");
+    let serialized = serde_json::to_string(&assessment).expect("assessment serializes");
+    assert!(!serialized.contains(&path_handle));
 }
 
 #[test]

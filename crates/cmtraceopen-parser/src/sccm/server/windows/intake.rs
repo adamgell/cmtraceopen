@@ -20,6 +20,7 @@ pub const MAX_SCCM_SERVER_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_SCCM_SERVER_MANIFEST_ARTIFACTS: usize = 512;
 pub const MAX_SCCM_SERVER_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_SCCM_SERVER_OPAQUE_EXTENSIONS: usize = 32;
 
 type PathFingerprintKey = (
     String,
@@ -57,6 +58,22 @@ pub struct SccmServerIntakeAssessment {
     pub evidence: Vec<SccmEvidence>,
     pub findings: Vec<SccmFinding>,
     pub next_artifact_requests: Vec<SccmArtifactRequest>,
+    /// Versioned opaque manifest extensions retained without interpreting them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<SccmServerOpaqueExtension>,
+}
+
+/// A public, deterministic representation of a recognized opaque manifest extension.
+///
+/// Extension names use `x-cmtraceopen-opaque-v1-<token>` and values use
+/// `cmtraceopen.extension.sha256.v1:<64 lowercase hexadecimal characters>`.
+/// The parser retains this provenance but never interprets it as diagnostic input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmServerOpaqueExtension {
+    pub schema_version: u32,
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -65,6 +82,8 @@ pub struct SccmServerTopologyAssessment {
     pub capture_host_handle: String,
     pub site_handle: String,
     pub roles_observed: Vec<SccmRole>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<SccmServerOpaqueExtension>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -95,6 +114,8 @@ pub struct SccmServerArtifactAssessment {
     pub fragment_complete: Option<bool>,
     pub capture_provenance: Option<SccmServerCaptureProvenance>,
     pub parser_eligible: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<SccmServerOpaqueExtension>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -183,6 +204,15 @@ pub fn assess_server_intake(
     validate_manifest_bounds(&manifest, payloads)?;
 
     let topology = normalize_topology(&manifest)?;
+    if topology.roles_observed.iter().any(|role| {
+        is_opaque_future_role(role)
+            && !manifest.artifacts.iter().any(|artifact| {
+                artifact.producer_role == *role
+                    && artifact.capture_state == SccmCoverageState::Unsupported
+            })
+    }) {
+        return Err(SccmServerIntakeError::InvalidTopology);
+    }
     let mut payload_by_id = BTreeMap::new();
     for payload in payloads {
         if !safe_manifest_artifact_id(&payload.manifest_artifact_id, manifest.synthetic_fixture)
@@ -321,6 +351,7 @@ pub fn assess_server_intake(
         evidence,
         findings: Vec::new(),
         next_artifact_requests,
+        extensions: normalize_opaque_extensions(&manifest.extensions)?,
     })
 }
 
@@ -476,7 +507,7 @@ fn normalize_topology(
             .topology
             .roles_observed
             .iter()
-            .any(|role| !is_declared_server_role(role))
+            .any(|role| !is_declared_server_role(role) && !is_opaque_future_role(role))
     {
         return Err(SccmServerIntakeError::InvalidTopology);
     }
@@ -490,6 +521,7 @@ fn normalize_topology(
         capture_host_handle,
         site_handle,
         roles_observed,
+        extensions: normalize_opaque_extensions(&manifest.topology.extensions)?,
     })
 }
 
@@ -502,8 +534,11 @@ fn normalize_artifact(
     canonical_artifact_identities: &mut BTreeSet<CanonicalArtifactIdentity>,
     payload_by_id: &BTreeMap<&str, &[u8]>,
 ) -> Result<PreparedArtifact, SccmServerIntakeError> {
+    let synthetic_unclassified =
+        artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
+    let opaque_future_role = is_opaque_future_role(&artifact.producer_role);
     let unsupported_unknown = artifact.capture_state == SccmCoverageState::Unsupported
-        && artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
+        && (synthetic_unclassified || opaque_future_role);
     validate_artifact_annotations(&artifact, synthetic_fixture)?;
     let source_version =
         normalize_source_version(artifact.source_version.as_deref(), synthetic_fixture)?;
@@ -541,8 +576,8 @@ fn normalize_artifact(
     }
 
     let producer_is_observed = roles_observed.contains(&artifact.producer_role);
-    if (!producer_is_observed && !unsupported_unknown)
-        || (producer_is_observed && !is_declared_server_role(&artifact.producer_role))
+    if (!producer_is_observed && !synthetic_unclassified)
+        || (!is_declared_server_role(&artifact.producer_role) && !unsupported_unknown)
     {
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
@@ -762,6 +797,7 @@ fn normalize_artifact(
             fragment_complete: artifact.fragment_complete,
             capture_provenance,
             parser_eligible,
+            extensions: normalize_opaque_extensions(&artifact.extensions)?,
         },
         evidence,
     })
@@ -1351,7 +1387,47 @@ fn safe_original_path_marker(value: &str, synthetic_fixture: bool) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
     }
-    !value.is_empty() && value.len() <= 1024 && !value.chars().any(char::is_control)
+    value == "REDACTED" || opaque_sha256_handle(value, "cmtraceopen.original-path.sha256.v1:")
+}
+
+fn normalize_opaque_extensions(
+    extensions: &BTreeMap<String, Value>,
+) -> Result<Vec<SccmServerOpaqueExtension>, SccmServerIntakeError> {
+    if extensions.len() > MAX_SCCM_SERVER_OPAQUE_EXTENSIONS {
+        return Err(SccmServerIntakeError::ManifestLimitExceeded);
+    }
+
+    extensions
+        .iter()
+        .map(|(name, value)| {
+            let value = value
+                .as_str()
+                .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+            if !safe_opaque_extension_name(name)
+                || !opaque_sha256_handle(value, "cmtraceopen.extension.sha256.v1:")
+            {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+            Ok(SccmServerOpaqueExtension {
+                schema_version: 1,
+                name: name.clone(),
+                value: value.to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn safe_opaque_extension_name(value: &str) -> bool {
+    value
+        .strip_prefix("x-cmtraceopen-opaque-v1-")
+        .is_some_and(|token| {
+            (1..=64).contains(&token.len())
+                && token.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                && !token.ends_with('-')
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
 }
 
 fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &str) -> bool {
@@ -1397,6 +1473,11 @@ fn is_declared_server_role(role: &SccmRole) -> bool {
     )
 }
 
+fn is_opaque_future_role(role: &SccmRole) -> bool {
+    matches!(role, SccmRole::Unknown(value)
+        if opaque_sha256_handle(value, "cmtraceopen.role.sha256.v1:"))
+}
+
 fn role_sort_key(role: &SccmRole) -> &str {
     match role {
         SccmRole::Client => "client",
@@ -1437,7 +1518,7 @@ fn rotation_sort_key(rotation: Option<&SccmRotation>) -> String {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RawServerManifest {
     sccm_manifest_version: u32,
     #[serde(default)]
@@ -1451,6 +1532,8 @@ struct RawServerManifest {
     #[serde(default)]
     input_order_is_deliberately_unsorted: Option<bool>,
     artifacts: Vec<RawServerArtifact>,
+    #[serde(flatten)]
+    extensions: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1461,15 +1544,17 @@ struct RawServerPrivacy {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RawServerTopology {
     capture_host: String,
     site_code: String,
     roles_observed: Vec<SccmRole>,
+    #[serde(flatten)]
+    extensions: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RawServerArtifact {
     artifact_id: String,
     producer_role: SccmRole,
@@ -1500,6 +1585,8 @@ struct RawServerArtifact {
     collected_utc: String,
     relative_path: Option<String>,
     bytes_copied: u64,
+    #[serde(flatten)]
+    extensions: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
