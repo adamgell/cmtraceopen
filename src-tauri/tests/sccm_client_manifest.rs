@@ -591,17 +591,17 @@ fn reader_rejects_multi_rotation_physical_bytes_over_the_source_cap() {
 }
 
 #[test]
-fn reader_rejects_physical_byte_metadata_overflow_before_evidence_reads() {
+fn reader_rejects_u64_max_physical_byte_metadata_before_evidence_reads() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("bundle");
     let mut current = physical_artifact(SccmRotation::Current, b"policy-current");
     current.value["bytesCopied"] = json!(u64::MAX);
-    let rotated = physical_artifact(SccmRotation::Numbered(1), b"policy-rotation-one");
-    write_native_bundle(&bundle_root, &[&current, &rotated], &[]);
-    set_native_limits(&bundle_root, 2, u64::MAX);
+    write_native_bundle(&bundle_root, &[&current], &[]);
+    set_native_limits(&bundle_root, 1, u64::MAX);
+    remove_written_evidence(&bundle_root, &current);
 
     let error = read_sccm_manifest_or_legacy(&bundle_root)
-        .expect_err("overflowing source bytes fail before unbounded evidence verification");
+        .expect_err("extreme metadata fails before unbounded evidence verification");
     assert!(error.to_string().contains("physical artifact byte cap"));
 }
 

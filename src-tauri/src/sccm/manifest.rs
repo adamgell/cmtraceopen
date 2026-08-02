@@ -1055,4 +1055,19 @@ mod tests {
             .expect_err("one byte beyond the aggregate ceiling is rejected before a file open");
         assert!(error.to_string().contains("aggregate physical byte cap"));
     }
+
+    #[test]
+    fn client_owned_physical_byte_budget_rejects_accumulator_overflow() {
+        let mut total = u64::MAX;
+
+        let error = add_to_client_physical_byte_budget(1, &mut total)
+            .expect_err("metadata summation cannot wrap the aggregate byte counter");
+
+        assert!(error.to_string().contains("aggregate physical byte cap"));
+        assert_eq!(
+            total,
+            u64::MAX,
+            "a rejected addition leaves the counter intact"
+        );
+    }
 }
