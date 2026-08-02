@@ -870,9 +870,7 @@ mod windows_tests {
         use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 
         use windows::core::PWSTR;
-        use windows::Win32::Foundation::{
-            LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL, READ_CONTROL, WRITE_DAC,
-        };
+        use windows::Win32::Foundation::{LocalFree, ERROR_SUCCESS, HANDLE, HLOCAL};
         use windows::Win32::Security::Authorization::{
             GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, GRANT_ACCESS,
             NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
@@ -881,7 +879,9 @@ mod windows_tests {
             ACL, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
             PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
         };
-        use windows::Win32::Storage::FileSystem::{FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS};
+        use windows::Win32::Storage::FileSystem::{
+            FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, READ_CONTROL, WRITE_DAC,
+        };
 
         fs::create_dir_all(path).expect("create bundle directory");
         // READ_CONTROL is required for GetSecurityInfo (owner query).
