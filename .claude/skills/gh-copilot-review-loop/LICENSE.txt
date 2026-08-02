@@ -28,7 +28,7 @@ Upstream commit: 72ef3d3322ee0ac8db02cf324c2030f13d3bb68d
 Upstream script path: scripts/review_state.py
 Upstream script SHA-256 at pinned commit: 71703606bcf171b9e7f8035466d41806622be7a6f04b8157ef86f16fb3ecdfad
 Downstream script commits: 925131c0da511e89eddbdb1e6f14f65ed4861a3f, a76c272d62a1d527f59c542608d10c405a210e2f
-Repository-level changes: SKILL.md uses a repository-relative invocation and an explicit --repo/--pr example; downstream regression tests cover the maintained script.
+Repository-level changes: SKILL.md uses a repository-relative invocation and an explicit --repo/--pr example; the reviewer-request command is formatted on one line; downstream regression tests cover the maintained script.
 Script changes: base-repository URL parsing and pending-review filtering, including prefixed enterprise pull-request URLs.
 License identifier: MIT, as declared by the upstream repository README. The
 upstream repository did not publish a root license file at this commit, so the
