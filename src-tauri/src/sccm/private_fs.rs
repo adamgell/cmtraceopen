@@ -1038,7 +1038,7 @@ mod windows_tests {
     fn verified_root_rejects_a_hard_linked_final_entry() {
         let temp = tempdir().expect("temporary root");
         let root = temp.path().join("bundle");
-        fs::create_dir_all(&root).expect("create bundle");
+        make_private_directory(&root);
         let manifest = root.join("manifest.json");
         let second_link = root.join("manifest-copy.json");
         fs::write(&manifest, b"{}\n").expect("manifest");
@@ -1057,7 +1057,7 @@ mod windows_tests {
 
         let temp = tempdir().expect("temporary root");
         let root = temp.path().join("bundle");
-        fs::create_dir_all(&root).expect("create bundle");
+        make_private_directory(&root);
         let target = temp.path().join("outside-manifest.json");
         fs::write(&target, b"outside").expect("outside manifest");
         if symlink_file(&target, root.join("manifest.json")).is_err() {
