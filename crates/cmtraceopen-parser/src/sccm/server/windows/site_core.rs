@@ -327,44 +327,53 @@ impl<'a> SiteCoreContext<'a> {
         }
     }
 
-    fn add_undeclared_status_gaps(
+    fn add_undeclared_peer_source_gaps(
         &mut self,
         grouped: &BTreeMap<SccmSiteCoreTransactionKey, Vec<SiteCoreFact>>,
     ) {
-        let producer_hosts = grouped
-            .iter()
-            .filter(|(_, facts)| {
-                facts
-                    .iter()
-                    .any(|fact| fact.marker.group == SiteCoreGroup::Component)
-            })
-            .map(|(key, _)| key.producer_host_handle.clone())
-            .collect::<BTreeSet<_>>();
-        for producer_host_handle in producer_hosts {
-            let compatible_status_source_exists = self.sources.values().any(|source| {
-                source.group == SiteCoreGroup::Status
-                    && source.artifact.producer_role == SccmRole::SiteServer
-                    && source.artifact.producer_host_handle.as_deref()
-                        == Some(producer_host_handle.as_str())
-                    && source.artifact.workflow_subject_role.is_none()
-                    && source.artifact.workflow_subject_handle.is_none()
-            });
-            if compatible_status_source_exists {
-                continue;
+        for (observed_group, required_group, reason_code) in [
+            (
+                SiteCoreGroup::Component,
+                SiteCoreGroup::Status,
+                "required-status-source-not-declared",
+            ),
+            (
+                SiteCoreGroup::Status,
+                SiteCoreGroup::Component,
+                "required-component-source-not-declared",
+            ),
+        ] {
+            let producer_hosts = grouped
+                .iter()
+                .filter(|(_, facts)| facts.iter().any(|fact| fact.marker.group == observed_group))
+                .map(|(key, _)| key.producer_host_handle.clone())
+                .collect::<BTreeSet<_>>();
+            for producer_host_handle in producer_hosts {
+                let compatible_source_exists = self.sources.values().any(|source| {
+                    source.group == required_group
+                        && source.artifact.producer_role == SccmRole::SiteServer
+                        && source.artifact.producer_host_handle.as_deref()
+                            == Some(producer_host_handle.as_str())
+                        && source.artifact.workflow_subject_role.is_none()
+                        && source.artifact.workflow_subject_handle.is_none()
+                });
+                if compatible_source_exists {
+                    continue;
+                }
+                let artifact_id = stable_opaque_id(
+                    "site-core:missing-source:v1:",
+                    &[required_group.source_id(), &producer_host_handle],
+                );
+                self.coverage_gap_producer_hosts
+                    .insert(artifact_id.clone(), producer_host_handle);
+                self.coverage_gaps.push(SccmSiteCoreCoverageGap {
+                    artifact_id,
+                    source_id: required_group.source_id().to_owned(),
+                    state: SccmCoverageState::Absent,
+                    reason_code: reason_code.to_owned(),
+                    diagnostic_meaning: SccmSiteCoreDiagnosticMeaning::CoverageOnly,
+                });
             }
-            let artifact_id = stable_opaque_id(
-                "site-core:missing-source:v1:",
-                &[SCCM_SITE_CORE_STATUS_GROUP, &producer_host_handle],
-            );
-            self.coverage_gap_producer_hosts
-                .insert(artifact_id.clone(), producer_host_handle);
-            self.coverage_gaps.push(SccmSiteCoreCoverageGap {
-                artifact_id,
-                source_id: SCCM_SITE_CORE_STATUS_GROUP.to_owned(),
-                state: SccmCoverageState::Absent,
-                reason_code: "required-status-source-not-declared".to_owned(),
-                diagnostic_meaning: SccmSiteCoreDiagnosticMeaning::CoverageOnly,
-            });
         }
         sort_and_dedup_coverage_gaps(&mut self.coverage_gaps);
     }
@@ -405,7 +414,7 @@ pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAna
             ProfileRecordParse::NotCandidate => {}
         }
     }
-    context.add_undeclared_status_gaps(&grouped);
+    context.add_undeclared_peer_source_gaps(&grouped);
 
     let mut results = Vec::new();
     let mut findings = Vec::new();
@@ -1290,6 +1299,18 @@ fn next_artifacts_for_state(
     {
         return vec![status_request("matching-status-evidence-missing", key)];
     }
+    if facts
+        .iter()
+        .any(|fact| fact.marker.group == SiteCoreGroup::Status)
+        && !facts
+            .iter()
+            .any(|fact| fact.marker.group == SiteCoreGroup::Component)
+    {
+        return vec![component_request(
+            "matching-component-evidence-missing",
+            key,
+        )];
+    }
     Vec::new()
 }
 
@@ -1297,29 +1318,31 @@ fn status_request(
     reason_code: &str,
     key: &SccmSiteCoreTransactionKey,
 ) -> SccmSiteCoreArtifactRequest {
-    SccmSiteCoreArtifactRequest {
-        logical_name: SCCM_SITE_CORE_STATUS_GROUP.to_owned(),
-        role: SccmRole::SiteServer,
-        reason_code: reason_code.to_owned(),
-        candidates: vec![
-            SccmSiteCoreArtifactCandidate {
-                basename: "statmgr.log".to_owned(),
-                rotation: "current".to_owned(),
-            },
-            SccmSiteCoreArtifactCandidate {
-                basename: "statmgr.lo_".to_owned(),
-                rotation: "loUnderscore".to_owned(),
-            },
-        ],
-        max_artifacts: MAX_SITE_CORE_REQUEST_ARTIFACTS,
-        max_bytes_per_artifact: None,
-        scope: SccmSiteCoreRequestScope {
+    matching_group_request(SiteCoreGroup::Status, reason_code, key)
+}
+
+fn component_request(
+    reason_code: &str,
+    key: &SccmSiteCoreTransactionKey,
+) -> SccmSiteCoreArtifactRequest {
+    matching_group_request(SiteCoreGroup::Component, reason_code, key)
+}
+
+fn matching_group_request(
+    group: SiteCoreGroup,
+    reason_code: &str,
+    key: &SccmSiteCoreTransactionKey,
+) -> SccmSiteCoreArtifactRequest {
+    group_request(
+        group,
+        reason_code,
+        SccmSiteCoreRequestScope {
             producer_host_handle: Some(key.producer_host_handle.clone()),
             component_id: Some(key.component_id.clone()),
             work_item_id: Some(key.work_item_id.clone()),
             rotation_lineage_handle: None,
         },
-    }
+    )
 }
 
 fn recapture_request(

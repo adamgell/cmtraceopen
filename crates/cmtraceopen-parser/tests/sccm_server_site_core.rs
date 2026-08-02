@@ -860,6 +860,7 @@ fn undeclared_status_source_is_an_explicit_host_scoped_coverage_gap() {
         Some(SccmFindingClass::InsufficientEvidence)
     );
     assert!(!result.evidence.is_empty());
+    assert!(!analysis.cross_side_correlation_performed);
 
     assert_eq!(analysis.coverage_gaps.len(), 1);
     let gap = &analysis.coverage_gaps[0];
@@ -951,14 +952,16 @@ fn undeclared_component_source_is_an_explicit_host_component_work_item_scoped_co
     let component_requests = analysis
         .artifact_requests
         .iter()
-        .filter(|request| request.logical_name == "server-sitecomp")
+        .filter(|request| {
+            request.logical_name == "server-sitecomp"
+                && request.scope.producer_host_handle.as_deref() == Some("synthetic:host:site-01")
+                && request.scope.component_id.as_deref() == Some("SMS_EXECUTIVE")
+                && request.scope.work_item_id.as_deref() == Some("SC-HEALTH-001")
+        })
         .collect::<Vec<_>>();
     assert_eq!(component_requests.len(), 1);
     let request = component_requests[0];
-    assert_eq!(
-        request.reason_code,
-        "required-component-source-not-declared"
-    );
+    assert_eq!(request.reason_code, "matching-component-evidence-missing");
     assert_eq!(request.max_artifacts, 2);
     assert_eq!(
         request
@@ -966,7 +969,10 @@ fn undeclared_component_source_is_an_explicit_host_component_work_item_scoped_co
             .iter()
             .map(|candidate| (candidate.basename.as_str(), candidate.rotation.as_str()))
             .collect::<Vec<_>>(),
-        vec![("sitecomp.log", "current"), ("sitecomp.lo_", "loUnderscore")]
+        vec![
+            ("sitecomp.log", "current"),
+            ("sitecomp.lo_", "loUnderscore")
+        ]
     );
     assert_eq!(
         request.scope.producer_host_handle.as_deref(),
@@ -975,6 +981,16 @@ fn undeclared_component_source_is_an_explicit_host_component_work_item_scoped_co
     assert_eq!(request.scope.component_id.as_deref(), Some("SMS_EXECUTIVE"));
     assert_eq!(request.scope.work_item_id.as_deref(), Some("SC-HEALTH-001"));
     assert_eq!(request.scope.rotation_lineage_handle, None);
+}
+
+#[test]
+fn undeclared_component_gap_requires_admitted_status_facts() {
+    let unrelated_status = HEALTHY_STATUS.replace("profileId=sccm-site-core", "profileId=other");
+    let analysis = analyze_site_core(&assess(&[Source::status(&unrelated_status)]));
+
+    assert!(analysis.results.is_empty());
+    assert!(analysis.coverage_gaps.is_empty());
+    assert!(!analysis.cross_side_correlation_performed);
 }
 
 #[test]
