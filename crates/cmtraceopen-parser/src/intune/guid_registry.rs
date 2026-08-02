@@ -43,6 +43,7 @@ pub(crate) enum ExplicitAppIdentity {
 pub(crate) struct ExplicitAppIdentityContext {
     pub identity: ExplicitAppIdentity,
     pub local_name: Option<String>,
+    pub fallback_app_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -595,21 +596,11 @@ fn scope_name(scope: &JsonObjectScope<'_>) -> Option<(String, GuidNameSource)> {
 /// Checks (in order): `"AppId"`, `"Id"`, then falls back to a generic
 /// GUID regex when a name field is also present on the same line.
 pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
-    match explicit_app_identity(msg) {
+    let context = explicit_app_identity_context(msg);
+    match context.identity {
         ExplicitAppIdentity::Valid(guid) => Some(guid),
         ExplicitAppIdentity::Invalid => None,
-        ExplicitAppIdentity::Absent => {
-            // Only fall back to generic GUID if a name field is present
-            // (avoids polluting registry with context-free GUIDs)
-            if scan_json_fields(msg).is_ok_and(|scan| scan_has_name_field(&scan)) {
-                guid_re()
-                    .captures(msg)
-                    .and_then(|c| c.get(1))
-                    .map(|m| m.as_str().to_ascii_lowercase())
-            } else {
-                None
-            }
-        }
+        ExplicitAppIdentity::Absent => context.fallback_app_id,
     }
 }
 
@@ -621,6 +612,7 @@ pub(crate) fn explicit_app_identity_context(msg: &str) -> ExplicitAppIdentityCon
         return ExplicitAppIdentityContext {
             identity: ExplicitAppIdentity::Invalid,
             local_name: None,
+            fallback_app_id: None,
         };
     };
 
@@ -628,14 +620,26 @@ pub(crate) fn explicit_app_identity_context(msg: &str) -> ExplicitAppIdentityCon
         ExplicitAppIdentitySelection::Absent => ExplicitAppIdentityContext {
             identity: ExplicitAppIdentity::Absent,
             local_name: None,
+            // Preserve the established named-context fallback without running
+            // the structural scanner a second time.
+            fallback_app_id: if scan_has_name_field(&scan) {
+                guid_re()
+                    .captures(msg)
+                    .and_then(|captures| captures.get(1))
+                    .map(|matched| matched.as_str().to_ascii_lowercase())
+            } else {
+                None
+            },
         },
         ExplicitAppIdentitySelection::Valid { guid, scope } => ExplicitAppIdentityContext {
             identity: ExplicitAppIdentity::Valid(guid),
             local_name: scope_name(scope).map(|(name, _)| name),
+            fallback_app_id: None,
         },
         ExplicitAppIdentitySelection::Invalid => ExplicitAppIdentityContext {
             identity: ExplicitAppIdentity::Invalid,
             local_name: None,
+            fallback_app_id: None,
         },
     }
 }
@@ -643,6 +647,7 @@ pub(crate) fn explicit_app_identity_context(msg: &str) -> ExplicitAppIdentityCon
 /// Classify explicit JSON `AppId`/`Id` fields without falling back to other
 /// GUIDs on the line. An invalid explicit field is an identity boundary: its
 /// presence suppresses line-wide GUID inference.
+#[cfg(test)]
 pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
     explicit_app_identity_context(msg).identity
 }
@@ -1379,12 +1384,8 @@ mod tests {
         let upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
         let lower = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         let messages = [
-            format!(
-                r#"Processing identity {upper} for {{"ApplicationName":"Contoso"}}"#
-            ),
-            format!(
-                r#"Processing identity {upper} for {{\"Name\":\"Contoso\"}}"#
-            ),
+            format!(r#"Processing identity {upper} for {{"ApplicationName":"Contoso"}}"#),
+            format!(r#"Processing identity {upper} for {{\"Name\":\"Contoso\"}}"#),
         ];
 
         for message in messages {

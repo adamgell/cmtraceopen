@@ -497,7 +497,7 @@ pub fn extract_events(
             guid_registry::ExplicitAppIdentity::Valid(guid) => Some(guid.clone()),
             guid_registry::ExplicitAppIdentity::Invalid => None,
             guid_registry::ExplicitAppIdentity::Absent => {
-                extract_guid(&line.message).or_else(|| guid_registry::extract_app_id(&line.message))
+                extract_guid(&line.message).or_else(|| identity_context.fallback_app_id.clone())
             }
         };
         let status = determine_status(&line.message, source_kind);
@@ -612,7 +612,7 @@ fn extract_appworkload_event(
         guid_registry::ExplicitAppIdentity::Absent => {
             // Preserve the established AppWorkload heuristics only when the
             // line does not claim an explicit JSON identity field.
-            extract_guid(msg).or_else(|| guid_registry::extract_app_id(msg))
+            extract_guid(msg).or_else(|| identity_context.fallback_app_id.clone())
         }
     };
 

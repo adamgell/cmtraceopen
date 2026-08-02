@@ -4,8 +4,8 @@ use std::path::Path;
 use regex::Regex;
 
 use super::guid_registry::{
-    explicit_app_identity_context, extract_app_id, extract_app_name, is_fallback_name,
-    ExplicitAppIdentity, GuidRegistry,
+    explicit_app_identity_context, extract_app_name, is_fallback_name, ExplicitAppIdentity,
+    GuidRegistry,
 };
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
@@ -404,7 +404,7 @@ fn extract_download_identity(msg: &str) -> DownloadIdentityAnalysis {
         ExplicitAppIdentity::Absent => {
             // Preserve named-context and download-specific heuristics only
             // when the line has no explicit JSON identity field.
-            let content_id = extract_app_id(msg).or_else(|| {
+            let content_id = context.fallback_app_id.or_else(|| {
                 content_id_re()
                     .captures(msg)
                     .and_then(|captures| captures.get(1))
@@ -809,7 +809,8 @@ mod tests {
     fn escaped_json_fields_are_extracted_without_normalization() {
         let message = r#"Download completed successfully RequestPayload: {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\"ApplicationName\":\"Contoso App\",\"SetUpFilePath\":\"C:\\Cache\\setup.exe\"}"#;
 
-        // extract_content_id delegates to guid_registry::extract_app_id + content_id_re() fallback
+        // extract_content_id reuses the shared explicit-identity context before
+        // the download-specific content-ID fallback.
         assert_eq!(
             extract_content_id(message).as_deref(),
             Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
