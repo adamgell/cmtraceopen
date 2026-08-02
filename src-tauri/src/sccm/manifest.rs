@@ -987,12 +987,41 @@ fn is_four_ascii_digits(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
-    fn native_validation_returns_its_reusable_intake_projection() {
-        let _validate: fn(
-            &VerifiedBundleRoot,
-            &SccmBundleManifestV1,
-        ) -> Result<SccmClientIntakeBundle, AppError> = validate_native_manifest;
+    fn native_intake_reader_assesses_the_projection_once() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temporary root");
+        let bundle_root = temp.path().join("bundle");
+        fs::create_dir(&bundle_root).expect("create bundle root");
+        fs::set_permissions(&bundle_root, fs::Permissions::from_mode(0o700))
+            .expect("make bundle root private");
+        let manifest = serde_json::json!({
+            "sccmManifestVersion": 1,
+            "diagnosticsSchemaVersion": 1,
+            "sourceCatalogVersion": 1,
+            "provenance": "nativeClientCapture",
+            "provenanceProfile": "hmacSha256V1",
+            "collectedAtUtc": "2026-07-30T15:00:00Z",
+            "maxFilesPerSource": 8,
+            "maxBytesPerSource": 4096,
+            "artifacts": [],
+            "captureGaps": []
+        });
+        fs::write(
+            bundle_root.join(SCCM_MANIFEST_FILE_NAME),
+            serde_json::to_vec(&manifest).expect("serialize native manifest"),
+        )
+        .expect("write native manifest");
+
+        reset_intake_projection_count();
+        let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("read native intake");
+
+        assert!(bundle.artifacts.is_empty());
+        assert!(bundle.capture_gaps.is_empty());
+        assert_eq!(intake_projection_count(), 1);
     }
 
     #[test]
