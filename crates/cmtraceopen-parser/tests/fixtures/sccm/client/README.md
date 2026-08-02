@@ -1,10 +1,12 @@
 # Synthetic SCCM client intake fixtures
 
-These are preparation-only fixtures for issue #319. They are not accepted by a
-production SCCM reader until #318 publishes its stable public contracts.
-`manifest.json` and `expected.json` are proposed contract inputs/outputs, not
-compiled test fixtures. Every identity, path, timestamp, byte count, UUID, and
-log record is deterministic and synthetic.
+These are compiled pure-intake fixtures for issue #319. The parser test harness
+maps their declared artifact fields into the published #318 spine types and
+checks the executable #319 assessment. `manifest.json` remains a
+`proposalOnly` native wire design: no native SCCM manifest reader, discovery,
+capture, legacy adapter, or Windows acceptance is implied. Every identity,
+path, timestamp, byte count, UUID, and log record is deterministic and
+synthetic.
 
 Privacy markers: manifests require `syntheticFixture: true` and
 `proposalOnly: true`; issue #319 intake evidence uses only `LAB-CLIENT-01`, the
@@ -24,14 +26,16 @@ paths; `root-a` and `root-b` are opaque configured-root handles, not native
 paths.
 `missing-root`, `access-denied`, and `capped` prove coverage behavior only;
 their evidence must not form workflow findings. `skipped`, `unsafe-path`, and
-legacy generic-manifest mapping are intentionally documented test designs in
-`docs/sccm/preparation/issue-319-client-intake.md`, pending #318 contracts.
+legacy generic-manifest mapping are intentionally documented native test
+designs in `docs/sccm/preparation/issue-319-client-intake.md` and remain
+pending.
 
-Expected arrays are stable-sorted by `logicalArtifactId`. `contractState` must
-remain `proposedPending318` until an implementation maps this design to the
-published spine schema. Replay after #318: deserialize via its public reader,
-assert coverage directly, reorder artifacts and compare normalized output, and
-never interpret capped/split fragment text as a phase or terminal diagnosis.
+Expected arrays are stable-sorted by `logicalArtifactId`. `contractState` is
+`pureIntakeImplementedNativePending`: tests bind coverage and physical
+provenance to the public pure assessment, while request wording and native
+capture remain design-only. The harness asserts coverage directly, reorders
+artifacts and compares normalized output, and never interprets capped/split
+fragment text as a phase or terminal diagnosis.
 
 Every manifest artifact has one physical `artifactId` and a
 `designOnlyCatalog` object containing one catalog entry plus sorted logical

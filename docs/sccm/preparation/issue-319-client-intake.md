@@ -2,12 +2,13 @@
 
 ## Purpose and dependency boundary
 
-This preparation artifact defines the bounded source inventory and synthetic
-fixture design for issue #319. It is deliberately not production code and does
-not freeze an API, Rust type, Tauri feature, Cargo dependency, or the #318
-serialized contract. #319 may start implementation only after #318 publishes
-and tests its public artifact, evidence, coverage, signal, key, timestamp,
-redaction, finding, and bundle-reader contracts.
+This document began as the bounded source inventory and synthetic fixture
+design for issue #319. The pure parser intake is now implemented against the
+published #318 artifact, coverage, rotation, and schema contracts; its public
+assessment is executable and validated on both serialization and
+deserialization. The native manifest reader/writer, bounded discovery/capture,
+legacy adapter, and Windows acceptance described below remain pending and do
+not become delivered merely because the pure projection is available.
 
 The proposed native adapter consumes the catalog below and writes an additive,
 versioned SCCM extension (for example `sccm-manifest.json`). The generic bundle
@@ -209,19 +210,20 @@ separate acceptance gate.
   while request wording, native manifest emission, discovery/capture, and
   Windows acceptance remain design-only gates rather than delivered claims.
 
-## Exact dependency blockers
+## Remaining delivery blockers
 
-1. #318 has not yet supplied a stable public `SccmArtifact`, evidence,
-   coverage, rotation, redaction, key/timestamp, finding, and bundle-reader
-   contract in this worktree. No parser source, test compiled against an
-   invented interface, or Cargo change is authorized here.
-2. The final mapping from the proposed SCCM extension states to #318 coverage
-   variants is unresolved. In particular `accessDenied`, `capped`, `skipped`,
-   `unsafePath`, and `legacyUnknownDetail` must remain distinct.
+1. The additive SCCM native manifest reader/writer and bounded client
+   discovery/capture adapter are not implemented. The committed
+   `proposalOnly` manifest shape is test design, not a native wire acceptance
+   claim.
+2. Pure coverage already keeps `accessDenied`, `capped`, `skipped`,
+   `unsupported`, and `parseFailed` distinct. Native `unsafePath` and
+   `legacyUnknownDetail` mapping still need their own additive manifest and
+   test-double contracts rather than being guessed into an existing state.
 3. The public legacy generic-manifest adapter and tolerant unknown-field/enum
-   behavior are unresolved; only provenance-backed `collected`/`missing` may
-   map forward.
+   behavior remain unresolved; only provenance-backed `collected`/`missing`
+   may map forward.
 4. A Windows SCCM development client and Windows CI are required to accept
    actual canonicalization/reparse/ACL/rotation collection semantics. macOS
-   can validate only JSON, ordering, synthetic privacy, and later pure/native
-   test doubles.
+   proves the pure projection, JSON, ordering, synthetic privacy, and future
+   native test doubles only.
