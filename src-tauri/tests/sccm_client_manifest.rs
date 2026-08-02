@@ -469,6 +469,9 @@ fn reader_opens_manifest_without_following_a_symlink() {
         .to_string()
         .contains(&bundle_root.display().to_string()));
     assert!(!error.to_string().contains(&outside.display().to_string()));
+    assert!(error
+        .to_string()
+        .contains("manifest cannot be opened safely"));
 }
 
 #[cfg(unix)]
