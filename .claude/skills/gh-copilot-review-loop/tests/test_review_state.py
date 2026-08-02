@@ -141,15 +141,17 @@ class ProvenanceTests(unittest.TestCase):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
         license_text = LICENSE_PATH.read_text(encoding="utf-8")
 
-        provenance = license_text.split(
-            "Third-party attribution for gh-copilot-review-loop\n", 1
-        )[1]
+        license_marker = "Third-party attribution for gh-copilot-review-loop\n"
+        skill_marker = "## Provenance\n"
+        self.assertIn(license_marker, license_text)
+        self.assertIn(skill_marker, skill_text)
+        _, _, provenance = license_text.partition(license_marker)
         labeled_fields = dict(
             line.split(": ", 1)
             for line in provenance.splitlines()
             if ": " in line
         )
-        skill_provenance = skill_text.split("## Provenance\n", 1)[1]
+        _, _, skill_provenance = skill_text.partition(skill_marker)
 
         self.assertNotEqual(script_digest, UPSTREAM_SCRIPT_SHA256)
         self.assertEqual(labeled_fields["Upstream commit"], UPSTREAM_COMMIT)
