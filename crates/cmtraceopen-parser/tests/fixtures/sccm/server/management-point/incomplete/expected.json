@@ -4,7 +4,7 @@
   "scenario": "incomplete",
   "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
   "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
   "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
   "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
   "reorderedInputDeterministic": true,
@@ -14,9 +14,9 @@
     {"logicalArtifactId":"server-mp-policy","state":"absent","requiredness":"required"}
   ],
   "artifactProvenance": [
-    {"artifactId":"mp-incomplete-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:incomplete-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T07:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"mp-incomplete-policy-absent","captureState":"absent","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:incomplete-policy-configured","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T07:00:05Z","encoding":null,"byteLimit":null,"limitApplied":null},
-    {"artifactId":"mp-incomplete-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:incomplete-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T07:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+    {"artifactId":"mp-incomplete-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:incomplete-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T07:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-incomplete-policy-absent","captureState":"absent","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:incomplete-policy-configured","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T07:00:05Z","encoding":null,"byteLimit":null,"limitApplied":null},
+    {"artifactId":"mp-incomplete-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:incomplete-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T07:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
   ],
   "primaryTransactionId": "mp:request:28777777-7777-7777-7777-777777777777",
   "transactions": [{

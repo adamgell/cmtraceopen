@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io::{self, Write};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::de::{Error as _, MapAccess, SeqAccess, Visitor};
@@ -63,6 +64,11 @@ pub struct SccmServerIntakeAssessment {
     pub evidence: Vec<SccmEvidence>,
     pub findings: Vec<SccmFinding>,
     pub next_artifact_requests: Vec<SccmArtifactRequest>,
+    /// Private integrity binding for the canonical projection that server-role
+    /// reducers consume. It is sequence-independent, but every authoritative
+    /// schema, topology, artifact, coverage, and evidence field remains bound
+    /// to the assessment produced by intake.
+    intake_integrity: SccmServerIntakeIntegrity,
     /// Versioned opaque manifest extensions retained without interpreting them.
     extensions: Vec<SccmServerOpaqueExtension>,
     privacy_extensions: Vec<SccmServerOpaqueExtension>,
@@ -186,6 +192,128 @@ impl SccmServerIntakeAssessment {
 
     pub fn privacy_extensions(&self) -> &[SccmServerOpaqueExtension] {
         &self.privacy_extensions
+    }
+
+    pub(crate) fn adapter_authority_is_intake_bound(&self) -> bool {
+        if self.schema_version != self.intake_integrity.schema_version
+            || self.topology.roles_observed.len() != self.intake_integrity.topology_role_count
+            || self.artifacts.len() != self.intake_integrity.artifacts.len()
+            || self.coverage.len() != self.intake_integrity.coverage.len()
+            || self.evidence.len() != self.intake_integrity.evidence.len()
+        {
+            return false;
+        }
+        canonical_intake_integrity_for_adapter(
+            self.schema_version,
+            &self.topology,
+            &self.artifacts,
+            &self.coverage,
+            &self.evidence,
+            &self.intake_integrity,
+        )
+        .as_ref()
+        .is_some_and(|integrity| integrity == &self.intake_integrity)
+    }
+}
+
+/// Nonserialized canonical-input binding for downstream server-role adapters.
+/// Collection order is not authority: the normalized records are serialized
+/// independently and compared as duplicate-free sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SccmServerIntakeIntegrity {
+    schema_version: u32,
+    topology_role_count: usize,
+    structure: IntakeIntegrityStructure,
+    topology: IntakeIntegrityRecord,
+    artifacts: BTreeMap<ArtifactIntegrityIdentity, IntakeIntegrityRecord>,
+    coverage: BTreeMap<CoverageIntegrityIdentity, IntakeIntegrityRecord>,
+    evidence: BTreeMap<EvidenceIntegrityIdentity, IntakeIntegrityRecord>,
+}
+
+type IntakeIntegrityDigest = [u8; 32];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IntakeIntegrityRecord {
+    payload_len: u64,
+    digest: IntakeIntegrityDigest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IntakeIntegrityStructure {
+    // Exact aggregate lengths keep the adapter preflight allocation-free and
+    // order-independent. Any one caller-mutated string is therefore bounded
+    // by the canonical aggregate before canonical JSON is visited.
+    topology_string_bytes: usize,
+    artifact_string_bytes: usize,
+    coverage_string_bytes: usize,
+    evidence_string_bytes: usize,
+    coverage_artifact_memberships: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ArtifactIntegrityIdentity(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CoverageIntegrityIdentity {
+    producer_role: String,
+    workflow_subject_role: String,
+    source_id: String,
+    state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct EvidenceIntegrityIdentity(String);
+
+impl std::borrow::Borrow<str> for ArtifactIntegrityIdentity {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::borrow::Borrow<str> for EvidenceIntegrityIdentity {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl SccmServerIntakeIntegrity {
+    fn retained_material_bytes(&self) -> usize {
+        std::mem::size_of_val(&self.schema_version)
+            + std::mem::size_of_val(&self.topology_role_count)
+            + std::mem::size_of_val(&self.structure)
+            + std::mem::size_of_val(&self.topology.payload_len)
+            + self.topology.digest.len()
+            + self
+                .artifacts
+                .iter()
+                .map(|(identity, record)| {
+                    identity.0.len()
+                        + std::mem::size_of_val(&record.payload_len)
+                        + record.digest.len()
+                })
+                .sum::<usize>()
+            + self
+                .coverage
+                .iter()
+                .map(|(identity, record)| {
+                    identity.producer_role.len()
+                        + identity.workflow_subject_role.len()
+                        + identity.source_id.len()
+                        + identity.state.len()
+                        + std::mem::size_of_val(&record.payload_len)
+                        + record.digest.len()
+                })
+                .sum::<usize>()
+            + self
+                .evidence
+                .iter()
+                .map(|(identity, record)| {
+                    identity.0.len()
+                        + std::mem::size_of_val(&record.payload_len)
+                        + record.digest.len()
+                })
+                .sum::<usize>()
     }
 }
 
@@ -547,15 +675,20 @@ pub fn assess_server_intake(
                 right.reason.as_str(),
             ))
     });
+    let schema_version = 1;
+    let intake_integrity =
+        canonical_intake_integrity(schema_version, &topology, &artifacts, &coverage, &evidence)
+            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
 
     Ok(SccmServerIntakeAssessment {
-        schema_version: 1,
+        schema_version,
         topology,
         artifacts,
         coverage,
         evidence,
         findings: Vec::new(),
         next_artifact_requests,
+        intake_integrity,
         extensions: normalize_opaque_extensions(
             &manifest.extensions,
             SccmServerIntakeError::MalformedManifest,
@@ -1061,6 +1194,644 @@ fn payload_sha256(bytes: &[u8]) -> String {
         encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
     }
     encoded
+}
+
+fn checked_add_string_bytes(total: &mut usize, value: &str) -> Option<()> {
+    *total = total.checked_add(value.len())?;
+    Some(())
+}
+
+fn checked_add_optional_string_bytes(total: &mut usize, value: Option<&str>) -> Option<()> {
+    if let Some(value) = value {
+        checked_add_string_bytes(total, value)?;
+    }
+    Some(())
+}
+
+fn checked_add_opaque_extension_bytes(
+    total: &mut usize,
+    extensions: &[SccmServerOpaqueExtension],
+) -> Option<()> {
+    for extension in extensions {
+        checked_add_string_bytes(total, &extension.name)?;
+        checked_add_string_bytes(total, &extension.value)?;
+    }
+    Some(())
+}
+
+fn artifact_family_integrity_key(family: &SccmArtifactFamily) -> &str {
+    family.serialized_name()
+}
+
+fn topology_string_bytes(topology: &SccmServerTopologyAssessment) -> Option<usize> {
+    let mut total = 0usize;
+    checked_add_string_bytes(&mut total, &topology.capture_host_handle)?;
+    checked_add_string_bytes(&mut total, &topology.site_handle)?;
+    for role in &topology.roles_observed {
+        checked_add_string_bytes(&mut total, role_sort_key(role))?;
+    }
+    checked_add_opaque_extension_bytes(&mut total, &topology.extensions)?;
+    Some(total)
+}
+
+fn artifact_string_bytes(artifacts: &[SccmServerArtifactAssessment]) -> Option<usize> {
+    let mut total = 0usize;
+    for artifact in artifacts {
+        checked_add_string_bytes(&mut total, &artifact.artifact_id)?;
+        checked_add_string_bytes(&mut total, role_sort_key(&artifact.producer_role))?;
+        checked_add_optional_string_bytes(&mut total, artifact.producer_host_handle.as_deref())?;
+        checked_add_optional_string_bytes(
+            &mut total,
+            artifact.workflow_subject_role.as_ref().map(role_sort_key),
+        )?;
+        checked_add_optional_string_bytes(&mut total, artifact.workflow_subject_handle.as_deref())?;
+        checked_add_string_bytes(&mut total, &artifact.source_id)?;
+        checked_add_string_bytes(&mut total, &artifact.source_kind)?;
+        checked_add_string_bytes(&mut total, artifact_family_integrity_key(&artifact.family))?;
+        checked_add_optional_string_bytes(&mut total, artifact.original_basename.as_deref())?;
+        match artifact.rotation.as_ref() {
+            None => {}
+            Some(SccmRotation::Current) => checked_add_string_bytes(&mut total, "current")?,
+            Some(SccmRotation::LoUnderscore) => {
+                checked_add_string_bytes(&mut total, "loUnderscore")?;
+            }
+            Some(SccmRotation::Numbered(_)) => {
+                checked_add_string_bytes(&mut total, "numbered")?;
+            }
+            Some(SccmRotation::Timestamped(value)) => {
+                checked_add_string_bytes(&mut total, "timestamped")?;
+                checked_add_string_bytes(&mut total, value)?;
+            }
+            // Canonical server intake admits only its closed rotation grammar.
+            // Reject a caller-injected open JSON value before traversing it.
+            Some(SccmRotation::Unknown(_)) => return None,
+        }
+        checked_add_string_bytes(&mut total, &artifact.rotation_lineage_handle)?;
+        checked_add_string_bytes(&mut total, coverage_sort_key(&artifact.state))?;
+        checked_add_string_bytes(
+            &mut total,
+            match artifact.configured_path_state {
+                SccmServerConfiguredPathState::Configured => "configured",
+                SccmServerConfiguredPathState::DefaultCandidate => "defaultCandidate",
+                SccmServerConfiguredPathState::NotRequested => "notRequested",
+                SccmServerConfiguredPathState::Supplied => "supplied",
+            },
+        )?;
+        if artifact.configured_path_class.is_some() {
+            checked_add_string_bytes(&mut total, "nonDefault")?;
+        }
+        checked_add_string_bytes(&mut total, &artifact.path_fingerprint)?;
+        checked_add_optional_string_bytes(&mut total, artifact.source_version.as_deref())?;
+        checked_add_string_bytes(&mut total, &artifact.collected_at_utc)?;
+        checked_add_optional_string_bytes(&mut total, artifact.relative_path.as_deref())?;
+        checked_add_optional_string_bytes(&mut total, artifact.content_sha256.as_deref())?;
+        if let Some(provenance) = &artifact.capture_provenance {
+            checked_add_string_bytes(&mut total, &provenance.encoding)?;
+        }
+        checked_add_opaque_extension_bytes(&mut total, &artifact.extensions)?;
+        checked_add_opaque_extension_bytes(&mut total, &artifact.workflow_subject_extensions)?;
+        checked_add_opaque_extension_bytes(
+            &mut total,
+            &artifact.configured_path_provenance_extensions,
+        )?;
+        checked_add_opaque_extension_bytes(&mut total, &artifact.rotation_extensions)?;
+        checked_add_opaque_extension_bytes(&mut total, &artifact.collection_limit_extensions)?;
+    }
+    Some(total)
+}
+
+fn coverage_artifact_memberships(coverage: &[SccmServerCoverage]) -> Option<usize> {
+    coverage.iter().try_fold(0usize, |total, record| {
+        total.checked_add(record.artifact_ids.len())
+    })
+}
+
+fn coverage_string_bytes(coverage: &[SccmServerCoverage]) -> Option<usize> {
+    let mut total = 0usize;
+    for record in coverage {
+        checked_add_string_bytes(&mut total, role_sort_key(&record.producer_role))?;
+        checked_add_optional_string_bytes(
+            &mut total,
+            record.workflow_subject_role.as_ref().map(role_sort_key),
+        )?;
+        checked_add_string_bytes(&mut total, &record.source_id)?;
+        checked_add_string_bytes(&mut total, coverage_sort_key(&record.state))?;
+        for artifact_id in &record.artifact_ids {
+            checked_add_string_bytes(&mut total, artifact_id)?;
+        }
+    }
+    Some(total)
+}
+
+fn evidence_string_bytes(evidence: &[SccmEvidence]) -> Option<usize> {
+    let mut total = 0usize;
+    for record in evidence {
+        checked_add_string_bytes(&mut total, &record.evidence_id)?;
+        checked_add_string_bytes(&mut total, &record.reference.artifact_id)?;
+        checked_add_string_bytes(&mut total, &record.reference.entry_id)?;
+        checked_add_string_bytes(&mut total, role_sort_key(&record.role))?;
+        checked_add_optional_string_bytes(&mut total, record.component.as_deref())?;
+        checked_add_optional_string_bytes(&mut total, record.ccm_source_file.as_deref())?;
+        checked_add_string_bytes(&mut total, &record.message)?;
+        checked_add_optional_string_bytes(
+            &mut total,
+            record.timestamp.original_display.as_deref(),
+        )?;
+        if let Some(context) = &record.execution_context {
+            checked_add_string_bytes(&mut total, &context.scheme)?;
+            checked_add_string_bytes(&mut total, &context.value)?;
+        }
+    }
+    Some(total)
+}
+
+fn intake_integrity_structure(
+    topology: &SccmServerTopologyAssessment,
+    artifacts: &[SccmServerArtifactAssessment],
+    coverage: &[SccmServerCoverage],
+    evidence: &[SccmEvidence],
+    coverage_artifact_memberships: usize,
+) -> Option<IntakeIntegrityStructure> {
+    Some(IntakeIntegrityStructure {
+        topology_string_bytes: topology_string_bytes(topology)?,
+        artifact_string_bytes: artifact_string_bytes(artifacts)?,
+        coverage_string_bytes: coverage_string_bytes(coverage)?,
+        evidence_string_bytes: evidence_string_bytes(evidence)?,
+        coverage_artifact_memberships,
+    })
+}
+
+fn canonical_intake_integrity(
+    schema_version: u32,
+    topology: &SccmServerTopologyAssessment,
+    artifacts: &[SccmServerArtifactAssessment],
+    coverage: &[SccmServerCoverage],
+    evidence: &[SccmEvidence],
+) -> Option<SccmServerIntakeIntegrity> {
+    let coverage_artifact_memberships = coverage_artifact_memberships(coverage)?;
+    let structure = intake_integrity_structure(
+        topology,
+        artifacts,
+        coverage,
+        evidence,
+        coverage_artifact_memberships,
+    )?;
+    canonical_intake_integrity_with_structure(
+        schema_version,
+        topology,
+        artifacts,
+        coverage,
+        evidence,
+        structure,
+        None,
+    )
+}
+
+fn canonical_intake_integrity_for_adapter(
+    schema_version: u32,
+    topology: &SccmServerTopologyAssessment,
+    artifacts: &[SccmServerArtifactAssessment],
+    coverage: &[SccmServerCoverage],
+    evidence: &[SccmEvidence],
+    expected: &SccmServerIntakeIntegrity,
+) -> Option<SccmServerIntakeIntegrity> {
+    let coverage_artifact_memberships = coverage_artifact_memberships(coverage)?;
+    if coverage_artifact_memberships != expected.structure.coverage_artifact_memberships {
+        return None;
+    }
+    let structure = intake_integrity_structure(
+        topology,
+        artifacts,
+        coverage,
+        evidence,
+        coverage_artifact_memberships,
+    )?;
+    if structure != expected.structure {
+        return None;
+    }
+    canonical_intake_integrity_with_structure(
+        schema_version,
+        topology,
+        artifacts,
+        coverage,
+        evidence,
+        structure,
+        Some(expected),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn canonical_intake_integrity_with_structure(
+    schema_version: u32,
+    topology: &SccmServerTopologyAssessment,
+    artifacts: &[SccmServerArtifactAssessment],
+    coverage: &[SccmServerCoverage],
+    evidence: &[SccmEvidence],
+    structure: IntakeIntegrityStructure,
+    expected: Option<&SccmServerIntakeIntegrity>,
+) -> Option<SccmServerIntakeIntegrity> {
+    #[cfg(test)]
+    INTAKE_CANONICALIZATION_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+
+    let mut normalized_topology = topology.clone();
+    normalized_topology
+        .roles_observed
+        .sort_by(|left, right| role_sort_key(left).cmp(role_sort_key(right)));
+    if normalized_topology
+        .roles_observed
+        .windows(2)
+        .any(|roles| roles[0] == roles[1])
+    {
+        return None;
+    }
+
+    let mut normalized_coverage = coverage.to_vec();
+    for record in &mut normalized_coverage {
+        record.artifact_ids.sort();
+        if record.artifact_ids.windows(2).any(|ids| ids[0] == ids[1]) {
+            return None;
+        }
+    }
+
+    if evidence
+        .iter()
+        .any(|record| record.evidence_id != record.reference.entry_id)
+    {
+        return None;
+    }
+
+    let mut artifact_integrity = BTreeMap::new();
+    for artifact in artifacts {
+        let max_payload_len = match expected {
+            Some(expected) => Some(
+                expected
+                    .artifacts
+                    .get(artifact.artifact_id.as_str())?
+                    .payload_len,
+            ),
+            None => None,
+        };
+        if artifact_integrity
+            .insert(
+                ArtifactIntegrityIdentity(artifact.artifact_id.clone()),
+                canonical_record_digest_bounded(b"artifact", artifact, max_payload_len)?,
+            )
+            .is_some()
+        {
+            return None;
+        }
+    }
+
+    let mut coverage_integrity = BTreeMap::new();
+    for record in &normalized_coverage {
+        let identity = CoverageIntegrityIdentity {
+            producer_role: role_sort_key(&record.producer_role).to_owned(),
+            workflow_subject_role: record
+                .workflow_subject_role
+                .as_ref()
+                .map(role_sort_key)
+                .unwrap_or_default()
+                .to_owned(),
+            source_id: record.source_id.clone(),
+            state: coverage_sort_key(&record.state).to_owned(),
+        };
+        let max_payload_len = match expected {
+            Some(expected) => Some(expected.coverage.get(&identity)?.payload_len),
+            None => None,
+        };
+        if coverage_integrity
+            .insert(
+                identity,
+                canonical_record_digest_bounded(b"coverage", record, max_payload_len)?,
+            )
+            .is_some()
+        {
+            return None;
+        }
+    }
+
+    let mut evidence_integrity = BTreeMap::new();
+    for record in evidence {
+        let max_payload_len = match expected {
+            Some(expected) => Some(
+                expected
+                    .evidence
+                    .get(record.evidence_id.as_str())?
+                    .payload_len,
+            ),
+            None => None,
+        };
+        if evidence_integrity
+            .insert(
+                EvidenceIntegrityIdentity(record.evidence_id.clone()),
+                canonical_record_digest_bounded(b"evidence", record, max_payload_len)?,
+            )
+            .is_some()
+        {
+            return None;
+        }
+    }
+
+    Some(SccmServerIntakeIntegrity {
+        schema_version,
+        topology_role_count: normalized_topology.roles_observed.len(),
+        structure,
+        topology: canonical_record_digest_bounded(
+            b"topology",
+            &normalized_topology,
+            expected.map(|expected| expected.topology.payload_len),
+        )?,
+        artifacts: artifact_integrity,
+        coverage: coverage_integrity,
+        evidence: evidence_integrity,
+    })
+}
+
+const INTAKE_INTEGRITY_DOMAIN: &[u8] = b"cmtraceopen.sccm.server-intake.integrity.v1";
+
+#[cfg(test)]
+std::thread_local! {
+    static INTAKE_CANONICALIZATION_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static INTAKE_CANONICAL_JSON_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_intake_integrity_work_probe() {
+    INTAKE_CANONICALIZATION_CALLS.with(|calls| calls.set(0));
+    INTAKE_CANONICAL_JSON_BYTES.with(|bytes| bytes.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn intake_integrity_work_probe() -> (usize, usize) {
+    let calls = INTAKE_CANONICALIZATION_CALLS.with(std::cell::Cell::get);
+    let bytes = INTAKE_CANONICAL_JSON_BYTES.with(std::cell::Cell::get);
+    (calls, bytes)
+}
+
+struct IntakeIntegrityWriter {
+    hasher: Sha256,
+    payload_len: u64,
+    max_payload_len: Option<u64>,
+}
+
+impl Write for IntakeIntegrityWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        #[cfg(test)]
+        INTAKE_CANONICAL_JSON_BYTES.with(|total| {
+            total.set(total.get().saturating_add(bytes.len()));
+        });
+        let bytes_len = u64::try_from(bytes.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "integrity input length overflow",
+            )
+        })?;
+        let payload_len = self.payload_len.checked_add(bytes_len).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "integrity input length overflow",
+            )
+        })?;
+        if self
+            .max_payload_len
+            .is_some_and(|max_payload_len| payload_len > max_payload_len)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "integrity input exceeds sealed payload length",
+            ));
+        }
+        self.hasher.update(bytes);
+        self.payload_len = payload_len;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn framed_integrity_hasher(domain: &[u8]) -> Option<Sha256> {
+    // The master namespace is fixed, the variable domain is length-framed,
+    // and the one canonical JSON value is terminal. That encoding has only
+    // one boundary interpretation, so hashing does not need a length pass.
+    let domain_len = u64::try_from(domain.len()).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(INTAKE_INTEGRITY_DOMAIN);
+    hasher.update(domain_len.to_be_bytes());
+    hasher.update(domain);
+    Some(hasher)
+}
+
+#[cfg(test)]
+fn canonical_record_digest<T: Serialize>(
+    domain: &[u8],
+    record: &T,
+) -> Option<IntakeIntegrityRecord> {
+    canonical_record_digest_bounded(domain, record, None)
+}
+
+fn canonical_record_digest_bounded<T: Serialize>(
+    domain: &[u8],
+    record: &T,
+    max_payload_len: Option<u64>,
+) -> Option<IntakeIntegrityRecord> {
+    let mut writer = IntakeIntegrityWriter {
+        hasher: framed_integrity_hasher(domain)?,
+        payload_len: 0,
+        max_payload_len,
+    };
+    serde_json::to_writer(&mut writer, record).ok()?;
+    if max_payload_len.is_some_and(|max_payload_len| writer.payload_len != max_payload_len) {
+        return None;
+    }
+    let digest = writer.hasher.finalize();
+    let mut encoded = [0; 32];
+    encoded.copy_from_slice(&digest);
+    Some(IntakeIntegrityRecord {
+        payload_len: writer.payload_len,
+        digest: encoded,
+    })
+}
+
+#[cfg(test)]
+mod intake_integrity_tests {
+    use std::fs;
+    use std::path::Path;
+
+    use super::*;
+
+    fn canonical_assessment() -> SccmServerIntakeAssessment {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sccm/server/management-point/canonical-intake-policy-scope");
+        let manifest_json =
+            fs::read_to_string(directory.join("manifest.json")).expect("fixture manifest");
+        let manifest: Value = serde_json::from_str(&manifest_json).expect("fixture JSON");
+        let payloads = manifest["artifacts"]
+            .as_array()
+            .expect("fixture artifacts")
+            .iter()
+            .filter_map(|artifact| {
+                let relative_path = artifact["relativePath"].as_str()?;
+                Some(SccmServerArtifactPayload {
+                    manifest_artifact_id: artifact["artifactId"]
+                        .as_str()
+                        .expect("fixture artifact ID")
+                        .to_owned(),
+                    bytes: fs::read(directory.join(relative_path)).expect("fixture payload"),
+                })
+            })
+            .collect::<Vec<_>>();
+        assess_server_intake(&manifest_json, &payloads).expect("canonical fixture")
+    }
+
+    fn integrity(assessment: &SccmServerIntakeAssessment) -> Option<SccmServerIntakeIntegrity> {
+        canonical_intake_integrity(
+            assessment.schema_version,
+            &assessment.topology,
+            &assessment.artifacts,
+            &assessment.coverage,
+            &assessment.evidence,
+        )
+    }
+
+    #[test]
+    fn intake_integrity_is_compact_and_collision_safe() {
+        let assessment = canonical_assessment();
+        let baseline = integrity(&assessment).expect("baseline integrity");
+
+        let mut large_message = assessment.clone();
+        large_message.evidence[0].message = "x".repeat(1024 * 1024);
+        let large_integrity = integrity(&large_message).expect("large-message integrity");
+        assert!(
+            large_integrity.retained_material_bytes() <= 1_024,
+            "integrity retained {} bytes for one 1 MiB message",
+            large_integrity.retained_material_bytes()
+        );
+
+        let mut schema_mutation = assessment.clone();
+        schema_mutation.schema_version += 1;
+        assert_ne!(integrity(&schema_mutation), Some(baseline.clone()));
+
+        let mut topology_mutation = assessment.clone();
+        topology_mutation
+            .topology
+            .capture_host_handle
+            .push_str("-changed");
+        assert_ne!(integrity(&topology_mutation), Some(baseline.clone()));
+
+        let mut artifact_mutation = assessment.clone();
+        artifact_mutation.artifacts[0]
+            .path_fingerprint
+            .push_str("-changed");
+        assert_ne!(integrity(&artifact_mutation), Some(baseline.clone()));
+
+        let mut coverage_mutation = assessment.clone();
+        coverage_mutation.coverage[0].state = SccmCoverageState::Capped;
+        assert_ne!(integrity(&coverage_mutation), Some(baseline.clone()));
+
+        let mut evidence_mutation = assessment.clone();
+        evidence_mutation.evidence[0].message.push_str(" changed");
+        assert_ne!(integrity(&evidence_mutation), Some(baseline.clone()));
+
+        let mut duplicate = assessment.clone();
+        duplicate.evidence.push(duplicate.evidence[0].clone());
+        assert_eq!(integrity(&duplicate), None);
+
+        let mut removed = assessment.clone();
+        removed.evidence.clear();
+        assert_ne!(integrity(&removed), Some(baseline.clone()));
+
+        let mut appended = assessment.clone();
+        let mut appended_record = appended.evidence[0].clone();
+        appended_record.evidence_id = "mp-policy-current:replayed".to_owned();
+        appended_record.reference.entry_id = "mp-policy-current:replayed".to_owned();
+        appended.evidence.push(appended_record);
+        assert_ne!(integrity(&appended), Some(baseline.clone()));
+
+        let mut collision = assessment.clone();
+        let mut colliding_record = collision.evidence[0].clone();
+        colliding_record.message.push_str(" different content");
+        collision.evidence.push(colliding_record);
+        assert_eq!(
+            integrity(&collision),
+            None,
+            "one semantic evidence identity cannot retain two bodies"
+        );
+
+        let mut artifact_collision = assessment.clone();
+        let mut colliding_artifact = artifact_collision.artifacts[0].clone();
+        colliding_artifact.path_fingerprint.push_str("-different");
+        artifact_collision.artifacts.push(colliding_artifact);
+        assert_eq!(integrity(&artifact_collision), None);
+
+        let mut coverage_collision = assessment.clone();
+        let mut colliding_coverage = coverage_collision.coverage[0].clone();
+        colliding_coverage.artifact_ids = vec!["different-artifact".to_owned()];
+        coverage_collision.coverage.push(colliding_coverage);
+        assert_eq!(integrity(&coverage_collision), None);
+
+        let mut duplicate_membership = assessment.clone();
+        let artifact_id = duplicate_membership.coverage[0].artifact_ids[0].clone();
+        duplicate_membership.coverage[0]
+            .artifact_ids
+            .push(artifact_id);
+        assert_eq!(integrity(&duplicate_membership), None);
+
+        let mut duplicate_topology_role = assessment;
+        duplicate_topology_role
+            .topology
+            .roles_observed
+            .push(SccmRole::ManagementPoint);
+        assert_eq!(integrity(&duplicate_topology_role), None);
+    }
+
+    #[test]
+    fn intake_integrity_hash_framing_separates_domains_and_boundaries() {
+        fn framed_digest(domain: &[u8], payload: &[u8]) -> IntakeIntegrityDigest {
+            let mut hasher = framed_integrity_hasher(domain).expect("test hash framing");
+            hasher.update(payload);
+            let digest = hasher.finalize();
+            let mut encoded = [0; 32];
+            encoded.copy_from_slice(&digest);
+            encoded
+        }
+
+        assert_ne!(
+            framed_digest(b"artifact", b"same-body"),
+            framed_digest(b"evidence", b"same-body"),
+            "record domains must not share a digest namespace"
+        );
+        assert_ne!(
+            framed_digest(b"a", b"bc"),
+            framed_digest(b"ab", b"c"),
+            "a length-framed domain and terminal payload must not concatenate ambiguously"
+        );
+    }
+
+    #[test]
+    fn intake_integrity_serializes_each_record_once() {
+        struct CountedRecord<'a>(&'a std::cell::Cell<usize>);
+
+        impl Serialize for CountedRecord<'_> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                self.0.set(self.0.get().saturating_add(1));
+                serializer.serialize_str("canonical-payload")
+            }
+        }
+
+        let serializations = std::cell::Cell::new(0);
+        canonical_record_digest(b"evidence", &CountedRecord(&serializations))
+            .expect("integrity digest");
+        assert_eq!(
+            serializations.get(),
+            1,
+            "integrity hashing must stream one terminal canonical JSON payload"
+        );
+    }
 }
 
 fn validate_payload_contract<'a>(
@@ -2211,6 +2982,49 @@ define_raw_server_wire! {
     struct RawCollectionLimit {
         "byteLimit" => byte_limit: u64,
         "limitApplied" => limit_applied: bool,
+    }
+}
+
+#[cfg(test)]
+mod artifact_family_integrity_key_tests {
+    use super::*;
+
+    #[test]
+    fn artifact_family_integrity_keys_match_the_frozen_serialized_mapping() {
+        let cases = [
+            (SccmArtifactFamily::ClientSetup, "clientSetup"),
+            (SccmArtifactFamily::ClientHealth, "clientHealth"),
+            (SccmArtifactFamily::ClientIdentity, "clientIdentity"),
+            (SccmArtifactFamily::ClientLocation, "clientLocation"),
+            (SccmArtifactFamily::ClientPolicy, "clientPolicy"),
+            (SccmArtifactFamily::ClientContent, "clientContent"),
+            (SccmArtifactFamily::ClientApplication, "clientApplication"),
+            (SccmArtifactFamily::ClientUpdates, "clientUpdates"),
+            (SccmArtifactFamily::ClientTaskSequence, "clientTaskSequence"),
+            (SccmArtifactFamily::SiteComponent, "siteComponent"),
+            (SccmArtifactFamily::SiteStatus, "siteStatus"),
+            (SccmArtifactFamily::ManagementPoint, "managementPoint"),
+            (SccmArtifactFamily::DistributionPoint, "distributionPoint"),
+            (
+                SccmArtifactFamily::SoftwareUpdatePoint,
+                "softwareUpdatePoint",
+            ),
+            (SccmArtifactFamily::Hierarchy, "hierarchy"),
+            (SccmArtifactFamily::Provider, "provider"),
+            (SccmArtifactFamily::AdminService, "adminService"),
+            (
+                SccmArtifactFamily::Unknown("opaqueFamily".to_owned()),
+                "opaqueFamily",
+            ),
+        ];
+
+        for (family, expected) in cases {
+            assert_eq!(artifact_family_integrity_key(&family), expected);
+            assert_eq!(
+                serde_json::to_value(family).expect("family must serialize"),
+                Value::String(expected.to_owned())
+            );
+        }
     }
 }
 

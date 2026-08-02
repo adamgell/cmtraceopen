@@ -4,7 +4,7 @@
   "scenario": "policy-failure",
   "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
   "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
   "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
   "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
   "reorderedInputDeterministic": true,
@@ -14,9 +14,9 @@
     {"logicalArtifactId":"server-mp-policy","state":"captured","requiredness":"required"}
   ],
   "artifactProvenance": [
-    {"artifactId":"mp-policy-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:policy-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"mp-policy-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:policy-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"mp-policy-response-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:policy-response","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+    {"artifactId":"mp-policy-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:policy-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-policy-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:policy-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-policy-response-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:policy-response","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T05:10:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
   ],
   "primaryTransactionId": "mp:request:28555555-5555-5555-5555-555555555555",
   "transactions": [
