@@ -218,6 +218,17 @@ struct SccmServerIntakeIntegrity {
     evidence: BTreeSet<Vec<u8>>,
 }
 
+#[cfg(test)]
+impl SccmServerIntakeIntegrity {
+    fn retained_material_bytes(&self) -> usize {
+        std::mem::size_of_val(&self.schema_version)
+            + self.topology.len()
+            + self.artifacts.iter().map(Vec::len).sum::<usize>()
+            + self.coverage.iter().map(Vec::len).sum::<usize>()
+            + self.evidence.iter().map(Vec::len).sum::<usize>()
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SccmServerIntakeAssessmentSerializeWire<'a> {
@@ -1148,6 +1159,102 @@ fn canonical_record_set<T: Serialize>(records: &[T]) -> Option<BTreeSet<Vec<u8>>
         }
     }
     Some(canonical)
+}
+
+#[cfg(test)]
+mod intake_integrity_tests {
+    use std::fs;
+    use std::path::Path;
+
+    use super::*;
+
+    fn canonical_assessment() -> SccmServerIntakeAssessment {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sccm/server/management-point/canonical-intake-policy-scope");
+        let manifest_json =
+            fs::read_to_string(directory.join("manifest.json")).expect("fixture manifest");
+        let manifest: Value = serde_json::from_str(&manifest_json).expect("fixture JSON");
+        let payloads = manifest["artifacts"]
+            .as_array()
+            .expect("fixture artifacts")
+            .iter()
+            .filter_map(|artifact| {
+                let relative_path = artifact["relativePath"].as_str()?;
+                Some(SccmServerArtifactPayload {
+                    manifest_artifact_id: artifact["artifactId"]
+                        .as_str()
+                        .expect("fixture artifact ID")
+                        .to_owned(),
+                    bytes: fs::read(directory.join(relative_path)).expect("fixture payload"),
+                })
+            })
+            .collect::<Vec<_>>();
+        assess_server_intake(&manifest_json, &payloads).expect("canonical fixture")
+    }
+
+    fn integrity(assessment: &SccmServerIntakeAssessment) -> Option<SccmServerIntakeIntegrity> {
+        canonical_intake_integrity(
+            assessment.schema_version,
+            &assessment.topology,
+            &assessment.artifacts,
+            &assessment.coverage,
+            &assessment.evidence,
+        )
+    }
+
+    #[test]
+    fn intake_integrity_is_compact_and_collision_safe() {
+        let assessment = canonical_assessment();
+        let baseline = integrity(&assessment).expect("baseline integrity");
+
+        let mut large_message = assessment.clone();
+        large_message.evidence[0].message = "x".repeat(1024 * 1024);
+        let large_integrity = integrity(&large_message).expect("large-message integrity");
+        assert!(
+            large_integrity.retained_material_bytes() <= 1_024,
+            "integrity retained {} bytes for one 1 MiB message",
+            large_integrity.retained_material_bytes()
+        );
+
+        let mut schema_mutation = assessment.clone();
+        schema_mutation.schema_version += 1;
+        assert_ne!(integrity(&schema_mutation), Some(baseline.clone()));
+
+        let mut topology_mutation = assessment.clone();
+        topology_mutation
+            .topology
+            .capture_host_handle
+            .push_str("-changed");
+        assert_ne!(integrity(&topology_mutation), Some(baseline.clone()));
+
+        let mut artifact_mutation = assessment.clone();
+        artifact_mutation.artifacts[0]
+            .path_fingerprint
+            .push_str("-changed");
+        assert_ne!(integrity(&artifact_mutation), Some(baseline.clone()));
+
+        let mut coverage_mutation = assessment.clone();
+        coverage_mutation.coverage[0].state = SccmCoverageState::Capped;
+        assert_ne!(integrity(&coverage_mutation), Some(baseline.clone()));
+
+        let mut evidence_mutation = assessment.clone();
+        evidence_mutation.evidence[0].message.push_str(" changed");
+        assert_ne!(integrity(&evidence_mutation), Some(baseline));
+
+        let mut duplicate = assessment.clone();
+        duplicate.evidence.push(duplicate.evidence[0].clone());
+        assert_eq!(integrity(&duplicate), None);
+
+        let mut collision = assessment;
+        let mut colliding_record = collision.evidence[0].clone();
+        colliding_record.message.push_str(" different content");
+        collision.evidence.push(colliding_record);
+        assert_eq!(
+            integrity(&collision),
+            None,
+            "one semantic evidence identity cannot retain two bodies"
+        );
+    }
 }
 
 fn validate_payload_contract<'a>(
