@@ -339,4 +339,73 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn per_source_cap_does_not_let_an_early_noisy_source_starve_later_sources() {
+        let mut observations = (1..=6_000)
+            .map(|number| {
+                observation(
+                    ROOT_A,
+                    format!("AppEnforce.log.{number}"),
+                    SccmRotation::Numbered(number),
+                )
+            })
+            .collect::<Vec<_>>();
+        observations.splice(
+            0..0,
+            [
+                observation(ROOT_A, "AppEnforce.log".to_owned(), SccmRotation::Current),
+                observation(
+                    ROOT_A,
+                    "AppEnforce.lo_".to_owned(),
+                    SccmRotation::LoUnderscore,
+                ),
+            ],
+        );
+        observations.push(observation(
+            ROOT_B,
+            "PolicyAgent.log".to_owned(),
+            SccmRotation::Current,
+        ));
+        observations.push(observation(
+            ROOT_B,
+            "PolicyAgent.lo_".to_owned(),
+            SccmRotation::LoUnderscore,
+        ));
+
+        reset_construction_counts();
+        let result = discover_client_sources(&SccmClientDiscoveryInput {
+            max_found_fragments_per_source: 2,
+            observations,
+        })
+        .expect("valid observations");
+        let (candidate_constructions, declaration_constructions) = construction_counts();
+
+        assert_eq!(
+            result
+                .declarations
+                .iter()
+                .filter(|declaration| declaration.root_handle == ROOT_A)
+                .map(|declaration| (&declaration.rotation, declaration.state))
+                .collect::<Vec<_>>(),
+            vec![
+                (&SccmRotation::Current, SccmClientDiscoveryState::Discovered),
+                (
+                    &SccmRotation::LoUnderscore,
+                    SccmClientDiscoveryState::Discovered
+                ),
+                (&SccmRotation::Numbered(1), SccmClientDiscoveryState::Capped),
+            ]
+        );
+        assert!(result.declarations.iter().any(|declaration| {
+            declaration.root_handle == ROOT_B
+                && declaration.rotation == SccmRotation::Current
+                && declaration.state == SccmClientDiscoveryState::Discovered
+        }));
+        assert!(
+            result.declarations.len() <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
+                && candidate_constructions <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
+                && declaration_constructions <= MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
+        );
+    }
 }
