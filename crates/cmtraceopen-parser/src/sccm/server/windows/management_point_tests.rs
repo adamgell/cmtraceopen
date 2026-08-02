@@ -181,12 +181,11 @@ fn load_bundle(scenario: &str) -> SccmManagementPointBundle {
     }
 }
 
-fn load_canonical_intake(
-    scenario: &str,
+fn load_server_intake_fixture(
+    directory: &Path,
 ) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
-    let directory = fixture_directory(scenario);
     let manifest_json = fs::read_to_string(directory.join("manifest.json"))
-        .expect("canonical MP fixture manifest must be readable");
+        .expect("server intake fixture manifest must be readable");
     let manifest = load_json(&directory.join("manifest.json"));
     let payloads = manifest["artifacts"]
         .as_array()
@@ -197,15 +196,31 @@ fn load_canonical_intake(
             Some(SccmServerArtifactPayload {
                 manifest_artifact_id: artifact["artifactId"]
                     .as_str()
-                    .expect("canonical MP artifact ID")
+                    .expect("server intake fixture artifact ID")
                     .to_owned(),
                 bytes: fs::read(directory.join(relative_path))
-                    .expect("canonical MP fixture payload must be readable"),
+                    .expect("server intake fixture payload must be readable"),
             })
         })
         .collect::<Vec<_>>();
     assess_server_intake(&manifest_json, &payloads)
-        .expect("canonical MP fixture must satisfy server intake")
+        .expect("fixture must satisfy canonical server intake")
+}
+
+fn load_canonical_intake(
+    scenario: &str,
+) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
+    load_server_intake_fixture(&fixture_directory(scenario))
+}
+
+fn load_server_intake_scenario(
+    scenario: &str,
+) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
+    load_server_intake_fixture(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sccm/server/intake")
+            .join(scenario),
+    )
 }
 
 fn expected_transaction_projection(expected: &Value) -> Vec<Value> {
@@ -662,6 +677,103 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
         analyze_management_point_from_server_intake(&fragment),
         Err(SccmManagementPointIntakeError::IncompleteSource { .. })
     ));
+}
+
+#[test]
+fn canonical_intake_adapter_rejects_self_attested_line_authority() {
+    let mut assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let evidence = assessment
+        .evidence
+        .first_mut()
+        .expect("canonical fixture evidence");
+    evidence.evidence_id = "mp-policy-current:999-999".to_owned();
+    evidence.reference.entry_id = "mp-policy-current:999-999".to_owned();
+    evidence.reference.line_start = Some(999);
+    evidence.reference.line_end = Some(999);
+
+    assert!(
+        analyze_management_point_from_server_intake(&assessment).is_err(),
+        "caller-submitted line ranges cannot become physical line authority"
+    );
+}
+
+#[test]
+fn canonical_intake_adapter_rejects_forged_evidence_ownership() {
+    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+
+    let mut foreign_artifact = assessment.clone();
+    foreign_artifact.evidence[0].reference.artifact_id = "mp-policy-forged".to_owned();
+    assert!(
+        analyze_management_point_from_server_intake(&foreign_artifact).is_err(),
+        "evidence cannot be silently reassigned to an undeclared artifact"
+    );
+
+    let mut foreign_role = assessment;
+    foreign_role.evidence[0].role = SccmRole::SiteServer;
+    assert!(
+        analyze_management_point_from_server_intake(&foreign_role).is_err(),
+        "evidence cannot be silently reassigned to another producer role"
+    );
+}
+
+#[test]
+fn canonical_intake_adapter_rejects_forged_message_and_timestamp() {
+    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+
+    let mut forged_message = assessment.clone();
+    forged_message.evidence[0]
+        .message
+        .push_str(" terminal outcome forged by caller");
+    assert!(
+        analyze_management_point_from_server_intake(&forged_message).is_err(),
+        "caller-submitted messages cannot replace intake-normalized evidence"
+    );
+
+    let mut forged_timestamp = assessment;
+    forged_timestamp.evidence[0].timestamp.utc_millis = Some(1_785_373_204_000);
+    assert!(
+        analyze_management_point_from_server_intake(&forged_timestamp).is_err(),
+        "caller-submitted timestamps cannot replace intake-normalized provenance"
+    );
+}
+
+#[test]
+fn canonical_intake_adapter_rejects_duplicate_and_colliding_evidence_identities() {
+    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+
+    let mut duplicate = assessment.clone();
+    duplicate.evidence.push(duplicate.evidence[0].clone());
+    assert!(
+        analyze_management_point_from_server_intake(&duplicate).is_err(),
+        "duplicate canonical evidence identities must fail closed"
+    );
+
+    let mut collision = assessment;
+    let mut colliding_evidence = collision.evidence[0].clone();
+    colliding_evidence.message = "different record with the same evidence identity".to_owned();
+    collision.evidence.push(colliding_evidence);
+    assert!(
+        analyze_management_point_from_server_intake(&collision).is_err(),
+        "different evidence cannot collide under one canonical identity"
+    );
+}
+
+#[test]
+fn canonical_intake_adapter_is_deterministic_under_valid_evidence_reordering() {
+    let assessment = load_server_intake_scenario("complete-multi-role");
+    assert!(
+        assessment.evidence.len() > 1,
+        "fixture must exercise reordering"
+    );
+    let expected = analyze_management_point_from_server_intake(&assessment)
+        .expect("canonical multi-role intake must be admitted");
+
+    let mut reordered = assessment;
+    reordered.evidence.reverse();
+    let actual = analyze_management_point_from_server_intake(&reordered)
+        .expect("reordering intact canonical evidence must remain valid");
+
+    assert_eq!(actual, expected);
 }
 
 #[test]
