@@ -11,9 +11,9 @@ use cmtraceopen_parser::sccm::SccmRotation;
 use sha2::{Digest, Sha256};
 
 use super::contract::{
-    canonical_client_source, catalog_entry_id, expected_marker_artifact_id,
-    expected_physical_artifact_id, logical_artifact_ids_for_basename, root_handle_digest,
-    rotation_order, rotation_segment, source_identity_digest, SccmManifestSourceState,
+    SccmManifestSourceState, canonical_client_source, catalog_entry_id,
+    expected_marker_artifact_id, expected_physical_artifact_id, logical_artifact_ids_for_basename,
+    root_handle_digest, rotation_order, rotation_segment, source_identity_digest,
 };
 
 pub const MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS: usize = 4_096;
@@ -117,6 +117,7 @@ thread_local! {
     static CANDIDATE_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
     static DECLARATION_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
     static NORMALIZATION_OPERATIONS: Cell<usize> = const { Cell::new(0) };
+    static LOGICAL_ARTIFACT_ID_LOOKUPS: Cell<usize> = const { Cell::new(0) };
 }
 
 pub fn discover_client_sources(
@@ -251,7 +252,7 @@ fn candidate_from_observation(observation: &NormalizedObservation<'_>) -> Option
     Some(Candidate {
         observation: observation.observation.clone(),
         catalog_entry_id: catalog_entry_id(&observation.canonical_basename),
-        logical_artifact_ids: logical_artifact_ids_for_basename(&observation.canonical_basename),
+        logical_artifact_ids: logical_artifact_ids(&observation.canonical_basename),
         source_digest,
     })
 }
@@ -350,10 +351,8 @@ fn compare_observation_order(
     left: &NormalizedObservation<'_>,
     right: &NormalizedObservation<'_>,
 ) -> Ordering {
-    logical_artifact_ids_for_basename(&left.canonical_basename)
-        .cmp(&logical_artifact_ids_for_basename(
-            &right.canonical_basename,
-        ))
+    logical_artifact_ids(&left.canonical_basename)
+        .cmp(&logical_artifact_ids(&right.canonical_basename))
         .then_with(|| {
             left.observation
                 .root_handle
@@ -362,6 +361,12 @@ fn compare_observation_order(
         .then_with(|| rotation_order(&left.observation.rotation, &right.observation.rotation))
         .then_with(|| left.observation.basename.cmp(&right.observation.basename))
         .then_with(|| state_rank(left.observation.state).cmp(&state_rank(right.observation.state)))
+}
+
+fn logical_artifact_ids(canonical_basename: &str) -> Vec<String> {
+    #[cfg(test)]
+    LOGICAL_ARTIFACT_ID_LOOKUPS.with(|count| count.set(count.get() + 1));
+    logical_artifact_ids_for_basename(canonical_basename)
 }
 
 fn state_rank(state: SccmClientDiscoveryObservationState) -> u8 {
@@ -410,6 +415,14 @@ mod tests {
 
     fn reset_normalization_count() {
         NORMALIZATION_OPERATIONS.with(|count| count.set(0));
+    }
+
+    fn logical_artifact_id_lookup_count() -> usize {
+        LOGICAL_ARTIFACT_ID_LOOKUPS.with(Cell::get)
+    }
+
+    fn reset_logical_artifact_id_lookup_count() {
+        LOGICAL_ARTIFACT_ID_LOOKUPS.with(|count| count.set(0));
     }
 
     #[test]
@@ -490,6 +503,32 @@ mod tests {
                 "the declaration output remains globally bounded"
             );
         }
+    }
+
+    #[test]
+    fn normalization_caches_logical_artifact_ids_once_per_observation_despite_sorting() {
+        let observations = (1..=64)
+            .map(|number| {
+                observation(
+                    ROOT_A,
+                    format!("AppEnforce.log.{number}"),
+                    SccmRotation::Numbered(number),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        reset_logical_artifact_id_lookup_count();
+        discover_client_sources(&SccmClientDiscoveryInput {
+            max_found_fragments_per_source: 64,
+            observations,
+        })
+        .expect("accepted observations normalize deterministically");
+
+        assert_eq!(
+            logical_artifact_id_lookup_count(),
+            64,
+            "sorting and declaration construction must reuse each normalized observation's cached logical IDs"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use app_lib::sccm::{
-    discover_client_sources, SccmClientDiscoveryError, SccmClientDiscoveryInput,
-    SccmClientDiscoveryObservation, SccmClientDiscoveryObservationState, SccmClientDiscoveryState,
     MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS, MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS,
+    SccmClientDiscoveryError, SccmClientDiscoveryInput, SccmClientDiscoveryObservation,
+    SccmClientDiscoveryObservationState, SccmClientDiscoveryState, discover_client_sources,
 };
 use cmtraceopen_parser::sccm::SccmRotation;
 use sha2::{Digest, Sha256};
@@ -86,6 +86,29 @@ fn expected_marker_artifact_id(
     )
 }
 
+fn expected_evidence_identity(
+    canonical_basename: &str,
+    root_handle: &str,
+    rotation: &SccmRotation,
+    physical_basename: &str,
+) -> String {
+    let catalog_entry_id = format!(
+        "sccm-client-source:v1:sha256:{}",
+        sha256(canonical_basename)
+    );
+    let fingerprint = path_fingerprint(root_handle, canonical_basename);
+    let source_digest = fingerprint
+        .strip_prefix("sha256:")
+        .expect("path fingerprint has the expected versioned prefix");
+    format!(
+        "sccm-evidence:v1:sha256:{}",
+        sha256(format!(
+            "cmtraceopen.sccm.evidence.v1\0{catalog_entry_id}\0{source_digest}\0{}\0{physical_basename}",
+            rotation_segment(rotation)
+        ))
+    )
+}
+
 #[test]
 fn discovery_uses_one_global_declaration_budget_and_marks_the_first_omitted_rotation() {
     let mut observations = Vec::new();
@@ -161,10 +184,12 @@ fn discovery_at_the_exact_global_boundary_does_not_manufacture_a_gap() {
         result.declarations.len(),
         MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS
     );
-    assert!(result
-        .declarations
-        .iter()
-        .all(|declaration| declaration.state == SccmClientDiscoveryState::Discovered));
+    assert!(
+        result
+            .declarations
+            .iter()
+            .all(|declaration| declaration.state == SccmClientDiscoveryState::Discovered)
+    );
 }
 
 #[test]
@@ -227,6 +252,58 @@ fn discovery_enforces_each_source_cap_and_retains_the_first_omitted_rotation_gap
 }
 
 #[test]
+fn discovery_marks_only_the_first_found_fragment_per_source_when_the_cap_is_zero() {
+    let result = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 0,
+        observations: vec![
+            observation(
+                ROOT_A,
+                "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_A,
+                "AppEnforce.lo_",
+                SccmRotation::LoUnderscore,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_B,
+                "PolicyAgent.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_B,
+                "PolicyAgent.lo_",
+                SccmRotation::LoUnderscore,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+        ],
+    })
+    .expect("zero cap is an explicit per-source coverage boundary");
+
+    assert_eq!(
+        result
+            .declarations
+            .iter()
+            .map(|declaration| {
+                (
+                    declaration.root_handle.as_str(),
+                    declaration.basename.as_str(),
+                    declaration.state,
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (ROOT_A, "AppEnforce.log", SccmClientDiscoveryState::Capped),
+            (ROOT_B, "PolicyAgent.log", SccmClientDiscoveryState::Capped),
+        ]
+    );
+}
+
+#[test]
 fn discovery_preserves_denied_and_not_found_coverage_with_stable_collision_safe_identities() {
     let input = SccmClientDiscoveryInput {
         max_found_fragments_per_source: 8,
@@ -265,14 +342,18 @@ fn discovery_preserves_denied_and_not_found_coverage_with_stable_collision_safe_
     .expect("valid observations");
 
     assert_eq!(result.declarations, reversed.declarations);
-    assert!(result
-        .declarations
-        .iter()
-        .any(|declaration| declaration.state == SccmClientDiscoveryState::AccessDenied));
-    assert!(result
-        .declarations
-        .iter()
-        .any(|declaration| declaration.state == SccmClientDiscoveryState::NotFound));
+    assert!(
+        result
+            .declarations
+            .iter()
+            .any(|declaration| declaration.state == SccmClientDiscoveryState::AccessDenied)
+    );
+    assert!(
+        result
+            .declarations
+            .iter()
+            .any(|declaration| declaration.state == SccmClientDiscoveryState::NotFound)
+    );
 
     let collisions = result
         .declarations
@@ -481,6 +562,7 @@ fn discovery_rejects_conflicting_states_for_canonical_basename_aliases() {
 
     let error = discover_client_sources(&input)
         .expect_err("canonical aliases with conflicting state fail closed");
+    assert_eq!(error, SccmClientDiscoveryError::ConflictingObservation);
     let mut reversed = input;
     reversed.observations.reverse();
     assert_eq!(
@@ -491,39 +573,69 @@ fn discovery_rejects_conflicting_states_for_canonical_basename_aliases() {
 }
 
 #[test]
-fn discovery_coalesces_same_state_canonical_aliases_to_the_stable_basename() {
-    let input = SccmClientDiscoveryInput {
-        max_found_fragments_per_source: 8,
-        observations: vec![
-            observation(
+fn discovery_canonicalizes_supported_aliases_into_stable_physical_declarations() {
+    for (canonical_basename, alias, rotation, physical_basename) in [
+        (
+            "AppEnforce.log",
+            "appenforce.log",
+            SccmRotation::Current,
+            "AppEnforce.log",
+        ),
+        (
+            "AppEnforce.log",
+            "appenforce.lo_",
+            SccmRotation::LoUnderscore,
+            "AppEnforce.lo_",
+        ),
+        (
+            "AppEnforce.log",
+            "appenforce.log.7",
+            SccmRotation::Numbered(7),
+            "AppEnforce.log.7",
+        ),
+    ] {
+        let canonical = discover_client_sources(&SccmClientDiscoveryInput {
+            max_found_fragments_per_source: 8,
+            observations: vec![observation(
                 ROOT_A,
-                "appenforce.log",
-                SccmRotation::Current,
+                physical_basename,
+                rotation.clone(),
                 SccmClientDiscoveryObservationState::Found,
-            ),
-            observation(
+            )],
+        })
+        .expect("canonical observation is supported");
+        let alias = discover_client_sources(&SccmClientDiscoveryInput {
+            max_found_fragments_per_source: 8,
+            observations: vec![observation(
                 ROOT_A,
-                "AppEnforce.log",
-                SccmRotation::Current,
+                alias,
+                rotation.clone(),
                 SccmClientDiscoveryObservationState::Found,
-            ),
-        ],
-    };
+            )],
+        })
+        .expect("case-equivalent observation is supported");
 
-    let result = discover_client_sources(&input).expect("same-state aliases are one source");
-    let reversed = discover_client_sources(&SccmClientDiscoveryInput {
-        max_found_fragments_per_source: input.max_found_fragments_per_source,
-        observations: input.observations.into_iter().rev().collect(),
-    })
-    .expect("same-state aliases remain order independent");
-
-    assert_eq!(result, reversed);
-    assert_eq!(result.declarations.len(), 1);
-    assert_eq!(result.declarations[0].basename, "AppEnforce.log");
-    assert_eq!(
-        result.declarations[0].state,
-        SccmClientDiscoveryState::Discovered
-    );
+        assert_eq!(alias.declarations, canonical.declarations);
+        let declaration = &alias.declarations[0];
+        assert_eq!(declaration.basename, physical_basename);
+        assert_eq!(
+            declaration.artifact_id,
+            expected_physical_artifact_id(
+                &path_fingerprint(ROOT_A, canonical_basename),
+                &rotation,
+                physical_basename,
+            )
+        );
+        assert_eq!(
+            declaration.evidence_identity,
+            expected_evidence_identity(canonical_basename, ROOT_A, &rotation, physical_basename,)
+        );
+        assert_eq!(
+            declaration.evidence_identity.as_bytes(),
+            canonical.declarations[0].evidence_identity.as_bytes(),
+            "equivalent aliases preserve byte-identical evidence IDs"
+        );
+    }
 }
 
 #[test]
@@ -553,13 +665,19 @@ fn discovery_rejects_observations_beyond_its_defensive_contract() {
 }
 
 #[test]
-fn discovery_skips_supported_observations_with_malformed_root_handles() {
+fn discovery_skips_malformed_roots_and_unsupported_basenames() {
     let result = discover_client_sources(&SccmClientDiscoveryInput {
         max_found_fragments_per_source: 8,
         observations: vec![
             observation(
                 "root-not-a-sha256-handle",
                 "AppEnforce.log",
+                SccmRotation::Current,
+                SccmClientDiscoveryObservationState::Found,
+            ),
+            observation(
+                ROOT_B,
+                "Unrelated.log",
                 SccmRotation::Current,
                 SccmClientDiscoveryObservationState::Found,
             ),
