@@ -123,6 +123,7 @@ thread_local! {
 pub fn discover_client_sources(
     input: &SccmClientDiscoveryInput,
 ) -> Result<SccmClientDiscoveryResult, SccmClientDiscoveryError> {
+    validate_all_observation_conflicts(input)?;
     let mut found_per_source = BTreeMap::<(String, String), usize>::new();
     let mut capped_sources = BTreeSet::<(String, String)>::new();
     let mut declarations = Vec::with_capacity(MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS);
@@ -136,8 +137,10 @@ pub fn discover_client_sources(
         .pop_front()
         .or_else(|| next_observation(input, cursor, &capped_sources))
     {
-        validate_observation_conflict(input, observation.0)?;
         cursor = Some(observation);
+        if !is_physical_representative(input, observation.0) {
+            continue;
+        }
 
         let Some(state) = selection_state(
             observation.0,
@@ -189,8 +192,9 @@ fn initial_observations(input: &SccmClientDiscoveryInput) -> BTreeSet<Observatio
                 .next_back()
                 .expect("nonempty candidate set")
         {
-            observations.insert(candidate);
-            observations.pop_last();
+            if observations.insert(candidate) {
+                observations.pop_last();
+            }
         }
     }
     observations
@@ -224,14 +228,18 @@ fn next_observation<'a>(
     next
 }
 
-fn validate_observation_conflict(
+fn validate_all_observation_conflicts(
     input: &SccmClientDiscoveryInput,
-    selected: &SccmClientDiscoveryObservation,
 ) -> Result<(), SccmClientDiscoveryError> {
-    if input.observations.iter().any(|observation| {
-        observation.state != selected.state && same_physical_observation(observation, selected)
-    }) {
-        return Err(SccmClientDiscoveryError::ConflictingObservation);
+    for (index, left) in input.observations.iter().enumerate() {
+        if canonical_client_source(&left.basename, &left.rotation).is_none() {
+            continue;
+        }
+        for right in input.observations.iter().skip(index + 1) {
+            if left.state != right.state && same_physical_observation(left, right) {
+                return Err(SccmClientDiscoveryError::ConflictingObservation);
+            }
+        }
     }
     Ok(())
 }
@@ -241,10 +249,19 @@ fn same_physical_observation(
     right: &SccmClientDiscoveryObservation,
 ) -> bool {
     left.root_handle == right.root_handle
-        && left.basename == right.basename
         && left.rotation == right.rotation
         && canonical_client_source(&left.basename, &left.rotation)
             == canonical_client_source(&right.basename, &right.rotation)
+}
+
+fn is_physical_representative(
+    input: &SccmClientDiscoveryInput,
+    selected: &SccmClientDiscoveryObservation,
+) -> bool {
+    !input.observations.iter().any(|observation| {
+        same_physical_observation(observation, selected)
+            && ObservationRef(observation) < ObservationRef(selected)
+    })
 }
 
 fn selection_state(
