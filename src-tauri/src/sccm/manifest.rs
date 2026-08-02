@@ -382,7 +382,7 @@ fn validate_native_manifest_structure(manifest: &SccmBundleManifestV1) -> Result
         || manifest
             .host_handle
             .as_deref()
-            .is_some_and(|value| !is_versioned_handle(value, "cmtraceopen.host.sha256.v1:"))
+            .is_some_and(|value| !is_versioned_handle(value, "cmtraceopen.host.hmac-sha256.v1:"))
     {
         return Err(AppError::InvalidInput(
             "SCCM manifest context is malformed or privacy-unsafe".to_owned(),

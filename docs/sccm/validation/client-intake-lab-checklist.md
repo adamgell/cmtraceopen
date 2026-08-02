@@ -48,6 +48,10 @@ does not prove that the client, a role, or a workflow is missing or broken.
 - [ ] Record the temporary evidence location using a privacy-safe label, its
       retention period, and disposal owner:
       `____________________________________________________________`.
+- [ ] Generate a fresh 32-byte host-pseudonym key with the approved OS random
+      source for this retention scope. Record only its custody/disposal
+      reference: `______________________________________________________`.
+      Keep the key outside the bundle, manifest, logs, fixtures, issue, and PR.
 - [ ] Confirm fixtures will be synthetic/sanitized reductions only. Never add
       a wholesale lab log to the repository.
 

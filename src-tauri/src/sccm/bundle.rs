@@ -1,13 +1,15 @@
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use cmtraceopen_parser::sccm::SccmRole;
+use sha2::{Digest, Sha256};
 
 use crate::error::AppError;
 
 use super::intake::{
-    discover_client_sources, is_reparse_point, sha256_bytes, SccmClientDiscoveredArtifact,
+    discover_client_sources, is_reparse_point, SccmClientDiscoveredArtifact,
     SccmClientDiscoveryInput,
 };
 use super::manifest::{
@@ -17,12 +19,49 @@ use super::manifest::{
     SccmManifestArtifact, SccmManifestSourceState,
 };
 
-#[derive(Debug, Clone)]
+const HOST_HANDLE_HMAC_DOMAIN: &[u8] = b"cmtraceopen.sccm.host-handle.v1\0";
+
+#[derive(Clone)]
+pub struct SccmHostPseudonymKey([u8; 32]);
+
+impl SccmHostPseudonymKey {
+    pub fn from_secret_bytes(bytes: [u8; 32]) -> Result<Self, AppError> {
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(AppError::InvalidInput(
+                "SCCM capture host pseudonym key is missing".to_owned(),
+            ));
+        }
+        Ok(Self(bytes))
+    }
+
+    fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SccmHostPseudonymKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SccmHostPseudonymKey([REDACTED])")
+    }
+}
+
+impl Drop for SccmHostPseudonymKey {
+    fn drop(&mut self) {
+        self.0.fill(0);
+    }
+}
+
+#[derive(Clone)]
 pub struct SccmClientCaptureRequest {
     pub bundle_root: PathBuf,
     /// Raw host context is accepted only to derive a versioned opaque handle.
     /// It is never written to the public manifest.
     pub host: String,
+    /// Secret 32-byte key scoped to the bundle's retention record. Callers
+    /// must generate it outside this manifest boundary and must not serialize
+    /// it into the bundle. Reusing a key intentionally makes host handles
+    /// linkable across captures; a distinct key keeps captures unlinkable.
+    pub host_pseudonym_key: SccmHostPseudonymKey,
     pub collected_at_utc: String,
     pub configmgr_version: Option<String>,
     pub encoding: Option<String>,
@@ -42,7 +81,7 @@ pub fn capture_client_bundle(
         request.configmgr_version.as_deref(),
         request.encoding.as_deref(),
     )?;
-    let host_handle = host_handle(&request.host)?;
+    let host_handle = host_handle(&request.host, request.host_pseudonym_key.as_bytes())?;
     let discovery = discover_client_sources(&request.discovery)?;
     let mut manifest = SccmBundleManifestV1::native_client(
         host_handle,
@@ -319,7 +358,7 @@ fn secure_destination_parent(bundle_root: &Path, relative_path: &str) -> Result<
     Ok(())
 }
 
-fn host_handle(host: &str) -> Result<Option<String>, AppError> {
+fn host_handle(host: &str, pseudonym_key: &[u8; 32]) -> Result<Option<String>, AppError> {
     if host.is_empty() {
         return Ok(None);
     }
@@ -328,10 +367,45 @@ fn host_handle(host: &str) -> Result<Option<String>, AppError> {
             "SCCM capture host context is malformed".to_owned(),
         ));
     }
+    let mut scoped_host = Vec::with_capacity(HOST_HANDLE_HMAC_DOMAIN.len() + host.len());
+    scoped_host.extend_from_slice(HOST_HANDLE_HMAC_DOMAIN);
+    scoped_host.extend_from_slice(host.as_bytes());
     Ok(Some(format!(
-        "cmtraceopen.host.sha256.v1:{}",
-        sha256_bytes(host.as_bytes())
+        "cmtraceopen.host.hmac-sha256.v1:{}",
+        hmac_sha256(pseudonym_key, &scoped_host)
     )))
+}
+
+fn hmac_sha256(key: &[u8], message: &[u8]) -> String {
+    const BLOCK_BYTES: usize = 64;
+    let mut normalized_key = [0_u8; BLOCK_BYTES];
+    if key.len() > BLOCK_BYTES {
+        let digest = Sha256::digest(key);
+        normalized_key[..digest.len()].copy_from_slice(&digest);
+    } else {
+        normalized_key[..key.len()].copy_from_slice(key);
+    }
+
+    let mut inner_pad = [0x36_u8; BLOCK_BYTES];
+    let mut outer_pad = [0x5c_u8; BLOCK_BYTES];
+    for index in 0..BLOCK_BYTES {
+        inner_pad[index] ^= normalized_key[index];
+        outer_pad[index] ^= normalized_key[index];
+    }
+
+    let mut inner = Sha256::new();
+    inner.update(inner_pad);
+    inner.update(message);
+    let inner_digest = inner.finalize();
+
+    let mut outer = Sha256::new();
+    outer.update(outer_pad);
+    outer.update(inner_digest);
+    outer
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[cfg(unix)]
@@ -363,6 +437,14 @@ fn open_source_without_following_links(path: &Path) -> Result<File, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hmac_sha256_matches_rfc_4231_test_case_one() {
+        assert_eq!(
+            hmac_sha256(&[0x0b; 20], b"Hi There"),
+            "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+        );
+    }
 
     #[test]
     fn exact_copy_detects_growth_but_allows_an_explicit_cap() {

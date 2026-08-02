@@ -4,11 +4,14 @@ use std::fs;
 use app_lib::sccm::{
     authoritative_client_source_catalog, capture_client_bundle, discover_client_sources,
     manifest_to_client_intake_bundle, read_sccm_manifest_or_legacy, SccmClientCaptureRequest,
-    SccmClientDiscoveryInput, SccmClientSourceSpec, SccmCoverageState, SccmManifestSourceState,
-    SccmRole, SccmRotation,
+    SccmClientDiscoveryInput, SccmClientSourceSpec, SccmCoverageState, SccmHostPseudonymKey,
+    SccmManifestSourceState, SccmRole, SccmRotation,
 };
 use cmtraceopen_parser::sccm::{assess_client_intake, declared_client_source_groups};
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
+
+const TEST_HOST_PSEUDONYM_KEY: [u8; 32] = [0xa5; 32];
 
 fn source(
     catalog_entry_id: &str,
@@ -44,6 +47,8 @@ fn request(
     SccmClientCaptureRequest {
         bundle_root,
         host: host.to_owned(),
+        host_pseudonym_key: SccmHostPseudonymKey::from_secret_bytes(TEST_HOST_PSEUDONYM_KEY)
+            .expect("synthetic host key"),
         collected_at_utc: "2026-07-30T15:00:00Z".to_owned(),
         configmgr_version: Some("5.00.TEST.0000".to_owned()),
         encoding: Some("utf-8".to_owned()),
@@ -85,7 +90,7 @@ fn capture_preserves_rotations_and_cross_root_collisions_in_a_versioned_manifest
         .manifest
         .host_handle
         .as_deref()
-        .is_some_and(|value| value.starts_with("cmtraceopen.host.sha256.v1:")));
+        .is_some_and(|value| value.starts_with("cmtraceopen.host.hmac-sha256.v1:")));
     assert!(artifacts
         .iter()
         .all(|artifact| artifact.role == SccmRole::Client));
@@ -380,6 +385,112 @@ fn public_manifest_never_contains_raw_host_or_native_source_paths() {
     assert!(!serialized.contains(raw_host));
     assert!(!serialized.contains(&raw_path));
     assert!(!serialized.contains("RealUser@example.test"));
+}
+
+#[test]
+fn host_handle_is_keyed_per_retention_scope_and_not_an_unsalted_digest() {
+    let temp = tempdir().expect("temporary test root");
+    let root = temp.path().join("logs");
+    fs::create_dir_all(&root).expect("log root");
+    fs::write(root.join("PolicyAgent.log"), "policy").expect("policy log");
+    let policy = source(
+        "sccm-client-group:v1:client-policy-agent",
+        "client-policy-agent",
+        &["PolicyAgent.log"],
+    );
+    let raw_host = "LAB-CLIENT-01";
+    let first_request = request(
+        temp.path().join("bundle-a"),
+        raw_host,
+        input(vec![root.clone()], vec![policy.clone()]),
+    );
+    let mut second_request = request(
+        temp.path().join("bundle-b"),
+        raw_host,
+        input(vec![root.clone()], vec![policy.clone()]),
+    );
+    second_request.host_pseudonym_key =
+        SccmHostPseudonymKey::from_secret_bytes([0x5a; 32]).expect("second synthetic host key");
+    let same_key_request = request(
+        temp.path().join("bundle-c"),
+        raw_host,
+        input(vec![root.clone()], vec![policy.clone()]),
+    );
+    let different_host_request = request(
+        temp.path().join("bundle-d"),
+        "LAB-CLIENT-02",
+        input(vec![root], vec![policy]),
+    );
+
+    let first = capture_client_bundle(&first_request).expect("first capture");
+    let second = capture_client_bundle(&second_request).expect("second capture");
+    let same_key = capture_client_bundle(&same_key_request).expect("same-key capture");
+    let different_host =
+        capture_client_bundle(&different_host_request).expect("different-host capture");
+    let first_handle = first
+        .manifest
+        .host_handle
+        .as_deref()
+        .expect("first host handle");
+    let second_handle = second
+        .manifest
+        .host_handle
+        .as_deref()
+        .expect("second host handle");
+    let same_key_handle = same_key
+        .manifest
+        .host_handle
+        .as_deref()
+        .expect("same-key host handle");
+    let different_host_handle = different_host
+        .manifest
+        .host_handle
+        .as_deref()
+        .expect("different-host handle");
+    let unsalted = Sha256::digest(raw_host.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let serialized = serde_json::to_string(&first.manifest).expect("manifest JSON");
+
+    assert_ne!(first_handle, second_handle);
+    assert_eq!(first_handle, same_key_handle);
+    assert_ne!(first_handle, different_host_handle);
+    assert_ne!(
+        first_handle,
+        format!("cmtraceopen.host.sha256.v1:{unsalted}")
+    );
+    assert!(!serialized.contains("hostPseudonymKey"));
+    assert!(!serialized.contains(&"a5".repeat(32)));
+    assert!(!serialized.contains("[165,165"));
+}
+
+#[test]
+fn host_pseudonym_key_is_required_redacted_and_absent_from_capture_errors() {
+    let temp = tempdir().expect("temporary test root");
+    let bundle_root = temp.path().join("bundle");
+    let missing_error =
+        SccmHostPseudonymKey::from_secret_bytes([0; 32]).expect_err("zero key fails closed");
+    assert!(!bundle_root.exists());
+    assert!(!missing_error.to_string().contains(&"00".repeat(32)));
+
+    let secret_key = [0x7b; 32];
+    let protected_key =
+        SccmHostPseudonymKey::from_secret_bytes(secret_key).expect("protected host key");
+    assert_eq!(
+        format!("{protected_key:?}"),
+        "SccmHostPseudonymKey([REDACTED])"
+    );
+    let mut malformed_host = request(
+        temp.path().join("malformed-bundle"),
+        "SECRET-HOST\n",
+        input(Vec::new(), Vec::new()),
+    );
+    malformed_host.host_pseudonym_key = protected_key;
+    let malformed_error = capture_client_bundle(&malformed_host).expect_err("host fails closed");
+    let error_text = malformed_error.to_string();
+    assert!(!error_text.contains("SECRET-HOST"));
+    assert!(!error_text.contains(&"7b".repeat(32)));
 }
 
 #[test]
