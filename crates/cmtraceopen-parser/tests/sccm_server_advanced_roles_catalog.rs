@@ -601,6 +601,17 @@ fn validate_card_with_inventory(card: &SourceCard, inventory: &BTreeSet<String>)
     validation
 }
 
+fn validate_catalog(cards: &[SourceCard]) -> Vec<Validation> {
+    let inventory = cards
+        .iter()
+        .map(|card| card.card_id.clone())
+        .collect::<BTreeSet<_>>();
+    cards
+        .iter()
+        .map(|card| validate_card_with_inventory(card, &inventory))
+        .collect()
+}
+
 fn validate_path(path: &Path) -> Validation {
     match load_card(path) {
         Ok(card) => validate_card(&card),
@@ -650,9 +661,13 @@ fn candidate_catalog_is_typed_private_and_not_semantically_admitted() {
         cards.len(),
         "source-card IDs must be unique"
     );
+    let validations = validate_catalog(&cards);
     let mut card_ids = Vec::new();
-    for (filename, card) in SOURCE_CARDS.into_iter().zip(cards) {
-        let validation = validate_card_with_inventory(&card, &inventory);
+    for ((filename, card), validation) in SOURCE_CARDS
+        .into_iter()
+        .zip(cards)
+        .zip(validations)
+    {
         assert!(
             validation.valid,
             "{filename}: {}",
@@ -811,6 +826,34 @@ fn deprecation_requires_an_explicit_successor_and_never_panics() {
         resolved.valid,
         "a supersedes entry present in the catalog keeps the card valid"
     );
+}
+
+#[test]
+fn supersession_self_references_and_cycles_fail_closed() {
+    let path = corpus_root()
+        .join("catalog-fixtures/valid")
+        .join("source-card.json");
+    let mut self_referential = load_card(&path).expect("valid fixture loads");
+    self_referential.supersession.supersedes = vec![self_referential.card_id.clone()];
+    let self_validation = validate_catalog(&[self_referential]);
+    assert_eq!(self_validation[0].issues, ["supersessionCycleDetected"]);
+    assert!(!self_validation[0].admitted_to_semantic_catalog);
+
+    let mut alpha = load_card(&path).expect("valid fixture loads");
+    alpha.card_id = "alpha-card".to_owned();
+    alpha.supersession.supersedes = vec!["bravo-card".to_owned()];
+    let mut bravo = load_card(&path).expect("valid fixture loads");
+    bravo.card_id = "bravo-card".to_owned();
+    bravo.supersession.supersedes = vec!["charlie-card".to_owned()];
+    let mut charlie = load_card(&path).expect("valid fixture loads");
+    charlie.card_id = "charlie-card".to_owned();
+    charlie.supersession.supersedes = vec!["alpha-card".to_owned()];
+
+    let cycle_validations = validate_catalog(&[alpha, bravo, charlie]);
+    assert!(cycle_validations.iter().all(|validation| {
+        validation.issues == ["supersessionCycleDetected"]
+            && !validation.admitted_to_semantic_catalog
+    }));
 }
 
 #[test]
