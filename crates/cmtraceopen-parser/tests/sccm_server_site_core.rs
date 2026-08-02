@@ -831,6 +831,66 @@ fn incomplete_sources_are_coverage_states_not_role_health_claims() {
 }
 
 #[test]
+fn undeclared_status_source_is_an_explicit_host_scoped_coverage_gap() {
+    let assessment = assess(&[Source::sitecomp(HEALTHY_SITECOMP)]);
+    assert!(assessment
+        .artifacts
+        .iter()
+        .all(|artifact| artifact.source_id != "server-status"));
+    assert!(!assessment.evidence.is_empty());
+
+    let analysis = analyze_site_core(&assessment);
+    assert_eq!(analysis.results.len(), 1);
+    let result = &analysis.results[0];
+    assert_eq!(result.state, SccmSiteCoreState::Incomplete);
+    assert_eq!(
+        result.finding_class,
+        Some(SccmFindingClass::InsufficientEvidence)
+    );
+    assert!(!result.evidence.is_empty());
+
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    let gap = &analysis.coverage_gaps[0];
+    assert_eq!(gap.source_id, "server-status");
+    assert_eq!(gap.state, SccmCoverageState::Absent);
+    assert_eq!(gap.reason_code, "required-status-source-not-declared");
+    assert!(gap.artifact_id.starts_with("site-core:missing-source:v1:"));
+    assert_eq!(
+        result.coverage_gap_artifact_ids,
+        vec![gap.artifact_id.clone()]
+    );
+
+    let result_finding = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.subject_id == result.result_id)
+        .expect("insufficient-evidence result has a validated finding");
+    assert_eq!(
+        result_finding.finding.class,
+        SccmFindingClass::InsufficientEvidence
+    );
+    assert!(result_finding
+        .finding
+        .coverage_gaps
+        .iter()
+        .any(|finding_gap| finding_gap.artifact_id == gap.artifact_id));
+
+    let status_requests = analysis
+        .artifact_requests
+        .iter()
+        .filter(|request| request.logical_name == "server-status")
+        .collect::<Vec<_>>();
+    assert!(!status_requests.is_empty());
+    for request in status_requests {
+        assert_bounded_request_has_specific_scope(request);
+        assert_eq!(
+            request.scope.producer_host_handle.as_deref(),
+            Some("synthetic:host:site-01")
+        );
+    }
+}
+
+#[test]
 fn site_core_output_is_byte_identical_after_assessment_reordering() {
     let assessment = assess(&[
         Source::sitecomp(CONTRADICTORY_SITECOMP),
