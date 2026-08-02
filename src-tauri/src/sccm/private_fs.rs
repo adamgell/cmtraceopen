@@ -748,6 +748,25 @@ mod tests {
     }
 
     #[test]
+    fn handle_relative_open_returns_a_blocking_final_descriptor() {
+        let root = tempdir().expect("temporary root");
+        let bundle = root.path().join("bundle");
+        fs::create_dir_all(bundle.join("evidence")).expect("private bundle");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&bundle, fs::Permissions::from_mode(0o700))
+            .expect("private root");
+        fs::write(bundle.join("evidence/manifest.json"), b"{}").expect("synthetic manifest");
+
+        let verified = verify_bundle_root(&bundle).expect("verified root");
+        let file = verified
+            .open_relative_file(Path::new("evidence/manifest.json"))
+            .expect("regular nested file");
+        let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        assert!(flags >= 0, "opened descriptor flags are readable");
+        assert_eq!(flags & libc::O_NONBLOCK, 0);
+    }
+
+    #[test]
     fn verified_root_keeps_reading_the_original_directory_after_root_replacement() {
         let temp = tempdir().expect("temporary root");
         let root = temp.path().join("bundle");
