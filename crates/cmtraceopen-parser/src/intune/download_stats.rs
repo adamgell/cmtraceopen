@@ -532,6 +532,24 @@ mod tests {
         GuidRegistry::new()
     }
 
+    fn completed_json_download(payload: &str) -> DownloadStat {
+        let mut downloads = extract_downloads(
+            &[ImeLine {
+                line_number: 1,
+                timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
+                message: format!("Download completed successfully {payload}"),
+                component: None,
+                thread: None,
+                timezone_offset: None,
+            }],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+        assert_eq!(downloads.len(), 1, "missing coverage record for {payload}");
+        downloads.remove(0)
+    }
+
     #[test]
     fn completed_download_is_recorded() {
         let lines = vec![
@@ -947,6 +965,64 @@ mod tests {
                 format!("Download ({app_guid})"),
                 "accepted out-of-scope name for {payload}"
             );
+        }
+    }
+
+    #[test]
+    fn selected_ancestor_does_not_take_a_repeated_descendant_identity_name() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payload = format!(
+            r#"{{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+        );
+
+        let download = completed_json_download(&payload);
+
+        assert_eq!(download.content_id, app_guid);
+        assert_eq!(download.name, format!("Download ({app_guid})"));
+        assert_eq!(extract_explicit_identity_name_pair(&payload), None);
+    }
+
+    #[test]
+    fn conflicting_duplicate_names_in_the_selected_object_fail_closed() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","Name":"First Name","Name":"Second Name"}}"#),
+            format!(r#"{{"AppId":"{app_guid}","Name":"Second Name","Name":"First Name"}}"#),
+        ];
+
+        for payload in payloads {
+            let download = completed_json_download(&payload);
+
+            assert_eq!(download.content_id, app_guid);
+            assert_eq!(
+                download.name,
+                format!("Download ({app_guid})"),
+                "accepted conflicting name from {payload}"
+            );
+            assert_eq!(extract_explicit_identity_name_pair(&payload), None);
+        }
+    }
+
+    #[test]
+    fn identical_duplicate_names_are_deterministic() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payload = format!(r#"{{"AppId":"{app_guid}","Name":"Same Name","Name":"Same Name"}}"#);
+
+        let download = completed_json_download(&payload);
+
+        assert_eq!(download.name, "Same Name");
+    }
+
+    #[test]
+    fn application_name_precedes_name_in_either_field_order() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","ApplicationName":"Preferred","Name":"Fallback"}}"#),
+            format!(r#"{{"AppId":"{app_guid}","Name":"Fallback","ApplicationName":"Preferred"}}"#),
+        ];
+
+        for payload in payloads {
+            assert_eq!(completed_json_download(&payload).name, "Preferred");
         }
     }
 }
