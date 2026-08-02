@@ -954,7 +954,16 @@ fn finding_unregistered_strong_or_exact_key_profiles_are_rejected() {
 #[test]
 fn finding_rejects_key_or_terminal_refs_that_are_not_cited() {
     let cited = finding_evidence_ref("client-policy-agent", "policy:1-1");
-    let missing = finding_evidence_ref("client-policy-agent", "policy:2-2");
+    // `finding_evidence_ref` pins every span to line 1, so this reference used
+    // to claim line 1 while calling itself `policy:2-2`. Two entry ids over one
+    // physical line is the shape this suite now rejects outright, and it would
+    // mask the uncited-reference rule under test. The span is spelled out to
+    // match the entry id it advertises.
+    let missing = SccmEvidenceRef {
+        line_start: Some(2),
+        line_end: Some(2),
+        ..finding_evidence_ref("client-policy-agent", "policy:2-2")
+    };
 
     let key_result = SccmFindingBuilder::new("uncited-key")
         .class(SccmFindingClass::Symptom)
@@ -1294,6 +1303,223 @@ fn finding_serialization_prioritizes_conflicting_evidence_identity_ranges() {
 
     let error = serde_json::to_string(&finding).unwrap_err().to_string();
     assert!(error.contains("ConflictingEvidenceReference"), "{error}");
+}
+
+/// Builds one finding per citation surface, carrying `second` on that surface
+/// only, so a validator that scans a single surface cannot pass by accident.
+fn evidence_surface_findings(
+    label: &str,
+    first: &SccmEvidenceRef,
+    second: &SccmEvidenceRef,
+) -> Vec<(String, Result<SccmFinding, SccmFindingValidationError>)> {
+    fn scaffold(finding_id: String) -> SccmFindingBuilder {
+        SccmFindingBuilder::new(finding_id)
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+    }
+
+    vec![
+        (
+            format!("{label}/top-level"),
+            scaffold(format!("{label}-top-level"))
+                .evidence(vec![first.clone(), second.clone()])
+                .build(),
+        ),
+        (
+            format!("{label}/terminal"),
+            scaffold(format!("{label}-terminal"))
+                .evidence(vec![first.clone()])
+                .terminal_evidence(vec![SccmTerminalEvidence::observed_failure(second.clone())])
+                .build(),
+        ),
+        (
+            format!("{label}/correlation-key"),
+            scaffold(format!("{label}-correlation-key"))
+                .evidence(vec![first.clone()])
+                .correlation_keys(vec![finding_key(
+                    SccmCorrelationKeyKind::AssignmentId,
+                    "{ABCDEFAB-0000-0000-0000-000000000001}",
+                    "abcdefab-0000-0000-0000-000000000001",
+                    SccmKeyConfidence::Low,
+                    Some("sccm-keys-experimental-v1"),
+                    second.clone(),
+                )])
+                .build(),
+        ),
+    ]
+}
+
+#[test]
+fn finding_rejects_overlapping_ranges_across_distinct_evidence_identities() {
+    let first = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    // Every case claims at least one physical line of `first` under a second
+    // entry id, so the two references cannot both be the record they claim.
+    let cases = [
+        ("identical-span", Some(4), Some(6)),
+        ("shared-start-line", Some(1), Some(4)),
+        ("shared-end-line", Some(6), Some(9)),
+        ("contained-span", Some(5), Some(5)),
+        ("containing-span", Some(1), Some(9)),
+        ("straddling-span", Some(5), Some(9)),
+    ];
+
+    for (label, line_start, line_end) in cases {
+        let second = SccmEvidenceRef {
+            entry_id: "entry-b".into(),
+            line_start,
+            line_end,
+            ..first.clone()
+        };
+        for (surface, result) in evidence_surface_findings(label, &first, &second) {
+            assert_eq!(
+                result.unwrap_err(),
+                SccmFindingValidationError::OverlappingEvidenceReference,
+                "{surface}"
+            );
+        }
+    }
+}
+
+#[test]
+fn finding_overlap_rejection_survives_evidence_serde_round_trips() {
+    let first = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    let mut finding = SccmFindingBuilder::new("overlapping-serde-ranges")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![
+            first.clone(),
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(7),
+                line_end: Some(9),
+                ..first
+            },
+        ])
+        .build()
+        .unwrap();
+
+    let mut json = serde_json::to_value(&finding).unwrap();
+    json["evidence"][1]["lineStart"] = serde_json::json!(6);
+    let error = serde_json::from_value::<SccmFinding>(json)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("OverlappingEvidenceReference"), "{error}");
+
+    finding.evidence[1].line_start = Some(6);
+    assert_eq!(
+        finding.validate().unwrap_err(),
+        SccmFindingValidationError::OverlappingEvidenceReference
+    );
+    let error = serde_json::to_string(&finding).unwrap_err().to_string();
+    assert!(error.contains("OverlappingEvidenceReference"), "{error}");
+}
+
+#[test]
+fn finding_accepts_disjoint_and_unbounded_evidence_ranges() {
+    let anchor = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: Some(4),
+        line_end: Some(6),
+    };
+    // Overlap is a claim about physical extent within one artifact. Adjacent
+    // spans, other artifacts, and references that assert no extent at all are
+    // all citations nine lanes already emit, and must keep validating.
+    let cases = [
+        (
+            "adjacent-below",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(1),
+                line_end: Some(3),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "adjacent-above",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: Some(7),
+                line_end: Some(9),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "same-span-other-artifact",
+            SccmEvidenceRef {
+                artifact_id: "artifact-b".into(),
+                entry_id: "entry-b".into(),
+                ..anchor.clone()
+            },
+        ),
+        (
+            "unbounded-second",
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                line_start: None,
+                line_end: None,
+                ..anchor.clone()
+            },
+        ),
+    ];
+
+    for (label, second) in cases {
+        let finding = SccmFindingBuilder::new(format!("disjoint-{label}"))
+            .class(SccmFindingClass::Symptom)
+            .phase(SccmPhase::Policy)
+            .role(SccmRole::Client)
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .evidence(vec![anchor.clone(), second])
+            .build()
+            .unwrap_or_else(|error| panic!("{label}: {error:?}"));
+        let json = serde_json::to_value(&finding).unwrap();
+        assert_eq!(
+            serde_json::from_value::<SccmFinding>(json).unwrap(),
+            finding,
+            "{label}"
+        );
+    }
+
+    // Two references that both assert no extent stay indistinguishable by span
+    // and must not be treated as claiming the same lines.
+    let unbounded = SccmEvidenceRef {
+        artifact_id: "artifact-a".into(),
+        entry_id: "entry-a".into(),
+        line_start: None,
+        line_end: None,
+    };
+    SccmFindingBuilder::new("disjoint-both-unbounded")
+        .class(SccmFindingClass::Symptom)
+        .phase(SccmPhase::Policy)
+        .role(SccmRole::Client)
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .evidence(vec![
+            unbounded.clone(),
+            SccmEvidenceRef {
+                entry_id: "entry-b".into(),
+                ..unbounded
+            },
+        ])
+        .build()
+        .expect("unbounded references assert no physical extent");
 }
 
 #[test]
@@ -5343,6 +5569,39 @@ fn signless_ccm_offset_is_enriched_only_in_sccm_provenance() {
         SccmTimeOrderingState::NormalizedUtc
     );
     assert!(evidence[0].timestamp.utc_millis.is_some());
+}
+
+#[test]
+fn microsecond_precision_tail_is_not_read_as_a_source_offset() {
+    // A six-digit unsigned tail is ambiguous: `%03u%d` would read it as three
+    // millisecond digits plus a positive offset, and .NET microsecond
+    // precision writes six fractional digits. 456 is not a real UTC offset
+    // (it is neither within UTC-14..UTC+14 as a quarter-hour value nor a
+    // shape `%d` emits), so the tail stays fractional and the record is not
+    // promoted to UTC-normalized ordering.
+    let text = r#"<![LOG[Microsecond precision]LOG]!><time="10:00:00.123456" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+    let (entries, errors) =
+        cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(errors, 0);
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(
+        evidence[0].timestamp.original_display.as_deref(),
+        Some("07-30-2026 10:00:00.123456")
+    );
+    assert_eq!(evidence[0].timestamp.offset_minutes, None);
+    assert_eq!(
+        evidence[0].timestamp.ordering_state,
+        SccmTimeOrderingState::OffsetMissing
+    );
+    assert_eq!(evidence[0].timestamp.utc_millis, None);
+
+    // The public LogEntry still carries the pre-spine greedy projection,
+    // which assigns the final digit to the offset. That divergence is
+    // deliberate compatibility, not a second reading of the grammar.
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].timezone_offset, Some(6));
 }
 
 #[test]

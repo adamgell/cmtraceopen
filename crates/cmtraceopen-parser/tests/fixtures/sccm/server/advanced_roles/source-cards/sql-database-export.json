@@ -1,0 +1,79 @@
+{
+  "cardSchemaVersion": "1.0.0",
+  "cardId": "sql-database-export",
+  "cardVersion": "1.0.0",
+  "family": "SQL database and supplementary export diagnostics",
+  "roleScope": [
+    "siteDatabaseServer"
+  ],
+  "candidateBasenames": [
+    "site-database-export.json"
+  ],
+  "pathClasses": [
+    "operatorProvidedDatabaseSupplement"
+  ],
+  "rawParserFamily": "unsupported",
+  "sourceVersionScope": {
+    "state": "unknown",
+    "allowedPrefixes": []
+  },
+  "capture": {
+    "classification": "optional",
+    "maxBytes": 1048576,
+    "accessPolicy": "explicitOperatorExport",
+    "rotationPolicy": {
+      "kinds": [
+        "snapshot"
+      ],
+      "maxFiles": 1
+    }
+  },
+  "privacy": {
+    "sensitivity": "high",
+    "classes": [
+      "databaseIdentity",
+      "deviceIdentity",
+      "queryText",
+      "userIdentity"
+    ],
+    "redactionRequired": true,
+    "publicProjection": [
+      "captureState",
+      "cardId",
+      "coverageState",
+      "roleScope"
+    ],
+    "rawSensitiveFieldProjection": []
+  },
+  "expectedHealthyEvidence": "No healthy semantic evidence is supported in this phase; an explicit operator export may only be retained as bounded coverage data.",
+  "terminalFailureEvidence": "No terminal database finding is supported in this phase; missing, denied, malformed, or partial exports remain coverage states only.",
+  "correlationPolicy": {
+    "keyState": "unvalidated",
+    "allowedKeyKinds": [],
+    "timeOnlyEligible": false,
+    "topologyRequired": true
+  },
+  "fixtureIds": [],
+  "ownerIssue": "#334",
+  "promotion": {
+    "state": "deferred",
+    "observedEvidenceIds": [],
+    "implementationIssue": null,
+    "productionReducer": null,
+    "deferredReason": "Database and export parsing needs a separately approved source contract, privacy model, and bounded operator workflow."
+  },
+  "semanticPolicy": {
+    "captureGuidanceOnly": true,
+    "canCreateTransactions": false,
+    "canCreateFailureFindings": false
+  },
+  "nextEvidence": [
+    "Approve a dedicated database-supplement contract with data minimization and explicit operator authorization.",
+    "Create sanitized schema, privacy, cap, unsupported-version, malformed, and partial-export fixtures in a separate implementation issue."
+  ],
+  "supersession": {
+    "state": "active",
+    "supersedes": [],
+    "supersededBy": null
+  }
+}

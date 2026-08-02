@@ -1,0 +1,144 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "rotation-boundary",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": []
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "partial"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-rotation-boundary-01-current",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-rotation-boundary-02-lo",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {
+      "observationId": "updates:source-local:rotation-boundary",
+      "key": null,
+      "keyConfidence": "none",
+      "phase": null,
+      "state": "incomplete",
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "lastSuccessfulPhase": null,
+      "nextArtifact": {
+        "logicalArtifactId": "client-updates",
+        "reason": "Collect the smallest bounded client-updates continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-rotation-boundary-01-current",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-rotation-boundary-02-lo",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "finding:updates:rotation-boundary",
+      "subjectId": "updates:source-local:rotation-boundary",
+      "class": "insufficientEvidence",
+      "phase": null,
+      "lastSuccessfulPhase": null,
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "nextArtifact": {
+        "logicalArtifactId": "client-updates",
+        "reason": "Collect the smallest bounded client-updates continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-rotation-boundary-01-current",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-rotation-boundary-02-lo",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": false,
+    "counterpartReadyFacts": []
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

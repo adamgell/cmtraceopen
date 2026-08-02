@@ -1,0 +1,39 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "co-management-sccm-owned",
+  "workflowFamily": "coManagement",
+  "bundle": {
+    "bundleId": "sccm-326-co-management-sccm-owned",
+    "captureHost": "LAB-CLIENT-01",
+    "role": "client",
+    "siteCode": "LAB"
+  },
+  "artifacts": [
+    {
+      "artifactId": "co-sccm-owner-current",
+      "role": "client",
+      "logicalArtifactId": "client-co-management",
+      "sourceName": "CoManagementHandler.log",
+      "catalogState": "admitted",
+      "parserEligible": true,
+      "captureState": "captured",
+      "relativePath": "evidence/client-co-management/current/CoManagementHandler.log",
+      "sanitizedSourcePath": "SYNTHETIC://client/management/co-management-sccm-owned/client-co-management/CoManagementHandler.log",
+      "pathFingerprint": "safe:path:326:co-sccm-owner",
+      "sourceVersion": "5.00.TEST.3260",
+      "encoding": "utf-8",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "collectionLimit": {
+        "capped": false,
+        "limitBytes": null
+      },
+      "capturedUtc": "2026-07-31T00:00:00Z"
+    }
+  ]
+}

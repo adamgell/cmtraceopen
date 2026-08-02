@@ -1,0 +1,73 @@
+{
+  "cardSchemaVersion": "1.0.0",
+  "cardId": "unvalidated-production-source",
+  "cardVersion": "1.0.0",
+  "family": "Synthetic unvalidated source attempting semantic admission",
+  "roleScope": [
+    "syntheticRole"
+  ],
+  "candidateBasenames": [
+    "SyntheticRole.log"
+  ],
+  "pathClasses": [
+    "configuredRoleLogRoot"
+  ],
+  "rawParserFamily": "ccm",
+  "sourceVersionScope": {
+    "state": "unknown",
+    "allowedPrefixes": []
+  },
+  "capture": {
+    "classification": "optional",
+    "maxBytes": 1024,
+    "accessPolicy": "leastPrivilegeNoEscalation",
+    "rotationPolicy": {
+      "kinds": [
+        "current"
+      ],
+      "maxFiles": 1
+    }
+  },
+  "privacy": {
+    "sensitivity": "low",
+    "classes": [],
+    "redactionRequired": false,
+    "publicProjection": [
+      "captureState",
+      "cardId",
+      "coverageState",
+      "roleScope"
+    ],
+    "rawSensitiveFieldProjection": []
+  },
+  "expectedHealthyEvidence": "A future validated synthetic rule would require an exact request key and explicit terminal success evidence.",
+  "terminalFailureEvidence": "A future validated synthetic rule would require an exact request key and explicit terminal failure evidence.",
+  "correlationPolicy": {
+    "keyState": "unvalidated",
+    "allowedKeyKinds": [],
+    "timeOnlyEligible": false,
+    "topologyRequired": true
+  },
+  "fixtureIds": [],
+  "ownerIssue": "#334",
+  "promotion": {
+    "state": "candidate",
+    "observedEvidenceIds": [],
+    "implementationIssue": null,
+    "productionReducer": "sccm.server.synthetic.reduce",
+    "deferredReason": null
+  },
+  "semanticPolicy": {
+    "captureGuidanceOnly": false,
+    "canCreateTransactions": true,
+    "canCreateFailureFindings": true
+  },
+  "nextEvidence": [
+    "Remove semantic claims and collect the complete observed, fixture, key, and implementation evidence chain."
+  ],
+  "supersession": {
+    "state": "active",
+    "supersedes": [],
+    "supersededBy": null
+  }
+}

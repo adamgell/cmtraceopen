@@ -1,0 +1,56 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "unrelated-runs",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":"task-sequence-client-5.00.test-v1","status":"matched"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"captured","pathClasses":["client"]}],
+  "artifactProvenance": [
+    {"artifactId":"task-sequence-unrelated-run-a","bytesCopied":424,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/root-a/CCM/Logs/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/root-a/CCM/Logs/smstslog/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":0},
+    {"artifactId":"task-sequence-unrelated-run-b","bytesCopied":418,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/root-b/CCM/Logs/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/root-b/CCM/Logs/smstslog/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":0}
+  ],
+  "transactions": [
+    {
+      "transactionId": "task-sequence-007",
+      "key": {"keyProfileKind":"executionPackageAdvertisementContext","executionId":"72400000-0000-0000-0000-000000000007","taskSequencePackageId":"LAB00324","advertisementId":"LAB20307","runContext":"osd-a","confidence":"exact","extractionProfileId":"task-sequence-client-5.00.test-v1"},
+      "evidence": [{"artifactId":"task-sequence-unrelated-run-a","startLine":1,"endLine":1}],
+      "pathSequence": [{"artifactId":"task-sequence-unrelated-run-a","pathClass":"client","relocationOrdinal":0}],
+      "timestampProvenance": {"orderingState":"normalizedUtc","offsetMinutes":0,"normalizedUtc":"2026-07-30T01:20:00Z"},
+      "orderingEvidence": {"artifactId":"task-sequence-unrelated-run-a","startLine":1,"endLine":1},
+      "coverageGapArtifactIds": [],
+      "nextArtifact": {"logicalArtifactId":"client-task-sequence-smsts","pathClass":"client","reason":"Collect later records bearing execution 007's exact key."},
+      "phase": "installSoftware",
+      "state": "inProgress",
+      "lastSuccessfulPhase": "installClient",
+      "classification": "insufficientEvidence",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "terminalEvidence": null
+    },
+    {
+      "transactionId": "task-sequence-008",
+      "key": {"keyProfileKind":"executionPackageAdvertisementContext","executionId":"72400000-0000-0000-0000-000000000008","taskSequencePackageId":"LAB00324","advertisementId":"LAB20308","runContext":"osd-b","confidence":"exact","extractionProfileId":"task-sequence-client-5.00.test-v1"},
+      "evidence": [{"artifactId":"task-sequence-unrelated-run-b","startLine":1,"endLine":1}],
+      "pathSequence": [{"artifactId":"task-sequence-unrelated-run-b","pathClass":"client","relocationOrdinal":0}],
+      "timestampProvenance": {"orderingState":"normalizedUtc","offsetMinutes":0,"normalizedUtc":"2026-07-30T01:20:00Z"},
+      "orderingEvidence": {"artifactId":"task-sequence-unrelated-run-b","startLine":1,"endLine":1},
+      "coverageGapArtifactIds": [],
+      "nextArtifact": {"logicalArtifactId":"client-task-sequence-smsts","pathClass":"client","reason":"Collect later records bearing execution 008's exact key."},
+      "phase": "preflight",
+      "state": "inProgress",
+      "lastSuccessfulPhase": "start",
+      "classification": "insufficientEvidence",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "terminalEvidence": null
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {"findingId":"run-a-nonterminal","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-unrelated-run-a","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false},
+    {"findingId":"run-b-nonterminal","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-unrelated-run-b","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false}
+  ],
+  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"],"sameTimestampDoesNotJoin":true}
+}

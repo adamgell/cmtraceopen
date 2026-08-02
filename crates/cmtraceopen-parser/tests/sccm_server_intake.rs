@@ -1,5 +1,11 @@
-use cmtraceopen_parser::sccm::server::windows::{assess_server_intake, SccmServerArtifactPayload};
-use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation};
+use cmtraceopen_parser::models::log_entry::Severity;
+use cmtraceopen_parser::sccm::server::windows::{
+    assess_server_intake, SccmServerArtifactPayload, SccmServerIntakeError,
+};
+use cmtraceopen_parser::sccm::{
+    SccmConfidence, SccmCoverageState, SccmFinding, SccmFindingBuilder, SccmFindingClass,
+    SccmFindingCoverageGap, SccmPhase, SccmRole, SccmRotation,
+};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -72,6 +78,43 @@ fn artifact_json<'a>(assessment: &'a Value, artifact_id: &str) -> &'a Value {
         .expect("artifact is present")
 }
 
+fn assert_request_passes_finding_boundaries(
+    scenario: &str,
+    assessment: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
+) {
+    let request = assessment
+        .next_artifact_requests
+        .first()
+        .unwrap_or_else(|| panic!("{scenario} emits one bounded request"));
+    let artifact = assessment
+        .artifacts
+        .first()
+        .unwrap_or_else(|| panic!("{scenario} retains its coverage artifact"));
+    let finding = SccmFindingBuilder::new(format!("server-intake-{scenario}"))
+        .class(SccmFindingClass::InsufficientEvidence)
+        .phase(SccmPhase::Unknown("serverIntake".to_owned()))
+        .role(request.role.clone())
+        .severity(Severity::Warning)
+        .confidence(SccmConfidence::Low)
+        .coverage_gap(SccmFindingCoverageGap {
+            artifact_id: artifact.artifact_id.clone(),
+            role: request.role.clone(),
+            coverage: artifact.state.clone(),
+        })
+        .next_artifact(request.clone())
+        .build()
+        .unwrap_or_else(|error| panic!("{scenario} request must validate: {error:?}"));
+
+    let serialized = serde_json::to_value(&finding)
+        .unwrap_or_else(|error| panic!("{scenario} finding must serialize: {error}"));
+    let deserialized = serde_json::from_value::<SccmFinding>(serialized)
+        .unwrap_or_else(|error| panic!("{scenario} finding must deserialize: {error}"));
+    assert_eq!(
+        deserialized, finding,
+        "{scenario} request and coverage data must survive the JSON boundary"
+    );
+}
+
 #[test]
 fn server_intake_normalizes_role_coverage_and_logical_records() {
     let (complete_manifest, complete_payloads) = load_bundle("complete-multi-role");
@@ -135,10 +178,7 @@ fn server_intake_normalizes_role_coverage_and_logical_records() {
     assert!(absent.evidence.is_empty());
     assert!(absent.findings.is_empty());
     assert_eq!(absent.next_artifact_requests.len(), 1);
-    assert_eq!(
-        absent.next_artifact_requests[0].logical_id,
-        "server-dp-distribution"
-    );
+    assert_eq!(absent.next_artifact_requests[0].logical_id, "distmgr");
 
     let (unsorted_manifest, unsorted_payloads) = load_bundle("unsorted-manifest");
     let unsorted =
@@ -158,6 +198,64 @@ fn server_intake_normalizes_role_coverage_and_logical_records() {
         serde_json::to_vec(&unsorted).expect("assessment serializes"),
         serde_json::to_vec(&reordered).expect("assessment serializes"),
         "manifest order must not affect normalized output"
+    );
+}
+
+#[test]
+fn server_intake_gap_requests_use_exact_shared_catalog_artifacts() {
+    let cases = [
+        (
+            "absent-dp",
+            "distmgr",
+            SccmRole::SiteServer,
+            "Collect the complete distmgr.log file.",
+        ),
+        (
+            "access-denied-mp",
+            "mpGetPolicy",
+            SccmRole::ManagementPoint,
+            "Collect the complete MP_GetPolicy.log file.",
+        ),
+        (
+            "capped-sup",
+            "wsyncmgr",
+            SccmRole::SiteServer,
+            "Collect the complete wsyncmgr.log file.",
+        ),
+    ];
+
+    for (scenario, logical_id, role, reason) in cases {
+        let (manifest, payloads) = load_bundle(scenario);
+        let assessment = assess_server_intake(&manifest, &payloads)
+            .unwrap_or_else(|error| panic!("{scenario} should be assessed: {error}"));
+
+        assert_request_passes_finding_boundaries(scenario, &assessment);
+        assert_eq!(assessment.next_artifact_requests.len(), 1, "{scenario}");
+        let request = &assessment.next_artifact_requests[0];
+        assert_eq!(request.logical_id, logical_id, "{scenario}");
+        assert_eq!(request.role, role, "{scenario}");
+        assert_eq!(request.reason, reason, "{scenario}");
+    }
+}
+
+#[test]
+fn server_intake_does_not_request_unknown_or_non_ccm_sources() {
+    let (iis_manifest, iis_payloads) = load_bundle("skipped-iis");
+    let mut denied_iis = manifest_value(&iis_manifest);
+    denied_iis["artifacts"][0]["captureState"] = Value::String("accessDenied".to_owned());
+    let iis = assess_server_intake(&serialize_manifest(&denied_iis), &iis_payloads)
+        .expect("non-CCM coverage remains assessable");
+    assert!(
+        iis.next_artifact_requests.is_empty(),
+        "a non-CCM group has no shared catalog artifact request"
+    );
+
+    let (unknown_manifest, unknown_payloads) = load_bundle("unsupported-db-supplement");
+    let unknown = assess_server_intake(&unknown_manifest, &unknown_payloads)
+        .expect("unknown coverage remains assessable");
+    assert!(
+        unknown.next_artifact_requests.is_empty(),
+        "an unknown source has no shared catalog artifact request"
     );
 }
 
@@ -306,9 +404,155 @@ fn server_intake_rejects_relabelled_duplicate_canonical_artifact_identity() {
     manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
     manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
 
-    assert!(
-        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
-        "caller-chosen artifact and root labels must not duplicate one canonical identity"
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::DuplicateArtifact),
+        "caller-chosen artifact and root labels must not duplicate one canonical identity",
+    );
+}
+
+#[test]
+fn server_intake_scopes_canonical_identity_to_producer_host() {
+    let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
+    let mut manifest = manifest_value(&manifest_json);
+    let fingerprint =
+        manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
+    let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
+    manifest["artifacts"][0]["producerHostHandle"] =
+        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["producerHostHandle"] =
+        Value::String("synthetic:host:mp-01".to_owned());
+    manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+    manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the same artifact identity on a distinct producer host is independent");
+    assert_eq!(assessment.artifacts.len(), 2);
+    assert_eq!(
+        assessment
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.producer_host_handle.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("synthetic:host:mp-01"), Some("synthetic:host:site-01"),],
+        "producer-host provenance orders otherwise-equal artifacts before caller ids",
+    );
+
+    let mut reordered_manifest = manifest.clone();
+    reordered_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .reverse();
+    let reordered = assess_server_intake(&serialize_manifest(&reordered_manifest), &payloads)
+        .expect("reordered distinct-host artifacts are assessed");
+    assert_eq!(
+        serde_json::to_vec(&assessment).expect("assessment serializes"),
+        serde_json::to_vec(&reordered).expect("reordered assessment serializes"),
+        "distinct-host output is independent of manifest order",
+    );
+}
+
+#[test]
+fn server_intake_scopes_path_fingerprint_lineage_to_producer_host() {
+    let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
+    let mut manifest = manifest_value(&manifest_json);
+    let fingerprint =
+        manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
+    manifest["artifacts"][1]["producerHostHandle"] =
+        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("path fingerprints are scoped to their producer host");
+    assert_eq!(assessment.artifacts.len(), 2);
+}
+
+fn configure_second_artifact_as_dp_identity(
+    manifest: &mut Value,
+    subject_handle: &str,
+    share_lineage: bool,
+) {
+    let fingerprint =
+        manifest["artifacts"][2]["configuredPathProvenance"]["pathFingerprint"].clone();
+    let lineage = manifest["artifacts"][2]["rotation"]["lineageId"].clone();
+    let artifact = &mut manifest["artifacts"][3];
+    artifact["workflowSubject"] = json!({
+        "role": "distributionPoint",
+        "instanceHandle": subject_handle,
+    });
+    artifact["sourceId"] = Value::String("server-dp-distribution".to_owned());
+    artifact["originalPath"] = Value::String("REDACTED_SITE_DP_CONTROL_ROOT_COPY".to_owned());
+    artifact["originalBasename"] = Value::String("distmgr.log".to_owned());
+    artifact["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+    if share_lineage {
+        artifact["rotation"]["lineageId"] = lineage;
+    }
+    artifact["relativePath"] = Value::String(
+        "evidence/sccm/server/site-server/server-dp-distribution/subject-distribution-point/instance-bbbbbbbb/current/distmgr.log"
+            .to_owned(),
+    );
+}
+
+#[test]
+fn server_intake_scopes_canonical_identity_to_workflow_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][2]["workflowSubject"]["instanceHandle"] =
+        Value::String("synthetic:subject:dp-02".to_owned());
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-01", true);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the same artifact identity for a distinct workflow subject is independent");
+    assert_eq!(assessment.artifacts.len(), 4);
+    assert_eq!(
+        assessment
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.source_id == "server-dp-distribution")
+            .map(|artifact| artifact.workflow_subject_handle.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some("synthetic:subject:dp-01"),
+            Some("synthetic:subject:dp-02"),
+        ],
+        "workflow-subject provenance orders otherwise-equal artifacts before caller ids",
+    );
+
+    let mut reordered_manifest = manifest.clone();
+    reordered_manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .reverse();
+    let reordered = assess_server_intake(&serialize_manifest(&reordered_manifest), &payloads)
+        .expect("reordered distinct-subject artifacts are assessed");
+    assert_eq!(
+        serde_json::to_vec(&assessment).expect("assessment serializes"),
+        serde_json::to_vec(&reordered).expect("reordered assessment serializes"),
+        "distinct-subject output is independent of manifest order",
+    );
+}
+
+#[test]
+fn server_intake_scopes_path_fingerprint_lineage_to_workflow_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-02", false);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("path fingerprints are scoped to their workflow subject");
+    assert_eq!(assessment.artifacts.len(), 4);
+}
+
+#[test]
+fn server_intake_rejects_relabelled_duplicate_for_same_workflow_subject() {
+    let (manifest_json, payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-01", true);
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::DuplicateArtifact),
+        "caller labels cannot split one host-and-subject artifact identity",
     );
 }
 
@@ -419,6 +663,50 @@ fn server_intake_suppresses_absent_default_request_when_configured_source_is_usa
         assessment.next_artifact_requests.is_empty(),
         "a usable configured candidate satisfies the logical source request"
     );
+}
+
+#[test]
+fn server_intake_does_not_suppress_default_request_across_producer_hosts() {
+    let (configured_manifest, configured_payloads) = load_bundle("configured-nondefault-path");
+    let mut combined = manifest_value(&configured_manifest);
+    let (absent_manifest, _absent_payloads) = load_bundle("access-denied-mp");
+    let mut absent = manifest_value(&absent_manifest)["artifacts"][0].clone();
+    absent["producerHostHandle"] = Value::String("synthetic:host:site-01".to_owned());
+    absent["captureState"] = Value::String("absent".to_owned());
+    absent["configuredPathProvenance"]["state"] = Value::String("defaultCandidate".to_owned());
+    combined["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .push(absent);
+
+    let assessment = assess_server_intake(&serialize_manifest(&combined), &configured_payloads)
+        .expect("distinct-host configured and default candidates are assessed together");
+    assert_eq!(assessment.next_artifact_requests.len(), 1);
+    assert_eq!(
+        assessment.next_artifact_requests[0].logical_id,
+        "mpGetPolicy"
+    );
+}
+
+#[test]
+fn server_intake_does_not_suppress_default_request_across_workflow_subjects() {
+    let (captured_manifest, captured_payloads) = load_bundle("complete-multi-role");
+    let mut combined = manifest_value(&captured_manifest);
+    let (absent_manifest, _absent_payloads) = load_bundle("absent-dp");
+    let mut absent = manifest_value(&absent_manifest)["artifacts"][0].clone();
+    absent["workflowSubject"] = json!({
+        "role": "distributionPoint",
+        "instanceHandle": "synthetic:subject:dp-02",
+    });
+    combined["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .push(absent);
+
+    let assessment = assess_server_intake(&serialize_manifest(&combined), &captured_payloads)
+        .expect("distinct-subject configured and default candidates are assessed together");
+    assert_eq!(assessment.next_artifact_requests.len(), 1);
+    assert_eq!(assessment.next_artifact_requests[0].logical_id, "distmgr");
 }
 
 #[test]

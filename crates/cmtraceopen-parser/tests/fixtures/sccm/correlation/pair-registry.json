@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "1.0.0",
+  "pairs": [
+    {
+      "pairId": "content-distribution-point",
+      "workflow": "contentDistributionPoint",
+      "clientIssue": "#322",
+      "serverIssue": "#329",
+      "state": "contractPrepared",
+      "productionEnabled": false,
+      "ruleValidated": false,
+      "implementationModule": null,
+      "requiredGuardIds": [
+        "conflicting-exact-key",
+        "incompatible-topology",
+        "invalid-timestamp-offset",
+        "missing-client-counterpart",
+        "missing-server-counterpart",
+        "partial-capture",
+        "redaction-boundary",
+        "reordered-input",
+        "rotation-split",
+        "same-time-no-key",
+        "unknown-extraction-profile",
+        "unrelated-terminal-error",
+        "version-mismatch"
+      ],
+      "blockers": [
+        "#318 finding interface exact-head review pending",
+        "#322 public fact interface not implemented",
+        "#329 public fact interface not independently accepted"
+      ]
+    },
+    {
+      "pairId": "policy-management-point",
+      "workflow": "policyManagementPoint",
+      "clientIssue": "#321",
+      "serverIssue": "#328",
+      "state": "contractPrepared",
+      "productionEnabled": false,
+      "ruleValidated": false,
+      "implementationModule": null,
+      "requiredGuardIds": [
+        "conflicting-exact-key",
+        "incompatible-topology",
+        "invalid-timestamp-offset",
+        "missing-client-counterpart",
+        "missing-server-counterpart",
+        "partial-capture",
+        "redaction-boundary",
+        "reordered-input",
+        "rotation-split",
+        "same-time-no-key",
+        "unknown-extraction-profile",
+        "unrelated-terminal-error",
+        "version-mismatch"
+      ],
+      "blockers": [
+        "#318 finding interface exact-head review pending",
+        "#321 public fact interface not implemented",
+        "#328 public fact interface not implemented"
+      ]
+    },
+    {
+      "pairId": "updates-software-update-point",
+      "workflow": "updatesSoftwareUpdatePoint",
+      "clientIssue": "#323",
+      "serverIssue": "#330",
+      "state": "candidate",
+      "productionEnabled": false,
+      "ruleValidated": false,
+      "implementationModule": null,
+      "requiredGuardIds": [
+        "conflicting-exact-key",
+        "incompatible-topology",
+        "invalid-timestamp-offset",
+        "missing-client-counterpart",
+        "missing-server-counterpart",
+        "partial-capture",
+        "redaction-boundary",
+        "reordered-input",
+        "rotation-split",
+        "same-time-no-key",
+        "unknown-extraction-profile",
+        "unrelated-terminal-error",
+        "version-mismatch"
+      ],
+      "blockers": [
+        "#318 finding interface exact-head review pending",
+        "#323 source facts not independently accepted",
+        "#330 source facts not independently accepted",
+        "dedicated pair subplan not approved"
+      ]
+    }
+  ]
+}

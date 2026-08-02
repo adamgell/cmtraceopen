@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE updates malformed Scan UpdateId={NOT-A-UUID} CiId=CI-UPDATE-BAD cannot create a key]LOG]!><time="15:00:00.000+000" date="7-30-2026" component="ScanAgent" context="" type="2" thread="1" file="synthetic.cc:1">

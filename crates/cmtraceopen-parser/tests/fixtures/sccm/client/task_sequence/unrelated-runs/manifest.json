@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "unrelated-runs",
+  "bundle": {"role":"client","workflow":"taskSequence","siteCode":"LAB"},
+  "artifacts": [
+    {"artifactId":"task-sequence-unrelated-run-a","designOnlyCatalog":{"entryId":"client-task-sequence-smsts","groupMemberships":["client-task-sequence-smsts"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"smsts.log","sanitizedSourcePath":"SYNTHETIC://client/root-a/CCM/Logs/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/root-a/CCM/Logs/smstslog/smsts.log","pathFingerprint":"synthetic:unrelated:root-a","pathClass":"client","rotation":{"kind":"current","fragmentComplete":true},"relocationOrdinal":0,"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:20:05Z","bytesCopied":424,"relativePath":"evidence/client-task-sequence-smsts/client/root-a/current/smsts.log"},
+    {"artifactId":"task-sequence-unrelated-run-b","designOnlyCatalog":{"entryId":"client-task-sequence-smsts","groupMemberships":["client-task-sequence-smsts"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"smsts.log","sanitizedSourcePath":"SYNTHETIC://client/root-b/CCM/Logs/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/root-b/CCM/Logs/smstslog/smsts.log","pathFingerprint":"synthetic:unrelated:root-b","pathClass":"client","rotation":{"kind":"current","fragmentComplete":true},"relocationOrdinal":0,"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:20:05Z","bytesCopied":418,"relativePath":"evidence/client-task-sequence-smsts/client/root-b/current/smsts.log"}
+  ]
+}
