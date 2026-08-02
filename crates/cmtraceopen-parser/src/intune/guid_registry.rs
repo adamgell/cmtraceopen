@@ -1375,6 +1375,30 @@ mod tests {
     }
 
     #[test]
+    fn explicit_identity_context_carries_the_named_guid_fallback_from_its_scan() {
+        let upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+        let lower = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let messages = [
+            format!(
+                r#"Processing identity {upper} for {{"ApplicationName":"Contoso"}}"#
+            ),
+            format!(
+                r#"Processing identity {upper} for {{\"Name\":\"Contoso\"}}"#
+            ),
+        ];
+
+        for message in messages {
+            let context = explicit_app_identity_context(&message);
+            assert_eq!(context.identity, ExplicitAppIdentity::Absent);
+            assert_eq!(context.fallback_app_id.as_deref(), Some(lower));
+        }
+
+        let context = explicit_app_identity_context(&format!("Processing identity {upper}"));
+        assert_eq!(context.identity, ExplicitAppIdentity::Absent);
+        assert_eq!(context.fallback_app_id, None);
+    }
+
+    #[test]
     fn decorated_identity_field_uses_its_field_local_guid() {
         let unrelated_guid = "11111111-2222-3333-4444-555555555555";
         let app_guid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
