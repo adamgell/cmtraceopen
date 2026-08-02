@@ -903,6 +903,142 @@ fn undeclared_status_source_is_an_explicit_host_scoped_coverage_gap() {
 }
 
 #[test]
+fn undeclared_component_source_is_an_explicit_host_component_work_item_scoped_coverage_gap() {
+    let assessment = assess(&[Source::status(HEALTHY_STATUS)]);
+    assert!(assessment
+        .artifacts
+        .iter()
+        .all(|artifact| artifact.source_id != "server-sitecomp"));
+    assert!(!assessment.evidence.is_empty());
+
+    let analysis = analyze_site_core(&assessment);
+    assert_eq!(analysis.results.len(), 1);
+    let result = &analysis.results[0];
+    assert_eq!(result.state, SccmSiteCoreState::Incomplete);
+    assert_eq!(
+        result.finding_class,
+        Some(SccmFindingClass::InsufficientEvidence)
+    );
+    assert!(!result.evidence.is_empty());
+
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    let gap = &analysis.coverage_gaps[0];
+    assert_eq!(gap.source_id, "server-sitecomp");
+    assert_eq!(gap.state, SccmCoverageState::Absent);
+    assert_eq!(gap.reason_code, "required-component-source-not-declared");
+    assert!(gap.artifact_id.starts_with("site-core:missing-source:v1:"));
+    assert!(!gap.artifact_id.contains("site-01"));
+    assert_eq!(
+        result.coverage_gap_artifact_ids,
+        vec![gap.artifact_id.clone()]
+    );
+
+    let result_finding = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.subject_id == result.result_id)
+        .expect("insufficient-evidence result has a validated finding");
+    assert_eq!(
+        result_finding.finding.class,
+        SccmFindingClass::InsufficientEvidence
+    );
+    assert_eq!(result_finding.finding.coverage_gaps.len(), 1);
+    assert_eq!(
+        result_finding.finding.coverage_gaps[0].artifact_id,
+        gap.artifact_id
+    );
+
+    let component_requests = analysis
+        .artifact_requests
+        .iter()
+        .filter(|request| request.logical_name == "server-sitecomp")
+        .collect::<Vec<_>>();
+    assert_eq!(component_requests.len(), 1);
+    let request = component_requests[0];
+    assert_eq!(
+        request.reason_code,
+        "required-component-source-not-declared"
+    );
+    assert_eq!(request.max_artifacts, 2);
+    assert_eq!(
+        request
+            .candidates
+            .iter()
+            .map(|candidate| (candidate.basename.as_str(), candidate.rotation.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("sitecomp.log", "current"), ("sitecomp.lo_", "loUnderscore")]
+    );
+    assert_eq!(
+        request.scope.producer_host_handle.as_deref(),
+        Some("synthetic:host:site-01")
+    );
+    assert_eq!(request.scope.component_id.as_deref(), Some("SMS_EXECUTIVE"));
+    assert_eq!(request.scope.work_item_id.as_deref(), Some("SC-HEALTH-001"));
+    assert_eq!(request.scope.rotation_lineage_handle, None);
+}
+
+#[test]
+fn undeclared_component_gap_is_deterministic_under_status_only_assessment_permutation() {
+    let assessment = assess(&[Source::status(HEALTHY_STATUS)]);
+    let mut reordered = assessment.clone();
+    reordered.artifacts.reverse();
+    reordered.coverage.reverse();
+    reordered.evidence.reverse();
+    reordered.next_artifact_requests.reverse();
+
+    assert_eq!(
+        serde_json::to_vec(&analyze_site_core(&assessment)).expect("analysis serializes"),
+        serde_json::to_vec(&analyze_site_core(&reordered)).expect("analysis serializes")
+    );
+}
+
+#[test]
+fn undeclared_component_gap_does_not_attach_across_producer_hosts() {
+    let mut assessment = assess(&[
+        Source::status(HEALTHY_STATUS),
+        Source::sitecomp(HEALTHY_SITECOMP),
+    ]);
+    assessment
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-sitecomp")
+        .expect("component artifact")
+        .producer_host_handle = Some("synthetic:host:site-02".to_owned());
+
+    let analysis = analyze_site_core(&assessment);
+    let status_only_result = analysis
+        .results
+        .iter()
+        .find(|result| result.transaction_key.producer_host_handle == "synthetic:host:site-01")
+        .expect("status-only host result");
+    assert_eq!(status_only_result.coverage_gap_artifact_ids.len(), 1);
+    let local_gap_id = &status_only_result.coverage_gap_artifact_ids[0];
+    let local_gap = analysis
+        .coverage_gaps
+        .iter()
+        .find(|gap| gap.artifact_id == *local_gap_id)
+        .expect("status-only host component gap");
+    assert_eq!(local_gap.source_id, "server-sitecomp");
+    assert_eq!(
+        local_gap.reason_code,
+        "required-component-source-not-declared"
+    );
+    assert!(status_only_result.next_artifacts.iter().all(|request| {
+        request.scope.producer_host_handle.as_deref() == Some("synthetic:host:site-01")
+    }));
+
+    let foreign_component_result = analysis
+        .results
+        .iter()
+        .find(|result| result.transaction_key.producer_host_handle == "synthetic:host:site-02")
+        .expect("foreign component host result");
+    assert!(foreign_component_result
+        .coverage_gap_artifact_ids
+        .iter()
+        .all(|gap_id| gap_id != local_gap_id));
+}
+
+#[test]
 fn site_core_output_is_byte_identical_after_assessment_reordering() {
     let assessment = assess(&[
         Source::sitecomp(CONTRADICTORY_SITECOMP),
