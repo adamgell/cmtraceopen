@@ -569,6 +569,27 @@ fn collection_timestamp_is_projected_as_canonical_utc() {
 }
 
 #[test]
+fn group_level_coverage_gaps_serialize_an_explicit_null_artifact_id() {
+    let serialized =
+        serde_json::to_value(assessment("rotations")).expect("client intake assessment serializes");
+    let gaps = serialized["coverageGaps"]
+        .as_array()
+        .expect("coverage gaps serialize as an array");
+
+    assert!(
+        !gaps.is_empty(),
+        "the rotations fixture has group-level gaps"
+    );
+    assert!(
+        gaps.iter().all(|gap| {
+            gap.as_object()
+                .is_some_and(|object| object.get("artifactId").is_some_and(Value::is_null))
+        }),
+        "group-level gaps must serialize artifactId explicitly as null"
+    );
+}
+
+#[test]
 fn every_declared_client_basename_is_supported_by_the_authoritative_catalog() {
     for group in declared_client_source_groups() {
         for basename in group.accepted_basenames {

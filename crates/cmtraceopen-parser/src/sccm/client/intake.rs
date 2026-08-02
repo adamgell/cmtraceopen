@@ -325,7 +325,7 @@ impl From<&SccmClientIntakeGroup> for SccmClientIntakeGroupWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SccmClientIntakeCoverageGapWire {
     logical_artifact_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     artifact_id: Option<String>,
     role: SccmRole,
     coverage: SccmCoverageState,

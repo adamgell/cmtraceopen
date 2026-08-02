@@ -3895,6 +3895,15 @@ fn finding_request_rejects_multi_dot_scope_without_exact_catalog_authorization()
             SccmFindingValidationError::InvalidArtifactRequestReason,
         ),
         (
+            "bare component of the multi-dot basename",
+            finding_request(
+                "clientMsi",
+                SccmRole::Client,
+                "Collect the complete client.log file.",
+            ),
+            SccmFindingValidationError::InvalidArtifactRequestReason,
+        ),
+        (
             "mismatched logical id",
             finding_request(
                 "policyAgent",
@@ -3963,9 +3972,10 @@ fn finding_request_rejects_multi_dot_scope_without_exact_catalog_authorization()
             "reason": &request.reason,
         });
         let deserialized = serde_json::from_value::<SccmFinding>(json);
+        let expected_message = format!("invalid SCCM finding contract: {expected_error:?}");
         let matches_expected = deserialized
             .err()
-            .is_some_and(|error| error.to_string().contains(&format!("{expected_error:?}")));
+            .is_some_and(|error| error.to_string() == expected_message);
         if !matches_expected {
             incorrectly_accepted.push(format!("deserializer: {label}"));
         }
