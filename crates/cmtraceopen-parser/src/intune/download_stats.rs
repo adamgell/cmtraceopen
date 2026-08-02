@@ -550,6 +550,18 @@ mod tests {
         downloads.remove(0)
     }
 
+    fn test_line(line_number: u32, message: impl Into<String>) -> ImeLine {
+        ImeLine {
+            line_number,
+            timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+            timestamp_utc: None,
+            message: message.into(),
+            component: None,
+            thread: None,
+            timezone_offset: None,
+        }
+    }
+
     #[test]
     fn completed_download_is_recorded() {
         let lines = vec![
@@ -1024,5 +1036,101 @@ mod tests {
         for payload in payloads {
             assert_eq!(completed_json_download(&payload).name, "Preferred");
         }
+    }
+
+    #[test]
+    fn ingested_descendant_name_does_not_enrich_outer_selected_download() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let lines = vec![test_line(
+            1,
+            format!(
+                r#"Download completed successfully {{"AppId":"{app_guid}","Metadata":{{"AppId":"{app_guid}","Name":"Descendant Name"}}}}"#
+            ),
+        )];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+        assert_eq!(registry.resolve(app_guid), Some("Descendant Name"));
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].content_id, app_guid);
+        assert_eq!(downloads[0].name, format!("Download ({app_guid})"));
+    }
+
+    #[test]
+    fn explicit_name_ambiguity_suppresses_existing_registry_enrichment() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","Name":"First Name","Name":"Second Name"}}"#),
+            format!(r#"[{{"AppId":"{app_guid}"}},{{"Name":"Sibling Name"}}]"#),
+        ];
+
+        for payload in payloads {
+            let lines = vec![
+                test_line(
+                    1,
+                    format!(
+                        r#"Observed identity {{"AppId":"{app_guid}","ApplicationName":"Trusted Registry Name"}}"#
+                    ),
+                ),
+                test_line(2, format!("Download completed successfully {payload}")),
+            ];
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&lines);
+            assert_eq!(registry.resolve(app_guid), Some("Trusted Registry Name"));
+
+            let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+            assert_eq!(downloads.len(), 1, "missing download for {payload}");
+            assert_eq!(downloads[0].content_id, app_guid);
+            assert_eq!(
+                downloads[0].name,
+                format!("Download ({app_guid})"),
+                "enriched explicit ambiguous name for {payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_explicit_download_keeps_registry_fallback() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let lines = vec![
+            test_line(
+                1,
+                format!(
+                    r#"Observed identity {app_guid} {{"ApplicationName":"Trusted Registry Name"}}"#
+                ),
+            ),
+            test_line(
+                2,
+                format!("Download completed successfully for app id: {app_guid}"),
+            ),
+        ];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].name, "Trusted Registry Name");
+    }
+
+    #[test]
+    fn explicit_same_scope_name_remains_valid_with_ingested_registry() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let lines = vec![test_line(
+            1,
+            format!(
+                r#"Download completed successfully {{"AppId":"{app_guid}","Name":"Local Name"}}"#
+            ),
+        )];
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&lines);
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &registry);
+
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].name, "Local Name");
     }
 }
