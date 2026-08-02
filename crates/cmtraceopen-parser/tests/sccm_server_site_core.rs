@@ -1020,6 +1020,68 @@ fn rejected_evidence_contracts_become_source_gaps_with_scoped_requests() {
 }
 
 #[test]
+fn foreign_artifact_identity_cannot_scope_an_unresolved_site_core_request() {
+    let mut assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    let mut foreign_artifact = assessment.artifacts[0].clone();
+    foreign_artifact.artifact_id = "foreign-artifact".to_owned();
+    foreign_artifact.source_id = "server-foreign".to_owned();
+    foreign_artifact.producer_host_handle = Some("synthetic:host:foreign".to_owned());
+    foreign_artifact.rotation_lineage_handle = "foreign-lineage".to_owned();
+    assessment.artifacts.push(foreign_artifact);
+    assessment.evidence[0].reference.artifact_id = "foreign-artifact".to_owned();
+
+    let analysis = analyze_site_core(&assessment);
+    let gap = analysis
+        .coverage_gaps
+        .iter()
+        .find(|gap| {
+            gap.source_id == "server-sitecomp" && gap.reason_code == "evidence-source-unresolved"
+        })
+        .expect("foreign attribution becomes a site-core coverage gap");
+    assert_ne!(gap.artifact_id, "foreign-artifact");
+    assert!(gap
+        .artifact_id
+        .starts_with("site-core:rejected-artifact:v1:"));
+    let request = analysis
+        .artifact_requests
+        .iter()
+        .find(|request| request.logical_name == "server-sitecomp")
+        .expect("unresolved site-core evidence has a bounded request");
+    assert_bounded_request_has_specific_scope(request);
+    assert_eq!(
+        request.scope.producer_host_handle.as_deref(),
+        Some("synthetic:host:site-01")
+    );
+    assert_ne!(
+        request.scope.rotation_lineage_handle.as_deref(),
+        Some("foreign-lineage")
+    );
+}
+
+#[test]
+fn rejected_nonprofile_prose_is_coverage_not_a_profile_symptom() {
+    let mut assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    assessment.evidence[0].message = "ordinary non-profile source prose".to_owned();
+    assessment.evidence[0].role = SccmRole::ManagementPoint;
+
+    let analysis = analyze_site_core(&assessment);
+    assert_explicit_gap_and_request(&analysis, "sitecomp-current", "server-sitecomp");
+    assert_gap_reason(&analysis, "sitecomp-current", "evidence-role-rejected");
+    assert_eq!(analysis.unlinked_observations.len(), 1);
+    assert_eq!(
+        analysis.unlinked_observations[0].finding_class,
+        SccmFindingClass::InsufficientEvidence
+    );
+    assert!(analysis.unlinked_observations[0].evidence.is_empty());
+}
+
+#[test]
 fn colliding_evidence_identities_are_parse_gaps_not_silent_drops() {
     let mut assessment = assess(&[Source::sitecomp(HEALTHY_SITECOMP), Source::absent_status()]);
     let duplicate = assessment.evidence[0].clone();
