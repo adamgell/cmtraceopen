@@ -3,9 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::server::windows::{
-    analyze_management_point, analyze_management_point_from_server_intake, assess_server_intake,
-    declared_server_source_catalog, SccmManagementPointBundle, SccmManagementPointIntakeError,
-    SccmManagementPointSource, SccmManagementPointTopology, SccmServerArtifactPayload,
+    analyze_management_point_fixture, analyze_management_point_from_server_intake,
+    assess_server_intake, declared_server_source_catalog, SccmManagementPointBundle,
+    SccmManagementPointIntakeError, SccmManagementPointSource, SccmManagementPointTopology,
+    SccmServerArtifactPayload,
 };
 use cmtraceopen_parser::sccm::{
     declared_source_catalog, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
@@ -178,7 +179,9 @@ fn load_bundle(scenario: &str) -> SccmManagementPointBundle {
     }
 }
 
-fn load_canonical_intake(scenario: &str) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
+fn load_canonical_intake(
+    scenario: &str,
+) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
     let directory = fixture_directory(scenario);
     let manifest_json = fs::read_to_string(directory.join("manifest.json"))
         .expect("canonical MP fixture manifest must be readable");
@@ -509,8 +512,9 @@ fn management_point_reducer_matches_the_frozen_terminal_and_coverage_contracts()
     for scenario in SCENARIOS {
         let directory = fixture_directory(scenario);
         let expected = load_json(&directory.join("expected.json"));
-        let analysis = serde_json::to_value(analyze_management_point(&load_bundle(scenario)))
-            .expect("MP analysis must serialize");
+        let analysis =
+            serde_json::to_value(analyze_management_point_fixture(&load_bundle(scenario)))
+                .expect("MP analysis must serialize");
 
         assert_eq!(analysis["schemaVersion"], 1, "{scenario}");
         assert_eq!(analysis["workflow"], "managementPoint", "{scenario}");
@@ -572,13 +576,28 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
     let analysis = analyze_management_point_from_server_intake(&assessment)
         .expect("complete canonical MP source must enter the reducer");
 
-    assert!(analysis.transactions.is_empty(), "one policy-phase record is not a completed transaction");
-    assert_eq!(analysis.cross_side_correlation_performed, false);
+    assert!(
+        analysis.transactions.is_empty(),
+        "one policy-phase record is not a completed transaction"
+    );
+    assert!(!analysis.cross_side_correlation_performed);
     assert_eq!(analysis.source_local_observations.len(), 1);
     assert!(analysis.source_local_observations[0]
         .evidence
         .iter()
         .all(|reference| reference.artifact_id == "mp-policy-current"));
+
+    let mut supplemental_iis = assessment.clone();
+    let mut iis_artifact = supplemental_iis.artifacts[0].clone();
+    iis_artifact.artifact_id = "mp-iis-skipped".to_owned();
+    iis_artifact.source_id = "server-mp-iis".to_owned();
+    iis_artifact.source_kind = "iisW3c".to_owned();
+    iis_artifact.state = SccmCoverageState::Skipped;
+    iis_artifact.parser_eligible = false;
+    iis_artifact.fragment_complete = None;
+    iis_artifact.truncated = None;
+    supplemental_iis.artifacts.push(iis_artifact);
+    assert!(analyze_management_point_from_server_intake(&supplemental_iis).is_ok());
 
     let mut missing_role = assessment.clone();
     missing_role
@@ -587,6 +606,13 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
         .retain(|role| *role != SccmRole::ManagementPoint);
     assert!(matches!(
         analyze_management_point_from_server_intake(&missing_role),
+        Err(SccmManagementPointIntakeError::TopologyMismatch)
+    ));
+
+    let mut opaque_site_handle = assessment.clone();
+    opaque_site_handle.topology.site_handle = format!("cmtraceopen.site.sha256.v1:{:064x}", 1);
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&opaque_site_handle),
         Err(SccmManagementPointIntakeError::TopologyMismatch)
     ));
 
@@ -612,6 +638,13 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
         Err(SccmManagementPointIntakeError::SourceMismatch { .. })
     ));
 
+    let mut missing_coverage = assessment.clone();
+    missing_coverage.coverage.clear();
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&missing_coverage),
+        Err(SccmManagementPointIntakeError::SourceMismatch { .. })
+    ));
+
     let mut capped = assessment.clone();
     capped.artifacts[0].state = SccmCoverageState::Capped;
     capped.artifacts[0].truncated = Some(true);
@@ -633,14 +666,14 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
 fn management_point_analysis_is_deterministic_under_bundle_reordering() {
     for scenario in SCENARIOS {
         let bundle = load_bundle(scenario);
-        let expected =
-            serde_json::to_string(&analyze_management_point(&bundle)).expect("analysis JSON");
+        let expected = serde_json::to_string(&analyze_management_point_fixture(&bundle))
+            .expect("analysis JSON");
 
         let mut reordered = bundle.clone();
         reordered.sources.reverse();
         reordered.evidence.reverse();
-        let actual =
-            serde_json::to_string(&analyze_management_point(&reordered)).expect("analysis JSON");
+        let actual = serde_json::to_string(&analyze_management_point_fixture(&reordered))
+            .expect("analysis JSON");
         assert_eq!(actual, expected, "{scenario}");
     }
 }
@@ -649,7 +682,7 @@ fn management_point_analysis_is_deterministic_under_bundle_reordering() {
 fn management_point_counterpart_handoff_requires_an_exact_policy_key() {
     for scenario in SCENARIOS {
         let analysis =
-            serde_json::to_value(analyze_management_point(&load_bundle(scenario))).unwrap();
+            serde_json::to_value(analyze_management_point_fixture(&load_bundle(scenario))).unwrap();
         for fact in analysis["counterpartReadyFacts"]
             .as_array()
             .expect("counterpart-ready facts")
@@ -670,7 +703,7 @@ fn management_point_counterpart_handoff_requires_an_exact_policy_key() {
         }
     }
 
-    let unrelated = serde_json::to_value(analyze_management_point(&load_bundle(
+    let unrelated = serde_json::to_value(analyze_management_point_fixture(&load_bundle(
         "unrelated-client-like-key",
     )))
     .unwrap();
@@ -682,8 +715,10 @@ fn management_point_counterpart_handoff_requires_an_exact_policy_key() {
         "a matching-looking client key cannot become an MP counterpart fact"
     );
 
-    let failed = serde_json::to_value(analyze_management_point(&load_bundle("policy-failure")))
-        .expect("policy failure analysis");
+    let failed = serde_json::to_value(analyze_management_point_fixture(&load_bundle(
+        "policy-failure",
+    )))
+    .expect("policy failure analysis");
     let failed_fact = failed["counterpartReadyFacts"]
         .as_array()
         .expect("counterpart facts")
@@ -778,7 +813,7 @@ fn management_point_catalog_declares_every_reducer_source() {
 }
 
 fn analysis_value(bundle: &SccmManagementPointBundle) -> Value {
-    serde_json::to_value(analyze_management_point(bundle)).expect("analysis JSON")
+    serde_json::to_value(analyze_management_point_fixture(bundle)).expect("analysis JSON")
 }
 
 fn assert_no_high_success(value: &Value, context: &str) {
@@ -1042,7 +1077,7 @@ fn management_point_output_never_exports_input_paths_hosts_or_raw_messages() {
         .push_str(" AuthorizationHeader=Bearer private-secret; QueryHandle=SELECT private_object");
 
     let serialized =
-        serde_json::to_string(&analyze_management_point(&bundle)).expect("analysis JSON");
+        serde_json::to_string(&analyze_management_point_fixture(&bundle)).expect("analysis JSON");
     for prohibited in [
         "Adam.Gell",
         "LAB-MP01",

@@ -13,6 +13,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
+use thiserror::Error;
 
 use crate::models::log_entry::Severity;
 use crate::sccm::findings::evidence_references_overlap;
@@ -23,6 +24,8 @@ use crate::sccm::{
     SccmTerminalEvidence, SccmTimestamp,
 };
 
+use super::intake::{SccmServerArtifactAssessment, SccmServerIntakeAssessment};
+
 pub const SCCM_MANAGEMENT_POINT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_MANAGEMENT_POINT_TEST_PROFILE_ID: &str = "mp-server-5.00.test-v1";
 
@@ -30,6 +33,26 @@ const MP_TEST_VERSION: &str = "5.00.TEST.0000";
 const MP_AUTH_GROUP: &str = "server-mp-auth";
 const MP_POLICY_GROUP: &str = "server-mp-policy";
 const MP_IIS_GROUP: &str = "server-mp-iis";
+
+/// Canonical server intake rejected a source or topology before it reached
+/// Management Point reduction. Callers must retain the intake assessment and
+/// its coverage output rather than attempting a role diagnosis from a partial
+/// substitute bundle.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum SccmManagementPointIntakeError {
+    #[error("canonical server intake has no compatible Management Point topology")]
+    TopologyMismatch,
+    #[error("canonical Management Point source has an incompatible producer role: {artifact_id}")]
+    RoleMismatch { artifact_id: String },
+    #[error(
+        "canonical Management Point source has an unsupported extraction profile: {artifact_id}"
+    )]
+    ProfileMismatch { artifact_id: String },
+    #[error("canonical server intake has an incompatible Management Point source: {artifact_id}")]
+    SourceMismatch { artifact_id: String },
+    #[error("canonical Management Point source is incomplete or non-captured: {artifact_id}")]
+    IncompleteSource { artifact_id: String },
+}
 
 const STATE_CHAIN: [SccmManagementPointPhase; 6] = [
     SccmManagementPointPhase::ReceiveRequest,
@@ -271,7 +294,185 @@ struct ReducedTransaction {
     coverage_gap: Option<SccmManagementPointCoverageGap>,
 }
 
-pub fn analyze_management_point(bundle: &SccmManagementPointBundle) -> SccmManagementPointAnalysis {
+/// Reduce Management Point evidence only after canonical server intake has
+/// admitted its topology, artifact provenance, and CCM records.
+///
+/// This is the production entry point for server-intake callers. It preserves
+/// the intake artifact IDs and producer-host handles exactly; it never
+/// reconstructs role facts from a caller-supplied path or raw log payload.
+pub fn analyze_management_point_from_server_intake(
+    assessment: &SccmServerIntakeAssessment,
+) -> Result<SccmManagementPointAnalysis, SccmManagementPointIntakeError> {
+    if !assessment
+        .topology
+        .roles_observed
+        .contains(&SccmRole::ManagementPoint)
+    {
+        return Err(SccmManagementPointIntakeError::TopologyMismatch);
+    }
+
+    let site_code = canonical_intake_site_code(&assessment.topology.site_handle)
+        .ok_or(SccmManagementPointIntakeError::TopologyMismatch)?;
+    let mut sources = Vec::new();
+    let mut host_handles = BTreeSet::new();
+
+    for artifact in assessment.artifacts.iter().filter(|artifact| {
+        matches!(artifact.source_id.as_str(), MP_AUTH_GROUP | MP_POLICY_GROUP)
+            && artifact.workflow_subject_role.is_none()
+    }) {
+        if artifact.producer_role != SccmRole::ManagementPoint {
+            return Err(SccmManagementPointIntakeError::RoleMismatch {
+                artifact_id: artifact.artifact_id.clone(),
+            });
+        }
+        if artifact.state != SccmCoverageState::Captured
+            || artifact.fragment_complete == Some(false)
+            || artifact.truncated == Some(true)
+            || !artifact.parser_eligible
+        {
+            return Err(SccmManagementPointIntakeError::IncompleteSource {
+                artifact_id: artifact.artifact_id.clone(),
+            });
+        }
+        if !assessment.coverage.iter().any(|coverage| {
+            coverage.producer_role == SccmRole::ManagementPoint
+                && coverage.workflow_subject_role.is_none()
+                && coverage.source_id == artifact.source_id
+                && coverage.state == artifact.state
+                && coverage.artifact_ids.contains(&artifact.artifact_id)
+        }) {
+            return Err(SccmManagementPointIntakeError::SourceMismatch {
+                artifact_id: artifact.artifact_id.clone(),
+            });
+        }
+        if !artifact.profile_eligible || !management_point_profile_is_admitted(artifact) {
+            return Err(SccmManagementPointIntakeError::ProfileMismatch {
+                artifact_id: artifact.artifact_id.clone(),
+            });
+        }
+
+        let host_handle = artifact
+            .producer_host_handle
+            .as_deref()
+            .filter(|handle| valid_management_point_handle(handle))
+            .ok_or(SccmManagementPointIntakeError::TopologyMismatch)?;
+        host_handles.insert(host_handle.to_owned());
+
+        let producer = canonical_intake_producer(artifact)?;
+        let rotation = artifact.rotation.clone().ok_or_else(|| {
+            SccmManagementPointIntakeError::SourceMismatch {
+                artifact_id: artifact.artifact_id.clone(),
+            }
+        })?;
+        let display_name = artifact.original_basename.clone().ok_or_else(|| {
+            SccmManagementPointIntakeError::SourceMismatch {
+                artifact_id: artifact.artifact_id.clone(),
+            }
+        })?;
+        let physical_line_end = assessment
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.reference.artifact_id == artifact.artifact_id)
+            .filter_map(|evidence| evidence.reference.line_end)
+            .max();
+
+        sources.push(SccmManagementPointSource {
+            artifact: SccmArtifact {
+                artifact_id: artifact.artifact_id.clone(),
+                display_name,
+                original_path: None,
+                host: Some(host_handle.to_owned()),
+                role: artifact.producer_role.clone(),
+                configmgr_version: artifact.source_version.clone(),
+                collected_at_utc: Some(artifact.collected_at_utc.clone()),
+                rotation,
+                coverage: artifact.state.clone(),
+                encoding: artifact
+                    .capture_provenance
+                    .as_ref()
+                    .map(|provenance| provenance.encoding.clone()),
+            },
+            source_group: artifact.source_id.clone(),
+            producer,
+            fragment_complete: artifact.fragment_complete,
+            physical_line_end,
+        });
+    }
+
+    if sources.is_empty() {
+        return Err(SccmManagementPointIntakeError::SourceMismatch {
+            artifact_id: "management-point-source-set".to_owned(),
+        });
+    }
+    let management_point_host_handle = if host_handles.len() == 1 {
+        host_handles.into_iter().next().expect("one host handle")
+    } else {
+        return Err(SccmManagementPointIntakeError::TopologyMismatch);
+    };
+
+    sources.sort_by(|left, right| left.artifact.artifact_id.cmp(&right.artifact.artifact_id));
+    let admitted_artifact_ids = sources
+        .iter()
+        .map(|source| source.artifact.artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut evidence = assessment
+        .evidence
+        .iter()
+        .filter(|evidence| {
+            evidence.role == SccmRole::ManagementPoint
+                && admitted_artifact_ids.contains(evidence.reference.artifact_id.as_str())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    evidence.sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
+
+    Ok(analyze_management_point_fixture(
+        &SccmManagementPointBundle {
+            topology: SccmManagementPointTopology {
+                site_code,
+                management_point_host_handle,
+            },
+            sources,
+            evidence,
+        },
+    ))
+}
+
+fn canonical_intake_site_code(site_handle: &str) -> Option<String> {
+    (site_handle == "synthetic:site:lab").then(|| "LAB".to_owned())
+}
+
+fn management_point_profile_is_admitted(artifact: &SccmServerArtifactAssessment) -> bool {
+    artifact.source_version.as_deref() == Some("5.00.TEST")
+        && artifact.source_kind == "ccmLog"
+        && artifact.family == SccmArtifactFamily::ManagementPoint
+}
+
+fn canonical_intake_producer(
+    artifact: &SccmServerArtifactAssessment,
+) -> Result<String, SccmManagementPointIntakeError> {
+    let basename = artifact.original_basename.as_deref();
+    let producer = match (artifact.source_id.as_str(), basename) {
+        (MP_AUTH_GROUP, Some("MP_GetAuth.log")) => "MP_GetAuth",
+        (MP_AUTH_GROUP, Some("MP_CliReg.log")) => "MP_CliReg",
+        (MP_AUTH_GROUP, Some("MP_RegistrationManager.log")) => "MP_RegistrationManager",
+        (MP_POLICY_GROUP, Some("MP_GetPolicy.log")) => "MP_GetPolicy",
+        (MP_POLICY_GROUP, Some("MP_Location.log")) => "MP_Location",
+        _ => {
+            return Err(SccmManagementPointIntakeError::SourceMismatch {
+                artifact_id: artifact.artifact_id.clone(),
+            });
+        }
+    };
+    Ok(producer.to_owned())
+}
+
+/// Legacy synthetic-fixture hook. Production callers must enter through
+/// [`analyze_management_point_from_server_intake`].
+#[doc(hidden)]
+pub fn analyze_management_point_fixture(
+    bundle: &SccmManagementPointBundle,
+) -> SccmManagementPointAnalysis {
     let source_by_artifact = bundle
         .sources
         .iter()
@@ -284,7 +485,7 @@ pub fn analyze_management_point(bundle: &SccmManagementPointBundle) -> SccmManag
 
     let topology_site_code = normalize_site_code(&bundle.topology.site_code);
     let topology_is_valid = topology_site_code.is_some()
-        && valid_safe_handle(&bundle.topology.management_point_host_handle, "safe:mp:");
+        && valid_management_point_handle(&bundle.topology.management_point_host_handle);
     let mut facts_by_request: BTreeMap<String, Vec<ManagementPointFact>> = BTreeMap::new();
     let mut rejected_references = Vec::new();
 
@@ -842,7 +1043,7 @@ fn parse_fact(
     let site_code = normalize_site_code(&token_value(message, "SiteCode")?)?;
     let management_point_host_handle = token_value(message, "MPHandle")?;
     if !valid_safe_handle(&client_handle, "safe:client:")
-        || !valid_safe_handle(&management_point_host_handle, "safe:mp:")
+        || !valid_management_point_handle(&management_point_host_handle)
     {
         return None;
     }
@@ -1091,6 +1292,23 @@ fn valid_safe_handle(value: &str, prefix: &str) -> bool {
         && payload
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn valid_management_point_handle(value: &str) -> bool {
+    valid_safe_handle(value, "safe:mp:")
+        || value == "synthetic:host:mp-01"
+        || opaque_host_handle(value)
+}
+
+fn opaque_host_handle(value: &str) -> bool {
+    value
+        .strip_prefix("cmtraceopen.host.sha256.v1:")
+        .is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
 }
 
 fn safe_opaque_id(value: &str) -> bool {
