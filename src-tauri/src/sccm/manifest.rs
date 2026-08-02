@@ -967,6 +967,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_validation_returns_its_reusable_intake_projection() {
+        let _validate: fn(
+            &VerifiedBundleRoot,
+            &SccmBundleManifestV1,
+        ) -> Result<SccmClientIntakeBundle, AppError> = validate_native_manifest;
+    }
+
+    #[test]
     fn client_owned_physical_byte_budget_accepts_exact_ceilings_without_opening_evidence() {
         let mut total = 0;
         for _ in 0..4 {
