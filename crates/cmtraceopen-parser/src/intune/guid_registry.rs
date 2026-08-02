@@ -118,14 +118,20 @@ impl GuidRegistry {
 
     /// Extract GUID→name pairs from a single message string.
     fn ingest_message(&mut self, msg: &str) {
+        let (_, app_id) = explicit_app_id(msg, has_name_field(msg));
+
         // Multi-pair path: extract all "Id"+"Name" pairs from JSON arrays
         // e.g. Get policies = [{"Id":"guid1","Name":"name1"},{"Id":"guid2","Name":"name2"}]
-        for (guid, name, source) in extract_all_id_name_pairs(msg) {
-            self.insert_if_dominated(guid, name, source);
+        // A valid AppId is the higher-priority identity for the whole message,
+        // so an accompanying Id must not also enter the registry.
+        if app_id.is_none() {
+            for (guid, name, source) in extract_all_id_name_pairs(msg) {
+                self.insert_if_dominated(guid, name, source);
+            }
         }
 
         // Single-GUID path: handles AppId, ApplicationName, SetUpFilePath
-        if let Some(guid) = extract_app_id(msg) {
+        if let Some(guid) = app_id.or_else(|| extract_app_id(msg)) {
             if let Some((name, source)) = extract_app_name_with_source(msg) {
                 self.insert_if_dominated(guid, name, source);
             }
@@ -318,32 +324,18 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
 /// GUIDs on the line. An invalid explicit field is an identity boundary: its
 /// presence suppresses line-wide GUID inference.
 pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
-    // Preserve the established fast paths and their ordering.
-    for (prefix, suffix) in [
-        ("\"AppId\":\"", "\""),
-        ("\\\"AppId\\\":\\\"", "\\\""),
-        ("\"Id\":\"", "\""),
-        ("\\\"Id\\\":\\\"", "\\\""),
-    ] {
+    let allow_decorated = has_name_field(msg);
+    let (app_id_present, app_id) = explicit_app_id(msg, allow_decorated);
+    if let Some(value) = app_id {
+        return ExplicitAppIdentity::Valid(value);
+    }
+
+    // AppId has higher precedence than Id, so only inspect Id after every
+    // supported AppId syntax has been exhausted.
+    for (prefix, suffix) in [("\"Id\":\"", "\""), ("\\\"Id\\\":\\\"", "\\\"")] {
         if let Some(value) = extract_guid_field(msg, prefix, suffix) {
             return ExplicitAppIdentity::Valid(value);
         }
-    }
-
-    // Preserve the whitespace-tolerant AppId path with its canonical GUID
-    // grammar. The field scanner below covers escaped spacing and Id fields.
-    if let Some(value) = app_id_json_re()
-        .captures(msg)
-        .and_then(|captures| captures.get(1))
-    {
-        return ExplicitAppIdentity::Valid(value.as_str().to_string());
-    }
-
-    let allow_decorated = has_name_field(msg);
-    let (app_id_present, app_id) =
-        scan_identity_fields(msg, &APP_ID_FIELD_SYNTAXES, allow_decorated);
-    if let Some(value) = app_id {
-        return ExplicitAppIdentity::Valid(value);
     }
 
     let (id_present, id) = scan_identity_fields(msg, &ID_FIELD_SYNTAXES, allow_decorated);
@@ -356,6 +348,27 @@ pub(crate) fn explicit_app_identity(msg: &str) -> ExplicitAppIdentity {
     } else {
         ExplicitAppIdentity::Absent
     }
+}
+
+fn explicit_app_id(msg: &str, allow_decorated: bool) -> (bool, Option<String>) {
+    // Preserve the established compact direct and escaped fast paths.
+    for (prefix, suffix) in [("\"AppId\":\"", "\""), ("\\\"AppId\\\":\\\"", "\\\"")] {
+        if let Some(value) = extract_guid_field(msg, prefix, suffix) {
+            return (true, Some(value));
+        }
+    }
+
+    // Preserve the whitespace-tolerant escaped AppId path with its canonical
+    // GUID grammar, then scan all direct/escaped forms including decorated
+    // field-local GUIDs.
+    if let Some(value) = app_id_json_re()
+        .captures(msg)
+        .and_then(|captures| captures.get(1))
+    {
+        return (true, Some(value.as_str().to_string()));
+    }
+
+    scan_identity_fields(msg, &APP_ID_FIELD_SYNTAXES, allow_decorated)
 }
 
 fn scan_identity_fields(
@@ -995,5 +1008,53 @@ mod tests {
         );
 
         assert_eq!(extract_app_id(&message), Some(app_guid.to_string()));
+    }
+
+    #[test]
+    fn app_id_syntaxes_precede_id_in_registry_identity_selection() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let id_guid = "11111111-2222-3333-4444-555555555555";
+        let messages = [
+            format!(r#"{{"AppId":"{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\":\"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId" : "{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\" : \"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId":"Win32App_{app_guid}_1","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"AppId\":\"Win32App_{app_guid}_1\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#
+            ),
+            format!(r#"{{"Id":"{id_guid}","AppId" : "{app_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"Id\":\"{id_guid}\",\"AppId\":\"Win32App_{app_guid}_1\",\"Name\":\"Contoso\"}}"#
+            ),
+        ];
+
+        for message in messages {
+            let mut registry = GuidRegistry::new();
+            registry.ingest_lines(&[line(&message)]);
+
+            assert_eq!(
+                registry.resolve(app_guid),
+                Some("Contoso"),
+                "AppId was not selected for {message}"
+            );
+            assert_eq!(
+                registry.resolve(id_guid),
+                None,
+                "lower-priority Id was also registered for {message}"
+            );
+            assert_eq!(registry.len(), 1, "unexpected identities for {message}");
+        }
+    }
+
+    #[test]
+    fn invalid_app_id_still_allows_valid_id_registry_fallback() {
+        let id_guid = "11111111-2222-3333-4444-555555555555";
+        let message = format!(r#"{{"AppId":"invalid","Id":"{id_guid}","Name":"Contoso"}}"#);
+        let mut registry = GuidRegistry::new();
+        registry.ingest_lines(&[line(&message)]);
+
+        assert_eq!(registry.resolve(id_guid), Some("Contoso"));
+        assert_eq!(registry.len(), 1);
     }
 }

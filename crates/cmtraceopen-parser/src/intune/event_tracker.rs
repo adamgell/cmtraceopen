@@ -2159,4 +2159,41 @@ mod tests {
         assert_eq!(events[0].guid.as_deref(), Some(app_guid));
         assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
     }
+
+    #[test]
+    fn appworkload_app_id_syntaxes_precede_id() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let id_guid = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\":\"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId" : "{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\" : \"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId":"Win32App_{app_guid}_1","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"AppId\":\"Win32App_{app_guid}_1\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#
+            ),
+            format!(r#"{{"Id":"{id_guid}","AppId" : "{app_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"Id\":\"{id_guid}\",\"AppId\":\"Win32App_{app_guid}_1\",\"Name\":\"Contoso\"}}"#
+            ),
+        ];
+
+        for payload in payloads {
+            let message = format!("SidecarScriptDetectionManager launch {payload}");
+            let events = extract_events(
+                &[line(&message, "01-15-2024 10:00:05.000", 1)],
+                "C:/Logs/AppWorkload.log",
+                &empty_registry(),
+            );
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                events[0].guid.as_deref(),
+                Some(app_guid),
+                "wrong identity for {payload}"
+            );
+            assert_eq!(events[0].parent_app_guid.as_deref(), Some(app_guid));
+        }
+    }
 }

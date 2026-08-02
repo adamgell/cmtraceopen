@@ -748,4 +748,84 @@ mod tests {
         let message = r#"Starting content download for app 11111111-2222-3333-4444-555555555555 {"AppId":"not-an-app-guid","ApplicationName":"Contoso"}"#;
         assert_eq!(extract_content_id(message), None);
     }
+
+    #[test]
+    fn download_app_id_syntaxes_precede_id() {
+        let app_guid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let id_guid = "11111111-2222-3333-4444-555555555555";
+        let payloads = [
+            format!(r#"{{"AppId":"{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\":\"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId" : "{app_guid}","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(r#"{{\"AppId\" : \"{app_guid}\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#),
+            format!(r#"{{"AppId":"Win32App_{app_guid}_1","Id":"{id_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"AppId\":\"Win32App_{app_guid}_1\",\"Id\":\"{id_guid}\",\"Name\":\"Contoso\"}}"#
+            ),
+            format!(r#"{{"Id":"{id_guid}","AppId" : "{app_guid}","Name":"Contoso"}}"#),
+            format!(
+                r#"{{\"Id\":\"{id_guid}\",\"AppId\":\"Win32App_{app_guid}_1\",\"Name\":\"Contoso\"}}"#
+            ),
+        ];
+
+        for payload in payloads {
+            let lines = vec![
+                ImeLine {
+                    line_number: 1,
+                    timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Starting content download {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                },
+                ImeLine {
+                    line_number: 2,
+                    timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                    timestamp_utc: None,
+                    message: format!("Download completed successfully {payload}"),
+                    component: None,
+                    thread: None,
+                    timezone_offset: None,
+                },
+            ];
+
+            let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+            assert_eq!(downloads.len(), 1, "missing download for {payload}");
+            assert_eq!(
+                downloads[0].content_id, app_guid,
+                "wrong identity for {payload}"
+            );
+        }
+    }
+
+    #[test]
+    fn download_invalid_app_id_still_allows_valid_id_fallback() {
+        let id_guid = "11111111-2222-3333-4444-555555555555";
+        let payload = format!(r#"{{"AppId":"invalid","Id":"{id_guid}","Name":"Contoso"}}"#);
+        let lines = vec![
+            ImeLine {
+                line_number: 1,
+                timestamp: Some("01-15-2024 10:00:00.000".to_string()),
+                timestamp_utc: None,
+                message: format!("Starting content download {payload}"),
+                component: None,
+                thread: None,
+                timezone_offset: None,
+            },
+            ImeLine {
+                line_number: 2,
+                timestamp: Some("01-15-2024 10:00:05.000".to_string()),
+                timestamp_utc: None,
+                message: format!("Download completed successfully {payload}"),
+                component: None,
+                thread: None,
+                timezone_offset: None,
+            },
+        ];
+
+        let downloads = extract_downloads(&lines, "C:/Logs/AppWorkload.log", &empty_registry());
+        assert_eq!(downloads.len(), 1);
+        assert_eq!(downloads[0].content_id, id_guid);
+    }
 }
