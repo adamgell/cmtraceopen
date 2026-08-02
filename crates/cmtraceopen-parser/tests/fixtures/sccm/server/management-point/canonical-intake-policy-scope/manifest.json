@@ -1,0 +1,39 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": {
+    "captureHost": "LAB-MP01",
+    "siteCode": "LAB",
+    "rolesObserved": ["managementPoint"]
+  },
+  "artifacts": [
+    {
+      "artifactId": "mp-policy-current",
+      "producerRole": "managementPoint",
+      "producerHostHandle": "synthetic:host:mp-01",
+      "sourceId": "server-mp-policy",
+      "sourceKind": "ccmLog",
+      "sourceVersion": "5.00.TEST",
+      "originalPath": "REDACTED_MP_ROOT",
+      "originalBasename": "MP_GetPolicy.log",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:mp-default"
+      },
+      "rotation": {
+        "kind": "current",
+        "lineageId": "mp-policy-lab",
+        "fragmentComplete": true
+      },
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": { "byteLimit": 4096, "limitApplied": false },
+      "collectedUtc": "2026-07-30T01:00:10Z",
+      "relativePath": "evidence/sccm/server/management-point/server-mp-policy/current/MP_GetPolicy.log",
+      "bytesCopied": 397
+    }
+  ]
+}

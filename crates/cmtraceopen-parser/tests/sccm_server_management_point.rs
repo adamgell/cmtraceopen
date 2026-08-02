@@ -3,8 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::server::windows::{
-    analyze_management_point, declared_server_source_catalog, SccmManagementPointBundle,
-    SccmManagementPointSource, SccmManagementPointTopology,
+    analyze_management_point, analyze_management_point_from_server_intake, assess_server_intake,
+    declared_server_source_catalog, SccmManagementPointBundle, SccmManagementPointIntakeError,
+    SccmManagementPointSource, SccmManagementPointTopology, SccmServerArtifactPayload,
 };
 use cmtraceopen_parser::sccm::{
     declared_source_catalog, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
@@ -175,6 +176,31 @@ fn load_bundle(scenario: &str) -> SccmManagementPointBundle {
         sources,
         evidence,
     }
+}
+
+fn load_canonical_intake(scenario: &str) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
+    let directory = fixture_directory(scenario);
+    let manifest_json = fs::read_to_string(directory.join("manifest.json"))
+        .expect("canonical MP fixture manifest must be readable");
+    let manifest = load_json(&directory.join("manifest.json"));
+    let payloads = manifest["artifacts"]
+        .as_array()
+        .expect("canonical MP fixture artifacts")
+        .iter()
+        .filter_map(|artifact| {
+            let relative_path = artifact["relativePath"].as_str()?;
+            Some(SccmServerArtifactPayload {
+                manifest_artifact_id: artifact["artifactId"]
+                    .as_str()
+                    .expect("canonical MP artifact ID")
+                    .to_owned(),
+                bytes: fs::read(directory.join(relative_path))
+                    .expect("canonical MP fixture payload must be readable"),
+            })
+        })
+        .collect::<Vec<_>>();
+    assess_server_intake(&manifest_json, &payloads)
+        .expect("canonical MP fixture must satisfy server intake")
 }
 
 fn expected_transaction_projection(expected: &Value) -> Vec<Value> {
@@ -538,6 +564,69 @@ fn management_point_reducer_matches_the_frozen_terminal_and_coverage_contracts()
             );
         }
     }
+}
+
+#[test]
+fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
+    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let analysis = analyze_management_point_from_server_intake(&assessment)
+        .expect("complete canonical MP source must enter the reducer");
+
+    assert!(analysis.transactions.is_empty(), "one policy-phase record is not a completed transaction");
+    assert_eq!(analysis.cross_side_correlation_performed, false);
+    assert_eq!(analysis.source_local_observations.len(), 1);
+    assert!(analysis.source_local_observations[0]
+        .evidence
+        .iter()
+        .all(|reference| reference.artifact_id == "mp-policy-current"));
+
+    let mut missing_role = assessment.clone();
+    missing_role
+        .topology
+        .roles_observed
+        .retain(|role| *role != SccmRole::ManagementPoint);
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&missing_role),
+        Err(SccmManagementPointIntakeError::TopologyMismatch)
+    ));
+
+    let mut wrong_role = assessment.clone();
+    wrong_role.artifacts[0].producer_role = SccmRole::SiteServer;
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&wrong_role),
+        Err(SccmManagementPointIntakeError::RoleMismatch { .. })
+    ));
+
+    let mut wrong_profile = assessment.clone();
+    wrong_profile.artifacts[0].source_version = Some("5.00.TEST.9999".to_owned());
+    wrong_profile.artifacts[0].profile_eligible = true;
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&wrong_profile),
+        Err(SccmManagementPointIntakeError::ProfileMismatch { .. })
+    ));
+
+    let mut wrong_source = assessment.clone();
+    wrong_source.artifacts[0].source_id = "server-sitecomp".to_owned();
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&wrong_source),
+        Err(SccmManagementPointIntakeError::SourceMismatch { .. })
+    ));
+
+    let mut capped = assessment.clone();
+    capped.artifacts[0].state = SccmCoverageState::Capped;
+    capped.artifacts[0].truncated = Some(true);
+    capped.artifacts[0].fragment_complete = Some(false);
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&capped),
+        Err(SccmManagementPointIntakeError::IncompleteSource { .. })
+    ));
+
+    let mut fragment = assessment;
+    fragment.artifacts[0].fragment_complete = Some(false);
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&fragment),
+        Err(SccmManagementPointIntakeError::IncompleteSource { .. })
+    ));
 }
 
 #[test]
