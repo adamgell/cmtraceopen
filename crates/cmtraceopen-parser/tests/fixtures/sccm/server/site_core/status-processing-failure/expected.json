@@ -1,18 +1,26 @@
 {
-  "expectedContractVersion": 1,
-  "scenario": "status-processing-failure",
+  "schemaVersion": 1,
+  "workflow": "siteCore",
   "profile": {
     "id": "sccm-site-core",
     "version": 1,
     "stability": "experimental"
   },
+  "stateChain": [
+    "componentStart",
+    "componentWork",
+    "inboxOrQueue",
+    "statusOrStateProcessing",
+    "healthyOrTerminal"
+  ],
   "results": [
     {
-      "resultId": "site-core/LAB/SMS_EXECUTIVE/SC-STATUSFAIL-001",
+      "resultId": "site-core:result:v1:234575fad725c1b8673aaa8d9c02e5465aad0b919b0de5c4b52b4221098d0eb1",
       "transactionKey": {
         "profileId": "sccm-site-core",
         "profileVersion": 1,
-        "siteCode": "LAB",
+        "siteHandle": "synthetic:site:lab",
+        "producerHostHandle": "synthetic:host:site-01",
         "componentId": "SMS_EXECUTIVE",
         "workItemId": "SC-STATUSFAIL-001"
       },
@@ -23,32 +31,32 @@
       "confidenceCeiling": "high",
       "evidence": [
         {
-          "artifactId": "status-processing-failure-sitecomp-current",
-          "entryId": "status-processing-failure-sitecomp-current:1-1",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:1-1",
           "lineStart": 1,
           "lineEnd": 1
         },
         {
-          "artifactId": "status-processing-failure-sitecomp-current",
-          "entryId": "status-processing-failure-sitecomp-current:2-2",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:2-2",
           "lineStart": 2,
           "lineEnd": 2
         },
         {
-          "artifactId": "status-processing-failure-sitecomp-current",
-          "entryId": "status-processing-failure-sitecomp-current:3-3",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:3-3",
           "lineStart": 3,
           "lineEnd": 3
         },
         {
-          "artifactId": "status-processing-failure-statmgr-current",
-          "entryId": "status-processing-failure-statmgr-current:1-1",
+          "artifactId": "z-site-status",
+          "entryId": "z-site-status:1-1",
           "lineStart": 1,
           "lineEnd": 1
         },
         {
-          "artifactId": "status-processing-failure-statmgr-current",
-          "entryId": "status-processing-failure-statmgr-current:2-2",
+          "artifactId": "z-site-status",
+          "entryId": "z-site-status:2-2",
           "lineStart": 2,
           "lineEnd": 2,
           "terminal": true
@@ -60,27 +68,66 @@
   ],
   "unlinkedObservations": [],
   "coverageGaps": [],
-  "prohibitedClaims": [
-    "absentDownstreamRole",
-    "clientImpact",
-    "crossSideCausality"
+  "findings": [
+    {
+      "findingId": "site-core:finding:v1:853fbf3e3970fd2b5acba277229471609617eb1f25b7932e01e7c67e5308f93d",
+      "class": "confirmedFailure",
+      "phase": "statusOrStateProcessing",
+      "role": "siteServer",
+      "severity": "Error",
+      "confidence": "high",
+      "title": "Site component and status evidence",
+      "summary": "The last confirmed successful phase is statusOrStateProcessing; later phases are bounded to cited evidence.",
+      "evidence": [
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:3-3",
+          "lineStart": 3,
+          "lineEnd": 3
+        },
+        {
+          "artifactId": "z-site-status",
+          "entryId": "z-site-status:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "z-site-status",
+          "entryId": "z-site-status:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        }
+      ],
+      "terminalEvidence": [
+        {
+          "reference": {
+            "artifactId": "z-site-status",
+            "entryId": "z-site-status:2-2",
+            "lineStart": 2,
+            "lineEnd": 2
+          },
+          "kind": "observedFailure"
+        }
+      ],
+      "coverageGaps": [],
+      "correlationKeys": [],
+      "nextArtifacts": [],
+      "subjectId": "site-core:result:v1:234575fad725c1b8673aaa8d9c02e5465aad0b919b0de5c4b52b4221098d0eb1",
+      "lastSuccessfulPhase": "statusOrStateProcessing"
+    }
   ],
-  "ordering": {
-    "resultsBy": [
-      "resultId"
-    ],
-    "evidenceBy": [
-      "artifactId",
-      "lineStart",
-      "lineEnd"
-    ],
-    "coverageGapsBy": [
-      "artifactId"
-    ],
-    "nextArtifactsBy": [
-      "logicalName",
-      "role",
-      "reasonCode"
-    ]
-  }
+  "artifactRequests": [],
+  "crossSideCorrelationPerformed": false
 }

@@ -34,7 +34,7 @@ fn coverage_contract_failures(artifact: &Value) -> Vec<String> {
     if matches!(
         state,
         "absent" | "accessDenied" | "capped" | "skipped" | "unsupported" | "parseFailed"
-    ) && artifact["rotation"]["fragmentComplete"] == true
+    ) && artifact["fragmentComplete"] == true
     {
         vec![format!(
             "{state} artifact {} cannot be a complete fragment",
@@ -179,7 +179,7 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
         .as_array()
         .expect("rotation artifacts are an array")
         .iter()
-        .find(|artifact| artifact["rotation"]["kind"] == "loUnderscore")
+        .find(|artifact| artifact["rotation"]["kind"] == "lo_")
         .expect("rotation corpus has a .lo_ artifact");
 
     let basename = rollover["originalBasename"]
@@ -202,18 +202,31 @@ fn site_core_uses_canonical_rotation_and_coverage_contracts() {
         "fixtures/sccm/server/site_core/rotation-boundary/expected.json"
     ))
     .expect("rotation expected output is JSON");
-    let requested_basenames = expected["unlinkedObservations"][0]["nextArtifacts"][0]["basenames"]
+    let requested_candidates = expected["unlinkedObservations"]
         .as_array()
-        .expect("rotation request has basenames");
-    if requested_basenames
+        .expect("rotation output has observations")
         .iter()
-        .any(|value| value.as_str() == Some("sitecomp.log.lo_"))
-        || !requested_basenames
-            .iter()
-            .any(|value| value.as_str() == Some("sitecomp.lo_"))
+        .flat_map(|observation| {
+            observation["nextArtifacts"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .flat_map(|request| request["candidates"].as_array().into_iter().flatten())
+        .collect::<Vec<_>>();
+    let rollover_candidates = requested_candidates
+        .iter()
+        .filter(|candidate| candidate["basename"] == "sitecomp.lo_")
+        .copied()
+        .collect::<Vec<_>>();
+    if requested_candidates
+        .iter()
+        .any(|candidate| candidate["basename"] == "sitecomp.log.lo_")
+        || rollover_candidates.len() != 1
+        || rollover_candidates[0]["rotation"] != "loUnderscore"
     {
         failures.push(format!(
-            "rotation-boundary: expected request must use sitecomp.lo_, got {requested_basenames:?}"
+            "rotation-boundary: expected request must use exactly paired sitecomp.lo_/loUnderscore, got {requested_candidates:?}"
         ));
     }
 
@@ -225,7 +238,8 @@ fn capped_artifact_cannot_claim_a_complete_fragment() {
     let artifact = serde_json::json!({
         "artifactId": "capped-probe",
         "captureState": "capped",
-        "rotation": {"kind": "current", "fragmentComplete": true}
+        "rotation": {"kind": "current"},
+        "fragmentComplete": true
     });
 
     assert_eq!(coverage_contract_failures(&artifact).len(), 1);
@@ -287,7 +301,8 @@ fn nonphysical_states_cannot_claim_files_or_complete_fragments() {
             "captureState": state,
             "relativePath": "evidence/placeholder.log",
             "bytesCopied": 1,
-            "rotation": {"kind": "current", "fragmentComplete": true}
+            "rotation": {"kind": "current"},
+            "fragmentComplete": true
         });
 
         assert_eq!(

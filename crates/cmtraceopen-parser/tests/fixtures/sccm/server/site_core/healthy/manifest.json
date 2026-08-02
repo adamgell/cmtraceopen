@@ -1,52 +1,55 @@
 {
   "sccmManifestVersion": 1,
-  "bundleRole": "server",
   "syntheticFixture": true,
-  "scenario": "healthy",
+  "proposalOnly": true,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
   "topology": {
     "captureHost": "LAB-CM01",
-    "rolesObserved": [
-      "siteServer"
-    ],
-    "siteCode": "LAB"
+    "siteCode": "LAB",
+    "rolesObserved": ["siteServer"]
   },
   "artifacts": [
     {
-      "artifactId": "healthy-sitecomp-current",
-      "role": "siteServer",
-      "sourceGroup": "server-sitecomp",
+      "artifactId": "sitecomp-current",
+      "producerRole": "siteServer",
+      "producerHostHandle": "synthetic:host:site-01",
+      "sourceId": "server-sitecomp",
       "sourceKind": "ccmLog",
-      "originalPath": "REDACTED",
-      "originalBasename": "sitecomp.log",
-      "configuredPath": true,
-      "rotation": {
-        "kind": "current"
-      },
-      "rotationLineage": "sitecomp.log",
-      "captureState": "captured",
       "sourceVersion": "5.00.TEST",
-      "collectedUtc": "2026-07-30T14:01:00Z",
+      "originalPath": "REDACTED_SITE_ROOT",
+      "originalBasename": "sitecomp.log",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:site-default"
+      },
+      "rotation": { "kind": "current", "lineageId": "sitecomp-lab" },
+      "captureState": "captured",
       "encoding": "utf-8",
-      "relativePath": "evidence/sccm/server/site-core/sitecomp/current/sitecomp.log",
+      "collectionLimit": { "byteLimit": 4096, "limitApplied": false },
+      "collectedUtc": "2026-07-30T14:01:00Z",
+      "relativePath": "evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log",
       "bytesCopied": 983
     },
     {
-      "artifactId": "healthy-statmgr-current",
-      "role": "siteServer",
-      "sourceGroup": "server-status",
+      "artifactId": "z-site-status",
+      "producerRole": "siteServer",
+      "producerHostHandle": "synthetic:host:site-01",
+      "sourceId": "server-status",
       "sourceKind": "ccmLog",
-      "originalPath": "REDACTED",
-      "originalBasename": "statmgr.log",
-      "configuredPath": true,
-      "rotation": {
-        "kind": "current"
-      },
-      "rotationLineage": "statmgr.log",
-      "captureState": "captured",
       "sourceVersion": "5.00.TEST",
-      "collectedUtc": "2026-07-30T14:01:00Z",
+      "originalPath": "REDACTED_SITE_ROOT",
+      "originalBasename": "statmgr.log",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:z-site"
+      },
+      "rotation": { "kind": "current", "lineageId": "site-status-z" },
+      "captureState": "captured",
       "encoding": "utf-8",
-      "relativePath": "evidence/sccm/server/site-core/status/current/statmgr.log",
+      "collectionLimit": { "byteLimit": 4096, "limitApplied": false },
+      "collectedUtc": "2026-07-30T14:01:00Z",
+      "relativePath": "evidence/sccm/server/site-server/server-status/current/statmgr.log",
       "bytesCopied": 653
     }
   ]

@@ -1,18 +1,26 @@
 {
-  "expectedContractVersion": 1,
-  "scenario": "inbox-backlog",
+  "schemaVersion": 1,
+  "workflow": "siteCore",
   "profile": {
     "id": "sccm-site-core",
     "version": 1,
     "stability": "experimental"
   },
+  "stateChain": [
+    "componentStart",
+    "componentWork",
+    "inboxOrQueue",
+    "statusOrStateProcessing",
+    "healthyOrTerminal"
+  ],
   "results": [
     {
-      "resultId": "site-core/LAB/SMS_EXECUTIVE/SC-BACKLOG-001",
+      "resultId": "site-core:result:v1:8f00cd22916faa6850e60171e8392ee5dd7aa55efe883c7d76546a3c3d221f1f",
       "transactionKey": {
         "profileId": "sccm-site-core",
         "profileVersion": 1,
-        "siteCode": "LAB",
+        "siteHandle": "synthetic:site:lab",
+        "producerHostHandle": "synthetic:host:site-01",
         "componentId": "SMS_EXECUTIVE",
         "workItemId": "SC-BACKLOG-001"
       },
@@ -23,42 +31,38 @@
       "confidenceCeiling": "low",
       "evidence": [
         {
-          "artifactId": "inbox-backlog-sitecomp-current",
-          "entryId": "inbox-backlog-sitecomp-current:1-1",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:1-1",
           "lineStart": 1,
           "lineEnd": 1
         },
         {
-          "artifactId": "inbox-backlog-sitecomp-current",
-          "entryId": "inbox-backlog-sitecomp-current:2-2",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:2-2",
           "lineStart": 2,
           "lineEnd": 2
         },
         {
-          "artifactId": "inbox-backlog-sitecomp-current",
-          "entryId": "inbox-backlog-sitecomp-current:3-3",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:3-3",
           "lineStart": 3,
           "lineEnd": 3,
           "terminal": false
         }
       ],
-      "coverageGapArtifactIds": [
-        "inbox-backlog-statmgr-absent"
-      ],
+      "coverageGapArtifactIds": ["z-site-status"],
       "nextArtifacts": [
         {
           "logicalName": "server-status",
           "role": "siteServer",
           "reasonCode": "matching-status-terminal-evidence-missing",
-          "basenames": [
-            "statmgr.log"
-          ],
-          "rotations": [
-            "current",
-            "loUnderscore"
+          "candidates": [
+            { "basename": "statmgr.log", "rotation": "current" },
+            { "basename": "statmgr.lo_", "rotation": "loUnderscore" }
           ],
           "maxArtifacts": 2,
           "scope": {
+            "producerHostHandle": "synthetic:host:site-01",
             "componentId": "SMS_EXECUTIVE",
             "workItemId": "SC-BACKLOG-001"
           }
@@ -66,35 +70,144 @@
       ]
     }
   ],
-  "unlinkedObservations": [],
+  "unlinkedObservations": [
+    {
+      "observationId": "site-core:observation:v1:3c9d38e20784d06345b49e9978c0ee0a106b87001ac62428d18c41115f72a2f0",
+      "state": "parseGap",
+      "findingClass": "insufficientEvidence",
+      "confidence": "none",
+      "evidence": [],
+      "coverageGapArtifactIds": ["z-site-status"],
+      "nextArtifacts": [
+        {
+          "logicalName": "server-status",
+          "role": "siteServer",
+          "reasonCode": "required-source-absent",
+          "candidates": [{ "basename": "statmgr.log", "rotation": "current" }],
+          "maxArtifacts": 1,
+          "scope": {
+            "producerHostHandle": "synthetic:host:site-01",
+            "rotationLineageHandle": "site-status-z"
+          }
+        }
+      ]
+    }
+  ],
   "coverageGaps": [
     {
-      "artifactId": "inbox-backlog-statmgr-absent",
+      "artifactId": "z-site-status",
+      "sourceId": "server-status",
       "state": "absent",
+      "reasonCode": "required-source-absent",
       "diagnosticMeaning": "coverageOnly"
     }
   ],
-  "prohibitedClaims": [
-    "absentDownstreamRole",
-    "clientImpact",
-    "crossSideCausality"
+  "findings": [
+    {
+      "findingId": "site-core:finding:v1:3904d5916025a996b54227f390835cf3a9417264aa9d80d592e59e58793fe0ee",
+      "class": "insufficientEvidence",
+      "phase": "siteCoreCoverage",
+      "role": "siteServer",
+      "severity": "Warning",
+      "confidence": "none",
+      "title": "Site core coverage gap",
+      "summary": "The source is incomplete and cannot establish a component outcome.",
+      "evidence": [],
+      "terminalEvidence": [],
+      "coverageGaps": [
+        {
+          "artifactId": "z-site-status",
+          "role": "siteServer",
+          "coverage": "absent"
+        }
+      ],
+      "correlationKeys": [],
+      "nextArtifacts": [
+        {
+          "logicalId": "statmgr",
+          "role": "siteServer",
+          "reason": "Collect the complete statmgr.log file."
+        }
+      ],
+      "subjectId": "site-core:observation:v1:3c9d38e20784d06345b49e9978c0ee0a106b87001ac62428d18c41115f72a2f0",
+      "lastSuccessfulPhase": null
+    },
+    {
+      "findingId": "site-core:finding:v1:7f88716d8276aa14790bb220f91a66086fdc10d86f55a5aeb831f2aacf2944ef",
+      "class": "blockedOrDeferred",
+      "phase": "componentWork",
+      "role": "siteServer",
+      "severity": "Warning",
+      "confidence": "low",
+      "title": "Site component and status evidence",
+      "summary": "The last confirmed successful phase is componentWork; later phases are bounded to cited evidence.",
+      "evidence": [
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:3-3",
+          "lineStart": 3,
+          "lineEnd": 3
+        }
+      ],
+      "terminalEvidence": [],
+      "coverageGaps": [
+        {
+          "artifactId": "z-site-status",
+          "role": "siteServer",
+          "coverage": "absent"
+        }
+      ],
+      "correlationKeys": [],
+      "nextArtifacts": [
+        {
+          "logicalId": "statmgr",
+          "role": "siteServer",
+          "reason": "Collect the complete statmgr.log file."
+        }
+      ],
+      "subjectId": "site-core:result:v1:8f00cd22916faa6850e60171e8392ee5dd7aa55efe883c7d76546a3c3d221f1f",
+      "lastSuccessfulPhase": "componentWork"
+    }
   ],
-  "ordering": {
-    "resultsBy": [
-      "resultId"
-    ],
-    "evidenceBy": [
-      "artifactId",
-      "lineStart",
-      "lineEnd"
-    ],
-    "coverageGapsBy": [
-      "artifactId"
-    ],
-    "nextArtifactsBy": [
-      "logicalName",
-      "role",
-      "reasonCode"
-    ]
-  }
+  "artifactRequests": [
+    {
+      "logicalName": "server-status",
+      "role": "siteServer",
+      "reasonCode": "matching-status-terminal-evidence-missing",
+      "candidates": [
+        { "basename": "statmgr.log", "rotation": "current" },
+        { "basename": "statmgr.lo_", "rotation": "loUnderscore" }
+      ],
+      "maxArtifacts": 2,
+      "scope": {
+        "producerHostHandle": "synthetic:host:site-01",
+        "componentId": "SMS_EXECUTIVE",
+        "workItemId": "SC-BACKLOG-001"
+      }
+    },
+    {
+      "logicalName": "server-status",
+      "role": "siteServer",
+      "reasonCode": "required-source-absent",
+      "candidates": [{ "basename": "statmgr.log", "rotation": "current" }],
+      "maxArtifacts": 1,
+      "scope": {
+        "producerHostHandle": "synthetic:host:site-01",
+        "rotationLineageHandle": "site-status-z"
+      }
+    }
+  ],
+  "crossSideCorrelationPerformed": false
 }

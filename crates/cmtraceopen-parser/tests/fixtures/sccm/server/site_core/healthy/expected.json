@@ -1,18 +1,26 @@
 {
-  "expectedContractVersion": 1,
-  "scenario": "healthy",
+  "schemaVersion": 1,
+  "workflow": "siteCore",
   "profile": {
     "id": "sccm-site-core",
     "version": 1,
     "stability": "experimental"
   },
+  "stateChain": [
+    "componentStart",
+    "componentWork",
+    "inboxOrQueue",
+    "statusOrStateProcessing",
+    "healthyOrTerminal"
+  ],
   "results": [
     {
-      "resultId": "site-core/LAB/SMS_EXECUTIVE/SC-HEALTH-001",
+      "resultId": "site-core:result:v1:4333cffa83f498b6a451e36269b164ae23717b1e790f4e0af31beb4821eece3b",
       "transactionKey": {
         "profileId": "sccm-site-core",
         "profileVersion": 1,
-        "siteCode": "LAB",
+        "siteHandle": "synthetic:site:lab",
+        "producerHostHandle": "synthetic:host:site-01",
         "componentId": "SMS_EXECUTIVE",
         "workItemId": "SC-HEALTH-001"
       },
@@ -23,32 +31,32 @@
       "confidenceCeiling": "high",
       "evidence": [
         {
-          "artifactId": "healthy-sitecomp-current",
-          "entryId": "healthy-sitecomp-current:1-1",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:1-1",
           "lineStart": 1,
           "lineEnd": 1
         },
         {
-          "artifactId": "healthy-sitecomp-current",
-          "entryId": "healthy-sitecomp-current:2-2",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:2-2",
           "lineStart": 2,
           "lineEnd": 2
         },
         {
-          "artifactId": "healthy-sitecomp-current",
-          "entryId": "healthy-sitecomp-current:3-3",
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:3-3",
           "lineStart": 3,
           "lineEnd": 3
         },
         {
-          "artifactId": "healthy-statmgr-current",
-          "entryId": "healthy-statmgr-current:1-1",
+          "artifactId": "z-site-status",
+          "entryId": "z-site-status:1-1",
           "lineStart": 1,
           "lineEnd": 1
         },
         {
-          "artifactId": "healthy-statmgr-current",
-          "entryId": "healthy-statmgr-current:2-2",
+          "artifactId": "z-site-status",
+          "entryId": "z-site-status:2-2",
           "lineStart": 2,
           "lineEnd": 2
         }
@@ -59,27 +67,7 @@
   ],
   "unlinkedObservations": [],
   "coverageGaps": [],
-  "prohibitedClaims": [
-    "absentDownstreamRole",
-    "clientImpact",
-    "crossSideCausality"
-  ],
-  "ordering": {
-    "resultsBy": [
-      "resultId"
-    ],
-    "evidenceBy": [
-      "artifactId",
-      "lineStart",
-      "lineEnd"
-    ],
-    "coverageGapsBy": [
-      "artifactId"
-    ],
-    "nextArtifactsBy": [
-      "logicalName",
-      "role",
-      "reasonCode"
-    ]
-  }
+  "findings": [],
+  "artifactRequests": [],
+  "crossSideCorrelationPerformed": false
 }
