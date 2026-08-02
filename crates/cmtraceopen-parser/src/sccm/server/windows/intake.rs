@@ -1493,6 +1493,30 @@ mod intake_integrity_tests {
             "domain and payload boundaries must be length-framed"
         );
     }
+
+    #[test]
+    fn intake_integrity_serializes_each_record_once() {
+        struct CountedRecord<'a>(&'a std::cell::Cell<usize>);
+
+        impl Serialize for CountedRecord<'_> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                self.0.set(self.0.get().saturating_add(1));
+                serializer.serialize_str("canonical-payload")
+            }
+        }
+
+        let serializations = std::cell::Cell::new(0);
+        canonical_record_digest(b"evidence", &CountedRecord(&serializations))
+            .expect("integrity digest");
+        assert_eq!(
+            serializations.get(),
+            1,
+            "integrity hashing must stream one terminal canonical JSON payload"
+        );
+    }
 }
 
 fn validate_payload_contract<'a>(
