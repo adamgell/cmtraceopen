@@ -7,6 +7,7 @@ use cmtraceopen_parser::sccm::{
     SccmFindingCoverageGap, SccmPhase, SccmRole, SccmRotation,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn intake_root() -> PathBuf {
@@ -147,6 +148,313 @@ fn artifact_json<'a>(assessment: &'a Value, artifact_id: &str) -> &'a Value {
         .iter()
         .find(|artifact| artifact["artifactId"] == artifact_id)
         .expect("artifact is present")
+}
+
+fn reversed_assessment_json(manifest_json: &str, payloads: &[SccmServerArtifactPayload]) -> Value {
+    let mut manifest = manifest_value(manifest_json);
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("manifest artifacts are an array")
+        .reverse();
+    let mut reversed_payloads = payloads.to_vec();
+    reversed_payloads.reverse();
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &reversed_payloads)
+        .expect("reordered manifest remains assessable");
+    serde_json::to_value(assessment).expect("reordered assessment serializes")
+}
+
+fn assert_unique_public_relative_paths(scenario: &str, actual: &Value) {
+    let paths = actual["artifacts"]
+        .as_array()
+        .expect("assessment artifacts are an array")
+        .iter()
+        .filter_map(|artifact| artifact["relativePath"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths.iter().copied().collect::<BTreeSet<_>>().len(),
+        paths.len(),
+        "{scenario}: relative paths are collision-safe"
+    );
+}
+
+fn assert_collision_contract(scenario: &str, expected: &Value, actual: &Value) {
+    let artifacts = actual["artifacts"]
+        .as_array()
+        .expect("assessment artifacts are an array");
+    for (key, value) in expected
+        .as_object()
+        .expect("collision assertions are an object")
+    {
+        match key.as_str() {
+            "sameBasename" => assert!(artifacts
+                .iter()
+                .all(|artifact| { artifact["originalBasename"].as_str() == value.as_str() })),
+            "distinctPathFingerprints" => {
+                let fingerprints = artifacts
+                    .iter()
+                    .map(|artifact| artifact["pathFingerprint"].as_str().expect("fingerprint"))
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(fingerprints.len(), artifacts.len(), "{scenario}: {key}");
+                assert_eq!(value, true, "{scenario}: {key} expectation");
+            }
+            "distinctOpaqueRootSegments" => {
+                assert_eq!(value, true, "{scenario}: {key} expectation");
+                let root_segments = artifacts
+                    .iter()
+                    .map(|artifact| {
+                        artifact["relativePath"]
+                            .as_str()
+                            .expect("relative path")
+                            .split('/')
+                            .nth(5)
+                            .filter(|segment| segment.starts_with("root-"))
+                            .expect("opaque configured-root segment")
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(root_segments.len(), artifacts.len(), "{scenario}: {key}");
+            }
+            "notMerged" => {
+                assert_eq!(value, true, "{scenario}: {key} expectation");
+                let content_digests = artifacts
+                    .iter()
+                    .map(|artifact| artifact["contentSha256"].as_str().expect("content digest"))
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(content_digests.len(), artifacts.len(), "{scenario}: {key}");
+            }
+            "exactReferencesResolve" => {
+                assert_eq!(value, true, "{scenario}: {key} expectation");
+                let artifact_ids = artifacts
+                    .iter()
+                    .map(|artifact| artifact["artifactId"].as_str().expect("artifact ID"))
+                    .collect::<BTreeSet<_>>();
+                for coverage in actual["coverage"].as_array().expect("coverage is an array") {
+                    for artifact_id in coverage["artifactIds"]
+                        .as_array()
+                        .expect("coverage artifact IDs are an array")
+                    {
+                        assert!(artifact_ids.contains(artifact_id.as_str().expect("artifact ID")));
+                    }
+                }
+                for evidence in actual["evidence"].as_array().expect("evidence is an array") {
+                    assert!(artifact_ids.contains(
+                        evidence["reference"]["artifactId"]
+                            .as_str()
+                            .expect("evidence artifact ID")
+                    ));
+                }
+            }
+            "normalizedArtifactCount" => assert_eq!(
+                artifacts.len() as u64,
+                value.as_u64().expect("artifact count is an integer"),
+                "{scenario}: {key}"
+            ),
+            other => panic!("{scenario}: unhandled collision assertion {other}"),
+        }
+    }
+}
+
+fn assert_remaining_expected_contracts(
+    scenario: &str,
+    expected: &Value,
+    manifest_json: &str,
+    payloads: &[SccmServerArtifactPayload],
+    actual: &Value,
+) {
+    let manifest = manifest_value(manifest_json);
+    let actual_artifacts = actual["artifacts"]
+        .as_array()
+        .expect("assessment artifacts are an array");
+    for (key, value) in expected
+        .as_object()
+        .expect("expected contract is an object")
+    {
+        match key.as_str() {
+            "pre318ExpectedVersion"
+            | "artifactId"
+            | "artifactProvenance"
+            | "canonicalArtifactIds"
+            | "canonicalRotationArtifactIds"
+            | "configuredPathProvenance"
+            | "coverage"
+            | "evidence"
+            | "retainedUnclassifiedArtifactIds"
+            | "rolesObserved" => {}
+            "nonCapturedProvenance" => {
+                assert_eq!(value["encoding"], "omitted", "{scenario}: encoding");
+                assert_eq!(
+                    value["collectionLimit"], "omitted",
+                    "{scenario}: collection limit"
+                );
+                for artifact in manifest["artifacts"]
+                    .as_array()
+                    .expect("manifest artifacts are an array")
+                    .iter()
+                    .filter(|artifact| artifact["relativePath"].is_null())
+                {
+                    assert!(artifact.get("encoding").is_none_or(Value::is_null));
+                    assert!(artifact.get("collectionLimit").is_none_or(Value::is_null));
+                }
+                assert!(actual_artifacts
+                    .iter()
+                    .filter(|artifact| artifact["relativePath"].is_null())
+                    .all(|artifact| artifact["captureProvenance"].is_null()));
+            }
+            "nextArtifactRequest" => {
+                let requests = actual["nextArtifactRequests"]
+                    .as_array()
+                    .expect("requests are an array");
+                assert_eq!(requests.len(), 1, "{scenario}: one bounded request");
+                match value.as_str().expect("request expectation is a string") {
+                    "read-only capture of server-mp-policy from the observed management point" => {
+                        assert_eq!(requests[0]["logicalId"], "mpGetPolicy");
+                        assert_eq!(requests[0]["role"], "managementPoint");
+                    }
+                    "bounded recapture of server-sup-sync with a cap sufficient for complete logical records" => {
+                        assert_eq!(requests[0]["logicalId"], "wsyncmgr");
+                        assert_eq!(requests[0]["role"], "siteServer");
+                    }
+                    other => panic!("{scenario}: unhandled request contract {other}"),
+                }
+            }
+            "terminalManagementPointDiagnosis"
+            | "terminalSoftwareUpdatePointHealth"
+            | "partialPhysicalFragmentCreatesTerminalResult"
+            | "requiredSourceFailure" => {
+                assert_eq!(value, false, "{scenario}: {key} expectation");
+                assert!(actual["findings"]
+                    .as_array()
+                    .expect("findings are an array")
+                    .is_empty());
+            }
+            "roleHealthFinding" | "databaseOrRoleFinding" => {
+                assert_eq!(value, "none", "{scenario}: {key} expectation");
+                assert!(actual["findings"]
+                    .as_array()
+                    .expect("findings are an array")
+                    .is_empty());
+            }
+            "forbiddenConclusion" => {
+                let serialized = serde_json::to_string(actual).expect("assessment serializes");
+                assert!(!serialized
+                    .to_ascii_lowercase()
+                    .contains(&value.as_str().expect("forbidden text").to_ascii_lowercase()));
+            }
+            "privacy" => {
+                assert_eq!(value, "synthetic", "{scenario}: privacy declaration");
+                assert_eq!(manifest["syntheticFixture"], true);
+                assert_eq!(manifest["privacy"]["synthetic"], true);
+                assert_eq!(manifest["privacy"]["rawPaths"], "redacted");
+                let serialized = serde_json::to_string(actual).expect("assessment serializes");
+                assert!(!serialized.contains("REDACTED"));
+            }
+            "defaultCandidateInterpretation" => {
+                assert_eq!(value, "candidateAbsentOnly");
+                assert_eq!(
+                    manifest["artifacts"][0]["defaultCandidateState"],
+                    "absentCandidateOnly"
+                );
+            }
+            "roleInference" => {
+                assert_eq!(
+                    value,
+                    "managementPoint is observed from topology, not from default path"
+                );
+                assert!(actual["topology"]["rolesObserved"]
+                    .as_array()
+                    .expect("roles are an array")
+                    .contains(&Value::String("managementPoint".to_owned())));
+            }
+            "lineageId" => assert!(actual_artifacts
+                .iter()
+                .all(|artifact| { artifact["rotationLineageHandle"] == *value })),
+            "totalRotationSort" => {
+                assert_eq!(value, true);
+                let ids = actual_artifacts
+                    .iter()
+                    .map(|artifact| artifact["artifactId"].clone())
+                    .collect::<Value>();
+                assert_eq!(ids, expected["canonicalRotationArtifactIds"]);
+            }
+            "serializationOrderIsChronology" => {
+                assert_eq!(value, false);
+                let instants = actual_artifacts
+                    .iter()
+                    .map(|artifact| artifact["collectedAtUtc"].as_str().expect("timestamp"))
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(
+                    instants.len(),
+                    1,
+                    "{scenario}: chronology cannot choose order"
+                );
+            }
+            "uniqueRelativePaths" | "collisionSafe" => {
+                assert_eq!(value, true, "{scenario}: {key} expectation");
+                assert_unique_public_relative_paths(scenario, actual);
+            }
+            "collisionAssertions" => assert_collision_contract(scenario, value, actual),
+            "normalizedOutputByteIdenticalWhenReordered"
+            | "artifactIdDerivationIgnoresDiscoveryOrder" => {
+                assert_eq!(value, true, "{scenario}: {key} expectation");
+                assert_eq!(
+                    reversed_assessment_json(manifest_json, payloads),
+                    *actual,
+                    "{scenario}: {key}"
+                );
+            }
+            "artifactIdUniquenessScope" => {
+                assert_eq!(value, "manifest");
+                let ids = actual_artifacts
+                    .iter()
+                    .map(|artifact| artifact["artifactId"].as_str().expect("artifact ID"))
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(ids.len(), actual_artifacts.len());
+            }
+            "crossBundleArtifactIdReuseAllowed" => {
+                assert_eq!(value, true);
+                let repeated = assess_server_intake(manifest_json, payloads)
+                    .expect("a separate assessment may reuse manifest-scoped IDs");
+                assert_eq!(
+                    serde_json::to_value(repeated).expect("repeat serializes"),
+                    *actual
+                );
+            }
+            "deterministicEvidenceIds" => {
+                assert_eq!(value, true);
+                assert_eq!(
+                    reversed_assessment_json(manifest_json, payloads)["evidence"],
+                    actual["evidence"]
+                );
+            }
+            "rawByteCountedBeforeDecoding" => {
+                assert_eq!(value, true);
+                for payload in payloads {
+                    let artifact = artifact_json(actual, &payload.manifest_artifact_id);
+                    assert_eq!(artifact["bytesCopied"], payload.bytes.len() as u64);
+                }
+            }
+            "completeCcmRecordCount" => assert_eq!(
+                actual["evidence"]
+                    .as_array()
+                    .expect("evidence is an array")
+                    .len() as u64,
+                value.as_u64().expect("record count is an integer")
+            ),
+            "logicalRecordParseable" => {
+                assert_eq!(value, false);
+                assert!(actual["evidence"]
+                    .as_array()
+                    .expect("evidence is an array")
+                    .is_empty());
+            }
+            "eligibleForRoleReducer" => {
+                assert_eq!(value, false);
+                assert!(actual_artifacts
+                    .iter()
+                    .all(|artifact| artifact["parserEligible"] == false));
+            }
+            other => panic!("{scenario}: unhandled expected contract key {other}"),
+        }
+    }
 }
 
 fn assert_request_passes_finding_boundaries(
@@ -314,6 +622,7 @@ fn server_intake_does_not_request_unknown_or_non_ccm_sources() {
     let (iis_manifest, iis_payloads) = load_bundle("skipped-iis");
     let mut denied_iis = manifest_value(&iis_manifest);
     denied_iis["artifacts"][0]["captureState"] = Value::String("accessDenied".to_owned());
+    denied_iis["artifacts"][0]["skipReason"] = Value::Null;
     let iis = assess_server_intake(&serialize_manifest(&denied_iis), &iis_payloads)
         .expect("non-CCM coverage remains assessable");
     assert!(
@@ -713,6 +1022,7 @@ fn server_intake_suppresses_absent_default_request_when_configured_source_is_usa
     let (absent_manifest, _absent_payloads) = load_bundle("access-denied-mp");
     let mut absent = manifest_value(&absent_manifest)["artifacts"][0].clone();
     absent["captureState"] = Value::String("absent".to_owned());
+    absent["collectionDetail"] = Value::Null;
     absent["configuredPathProvenance"]["state"] = Value::String("defaultCandidate".to_owned());
     combined["artifacts"]
         .as_array_mut()
@@ -744,6 +1054,7 @@ fn server_intake_does_not_suppress_default_request_across_producer_hosts() {
     let mut absent = manifest_value(&absent_manifest)["artifacts"][0].clone();
     absent["producerHostHandle"] = Value::String("synthetic:host:site-01".to_owned());
     absent["captureState"] = Value::String("absent".to_owned());
+    absent["collectionDetail"] = Value::Null;
     absent["configuredPathProvenance"]["state"] = Value::String("defaultCandidate".to_owned());
     combined["artifacts"]
         .as_array_mut()
@@ -994,20 +1305,171 @@ fn server_intake_retains_unsupported_source_provenance() {
 }
 
 #[test]
-fn server_intake_tolerates_future_safe_unsupported_source_labels() {
+fn server_intake_rejects_unversioned_future_unsupported_source_labels() {
     let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
     let mut manifest = manifest_value(&manifest_json);
     manifest["artifacts"][0]["sourceId"] = Value::String("future-server-supplement".to_owned());
     manifest["artifacts"][0]["sourceKind"] = Value::String("futureSupplement".to_owned());
 
-    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
-        .expect("a privacy-safe future unsupported label remains forward-compatible");
-    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
-    let artifact = artifact_json(&serialized, "unknown-db-export");
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+        "future provenance needs a versioned opaque handle, not an arbitrary public label"
+    );
+}
 
-    assert_eq!(artifact["sourceId"], "future-server-supplement");
-    assert_eq!(artifact["sourceKind"], "futureSupplement");
-    assert_eq!(artifact["family"], "future-server-supplement");
+#[test]
+fn server_intake_rejects_identity_bearing_unsupported_public_provenance() {
+    for (field, marker) in [
+        ("sourceId", "realuser-example"),
+        ("sourceKind", "RealUser"),
+        ("originalBasename", "RealUser.log"),
+    ] {
+        assert_unsafe_mutation_is_rejected("unsupported-db-supplement", marker, |manifest, _| {
+            manifest["artifacts"][0][field] = Value::String(marker.to_owned());
+        });
+    }
+}
+
+#[test]
+fn server_intake_accepts_only_opaque_future_unsupported_provenance() {
+    let (manifest_json, _) = bounded_manifest(1, 4_096);
+    let mut manifest = manifest_value(&manifest_json);
+    let source_id = opaque_handle("cmtraceopen.source.sha256.v1:", 1);
+    let source_kind = opaque_handle("cmtraceopen.source-kind.sha256.v1:", 2);
+    let basename = opaque_handle("cmtraceopen.basename.sha256.v1:", 3);
+    let artifact = &mut manifest["artifacts"][0];
+    artifact["producerRole"] = Value::String("unclassified".to_owned());
+    artifact["producerHostHandle"] = Value::Null;
+    artifact["sourceId"] = Value::String(source_id.clone());
+    artifact["sourceKind"] = Value::String(source_kind.clone());
+    artifact["originalBasename"] = Value::String(basename.clone());
+    artifact["rotation"] = json!({
+        "kind": "none",
+        "lineageId": opaque_handle("cmtraceopen.lineage.sha256.v1:", 4),
+    });
+    artifact["captureState"] = Value::String("unsupported".to_owned());
+    artifact["encoding"] = Value::Null;
+    artifact["collectionLimit"] = Value::Null;
+    artifact["relativePath"] = Value::Null;
+    artifact["bytesCopied"] = Value::from(0);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &[])
+        .expect("opaque future unsupported provenance remains retainable");
+    let public = serde_json::to_value(assessment).expect("assessment serializes");
+    assert_eq!(public["artifacts"][0]["sourceId"], source_id);
+    assert_eq!(public["artifacts"][0]["sourceKind"], source_kind);
+    assert_eq!(public["artifacts"][0]["originalBasename"], basename);
+}
+
+#[test]
+fn server_manifest_v1_rejects_unknown_fields_instead_of_dropping_them() {
+    let (manifest_json, payloads) = load_bundle("multiline");
+
+    for path in ["manifest", "topology", "artifact"] {
+        let mut manifest = manifest_value(&manifest_json);
+        match path {
+            "manifest" => manifest["unexpectedEvidence"] = Value::Bool(true),
+            "topology" => manifest["topology"]["unexpectedEvidence"] = Value::Bool(true),
+            "artifact" => manifest["artifacts"][0]["unexpectedEvidence"] = Value::Bool(true),
+            _ => unreachable!(),
+        }
+        assert!(
+            assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
+            "unknown {path} fields require a schema change; they cannot be silently discarded"
+        );
+    }
+}
+
+#[test]
+fn server_intake_expected_oracle_has_no_unhandled_contract_keys() {
+    let currently_asserted = [
+        "artifactId",
+        "artifactIdDerivationIgnoresDiscoveryOrder",
+        "artifactIdUniquenessScope",
+        "artifactProvenance",
+        "canonicalArtifactIds",
+        "canonicalRotationArtifactIds",
+        "collisionAssertions",
+        "collisionSafe",
+        "completeCcmRecordCount",
+        "configuredPathProvenance",
+        "coverage",
+        "crossBundleArtifactIdReuseAllowed",
+        "databaseOrRoleFinding",
+        "defaultCandidateInterpretation",
+        "deterministicEvidenceIds",
+        "eligibleForRoleReducer",
+        "evidence",
+        "forbiddenConclusion",
+        "lineageId",
+        "logicalRecordParseable",
+        "nextArtifactRequest",
+        "nonCapturedProvenance",
+        "normalizedOutputByteIdenticalWhenReordered",
+        "partialPhysicalFragmentCreatesTerminalResult",
+        "pre318ExpectedVersion",
+        "privacy",
+        "rawByteCountedBeforeDecoding",
+        "requiredSourceFailure",
+        "retainedUnclassifiedArtifactIds",
+        "roleHealthFinding",
+        "roleInference",
+        "rolesObserved",
+        "serializationOrderIsChronology",
+        "terminalManagementPointDiagnosis",
+        "terminalSoftwareUpdatePointHealth",
+        "totalRotationSort",
+        "uniqueRelativePaths",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    let all_expected = std::fs::read_dir(intake_root())
+        .expect("intake fixture root is readable")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("expected.json").is_file())
+        .flat_map(|entry| {
+            let scenario = entry.file_name().to_string_lossy().into_owned();
+            load_expected(&scenario)
+                .as_object()
+                .expect("expected contract is an object")
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        currently_asserted, all_expected,
+        "every committed expected.json key must drive an assertion"
+    );
+}
+
+#[test]
+fn server_intake_expected_oracles_do_not_claim_native_collection_acceptance() {
+    let forbidden_native_claims = BTreeSet::from([
+        "atomicCreateNoOverwrite",
+        "destinationsPrecomputed",
+        "neitherOverwritten",
+    ]);
+
+    for entry in std::fs::read_dir(intake_root()).expect("intake fixture root is readable") {
+        let entry = entry.expect("fixture directory entry is readable");
+        let expected_path = entry.path().join("expected.json");
+        if !expected_path.is_file() {
+            continue;
+        }
+        let scenario = entry.file_name().to_string_lossy().into_owned();
+        let expected = load_expected(&scenario);
+        let asserted_collision_keys = expected["collisionAssertions"]
+            .as_object()
+            .map(|assertions| assertions.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        assert!(
+            forbidden_native_claims.is_disjoint(&asserted_collision_keys),
+            "{scenario}: pure parser oracles cannot claim native collection acceptance"
+        );
+    }
 }
 
 #[test]
@@ -1129,12 +1591,53 @@ fn server_intake_exercises_committed_expected_contracts() {
             "{scenario}: coverage row count"
         );
         for (actual_row, expected_row) in actual_coverage.iter().zip(expected_coverage) {
-            for key in ["producerRole", "workflowSubjectRole", "sourceId", "state"] {
-                if let Some(expected_value) = expected_row.get(key) {
-                    assert_eq!(
-                        &actual_row[key], expected_value,
-                        "{scenario}: coverage {key}"
-                    );
+            for (key, expected_value) in expected_row
+                .as_object()
+                .expect("expected coverage row is an object")
+            {
+                match key.as_str() {
+                    "producerRole" | "workflowSubjectRole" | "sourceId" | "state" => {
+                        assert_eq!(
+                            &actual_row[key], expected_value,
+                            "{scenario}: coverage {key}"
+                        );
+                    }
+                    "gap" => {
+                        assert_eq!(expected_value, "candidate absent only");
+                        assert_eq!(actual_row["state"], "absent");
+                        let artifact = artifact_json(
+                            &actual,
+                            actual_row["artifactIds"][0]
+                                .as_str()
+                                .expect("coverage artifact ID"),
+                        );
+                        assert_eq!(artifact["configuredPathState"], "defaultCandidate");
+                    }
+                    "configuredRootInstances" => assert_eq!(
+                        actual_row["artifactIds"]
+                            .as_array()
+                            .expect("coverage artifact IDs")
+                            .len() as u64,
+                        expected_value.as_u64().expect("root count is an integer")
+                    ),
+                    "truncated" => {
+                        assert_eq!(expected_value, true);
+                        let artifact = artifact_json(
+                            &actual,
+                            actual_row["artifactIds"][0]
+                                .as_str()
+                                .expect("coverage artifact ID"),
+                        );
+                        assert_eq!(artifact["truncated"], true);
+                    }
+                    "requiredness" => {
+                        assert_eq!(expected_value, "optionalSupplemental");
+                        assert!(actual["nextArtifactRequests"]
+                            .as_array()
+                            .expect("requests are an array")
+                            .is_empty());
+                    }
+                    other => panic!("{scenario}: unhandled coverage key {other}"),
                 }
             }
         }
@@ -1148,23 +1651,22 @@ fn server_intake_exercises_committed_expected_contracts() {
                     .as_str()
                     .expect("expected artifactId is a string");
                 let actual_artifact = artifact_json(&actual, artifact_id);
-                for (expected_key, actual_value) in [
-                    (
-                        "encoding",
-                        &actual_artifact["captureProvenance"]["encoding"],
-                    ),
-                    (
-                        "byteLimit",
-                        &actual_artifact["captureProvenance"]["byteLimit"],
-                    ),
-                    (
-                        "limitApplied",
-                        &actual_artifact["captureProvenance"]["limitApplied"],
-                    ),
-                    ("bytesCopied", &actual_artifact["bytesCopied"]),
-                    ("relativePath", &actual_artifact["relativePath"]),
-                ] {
-                    if let Some(expected_value) = expected_artifact.get(expected_key) {
+                for (expected_key, expected_value) in expected_artifact
+                    .as_object()
+                    .expect("expected provenance is an object")
+                {
+                    let actual_value = match expected_key.as_str() {
+                        "artifactId" => &actual_artifact["artifactId"],
+                        "encoding" => &actual_artifact["captureProvenance"]["encoding"],
+                        "byteLimit" => &actual_artifact["captureProvenance"]["byteLimit"],
+                        "limitApplied" => &actual_artifact["captureProvenance"]["limitApplied"],
+                        "bytesCopied" => &actual_artifact["bytesCopied"],
+                        "relativePath" => &actual_artifact["relativePath"],
+                        "fragmentComplete" => &actual_artifact["fragmentComplete"],
+                        "sha256" => &actual_artifact["contentSha256"],
+                        other => panic!("{scenario}: unhandled provenance key {other}"),
+                    };
+                    if expected_key != "artifactId" {
                         assert_eq!(
                             actual_value, expected_value,
                             "{scenario}: {artifact_id} {expected_key}"
@@ -1199,6 +1701,17 @@ fn server_intake_exercises_committed_expected_contracts() {
                     assert_eq!(records[0]["reference"]["lineStart"], line_range["start"]);
                     assert_eq!(records[0]["reference"]["lineEnd"], line_range["end"]);
                 }
+                let keys = expected_row
+                    .as_object()
+                    .expect("expected evidence row is an object")
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(
+                    keys,
+                    BTreeSet::from(["artifactId", "lineRange", "logicalRecordCount"]),
+                    "{scenario}: every evidence expectation is asserted"
+                );
             }
         }
 
@@ -1224,5 +1737,13 @@ fn server_intake_exercises_committed_expected_contracts() {
         if let Some(expected_roles) = expected.get("rolesObserved") {
             assert_eq!(actual["topology"]["rolesObserved"], *expected_roles);
         }
+
+        assert_remaining_expected_contracts(
+            &scenario,
+            &expected,
+            &manifest_json,
+            &payloads,
+            &actual,
+        );
     }
 }

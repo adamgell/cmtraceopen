@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::sccm::{
@@ -88,6 +89,9 @@ pub struct SccmServerArtifactAssessment {
     pub collected_at_utc: String,
     pub relative_path: Option<String>,
     pub bytes_copied: u64,
+    pub content_sha256: Option<String>,
+    pub truncated: Option<bool>,
+    pub fragment_complete: Option<bool>,
     pub capture_provenance: Option<SccmServerCaptureProvenance>,
     pub parser_eligible: bool,
 }
@@ -174,6 +178,7 @@ pub fn assess_server_intake(
     if manifest.bundle_role != "server" {
         return Err(SccmServerIntakeError::InvalidBundleRole);
     }
+    validate_manifest_metadata(&manifest)?;
     validate_manifest_bounds(&manifest, payloads)?;
 
     let topology = normalize_topology(&manifest)?;
@@ -396,6 +401,33 @@ fn validate_manifest_bounds(
     Ok(())
 }
 
+fn validate_manifest_metadata(manifest: &RawServerManifest) -> Result<(), SccmServerIntakeError> {
+    if manifest.synthetic_fixture {
+        let privacy = manifest
+            .privacy
+            .as_ref()
+            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+        if manifest.proposal_only != Some(true)
+            || !privacy.synthetic
+            || privacy.raw_paths != "redacted"
+        {
+            return Err(SccmServerIntakeError::InvalidArtifact);
+        }
+    } else if manifest.proposal_only == Some(true)
+        || manifest
+            .privacy
+            .as_ref()
+            .is_some_and(|privacy| privacy.synthetic || privacy.raw_paths != "redacted")
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+
+    if manifest.input_order_is_deliberately_unsorted == Some(false) {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+    Ok(())
+}
+
 fn normalize_topology(
     manifest: &RawServerManifest,
 ) -> Result<SccmServerTopologyAssessment, SccmServerIntakeError> {
@@ -464,11 +496,16 @@ fn normalize_artifact(
 ) -> Result<PreparedArtifact, SccmServerIntakeError> {
     let unsupported_unknown = artifact.capture_state == SccmCoverageState::Unsupported
         && artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
+    validate_artifact_annotations(&artifact, synthetic_fixture)?;
     let source_version =
         normalize_source_version(artifact.source_version.as_deref(), synthetic_fixture)?;
     if !safe_manifest_artifact_id(&artifact.artifact_id, synthetic_fixture)
-        || !safe_source_id(&artifact.source_id, unsupported_unknown)
-        || !safe_source_kind(&artifact.source_kind, unsupported_unknown)
+        || !safe_source_id(&artifact.source_id, unsupported_unknown, synthetic_fixture)
+        || !safe_source_kind(
+            &artifact.source_kind,
+            unsupported_unknown,
+            synthetic_fixture,
+        )
         || !safe_lineage_id(&artifact.rotation.lineage_id, synthetic_fixture)
         || !safe_path_fingerprint(
             &artifact.configured_path_provenance.path_fingerprint,
@@ -489,7 +526,8 @@ fn normalize_artifact(
             "subject",
         )
         || (!unsupported_unknown && artifact.producer_host_handle.is_none())
-        || (unsupported_unknown && !safe_public_basename(&artifact.original_basename))
+        || (unsupported_unknown
+            && !safe_public_basename(&artifact.original_basename, synthetic_fixture))
     {
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
@@ -631,6 +669,7 @@ fn normalize_artifact(
     )?;
     let (bytes, capture_provenance) =
         validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id)?;
+    let content_sha256 = bytes.map(payload_sha256);
     let profile_eligible = source_version
         .as_deref()
         .is_some_and(|version| source_version_is_profile_eligible(version, synthetic_fixture));
@@ -710,11 +749,19 @@ fn normalize_artifact(
             collected_at_utc,
             relative_path,
             bytes_copied: artifact.bytes_copied,
+            content_sha256,
+            truncated: artifact.truncated,
+            fragment_complete: artifact.fragment_complete,
             capture_provenance,
             parser_eligible,
         },
         evidence,
     })
+}
+
+fn payload_sha256(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn validate_payload_contract<'a>(
@@ -796,7 +843,7 @@ fn decode_server_payload(
         }
         "utf-16le" => {
             let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(bytes);
-            if bytes.len() % 2 != 0 {
+            if !bytes.len().is_multiple_of(2) {
                 return Err(SccmServerIntakeError::InvalidPayloadEncoding);
             }
             let units = bytes
@@ -1083,6 +1130,73 @@ fn normalize_source_version(
     Ok(Some(value.to_owned()))
 }
 
+fn validate_artifact_annotations(
+    artifact: &RawServerArtifact,
+    synthetic_fixture: bool,
+) -> Result<(), SccmServerIntakeError> {
+    if artifact
+        .workflow_subject
+        .as_ref()
+        .and_then(|subject| subject.basis.as_deref())
+        .is_some_and(|basis| {
+            if synthetic_fixture {
+                basis != "incidentScopeOnly"
+            } else {
+                !opaque_sha256_handle(basis, "cmtraceopen.subject-basis.sha256.v1:")
+            }
+        })
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+    if artifact
+        .default_candidate_state
+        .as_deref()
+        .is_some_and(|value| value != "absentCandidateOnly")
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+
+    for (detail, expected_state, synthetic_value, domain) in [
+        (
+            artifact.collection_detail.as_deref(),
+            SccmCoverageState::AccessDenied,
+            "synthetic permission denial",
+            "collection-detail",
+        ),
+        (
+            artifact.skip_reason.as_deref(),
+            SccmCoverageState::Skipped,
+            "optional supplemental source not requested",
+            "skip-reason",
+        ),
+        (
+            artifact.unsupported_reason.as_deref(),
+            SccmCoverageState::Unsupported,
+            "no approved server source contract",
+            "unsupported-reason",
+        ),
+    ] {
+        if let Some(detail) = detail {
+            if artifact.capture_state != expected_state
+                || if synthetic_fixture {
+                    detail != synthetic_value
+                } else {
+                    !opaque_sha256_handle(detail, &format!("cmtraceopen.{domain}.sha256.v1:"))
+                }
+            {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+        }
+    }
+
+    match (artifact.truncated, artifact.fragment_complete) {
+        (None, None) => {}
+        (Some(true), Some(false)) if artifact.capture_state == SccmCoverageState::Capped => {}
+        _ => return Err(SccmServerIntakeError::InvalidArtifact),
+    }
+    Ok(())
+}
+
 fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture && value == "5.00.TEST" {
         return true;
@@ -1134,7 +1248,7 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
 }
 
-fn safe_source_id(value: &str, allow_unknown: bool) -> bool {
+fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
     matches!(
         value,
         "server-sitecomp"
@@ -1146,26 +1260,28 @@ fn safe_source_id(value: &str, allow_unknown: bool) -> bool {
             | "server-sup-sync"
             | "unknown-db-supplement"
     ) || (allow_unknown
-        && (1..=64).contains(&value.len())
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        }))
+        && if synthetic_fixture {
+            value == "unknown-db-supplement"
+        } else {
+            opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:")
+        })
 }
 
-fn safe_source_kind(value: &str, allow_unknown: bool) -> bool {
-    matches!(value, "ccmLog" | "iisW3c" | "structuredSupplement")
-        || (allow_unknown
-            && (1..=64).contains(&value.len())
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
+    matches!(
+        value,
+        "ccmLog" | "iisW3c" | "structuredSupplement" | "unknown"
+    ) || (allow_unknown
+        && !synthetic_fixture
+        && opaque_sha256_handle(value, "cmtraceopen.source-kind.sha256.v1:"))
 }
 
-fn safe_public_basename(value: &str) -> bool {
-    (1..=255).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+fn safe_public_basename(value: &str, synthetic_fixture: bool) -> bool {
+    if synthetic_fixture {
+        value == "synthetic-db-export.txt"
+    } else {
+        opaque_sha256_handle(value, "cmtraceopen.basename.sha256.v1:")
+    }
 }
 
 fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
@@ -1310,18 +1426,31 @@ fn rotation_sort_key(rotation: Option<&SccmRotation>) -> String {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawServerManifest {
     sccm_manifest_version: u32,
     #[serde(default)]
     synthetic_fixture: bool,
+    #[serde(default)]
+    proposal_only: Option<bool>,
+    #[serde(default)]
+    privacy: Option<RawServerPrivacy>,
     bundle_role: String,
     topology: RawServerTopology,
+    #[serde(default)]
+    input_order_is_deliberately_unsorted: Option<bool>,
     artifacts: Vec<RawServerArtifact>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawServerPrivacy {
+    synthetic: bool,
+    raw_paths: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawServerTopology {
     capture_host: String,
     site_code: String,
@@ -1329,7 +1458,7 @@ struct RawServerTopology {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawServerArtifact {
     artifact_id: String,
     producer_role: SccmRole,
@@ -1341,24 +1470,38 @@ struct RawServerArtifact {
     original_path: String,
     original_basename: String,
     configured_path_provenance: RawConfiguredPathProvenance,
+    #[serde(default)]
+    default_candidate_state: Option<String>,
     rotation: RawServerRotation,
     capture_state: SccmCoverageState,
+    #[serde(default)]
+    collection_detail: Option<String>,
+    #[serde(default)]
+    skip_reason: Option<String>,
+    #[serde(default)]
+    unsupported_reason: Option<String>,
     encoding: Option<String>,
     collection_limit: Option<RawCollectionLimit>,
+    #[serde(default)]
+    truncated: Option<bool>,
+    #[serde(default)]
+    fragment_complete: Option<bool>,
     collected_utc: String,
     relative_path: Option<String>,
     bytes_copied: u64,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawWorkflowSubject {
     role: SccmRole,
     instance_handle: Option<String>,
+    #[serde(default)]
+    basis: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawConfiguredPathProvenance {
     state: String,
     path_class: Option<String>,
@@ -1366,7 +1509,7 @@ struct RawConfiguredPathProvenance {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawServerRotation {
     kind: String,
     value: Option<Value>,
@@ -1374,7 +1517,7 @@ struct RawServerRotation {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawCollectionLimit {
     byte_limit: u64,
     limit_applied: bool,
