@@ -30,6 +30,15 @@ REPOSITORY_LEVEL_CHANGES = (
     "example; the reviewer-request command is formatted on one line; downstream "
     "regression tests cover the maintained script."
 )
+SCRIPT_CHANGES = (
+    "base-repository URL parsing and pending-review filtering, including prefixed "
+    "enterprise pull-request URLs."
+)
+MIT_LICENSE_SECTIONS = (
+    "MIT License\n",
+    "Permission is hereby granted, free of charge, to any person obtaining a copy",
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND',
+)
 SPEC = importlib.util.spec_from_file_location("review_state", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
 review_state = importlib.util.module_from_spec(SPEC)
@@ -183,9 +192,10 @@ class ProvenanceTests(unittest.TestCase):
             labeled_fields["Repository-level changes"],
             REPOSITORY_LEVEL_CHANGES,
         )
-        self.assertIn("base-repository URL parsing", labeled_fields["Script changes"])
-        self.assertIn("pending-review filtering", labeled_fields["Script changes"])
+        self.assertEqual(labeled_fields["Script changes"], SCRIPT_CHANGES)
         self.assertEqual(labeled_fields["License identifier"], LICENSE_IDENTIFIER)
+        for section in MIT_LICENSE_SECTIONS:
+            self.assertIn(section, license_text)
         self.assertEqual(
             labeled_fields["Derivative status"],
             "the maintained scripts/review_state.py is not byte-identical to the pinned upstream script",
