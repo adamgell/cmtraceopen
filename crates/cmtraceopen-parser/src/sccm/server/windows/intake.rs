@@ -1153,7 +1153,12 @@ fn decode_server_payload(
                 .map(Some)
                 .map_err(|_| SccmServerIntakeError::InvalidPayloadEncoding)
         }
-        "windows-1252" => Ok(Some(encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned())),
+        "windows-1252" => Ok(Some(
+            encoding_rs::WINDOWS_1252
+                .decode_without_bom_handling(bytes)
+                .0
+                .into_owned(),
+        )),
         "unknown" => Ok(None),
         _ => Err(SccmServerIntakeError::InvalidPayloadEncoding),
     }

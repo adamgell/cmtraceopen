@@ -1488,6 +1488,37 @@ fn server_intake_decodes_declared_windows_1252_ccm_payloads() {
 }
 
 #[test]
+fn server_intake_declared_windows_1252_does_not_sniff_a_conflicting_bom() {
+    let (manifest_json, mut payloads) = load_bundle("multiline");
+    let mut manifest = manifest_value(&manifest_json);
+    let marker = b"SYNTHETIC FIXTURE";
+    let marker_end = payloads[0]
+        .bytes
+        .windows(marker.len())
+        .position(|window| window == marker)
+        .expect("fixture contains its synthetic marker")
+        + marker.len();
+    let mut declared_windows_1252 = vec![0xef, 0xbb, 0xbf];
+    declared_windows_1252.extend_from_slice(&payloads[0].bytes[..marker_end]);
+    declared_windows_1252.extend_from_slice(b" \xc3\xa9");
+    declared_windows_1252.extend_from_slice(&payloads[0].bytes[marker_end..]);
+    payloads[0].bytes = declared_windows_1252;
+    manifest["artifacts"][0]["encoding"] = Value::String("windows-1252".to_owned());
+    manifest["artifacts"][0]["bytesCopied"] = Value::from(payloads[0].bytes.len() as u64);
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("the declared Windows-1252 contract wins over payload BOM bytes");
+
+    assert_eq!(assessment.evidence.len(), 1);
+    assert!(
+        assessment.evidence[0]
+            .message
+            .contains("SYNTHETIC FIXTURE Ã©"),
+        "BOM sniffing must not reinterpret a manifest-declared Windows-1252 payload as UTF-8"
+    );
+}
+
+#[test]
 fn server_intake_keeps_unknown_encoding_as_unsupported_coverage() {
     let (manifest_json, payloads) = load_bundle("multiline");
     let mut manifest = manifest_value(&manifest_json);
