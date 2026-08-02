@@ -9,6 +9,7 @@ use cmtraceopen_parser::sccm::SccmCoverageState;
 use serde_json::Value;
 
 const FIXTURE_ROOT: &str = "tests/fixtures/sccm/server/management-point";
+const SYNTHETIC_MP_SOURCE_VERSION: &str = "5.00.TEST";
 
 fn fixture_directory(scenario: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -65,4 +66,81 @@ fn canonical_intake_adapter_derives_assessed_mp_evidence_and_fails_closed() {
         Err(SccmManagementPointIntakeError::SourceMismatch { artifact_id })
             if artifact_id == "management-point-intake-projection"
     ));
+}
+
+#[test]
+fn selected_management_point_profile_prefixes_admit_exact_synthetic_versions() {
+    let fixture_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_ROOT);
+    let mut checked_artifacts = 0;
+
+    for entry in fs::read_dir(&fixture_root).expect("MP fixture root must be readable") {
+        let scenario_directory = entry
+            .expect("MP fixture directory entry must be readable")
+            .path();
+        if !scenario_directory.is_dir() {
+            continue;
+        }
+
+        let expected: Value = serde_json::from_str(
+            &fs::read_to_string(scenario_directory.join("expected.json"))
+                .expect("MP expected fixture must be readable"),
+        )
+        .expect("MP expected fixture must be valid JSON");
+        let profile = &expected["extractionProfile"];
+        let selected = matches!(
+            profile["selectionState"].as_str(),
+            Some("selected" | "selectedNoCompatibleTransaction")
+        );
+        if !selected {
+            continue;
+        }
+
+        let expected_artifacts = expected["artifactProvenance"]
+            .as_array()
+            .expect("MP expected artifact provenance must be an array");
+        let exact_version_artifacts = expected_artifacts
+            .iter()
+            .filter(|artifact| artifact["sourceVersion"] == SYNTHETIC_MP_SOURCE_VERSION)
+            .collect::<Vec<_>>();
+        if exact_version_artifacts.is_empty() {
+            continue;
+        }
+
+        assert_eq!(
+            profile["sourceVersionPrefix"].as_str(),
+            Some(SYNTHETIC_MP_SOURCE_VERSION),
+            "{}: selected synthetic profile must admit its exact source version",
+            scenario_directory.display()
+        );
+
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(scenario_directory.join("manifest.json"))
+                .expect("MP manifest fixture must be readable"),
+        )
+        .expect("MP manifest fixture must be valid JSON");
+        let manifest_artifacts = manifest["artifacts"]
+            .as_array()
+            .expect("MP manifest artifacts must be an array");
+        for expected_artifact in exact_version_artifacts {
+            let artifact_id = expected_artifact["artifactId"]
+                .as_str()
+                .expect("MP expected artifact ID must be a string");
+            let manifest_artifact = manifest_artifacts
+                .iter()
+                .find(|artifact| artifact["artifactId"] == artifact_id)
+                .expect("MP expected artifact must exist in its manifest");
+            assert_eq!(
+                manifest_artifact["sourceVersion"].as_str(),
+                Some(SYNTHETIC_MP_SOURCE_VERSION),
+                "{}: {artifact_id} must retain the exact admitted ConfigMgr version",
+                scenario_directory.display()
+            );
+            checked_artifacts += 1;
+        }
+    }
+
+    assert!(
+        checked_artifacts > 0,
+        "the contract must exercise at least one selected exact synthetic MP artifact"
+    );
 }
