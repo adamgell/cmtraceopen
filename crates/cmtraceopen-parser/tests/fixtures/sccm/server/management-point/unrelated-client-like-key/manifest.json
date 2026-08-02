@@ -28,7 +28,7 @@
       "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetAuth.log",
       "pathFingerprint": "synthetic:unrelated-auth-configured",
       "rotation": {"kind":"current","lineageId":"mp-unrelated-auth"},
-      "sourceVersion": "5.00.TEST.0000",
+      "sourceVersion": "5.00.TEST",
       "collectedUtc": "2026-07-30T08:00:05Z",
       "bytesCopied": 0,
       "relativePath": null
@@ -46,7 +46,7 @@
       "sanitizedSourcePath": "SYNTHETIC://configured-root/MP/Logs/MP_GetPolicy.log",
       "pathFingerprint": "synthetic:unrelated-policy",
       "rotation": {"kind":"current","lineageId":"mp-unrelated-policy","fragmentComplete":true},
-      "sourceVersion": "5.00.TEST.0000",
+      "sourceVersion": "5.00.TEST",
       "collectedUtc": "2026-07-30T08:00:05Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit":4096,"limitApplied":false},

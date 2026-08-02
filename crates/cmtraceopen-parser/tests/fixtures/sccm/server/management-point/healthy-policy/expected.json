@@ -14,9 +14,9 @@
     {"logicalArtifactId":"server-mp-policy","state":"captured","requiredness":"required"}
   ],
   "artifactProvenance": [
-    {"artifactId":"mp-healthy-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:healthy-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"mp-healthy-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:healthy-policy","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"mp-healthy-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:healthy-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+    {"artifactId":"mp-healthy-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:healthy-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-healthy-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:healthy-policy","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-healthy-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:healthy-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T01:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
   ],
   "primaryTransactionId": "mp:request:28111111-1111-1111-1111-111111111111",
   "transactions": [{

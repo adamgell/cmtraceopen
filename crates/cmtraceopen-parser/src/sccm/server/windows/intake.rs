@@ -63,10 +63,11 @@ pub struct SccmServerIntakeAssessment {
     pub evidence: Vec<SccmEvidence>,
     pub findings: Vec<SccmFinding>,
     pub next_artifact_requests: Vec<SccmArtifactRequest>,
-    /// Private integrity binding for the normalized evidence projection. Public
-    /// fields remain inspectable and cloneable, but downstream reducers can
-    /// reject a clone whose evidence was rewritten after canonical intake.
-    evidence_integrity: BTreeMap<String, String>,
+    /// Private integrity binding for the canonical projection that server-role
+    /// reducers consume. It is sequence-independent, but every authoritative
+    /// schema, topology, artifact, coverage, and evidence field remains bound
+    /// to the assessment produced by intake.
+    intake_integrity: SccmServerIntakeIntegrity,
     /// Versioned opaque manifest extensions retained without interpreting them.
     extensions: Vec<SccmServerOpaqueExtension>,
     privacy_extensions: Vec<SccmServerOpaqueExtension>,
@@ -192,11 +193,29 @@ impl SccmServerIntakeAssessment {
         &self.privacy_extensions
     }
 
-    pub(crate) fn evidence_projection_is_intake_bound(&self) -> bool {
-        canonical_evidence_integrity(&self.evidence)
-            .as_ref()
-            .is_some_and(|integrity| integrity == &self.evidence_integrity)
+    pub(crate) fn adapter_authority_is_intake_bound(&self) -> bool {
+        canonical_intake_integrity(
+            self.schema_version,
+            &self.topology,
+            &self.artifacts,
+            &self.coverage,
+            &self.evidence,
+        )
+        .as_ref()
+        .is_some_and(|integrity| integrity == &self.intake_integrity)
     }
+}
+
+/// Nonserialized canonical-input binding for downstream server-role adapters.
+/// Collection order is not authority: the normalized records are serialized
+/// independently and compared as duplicate-free sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SccmServerIntakeIntegrity {
+    schema_version: u32,
+    topology: Vec<u8>,
+    artifacts: BTreeSet<Vec<u8>>,
+    coverage: BTreeSet<Vec<u8>>,
+    evidence: BTreeSet<Vec<u8>>,
 }
 
 #[derive(Serialize)]
@@ -557,18 +576,20 @@ pub fn assess_server_intake(
                 right.reason.as_str(),
             ))
     });
-    let evidence_integrity =
-        canonical_evidence_integrity(&evidence).ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let schema_version = 1;
+    let intake_integrity =
+        canonical_intake_integrity(schema_version, &topology, &artifacts, &coverage, &evidence)
+            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
 
     Ok(SccmServerIntakeAssessment {
-        schema_version: 1,
+        schema_version,
         topology,
         artifacts,
         coverage,
         evidence,
         findings: Vec::new(),
         next_artifact_requests,
-        evidence_integrity,
+        intake_integrity,
         extensions: normalize_opaque_extensions(
             &manifest.extensions,
             SccmServerIntakeError::MalformedManifest,
@@ -1076,21 +1097,57 @@ fn payload_sha256(bytes: &[u8]) -> String {
     encoded
 }
 
-fn canonical_evidence_integrity(evidence: &[SccmEvidence]) -> Option<BTreeMap<String, String>> {
-    let mut integrity = BTreeMap::new();
-    for record in evidence {
-        if record.evidence_id != record.reference.entry_id {
-            return None;
-        }
-        let encoded = serde_json::to_vec(record).ok()?;
-        if integrity
-            .insert(record.evidence_id.clone(), payload_sha256(&encoded))
-            .is_some()
-        {
+fn canonical_intake_integrity(
+    schema_version: u32,
+    topology: &SccmServerTopologyAssessment,
+    artifacts: &[SccmServerArtifactAssessment],
+    coverage: &[SccmServerCoverage],
+    evidence: &[SccmEvidence],
+) -> Option<SccmServerIntakeIntegrity> {
+    let mut normalized_topology = topology.clone();
+    normalized_topology
+        .roles_observed
+        .sort_by(|left, right| role_sort_key(left).cmp(role_sort_key(right)));
+    if normalized_topology
+        .roles_observed
+        .windows(2)
+        .any(|roles| roles[0] == roles[1])
+    {
+        return None;
+    }
+
+    let mut normalized_coverage = coverage.to_vec();
+    for record in &mut normalized_coverage {
+        record.artifact_ids.sort();
+        if record.artifact_ids.windows(2).any(|ids| ids[0] == ids[1]) {
             return None;
         }
     }
-    Some(integrity)
+
+    if evidence
+        .iter()
+        .any(|record| record.evidence_id != record.reference.entry_id)
+    {
+        return None;
+    }
+
+    Some(SccmServerIntakeIntegrity {
+        schema_version,
+        topology: serde_json::to_vec(&normalized_topology).ok()?,
+        artifacts: canonical_record_set(artifacts)?,
+        coverage: canonical_record_set(&normalized_coverage)?,
+        evidence: canonical_record_set(evidence)?,
+    })
+}
+
+fn canonical_record_set<T: Serialize>(records: &[T]) -> Option<BTreeSet<Vec<u8>>> {
+    let mut canonical = BTreeSet::new();
+    for record in records {
+        if !canonical.insert(serde_json::to_vec(record).ok()?) {
+            return None;
+        }
+    }
+    Some(canonical)
 }
 
 fn validate_payload_contract<'a>(

@@ -1,7 +1,7 @@
 //! Server-local Management Point analysis for issue #328.
 //!
 //! The only selected extraction profile in this slice is
-//! `mp-server-5.00.test-v1` for the synthetic `5.00.TEST.0000` corpus. A
+//! `mp-server-5.00.test-v1` for the synthetic `5.00.TEST` corpus. A
 //! transaction requires an exact request ID, optional exact policy ID, safe
 //! client handle, canonical site code, compatible Management Point handle,
 //! source ownership, complete physical provenance, and usable ordering
@@ -29,7 +29,7 @@ use super::intake::{SccmServerArtifactAssessment, SccmServerIntakeAssessment};
 pub const SCCM_MANAGEMENT_POINT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_MANAGEMENT_POINT_TEST_PROFILE_ID: &str = "mp-server-5.00.test-v1";
 
-const MP_TEST_VERSION: &str = "5.00.TEST.0000";
+const MP_TEST_VERSION: &str = "5.00.TEST";
 const MP_AUTH_GROUP: &str = "server-mp-auth";
 const MP_POLICY_GROUP: &str = "server-mp-policy";
 const MP_IIS_GROUP: &str = "server-mp-iis";
@@ -303,11 +303,6 @@ struct ReducedTransaction {
 pub fn analyze_management_point_from_server_intake(
     assessment: &SccmServerIntakeAssessment,
 ) -> Result<SccmManagementPointAnalysis, SccmManagementPointIntakeError> {
-    if !assessment.evidence_projection_is_intake_bound() {
-        return Err(SccmManagementPointIntakeError::SourceMismatch {
-            artifact_id: "management-point-evidence-set".to_owned(),
-        });
-    }
     if !assessment
         .topology
         .roles_observed
@@ -399,7 +394,11 @@ pub fn analyze_management_point_from_server_intake(
             },
             source_group: artifact.source_id.clone(),
             producer,
-            fragment_complete: artifact.fragment_complete,
+            // The canonical intake contract expresses a complete capture with
+            // neither truncation nor fragment flags. The legacy fixture
+            // reducer uses an explicit complete bit, so translate only that
+            // canonical state at this adapter boundary.
+            fragment_complete: canonical_fragment_complete(artifact),
             physical_line_end,
         });
     }
@@ -431,6 +430,12 @@ pub fn analyze_management_point_from_server_intake(
         .collect::<Vec<_>>();
     evidence.sort_by(|left, right| left.evidence_id.cmp(&right.evidence_id));
 
+    if !assessment.adapter_authority_is_intake_bound() {
+        return Err(SccmManagementPointIntakeError::SourceMismatch {
+            artifact_id: "management-point-intake-projection".to_owned(),
+        });
+    }
+
     Ok(analyze_management_point_fixture(
         &SccmManagementPointBundle {
             topology: SccmManagementPointTopology {
@@ -441,6 +446,17 @@ pub fn analyze_management_point_from_server_intake(
             evidence,
         },
     ))
+}
+
+fn canonical_fragment_complete(artifact: &SccmServerArtifactAssessment) -> Option<bool> {
+    match (
+        artifact.state.clone(),
+        artifact.truncated,
+        artifact.fragment_complete,
+    ) {
+        (SccmCoverageState::Captured, None, None) => Some(true),
+        _ => artifact.fragment_complete,
+    }
 }
 
 fn canonical_intake_site_code(site_handle: &str) -> Option<String> {

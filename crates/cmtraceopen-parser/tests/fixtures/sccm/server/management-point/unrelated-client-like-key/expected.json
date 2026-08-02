@@ -14,8 +14,8 @@
     {"logicalArtifactId":"server-mp-policy","state":"captured","requiredness":"required"}
   ],
   "artifactProvenance": [
-    {"artifactId":"mp-unrelated-auth-absent","captureState":"absent","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:unrelated-auth-configured","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T08:00:05Z","encoding":null,"byteLimit":null,"limitApplied":null},
-    {"artifactId":"mp-unrelated-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:unrelated-policy","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T08:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+    {"artifactId":"mp-unrelated-auth-absent","captureState":"absent","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:unrelated-auth-configured","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T08:00:05Z","encoding":null,"byteLimit":null,"limitApplied":null},
+    {"artifactId":"mp-unrelated-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:unrelated-policy","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T08:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
   ],
   "primaryTransactionId": null,
   "transactions": [],

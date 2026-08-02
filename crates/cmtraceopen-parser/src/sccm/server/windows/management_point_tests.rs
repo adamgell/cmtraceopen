@@ -1,3 +1,4 @@
+use super::canonical_fragment_complete;
 use crate as cmtraceopen_parser;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -614,7 +615,10 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
     iis_artifact.fragment_complete = None;
     iis_artifact.truncated = None;
     supplemental_iis.artifacts.push(iis_artifact);
-    assert!(analyze_management_point_from_server_intake(&supplemental_iis).is_ok());
+    assert!(
+        analyze_management_point_from_server_intake(&supplemental_iis).is_err(),
+        "a caller cannot append even supplemental metadata after canonical intake"
+    );
 
     let mut missing_role = assessment.clone();
     missing_role
@@ -681,15 +685,14 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
 
 #[test]
 fn canonical_intake_adapter_admits_its_exact_synthetic_profile_version() {
-    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let bundle = load_bundle("healthy-policy");
     assert_eq!(
-        assessment.artifacts[0].source_version.as_deref(),
+        bundle.sources[0].artifact.configmgr_version.as_deref(),
         Some("5.00.TEST"),
-        "server intake owns the frozen synthetic source version"
+        "the frozen synthetic MP corpus must retain its exact profile version"
     );
 
-    let analysis = analyze_management_point_from_server_intake(&assessment)
-        .expect("the canonical intake profile must enter MP reduction");
+    let analysis = analyze_management_point_fixture(&bundle);
     assert_eq!(
         analysis.transactions.len(),
         1,
@@ -708,12 +711,17 @@ fn canonical_intake_adapter_maps_captured_unspecified_fragment_to_complete() {
         "canonical intake represents a full captured artifact without fragment flags"
     );
 
+    assert_eq!(
+        canonical_fragment_complete(artifact),
+        Some(true),
+        "the adapter must project canonical captured completeness for its internal reducer"
+    );
     let analysis = analyze_management_point_from_server_intake(&assessment)
         .expect("the canonical captured artifact must enter MP reduction");
     assert_eq!(
-        analysis.transactions.len(),
+        analysis.source_local_observations.len(),
         1,
-        "canonical captured completeness must not be mistaken for a partial fragment"
+        "the canonical policy record remains reducer-visible after completeness projection"
     );
 }
 
@@ -757,15 +765,83 @@ fn canonical_intake_adapter_rejects_forged_evidence_ownership() {
 #[test]
 fn canonical_intake_adapter_rejects_forged_admission_metadata() {
     let mut assessment = load_canonical_intake("canonical-intake-policy-scope");
-    assessment.artifacts[0].producer_host_handle = Some(format!(
-        "cmtraceopen.host.sha256.v1:{:064x}",
-        1
-    ));
+    assessment.artifacts[0].producer_host_handle =
+        Some(format!("cmtraceopen.host.sha256.v1:{:064x}", 1));
 
     assert!(
         analyze_management_point_from_server_intake(&assessment).is_err(),
         "caller-submitted topology and artifact metadata cannot replace canonical intake authority"
     );
+}
+
+#[test]
+fn canonical_intake_adapter_accepts_reordered_authoritative_records() {
+    let assessment = load_canonical_intake("canonical-intake-policy-scope");
+    let expected = analyze_management_point_from_server_intake(&assessment)
+        .expect("canonical intake must enter the adapter");
+
+    let mut reordered = assessment;
+    reordered.artifacts.reverse();
+    reordered.coverage.reverse();
+    reordered.evidence.reverse();
+    assert_eq!(
+        analyze_management_point_from_server_intake(&reordered)
+            .expect("record ordering is not intake authority"),
+        expected
+    );
+}
+
+#[test]
+fn canonical_intake_adapter_rejects_promoted_capped_profile_ineligible_metadata() {
+    let directory =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/server/intake/capped-sup");
+    let mut manifest = load_json(&directory.join("manifest.json"));
+    manifest["artifacts"][0]
+        .as_object_mut()
+        .expect("capped fixture artifact")
+        .remove("sourceVersion");
+    let manifest_json = serde_json::to_string(&manifest).expect("manifest serializes");
+    let payloads = vec![SccmServerArtifactPayload {
+        manifest_artifact_id: "sup-sync-capped".to_owned(),
+        bytes: fs::read(directory.join(
+            "evidence/sccm/server/site-server/server-sup-sync/subject-software-update-point/instance-17eae15500d8968f/root-b11afca548220198/current/wsyncmgr.log",
+        ))
+        .expect("capped fixture payload"),
+    }];
+    let assessment = assess_server_intake(&manifest_json, &payloads)
+        .expect("capped profile-ineligible intake must be canonical");
+    assert_eq!(assessment.artifacts[0].state, SccmCoverageState::Capped);
+    assert!(!assessment.artifacts[0].profile_eligible);
+
+    let sealed_evidence = assessment.evidence.clone();
+    let mut promoted = assessment;
+    promoted.topology.roles_observed = vec![SccmRole::ManagementPoint];
+    let artifact = &mut promoted.artifacts[0];
+    artifact.producer_role = SccmRole::ManagementPoint;
+    artifact.producer_host_handle = Some("synthetic:host:mp-01".to_owned());
+    artifact.workflow_subject_role = None;
+    artifact.workflow_subject_handle = None;
+    artifact.source_id = "server-mp-policy".to_owned();
+    artifact.family = SccmArtifactFamily::ManagementPoint;
+    artifact.original_basename = Some("MP_GetPolicy.log".to_owned());
+    artifact.state = SccmCoverageState::Captured;
+    artifact.source_version = Some("5.00.TEST".to_owned());
+    artifact.profile_eligible = true;
+    artifact.truncated = None;
+    artifact.fragment_complete = None;
+    promoted.coverage[0].producer_role = SccmRole::ManagementPoint;
+    promoted.coverage[0].workflow_subject_role = None;
+    promoted.coverage[0].source_id = "server-mp-policy".to_owned();
+    promoted.coverage[0].state = SccmCoverageState::Captured;
+
+    assert_eq!(
+        promoted.evidence, sealed_evidence,
+        "the attempted promotion must not require evidence rewriting"
+    );
+    assert!(matches!(
+        analyze_management_point_from_server_intake(&promoted),
+        Err(SccmManagementPointIntakeError::SourceMismatch { .. })
+    ));
 }
 
 #[test]

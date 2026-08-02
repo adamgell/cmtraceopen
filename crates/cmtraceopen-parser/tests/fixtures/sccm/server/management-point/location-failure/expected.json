@@ -14,9 +14,9 @@
     {"logicalArtifactId":"server-mp-policy","state":"captured","requiredness":"required"}
   ],
   "artifactProvenance": [
-    {"artifactId":"mp-location-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:location-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T04:00:06Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"mp-location-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_Location","pathFingerprint":"synthetic:location-policy","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T04:00:06Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"mp-location-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:location-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T04:00:06Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+    {"artifactId":"mp-location-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:location-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T04:00:06Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-location-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_Location","pathFingerprint":"synthetic:location-policy","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T04:00:06Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-location-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:location-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T04:00:06Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
   ],
   "primaryTransactionId": "mp:request:28444444-4444-4444-4444-444444444444",
   "transactions": [{

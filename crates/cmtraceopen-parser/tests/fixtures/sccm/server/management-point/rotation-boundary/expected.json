@@ -13,8 +13,8 @@
     {"logicalArtifactId":"server-mp-auth","state":"captured","requiredness":"required"}
   ],
   "artifactProvenance": [
-    {"artifactId":"mp-rotation-current-fragment","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:rotation-auth-root","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T09:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
-    {"artifactId":"mp-rotation-lo-fragment","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:rotation-auth-root","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST.0000","collectedUtc":"2026-07-30T09:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-rotation-current-fragment","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:rotation-auth-root","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T09:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-rotation-lo-fragment","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:rotation-auth-root","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T09:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
     {"artifactId":"mp-rotation-numbered-malformed","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:rotation-auth-root","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.UNKNOWN.0000","collectedUtc":"2026-07-30T09:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
   ],
   "primaryTransactionId": null,
