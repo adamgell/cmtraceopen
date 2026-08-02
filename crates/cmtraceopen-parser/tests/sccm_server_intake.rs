@@ -1787,6 +1787,65 @@ fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() 
 }
 
 #[test]
+fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let mutations: [(&str, fn(&mut Value)); 8] = [
+        ("subject role not observed", |manifest| {
+            manifest["topology"]["rolesObserved"] = json!(["wsUs"]);
+        }),
+        ("workflow subject omitted", |manifest| {
+            manifest["artifacts"][0]
+                .as_object_mut()
+                .expect("artifact is an object")
+                .remove("workflowSubject");
+        }),
+        ("workflow subject role changed", |manifest| {
+            manifest["artifacts"][0]["workflowSubject"]["role"] =
+                Value::String("distributionPoint".to_owned());
+        }),
+        ("producer host rebound", |manifest| {
+            manifest["artifacts"][0]["producerHostHandle"] =
+                Value::String("synthetic:host:mp-01".to_owned());
+        }),
+        ("subject handle rebound", |manifest| {
+            manifest["artifacts"][0]["workflowSubject"]["instanceHandle"] =
+                Value::String("synthetic:subject:dp-01".to_owned());
+        }),
+        ("source version omitted", |manifest| {
+            manifest["artifacts"][0]
+                .as_object_mut()
+                .expect("artifact is an object")
+                .remove("sourceVersion");
+        }),
+        ("path fingerprint substituted", |manifest| {
+            manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"] =
+                Value::String("synthetic:path:site-sup-control".to_owned());
+        }),
+        ("rotation lineage substituted", |manifest| {
+            manifest["artifacts"][0]["rotation"]["lineageId"] =
+                Value::String("sup-sync-lab".to_owned());
+        }),
+    ];
+
+    let mut unexpected = Vec::new();
+    for (name, mutate) in mutations {
+        let mut manifest = manifest_value(&manifest_json);
+        mutate(&mut manifest);
+        match assess_server_intake(&serialize_manifest(&manifest), &payloads) {
+            Err(SccmServerIntakeError::InvalidArtifact) => {}
+            Err(error) => unexpected.push(format!("{name}: returned {error:?}")),
+            Ok(_) => unexpected.push(format!("{name}: was accepted")),
+        }
+    }
+
+    assert!(
+        unexpected.is_empty(),
+        "WSUS supplemental tuple mutations must fail closed:\n{}",
+        unexpected.join("\n")
+    );
+}
+
+#[test]
 fn server_intake_rejects_opaque_future_source_ids_in_synthetic_fixtures() {
     let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
     let mut manifest = manifest_value(&manifest_json);
