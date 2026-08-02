@@ -5,9 +5,11 @@
 //! pure contracts without changing the generic collection manifest.
 
 mod contract;
+mod discovery;
 mod manifest;
 mod private_fs;
 
 pub use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation};
 pub use contract::*;
+pub use discovery::*;
 pub use manifest::*;
