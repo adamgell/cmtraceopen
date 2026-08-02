@@ -311,18 +311,18 @@
         "limitApplied": false,
         "bytesCopied": 177
       },
-    {
-      "artifactId": "fixture-complete-update-supplemental-root-a-current",
-      "byteLimit": 4096,
-      "limitApplied": false,
-      "bytesCopied": 86
-    },
-    {
-      "artifactId": "fixture-complete-updates-root-a-current",
-      "byteLimit": 4096,
-      "limitApplied": false,
-      "bytesCopied": 174
-    }
+      {
+        "artifactId": "fixture-complete-update-supplemental-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 86
+      },
+      {
+        "artifactId": "fixture-complete-updates-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 174
+      }
     ]
   },
   "downstreamDesignPending": {

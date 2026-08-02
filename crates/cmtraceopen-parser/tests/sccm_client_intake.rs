@@ -1510,8 +1510,9 @@ fn unpinned_and_pinned_markers_for_the_same_source_fail_closed() {
     // mandatory on every declaration; the client contract keeps optional
     // marker fingerprints for the committed all-absent fixture bundles, so
     // identity intersection is the fail-closed equivalent here. Documented
-    // follow-up: converge the client contract on mandatory fingerprints to
-    // remove the remaining client/server asymmetry.
+    // #319 native-manifest follow-up: reassess whether legacy marker mapping
+    // can converge the client contract on mandatory fingerprints and remove
+    // the remaining client/server asymmetry.
     let unpinned = synthetic_marker("missing-one", "PolicyAgent.log", SccmCoverageState::Absent);
     let mut pinned = synthetic_marker("missing-two", "PolicyAgent.log", SccmCoverageState::Absent);
     pinned.path_fingerprint = Some("synthetic:policy-root-a".to_owned());
