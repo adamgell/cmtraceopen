@@ -319,6 +319,45 @@ fn assert_explicit_gap_and_request(
     }));
 }
 
+fn assert_delimiter_attached_unknown_label_fails_closed(delimiter: char) {
+    for (position, outcome_field) in [
+        (
+            "after-known",
+            format!("outcome=success{delimiter}unreviewed=x"),
+        ),
+        (
+            "before-known",
+            format!("unreviewed=x{delimiter}outcome=success"),
+        ),
+    ] {
+        let sitecomp = HEALTHY_SITECOMP.replace("outcome=success", &outcome_field);
+        let status = HEALTHY_STATUS.replace("outcome=success", &outcome_field);
+        let assessment = assess(&[Source::sitecomp(&sitecomp), Source::status(&status)]);
+        let expected_observations = assessment.evidence.len();
+        let analysis = analyze_site_core(&assessment);
+
+        assert!(
+            analysis.results.is_empty(),
+            "delimiter {delimiter:?} {position} must not create a transaction"
+        );
+        assert_eq!(
+            analysis.unlinked_observations.len(),
+            expected_observations,
+            "delimiter {delimiter:?} {position} must retain every rejected record"
+        );
+        assert!(analysis.unlinked_observations.iter().all(|observation| {
+            observation.finding_class == SccmFindingClass::Symptom
+                && observation.evidence.len() == 1
+                && observation.next_artifacts.len() == 1
+                && observation.next_artifacts[0].candidates.len() == 1
+        }));
+        assert!(analysis
+            .findings
+            .iter()
+            .all(|finding| finding.finding.class == SccmFindingClass::Symptom));
+    }
+}
+
 fn site_core_corpus_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/server/site_core")
 }
@@ -895,6 +934,46 @@ fn closed_profile_schema_rejects_arbitrary_keys_and_retains_safe_unknown_facts()
         "Unrecognized site core profile record"
     );
     assert!(finding.finding.coverage_gaps.is_empty());
+}
+
+#[test]
+fn semicolon_attached_unknown_profile_labels_fail_closed_in_both_orders() {
+    assert_delimiter_attached_unknown_label_fails_closed(';');
+}
+
+#[test]
+fn comma_attached_unknown_profile_labels_fail_closed_in_both_orders() {
+    assert_delimiter_attached_unknown_label_fails_closed(',');
+}
+
+#[test]
+fn ampersand_attached_unknown_profile_labels_fail_closed_in_both_orders() {
+    assert_delimiter_attached_unknown_label_fails_closed('&');
+}
+
+#[test]
+fn delimiter_separated_known_profile_labels_and_safe_prose_remain_accepted() {
+    for delimiter in [';', ',', '&'] {
+        let joined_fields =
+            format!("outcome=success{delimiter}terminal=false harmless prose tokens");
+        let sitecomp = HEALTHY_SITECOMP.replace("outcome=success terminal=false", &joined_fields);
+        let status = HEALTHY_STATUS.replace("outcome=success terminal=false", &joined_fields);
+        let analysis = analyze_site_core(&assess(&[
+            Source::sitecomp(&sitecomp),
+            Source::status(&status),
+        ]));
+
+        assert_eq!(analysis.results.len(), 1, "delimiter {delimiter:?}");
+        assert_eq!(
+            analysis.results[0].state,
+            SccmSiteCoreState::Healthy,
+            "delimiter {delimiter:?}"
+        );
+        assert!(
+            analysis.unlinked_observations.is_empty(),
+            "delimiter {delimiter:?}"
+        );
+    }
 }
 
 #[test]
