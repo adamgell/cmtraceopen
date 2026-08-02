@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::{
     assess_client_intake, classify_artifact_name, declared_client_source_groups, SccmArtifact,
-    SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientIntakeError, SccmCoverageState,
-    SccmRole, SccmRotation, SccmUnknownRotation,
+    SccmClientIntakeArtifact, SccmClientIntakeAssessment, SccmClientIntakeBundle,
+    SccmClientIntakeError, SccmCoverageState, SccmRole, SccmRotation, SccmUnknownRotation,
 };
 use serde::Deserialize;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const FIXTURE_ROOT: &str = "tests/fixtures/sccm/client/intake";
 
@@ -83,6 +85,12 @@ fn load_bundle(scenario: &str) -> SccmClientIntakeBundle {
     }
 }
 
+fn load_fixture_json(scenario: &str, file_name: &str) -> Value {
+    let path = fixture_directory(scenario).join(file_name);
+    serde_json::from_str(&fs::read_to_string(path).expect("fixture JSON is readable"))
+        .expect("fixture JSON is valid")
+}
+
 fn rotation(fixture: &FixtureRotation) -> SccmRotation {
     match fixture.kind.as_str() {
         "current" => SccmRotation::Current,
@@ -110,6 +118,20 @@ fn coverage(value: &str) -> SccmCoverageState {
 
 fn assessment(scenario: &str) -> cmtraceopen_parser::sccm::SccmClientIntakeAssessment {
     assess_client_intake(&load_bundle(scenario)).expect("fixture intake is valid")
+}
+
+fn rotation_label(rotation: &SccmRotation) -> String {
+    match rotation {
+        SccmRotation::Current => "current".to_owned(),
+        SccmRotation::LoUnderscore => "lo".to_owned(),
+        SccmRotation::Numbered(number) => format!("numbered:{number}"),
+        SccmRotation::Timestamped(timestamp) => format!("timestamped:{timestamp}"),
+        SccmRotation::Unknown(_) => "unknown".to_owned(),
+    }
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntakeArtifact {
@@ -202,6 +224,57 @@ fn serialized_privacy_probe_detects_forward_slash_normalized_windows_user_path()
 }
 
 #[test]
+fn public_assessment_deserialization_rejects_forged_coverage_and_identity() {
+    let mut forged_coverage =
+        serde_json::to_value(assessment("missing-root")).expect("assessment serializes");
+    forged_coverage["groups"][0]["coverage"] = serde_json::json!("captured");
+    assert!(
+        serde_json::from_value::<SccmClientIntakeAssessment>(forged_coverage).is_err(),
+        "a standalone assessment must not deserialize coverage that contradicts its fragments"
+    );
+
+    let mut leaked_identity =
+        serde_json::to_value(assessment("complete")).expect("assessment serializes");
+    leaked_identity["physicalArtifacts"][0]["artifactId"] =
+        serde_json::json!(r"C:\Users\RealUser\PolicyAgent.log");
+    leaked_identity["physicalArtifacts"][0]["pathFingerprint"] =
+        serde_json::json!("synthetic:realuser");
+    leaked_identity["physicalArtifacts"][0]["relativePath"] =
+        serde_json::json!(r"C:\Users\RealUser\PolicyAgent.log");
+    assert!(
+        serde_json::from_value::<SccmClientIntakeAssessment>(leaked_identity).is_err(),
+        "a standalone assessment must not deserialize raw identity-bearing provenance"
+    );
+}
+
+#[test]
+fn collection_timestamp_is_projected_as_canonical_utc() {
+    let mut artifact = synthetic_artifact("offset", "PolicyAgent.log");
+    artifact.artifact.collected_at_utc = Some("2026-07-30T05:00:00+05:00".to_owned());
+
+    let intake = assess_client_intake(&SccmClientIntakeBundle {
+        artifacts: vec![artifact],
+    })
+    .expect("a valid RFC 3339 collection instant remains representable");
+    assert_eq!(
+        intake
+            .group("client-policy-agent")
+            .expect("policy group")
+            .fragments[0]
+            .collected_at_utc
+            .as_deref(),
+        Some("2026-07-30T00:00:00Z"),
+        "collectedAtUtc must have one deterministic UTC spelling"
+    );
+
+    let serialized = serde_json::to_value(&intake).expect("assessment serializes");
+    assert!(
+        serde_json::from_value::<SccmClientIntakeAssessment>(serialized).is_ok(),
+        "canonical assessment output must retain a valid standalone wire round trip"
+    );
+}
+
+#[test]
 fn every_declared_client_basename_is_supported_by_the_authoritative_catalog() {
     for group in declared_client_source_groups() {
         for basename in group.accepted_basenames {
@@ -220,6 +293,194 @@ fn every_declared_client_basename_is_supported_by_the_authoritative_catalog() {
                 classified.uses_ccm_records,
                 !matches!(basename.as_str(), "client.msi.log" | "ReportingEvents.log"),
                 "the shared catalog must not route a non-CCM supplement through raw CCM"
+            );
+        }
+    }
+}
+
+#[test]
+fn expected_design_contracts_bind_to_pure_intake_without_claiming_native_capture() {
+    for scenario in [
+        "complete",
+        "rotations",
+        "missing-root",
+        "access-denied",
+        "capped",
+        "collision",
+    ] {
+        let expected = load_fixture_json(scenario, "expected.json");
+        let manifest = load_fixture_json(scenario, "manifest.json");
+        let intake = assessment(scenario);
+
+        assert_eq!(
+            expected["scenario"], scenario,
+            "{scenario}: scenario identity"
+        );
+        assert_eq!(
+            expected["contractState"], "pureIntakeImplementedNativePending",
+            "{scenario}: expected output must identify the implemented pure boundary and pending native gate"
+        );
+        assert_eq!(
+            expected["workflowDiagnosisExpected"], false,
+            "{scenario}: intake evidence alone must not claim a workflow diagnosis"
+        );
+
+        for expected_group in expected["coverage"]
+            .as_array()
+            .expect("expected coverage is an array")
+        {
+            let logical_id = expected_group["logicalArtifactId"]
+                .as_str()
+                .expect("expected logical artifact ID");
+            let group = intake
+                .group(logical_id)
+                .expect("expected intake group exists");
+            assert_eq!(
+                serde_json::to_value(&group.coverage).expect("coverage serializes"),
+                expected_group["state"],
+                "{scenario}: {logical_id} coverage"
+            );
+
+            if let Some(fragment_count) = expected_group["fragmentCount"].as_u64() {
+                assert_eq!(group.fragments.len() as u64, fragment_count);
+            }
+            if let Some(physical_count) = expected_group["physicalArtifactCount"].as_u64() {
+                assert_eq!(
+                    intake
+                        .physical_artifacts
+                        .iter()
+                        .filter(|fragment| {
+                            group
+                                .fragments
+                                .iter()
+                                .any(|member| member.artifact_id == fragment.artifact_id)
+                        })
+                        .count() as u64,
+                    physical_count
+                );
+            }
+            if let Some(fragment_complete) = expected_group["fragmentComplete"].as_bool() {
+                assert!(group
+                    .fragments
+                    .iter()
+                    .all(|fragment| fragment.fragment_complete == Some(fragment_complete)));
+            }
+            if let Some(rotation_order) = expected_group["rotationOrder"].as_array() {
+                assert_eq!(
+                    group
+                        .fragments
+                        .iter()
+                        .map(|fragment| rotation_label(&fragment.rotation))
+                        .collect::<Vec<_>>(),
+                    rotation_order
+                        .iter()
+                        .map(|value| value.as_str().expect("rotation label").to_owned())
+                        .collect::<Vec<_>>()
+                );
+            }
+            if let Some(distinct_fingerprints) = expected_group["distinctPathFingerprints"].as_u64()
+            {
+                assert_eq!(
+                    group
+                        .fragments
+                        .iter()
+                        .filter_map(|fragment| fragment.path_fingerprint.as_deref())
+                        .collect::<BTreeSet<_>>()
+                        .len() as u64,
+                    distinct_fingerprints
+                );
+            }
+            if let Some(lineages) = expected_group["rotationLineages"].as_array() {
+                assert_eq!(
+                    group
+                        .fragments
+                        .iter()
+                        .filter_map(|fragment| fragment.rotation_lineage.as_deref())
+                        .collect::<BTreeSet<_>>(),
+                    lineages
+                        .iter()
+                        .map(|value| value.as_str().expect("lineage string"))
+                        .collect::<BTreeSet<_>>()
+                );
+            }
+        }
+
+        let expected_provenance = expected["artifactProvenance"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        assert_eq!(
+            expected_provenance
+                .iter()
+                .map(|entry| entry["artifactId"]
+                    .as_str()
+                    .expect("provenance artifact ID"))
+                .collect::<BTreeSet<_>>(),
+            intake
+                .physical_artifacts
+                .iter()
+                .map(|fragment| fragment.artifact_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            "{scenario}: expected provenance must cover every physical artifact exactly"
+        );
+
+        for expected_artifact in expected_provenance {
+            let artifact_id = expected_artifact["artifactId"]
+                .as_str()
+                .expect("expected provenance artifact ID");
+            let manifest_artifact = manifest["artifacts"]
+                .as_array()
+                .expect("manifest artifacts")
+                .iter()
+                .find(|artifact| artifact["artifactId"] == artifact_id)
+                .expect("expected provenance refers to a manifest artifact");
+            let fragment = intake
+                .physical_artifacts
+                .iter()
+                .find(|fragment| fragment.artifact_id == artifact_id)
+                .expect("expected provenance refers to a projected physical artifact");
+
+            assert_eq!(
+                expected_artifact["encoding"].as_str(),
+                fragment.encoding.as_deref()
+            );
+            assert_eq!(
+                expected_artifact["byteLimit"],
+                manifest_artifact["collectionLimit"]["byteLimit"]
+            );
+            assert_eq!(
+                expected_artifact["limitApplied"],
+                manifest_artifact["collectionLimit"]["limitApplied"]
+            );
+
+            if let Some(bytes_copied) = expected_artifact["bytesCopied"].as_u64() {
+                assert_eq!(
+                    manifest_artifact["bytesCopied"].as_u64(),
+                    Some(bytes_copied)
+                );
+                let relative_path = manifest_artifact["relativePath"]
+                    .as_str()
+                    .expect("physical manifest artifact has a relative path");
+                let bytes = fs::read(fixture_directory(scenario).join(relative_path))
+                    .expect("physical fixture evidence is readable");
+                assert_eq!(bytes.len() as u64, bytes_copied);
+                if let Some(expected_sha256) = expected_artifact["sha256"].as_str() {
+                    assert_eq!(
+                        lowercase_hex(Sha256::digest(&bytes).as_ref()),
+                        expected_sha256
+                    );
+                }
+            }
+        }
+
+        assert!(
+            expected["requests"].is_array(),
+            "{scenario}: request design is explicit"
+        );
+        if let Some(prohibited_claims) = expected.get("prohibitedClaims") {
+            assert!(
+                prohibited_claims.is_array(),
+                "{scenario}: prohibited-claim design is explicit"
             );
         }
     }
@@ -1097,6 +1358,7 @@ fn unknown_rotation_public_metadata_is_versioned_and_opaque() {
             kind,
             value: Some(serde_json::json!("opaque-v1")),
         });
+        artifact.relative_path = Some("evidence/unknown/PolicyAgent.log".to_owned());
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
@@ -1120,6 +1382,7 @@ fn unknown_rotation_public_metadata_is_versioned_and_opaque() {
             kind: "cmtraceopen.rotation.opaque.v1".to_owned(),
             value: Some(value),
         });
+        artifact.relative_path = Some("evidence/unknown/PolicyAgent.log".to_owned());
         assert_eq!(
             assess_client_intake(&SccmClientIntakeBundle {
                 artifacts: vec![artifact],
