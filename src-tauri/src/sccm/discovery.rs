@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+use std::cell::Cell;
 
 use cmtraceopen_parser::sccm::SccmRotation;
 use sha2::{Digest, Sha256};
@@ -74,10 +74,10 @@ struct Candidate {
 }
 
 #[cfg(test)]
-static CANDIDATE_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
-
-#[cfg(test)]
-static DECLARATION_CONSTRUCTIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static CANDIDATE_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
+    static DECLARATION_CONSTRUCTIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 pub fn discover_client_sources(input: &SccmClientDiscoveryInput) -> SccmClientDiscoveryResult {
     let mut candidates = input
@@ -135,9 +135,9 @@ pub fn discover_client_sources(input: &SccmClientDiscoveryInput) -> SccmClientDi
 
 fn candidate_from_observation(observation: &SccmClientDiscoveryObservation) -> Option<Candidate> {
     let canonical = canonical_client_source(&observation.basename, &observation.rotation)?;
-    let source_digest = source_identity_digest(&observation.root_handle, &canonical)?;
     #[cfg(test)]
-    CANDIDATE_CONSTRUCTIONS.fetch_add(1, AtomicOrdering::Relaxed);
+    CANDIDATE_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
+    let source_digest = source_identity_digest(&observation.root_handle, &canonical)?;
 
     Some(Candidate {
         observation: observation.clone(),
@@ -152,7 +152,7 @@ fn declaration_from_candidate(
     state: SccmClientDiscoveryState,
 ) -> SccmClientDiscoveryDeclaration {
     #[cfg(test)]
-    DECLARATION_CONSTRUCTIONS.fetch_add(1, AtomicOrdering::Relaxed);
+    DECLARATION_CONSTRUCTIONS.with(|count| count.set(count.get() + 1));
 
     let path_fingerprint = format!("sha256:{}", candidate.source_digest);
     let artifact_id = match state {
@@ -280,14 +280,14 @@ mod tests {
 
     fn construction_counts() -> (usize, usize) {
         (
-            CANDIDATE_CONSTRUCTIONS.load(AtomicOrdering::Relaxed),
-            DECLARATION_CONSTRUCTIONS.load(AtomicOrdering::Relaxed),
+            CANDIDATE_CONSTRUCTIONS.with(Cell::get),
+            DECLARATION_CONSTRUCTIONS.with(Cell::get),
         )
     }
 
     fn reset_construction_counts() {
-        CANDIDATE_CONSTRUCTIONS.store(0, AtomicOrdering::Relaxed);
-        DECLARATION_CONSTRUCTIONS.store(0, AtomicOrdering::Relaxed);
+        CANDIDATE_CONSTRUCTIONS.with(|count| count.set(0));
+        DECLARATION_CONSTRUCTIONS.with(|count| count.set(0));
     }
 
     #[test]
@@ -311,13 +311,13 @@ mod tests {
         };
 
         reset_construction_counts();
-        let result = discover_client_sources(&input);
+        let result = discover_client_sources(&input).expect("valid observations");
         let counts = construction_counts();
 
         let mut reversed = input.clone();
         reversed.observations.reverse();
         reset_construction_counts();
-        let reversed_result = discover_client_sources(&reversed);
+        let reversed_result = discover_client_sources(&reversed).expect("valid observations");
         let reversed_counts = construction_counts();
 
         assert_eq!(

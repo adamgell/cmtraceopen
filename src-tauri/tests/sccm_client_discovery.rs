@@ -113,7 +113,8 @@ fn discovery_uses_one_global_declaration_budget_and_marks_the_first_omitted_rota
     let result = discover_client_sources(&SccmClientDiscoveryInput {
         max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
         observations,
-    });
+    })
+    .expect("valid observations");
 
     assert_eq!(
         result.declarations.len(),
@@ -153,7 +154,8 @@ fn discovery_at_the_exact_global_boundary_does_not_manufacture_a_gap() {
     let result = discover_client_sources(&SccmClientDiscoveryInput {
         max_found_fragments_per_source: MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS,
         observations,
-    });
+    })
+    .expect("valid observations");
 
     assert_eq!(
         result.declarations.len(),
@@ -189,7 +191,8 @@ fn discovery_enforces_each_source_cap_and_retains_the_first_omitted_rotation_gap
                 SccmClientDiscoveryObservationState::Found,
             ),
         ],
-    });
+    })
+    .expect("valid observations");
 
     assert_eq!(
         result
@@ -254,11 +257,12 @@ fn discovery_preserves_denied_and_not_found_coverage_with_stable_collision_safe_
             ),
         ],
     };
-    let result = discover_client_sources(&input);
+    let result = discover_client_sources(&input).expect("valid observations");
     let reversed = discover_client_sources(&SccmClientDiscoveryInput {
         max_found_fragments_per_source: input.max_found_fragments_per_source,
         observations: input.observations.into_iter().rev().collect(),
-    });
+    })
+    .expect("valid observations");
 
     assert_eq!(result.declarations, reversed.declarations);
     assert!(result
@@ -349,7 +353,8 @@ fn discovery_coalesces_exact_duplicate_observations_without_spending_global_quot
     let result = discover_client_sources(&SccmClientDiscoveryInput {
         max_found_fragments_per_source: 1,
         observations: vec![duplicate.clone(), duplicate],
-    });
+    })
+    .expect("exact duplicates are valid");
 
     assert_eq!(result.declarations.len(), 1);
     assert_eq!(
