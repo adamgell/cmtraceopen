@@ -43,6 +43,8 @@ pub(crate) enum ExplicitAppIdentity {
 pub(crate) struct ExplicitAppIdentityContext {
     pub identity: ExplicitAppIdentity,
     pub local_name: Option<String>,
+    /// Populated only for an absent explicit identity when the caller enables
+    /// the legacy named-GUID fallback; valid and invalid identities keep this `None`.
     pub fallback_app_id: Option<String>,
 }
 
