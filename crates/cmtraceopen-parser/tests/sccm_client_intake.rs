@@ -1,13 +1,14 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::{
     assess_client_intake, classify_artifact_name, declared_client_source_groups, SccmArtifact,
     SccmClientIntakeArtifact, SccmClientIntakeAssessment, SccmClientIntakeBundle,
-    SccmClientIntakeError, SccmCoverageState, SccmRole, SccmRotation, SccmUnknownRotation,
+    SccmClientIntakeCoverageGap, SccmClientIntakeError, SccmClientIntakeFragment,
+    SccmClientUnsupportedArtifact, SccmCoverageState, SccmRole, SccmRotation, SccmUnknownRotation,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -42,6 +43,78 @@ struct FixtureRotation {
     timestamp: Option<String>,
     lineage_id: Option<String>,
     fragment_complete: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedIntakeContract {
+    contract_state: String,
+    scenario: String,
+    pure_assessment: ExpectedPureAssessment,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedPureAssessment {
+    schema_version: u32,
+    groups: Vec<ExpectedPureGroup>,
+    fragments: Vec<ExpectedPureFragment>,
+    physical_artifact_ids: Vec<String>,
+    unsupported_artifacts: Vec<ExpectedUnsupportedArtifact>,
+    coverage_gaps: Vec<ExpectedCoverageGap>,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedPureGroup {
+    logical_artifact_id: String,
+    coverage: SccmCoverageState,
+    fragment_artifact_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedPureFragment {
+    artifact_id: String,
+    basename: String,
+    rotation: SccmRotation,
+    coverage: SccmCoverageState,
+    path_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rotation_lineage: Option<String>,
+    relative_path: Option<String>,
+    fragment_complete: Option<bool>,
+    configmgr_version: Option<String>,
+    collected_at_utc: Option<String>,
+    encoding: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedUnsupportedArtifact {
+    artifact_id: String,
+    basename: String,
+    declared_coverage: SccmCoverageState,
+    classification: SccmCoverageState,
+    rotation: SccmRotation,
+    path_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rotation_lineage: Option<String>,
+    relative_path: Option<String>,
+    fragment_complete: Option<bool>,
+    configmgr_version: Option<String>,
+    collected_at_utc: Option<String>,
+    encoding: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExpectedCoverageGap {
+    logical_artifact_id: String,
+    artifact_id: Option<String>,
+    role: SccmRole,
+    coverage: SccmCoverageState,
+    reason: String,
 }
 
 fn fixture_directory(scenario: &str) -> PathBuf {
@@ -132,6 +205,104 @@ fn rotation_label(rotation: &SccmRotation) -> String {
 
 fn lowercase_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+impl From<&SccmClientIntakeFragment> for ExpectedPureFragment {
+    fn from(fragment: &SccmClientIntakeFragment) -> Self {
+        Self {
+            artifact_id: fragment.artifact_id.clone(),
+            basename: fragment.basename.clone(),
+            rotation: fragment.rotation.clone(),
+            coverage: fragment.coverage.clone(),
+            path_fingerprint: fragment.path_fingerprint.clone(),
+            rotation_lineage: fragment.rotation_lineage.clone(),
+            relative_path: fragment.relative_path.clone(),
+            fragment_complete: fragment.fragment_complete,
+            configmgr_version: fragment.configmgr_version.clone(),
+            collected_at_utc: fragment.collected_at_utc.clone(),
+            encoding: fragment.encoding.clone(),
+        }
+    }
+}
+
+impl From<&SccmClientUnsupportedArtifact> for ExpectedUnsupportedArtifact {
+    fn from(artifact: &SccmClientUnsupportedArtifact) -> Self {
+        Self {
+            artifact_id: artifact.artifact_id.clone(),
+            basename: artifact.basename.clone(),
+            declared_coverage: artifact.declared_coverage.clone(),
+            classification: artifact.classification.clone(),
+            rotation: artifact.rotation.clone(),
+            path_fingerprint: artifact.path_fingerprint.clone(),
+            rotation_lineage: artifact.rotation_lineage.clone(),
+            relative_path: artifact.relative_path.clone(),
+            fragment_complete: artifact.fragment_complete,
+            configmgr_version: artifact.configmgr_version.clone(),
+            collected_at_utc: artifact.collected_at_utc.clone(),
+            encoding: artifact.encoding.clone(),
+        }
+    }
+}
+
+impl From<&SccmClientIntakeCoverageGap> for ExpectedCoverageGap {
+    fn from(gap: &SccmClientIntakeCoverageGap) -> Self {
+        Self {
+            logical_artifact_id: gap.logical_artifact_id.clone(),
+            artifact_id: gap.artifact_id.clone(),
+            role: gap.role.clone(),
+            coverage: gap.coverage.clone(),
+            reason: gap.reason.clone(),
+        }
+    }
+}
+
+fn normalize_pure_assessment(assessment: &SccmClientIntakeAssessment) -> ExpectedPureAssessment {
+    let mut fragments = BTreeMap::new();
+    let groups = assessment
+        .groups
+        .iter()
+        .map(|group| {
+            let fragment_artifact_ids = group
+                .fragments
+                .iter()
+                .map(|fragment| {
+                    let normalized = ExpectedPureFragment::from(fragment);
+                    if let Some(existing) =
+                        fragments.insert(fragment.artifact_id.clone(), normalized.clone())
+                    {
+                        assert_eq!(
+                            existing, normalized,
+                            "one artifact ID must retain identical provenance across group memberships"
+                        );
+                    }
+                    fragment.artifact_id.clone()
+                })
+                .collect();
+
+            ExpectedPureGroup {
+                logical_artifact_id: group.logical_artifact_id.clone(),
+                coverage: group.coverage.clone(),
+                fragment_artifact_ids,
+            }
+        })
+        .collect();
+
+    ExpectedPureAssessment {
+        schema_version: assessment.schema_version,
+        groups,
+        fragments: fragments.into_values().collect(),
+        physical_artifact_ids: assessment
+            .physical_artifacts
+            .iter()
+            .map(|fragment| fragment.artifact_id.clone())
+            .collect(),
+        unsupported_artifacts: assessment
+            .unsupported_artifacts
+            .iter()
+            .map(Into::into)
+            .collect(),
+        coverage_gaps: assessment.coverage_gaps.iter().map(Into::into).collect(),
+    }
 }
 
 fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntakeArtifact {
@@ -342,6 +513,35 @@ fn every_declared_client_basename_is_supported_by_the_authoritative_catalog() {
                 "the shared catalog must not route a non-CCM supplement through raw CCM"
             );
         }
+    }
+}
+
+#[test]
+fn expected_pure_assessments_are_complete_exact_and_deterministic() {
+    for scenario in [
+        "complete",
+        "rotations",
+        "missing-root",
+        "access-denied",
+        "capped",
+        "collision",
+    ] {
+        let expected: ExpectedIntakeContract = serde_json::from_str(
+            &fs::read_to_string(fixture_directory(scenario).join("expected.json"))
+                .expect("expected fixture is readable"),
+        )
+        .expect("expected fixture has the exact typed pure contract");
+
+        assert_eq!(
+            expected.contract_state,
+            "pureIntakeImplementedNativePending"
+        );
+        assert_eq!(expected.scenario, scenario);
+        assert_eq!(
+            expected.pure_assessment,
+            normalize_pure_assessment(&assessment(scenario)),
+            "{scenario}: expected pure assessment must cover the entire deterministic output"
+        );
     }
 }
 
@@ -1567,7 +1767,7 @@ fn public_identity_contract_retains_only_reviewed_synthetic_and_opaque_forms() {
 
     let mut raw_context = synthetic_artifact("valid-version", "PolicyAgent.log");
     raw_context.artifact.original_path = Some(r"C:\Users\RealUser\PolicyAgent.log".to_owned());
-    raw_context.artifact.host = Some("realuser.corp.example.test".to_owned());
+    raw_context.artifact.host = Some("host-only-sentinel.corp.example.test".to_owned());
     let serialized = serde_json::to_string(
         &assess_client_intake(&SccmClientIntakeBundle {
             artifacts: vec![raw_context],
@@ -1577,7 +1777,7 @@ fn public_identity_contract_retains_only_reviewed_synthetic_and_opaque_forms() {
     .expect("assessment serializes");
     let serialized_casefolded = serialized.to_ascii_lowercase();
     assert!(!serialized_casefolded.contains("realuser"));
-    assert!(!serialized_casefolded.contains("realuser.corp"));
+    assert!(!serialized_casefolded.contains("host-only-sentinel"));
     assert!(!serialized_json_contains_windows_user_root(
         &serialized_casefolded
     ));
