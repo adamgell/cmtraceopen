@@ -15,6 +15,10 @@ UPSTREAM_COMMIT = "72ef3d3322ee0ac8db02cf324c2030f13d3bb68d"
 UPSTREAM_SCRIPT_SHA256 = (
     "71703606bcf171b9e7f8035466d41806622be7a6f04b8157ef86f16fb3ecdfad"
 )
+DOWNSTREAM_SCRIPT_COMMITS = (
+    "925131c0da511e89eddbdb1e6f14f65ed4861a3f",
+    "a76c272d62a1d527f59c542608d10c405a210e2f",
+)
 SPEC = importlib.util.spec_from_file_location("review_state", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
 review_state = importlib.util.module_from_spec(SPEC)
@@ -137,12 +141,38 @@ class ProvenanceTests(unittest.TestCase):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
         license_text = LICENSE_PATH.read_text(encoding="utf-8")
 
+        provenance = license_text.split(
+            "Third-party attribution for gh-copilot-review-loop\n", 1
+        )[1]
+        labeled_fields = dict(
+            line.split(": ", 1)
+            for line in provenance.splitlines()
+            if ": " in line
+        )
+        skill_provenance = skill_text.split("## Provenance\n", 1)[1]
+
         self.assertNotEqual(script_digest, UPSTREAM_SCRIPT_SHA256)
-        self.assertIn(UPSTREAM_COMMIT, skill_text)
-        self.assertIn(UPSTREAM_COMMIT, license_text)
-        self.assertIn(UPSTREAM_SCRIPT_SHA256, license_text)
-        self.assertIn("modified downstream derivative", skill_text)
-        self.assertIn("not byte-identical", skill_text)
+        self.assertEqual(labeled_fields["Upstream commit"], UPSTREAM_COMMIT)
+        self.assertEqual(
+            labeled_fields["Upstream script path"], "scripts/review_state.py"
+        )
+        self.assertEqual(
+            labeled_fields["Upstream script SHA-256 at pinned commit"],
+            UPSTREAM_SCRIPT_SHA256,
+        )
+        self.assertEqual(
+            labeled_fields["Downstream script commits"],
+            ", ".join(DOWNSTREAM_SCRIPT_COMMITS),
+        )
+        self.assertIn("SKILL.md", labeled_fields["Repository-level changes"])
+        self.assertIn("regression tests", labeled_fields["Repository-level changes"])
+        self.assertIn("base-repository URL parsing", labeled_fields["Script changes"])
+        self.assertIn("pending-review filtering", labeled_fields["Script changes"])
+        self.assertIn(UPSTREAM_COMMIT, skill_provenance)
+        for commit in DOWNSTREAM_SCRIPT_COMMITS:
+            self.assertIn(commit, skill_provenance)
+        self.assertIn("modified downstream derivative", skill_provenance)
+        self.assertIn("not byte-identical", skill_provenance)
 
 
 if __name__ == "__main__":
