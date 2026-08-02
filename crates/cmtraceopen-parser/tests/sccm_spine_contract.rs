@@ -3957,7 +3957,11 @@ fn finding_request_rejects_multi_dot_scope_without_exact_catalog_authorization()
         }
 
         let mut json = serde_json::to_value(&canonical).unwrap();
-        json["nextArtifacts"][0] = serde_json::to_value(request).unwrap();
+        json["nextArtifacts"][0] = serde_json::json!({
+            "logicalId": &request.logical_id,
+            "role": &request.role,
+            "reason": &request.reason,
+        });
         let deserialized = serde_json::from_value::<SccmFinding>(json);
         let matches_expected = deserialized
             .err()
