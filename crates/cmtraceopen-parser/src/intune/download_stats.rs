@@ -4,8 +4,8 @@ use std::path::Path;
 use regex::Regex;
 
 use super::guid_registry::{
-    explicit_app_identity, extract_app_id, extract_app_name, is_fallback_name, ExplicitAppIdentity,
-    GuidRegistry,
+    explicit_app_identity, extract_app_id, extract_app_name, extract_explicit_identity_name_pair,
+    is_fallback_name, ExplicitAppIdentity, GuidRegistry,
 };
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
@@ -369,8 +369,14 @@ fn extract_content_id(msg: &str) -> Option<String> {
 }
 
 fn extract_display_name(msg: &str) -> Option<String> {
-    // Delegates to shared extraction in guid_registry (handles ApplicationName, Name, SetUpFilePath)
-    extract_app_name(msg)
+    match explicit_app_identity(msg) {
+        ExplicitAppIdentity::Valid(_) => {
+            extract_explicit_identity_name_pair(msg).map(|(_, name)| name)
+        }
+        ExplicitAppIdentity::Invalid => None,
+        // Preserve line-wide extraction for the established named-context fallback.
+        ExplicitAppIdentity::Absent => extract_app_name(msg),
+    }
 }
 
 fn apply_download_analysis(

@@ -594,6 +594,20 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
     }
 }
 
+/// Extract an explicit app identity together with a name from that identity's
+/// own JSON object. Names in a sibling or nested object are not associated.
+pub(crate) fn extract_explicit_identity_name_pair(msg: &str) -> Option<(String, String)> {
+    let guid = match explicit_app_identity(msg) {
+        ExplicitAppIdentity::Valid(guid) => guid,
+        ExplicitAppIdentity::Absent | ExplicitAppIdentity::Invalid => return None,
+    };
+    let scan = scan_json_fields(msg).ok()?;
+    extract_all_identity_name_pairs(&scan)
+        .into_iter()
+        .find(|(candidate, _, _)| candidate == &guid)
+        .map(|(_, name, _)| (guid, name))
+}
+
 /// Classify explicit JSON `AppId`/`Id` fields without falling back to other
 /// GUIDs on the line. An invalid explicit field is an identity boundary: its
 /// presence suppresses line-wide GUID inference.
