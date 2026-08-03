@@ -136,6 +136,15 @@ root, use a testable access-status provider, and retain original paths only as
 privacy-classified provenance. There is no Tauri command, UI, direct parser
 filesystem access, globbing in the pure crate, or redefinition of CCM.
 
+The later native binding must use one opened source handle for the entire
+capture transaction: stream the bounded retained bytes, compute
+`declaredByteLength` and lowercase `contentSha256` over exactly those bytes,
+and persist/hand off that same byte sequence before closing the handle. It must
+not stat, hash, or reopen the path in separate authority steps, because a file
+replacement between those operations would bind the manifest to bytes that
+were never supplied. This pure-parser slice validates and consumes that
+binding but does not implement or claim the Windows handle workflow.
+
 ## Determinism, collision, and rotation rules
 
 - Sort manifest artifacts by catalog entry ID, normalized path fingerprint,
@@ -210,11 +219,13 @@ remains a separate acceptance gate.
   file format.
 - `expected.json` uses `contractState: pureIntakeImplementedNativePending`.
   `pureAssessment` is the complete typed
-  executable oracle. `nativeDesignPending` holds byte/limit/digest facts that
-  remain outside the pure projection, and `downstreamDesignPending` labels
-  request wording and prohibited claims that are not intake output. Native
-  manifest emission, discovery/capture, and Windows acceptance remain
-  design-only gates rather than delivered claims.
+  executable oracle. Legacy fixtures intentionally omit the additive
+  length/digest authority and therefore remain assessment-only;
+  `nativeDesignPending` holds the proposed byte/limit facts until the native
+  adapter can populate the new binding from one source handle.
+  `downstreamDesignPending` labels request wording and prohibited claims that
+  are not intake output. Native manifest emission, discovery/capture, and
+  Windows acceptance remain design-only gates rather than delivered claims.
 
 ## Remaining delivery blockers
 

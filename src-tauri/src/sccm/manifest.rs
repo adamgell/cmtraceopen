@@ -121,6 +121,8 @@ fn manifest_to_client_intake_bundle(
             rotation_lineage: source.rotation_lineage.clone(),
             relative_path: source.relative_path.clone(),
             fragment_complete: Some(source.fragment_complete),
+            declared_byte_length: None,
+            content_sha256: None,
         })
         .collect();
     let capture_gaps = manifest
@@ -867,6 +869,8 @@ fn read_legacy_client_intake_bundle(
             rotation_lineage: None,
             relative_path: None,
             fragment_complete: Some(false),
+            declared_byte_length: None,
+            content_sha256: None,
         });
     }
     let bundle = SccmClientIntakeBundle {
