@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useLogStore, getCachedTabSnapshot, setCachedTabSnapshot, clearAllTabSnapshots } from "./log-store";
-import type { LogEntry } from "../types/log";
+import type { LogEntry, TailEntryAmendment } from "../types/log";
 
 function makeEntry(overrides: Partial<LogEntry> & { id: number }): LogEntry {
   return {
@@ -65,30 +65,76 @@ describe("log-store", () => {
     });
   });
 
-  describe("replaceEntry", () => {
-    it("amends an initial logical record without changing its id, selection, or line count", () => {
-      useLogStore.getState().setEntries([
-        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
-        makeEntry({ id: 1, lineNumber: 3, message: "later record" }),
-      ]);
-      useLogStore.getState().setTotalLines(3);
-      useLogStore.getState().selectEntry(0);
+  describe("amendEntry", () => {
+    const firstAmendment: TailEntryAmendment = {
+      entryId: 0,
+      entryLineNumber: 1,
+      continuationStartLine: 2,
+      continuationEndLine: 2,
+      messageUtf16Start: 14,
+      messageSuffix: "\nrequest failed with 0x80070005",
+      errorCodeSpans: [
+        {
+          start: 35,
+          end: 45,
+          codeHex: "0x80070005",
+          codeDecimal: "-2147024891",
+          description: "Access is denied.",
+          category: "Win32",
+        },
+      ],
+    };
 
-      useLogStore.getState().replaceEntry(
+    const secondAmendment: TailEntryAmendment = {
+      entryId: 0,
+      entryLineNumber: 1,
+      continuationStartLine: 3,
+      continuationEndLine: 3,
+      messageUtf16Start: 45,
+      messageSuffix: "\nretry scheduled",
+      errorCodeSpans: [],
+    };
+
+    it("amends every continuation-owned field without changing identity or selection", () => {
+      useLogStore.getState().setEntries([
         makeEntry({
           id: 0,
           lineNumber: 1,
-          message: "[Sync] started\nSystem.Net.Http.HttpRequestException: response status 403",
-        })
-      );
+          message: "[Sync] started",
+          errorCodeSpans: [],
+        }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+      useLogStore.getState().selectEntry(0);
+
+      useLogStore.getState().amendEntry(firstAmendment);
 
       const state = useLogStore.getState();
-      expect(state.entries).toHaveLength(2);
+      expect(state.entries).toHaveLength(1);
       expect(state.entries[0].id).toBe(0);
       expect(state.entries[0].lineNumber).toBe(1);
-      expect(state.entries[0].message).toContain("HttpRequestException");
+      expect(state.entries[0].message).toBe(
+        "[Sync] started\nrequest failed with 0x80070005",
+      );
+      expect(state.entries[0].errorCodeSpans).toEqual(firstAmendment.errorCodeSpans);
       expect(state.selectedId).toBe(0);
-      expect(state.totalLines).toBe(3);
+      expect(state.totalLines).toBe(2);
+    });
+
+    it("ignores duplicate and stale reordered physical ranges", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry(firstAmendment);
+      useLogStore.getState().amendEntry(secondAmendment);
+      useLogStore.getState().amendEntry(firstAmendment);
+
+      expect(useLogStore.getState().entries[0].message).toBe(
+        "[Sync] started\nrequest failed with 0x80070005\nretry scheduled",
+      );
+      expect(useLogStore.getState().totalLines).toBe(3);
     });
   });
 
@@ -147,33 +193,52 @@ describe("log-store", () => {
     });
   });
 
-  describe("replaceAggregateEntry", () => {
+  describe("amendAggregateEntry", () => {
     it("amends the matching file and physical line while preserving its merged display id", () => {
       useLogStore.getState().setEntries([
         makeEntry({ id: 4, filePath: "/a.log", lineNumber: 1, message: "[Sync] started" }),
         makeEntry({ id: 5, filePath: "/b.log", lineNumber: 1, message: "unrelated" }),
       ]);
-
-      useLogStore.getState().replaceAggregateEntry(
-        "/a.log",
-        makeEntry({
-          id: 0,
+      useLogStore.getState().setAggregateFiles([
+        {
           filePath: "/a.log",
-          lineNumber: 1,
-          message: "[Sync] started\nSystem.Net.Http.HttpRequestException: response status 403",
-        })
-      );
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(2);
+
+      useLogStore.getState().amendAggregateEntry("/a.log", {
+        entryId: 0,
+        entryLineNumber: 1,
+        continuationStartLine: 2,
+        continuationEndLine: 2,
+        messageUtf16Start: 14,
+        messageSuffix: "\nrequest failed",
+        errorCodeSpans: [],
+      });
 
       const entries = useLogStore.getState().entries;
       expect(entries.find((entry) => entry.filePath === "/a.log")).toMatchObject({
         id: 4,
         lineNumber: 1,
-        message: expect.stringContaining("HttpRequestException"),
+        message: "[Sync] started\nrequest failed",
       });
       expect(entries.find((entry) => entry.filePath === "/b.log")).toMatchObject({
         id: 5,
         message: "unrelated",
       });
+      expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(2);
+      expect(useLogStore.getState().totalLines).toBe(3);
     });
   });
 

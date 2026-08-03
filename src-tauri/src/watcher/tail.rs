@@ -1267,12 +1267,15 @@ mod tests {
         assert_eq!(initial_result.entries[0].line_number, 1);
         assert_eq!(initial_result.entries[0].message, "[Sync] started");
 
-        let mut reader = TailReader::new(
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
             path.clone(),
             initial_result.byte_offset,
             selection,
             initial_result.entries.len() as u64,
             initial_result.total_lines + 1,
+            initial_record,
         );
 
         let mut file = OpenOptions::new()
@@ -1294,14 +1297,18 @@ mod tests {
         assert!(!batch.reset);
         assert_eq!(batch.parse_errors, 0);
         assert!(batch.entries.is_empty());
-        let replacement = batch
-            .replacement
-            .expect("late continuation must replace the initial rendered record");
-        assert_eq!(replacement.id, 0);
-        assert_eq!(replacement.line_number, 1);
+        let amendment = batch
+            .amendments
+            .first()
+            .expect("late continuation must amend the initial rendered record");
+        assert_eq!(amendment.entry_id, 0);
+        assert_eq!(amendment.entry_line_number, 1);
+        assert_eq!(amendment.continuation_start_line, 2);
+        assert_eq!(amendment.continuation_end_line, 2);
+        assert_eq!(amendment.message_utf16_start, 14);
         assert_eq!(
-            replacement.message,
-            "[Sync] started\nSystem.Net.Http.HttpRequestException: response status 403"
+            amendment.message_suffix,
+            "\nSystem.Net.Http.HttpRequestException: response status 403"
         );
 
         let flushed = reader.flush_pending_logical_record();
@@ -1335,12 +1342,15 @@ mod tests {
         let path_str = path.to_string_lossy().to_string();
         let (initial_result, selection) =
             parser::parse_file(&path_str).expect("initial fixture should parse");
-        let mut reader = TailReader::new(
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
             path.clone(),
             initial_result.byte_offset,
             selection,
             initial_result.entries.len() as u64,
             initial_result.total_lines + 1,
+            initial_record,
         );
 
         let mut file = OpenOptions::new()
@@ -1356,7 +1366,7 @@ mod tests {
         assert_eq!(first_batch.parse_errors, 0);
         assert!(first_batch.entries.is_empty());
         assert!(
-            first_batch.replacement.is_none(),
+            first_batch.amendments.is_empty(),
             "the initial record should be amended once at a real record boundary"
         );
 
@@ -1380,14 +1390,18 @@ mod tests {
             .expect("boundary read should succeed");
         assert_eq!(boundary_batch.parse_errors, 0);
         assert!(boundary_batch.entries.is_empty());
-        let replacement = boundary_batch
-            .replacement
-            .expect("the next header should complete one initial-record replacement");
-        assert_eq!(replacement.id, 0);
-        assert_eq!(replacement.line_number, 1);
+        let amendment = boundary_batch
+            .amendments
+            .first()
+            .expect("the next header should complete one initial-record amendment");
+        assert_eq!(boundary_batch.amendments.len(), 1);
+        assert_eq!(amendment.entry_id, 0);
+        assert_eq!(amendment.entry_line_number, 1);
+        assert_eq!(amendment.continuation_start_line, 2);
+        assert_eq!(amendment.continuation_end_line, 3);
         assert_eq!(
-            replacement.message,
-            "[Sync] started\nfirst continuation\nsecond continuation"
+            amendment.message_suffix,
+            "\nfirst continuation\nsecond continuation"
         );
 
         let flushed = reader.flush_pending_logical_record();
@@ -1416,12 +1430,15 @@ mod tests {
         let path_str = path.to_string_lossy().to_string();
         let (initial_result, selection) =
             parser::parse_file(&path_str).expect("initial fixture should parse");
-        let mut reader = TailReader::new(
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
             path.clone(),
             initial_result.byte_offset,
             selection,
             initial_result.entries.len() as u64,
             initial_result.total_lines + 1,
+            initial_record,
         );
 
         let changed_prior_bytes = initial.replace("started", "BROKEN!");
@@ -1445,12 +1462,13 @@ mod tests {
         let batch = reader
             .read_new_entries()
             .expect("tail boundary read should succeed");
-        let replacement = batch
-            .replacement
+        let amendment = batch
+            .amendments
+            .first()
             .expect("tail boundary should amend the entry parsed during initial open");
         assert_eq!(
-            replacement.message,
-            "[Sync] started\ncontinuation from the append-only boundary"
+            amendment.message_suffix,
+            "\ncontinuation from the append-only boundary"
         );
 
         fs::remove_dir_all(root).expect("should clean up temp fixture directory");
@@ -1477,12 +1495,15 @@ mod tests {
         let path_str = path.to_string_lossy().to_string();
         let (initial_result, selection) =
             parser::parse_file(&path_str).expect("initial fixture should parse");
-        let mut reader = TailReader::new(
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
             path.clone(),
             initial_result.byte_offset,
             selection,
             initial_result.entries.len() as u64,
             initial_result.total_lines + 1,
+            initial_record,
         );
 
         let continuation = "x".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES + 1);
@@ -1497,6 +1518,139 @@ mod tests {
             .read_new_entries()
             .expect("oversized continuation read should succeed");
         assert_eq!(batch.parse_errors, 1);
+        assert_eq!(batch.amendments.len(), 1);
+        assert!(
+            batch.amendments[0].message_suffix.len() <= MAX_PENDING_LOGICAL_RECORD_BYTES,
+            "a single watcher payload must stay inside the logical-record cap"
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "more content after the cap").expect("should append after cap");
+        drop(file);
+
+        let after_cap = reader
+            .read_new_entries()
+            .expect("post-cap continuation read should succeed");
+        assert_eq!(after_cap.parse_errors, 0, "the same cap is reported once");
+        assert!(after_cap.amendments.is_empty());
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
+    fn test_initial_company_portal_flush_emits_one_bounded_amendment_with_absolute_spans() {
+        let root = hinted_test_root("company-portal-initial-flush-span");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        fs::write(
+            &path,
+            concat!(
+                "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+            ),
+        )
+        .expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+            initial_record,
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "emoji 🙂 failed with 0x80070005")
+            .expect("should append continuation with an error code");
+        drop(file);
+
+        let pending = reader
+            .read_new_entries()
+            .expect("continuation read should succeed");
+        assert!(pending.amendments.is_empty());
+
+        let flushed = reader.flush_pending_logical_record();
+        assert_eq!(flushed.parse_errors, 0);
+        assert_eq!(flushed.amendments.len(), 1);
+        let amendment = &flushed.amendments[0];
+        assert_eq!(amendment.message_suffix, "\nemoji 🙂 failed with 0x80070005");
+        assert_eq!(amendment.message_utf16_start, 14);
+        assert_eq!(amendment.error_code_spans.len(), 1);
+        assert_eq!(amendment.error_code_spans[0].start, 36);
+        assert_eq!(amendment.error_code_spans[0].end, 46);
+
+        let duplicate_flush = reader.flush_pending_logical_record();
+        assert!(duplicate_flush.amendments.is_empty());
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
+    fn test_initial_company_portal_truncation_discards_unpublished_continuation() {
+        let root = hinted_test_root("company-portal-initial-reset");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        fs::write(
+            &path,
+            concat!(
+                "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+            ),
+        )
+        .expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+            initial_record,
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "continuation that must be discarded")
+            .expect("should append continuation");
+        drop(file);
+        assert!(reader
+            .read_new_entries()
+            .expect("continuation read should succeed")
+            .amendments
+            .is_empty());
+
+        fs::write(&path, "").expect("should truncate the file");
+        let reset = reader.read_new_entries().expect("reset read should succeed");
+        assert!(reset.reset);
+        assert!(reset.amendments.is_empty());
+        assert!(reader.flush_pending_logical_record().amendments.is_empty());
 
         fs::remove_dir_all(root).expect("should clean up temp fixture directory");
     }

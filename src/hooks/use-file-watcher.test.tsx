@@ -1,12 +1,16 @@
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startTail } from "../lib/commands";
 import { useLogStore } from "../stores/log-store";
-import type { LogEntry } from "../types/log";
+import type { LogEntry, TailPayload } from "../types/log";
 import { useFileWatcher } from "./use-file-watcher";
 
 const eventMocks = vi.hoisted(() => ({
-  listen: vi.fn(async () => vi.fn()),
+  tailListener: null as ((event: { payload: TailPayload }) => void) | null,
+  listen: vi.fn(async (_event: string, listener: (event: { payload: TailPayload }) => void) => {
+    eventMocks.tailListener = listener;
+    return vi.fn();
+  }),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -43,6 +47,7 @@ function multilineEntry(): LogEntry {
 describe("useFileWatcher tail start state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    eventMocks.tailListener = null;
     useLogStore.getState().clear();
   });
 
@@ -71,5 +76,52 @@ describe("useFileWatcher tail start state", () => {
         4,
       ),
     );
+  });
+
+  it("applies a duplicate logical-record amendment only once", async () => {
+    useLogStore.setState({
+      openFilePath: "/logs/Log_1.log",
+      sourceOpenMode: "single-file",
+      formatDetected: "Timestamped",
+      byteOffset: 512,
+      totalLines: 1,
+      entries: [
+        {
+          ...multilineEntry(),
+          message: "[Sync] started",
+        },
+      ],
+    });
+
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+
+    const payload: TailPayload = {
+      entries: [],
+      amendments: [
+        {
+          entryId: 0,
+          entryLineNumber: 1,
+          continuationStartLine: 2,
+          continuationEndLine: 2,
+          messageUtf16Start: 14,
+          messageSuffix: "\ncontinuation",
+          errorCodeSpans: [],
+        },
+      ],
+      filePath: "/logs/Log_1.log",
+      parseErrors: 0,
+      reset: false,
+    };
+
+    act(() => {
+      eventMocks.tailListener?.({ payload });
+      eventMocks.tailListener?.({ payload });
+    });
+
+    expect(useLogStore.getState().entries[0].message).toBe(
+      "[Sync] started\ncontinuation",
+    );
+    expect(useLogStore.getState().totalLines).toBe(2);
   });
 });
