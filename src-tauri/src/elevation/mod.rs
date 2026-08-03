@@ -44,6 +44,26 @@ pub enum AppWorkspace {
     DnsDhcp,
 }
 
+/// Every workspace, in declaration order. The `as_id`/`from_id` round trip and
+/// the startup-argument parser are both pinned against this, so a new variant
+/// that forgets its identifier fails a test rather than silently losing a
+/// restore destination.
+pub const ALL_APP_WORKSPACES: &[AppWorkspace] = &[
+    AppWorkspace::Log,
+    AppWorkspace::Intune,
+    AppWorkspace::NewIntune,
+    AppWorkspace::Dsregcmd,
+    AppWorkspace::MacosDiag,
+    AppWorkspace::MacosJamf,
+    AppWorkspace::Deployment,
+    AppWorkspace::EventLog,
+    AppWorkspace::EspDiagnostics,
+    AppWorkspace::Secureboot,
+    AppWorkspace::Sysmon,
+    AppWorkspace::Timeline,
+    AppWorkspace::DnsDhcp,
+];
+
 impl AppWorkspace {
     /// The frontend workspace identifier, matching `WorkspaceId`.
     pub fn as_id(self) -> &'static str {
@@ -62,6 +82,18 @@ impl AppWorkspace {
             Self::Timeline => "timeline",
             Self::DnsDhcp => "dns-dhcp",
         }
+    }
+
+    /// Resolve a workspace identifier from an untrusted startup argument.
+    ///
+    /// An allowlist, matched exactly: the identifier set is closed and contains
+    /// no separator, dot, or drive-letter form, which is what lets the elevated
+    /// child accept this on its command line without it ever naming a path.
+    pub fn from_id(id: &str) -> Option<Self> {
+        ALL_APP_WORKSPACES
+            .iter()
+            .copied()
+            .find(|workspace| workspace.as_id() == id)
     }
 }
 
