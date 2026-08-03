@@ -392,53 +392,9 @@ fn assert_bounded_request_has_specific_scope(request: &SccmSiteCoreArtifactReque
 }
 
 fn assert_malformed_peer_source_fails_closed(analysis: &SccmSiteCoreAnalysis, malformed_id: &str) {
-    assert!(analysis.results.is_empty());
-    assert_eq!(analysis.coverage_gaps.len(), 2);
-    assert!(analysis.coverage_gaps.iter().all(|gap| {
-        gap.artifact_id != malformed_id
-            && !gap.artifact_id.is_empty()
-            && gap.artifact_id.len() <= 256
-            && gap.artifact_id.trim() == gap.artifact_id
-            && gap.artifact_id.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b':' | b'_' | b'-')
-            })
-            && gap.state == SccmCoverageState::ParseFailed
-            && gap.reason_code == "intake-coverage-incongruent"
-    }));
-    assert_eq!(analysis.unlinked_observations.len(), 2);
-    assert_eq!(analysis.findings.len(), 2);
-
-    for gap in &analysis.coverage_gaps {
-        let observation = analysis
-            .unlinked_observations
-            .iter()
-            .find(|observation| observation.coverage_gap_artifact_ids == [gap.artifact_id.clone()])
-            .expect("each gap has an explicit coverage observation");
-        let finding = analysis
-            .findings
-            .iter()
-            .find(|finding| finding.subject_id == observation.observation_id)
-            .expect("each gap has a validated coverage finding");
-        assert_eq!(
-            finding.finding.class,
-            SccmFindingClass::InsufficientEvidence
-        );
-        assert!(finding
-            .finding
-            .coverage_gaps
-            .iter()
-            .any(|finding_gap| finding_gap.artifact_id == gap.artifact_id));
-    }
-
-    assert!(!analysis.artifact_requests.is_empty());
-    for request in &analysis.artifact_requests {
-        assert_bounded_request_has_specific_scope(request);
-        assert_eq!(
-            request.scope.producer_host_handle.as_deref(),
-            Some("synthetic:host:site-01")
-        );
-    }
-    assert!(!analysis.cross_side_correlation_performed);
+    assert_authority_invalid_analysis(analysis);
+    let wire = serde_json::to_string(analysis).expect("analysis serializes");
+    assert!(!wire.contains(malformed_id));
 }
 
 fn assert_explicit_gap_and_request(
@@ -479,6 +435,33 @@ fn assert_intake_authority_mutation_fails_closed(analysis: &SccmSiteCoreAnalysis
             ("z-site-status", "server-status", "synthetic:host:site-01"),
         ],
     );
+}
+
+fn assert_authority_invalid_analysis(analysis: &SccmSiteCoreAnalysis) {
+    assert!(analysis.results.is_empty());
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    let gap = &analysis.coverage_gaps[0];
+    assert_eq!(gap.artifact_id, "site-core-intake-authority");
+    assert_eq!(gap.source_id, "server-site-core-intake");
+    assert_eq!(gap.state, SccmCoverageState::ParseFailed);
+    assert_eq!(gap.reason_code, "intake-authority-invalid");
+
+    assert_eq!(analysis.unlinked_observations.len(), 1);
+    let observation = &analysis.unlinked_observations[0];
+    assert_eq!(
+        observation.finding_class,
+        SccmFindingClass::InsufficientEvidence
+    );
+    assert_eq!(
+        observation.coverage_gap_artifact_ids,
+        ["site-core-intake-authority"]
+    );
+    assert!(observation.evidence.is_empty());
+    assert!(observation.next_artifacts.is_empty());
+
+    assert!(analysis.findings.is_empty());
+    assert!(analysis.artifact_requests.is_empty());
+    assert!(!analysis.cross_side_correlation_performed);
 }
 
 fn assert_delimiter_attached_unknown_label_fails_closed(delimiter: char) {
@@ -1716,10 +1699,7 @@ fn intake_coverage_must_be_congruent_before_facts_can_shape_results() {
     assessment.coverage.clear();
 
     let analysis = analyze_site_core(&assessment);
-    assert!(analysis.results.is_empty());
-    assert!(!analysis.coverage_gaps.is_empty());
-    assert!(!analysis.unlinked_observations.is_empty());
-    assert!(!analysis.artifact_requests.is_empty());
+    assert_authority_invalid_analysis(&analysis);
 }
 
 #[test]
@@ -1745,72 +1725,64 @@ fn coordinated_post_intake_producer_host_mutation_fails_site_core_authority_clos
     );
 }
 
+#[test]
+fn invalid_intake_authority_never_exports_forged_scope_or_identity() {
+    let healthy = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+
+    let forged_host = "synthetic:host:forged-scope";
+    let mut host_mutation = healthy.clone();
+    replace_source_producer_host(&mut host_mutation, "server-sitecomp", forged_host);
+    replace_source_producer_host(&mut host_mutation, "server-status", forged_host);
+
+    let forged_lineage = "synthetic:lineage:forged-scope";
+    let mut lineage_mutation = healthy.clone();
+    for artifact in &mut lineage_mutation.artifacts {
+        artifact.rotation_lineage_handle = forged_lineage.to_owned();
+    }
+
+    let forged_artifact_id = "synthetic:artifact:forged-scope";
+    let mut artifact_id_mutation = healthy;
+    replace_source_artifact_id(
+        &mut artifact_id_mutation,
+        "server-sitecomp",
+        forged_artifact_id,
+    );
+
+    let analyses = [
+        (forged_host, analyze_site_core(&host_mutation)),
+        (forged_lineage, analyze_site_core(&lineage_mutation)),
+        (forged_artifact_id, analyze_site_core(&artifact_id_mutation)),
+    ];
+    for (forged_value, analysis) in &analyses {
+        assert_authority_invalid_analysis(analysis);
+        let wire = serde_json::to_string(analysis).expect("analysis serializes");
+        assert!(
+            !wire.contains(forged_value),
+            "invalid authority exported forged value {forged_value}"
+        );
+    }
+    assert!(analyses.windows(2).all(|pair| {
+        serde_json::to_vec(&pair[0].1).expect("analysis serializes")
+            == serde_json::to_vec(&pair[1].1).expect("analysis serializes")
+    }));
+}
+
 fn assert_topology_incongruence_fails_closed(
     analysis: &SccmSiteCoreAnalysis,
     expected_gaps: &[(&str, &str, &str)],
 ) {
-    assert!(
-        analysis.results.is_empty(),
-        "incongruent topology-bound coverage must not shape a result"
-    );
-    assert_eq!(analysis.coverage_gaps.len(), expected_gaps.len());
-    assert_eq!(
-        analysis.unlinked_observations.len(),
-        expected_gaps.len(),
-        "every topology mismatch stays visible as a coverage observation"
-    );
-    assert_eq!(
-        analysis.findings.len(),
-        expected_gaps.len(),
-        "every topology mismatch stays visible as a validated finding"
-    );
-
+    assert_authority_invalid_analysis(analysis);
+    let wire = serde_json::to_string(analysis).expect("analysis serializes");
     for (artifact_id, source_id, producer_host_handle) in expected_gaps {
-        let gap = analysis
-            .coverage_gaps
-            .iter()
-            .find(|gap| gap.artifact_id == *artifact_id)
-            .expect("topology-specific coverage gap");
-        assert_eq!(gap.source_id, *source_id);
-        assert_eq!(gap.state, SccmCoverageState::ParseFailed);
-        assert_eq!(gap.reason_code, "intake-coverage-incongruent");
-
-        let observation = analysis
-            .unlinked_observations
-            .iter()
-            .find(|observation| observation.coverage_gap_artifact_ids == [artifact_id.to_string()])
-            .expect("coverage gap has an explicit observation");
-        assert_eq!(
-            observation.finding_class,
-            SccmFindingClass::InsufficientEvidence
-        );
-
-        let finding = analysis
-            .findings
-            .iter()
-            .find(|finding| finding.subject_id == observation.observation_id)
-            .expect("coverage observation has a validated finding");
-        assert_eq!(
-            finding.finding.class,
-            SccmFindingClass::InsufficientEvidence
-        );
-        assert!(finding
-            .finding
-            .coverage_gaps
-            .iter()
-            .any(|finding_gap| finding_gap.artifact_id == *artifact_id));
-
-        let request = analysis
-            .artifact_requests
-            .iter()
-            .find(|request| request.logical_name == *source_id)
-            .expect("topology-specific gap has a bounded request");
-        assert_eq!(
-            request.scope.producer_host_handle.as_deref(),
-            Some(*producer_host_handle),
-            "the request stays scoped to artifact topology, not mutated coverage topology"
-        );
-        assert_bounded_request_has_specific_scope(request);
+        for forged_or_untrusted_value in [artifact_id, source_id, producer_host_handle] {
+            assert!(
+                !wire.contains(forged_or_untrusted_value),
+                "invalid authority exported untrusted value {forged_or_untrusted_value}"
+            );
+        }
     }
 }
 
@@ -1904,25 +1876,6 @@ fn post_intake_topology_mutations_fail_site_core_authority_closed() {
         ("capture host", analyze_site_core(&changed_capture_host)),
         ("observed roles", analyze_site_core(&changed_observed_roles)),
     ];
-    assert_eq!(
-        analyses
-            .iter()
-            .map(|(name, analysis)| (
-                *name,
-                analysis.results.len(),
-                analysis.coverage_gaps.len(),
-                analysis.unlinked_observations.len(),
-                analysis.findings.len(),
-                analysis.artifact_requests.len(),
-            ))
-            .collect::<Vec<_>>(),
-        vec![
-            ("site handle", 0, 2, 2, 2, 2),
-            ("capture host", 0, 2, 2, 2, 2),
-            ("observed roles", 0, 2, 2, 2, 2),
-        ],
-        "no caller-mutated topology may retain normal site-core facts"
-    );
 
     for (_, analysis) in &analyses {
         assert_topology_incongruence_fails_closed(
