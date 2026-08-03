@@ -108,7 +108,7 @@ windows = { version = "=0.62.2", features = [
 windows-future = "=0.3.2"
 # ureq 3.3 uses Cargo's 2024 edition and requires Rust 1.85, which the old
 # 1.77.2 floor barred. The floor is now 1.88; this pin is kept for now.
-ureq = "=3.2.0"
+ureq = "=3.3.0"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-window-state = "2"
