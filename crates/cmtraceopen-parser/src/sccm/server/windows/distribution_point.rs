@@ -490,21 +490,33 @@ fn coverage_gap_reason(
 }
 
 fn artifact_requests(gaps: &[SccmDistributionPointCoverageGap]) -> Vec<SccmArtifactRequest> {
-    let mut requests = gaps
-        .iter()
-        .map(|gap| match gap.producer_role.as_ref() {
-            Some(SccmRole::DistributionPoint) => SccmArtifactRequest {
-                logical_id: "smsDpProv".to_owned(),
-                role: SccmRole::DistributionPoint,
-                reason: "Collect the complete SMSDPProv.log file.".to_owned(),
-            },
-            _ => SccmArtifactRequest {
+    let mut requests = Vec::with_capacity(gaps.len());
+    for gap in gaps {
+        if gap.producer_role.is_none() {
+            requests.push(SccmArtifactRequest {
                 logical_id: "distmgr".to_owned(),
                 role: SccmRole::SiteServer,
                 reason: "Collect the complete distmgr.log file.".to_owned(),
-            },
-        })
-        .collect::<Vec<_>>();
+            });
+            requests.push(SccmArtifactRequest {
+                logical_id: "smsDpProv".to_owned(),
+                role: SccmRole::DistributionPoint,
+                reason: "Collect the complete SMSDPProv.log file.".to_owned(),
+            });
+        } else if gap.producer_role == Some(SccmRole::DistributionPoint) {
+            requests.push(SccmArtifactRequest {
+                logical_id: "smsDpProv".to_owned(),
+                role: SccmRole::DistributionPoint,
+                reason: "Collect the complete SMSDPProv.log file.".to_owned(),
+            });
+        } else {
+            requests.push(SccmArtifactRequest {
+                logical_id: "distmgr".to_owned(),
+                role: SccmRole::SiteServer,
+                reason: "Collect the complete distmgr.log file.".to_owned(),
+            });
+        }
+    }
     requests.sort_by(|left, right| {
         (
             left.logical_id.as_str(),
