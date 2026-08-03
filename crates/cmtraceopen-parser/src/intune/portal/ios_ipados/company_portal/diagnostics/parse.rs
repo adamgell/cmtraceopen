@@ -237,11 +237,25 @@ fn detect_headerless(lines: &[&str]) -> PortalConsoleDetection {
     // The loose anchor is far too permissive to stand in for a header: plenty of ordinary
     // application logs start with `YYYY-MM-DD HH:MM`. Without a header row the *full*
     // default-layout column grammar must hold, otherwise this is not a Console export.
-    let anchored = non_empty
+    //
+    // Continuation lines (lines that do not start a new record, such as multi-line payload
+    // lines that begin with whitespace) cannot serve as grammar anchors, so they must not
+    // reduce the ratio. Only lines that could potentially be record starters are counted in
+    // the denominator.
+    let candidate_anchors: Vec<&&str> = non_empty
+        .iter()
+        .copied()
+        .filter(|line| !line.starts_with(|c: char| c.is_whitespace()))
+        .collect();
+    let anchored = candidate_anchors
         .iter()
         .filter(|line| matches_default_record_grammar(line))
         .count();
-    let ratio = anchored as f64 / non_empty.len() as f64;
+    let ratio = if candidate_anchors.is_empty() {
+        0.0
+    } else {
+        anchored as f64 / candidate_anchors.len() as f64
+    };
 
     if anchored == 0 || ratio < HEADERLESS_ANCHOR_RATIO {
         return PortalConsoleDetection {
@@ -640,7 +654,8 @@ fn extract_columns(head: &str, layout: &[PortalConsoleColumn]) -> Option<Columns
 
     // Split the Apple message body sub-grammar. Explicit columns always win over values
     // recovered from the body.
-    if let Some(captures) = message_body_pattern().captures(&columns.message.clone()) {
+    let message_body = columns.message.clone();
+    if let Some(captures) = message_body_pattern().captures(&message_body) {
         columns
             .process
             .get_or_insert_with(|| captures["process"].to_string());
@@ -764,8 +779,9 @@ fn build_record(
         message.push_str(continuation);
     }
 
-    let semantic = classify_semantics(&class, columns.category.as_deref(), false);
-
+    // `apply_versions` assigns `semantic` once the capture-level version state is known,
+    // so None is the correct placeholder here; it is unconditionally overwritten before
+    // the capture is returned to any caller.
     PortalConsoleRecord {
         reference,
         timestamp,
@@ -788,7 +804,7 @@ fn build_record(
         },
         continuation_line_count: frame.continuations.len(),
         parse_state: PortalConsoleParseState::Parsed,
-        semantic,
+        semantic: None,
         raw_text: frame.raw_text.clone(),
     }
 }
@@ -829,7 +845,7 @@ const NORMALIZED_UTC_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.9fZ";
 /// would silently manufacture an instant that could be compared against server evidence.
 fn normalize_timestamp(
     raw: Option<&str>,
-    decimal_separator: PortalConsoleDecimalSeparator,
+    _decimal_separator: PortalConsoleDecimalSeparator,
 ) -> PortalTimestamp {
     let Some(raw) = raw else {
         return PortalTimestamp {
@@ -850,9 +866,6 @@ fn normalize_timestamp(
     };
 
     let mut naive_text = captures["naive"].to_string();
-    if decimal_separator == PortalConsoleDecimalSeparator::Comma {
-        naive_text = naive_text.replace(',', ".");
-    }
     // Tolerate either separator regardless of the layout hint; the layout only decides which
     // one is expected, not which one is legal.
     naive_text = naive_text.replace(',', ".");
