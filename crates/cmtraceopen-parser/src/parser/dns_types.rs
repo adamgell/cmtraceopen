@@ -147,8 +147,14 @@ fn decode_wire_format(raw: &str) -> String {
                         // Root label — signals end of name.
                         break;
                     }
-                    // Extract exactly `len` bytes for the label.
-                    let label_end = len.min(after_paren.len());
+                    // Extract `len` bytes for the label. `len` is parsed out of
+                    // the log text, so it can name a length that lands inside a
+                    // multi-byte character; clamp up to the enclosing character
+                    // boundary rather than slicing a character in half.
+                    let mut label_end = len.min(after_paren.len());
+                    while !after_paren.is_char_boundary(label_end) {
+                        label_end += 1;
+                    }
                     let label = &after_paren[..label_end];
                     if !label.is_empty() {
                         labels.push(label.to_string());
@@ -161,8 +167,11 @@ fn decode_wire_format(raw: &str) -> String {
             break;
         }
 
-        // Unexpected character — advance by one to avoid an infinite loop.
-        remaining = &remaining[1..];
+        // Unexpected character — advance by one character (not one byte) to
+        // stay on a character boundary and avoid an infinite loop.
+        let mut chars = remaining.chars();
+        chars.next();
+        remaining = chars.as_str();
     }
 
     if labels.is_empty() {
@@ -266,5 +275,30 @@ mod tests {
     #[test]
     fn test_decode_empty() {
         assert_eq!(decode_query_name(""), "");
+    }
+
+    #[test]
+    fn test_decode_unexpected_non_ascii_char_is_skipped() {
+        // The query-name field is arbitrary attacker-controlled text. An
+        // unexpected multi-byte character must be skipped a whole character at
+        // a time, not a byte at a time.
+        assert_eq!(decode_query_name("\u{e9}(1)a"), "a");
+    }
+
+    #[test]
+    fn test_decode_label_len_landing_mid_char_keeps_whole_char() {
+        // `len` is parsed out of the log text, so it can name a length that
+        // lands inside a multi-byte character. Clamp up to the char boundary.
+        assert_eq!(decode_query_name("(1)\u{e9}"), "\u{e9}");
+    }
+
+    #[test]
+    fn test_decode_non_ascii_soup_terminates_without_panic() {
+        // Forward progress must be guaranteed for arbitrary text containing
+        // `(`, so the decoder neither panics nor loops forever.
+        assert_eq!(
+            decode_query_name("\u{4e16}\u{754c}(2)\u{e9}\u{ff08}(0)"),
+            "\u{e9}"
+        );
     }
 }

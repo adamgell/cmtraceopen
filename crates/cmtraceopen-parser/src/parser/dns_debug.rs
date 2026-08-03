@@ -418,6 +418,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_packet_line_with_non_ascii_query_name() {
+        // Capture group 12 is `(.*)$`, so the query name is arbitrary text from
+        // the log. A multi-byte character must not abort the whole parse.
+        let lines = [
+            "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] A    \u{e9}(1)a",
+            "4/11/2026 3:29:18 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07f   Q [0001   D   NOERROR] A    (1)\u{e9}",
+        ];
+        let line_refs: Vec<&str> = lines.iter().map(|s| s.as_ref()).collect();
+        let (entries, errors) = parse_lines(&line_refs, "dns.log", DateOrder::MonthFirst);
+
+        assert_eq!(errors, 0);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].query_name.as_deref(), Some("a"));
+        assert_eq!(entries[1].query_name.as_deref(), Some("\u{e9}"));
+    }
+
+    #[test]
     fn test_parse_basic_query_response_pair() {
         let lines = [
             "4/11/2026 3:29:17 PM 0294 PACKET  000002DAEC36D650 UDP Rcv 127.0.0.1       d07e   Q [0001   D   NOERROR] SOA    (4)home(4)gell(3)one(0)",
