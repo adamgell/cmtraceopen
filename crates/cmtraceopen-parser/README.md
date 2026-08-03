@@ -115,6 +115,7 @@ Detection samples the start of the content and selects a parser automatically.
 | Burn | WiX Burn bootstrapper logs |
 | PatchMyPc detection | PatchMyPC detection-script output |
 | IntuneMacOs | Intune agent logs on macOS |
+| IntuneDeviceInventory | Microsoft Device Inventory Agent logs (`IntuneInventoryHarvesterLog.log`, `InventoryAdaptor.log`, `.log_` rotations) |
 | IIS W3C | W3C extended-format web logs |
 | DHCP | Windows DHCP Server logs |
 | DNS debug | Windows DNS Server debug logs |

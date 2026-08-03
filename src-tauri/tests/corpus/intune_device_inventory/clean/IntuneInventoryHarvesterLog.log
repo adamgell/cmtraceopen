@@ -1,0 +1,3 @@
+7/30/2026 6:00:53 AM [Information] Completed harvesting signed policies: 118 succeeded, 0 failed to collect.
+7/30/2026 10:08:52 AM [Warning] Reporting dropped attribute error for ExampleField: ErrorCode=404.
+7/30/2026 10:08:53 AM [Error] Harvester error code: 404, Message: ExampleField result is null.

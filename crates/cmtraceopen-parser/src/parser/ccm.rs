@@ -142,7 +142,12 @@ pub fn parse_content(
         Some(ParserSpecialization::Ime) => {
             crate::intune::ime_parser::parse_ime_entries(content, file_path)
         }
-        None => parse_content_multiline(content, file_path),
+        None
+        | Some(ParserSpecialization::IntuneDeviceInventoryHarvester)
+        | Some(ParserSpecialization::IntuneDeviceInventoryAdaptor)
+        | Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure) => {
+            parse_content_multiline(content, file_path)
+        }
     }
 }
 
