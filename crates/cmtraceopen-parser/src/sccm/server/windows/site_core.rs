@@ -308,7 +308,8 @@ impl<'a> SiteCoreContext<'a> {
             evidence_collision_artifact_ids(&intake.evidence, &evidence_identity_is_unique);
         let (evidence_source_rejections, unresolved_evidence_gaps) =
             evidence_source_rejections(intake);
-        let coverage_congruent = site_core_coverage_is_congruent(intake);
+        let coverage_congruent =
+            intake.topology_authority_is_intake_bound() && site_core_coverage_is_congruent(intake);
         let sources = admitted_sources(
             intake,
             &collision_artifact_ids,

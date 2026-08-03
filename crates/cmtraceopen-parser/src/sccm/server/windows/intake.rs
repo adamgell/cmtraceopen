@@ -194,6 +194,34 @@ impl SccmServerIntakeAssessment {
         &self.privacy_extensions
     }
 
+    pub(crate) fn topology_authority_is_intake_bound(&self) -> bool {
+        if self.schema_version != self.intake_integrity.schema_version
+            || self.topology.roles_observed.len() != self.intake_integrity.topology_role_count
+            || topology_string_bytes(&self.topology)
+                != Some(self.intake_integrity.structure.topology_string_bytes)
+        {
+            return false;
+        }
+        let mut normalized_topology = self.topology.clone();
+        normalized_topology
+            .roles_observed
+            .sort_by(|left, right| role_sort_key(left).cmp(role_sort_key(right)));
+        if normalized_topology
+            .roles_observed
+            .windows(2)
+            .any(|roles| roles[0] == roles[1])
+        {
+            return false;
+        }
+        canonical_record_digest_bounded(
+            b"topology",
+            &normalized_topology,
+            Some(self.intake_integrity.topology.payload_len),
+        )
+        .as_ref()
+        .is_some_and(|topology| topology == &self.intake_integrity.topology)
+    }
+
     pub(crate) fn adapter_authority_is_intake_bound(&self) -> bool {
         if self.schema_version != self.intake_integrity.schema_version
             || self.topology.roles_observed.len() != self.intake_integrity.topology_role_count
