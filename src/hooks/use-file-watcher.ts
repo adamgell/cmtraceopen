@@ -52,15 +52,13 @@ export function useFileWatcher() {
     if (!openFilePath || !formatDetected) return;
 
     const byteOffset = useLogStore.getState().byteOffset;
+    const totalLines = useLogStore.getState().totalLines;
     const currentEntries = useLogStore.getState().entries;
     const nextId =
       currentEntries.length > 0
         ? currentEntries[currentEntries.length - 1].id + 1
         : 0;
-    const nextLine =
-      currentEntries.length > 0
-        ? currentEntries[currentEntries.length - 1].lineNumber + 1
-        : 1;
+    const nextLine = totalLines + 1;
 
     startTail(openFilePath, formatDetected, byteOffset, nextId, nextLine).catch(
       (err) => console.error("Failed to start tail:", err)
