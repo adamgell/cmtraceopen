@@ -170,6 +170,27 @@ pub fn extract_keys(
     evidence: &SccmEvidence,
     profile: &SccmExtractionProfile,
 ) -> SccmKeyExtractionResult {
+    extract_keys_with_authority(evidence, profile, ExtractionProfileAuthority::Public)
+}
+
+pub(crate) fn extract_keys_from_admitted_profile(
+    evidence: &SccmEvidence,
+    profile: &SccmExtractionProfile,
+) -> SccmKeyExtractionResult {
+    extract_keys_with_authority(evidence, profile, ExtractionProfileAuthority::Admitted)
+}
+
+#[derive(Clone, Copy)]
+enum ExtractionProfileAuthority {
+    Public,
+    Admitted,
+}
+
+fn extract_keys_with_authority(
+    evidence: &SccmEvidence,
+    profile: &SccmExtractionProfile,
+    authority: ExtractionProfileAuthority,
+) -> SccmKeyExtractionResult {
     let candidates = find_candidates(&evidence.message);
     let mut result = SccmKeyExtractionResult {
         profile_id: profile.profile_id.clone(),
@@ -177,7 +198,7 @@ pub fn extract_keys(
         gaps: Vec::new(),
     };
 
-    if let Some(kind) = profile_gap_kind(profile) {
+    if let Some(kind) = profile_gap_kind(profile, authority) {
         if candidates.is_empty() {
             result.gaps.push(gap_for(kind, profile, evidence, None));
         } else {
@@ -233,7 +254,10 @@ fn is_bounded_key_value(key: &SccmCorrelationKey) -> bool {
         && has_at_most_chars(&key.normalized, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS)
 }
 
-fn profile_gap_kind(profile: &SccmExtractionProfile) -> Option<SccmExtractionGapKind> {
+fn profile_gap_kind(
+    profile: &SccmExtractionProfile,
+    authority: ExtractionProfileAuthority,
+) -> Option<SccmExtractionGapKind> {
     if profile.selected_configmgr_version.is_none() {
         return Some(SccmExtractionGapKind::MissingVersion);
     }
@@ -242,20 +266,29 @@ fn profile_gap_kind(profile: &SccmExtractionProfile) -> Option<SccmExtractionGap
         SccmExtractionProfileMaturity::Unvalidated => {
             Some(SccmExtractionGapKind::UnvalidatedVersion)
         }
-        SccmExtractionProfileMaturity::Experimental if is_builtin_experimental(profile) => None,
+        SccmExtractionProfileMaturity::Experimental
+            if is_builtin_experimental(profile, authority) =>
+        {
+            None
+        }
         SccmExtractionProfileMaturity::Experimental | SccmExtractionProfileMaturity::Stable => {
             Some(SccmExtractionGapKind::UnvalidatedProfile)
         }
     }
 }
 
-fn is_builtin_experimental(profile: &SccmExtractionProfile) -> bool {
+fn is_builtin_experimental(
+    profile: &SccmExtractionProfile,
+    authority: ExtractionProfileAuthority,
+) -> bool {
     is_builtin_experimental_core(profile)
-        && match profile.validated_artifact_families.as_slice() {
-            // Preserve the generic public `for_version` contract while the
-            // admitted-evidence path always seals a catalog family.
-            [] => true,
-            [family] => is_validated_builtin_experimental_family(family),
+        && match (authority, profile.validated_artifact_families.as_slice()) {
+            // Preserve the generic public `for_version` contract without
+            // treating a caller-populated family list as admission authority.
+            (ExtractionProfileAuthority::Public, []) => true,
+            (ExtractionProfileAuthority::Admitted, [family]) => {
+                is_validated_builtin_experimental_family(family)
+            }
             _ => false,
         }
 }

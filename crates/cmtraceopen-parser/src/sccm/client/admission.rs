@@ -23,9 +23,10 @@ use thiserror::Error;
 use crate::parser::ccm::scan_logical_records_bounded;
 use crate::sccm::catalog::classify_artifact_name;
 use crate::sccm::evidence::SccmRawEvidenceSnapshot;
+use crate::sccm::keys::extract_keys_from_admitted_profile;
 use crate::sccm::{
-    extract_keys, SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence,
-    SccmExtractionProfile, SccmKeyExtractionResult, SccmRole, SccmTimeOrderingState,
+    SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence, SccmExtractionProfile,
+    SccmKeyExtractionResult, SccmRole, SccmTimeOrderingState,
 };
 
 use super::{
@@ -144,7 +145,7 @@ impl SccmClientAdmittedEvidence {
             .evidence
             .iter()
             .filter(|evidence| evidence.reference.artifact_id == *sealed_artifact_id)
-            .map(|evidence| extract_keys(evidence, profile))
+            .map(|evidence| extract_keys_from_admitted_profile(evidence, profile))
             .collect::<Vec<_>>();
         if results.is_empty() {
             return Err(SccmClientEvidenceAdmissionError::MissingAdmittedArtifactEvidence);
