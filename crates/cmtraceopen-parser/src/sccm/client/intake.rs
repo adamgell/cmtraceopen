@@ -1829,7 +1829,7 @@ fn is_four_ascii_digits(value: &str) -> bool {
     value.len() == 4 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn is_supported_encoding(value: &str) -> bool {
+pub(super) fn is_supported_encoding(value: &str) -> bool {
     matches!(value, "utf-8" | "utf-16le" | "utf-16be" | "windows-1252")
 }
 

@@ -410,6 +410,49 @@ fn incomplete_and_capped_sources_fail_locally_without_blocking_bound_policy() {
 }
 
 #[test]
+fn missing_fragment_encoding_is_a_local_admission_gap() {
+    let policy_bytes = ccm_bytes("policy evidence");
+    let content_bytes = ccm_bytes("content evidence without decoding provenance");
+    let mut content = artifact(
+        "content-missing",
+        "CAS.log",
+        SccmCoverageState::Captured,
+        true,
+        Some(&content_bytes),
+    );
+    content.artifact.encoding = None;
+    let bundle = bundle_with(vec![
+        artifact(
+            "policy",
+            "PolicyAgent.log",
+            SccmCoverageState::Captured,
+            true,
+            Some(&policy_bytes),
+        ),
+        content,
+    ]);
+    let assessment = assess_client_intake(&bundle)
+        .expect("missing decoding provenance remains an assessable local coverage gap");
+
+    let admitted = admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[payload("fixture-policy", policy_bytes)],
+    )
+    .expect("a fragment without decoding provenance must not block unrelated bound evidence");
+
+    assert!(admitted
+        .require_captured_source("client-policy-agent")
+        .is_ok());
+    assert_eq!(
+        admitted.require_captured_source("client-content"),
+        Err(SccmClientEvidenceAdmissionError::SourceCoverageUnavailable),
+        "the un-decodable source remains a local admission gap"
+    );
+    assert_eq!(admitted.evidence().expect("valid authority seal").len(), 1);
+}
+
+#[test]
 fn admitted_profile_is_bound_to_the_catalogued_source_family() {
     let bytes = ccm_bytes("policy evidence");
     let bundle = bundle_with(vec![artifact(

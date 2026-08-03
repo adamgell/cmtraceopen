@@ -30,7 +30,7 @@ use crate::sccm::{
 
 use super::{
     assess_client_intake,
-    intake::{is_safe_artifact_id, source_matches_group},
+    intake::{is_safe_artifact_id, is_supported_encoding, source_matches_group},
     SccmClientIntakeAssessment, SccmClientIntakeBundle, SccmClientIntakeError,
     SccmClientIntakeFragment, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
 };
@@ -309,6 +309,9 @@ pub fn admit_client_evidence(
             unbound_complete_captures.insert(fragment.artifact_id.as_str());
             continue;
         }
+        if !has_supported_payload_encoding(fragment) {
+            continue;
+        }
         eligible.insert(fragment.artifact_id.clone(), (fragment, classified.family));
     }
     let admitted_source_groups = canonical
@@ -468,6 +471,14 @@ fn is_bound_complete_capture(fragment: &SccmClientIntakeFragment) -> bool {
         && fragment.fragment_complete == Some(true)
         && fragment.declared_byte_length.is_some()
         && fragment.content_sha256.is_some()
+        && has_supported_payload_encoding(fragment)
+}
+
+fn has_supported_payload_encoding(fragment: &SccmClientIntakeFragment) -> bool {
+    fragment
+        .encoding
+        .as_deref()
+        .is_some_and(is_supported_encoding)
 }
 
 fn validate_payload(
