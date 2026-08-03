@@ -22,6 +22,12 @@ const MAX_PENDING_LOGICAL_RECORD_BYTES: usize = 1024 * 1024;
 pub struct TailBatch {
     /// Complete log records parsed since the last read.
     pub entries: Vec<LogEntry>,
+    /// A corrected version of the final entry emitted during the initial open.
+    ///
+    /// A logical record can receive continuation lines after its header was
+    /// already shown by the whole-file parse. Consumers must replace the entry
+    /// with this same id/physical start line before appending `entries`.
+    pub replacement: Option<LogEntry>,
     /// Parse errors observed while producing this incremental batch.
     pub parse_errors: u32,
     /// True when the file was detected as truncated/rotated during this read.
@@ -39,6 +45,7 @@ impl TailBatch {
     fn empty(reset: bool) -> Self {
         Self {
             entries: Vec::new(),
+            replacement: None,
             parse_errors: 0,
             reset,
         }
@@ -46,6 +53,9 @@ impl TailBatch {
 
     fn append(&mut self, other: Self) {
         self.entries.extend(other.entries);
+        if other.replacement.is_some() {
+            self.replacement = other.replacement;
+        }
         self.parse_errors = self.parse_errors.saturating_add(other.parse_errors);
         self.reset |= other.reset;
     }
@@ -56,7 +66,10 @@ impl TailBatch {
     /// incremental input or a framing overflow still has to reach the session,
     /// otherwise those failures stay invisible until the tail stops.
     fn is_reportable(&self) -> bool {
-        self.reset || !self.entries.is_empty() || self.parse_errors > 0
+        self.reset
+            || self.replacement.is_some()
+            || !self.entries.is_empty()
+            || self.parse_errors > 0
     }
 }
 
@@ -272,6 +285,7 @@ impl TailReader {
         self.assign_entry_identity(&mut entries);
         batch.append(TailBatch {
             entries,
+            replacement: None,
             parse_errors,
             reset: false,
         });
@@ -417,6 +431,7 @@ impl TailReader {
 
         TailBatch {
             entries,
+            replacement: None,
             parse_errors,
             reset: false,
         }
@@ -1116,6 +1131,81 @@ mod tests {
     }
 
     #[test]
+    fn test_tail_reader_replaces_initial_company_portal_record_after_late_continuation() {
+        let root = hinted_test_root("company-portal-initial-logical-record");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        let first_header = concat!(
+            "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+            "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+        );
+        fs::write(&path, first_header).expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        assert_eq!(
+            selection.parser,
+            cmtraceopen_parser::models::log_entry::ParserKind::CompanyPortal
+        );
+        assert_eq!(initial_result.entries.len(), 1);
+        assert_eq!(initial_result.entries[0].id, 0);
+        assert_eq!(initial_result.entries[0].line_number, 1);
+
+        let mut reader = TailReader::new(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(
+            file,
+            concat!(
+                "System.Net.Http.HttpRequestException: response status 403\n",
+                "2024-11-15T16:50:08.2850341Z  INFO  Event  None  1  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] finished\n"
+            )
+        )
+        .expect("should append continuation and next Company Portal header");
+        drop(file);
+
+        let batch = reader
+            .read_new_entries()
+            .expect("tail read should succeed");
+        assert!(!batch.reset);
+        assert_eq!(batch.parse_errors, 0);
+        assert!(batch.entries.is_empty());
+        let replacement = batch
+            .replacement
+            .expect("late continuation must replace the initial rendered record");
+        assert_eq!(replacement.id, 0);
+        assert_eq!(replacement.line_number, 1);
+        assert_eq!(
+            replacement.message,
+            "[Sync] started\nSystem.Net.Http.HttpRequestException: response status 403"
+        );
+
+        let flushed = reader.flush_pending_logical_record();
+        assert_eq!(flushed.parse_errors, 0);
+        assert_eq!(flushed.entries.len(), 1);
+        assert_eq!(flushed.entries[0].id, 1);
+        assert_eq!(flushed.entries[0].line_number, 3);
+        assert_eq!(flushed.entries[0].message, "[Sync] finished");
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
     fn test_tail_reader_preserves_split_inventory_adaptor_json_record() {
         let path = unique_test_path("inventory-adaptor-split");
         fs::write(&path, "").expect("should create empty adaptor log");
@@ -1484,6 +1574,7 @@ mod tests {
 
         let parse_errors_only = TailBatch {
             entries: Vec::new(),
+            replacement: None,
             parse_errors: 1,
             reset: false,
         };
