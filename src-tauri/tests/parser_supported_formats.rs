@@ -6,7 +6,7 @@ use app_lib::parser::ResolvedParser;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const DECLARED_PARSER_KINDS: [ParserKind; 21] = [
+const DECLARED_PARSER_KINDS: [ParserKind; 22] = [
     ParserKind::Ccm,
     ParserKind::Simple,
     ParserKind::Timestamped,

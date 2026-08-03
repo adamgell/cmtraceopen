@@ -27,6 +27,9 @@ pub fn redacted_export_projection(document: &CompanyPortalLogDocument) -> Compan
     for record in &mut safe.records {
         record.message = redact_text(&record.message);
         record.raw_text = redact_text(&record.raw_text);
+        if let Some(severity) = &mut record.severity {
+            severity.raw_text = redact_text(&severity.raw_text);
+        }
         redact_optional(&mut record.component);
         redact_optional(&mut record.category);
         redact_optional(&mut record.scenario);
