@@ -410,7 +410,7 @@ fn assert_intake_authority_mutation_fails_closed(
             (
                 artifact.artifact_id.as_str(),
                 artifact.source_id.as_str(),
-                artifact.producer_host_handle.as_deref().unwrap_or_default(),
+                artifact.producer_host_handle.as_deref(),
             )
         })
         .collect::<Vec<_>>();
@@ -1243,6 +1243,18 @@ fn post_intake_source_contract_mutations_fail_sealed_authority_closed() {
     sitecomp.workflow_subject_handle = Some("synthetic:subject:client-01".to_owned());
     assert_authority_invalid_analysis(&analyze_site_core(&wrong_subject));
 
+    let mut missing_producer_host = healthy.clone();
+    missing_producer_host
+        .artifacts
+        .iter_mut()
+        .find(|artifact| artifact.source_id == "server-sitecomp")
+        .expect("sitecomp artifact")
+        .producer_host_handle = None;
+    assert_intake_authority_mutation_fails_closed(
+        &analyze_site_core(&missing_producer_host),
+        &missing_producer_host,
+    );
+
     let mut duplicate = healthy;
     let duplicate_sitecomp = duplicate
         .artifacts
@@ -1677,9 +1689,13 @@ fn coordinated_post_intake_producer_host_mutation_fails_site_core_authority_clos
             (
                 "sitecomp-current",
                 "server-sitecomp",
-                "synthetic:host:forged",
+                Some("synthetic:host:forged"),
             ),
-            ("z-site-status", "server-status", "synthetic:host:forged"),
+            (
+                "z-site-status",
+                "server-status",
+                Some("synthetic:host:forged"),
+            ),
         ],
     );
 }
@@ -1731,15 +1747,23 @@ fn invalid_intake_authority_never_exports_forged_scope_or_identity() {
 
 fn assert_invalid_authority_excludes_source_triples(
     analysis: &SccmSiteCoreAnalysis,
-    forbidden_source_triples: &[(&str, &str, &str)],
+    forbidden_source_triples: &[(&str, &str, Option<&str>)],
 ) {
     assert_authority_invalid_analysis(analysis);
+    assert!(
+        !forbidden_source_triples.is_empty(),
+        "authority assertion requires at least one source identity"
+    );
     let wire = serde_json::to_string(analysis).expect("analysis serializes");
-    for (artifact_id, source_id, producer_host_handle) in forbidden_source_triples {
-        for forged_or_untrusted_value in [artifact_id, source_id, producer_host_handle] {
-            if forged_or_untrusted_value.is_empty() {
-                continue;
-            }
+    for &(artifact_id, source_id, producer_host_handle) in forbidden_source_triples {
+        for forged_or_untrusted_value in [Some(artifact_id), Some(source_id), producer_host_handle]
+            .into_iter()
+            .flatten()
+        {
+            assert!(
+                !forged_or_untrusted_value.trim().is_empty(),
+                "authority assertion received a blank source identity"
+            );
             assert!(
                 !wire.contains(forged_or_untrusted_value),
                 "invalid authority exported untrusted value {forged_or_untrusted_value}"
@@ -1775,9 +1799,13 @@ fn swapped_coverage_producer_hosts_fail_site_core_congruence_closed() {
             (
                 "sitecomp-current",
                 "server-sitecomp",
-                "synthetic:host:site-01",
+                Some("synthetic:host:site-01"),
             ),
-            ("z-site-status", "server-status", "synthetic:host:site-02"),
+            (
+                "z-site-status",
+                "server-status",
+                Some("synthetic:host:site-02"),
+            ),
         ],
     );
 }
