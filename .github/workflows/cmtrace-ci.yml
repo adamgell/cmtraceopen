@@ -2,9 +2,11 @@ name: "CMTrace Open: CI"
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/parser-family-skeleton]
   pull_request:
-    branches: [main]
+    # Long-lived integration branches must be listed explicitly: a PR whose base
+    # is absent here runs no jobs at all, silently, and still reports mergeable.
+    branches: [main, codex/parser-family-skeleton]
 
 permissions:
   contents: read

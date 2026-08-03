@@ -1,5 +1,6 @@
 import {
   getKnownLogSources,
+  inspectPathKind,
   listLogSourceFolder,
   openLogFile,
   openLogSourceFile,
@@ -10,6 +11,11 @@ import {
 import { useLogStore, setCachedTabSnapshot, getCachedTabSnapshot } from "../stores/log-store";
 import { getColumnsForParser, getColumnsForAggregate } from "./column-config";
 import { getBaseName } from "./file-paths";
+import { offerElevationForSourceFailure } from "./elevation-recovery";
+import {
+  readAccessDenied,
+  type AccessDeniedClassification,
+} from "./source-error";
 import { useUiStore, type TabSourceContext } from "../stores/ui-store";
 import { useFilterStore } from "../stores/filter-store";
 import type {
@@ -62,23 +68,54 @@ export interface KnownSourceCatalogActionIds {
 }
 
 
-function classifySourceError(error: unknown): { kind: "missing" | "error"; message: string } {
+/**
+ * Sort a source failure into the category the status line reports.
+ *
+ * Exported for tests: the split between "missing" and "error" is the whole
+ * point of the Access Denied work, and it is far easier to pin here than
+ * through a full source load.
+ */
+export function classifySourceError(error: unknown): {
+  kind: "missing" | "error";
+  message: string;
+  accessDenied: AccessDeniedClassification | null;
+} {
+  // A backend verdict wins outright. It comes from the OS error kind/code, so
+  // unlike the text match below it stays correct on a localized Windows install.
+  const accessDenied = readAccessDenied(error);
+  if (accessDenied) {
+    // "error", not "missing": the source exists, we are simply not allowed to
+    // read it, and telling the user it is missing sends them looking for the
+    // wrong problem.
+    return { kind: "error", message: accessDenied.message, accessDenied };
+  }
+
   const message = error instanceof Error ? error.message : String(error);
 
+  // Fallback for failures that never reached the classifier. Only genuine
+  // not-found wording counts as missing.
+  // The error codes are anchored: unanchored, "os error 2" also matches
+  // "os error 21" (is-a-directory) and "os error 32" (sharing violation),
+  // neither of which means the source is gone.
   if (
-    /not found|cannot find|no such file|os error 2|os error 3|access is denied|permission denied|os error 5/i.test(
-      message
-    )
+    /not found|cannot find|no such file|os error 2\b|os error 3\b/i.test(message)
   ) {
     return {
       kind: "missing",
       message,
+      accessDenied: null,
     };
   }
 
+  // Everything else, including permission wording with no structured verdict,
+  // is a generic error. Calling a permission refusal "missing" is the exact
+  // misclassification this work exists to remove: it sends the user looking for
+  // a file that is sitting right where they left it. It still carries no
+  // verdict, so it never offers elevation off localized message text either.
   return {
     kind: "error",
     message,
+    accessDenied: null,
   };
 }
 
@@ -366,6 +403,16 @@ async function loadFolderProgressive(
     parseMs,
   });
 }
+/**
+ * Recover from a selected file that would not load inside a folder source.
+ *
+ * The folder listing itself succeeded, so this is a recovery rather than a
+ * rethrow and the failure never reaches `loadLogSource`'s catch. That makes it
+ * the second place an Access Denied verdict has to be honoured: dropping it here
+ * reported a protected file as a generic load failure and left the user with no
+ * route to elevation, which is the same misreport the folder lane exists to
+ * prevent.
+ */
 async function recoverFromSelectedFileLoadFailure(
   source: LogSource,
   entries: FolderEntry[],
@@ -373,7 +420,7 @@ async function recoverFromSelectedFileLoadFailure(
   error: unknown
 ): Promise<LoadLogSourceResult> {
   const state = useLogStore.getState();
-  const { kind, message } = classifySourceError(error);
+  const { kind, message, accessDenied } = classifySourceError(error);
 
   console.warn("[log-source] selected source file failed to load", {
     source,
@@ -386,15 +433,25 @@ async function recoverFromSelectedFileLoadFailure(
 
   state.setSourceStatus({
     kind: "awaiting-file-selection",
-    message:
-      kind === "missing"
+    message: accessDenied
+      ? `Access to this file was denied: ${getBaseName(selectedFilePath)}.`
+      : kind === "missing"
         ? `Selected file is no longer available: ${getBaseName(selectedFilePath)}.`
         : `Could not load selected file: ${getBaseName(selectedFilePath)}.`,
     detail:
-      kind === "missing"
+      !accessDenied && kind === "missing"
         ? "The source was reloaded without that file. Select another file from the sidebar."
         : message,
   });
+
+  if (accessDenied) {
+    // The file, not the folder: elevating and reopening the folder would land
+    // on the same refusal. Fire and forget, matching `loadLogSource`.
+    void offerElevationForSourceFailure({
+      error,
+      source: { kind: "file", path: selectedFilePath },
+    });
+  }
 
   return {
     source,
@@ -869,6 +926,57 @@ function getCommonDirectory(paths: string[]): string {
   return commonParts.join("/") || "/";
 }
 
+/**
+ * Choose the lane a raw, user-supplied path should be opened through.
+ *
+ * The kind is established before the lane is picked, and that ordering is the
+ * whole point. The file lane ends at `open_log_file`, and on Windows opening a
+ * directory without `FILE_FLAG_BACKUP_SEMANTICS` fails with
+ * `ERROR_ACCESS_DENIED`, which the backend classifier would otherwise have to
+ * distinguish from a genuine permission refusal. A folder that reached the file
+ * lane therefore raised "Restart as administrator?", and confirming it
+ * re-attempted the very same folder as a file, so the prompt could never
+ * succeed.
+ *
+ * Living here rather than at any one caller is deliberate: every entry point
+ * that turns a dropped, pasted, restored, or argv-supplied path into a source
+ * goes through `loadPathAsLogSource`, so one guard covers all of them. The
+ * Intune and ESP workspaces already probe the kind the same way before building
+ * their own source.
+ *
+ * An explicitly file-only request also keeps the file lane even if the path now
+ * names a directory. That preserves the caller's declared scope, which is
+ * especially important for a one-time elevation restore. A probe that cannot
+ * answer likewise keeps the historical file-first behaviour.
+ */
+async function resolveSourceForPath(
+  path: string,
+  preferFolder: boolean,
+  allowFolder: boolean
+): Promise<LogSource> {
+  if (preferFolder) {
+    return { kind: "folder", path };
+  }
+  if (!allowFolder) {
+    return { kind: "file", path };
+  }
+
+  let pathKind: "file" | "folder" | "unknown";
+  try {
+    pathKind = await inspectPathKind(path);
+  } catch (error) {
+    console.warn("[log-source] could not determine path kind, assuming file", {
+      path,
+      error,
+    });
+    pathKind = "unknown";
+  }
+
+  return pathKind === "folder"
+    ? { kind: "folder", path }
+    : { kind: "file", path };
+}
+
 export async function loadPathAsLogSource(
   path: string,
   options: LoadPathAsLogSourceOptions = {}
@@ -877,16 +985,21 @@ export async function loadPathAsLogSource(
     selectedFilePath: options.selectedFilePath ?? null,
   };
 
-  const primarySource: LogSource = options.preferFolder
-    ? { kind: "folder", path }
-    : { kind: "file", path };
+  const primarySource = await resolveSourceForPath(
+    path,
+    options.preferFolder === true,
+    options.fallbackToFolder !== false
+  );
 
   try {
     return await loadLogSource(primarySource, loadOptions);
   } catch (error) {
     const allowFolderFallback = options.fallbackToFolder !== false;
 
-    if (options.preferFolder || !allowFolderFallback) {
+    // Keyed off the lane actually taken, not off `preferFolder`: the kind probe
+    // can also select the folder lane, and retrying a folder as a folder would
+    // just repeat the same failure.
+    if (primarySource.kind === "folder" || !allowFolderFallback) {
       throw error;
     }
 
@@ -1000,7 +1113,7 @@ export async function loadLogSource(
 
     return recoverOrLoadSelectedFolderFile(source, listing.entries, requestedFilePath);
   } catch (error) {
-    const { kind, message } = classifySourceError(error);
+    const { kind, message, accessDenied } = classifySourceError(error);
 
     state.setActiveSource(source);
     state.setSourceEntries([]);
@@ -1008,8 +1121,15 @@ export async function loadLogSource(
     state.clearActiveFile();
     state.setSourceStatus({
       kind,
-      message:
-        kind === "missing"
+      message: accessDenied
+        ? // Prefer the backend's own bounded path: it is the thing that was
+          // actually denied, already length-capped for the IPC payload, and for
+          // a known source it is the resolved path rather than the catalog
+          // default the frontend would otherwise print.
+          accessDenied.path
+          ? `Access to this source was denied: ${accessDenied.path}`
+          : "Access to this source was denied."
+        : kind === "missing"
           ? `Source path is missing or inaccessible: ${getLogSourcePath(source)}`
           : "Failed to load source.",
       detail: message,
@@ -1019,6 +1139,13 @@ export async function loadLogSource(
       source,
       error,
     });
+
+    if (accessDenied) {
+      // Fire and forget: the offer is a suggestion, and the original error must
+      // propagate unchanged to whoever called us.
+      void offerElevationForSourceFailure({ error, source });
+    }
+
     throw error;
   } finally {
     state.setLoading(false);

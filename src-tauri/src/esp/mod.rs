@@ -10,7 +10,6 @@ pub mod event_logs;
 pub mod live_session;
 pub mod process;
 pub mod registry;
-pub mod relaunch;
 pub mod remediation;
 pub mod session;
 pub mod system;

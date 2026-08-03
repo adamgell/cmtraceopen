@@ -1,0 +1,3 @@
+﻿2026-05-12 08:20:00:100 | CompanyPortal | I | 261520 | AppDelegate | Company Portal version 5.2504.0 (build 2504.12) starting on macOS 15.4.1
+2026-05-12 08:20:00:900 | CompanyPortal | I | 261520 | SyncManager | Sync completed for user élodie.martin@contoso.example
+2026-05-12 08:20:01:400 | CompanyPortal | W | 261521 | ComplianceChecker | Policy “Disk encryption” is not evaluated yet

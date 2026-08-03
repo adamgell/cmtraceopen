@@ -1,0 +1,7 @@
+2026-05-12 08:15:02:900 | CompanyPortal | E | 261490 | AppCatalogViewModel | Unhandled error while loading catalog
+NSError Domain=CompanyPortalErrorDomain Code=5001 "Request failed"
+  UserInfo={
+    NSLocalizedDescription = "Request failed";
+    NSUnderlyingError = 0x600002a1c123;
+  }
+2026-05-12 08:15:03:010 | CompanyPortal | I | 261490 | AppCatalogViewModel | Catalog load retry scheduled in 30s

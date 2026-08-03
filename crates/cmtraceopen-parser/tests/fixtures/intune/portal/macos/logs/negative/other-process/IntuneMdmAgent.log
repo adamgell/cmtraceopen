@@ -1,0 +1,3 @@
+2026-05-12 08:14:20:104 | IntuneMdmAgent | I | 300140 | SyncActivityTracer | Starting check-in requested by CompanyPortal
+2026-05-12 08:14:21:552 | IntuneMDM-Daemon | I | 300141 | PolicyManager | Delivered 3 policies to CompanyPortal
+2026-05-12 08:14:22:007 | IntuneMdmAgent | W | 300140 | SyncActivityTracer | CompanyPortal requested a sync while one was already running

@@ -1,0 +1,5 @@
+    NSLocalizedDescription = "carried over from the rotated file";
+2026-05-12 08:16:00:120 | CompanyPortal | I | 261492 | DeviceActionManager | Device action requested: renameDevice
+2026-05-12 08:16:01:4 | CompanyPortal | I | 26149
+2026-05-12 08:16:02:330 | CompanyPortal | I | 261492 | DeviceActionManager | Device action accepted by service
+2026-05-12 08:16:03:9

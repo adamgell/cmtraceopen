@@ -1,0 +1,11 @@
+2026-05-12 08:18:00:001 | CompanyPortal | I | 261510 | AppDelegate | Company Portal version 5.2504.0 (build 2504.12) starting on macOS 15.4.1
+2026-05-12 08:18:00:044 | CompanyPortal | I | 261510 | NetworkService | GET https://manage.contoso.example/StatelessAppMetadataService/apps?tenantId=4b2f9d61-1c53-4c58-8f1a-b0d3e1b5aa77&deviceId=1d9f6b0e-6d1f-4a2b-9f74-2c0a51a9e310 returned 200
+2026-05-12 08:18:00:120 | CompanyPortal | I | 261510 | NetworkService | Client certificate subject CN=SC_Online_Issuing, OU=Devices, O=Contoso
+2026-05-12 08:18:00:135 | CompanyPortal | I | 261510 | NetworkService | Client certificate thumbprint=A1B2C3D4E5F60718293A4B5C6D7E8F9012345678
+2026-05-12 08:18:00:180 | CompanyPortal | I | 261511 | DeviceActionManager | Device serialNumber=C02XK1TDJGH5 model MacBookPro18,3
+2026-05-12 08:18:00:250 | CompanyPortal | I | 261510 | AuthenticationManager | Acquired token for adele.vance@contoso.example accessToken=eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.c3ludGhldGljcGF5bG9hZA.c2lnbmF0dXJl
+2026-05-12 08:18:00:310 | CompanyPortal | I | 261510 | SignInViewModel | Refreshed sign-in state for adele.vance@contoso.example
+2026-05-12 08:18:00:400 | CompanyPortal | I | 261510 | DiagnosticReportManager | Report bundle written to /Users/adele/Library/Logs/CompanyPortal/report-2026-05-12.zip
+2026-05-12 08:18:00:560 | CompanyPortal | W | 261511 | NetworkService | POST https://manage.contoso.example/deviceActions?deviceId=1d9f6b0e-6d1f-4a2b-9f74-2c0a51a9e310 returned 429, retrying
+2026-05-12 08:18:00:600 | CompanyPortal | I | 261510 | NetworkService | Resolved service endpoint to 203.0.113.47 through proxy 198.51.100.9:8080
+2026-05-12 08:18:00:640 | CompanyPortal | I | 261511 | DeviceActionManager | Primary interface en0 hardware address 3c:22:fb:a1:9d:4e global address 2001:0db8:85a3:0000:0000:8a2e:0370:7334

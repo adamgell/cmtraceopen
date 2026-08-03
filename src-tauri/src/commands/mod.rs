@@ -7,6 +7,7 @@ pub mod deployment;
 pub mod dns_dhcp;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
+pub mod elevation;
 pub mod error_lookup;
 #[cfg(feature = "esp-diagnostics")]
 pub mod esp_diagnostics;

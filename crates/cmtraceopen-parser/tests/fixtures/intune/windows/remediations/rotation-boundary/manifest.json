@@ -1,0 +1,23 @@
+{
+  "description": "An execution split across a rotation leaves an unkeyed tail rather than a guessed join.",
+  "artifacts": [
+    {
+      "artifactId": "hs-rot",
+      "fileName": "HealthScripts-1.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\HealthScripts-1.log",
+      "contentFile": "HealthScripts-1.log"
+    },
+    {
+      "artifactId": "hs",
+      "fileName": "HealthScripts.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\HealthScripts.log",
+      "contentFile": "HealthScripts.log"
+    },
+    {
+      "artifactId": "ae",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

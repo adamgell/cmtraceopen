@@ -20,9 +20,6 @@ crates/**/target/
 .DS_Store
 Thumbs.db
 
-# Internal docs (specs, plans, mockups)
-docs/
-
 # Brainstorming artifacts
 .superpowers/
 
@@ -62,3 +59,9 @@ loginventory/
 .Clairvoyance/editor-session.json
 .Clairvoyance/workspace-session.json
 .Clairvoyance/ui-state.json
+
+# Company Portal macOS app-log parser (issue #368). The generic "Logs/" rule
+# above is case-insensitive on macOS and would otherwise ignore these source
+# and fixture directories, which are named "logs" by contract.
+!crates/cmtraceopen-parser/src/intune/portal/macos/company_portal/logs/
+!crates/cmtraceopen-parser/tests/fixtures/intune/portal/macos/logs/
