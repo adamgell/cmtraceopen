@@ -1727,6 +1727,8 @@ mod tests {
         let linked_parent = temporary.path().join("linked-parent");
         std::os::unix::fs::symlink(&actual_parent, &linked_parent).expect("parent symlink");
 
+        open_private_capture_root(&private_root)
+            .expect("control path reaches the real root before testing the parent symlink");
         let error = open_private_capture_root(&linked_parent.join("private-root"))
             .expect_err("capture-root traversal never follows a parent symlink");
         assert!(
@@ -1951,7 +1953,10 @@ mod tests {
         let fifo_name = CString::new(fifo.as_os_str().as_bytes()).expect("fifo path");
         assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
 
-        open_file_no_follow(&fifo).expect_err("FIFO is rejected through a nonblocking open");
+        let error =
+            open_file_no_follow(&fifo).expect_err("FIFO is rejected through a nonblocking open");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(error.to_string(), "SCCM bundle entry is not a regular file");
     }
 
     #[test]
