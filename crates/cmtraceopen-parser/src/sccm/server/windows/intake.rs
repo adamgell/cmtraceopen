@@ -202,17 +202,9 @@ impl SccmServerIntakeAssessment {
         {
             return false;
         }
-        let mut normalized_topology = self.topology.clone();
-        normalized_topology
-            .roles_observed
-            .sort_by(|left, right| role_sort_key(left).cmp(role_sort_key(right)));
-        if normalized_topology
-            .roles_observed
-            .windows(2)
-            .any(|roles| roles[0] == roles[1])
-        {
+        let Some(normalized_topology) = normalized_topology_or_none(&self.topology) else {
             return false;
-        }
+        };
         canonical_record_digest_bounded(
             b"topology",
             &normalized_topology,
@@ -242,6 +234,23 @@ impl SccmServerIntakeAssessment {
         .as_ref()
         .is_some_and(|integrity| integrity == &self.intake_integrity)
     }
+}
+
+fn normalized_topology_or_none(
+    topology: &SccmServerTopologyAssessment,
+) -> Option<SccmServerTopologyAssessment> {
+    let mut normalized = topology.clone();
+    normalized
+        .roles_observed
+        .sort_by(|left, right| role_sort_key(left).cmp(role_sort_key(right)));
+    if normalized
+        .roles_observed
+        .windows(2)
+        .any(|roles| roles[0] == roles[1])
+    {
+        return None;
+    }
+    Some(normalized)
 }
 
 /// Nonserialized canonical-input binding for downstream server-role adapters.
@@ -1487,17 +1496,7 @@ fn canonical_intake_integrity_with_structure(
     #[cfg(test)]
     INTAKE_CANONICALIZATION_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
 
-    let mut normalized_topology = topology.clone();
-    normalized_topology
-        .roles_observed
-        .sort_by(|left, right| role_sort_key(left).cmp(role_sort_key(right)));
-    if normalized_topology
-        .roles_observed
-        .windows(2)
-        .any(|roles| roles[0] == roles[1])
-    {
-        return None;
-    }
+    let normalized_topology = normalized_topology_or_none(topology)?;
 
     let mut normalized_coverage = coverage.to_vec();
     for record in &mut normalized_coverage {
