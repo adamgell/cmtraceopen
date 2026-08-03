@@ -125,4 +125,102 @@ describe("useFileWatcher tail start state", () => {
     );
     expect(useLogStore.getState().totalLines).toBe(2);
   });
+
+  it("keeps aggregate file counts authoritative and ignores untracked payloads", async () => {
+    useLogStore.setState({
+      sourceOpenMode: "aggregate-folder",
+      formatDetected: "Timestamped",
+      totalLines: 2,
+      aggregateFiles: [
+        {
+          filePath: "/logs/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 512,
+          byteOffset: 512,
+        },
+        {
+          filePath: "/logs/b.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 256,
+          byteOffset: 256,
+        },
+      ],
+      entries: [
+        { ...multilineEntry(), filePath: "/logs/a.log", message: "[Sync] started" },
+        {
+          ...multilineEntry(),
+          id: 10,
+          filePath: "/logs/b.log",
+          message: "unrelated",
+        },
+      ],
+    });
+
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+
+    const payload: TailPayload = {
+      entries: [
+        {
+          ...multilineEntry(),
+          id: 1,
+          lineNumber: 3,
+          filePath: "/logs/a.log",
+          message: "[Sync] finished",
+        },
+      ],
+      amendments: [
+        {
+          entryId: 0,
+          entryLineNumber: 1,
+          continuationStartLine: 2,
+          continuationEndLine: 2,
+          messageUtf16Start: 14,
+          messageSuffix: "\ncontinuation",
+          errorCodeSpans: [],
+        },
+      ],
+      filePath: "/logs/a.log",
+      parseErrors: 0,
+      observedThroughLine: 3,
+      reset: false,
+    };
+
+    act(() => eventMocks.tailListener?.({ payload }));
+
+    expect(useLogStore.getState().aggregateFiles).toMatchObject([
+      { filePath: "/logs/a.log", totalLines: 3 },
+      { filePath: "/logs/b.log", totalLines: 1 },
+    ]);
+    expect(useLogStore.getState().totalLines).toBe(4);
+    expect(
+      useLogStore.getState().entries.find((entry) => entry.filePath === "/logs/a.log")
+        ?.message,
+    ).toBe("[Sync] started\ncontinuation");
+
+    const beforeUntracked = structuredClone(useLogStore.getState().entries);
+    act(() =>
+      eventMocks.tailListener?.({
+        payload: {
+          ...payload,
+          amendments: [],
+          entries: [
+            {
+              ...multilineEntry(),
+              id: 99,
+              lineNumber: 99,
+              filePath: "/logs/untracked.log",
+            },
+          ],
+          filePath: "/logs/untracked.log",
+          observedThroughLine: 99,
+        },
+      }),
+    );
+
+    expect(useLogStore.getState().entries).toEqual(beforeUntracked);
+    expect(useLogStore.getState().totalLines).toBe(4);
+  });
 });

@@ -152,6 +152,42 @@ describe("log-store", () => {
       );
       expect(useLogStore.getState().totalLines).toBe(2);
     });
+
+    it("rejects suffixes that are not anchored to a new physical line", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        messageSuffix: "request failed\n",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
+
+    it("rejects error spans outside the amended message", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        errorCodeSpans: [
+          {
+            ...firstAmendment.errorCodeSpans[0],
+            end: 4_096,
+          },
+        ],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
   });
 
   describe("resetEntries (tail truncation)", () => {
@@ -206,6 +242,74 @@ describe("log-store", () => {
       expect(aEntries).toHaveLength(1);
       expect(aEntries[0].message).toBe("rotated-a");
       expect(useLogStore.getState().totalLines).toBe(2);
+    });
+
+    it("seeds the reset file count from the highest fresh physical line", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, filePath: "/a.log", lineNumber: 5 }),
+        makeEntry({ id: 2, filePath: "/b.log", lineNumber: 1 }),
+      ]);
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 5,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(6);
+
+      useLogStore
+        .getState()
+        .resetAggregateEntries("/a.log", [
+          makeEntry({ id: 99, filePath: "/a.log", lineNumber: 4 }),
+        ]);
+
+      expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(4);
+      expect(useLogStore.getState().totalLines).toBe(5);
+    });
+  });
+
+  describe("appendAggregateEntries", () => {
+    it("derives aggregate counts from each file's highest observed entry line", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, filePath: "/a.log", lineNumber: 1 }),
+        makeEntry({ id: 2, filePath: "/b.log", lineNumber: 1 }),
+      ]);
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(2);
+
+      useLogStore
+        .getState()
+        .appendAggregateEntries("/a.log", [
+          makeEntry({ id: 0, filePath: "/a.log", lineNumber: 3 }),
+        ]);
+
+      expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(3);
+      expect(useLogStore.getState().totalLines).toBe(4);
     });
   });
 
