@@ -744,6 +744,13 @@ mod tests {
         }
     }
 
+    fn unsupported_rotation(suffix: &str) -> SccmRotation {
+        SccmRotation::Unknown(cmtraceopen_parser::sccm::SccmUnknownRotation {
+            kind: "filenameSuffix".to_owned(),
+            value: Some(serde_json::Value::String(suffix.to_owned())),
+        })
+    }
+
     fn construction_counts() -> (usize, usize) {
         (
             CANDIDATE_CONSTRUCTIONS.with(Cell::get),
@@ -941,10 +948,7 @@ mod tests {
             .map(|_| SccmClientDiscoveryObservation {
                 root_handle: "unvalidated-root".to_owned(),
                 basename: "Unrelated.log.backup".to_owned(),
-                rotation: SccmRotation::Unknown(cmtraceopen_parser::sccm::SccmUnknownRotation {
-                    kind: "filenameSuffix".to_owned(),
-                    value: Some(serde_json::Value::String(".backup".to_owned())),
-                }),
+                rotation: unsupported_rotation(".backup"),
                 state: SccmClientDiscoveryObservationState::Found,
             })
             .collect();
