@@ -129,9 +129,14 @@ fn assert_dp_intake_authority_invalid(
         gap.reason, "Canonical server intake authority could not be verified.",
         "{context}"
     );
-    assert_eq!(analysis.artifact_requests.len(), 1, "{context}");
+    assert_eq!(analysis.artifact_requests.len(), 2, "{context}");
     assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
     assert_eq!(analysis.artifact_requests[0].role, SccmRole::SiteServer);
+    assert_eq!(analysis.artifact_requests[1].logical_id, "smsDpProv");
+    assert_eq!(
+        analysis.artifact_requests[1].role,
+        SccmRole::DistributionPoint
+    );
     assert!(!analysis.cross_side_correlation_performed);
     serde_json::to_value(analysis).expect("authority-invalid analysis serializes")
 }
@@ -313,6 +318,29 @@ fn absent_dp_candidate_is_coverage_not_a_role_diagnosis() {
     assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
     assert_eq!(analysis.artifact_requests[0].role, SccmRole::SiteServer);
     serde_json::to_value(&analysis).expect("coverage-only analysis serializes");
+}
+
+#[test]
+fn no_declared_dp_source_requests_both_bounded_sides_without_correlation() {
+    let assessment = load_assessment("collision-same-basename-configured-roots");
+
+    let analysis = analyze_distribution_point(&assessment);
+
+    assert!(analysis.source_observations.is_empty());
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    assert_eq!(analysis.coverage_gaps[0].producer_role, None);
+    assert_eq!(
+        analysis
+            .artifact_requests
+            .iter()
+            .map(|request| (request.logical_id.as_str(), &request.role))
+            .collect::<Vec<_>>(),
+        vec![
+            ("distmgr", &SccmRole::SiteServer),
+            ("smsDpProv", &SccmRole::DistributionPoint),
+        ]
+    );
+    assert!(!analysis.cross_side_correlation_performed);
 }
 
 #[test]
