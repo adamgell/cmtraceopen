@@ -109,6 +109,23 @@ fn utf16_with_bom(value: &str, little_endian: bool) -> Vec<u8> {
     bytes
 }
 
+fn utf32_with_bom(value: &str, little_endian: bool) -> Vec<u8> {
+    let mut bytes = if little_endian {
+        vec![0xff, 0xfe, 0x00, 0x00]
+    } else {
+        vec![0x00, 0x00, 0xfe, 0xff]
+    };
+    for character in value.chars() {
+        let encoded = if little_endian {
+            u32::from(character).to_le_bytes()
+        } else {
+            u32::from(character).to_be_bytes()
+        };
+        bytes.extend_from_slice(&encoded);
+    }
+    bytes
+}
+
 fn bind_artifact_to_bytes(artifact: &mut SccmClientIntakeArtifact, bytes: &[u8]) {
     artifact.declared_byte_length = Some(bytes.len() as u64);
     artifact.content_sha256 = Some(digest(bytes));
@@ -302,6 +319,35 @@ fn admission_rejects_boms_that_do_not_match_the_declared_encoding() {
                 &[payload_from_bytes("fixture-policy-agent", bytes)],
             ),
             "a mismatched Unicode BOM must not override declared encoding authority",
+        );
+        assert_eq!(
+            error,
+            SccmClientEvidenceAdmissionError::InvalidEncoding,
+            "declared {declared_encoding}"
+        );
+    }
+}
+
+#[test]
+fn admission_rejects_utf32_boms_before_utf16_prefix_matching() {
+    let record = ccm_record("unsupported UTF-32 encoding", "+000");
+    let cases = [
+        ("utf-16le", utf32_with_bom(&record, true)),
+        ("windows-1252", utf32_with_bom(&record, false)),
+    ];
+
+    for (declared_encoding, bytes) in cases {
+        let mut bundle = bundle_with_bound_policy(&bytes);
+        bundle.artifacts[0].artifact.encoding = Some(declared_encoding.to_owned());
+        let assessment = assess_client_intake(&bundle)
+            .expect("an unsupported BOM remains canonical intake metadata");
+        let error = admission_error(
+            admit_client_evidence(
+                &bundle,
+                &assessment,
+                &[payload_from_bytes("fixture-policy-agent", bytes)],
+            ),
+            "UTF-32 BOMs must not inherit another declared encoding",
         );
         assert_eq!(
             error,
