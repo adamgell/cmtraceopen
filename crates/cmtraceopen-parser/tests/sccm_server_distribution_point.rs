@@ -105,6 +105,37 @@ fn assert_dp_coverage_only(
     serde_json::to_value(analysis).expect("coverage-only analysis serializes")
 }
 
+fn assert_dp_intake_authority_invalid(
+    assessment: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
+    context: &str,
+) -> Value {
+    let analysis = analyze_distribution_point(assessment);
+    assert!(
+        analysis.source_observations.is_empty(),
+        "{context}: unsealed intake must not export a source observation"
+    );
+    assert_eq!(analysis.coverage_gaps.len(), 1, "{context}");
+    let gap = &analysis.coverage_gaps[0];
+    assert_eq!(gap.source_id, "server-dp-distribution", "{context}");
+    assert_eq!(gap.producer_role, None, "{context}");
+    assert_eq!(
+        gap.workflow_subject_role,
+        Some(SccmRole::DistributionPoint),
+        "{context}"
+    );
+    assert_eq!(gap.state, Some(SccmCoverageState::ParseFailed), "{context}");
+    assert!(gap.artifact_ids.is_empty(), "{context}");
+    assert_eq!(
+        gap.reason, "Canonical server intake authority could not be verified.",
+        "{context}"
+    );
+    assert_eq!(analysis.artifact_requests.len(), 1, "{context}");
+    assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
+    assert_eq!(analysis.artifact_requests[0].role, SccmRole::SiteServer);
+    assert!(!analysis.cross_side_correlation_performed);
+    serde_json::to_value(analysis).expect("authority-invalid analysis serializes")
+}
+
 #[test]
 fn distribution_point_adapter_projects_only_canonical_intake_observations_deterministically() {
     let assessment = load_assessment("complete-multi-role");
@@ -120,10 +151,20 @@ fn distribution_point_adapter_projects_only_canonical_intake_observations_determ
     assert_eq!(observation.artifact_id, "dp-dist-current");
     assert_eq!(observation.producer_role, SccmRole::SiteServer);
     assert_eq!(
+        observation.producer_host_handle.as_deref(),
+        Some("synthetic:host:site-01")
+    );
+    assert_eq!(
         observation.workflow_subject_role,
         Some(SccmRole::DistributionPoint)
     );
+    assert_eq!(
+        observation.workflow_subject_handle.as_deref(),
+        Some("synthetic:subject:dp-01")
+    );
     assert_eq!(observation.source_id, "server-dp-distribution");
+    assert_eq!(observation.rotation, Some(SccmRotation::Current));
+    assert_eq!(observation.rotation_lineage_handle, "dp-dist-lab");
     assert_eq!(
         observation.timestamp.ordering_state,
         SccmTimeOrderingState::NormalizedUtc
@@ -133,11 +174,122 @@ fn distribution_point_adapter_projects_only_canonical_intake_observations_determ
     reordered.artifacts.reverse();
     reordered.coverage.reverse();
     reordered.evidence.reverse();
+    reordered.topology.roles_observed.reverse();
     assert_eq!(
         serde_json::to_value(&analysis).expect("analysis serializes"),
         serde_json::to_value(analyze_distribution_point(&reordered))
             .expect("reordered analysis serializes")
     );
+}
+
+#[test]
+fn post_intake_topology_and_coverage_handle_mutations_fail_sealed_authority_closed() {
+    let assessment = load_assessment("complete-multi-role");
+    let artifact_index = dp_artifact_index(&assessment);
+    let coverage_index = assessment
+        .coverage
+        .iter()
+        .position(|coverage| coverage.source_id == "server-dp-distribution")
+        .expect("fixture contains DP coverage");
+
+    let mut coordinated_producer = assessment.clone();
+    coordinated_producer.artifacts[artifact_index].producer_host_handle =
+        Some("synthetic:host:forged-dp-producer".to_owned());
+    coordinated_producer.coverage[coverage_index].producer_host_handle =
+        Some("synthetic:host:forged-dp-producer".to_owned());
+    let producer_output = assert_dp_intake_authority_invalid(
+        &coordinated_producer,
+        "coordinated producer-host mutation",
+    );
+    assert!(!producer_output
+        .to_string()
+        .contains("synthetic:host:forged-dp-producer"));
+
+    let mut coordinated_subject = assessment.clone();
+    coordinated_subject.artifacts[artifact_index].workflow_subject_handle =
+        Some("synthetic:subject:forged-dp".to_owned());
+    coordinated_subject.coverage[coverage_index].workflow_subject_handle =
+        Some("synthetic:subject:forged-dp".to_owned());
+    let subject_output = assert_dp_intake_authority_invalid(
+        &coordinated_subject,
+        "coordinated workflow-subject mutation",
+    );
+    assert!(!subject_output
+        .to_string()
+        .contains("synthetic:subject:forged-dp"));
+
+    let mut changed_topology = assessment;
+    changed_topology.topology.capture_host_handle = "synthetic:host:forged-capture".to_owned();
+    changed_topology.topology.site_handle = "synthetic:site:forged".to_owned();
+    let topology_output =
+        assert_dp_intake_authority_invalid(&changed_topology, "topology handle mutation");
+    let topology_json = topology_output.to_string();
+    assert!(!topology_json.contains("synthetic:host:forged-capture"));
+    assert!(!topology_json.contains("synthetic:site:forged"));
+}
+
+#[test]
+fn post_intake_coverage_and_evidence_shape_mutations_fail_sealed_authority_closed() {
+    let assessment = load_assessment("complete-multi-role");
+    let evidence_index = dp_evidence_index(&assessment);
+
+    let mut missing_coverage = assessment.clone();
+    missing_coverage
+        .coverage
+        .retain(|coverage| coverage.source_id != "server-dp-distribution");
+
+    let mut duplicate_coverage = assessment.clone();
+    let dp_coverage = duplicate_coverage
+        .coverage
+        .iter()
+        .find(|coverage| coverage.source_id == "server-dp-distribution")
+        .expect("fixture contains DP coverage")
+        .clone();
+    duplicate_coverage.coverage.push(dp_coverage);
+
+    let mut holey_coverage = assessment.clone();
+    holey_coverage
+        .coverage
+        .iter_mut()
+        .find(|coverage| coverage.source_id == "server-dp-distribution")
+        .expect("fixture contains DP coverage")
+        .artifact_ids
+        .push("dp-dist-undeclared".to_owned());
+
+    let mut missing_evidence = assessment.clone();
+    missing_evidence.evidence.remove(evidence_index);
+
+    let mut duplicate_evidence = assessment.clone();
+    duplicate_evidence
+        .evidence
+        .push(duplicate_evidence.evidence[evidence_index].clone());
+
+    let mut holey_evidence = assessment.clone();
+    holey_evidence.evidence[evidence_index].evidence_id = "dp-dist-current:1-1".to_owned();
+    holey_evidence.evidence[evidence_index].reference.entry_id = "dp-dist-current:1-1".to_owned();
+    holey_evidence.evidence[evidence_index].reference.line_start = Some(1);
+    holey_evidence.evidence[evidence_index].reference.line_end = Some(1);
+    let mut after_hole = holey_evidence.evidence[evidence_index].clone();
+    after_hole.evidence_id = "dp-dist-current:3-3".to_owned();
+    after_hole.reference.entry_id = "dp-dist-current:3-3".to_owned();
+    after_hole.reference.line_start = Some(3);
+    after_hole.reference.line_end = Some(3);
+    holey_evidence.evidence.push(after_hole);
+
+    let mut mismatched_evidence = assessment;
+    mismatched_evidence.evidence[evidence_index].role = SccmRole::DistributionPoint;
+
+    for (context, mutated) in [
+        ("missing coverage", missing_coverage),
+        ("duplicate coverage", duplicate_coverage),
+        ("holey coverage", holey_coverage),
+        ("missing evidence", missing_evidence),
+        ("duplicate evidence", duplicate_evidence),
+        ("holey evidence", holey_evidence),
+        ("mismatched evidence", mismatched_evidence),
+    ] {
+        assert_dp_intake_authority_invalid(&mutated, context);
+    }
 }
 
 #[test]
@@ -223,7 +375,7 @@ fn evidence_ranges_with_a_physical_line_hole_are_coverage_only() {
 }
 
 #[test]
-fn coverage_gap_preserves_every_declared_member_when_a_peer_is_not_admitted() {
+fn post_intake_peer_mutations_fail_sealed_authority_closed() {
     for defect in [
         "profile-ineligible",
         "parser-ineligible",
@@ -256,25 +408,7 @@ fn coverage_gap_preserves_every_declared_member_when_a_peer_is_not_admitted() {
             _ => unreachable!("test defect is declared above"),
         }
 
-        let analysis = analyze_distribution_point(&assessment);
-        assert_eq!(
-            analysis
-                .source_observations
-                .iter()
-                .map(|observation| observation.artifact_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["dp-dist-current"],
-            "{defect} peer must not be admitted"
-        );
-        assert_eq!(analysis.coverage_gaps.len(), 1, "{defect}");
-        assert_eq!(
-            analysis.coverage_gaps[0].artifact_ids,
-            vec!["dp-dist-current", "dp-dist-peer"],
-            "{defect} coverage gap must preserve every declared member"
-        );
-        assert_eq!(analysis.artifact_requests.len(), 1, "{defect}");
-
-        let expected = serde_json::to_value(&analysis).expect("analysis serializes");
+        let expected = assert_dp_intake_authority_invalid(&assessment, defect);
         assessment.artifacts.reverse();
         assessment.evidence.reverse();
         assessment.coverage.reverse();
@@ -283,8 +417,7 @@ fn coverage_gap_preserves_every_declared_member_when_a_peer_is_not_admitted() {
         }
         assert_eq!(
             expected,
-            serde_json::to_value(analyze_distribution_point(&assessment))
-                .expect("reordered analysis serializes"),
+            assert_dp_intake_authority_invalid(&assessment, defect),
             "{defect} output must be deterministic"
         );
     }
