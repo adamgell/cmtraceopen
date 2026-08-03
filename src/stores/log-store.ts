@@ -931,6 +931,9 @@ export const useLogStore = create<LogState>((set, get) => ({
         return {};
       }
 
+      const isTrackedFile = state.aggregateFiles.some(
+        (file) => file.filePath === filePath,
+      );
       const aggregateFiles = state.aggregateFiles.map((file) =>
         file.filePath === filePath
           ? {
@@ -947,10 +950,9 @@ export const useLogStore = create<LogState>((set, get) => ({
       return {
         entries,
         aggregateFiles,
-        totalLines: aggregateFiles.reduce(
-          (sum, file) => sum + file.totalLines,
-          0,
-        ),
+        totalLines: isTrackedFile
+          ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0)
+          : Math.max(state.totalLines, amendment.continuationEndLine),
         guidNameMap: buildGuidNameMap(entries),
       };
     });
