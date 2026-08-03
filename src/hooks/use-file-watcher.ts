@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useLogStore } from "../stores/log-store";
 import { startTail, stopTail, pauseTail, resumeTail } from "../lib/commands";
-import type { TailPayload } from "../types/log";
+import { parseTailPayload } from "../lib/tail-payload-validation";
 
 /**
  * Hook that manages the file-tail lifecycle:
@@ -22,6 +22,9 @@ export function useFileWatcher() {
   const appendAggregateEntries = useLogStore((s) => s.appendAggregateEntries);
   const amendAggregateEntry = useLogStore((s) => s.amendAggregateEntry);
   const observeAggregateTailLine = useLogStore((s) => s.observeAggregateTailLine);
+  const recordAggregateTailParseErrors = useLogStore(
+    (s) => s.recordAggregateTailParseErrors,
+  );
   const resetEntries = useLogStore((s) => s.resetEntries);
   const resetAggregateEntries = useLogStore((s) => s.resetAggregateEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
@@ -104,7 +107,12 @@ export function useFileWatcher() {
 
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
-    const unlisten = listen<TailPayload>("tail-new-entries", (event) => {
+    const unlisten = listen<unknown>("tail-new-entries", (event) => {
+      const payload = parseTailPayload(event.payload);
+      if (!payload) {
+        console.error("Ignored invalid tail payload from the backend");
+        return;
+      }
       const {
         amendments,
         entries: newEntries,
@@ -113,7 +121,7 @@ export function useFileWatcher() {
         parseErrors,
         parserSelection,
         reset,
-      } = event.payload;
+      } = payload;
       const state = useLogStore.getState();
 
       if (state.sourceOpenMode === "aggregate-folder") {
@@ -124,6 +132,7 @@ export function useFileWatcher() {
         }
 
         if (parseErrors > 0) {
+          recordAggregateTailParseErrors(filePath, parseErrors);
           console.warn(
             `Tail parsing reported ${parseErrors} coverage gap(s) for ${filePath}`,
           );
@@ -201,6 +210,7 @@ export function useFileWatcher() {
     appendAggregateEntries,
     appendEntries,
     observeAggregateTailLine,
+    recordAggregateTailParseErrors,
     resetAggregateEntries,
     resetEntries,
     setParserSelection,
