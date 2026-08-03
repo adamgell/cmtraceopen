@@ -5,4 +5,7 @@
 
 mod intake;
 
+#[cfg(test)]
+mod admission_tests;
+
 pub use intake::*;
