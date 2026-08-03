@@ -1,8 +1,13 @@
+use serde::de::Error as _;
+use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use super::rotation::{is_canonical_rotation_timestamp, parse_canonical_rotation_number};
 use super::{SccmRole, SccmRotation, SccmUnknownRotation};
+
+const INVALID_SCCM_ARTIFACT_FAMILY_MESSAGE: &str =
+    "InvalidArtifactFamily: unknown SCCM artifact family must be canonical and must not shadow a declared family";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SccmArtifactFamily {
@@ -49,6 +54,44 @@ impl SccmArtifactFamily {
             Self::Unknown(value) => value,
         }
     }
+
+    /// Maps a wire value back to the declared variant that owns it.
+    ///
+    /// This is the single source of truth for which names are declared, so the
+    /// shadow check below can never drift from what `Deserialize` accepts.
+    fn declared_from_serialized_name(value: &str) -> Option<Self> {
+        Some(match value {
+            "clientSetup" => Self::ClientSetup,
+            "clientHealth" => Self::ClientHealth,
+            "clientIdentity" => Self::ClientIdentity,
+            "clientLocation" => Self::ClientLocation,
+            "clientPolicy" => Self::ClientPolicy,
+            "clientContent" => Self::ClientContent,
+            "clientApplication" => Self::ClientApplication,
+            "clientUpdates" => Self::ClientUpdates,
+            "clientTaskSequence" => Self::ClientTaskSequence,
+            "siteComponent" => Self::SiteComponent,
+            "siteStatus" => Self::SiteStatus,
+            "managementPoint" => Self::ManagementPoint,
+            "distributionPoint" => Self::DistributionPoint,
+            "softwareUpdatePoint" => Self::SoftwareUpdatePoint,
+            "hierarchy" => Self::Hierarchy,
+            "provider" => Self::Provider,
+            "adminService" => Self::AdminService,
+            _ => return None,
+        })
+    }
+
+    fn has_canonical_serialized_form(&self) -> bool {
+        match self {
+            Self::Unknown(value) => {
+                !value.is_empty()
+                    && value.trim() == value
+                    && Self::declared_from_serialized_name(value).is_none()
+            }
+            _ => true,
+        }
+    }
 }
 
 impl Serialize for SccmArtifactFamily {
@@ -56,6 +99,9 @@ impl Serialize for SccmArtifactFamily {
     where
         S: Serializer,
     {
+        if !self.has_canonical_serialized_form() {
+            return Err(S::Error::custom(INVALID_SCCM_ARTIFACT_FAMILY_MESSAGE));
+        }
         serializer.serialize_str(self.serialized_name())
     }
 }
@@ -65,26 +111,12 @@ impl<'de> Deserialize<'de> for SccmArtifactFamily {
     where
         D: Deserializer<'de>,
     {
-        Ok(match String::deserialize(deserializer)? {
-            value if value == "clientSetup" => Self::ClientSetup,
-            value if value == "clientHealth" => Self::ClientHealth,
-            value if value == "clientIdentity" => Self::ClientIdentity,
-            value if value == "clientLocation" => Self::ClientLocation,
-            value if value == "clientPolicy" => Self::ClientPolicy,
-            value if value == "clientContent" => Self::ClientContent,
-            value if value == "clientApplication" => Self::ClientApplication,
-            value if value == "clientUpdates" => Self::ClientUpdates,
-            value if value == "clientTaskSequence" => Self::ClientTaskSequence,
-            value if value == "siteComponent" => Self::SiteComponent,
-            value if value == "siteStatus" => Self::SiteStatus,
-            value if value == "managementPoint" => Self::ManagementPoint,
-            value if value == "distributionPoint" => Self::DistributionPoint,
-            value if value == "softwareUpdatePoint" => Self::SoftwareUpdatePoint,
-            value if value == "hierarchy" => Self::Hierarchy,
-            value if value == "provider" => Self::Provider,
-            value if value == "adminService" => Self::AdminService,
-            value => Self::Unknown(value),
-        })
+        let value = String::deserialize(deserializer)?;
+        let family = Self::declared_from_serialized_name(&value).unwrap_or(Self::Unknown(value));
+        if !family.has_canonical_serialized_form() {
+            return Err(D::Error::custom(INVALID_SCCM_ARTIFACT_FAMILY_MESSAGE));
+        }
+        Ok(family)
     }
 }
 
@@ -419,7 +451,7 @@ pub fn classify_artifact_name(name: &str, role: SccmRole) -> SccmSourceCatalogEn
     let logical_name = lower_camel_identifier(parsed.basename);
     SccmSourceCatalogEntry {
         basename: format!("{}.log", parsed.basename),
-        family: SccmArtifactFamily::Unknown(logical_name.clone()),
+        family: unclassified_family(&logical_name),
         logical_name,
         role,
         rotation: parsed.rotation,
@@ -522,6 +554,27 @@ fn unknown_filename_suffix(raw_suffix: &str) -> SccmRotation {
         kind: "filenameSuffix".to_string(),
         value: Some(Value::String(raw_suffix.to_string())),
     })
+}
+
+/// Builds the `Unknown` family for an artifact the catalog does not declare.
+///
+/// The family is derived from the artifact's own name, which can collide with a
+/// declared family name: `AdminService.log` under a role the catalog does not
+/// pair it with derives `adminService`. Emitting that verbatim would round-trip
+/// back as the declared `AdminService` variant, so collisions are prefixed to
+/// keep the unclassified identity distinct.
+fn unclassified_family(logical_name: &str) -> SccmArtifactFamily {
+    if SccmArtifactFamily::declared_from_serialized_name(logical_name).is_none() {
+        return SccmArtifactFamily::Unknown(logical_name.to_string());
+    }
+
+    let mut characters = logical_name.chars();
+    let mut name = String::from("unclassified");
+    if let Some(first) = characters.next() {
+        name.extend(first.to_uppercase());
+        name.extend(characters);
+    }
+    SccmArtifactFamily::Unknown(name)
 }
 
 fn lower_camel_identifier(value: &str) -> String {

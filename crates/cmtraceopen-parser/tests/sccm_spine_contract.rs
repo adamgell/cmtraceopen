@@ -5802,6 +5802,116 @@ fn serde_families_are_string_backed_and_future_tolerant() {
     );
 }
 
+const DECLARED_ARTIFACT_FAMILY_NAMES: &[&str] = &[
+    "clientSetup",
+    "clientHealth",
+    "clientIdentity",
+    "clientLocation",
+    "clientPolicy",
+    "clientContent",
+    "clientApplication",
+    "clientUpdates",
+    "clientTaskSequence",
+    "siteComponent",
+    "siteStatus",
+    "managementPoint",
+    "distributionPoint",
+    "softwareUpdatePoint",
+    "hierarchy",
+    "provider",
+    "adminService",
+];
+
+#[test]
+fn serde_family_unknown_values_cannot_shadow_declared_families() {
+    for value in ["", " ", " clientPolicy "] {
+        assert!(
+            serde_json::to_string(&SccmArtifactFamily::Unknown(value.into())).is_err(),
+            "{value:?}"
+        );
+        let wire = serde_json::to_string(value).unwrap();
+        assert!(
+            serde_json::from_str::<SccmArtifactFamily>(&wire).is_err(),
+            "{value:?}"
+        );
+    }
+
+    for value in DECLARED_ARTIFACT_FAMILY_NAMES {
+        assert!(
+            serde_json::to_string(&SccmArtifactFamily::Unknown((*value).into())).is_err(),
+            "{value:?}"
+        );
+        assert!(
+            serde_json::from_str::<SccmArtifactFamily>(&serde_json::to_string(value).unwrap())
+                .is_ok(),
+            "declared name must still deserialize: {value:?}"
+        );
+    }
+
+    let future = SccmArtifactFamily::Unknown("futureFamily".into());
+    let wire = serde_json::to_string(&future).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SccmArtifactFamily>(&wire).unwrap(),
+        future
+    );
+}
+
+#[test]
+fn serde_family_canonical_form_is_enforced_at_the_extraction_profile_boundary() {
+    let profile_with_family = |family: &str| {
+        format!(
+            r#"{{"profileId":"p-v1","configmgrVersionPrefixes":["5.00."],"validatedArtifactFamilies":[{family}],"selectedConfigmgrVersion":null,"maturity":"experimental"}}"#
+        )
+    };
+
+    for family in [r#"" clientPolicy ""#, r#""""#, r#"" ""#] {
+        assert!(
+            serde_json::from_str::<SccmExtractionProfile>(&profile_with_family(family)).is_err(),
+            "{family} was accepted inside validatedArtifactFamilies"
+        );
+    }
+
+    let accepted =
+        serde_json::from_str::<SccmExtractionProfile>(&profile_with_family(r#""futureFamily""#))
+            .unwrap();
+    assert_eq!(
+        accepted.validated_artifact_families,
+        vec![SccmArtifactFamily::Unknown("futureFamily".into())]
+    );
+}
+
+#[test]
+fn classify_never_mints_a_family_that_shadows_a_declared_family() {
+    // An unclassified artifact derives its family from its own basename, so a
+    // file named after a declared family (`AdminService.log` under a role the
+    // catalog does not pair it with) must not derive that declared name back.
+    for family_name in DECLARED_ARTIFACT_FAMILY_NAMES {
+        let mut characters = family_name.chars();
+        let basename: String = characters
+            .next()
+            .into_iter()
+            .flat_map(char::to_uppercase)
+            .chain(characters)
+            .collect();
+        let name = format!("{basename}.log");
+
+        // An unknown role never pairs with a catalog entry, so this always
+        // takes the unclassified path regardless of the basename.
+        let class = classify_artifact_name(&name, SccmRole::Unknown("probeRole".into()));
+
+        assert!(
+            matches!(class.family, SccmArtifactFamily::Unknown(_)),
+            "{name} was unexpectedly classified as {:?}",
+            class.family
+        );
+        assert!(
+            serde_json::to_string(&class.family).is_ok(),
+            "{name} derived a family that shadows a declared family: {:?}",
+            class.family
+        );
+    }
+}
+
 #[test]
 fn serde_rotations_have_exact_tags_and_preserve_future_values() {
     let known = [
