@@ -2,9 +2,10 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::server::windows::{
     analyze_distribution_point, analyze_distribution_point_content_from_server_intake,
-    assess_server_intake, SccmServerArtifactPayload, SccmServerIntakeAssessment,
-    SccmServerIntakeError, SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION,
-    SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID, SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION,
+    assess_server_intake, SccmDistributionPointContentConfidence, SccmServerArtifactPayload,
+    SccmServerIntakeAssessment, SccmServerIntakeError,
+    SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION, SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID,
+    SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION,
 };
 use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState};
 use serde_json::{json, Value};
@@ -49,8 +50,15 @@ fn assess_manifest(
 fn assess_complete_manifest_after(
     mutate: impl FnOnce(&mut Value),
 ) -> Result<SccmServerIntakeAssessment, SccmServerIntakeError> {
+    assess_complete_manifest_and_payloads_after(|manifest, _| mutate(manifest))
+}
+
+fn assess_complete_manifest_and_payloads_after(
+    mutate: impl FnOnce(&mut Value, &mut Vec<SccmServerArtifactPayload>),
+) -> Result<SccmServerIntakeAssessment, SccmServerIntakeError> {
     let (mut manifest, payloads) = load_manifest_and_payloads("complete-multi-role");
-    mutate(&mut manifest);
+    let mut payloads = payloads;
+    mutate(&mut manifest, &mut payloads);
     assess_manifest(&manifest, &payloads)
 }
 
@@ -135,8 +143,15 @@ fn load_distribution_point_assessment_after(
                 "encoding": artifact["encoding"],
                 "collectionLimit": artifact["collectionLimit"],
                 "collectedUtc": artifact["collectedUtc"],
-                "relativePath": canonical_distribution_point_relative_path(artifact),
-                "bytesCopied": artifact["bytesCopied"],
+                "relativePath": if matches!(
+                    artifact["captureState"].as_str(),
+                    Some("captured" | "capped" | "parseFailed")
+                ) {
+                    json!(canonical_distribution_point_relative_path(artifact))
+                } else {
+                    Value::Null
+                },
+                "bytesCopied": artifact["bytesCopied"].as_u64().unwrap_or(0),
             }))
             .collect::<Vec<_>>(),
     });
@@ -163,6 +178,64 @@ fn canonical_distribution_point_relative_path(artifact: &Value) -> String {
     format!(
         "evidence/sccm/server/{role_segment}/server-dp-distribution/{subject_segment}current/{basename}"
     )
+}
+
+fn dp_payload_mut(payloads: &mut [SccmServerArtifactPayload]) -> &mut SccmServerArtifactPayload {
+    payloads
+        .iter_mut()
+        .find(|payload| payload.manifest_artifact_id == "dp-dist-current")
+        .expect("fixture contains the DP payload")
+}
+
+fn set_dp_nonphysical_coverage(
+    manifest: &mut Value,
+    payloads: &mut Vec<SccmServerArtifactPayload>,
+    state: &str,
+) {
+    let artifact = dp_manifest_artifact_mut(manifest);
+    artifact["captureState"] = json!(state);
+    artifact["relativePath"] = Value::Null;
+    artifact["bytesCopied"] = json!(0);
+    artifact["encoding"] = Value::Null;
+    artifact["collectionLimit"] = Value::Null;
+    artifact["collectionDetail"] = Value::Null;
+    artifact["skipReason"] = Value::Null;
+    artifact["unsupportedReason"] = Value::Null;
+    match state {
+        "accessDenied" => artifact["collectionDetail"] = json!("synthetic permission denial"),
+        "skipped" => artifact["skipReason"] = json!("optional supplemental source not requested"),
+        "unsupported" => {
+            artifact["unsupportedReason"] = json!("no approved server source contract")
+        }
+        _ => {}
+    }
+    payloads.retain(|payload| payload.manifest_artifact_id != "dp-dist-current");
+}
+
+fn dp_coverage_assessment(case: &str) -> SccmServerIntakeAssessment {
+    assess_complete_manifest_and_payloads_after(|manifest, payloads| match case {
+        "absent" | "accessDenied" | "skipped" | "unsupported" => {
+            set_dp_nonphysical_coverage(manifest, payloads, case);
+        }
+        "capped" => {
+            let payload = dp_payload_mut(payloads);
+            payload.bytes.truncate(64);
+            let artifact = dp_manifest_artifact_mut(manifest);
+            artifact["captureState"] = json!("capped");
+            artifact["bytesCopied"] = json!(64);
+            artifact["collectionLimit"] = json!({"byteLimit": 64, "limitApplied": true});
+            artifact["truncated"] = json!(true);
+            artifact["fragmentComplete"] = json!(false);
+        }
+        "malformed" => {
+            let payload = dp_payload_mut(payloads);
+            payload.bytes = b"not a complete CCM logical record".to_vec();
+            let bytes_copied = payload.bytes.len() as u64;
+            dp_manifest_artifact_mut(manifest)["bytesCopied"] = json!(bytes_copied);
+        }
+        _ => panic!("declared DP coverage case"),
+    })
+    .unwrap_or_else(|error| panic!("{case} DP coverage is sealed: {error}"))
 }
 
 fn dp_manifest_artifact_mut(manifest: &mut Value) -> &mut Value {
@@ -406,6 +479,160 @@ fn healthy_package_requires_profile_site_token_to_match_sealed_topology() {
     assert!(
         analysis.transactions.is_empty(),
         "valid-looking evidence for another site cannot become a healthy transaction"
+    );
+}
+
+#[test]
+fn semantic_analysis_preserves_conservative_source_coverage_and_bounded_requests() {
+    for (case, expected_state) in [
+        ("absent", SccmCoverageState::Absent),
+        ("accessDenied", SccmCoverageState::AccessDenied),
+        ("capped", SccmCoverageState::Capped),
+        ("skipped", SccmCoverageState::Skipped),
+        ("unsupported", SccmCoverageState::Unsupported),
+        ("malformed", SccmCoverageState::ParseFailed),
+    ] {
+        let assessment = dp_coverage_assessment(case);
+        let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+            .unwrap_or_else(|error| panic!("{case} coverage remains analyzable: {error}"));
+
+        assert!(analysis.transactions.is_empty(), "{case}");
+        assert_eq!(analysis.coverage_gaps.len(), 1, "{case}");
+        assert_eq!(
+            analysis.coverage_gaps[0].state,
+            Some(expected_state),
+            "{case}"
+        );
+        assert_eq!(
+            analysis
+                .artifact_requests
+                .iter()
+                .map(|request| (request.logical_id.as_str(), &request.role))
+                .collect::<Vec<_>>(),
+            vec![("distmgr", &SccmRole::SiteServer)],
+            "{case}"
+        );
+
+        let repeated =
+            analyze_distribution_point_content_from_server_intake(&dp_coverage_assessment(case))
+                .expect("repeated coverage remains analyzable");
+        assert_eq!(
+            serde_json::to_value(&analysis).expect("analysis serializes"),
+            serde_json::to_value(repeated).expect("repeated analysis serializes"),
+            "{case} output is deterministic"
+        );
+    }
+}
+
+#[test]
+fn incomplete_and_unknown_profile_evidence_remain_explicit_semantic_gaps() {
+    let incomplete =
+        load_distribution_point_assessment_after("healthy-package", |manifest, payloads| {
+            let provider = payloads
+                .iter_mut()
+                .find(|payload| payload.manifest_artifact_id == "dp-healthy-03-provider")
+                .expect("fixture contains provider payload");
+            let content =
+                std::str::from_utf8(&provider.bytes).expect("synthetic provider evidence is UTF-8");
+            let retained = content
+                .lines()
+                .filter(|line| !line.contains("Phase=serveOrReport"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            provider.bytes = retained.into_bytes();
+            manifest["artifacts"]
+                .as_array_mut()
+                .expect("artifacts are an array")
+                .iter_mut()
+                .find(|artifact| artifact["artifactId"] == "dp-healthy-03-provider")
+                .expect("fixture contains provider artifact")["bytesCopied"] =
+                json!(provider.bytes.len() as u64);
+        });
+    let incomplete_analysis = analyze_distribution_point_content_from_server_intake(&incomplete)
+        .expect("incomplete semantic evidence remains analyzable");
+    assert!(incomplete_analysis.transactions.is_empty());
+    assert_eq!(incomplete_analysis.coverage_gaps.len(), 1);
+    assert_eq!(
+        incomplete_analysis.coverage_gaps[0].state,
+        Some(SccmCoverageState::Captured)
+    );
+    assert_eq!(
+        incomplete_analysis.artifact_requests[0].logical_id,
+        "smsDpProv"
+    );
+
+    let unknown_profile =
+        load_distribution_point_assessment_after("healthy-package", |_, payloads| {
+            for payload in payloads {
+                let content =
+                    std::str::from_utf8(&payload.bytes).expect("synthetic DP evidence is UTF-8");
+                payload.bytes = content
+                    .replace(
+                        "ProfileId=dp-server-5.00.test-v1",
+                        "ProfileId=dp-server-5.00.test-v2",
+                    )
+                    .into_bytes();
+            }
+        });
+    let unknown_analysis = analyze_distribution_point_content_from_server_intake(&unknown_profile)
+        .expect("unknown semantic profile remains analyzable");
+    assert!(unknown_analysis.transactions.is_empty());
+    assert_eq!(unknown_analysis.coverage_gaps.len(), 2);
+    assert!(unknown_analysis
+        .coverage_gaps
+        .iter()
+        .all(|gap| gap.state == Some(SccmCoverageState::Captured)));
+    assert_eq!(
+        unknown_analysis
+            .artifact_requests
+            .iter()
+            .map(|request| request.logical_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["distmgr", "smsDpProv"]
+    );
+}
+
+#[test]
+fn healthy_transaction_cannot_hide_a_sealed_coverage_gap_or_keep_high_confidence() {
+    let assessment = load_distribution_point_assessment_after("healthy-package", |manifest, _| {
+        manifest["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array")
+            .push(json!({
+                "artifactId": "dp-distribution-absent-candidate",
+                "sourceId": "server-dp-distribution",
+                "producerRole": "siteServer",
+                "producerHostHandle": "safe:server:lab-pri-01",
+                "workflowSubjectRole": "distributionPoint",
+                "workflowSubjectHandle": "safe:dp:lab-dp-01",
+                "sourceKind": "ccmLog",
+                "sourceVersion": "5.00.TEST.0001",
+                "originalBasename": "distmgr.log",
+                "pathFingerprint": "synthetic:path:dp-default",
+                "rotation": {"kind": "current", "lineageId": "dp-distribution-default"},
+                "captureState": "absent",
+                "encoding": null,
+                "collectionLimit": null,
+                "collectedUtc": "2026-07-30T12:20:00Z",
+                "relativePath": null,
+                "bytesCopied": 0
+            }));
+    });
+
+    let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+        .expect("mixed healthy and missing coverage remains analyzable");
+
+    assert_eq!(analysis.transactions.len(), 1);
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    assert_eq!(
+        analysis.coverage_gaps[0].state,
+        Some(SccmCoverageState::Absent)
+    );
+    assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
+    assert_eq!(
+        analysis.transactions[0].confidence,
+        SccmDistributionPointContentConfidence::Medium
     );
 }
 

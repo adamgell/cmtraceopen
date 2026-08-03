@@ -110,6 +110,7 @@ pub enum SccmDistributionPointContentClassification {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SccmDistributionPointContentConfidence {
+    Medium,
     High,
 }
 
@@ -153,6 +154,8 @@ pub struct SccmDistributionPointContentAnalysis {
     pub workflow: SccmDistributionPointWorkflow,
     pub profile: SccmDistributionPointProfile,
     pub transactions: Vec<SccmDistributionPointContentTransaction>,
+    pub coverage_gaps: Vec<SccmDistributionPointCoverageGap>,
+    pub artifact_requests: Vec<SccmArtifactRequest>,
     pub cross_side_correlation_performed: bool,
 }
 
@@ -313,6 +316,8 @@ pub fn analyze_distribution_point_content_from_server_intake(
     let expected_site_code =
         selected_content_profile_site_code(intake.topology.site_handle.as_str());
     let mut facts_by_key = BTreeMap::<DistributionPointFactKey, Vec<DistributionPointFact>>::new();
+    let mut semantic_gaps =
+        BTreeMap::<(String, String, String), SccmDistributionPointCoverageGap>::new();
 
     for observation in &bounded.source_observations {
         let Some(evidence) = evidence_by_entry_id.get(observation.evidence.entry_id.as_str())
@@ -328,18 +333,69 @@ pub fn analyze_distribution_point_content_from_server_intake(
             evidence,
             expected_site_code,
         ) else {
+            note_semantic_gap(
+                &mut semantic_gaps,
+                artifacts_by_id
+                    .get(observation.artifact_id.as_str())
+                    .copied(),
+            );
             continue;
         };
         facts_by_key.entry(fact.key.clone()).or_default().push(fact);
     }
 
-    let mut transactions = facts_by_key
-        .into_iter()
-        .filter_map(|(key, facts)| {
+    let mut transactions = Vec::new();
+    for (key, facts) in facts_by_key {
+        let missing_roles = missing_healthy_phase_roles(&facts);
+        let gap_facts = facts.clone();
+        if let Some(transaction) =
             reduce_healthy_transaction(DistributionPointTransactionEnvelope { key, facts })
-        })
-        .collect::<Vec<_>>();
+        {
+            transactions.push(transaction);
+            continue;
+        }
+
+        let mut matched_missing_role = false;
+        for fact in &gap_facts {
+            let artifact = artifacts_by_id
+                .get(fact.reference.artifact_id.as_str())
+                .copied();
+            if artifact.is_some_and(|artifact| missing_roles.contains(&artifact.producer_role)) {
+                note_semantic_gap(&mut semantic_gaps, artifact);
+                matched_missing_role = true;
+            }
+        }
+        if !matched_missing_role {
+            for fact in &gap_facts {
+                note_semantic_gap(
+                    &mut semantic_gaps,
+                    artifacts_by_id
+                        .get(fact.reference.artifact_id.as_str())
+                        .copied(),
+                );
+            }
+        }
+    }
     transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+
+    let mut coverage_gaps = bounded.coverage_gaps;
+    coverage_gaps.extend(semantic_gaps.into_values().map(|mut gap| {
+        gap.artifact_ids.sort();
+        gap.artifact_ids.dedup();
+        gap
+    }));
+    coverage_gaps.sort_by(|left, right| {
+        coverage_gap_sort_key(left)
+            .cmp(&coverage_gap_sort_key(right))
+            .then_with(|| left.reason.cmp(&right.reason))
+    });
+    coverage_gaps.dedup();
+    let artifact_requests = artifact_requests(&coverage_gaps);
+    if !coverage_gaps.is_empty() {
+        for transaction in &mut transactions {
+            transaction.confidence = SccmDistributionPointContentConfidence::Medium;
+        }
+    }
 
     Ok(SccmDistributionPointContentAnalysis {
         schema_version: SCCM_DISTRIBUTION_POINT_CONTENT_ANALYSIS_SCHEMA_VERSION,
@@ -350,8 +406,76 @@ pub fn analyze_distribution_point_content_from_server_intake(
             stability: "experimental".to_owned(),
         },
         transactions,
+        coverage_gaps,
+        artifact_requests,
         cross_side_correlation_performed: false,
     })
+}
+
+fn note_semantic_gap(
+    gaps: &mut BTreeMap<(String, String, String), SccmDistributionPointCoverageGap>,
+    artifact: Option<&SccmServerArtifactAssessment>,
+) {
+    let Some(artifact) = artifact else {
+        return;
+    };
+    let key = (
+        artifact.source_id.clone(),
+        role_sort_key(&artifact.producer_role).to_owned(),
+        artifact
+            .workflow_subject_role
+            .as_ref()
+            .map(role_sort_key)
+            .unwrap_or_default()
+            .to_owned(),
+    );
+    gaps.entry(key)
+        .and_modify(|gap| gap.artifact_ids.push(artifact.artifact_id.clone()))
+        .or_insert_with(|| SccmDistributionPointCoverageGap {
+            source_id: artifact.source_id.clone(),
+            producer_role: Some(artifact.producer_role.clone()),
+            workflow_subject_role: artifact.workflow_subject_role.clone(),
+            state: Some(SccmCoverageState::Captured),
+            artifact_ids: vec![artifact.artifact_id.clone()],
+            reason: "Captured Distribution Point evidence did not match the selected content profile or complete a supported transaction."
+                .to_owned(),
+        });
+}
+
+fn missing_healthy_phase_roles(facts: &[DistributionPointFact]) -> Vec<SccmRole> {
+    let expected = [
+        (
+            SccmDistributionPointContentPhase::ReceiveContent,
+            SccmRole::SiteServer,
+        ),
+        (
+            SccmDistributionPointContentPhase::Distribute,
+            SccmRole::SiteServer,
+        ),
+        (
+            SccmDistributionPointContentPhase::Transfer,
+            SccmRole::SiteServer,
+        ),
+        (
+            SccmDistributionPointContentPhase::Validate,
+            SccmRole::DistributionPoint,
+        ),
+        (
+            SccmDistributionPointContentPhase::MakeAvailable,
+            SccmRole::DistributionPoint,
+        ),
+        (
+            SccmDistributionPointContentPhase::ServeOrReport,
+            SccmRole::DistributionPoint,
+        ),
+    ];
+    let mut roles = Vec::new();
+    for (phase, role) in expected {
+        if !facts.iter().any(|fact| fact.phase == phase) && !roles.contains(&role) {
+            roles.push(role);
+        }
+    }
+    roles
 }
 
 fn parse_healthy_distribution_point_fact(
