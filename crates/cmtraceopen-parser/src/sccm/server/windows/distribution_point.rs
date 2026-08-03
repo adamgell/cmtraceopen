@@ -123,6 +123,7 @@ pub struct SccmDistributionPointContentKey {
     pub site_code: String,
     pub distribution_point_handle: String,
     pub extraction_profile_id: String,
+    pub extraction_profile_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -624,11 +625,9 @@ fn reduce_healthy_transaction(
         site_code: envelope.key.site_code,
         distribution_point_handle: envelope.key.distribution_point_handle,
         extraction_profile_id: SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID.to_owned(),
+        extraction_profile_version: SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_VERSION,
     };
-    let transaction_id = format!(
-        "dp:{}:{}:v{}:{}",
-        key.package_id, key.content_id, key.content_version, key.distribution_point_handle
-    );
+    let transaction_id = distribution_point_transaction_id(&key);
     let evidence = envelope
         .facts
         .iter()
@@ -655,6 +654,19 @@ fn reduce_healthy_transaction(
         evidence,
         observations,
     })
+}
+
+fn distribution_point_transaction_id(key: &SccmDistributionPointContentKey) -> String {
+    format!(
+        "dp:site={}:package={}:content={}:content-version={}:dp={}:profile={}:profile-version={}",
+        key.site_code,
+        key.package_id,
+        key.content_id,
+        key.content_version,
+        key.distribution_point_handle,
+        key.extraction_profile_id,
+        key.extraction_profile_version,
+    )
 }
 
 fn exact_message_token<'a>(message: &'a str, label: &str) -> Option<&'a str> {
@@ -1107,5 +1119,58 @@ fn role_sort_key(role: &SccmRole) -> &str {
         SccmRole::Provider => "provider",
         SccmRole::AdminService => "adminService",
         SccmRole::Unknown(value) => value,
+    }
+}
+
+#[cfg(test)]
+mod content_identity_tests {
+    use super::*;
+
+    fn key(
+        site_code: &str,
+        profile_id: &str,
+        profile_version: u32,
+    ) -> SccmDistributionPointContentKey {
+        SccmDistributionPointContentKey {
+            package_id: "LAB00001".to_owned(),
+            content_id: "content-alpha".to_owned(),
+            content_version: 1,
+            site_code: site_code.to_owned(),
+            distribution_point_handle: "safe:dp:lab-dp-01".to_owned(),
+            extraction_profile_id: profile_id.to_owned(),
+            extraction_profile_version: profile_version,
+        }
+    }
+
+    #[test]
+    fn transaction_identity_includes_site_topology_and_profile_version_deterministically() {
+        let lab = key("LAB", "dp-server-5.00.test-v1", 1);
+        let abc = key("ABC", "dp-server-5.00.test-v1", 1);
+        let profile_v2 = key("LAB", "dp-server-5.00.test-v2", 2);
+
+        assert_eq!(
+            distribution_point_transaction_id(&lab),
+            "dp:site=LAB:package=LAB00001:content=content-alpha:content-version=1:dp=safe:dp:lab-dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+        );
+        assert_ne!(
+            distribution_point_transaction_id(&lab),
+            distribution_point_transaction_id(&abc)
+        );
+        assert_ne!(
+            distribution_point_transaction_id(&lab),
+            distribution_point_transaction_id(&profile_v2)
+        );
+
+        let mut forward = [&lab, &abc, &profile_v2]
+            .into_iter()
+            .map(distribution_point_transaction_id)
+            .collect::<Vec<_>>();
+        let mut reversed = [&profile_v2, &abc, &lab]
+            .into_iter()
+            .map(distribution_point_transaction_id)
+            .collect::<Vec<_>>();
+        forward.sort();
+        reversed.sort();
+        assert_eq!(forward, reversed);
     }
 }
