@@ -460,6 +460,7 @@ fn healthy_package_reduces_a_sealed_role_local_transaction() {
 
 #[test]
 fn healthy_package_requires_profile_site_token_to_match_sealed_topology() {
+    let mut mutated_records = 0usize;
     let assessment = load_distribution_point_assessment_after("healthy-package", |_, payloads| {
         for payload in payloads {
             let content =
@@ -468,9 +469,15 @@ fn healthy_package_requires_profile_site_token_to_match_sealed_topology() {
                 content.contains("SiteCode=LAB"),
                 "every healthy source must carry the profile site token"
             );
+            mutated_records =
+                mutated_records.saturating_add(content.matches("SiteCode=LAB").count());
             payload.bytes = content.replace("SiteCode=LAB", "SiteCode=ABC").into_bytes();
         }
     });
+    assert_eq!(
+        mutated_records, 6,
+        "the full healthy phase chain is mutated"
+    );
     assert_eq!(assessment.topology.site_handle, "synthetic:site:lab");
 
     let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
