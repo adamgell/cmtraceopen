@@ -180,16 +180,15 @@ fn discovery_coverage_issue_ids_without_omitted_state_use_nul_domain_separators(
         .iter()
         .find(|issue| issue.state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance)
         .expect("invalid provenance has a coverage issue");
+    let catalog_entry_id = expected_catalog_entry_id("AppEnforce.log");
+    let expected_payload = format!(
+        "cmtraceopen.sccm.discovery.coverage.v1\0{catalog_entry_id}\0unknown\0invalid-provenance"
+    );
     assert_eq!(
         invalid_provenance_issue.artifact_id,
         format!(
             "sccm-discovery-coverage:v1:sha256:{}",
-            sha256(concat!(
-                "cmtraceopen.sccm.discovery.coverage.v1\0",
-                "sccm-client-source:v1:sha256:",
-                "0e25c53307bce0649d0b969c2ae8354ac27100c97fdc6a532267b9a8c0a3f548\0",
-                "unknown\0invalid-provenance",
-            ))
+            sha256(expected_payload)
         ),
         "coverage IDs without an omitted state must hash true NUL-separated fields"
     );

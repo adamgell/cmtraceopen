@@ -438,6 +438,8 @@ fn declaration_limit_issue_key(
     }
 }
 
+const _: () = assert!(MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS <= u16::MAX as usize);
+
 fn add_coverage_issue_count(
     counts: &mut BTreeMap<CoverageIssueKey, u16>,
     key: CoverageIssueKey,
