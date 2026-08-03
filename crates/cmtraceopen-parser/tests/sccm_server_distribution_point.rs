@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::server::windows::{
     analyze_distribution_point, assess_server_intake, SccmServerArtifactPayload,
+    SccmServerIntakeAssessment, SccmServerIntakeError,
 };
 use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState};
 use serde_json::Value;
@@ -10,9 +11,7 @@ fn intake_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/server/intake")
 }
 
-fn load_assessment(
-    scenario: &str,
-) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
+fn load_manifest_and_payloads(scenario: &str) -> (Value, Vec<SccmServerArtifactPayload>) {
     let scenario_root = intake_root().join(scenario);
     let manifest_json =
         std::fs::read_to_string(scenario_root.join("manifest.json")).expect("manifest is readable");
@@ -34,12 +33,40 @@ fn load_assessment(
         })
         .collect::<Vec<_>>();
 
-    assess_server_intake(&manifest_json, &payloads).expect("fixture intake is accepted")
+    (manifest, payloads)
 }
 
-fn dp_artifact_index(
-    assessment: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
-) -> usize {
+fn assess_manifest(
+    manifest: &Value,
+    payloads: &[SccmServerArtifactPayload],
+) -> Result<SccmServerIntakeAssessment, SccmServerIntakeError> {
+    let manifest_json = serde_json::to_string(manifest).expect("manifest serializes");
+    assess_server_intake(&manifest_json, payloads)
+}
+
+fn assess_complete_manifest_after(
+    mutate: impl FnOnce(&mut Value),
+) -> Result<SccmServerIntakeAssessment, SccmServerIntakeError> {
+    let (mut manifest, payloads) = load_manifest_and_payloads("complete-multi-role");
+    mutate(&mut manifest);
+    assess_manifest(&manifest, &payloads)
+}
+
+fn load_assessment(scenario: &str) -> SccmServerIntakeAssessment {
+    let (manifest, payloads) = load_manifest_and_payloads(scenario);
+    assess_manifest(&manifest, &payloads).expect("fixture intake is accepted")
+}
+
+fn dp_manifest_artifact_mut(manifest: &mut Value) -> &mut Value {
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "dp-dist-current")
+        .expect("fixture contains the DP artifact")
+}
+
+fn dp_artifact_index(assessment: &SccmServerIntakeAssessment) -> usize {
     assessment
         .artifacts
         .iter()
@@ -47,9 +74,7 @@ fn dp_artifact_index(
         .expect("fixture contains the DP artifact")
 }
 
-fn dp_evidence_index(
-    assessment: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
-) -> usize {
+fn dp_evidence_index(assessment: &SccmServerIntakeAssessment) -> usize {
     assessment
         .evidence
         .iter()
@@ -57,9 +82,7 @@ fn dp_evidence_index(
         .expect("fixture contains the DP evidence")
 }
 
-fn add_dp_peer(
-    assessment: &mut cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
-) {
+fn add_dp_peer(assessment: &mut SccmServerIntakeAssessment) {
     let artifact_index = dp_artifact_index(assessment);
     let mut peer = assessment.artifacts[artifact_index].clone();
     peer.artifact_id = "dp-dist-peer".to_owned();
@@ -85,35 +108,47 @@ fn add_dp_peer(
         .push("dp-dist-peer".to_owned());
 }
 
-fn assert_dp_coverage_only(
-    assessment: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
+fn assert_dp_sealed_guard_rejection(
+    assessment: &SccmServerIntakeAssessment,
+    context: &str,
 ) -> Value {
     let analysis = analyze_distribution_point(assessment);
     assert!(
         analysis.source_observations.is_empty(),
-        "invalid DP evidence must not become a source observation"
+        "{context}: rejected DP evidence must not become a source observation"
     );
-    assert!(
-        !analysis.coverage_gaps.is_empty(),
-        "invalid DP evidence must remain an explicit coverage gap"
+    assert_eq!(analysis.coverage_gaps.len(), 1, "{context}");
+    let gap = &analysis.coverage_gaps[0];
+    assert_eq!(gap.source_id, "server-dp-distribution", "{context}");
+    assert_eq!(gap.producer_role, Some(SccmRole::SiteServer), "{context}");
+    assert_eq!(
+        gap.workflow_subject_role,
+        Some(SccmRole::DistributionPoint),
+        "{context}"
     );
-    assert!(
-        analysis
-            .coverage_gaps
-            .iter()
-            .all(|gap| gap.reason != "Canonical server intake authority could not be verified."),
-        "predicate-focused tests must reach a sealed adapter guard, not the authority quarantine"
+    assert_eq!(gap.state, Some(SccmCoverageState::Captured), "{context}");
+    assert_eq!(gap.artifact_ids, vec!["dp-dist-current"], "{context}");
+    assert_eq!(
+        gap.reason,
+        "Captured Distribution Point evidence is incomplete or outside the supported intake profile.",
+        "{context}"
     );
-    assert!(
-        !analysis.artifact_requests.is_empty(),
-        "invalid DP evidence must request a bounded declared source"
+    assert_eq!(analysis.artifact_requests.len(), 1, "{context}");
+    assert_eq!(
+        analysis.artifact_requests[0].logical_id, "distmgr",
+        "{context}"
     );
-    assert!(!analysis.cross_side_correlation_performed);
+    assert_eq!(
+        analysis.artifact_requests[0].role,
+        SccmRole::SiteServer,
+        "{context}"
+    );
+    assert!(!analysis.cross_side_correlation_performed, "{context}");
     serde_json::to_value(analysis).expect("coverage-only analysis serializes")
 }
 
 fn assert_dp_intake_authority_invalid(
-    assessment: &cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment,
+    assessment: &SccmServerIntakeAssessment,
     context: &str,
 ) -> Value {
     let analysis = analyze_distribution_point(assessment);
@@ -202,6 +237,109 @@ fn distribution_point_adapter_projects_only_canonical_intake_observations_determ
         serde_json::to_value(&analysis).expect("analysis serializes"),
         serde_json::to_value(analyze_distribution_point(&reordered))
             .expect("reordered analysis serializes")
+    );
+}
+
+#[test]
+fn sealed_intake_without_dp_source_version_reaches_profile_eligibility_guard() {
+    let assessment = assess_complete_manifest_after(|manifest| {
+        dp_manifest_artifact_mut(manifest)
+            .as_object_mut()
+            .expect("DP artifact is an object")
+            .remove("sourceVersion");
+    })
+    .expect("missing source version is retained as sealed, profile-ineligible intake");
+    let artifact = &assessment.artifacts[dp_artifact_index(&assessment)];
+
+    assert_eq!(artifact.source_version, None);
+    assert!(!artifact.profile_eligible);
+    assert!(artifact.parser_eligible);
+    assert_eq!(
+        artifact.workflow_subject_handle.as_deref(),
+        Some("synthetic:subject:dp-01")
+    );
+    assert!(assessment
+        .topology
+        .roles_observed
+        .contains(&SccmRole::DistributionPoint));
+    assert_dp_sealed_guard_rejection(&assessment, "missing DP source version");
+}
+
+#[test]
+fn sealed_intake_without_dp_subject_handle_reaches_subject_congruence_guard() {
+    let assessment = assess_complete_manifest_after(|manifest| {
+        let subject = dp_manifest_artifact_mut(manifest)["workflowSubject"]
+            .as_object_mut()
+            .expect("workflow subject is an object");
+        subject.remove("instanceHandle");
+        subject.insert(
+            "basis".to_owned(),
+            Value::String("incidentScopeOnly".to_owned()),
+        );
+    })
+    .expect("missing subject handle is retained as sealed intake");
+    let artifact = &assessment.artifacts[dp_artifact_index(&assessment)];
+
+    assert!(artifact.profile_eligible);
+    assert!(artifact.parser_eligible);
+    assert_eq!(
+        artifact.workflow_subject_role,
+        Some(SccmRole::DistributionPoint)
+    );
+    assert_eq!(artifact.workflow_subject_handle, None);
+    assert!(assessment
+        .topology
+        .roles_observed
+        .contains(&SccmRole::DistributionPoint));
+    assert_dp_sealed_guard_rejection(&assessment, "missing DP subject handle");
+}
+
+#[test]
+fn sealed_intake_without_observed_dp_role_reaches_topology_congruence_guard() {
+    let assessment = assess_complete_manifest_after(|manifest| {
+        manifest["topology"]["rolesObserved"]
+            .as_array_mut()
+            .expect("observed roles are an array")
+            .retain(|role| role.as_str() != Some("distributionPoint"));
+    })
+    .expect("unobserved workflow-subject role is retained as sealed intake");
+    let artifact = &assessment.artifacts[dp_artifact_index(&assessment)];
+
+    assert!(artifact.profile_eligible);
+    assert!(artifact.parser_eligible);
+    assert_eq!(
+        artifact.workflow_subject_handle.as_deref(),
+        Some("synthetic:subject:dp-01")
+    );
+    assert!(!assessment
+        .topology
+        .roles_observed
+        .contains(&SccmRole::DistributionPoint));
+    assert_dp_sealed_guard_rejection(&assessment, "unobserved DP workflow-subject role");
+}
+
+#[test]
+fn dp_subject_role_mismatch_is_rejected_before_intake_sealing() {
+    let result = assess_complete_manifest_after(|manifest| {
+        dp_manifest_artifact_mut(manifest)["workflowSubject"]["role"] =
+            Value::String("managementPoint".to_owned());
+    });
+
+    assert!(
+        matches!(result, Err(SccmServerIntakeError::InvalidArtifact)),
+        "role/source mismatch must not produce a sealed assessment: {result:?}"
+    );
+}
+
+#[test]
+fn dp_rotation_mismatch_is_rejected_before_intake_sealing() {
+    let result = assess_complete_manifest_after(|manifest| {
+        dp_manifest_artifact_mut(manifest)["rotation"]["kind"] = Value::String("lo_".to_owned());
+    });
+
+    assert!(
+        matches!(result, Err(SccmServerIntakeError::InvalidArtifact)),
+        "basename/rotation mismatch must not produce a sealed assessment: {result:?}"
     );
 }
 
@@ -366,7 +504,7 @@ fn no_declared_dp_source_requests_both_bounded_sides_without_correlation() {
 }
 
 #[test]
-fn duplicate_dp_artifact_identity_fails_closed_independent_of_input_order() {
+fn post_intake_duplicate_dp_artifact_identity_is_authority_quarantined_deterministically() {
     let mut assessment = load_assessment("complete-multi-role");
     let artifact_index = dp_artifact_index(&assessment);
     let mut duplicate = assessment.artifacts[artifact_index].clone();
@@ -374,27 +512,28 @@ fn duplicate_dp_artifact_identity_fails_closed_independent_of_input_order() {
     duplicate.path_fingerprint = "synthetic:path:site-dp-control-02".to_owned();
     assessment.artifacts.push(duplicate);
 
-    let first = assert_dp_coverage_only(&assessment);
+    let first = assert_dp_intake_authority_invalid(&assessment, "duplicate DP artifact identity");
     assessment.artifacts.reverse();
-    let reversed = assert_dp_coverage_only(&assessment);
+    let reversed =
+        assert_dp_intake_authority_invalid(&assessment, "reordered duplicate DP artifact identity");
 
     assert_eq!(first, reversed);
 }
 
 #[test]
-fn missing_duplicate_and_overlapping_evidence_ranges_are_coverage_only() {
+fn post_intake_evidence_range_mutations_are_authority_quarantined() {
     let assessment = load_assessment("complete-multi-role");
     let evidence_index = dp_evidence_index(&assessment);
 
     let mut missing_range = assessment.clone();
     missing_range.evidence[evidence_index].reference.line_start = None;
-    assert_dp_coverage_only(&missing_range);
+    assert_dp_intake_authority_invalid(&missing_range, "missing evidence range start");
 
     let mut duplicate = assessment.clone();
     duplicate
         .evidence
         .push(duplicate.evidence[evidence_index].clone());
-    assert_dp_coverage_only(&duplicate);
+    assert_dp_intake_authority_invalid(&duplicate, "duplicate evidence range");
 
     let mut overlap = assessment.clone();
     let mut overlapping = overlap.evidence[evidence_index].clone();
@@ -402,11 +541,11 @@ fn missing_duplicate_and_overlapping_evidence_ranges_are_coverage_only() {
     overlapping.reference.entry_id = "dp-dist-current:1-2".to_owned();
     overlapping.reference.line_end = Some(2);
     overlap.evidence.push(overlapping);
-    assert_dp_coverage_only(&overlap);
+    assert_dp_intake_authority_invalid(&overlap, "overlapping evidence range");
 }
 
 #[test]
-fn evidence_ranges_with_a_physical_line_hole_are_coverage_only() {
+fn post_intake_physical_line_hole_is_authority_quarantined() {
     let mut assessment = load_assessment("complete-multi-role");
     let evidence_index = dp_evidence_index(&assessment);
     assessment.evidence[evidence_index].evidence_id = "dp-dist-current:1-1".to_owned();
@@ -421,7 +560,7 @@ fn evidence_ranges_with_a_physical_line_hole_are_coverage_only() {
     after_hole.reference.line_end = Some(3);
     assessment.evidence.push(after_hole);
 
-    assert_dp_coverage_only(&assessment);
+    assert_dp_intake_authority_invalid(&assessment, "physical evidence line hole");
 }
 
 #[test]
@@ -474,36 +613,39 @@ fn post_intake_peer_mutations_fail_sealed_authority_closed() {
 }
 
 #[test]
-fn source_observation_requires_exact_intake_coverage_membership() {
+fn post_intake_missing_exact_coverage_membership_is_authority_quarantined() {
+    // Canonical intake derives coverage membership from normalized artifacts.
+    // A missing membership is therefore a post-intake integrity mutation, not
+    // a separately reachable adapter-predicate state.
     let mut assessment = load_assessment("complete-multi-role");
     assessment
         .coverage
         .retain(|coverage| coverage.source_id != "server-dp-distribution");
 
-    assert_dp_coverage_only(&assessment);
+    assert_dp_intake_authority_invalid(&assessment, "missing exact coverage membership");
 }
 
 #[test]
-fn role_topology_profile_and_rotation_mutations_fail_closed() {
+fn post_intake_role_topology_profile_and_rotation_mutations_are_authority_quarantined() {
     let assessment = load_assessment("complete-multi-role");
     let artifact_index = dp_artifact_index(&assessment);
 
     let mut wrong_role = assessment.clone();
     wrong_role.artifacts[artifact_index].workflow_subject_role = Some(SccmRole::ManagementPoint);
-    assert_dp_coverage_only(&wrong_role);
+    assert_dp_intake_authority_invalid(&wrong_role, "workflow-subject role mutation");
 
     let mut missing_topology = assessment.clone();
     missing_topology
         .topology
         .roles_observed
         .retain(|role| role != &SccmRole::DistributionPoint);
-    assert_dp_coverage_only(&missing_topology);
+    assert_dp_intake_authority_invalid(&missing_topology, "topology role mutation");
 
     let mut ineligible_profile = assessment.clone();
     ineligible_profile.artifacts[artifact_index].profile_eligible = false;
-    assert_dp_coverage_only(&ineligible_profile);
+    assert_dp_intake_authority_invalid(&ineligible_profile, "profile eligibility mutation");
 
     let mut wrong_rotation = assessment.clone();
     wrong_rotation.artifacts[artifact_index].rotation = Some(SccmRotation::LoUnderscore);
-    assert_dp_coverage_only(&wrong_rotation);
+    assert_dp_intake_authority_invalid(&wrong_rotation, "rotation mutation");
 }
