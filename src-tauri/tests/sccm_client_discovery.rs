@@ -109,10 +109,7 @@ fn expected_evidence_identity(
     rotation: &SccmRotation,
     physical_basename: &str,
 ) -> String {
-    let catalog_entry_id = format!(
-        "sccm-client-source:v1:sha256:{}",
-        sha256(canonical_basename)
-    );
+    let catalog_entry_id = expected_catalog_entry_id(canonical_basename);
     let fingerprint = path_fingerprint(root_handle, canonical_basename);
     let source_digest = fingerprint
         .strip_prefix("sha256:")

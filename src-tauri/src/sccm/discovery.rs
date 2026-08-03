@@ -244,6 +244,8 @@ pub fn discover_client_sources(
     }
 
     if selected.len() > MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS {
+        // Retain the first MAX - 1 sorted observations and the deterministic
+        // terminal observation; summarize only the omitted middle declarations.
         let terminal = selected
             .pop()
             .expect("an over-cap selection has a terminal observation");
@@ -468,6 +470,10 @@ fn coverage_issue_from_key(
         state,
         omitted_declaration_state,
     } = key;
+    assert!(
+        logical_artifact_ids.is_empty(),
+        "coverage issues cannot assert workflow membership"
+    );
     let artifact_id = coverage_issue_id(
         &catalog_entry_id,
         rotation_category,
