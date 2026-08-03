@@ -1,0 +1,195 @@
+{
+  "contractState": "pureIntakeImplementedNativePending",
+  "scenario": "collision",
+  "pureAssessment": {
+    "schemaVersion": 1,
+    "groups": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-collision-app-enforce-root-a-current",
+          "fixture-collision-app-enforce-root-b-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      }
+    ],
+    "fragments": [
+      {
+        "artifactId": "fixture-collision-app-enforce-root-a-current",
+        "basename": "AppEnforce.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-collision-root-a",
+        "relativePath": "evidence/client-app-enforce/root-a/current/AppEnforce.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:05:00Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-collision-app-enforce-root-b-current",
+        "basename": "AppEnforce.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-collision-root-b",
+        "relativePath": "evidence/client-app-enforce/root-b/current/AppEnforce.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:05:01Z",
+        "encoding": "utf-8"
+      }
+    ],
+    "physicalArtifactIds": [
+      "fixture-collision-app-enforce-root-a-current",
+      "fixture-collision-app-enforce-root-b-current"
+    ],
+    "unsupportedArtifacts": [],
+    "coverageGaps": [
+      {
+        "logicalArtifactId": "client-app-intent",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      }
+    ]
+  },
+  "nativeDesignPending": {
+    "artifactProvenance": [
+      {
+        "artifactId": "fixture-collision-app-enforce-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 180
+      },
+      {
+        "artifactId": "fixture-collision-app-enforce-root-b-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 180
+      }
+    ]
+  },
+  "downstreamDesignPending": {
+    "workflowDiagnosisExpected": false,
+    "requests": [],
+    "prohibitedClaims": []
+  }
+}

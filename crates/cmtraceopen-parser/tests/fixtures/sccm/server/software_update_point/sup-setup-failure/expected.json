@@ -1,0 +1,30 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "softwareUpdatePoint",
+  "scenario": "sup-setup-failure",
+  "stateChain": ["configure","synchronize","importOrProcessMetadata","validateWsus","publishAvailability","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"sup-server-5.00.test-v1","validatedRole":"softwareUpdatePoint"},
+  "roleAssessment": {"softwareUpdatePointObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "coverage": [{"artifactId":"sup-setup-failure-01-setup","state":"captured"}],
+  "transactions": [{
+    "transactionId": "sup:sync-06:LAB:safe:sup:lab-sup-01",
+    "key": {"syncRunId":"sync-06","siteCode":"LAB","supHandle":"safe:sup:lab-sup-01","updateId":null,"kbId":null,"confidence":"exact","extractionProfileId":"sup-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "correlationEligible": true,
+    "state": "failed",
+    "classification": "confirmedFailure",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "lastSuccessfulPhase": null,
+    "nextSourceId": null,
+    "coverageGapArtifactIds": [],
+    "observations": [
+      {"observationId":"sync-06-01-configure","phase":"configure","disposition":"failed","terminal":true,"evidence":[{"artifactId":"sup-setup-failure-01-setup","startLine":1,"endLine":1}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

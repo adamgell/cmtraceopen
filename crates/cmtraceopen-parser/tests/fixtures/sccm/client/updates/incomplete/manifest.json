@@ -1,0 +1,109 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "role": "client",
+    "workflow": "updates",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "updates-incomplete-01-deployment",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "UpdatesDeployment.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/UpdatesDeployment.log",
+      "pathFingerprint": "synthetic:updates-incomplete-01-deployment",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T11:59:59Z",
+      "bytesCopied": 1589,
+      "relativePath": "evidence/client-updates/current/UpdatesDeployment.log"
+    },
+    {
+      "artifactId": "updates-incomplete-02-window-absent",
+      "designOnlyCatalog": {
+        "entryId": "client-maintenance-window",
+        "groupMemberships": [
+          "client-maintenance-window"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "absent",
+      "originalBasename": "ServiceWindowManager.log",
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "rotation": {
+        "kind": "current"
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T11:59:59Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "updates-incomplete-03-reboot-absent",
+      "designOnlyCatalog": {
+        "entryId": "client-reboot",
+        "groupMemberships": [
+          "client-reboot"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "absent",
+      "originalBasename": "RebootCoordinator.log",
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "rotation": {
+        "kind": "current"
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T11:59:59Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "updates-incomplete-04-report-absent",
+      "designOnlyCatalog": {
+        "entryId": "client-policy-state",
+        "groupMemberships": [
+          "client-policy-state"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "absent",
+      "originalBasename": "StateMessage.log",
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "rotation": {
+        "kind": "current"
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T11:59:59Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    }
+  ]
+}

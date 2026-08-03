@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "workflow": "siteCore",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "stateChain": [
+    "componentStart",
+    "componentWork",
+    "inboxOrQueue",
+    "statusOrStateProcessing",
+    "healthyOrTerminal"
+  ],
+  "results": [
+    {
+      "resultId": "site-core:result:v1:17a3f55ffd5eb73fa686eb49ba0ee620d965de9a33ba240d7e87cba666952884",
+      "transactionKey": {
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteHandle": "synthetic:site:lab",
+        "producerHostHandle": "synthetic:host:site-01",
+        "componentId": "SMS_EXECUTIVE",
+        "workItemId": "SC-CONTRA-EXEC-001"
+      },
+      "state": "terminalFailure",
+      "lastSuccessfulPhase": "componentWork",
+      "findingClass": "confirmedFailure",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "evidence": [
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:4-4",
+          "lineStart": 4,
+          "lineEnd": 4
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:6-6",
+          "lineStart": 6,
+          "lineEnd": 6,
+          "terminal": true
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifacts": []
+    },
+    {
+      "resultId": "site-core:result:v1:5d5fc621e38bc0572b168833e7bef6fa352cb2a35414e52a97bfd998a8a1c1b3",
+      "transactionKey": {
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteHandle": "synthetic:site:lab",
+        "producerHostHandle": "synthetic:host:site-01",
+        "componentId": "SMS_DISTRIBUTION_MANAGER",
+        "workItemId": "SC-CONTRA-DIST-001"
+      },
+      "state": "healthy",
+      "lastSuccessfulPhase": "healthyOrTerminal",
+      "findingClass": null,
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "evidence": [
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:3-3",
+          "lineStart": 3,
+          "lineEnd": 3
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:5-5",
+          "lineStart": 5,
+          "lineEnd": 5
+        },
+        {
+          "artifactId": "z-site-status",
+          "entryId": "z-site-status:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "z-site-status",
+          "entryId": "z-site-status:2-2",
+          "lineStart": 2,
+          "lineEnd": 2
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifacts": []
+    }
+  ],
+  "unlinkedObservations": [],
+  "coverageGaps": [],
+  "findings": [
+    {
+      "findingId": "site-core:finding:v1:0dc933141f9f40354f35c580303bdb6c5b47f287e5829f055620a73e75277650",
+      "class": "confirmedFailure",
+      "phase": "componentWork",
+      "role": "siteServer",
+      "severity": "Error",
+      "confidence": "high",
+      "title": "Site component and status evidence",
+      "summary": "The last confirmed successful phase is componentWork; later phases are bounded to cited evidence.",
+      "evidence": [
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:1-1",
+          "lineStart": 1,
+          "lineEnd": 1
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:4-4",
+          "lineStart": 4,
+          "lineEnd": 4
+        },
+        {
+          "artifactId": "sitecomp-current",
+          "entryId": "sitecomp-current:6-6",
+          "lineStart": 6,
+          "lineEnd": 6
+        }
+      ],
+      "terminalEvidence": [
+        {
+          "reference": {
+            "artifactId": "sitecomp-current",
+            "entryId": "sitecomp-current:6-6",
+            "lineStart": 6,
+            "lineEnd": 6
+          },
+          "kind": "observedFailure"
+        }
+      ],
+      "coverageGaps": [],
+      "correlationKeys": [],
+      "nextArtifacts": [],
+      "subjectId": "site-core:result:v1:17a3f55ffd5eb73fa686eb49ba0ee620d965de9a33ba240d7e87cba666952884",
+      "lastSuccessfulPhase": "componentWork"
+    }
+  ],
+  "artifactRequests": [],
+  "crossSideCorrelationPerformed": false
+}

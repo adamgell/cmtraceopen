@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE deployment success reported assignmentId=10000000-0000-0000-0000-000000000001 ciId=20000000-0000-0000-0000-000000001001 state=succeeded]LOG]!><time="03:00:08.000+000" date="07-30-2026" component="StateMessage" context="" type="1" thread="1" file="synthetic.cc:1">

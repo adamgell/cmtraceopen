@@ -1,0 +1,37 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "winpe",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":"task-sequence-client-5.00.test-v1","status":"matched"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"captured","pathClasses":["winpe"]}],
+  "artifactProvenance": [
+    {"artifactId":"task-sequence-winpe-smsts-current","bytesCopied":402,"pathClass":"winpe","sanitizedSourcePath":"SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":0}
+  ],
+  "transactions": [
+    {
+      "transactionId": "task-sequence-001",
+      "key": {"keyProfileKind":"executionPackageAdvertisementContext","executionId":"72400000-0000-0000-0000-000000000001","taskSequencePackageId":"LAB00324","advertisementId":"LAB20301","runContext":"osd","confidence":"exact","extractionProfileId":"task-sequence-client-5.00.test-v1"},
+      "evidence": [{"artifactId":"task-sequence-winpe-smsts-current","startLine":1,"endLine":1}],
+      "pathSequence": [{"artifactId":"task-sequence-winpe-smsts-current","pathClass":"winpe","relocationOrdinal":0}],
+      "timestampProvenance": {"orderingState":"normalizedUtc","offsetMinutes":0,"normalizedUtc":"2026-07-30T01:00:01Z"},
+      "orderingEvidence": {"artifactId":"task-sequence-winpe-smsts-current","startLine":1,"endLine":1},
+      "coverageGapArtifactIds": [],
+      "nextArtifact": {"logicalArtifactId":"client-task-sequence-smsts","pathClass":"setup","reason":"Collect the post-format relocation to continue the keyed execution."},
+      "phase": "preflight",
+      "state": "inProgress",
+      "lastSuccessfulPhase": "start",
+      "classification": "insufficientEvidence",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "terminalEvidence": null
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {"findingId":"winpe-nonterminal","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-winpe-smsts-current","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false}
+  ],
+  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"]}
+}

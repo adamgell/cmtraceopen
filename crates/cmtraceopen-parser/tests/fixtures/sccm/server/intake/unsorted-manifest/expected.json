@@ -1,0 +1,19 @@
+{
+  "pre318ExpectedVersion": 1,
+  "canonicalArtifactIds": ["a-mp-policy", "b-sitecomp", "z-site-status"],
+  "normalizedOutputByteIdenticalWhenReordered": true,
+  "artifactIdDerivationIgnoresDiscoveryOrder": true,
+  "artifactIdUniquenessScope": "manifest",
+  "crossBundleArtifactIdReuseAllowed": true,
+  "deterministicEvidenceIds": true,
+  "coverage": [
+    { "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
+    { "producerRole": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },
+    { "producerRole": "siteServer", "sourceId": "server-status", "state": "captured" }
+  ],
+  "artifactProvenance": [
+    { "artifactId": "a-mp-policy", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "b-sitecomp", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "z-site-status", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
+  ]
+}

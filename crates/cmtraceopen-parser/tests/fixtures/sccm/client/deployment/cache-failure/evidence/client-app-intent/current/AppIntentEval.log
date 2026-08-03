@@ -1,0 +1,2 @@
+<![LOG[SYNTHETIC FIXTURE deployment targeted assignmentId=10000000-0000-0000-0000-000000000008 ciId=20000000-0000-0000-0000-000000001008 state=targeted]LOG]!><time="04:10:00.000+000" date="07-30-2026" component="AppIntentEval" context="" type="1" thread="1" file="synthetic.cc:1">
+<![LOG[Requirements satisfied assignmentId=10000000-0000-0000-0000-000000000008 ciId=20000000-0000-0000-0000-000000001008]LOG]!><time="04:10:01.000+000" date="07-30-2026" component="AppIntentEval" context="" type="1" thread="1" file="synthetic.cc:2">

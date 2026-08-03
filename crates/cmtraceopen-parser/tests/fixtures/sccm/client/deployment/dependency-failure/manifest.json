@@ -1,0 +1,10 @@
+{
+  "sccmManifestVersion":1,
+  "proposalOnly":true,
+  "syntheticFixture":true,
+  "scenario":"dependency-failure",
+  "bundle":{"role":"client","workflow":"deployment","captureHost":"LAB-CLIENT-01","siteCode":"LAB","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "artifacts":[
+    {"artifactId":"deployment-dependency-failure-intent-current","designOnlyCatalog":{"entryId":"client-app-intent","groupMemberships":["client-app-intent"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"AppIntentEval.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/AppIntentEval.log","pathFingerprint":"synthetic:deployment-dependency-failure-intent","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T03:30:10Z","bytesCopied":859,"relativePath":"evidence/client-app-intent/current/AppIntentEval.log"}
+  ]
+}

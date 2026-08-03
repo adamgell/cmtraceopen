@@ -1,0 +1,19 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "rotation-boundary",
+  "bundle": {"bundleRole":"server","workflow":"softwareUpdatePoint","capturedUtc":"2026-07-30T19:00:00Z"},
+  "topology": {"siteCode":"LAB","supHandle":"safe:sup:lab-sup-01","wsusHandle":"safe:wsus:lab-wsus-01","rolesObserved":["siteServer","softwareUpdatePoint","wsUs"]},
+  "artifacts": [
+    {
+      "artifactId":"rotation-01-current","sourceId":"server-sup-sync","producerRole":"siteServer","producerHostHandle":"safe:server:lab-pri-01","workflowSubjectRole":"softwareUpdatePoint","workflowSubjectHandle":"safe:sup:lab-sup-01","sourceKind":"ccmLog","originalBasename":"wsyncmgr.log","sanitizedSourcePath":"SYNTHETIC://configured-root/Site/Logs/wsyncmgr.log","pathFingerprint":"synthetic:rotation-wsync-current","rotation":{"kind":"current","lineageId":"rotation-sync-09","fragmentComplete":false},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T18:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":182,"relativePath":"evidence/server-sup-sync/site/current/wsyncmgr.log"
+    },
+    {
+      "artifactId":"rotation-02-lo","sourceId":"server-sup-sync","producerRole":"siteServer","producerHostHandle":"safe:server:lab-pri-01","workflowSubjectRole":"softwareUpdatePoint","workflowSubjectHandle":"safe:sup:lab-sup-01","sourceKind":"ccmLog","originalBasename":"wsyncmgr.log","sanitizedSourcePath":"SYNTHETIC://configured-root/Site/Logs/wsyncmgr.lo_","pathFingerprint":"synthetic:rotation-wsync-lo","rotation":{"kind":"lo_","lineageId":"rotation-sync-09","fragmentComplete":false},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T18:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":192,"relativePath":"evidence/server-sup-sync/site/lo_/wsyncmgr.log"
+    },
+    {
+      "artifactId":"rotation-03-malformed","sourceId":"server-sup-sync","producerRole":"softwareUpdatePoint","producerHostHandle":"safe:sup:lab-sup-01","workflowSubjectRole":"softwareUpdatePoint","workflowSubjectHandle":"safe:sup:lab-sup-01","sourceKind":"ccmLog","originalBasename":"WSUSCtrl.log","sanitizedSourcePath":"SYNTHETIC://configured-root/SUP/Logs/WSUSCtrl.log","pathFingerprint":"synthetic:rotation-wsus-malformed","rotation":{"kind":"current","lineageId":"rotation-wsus-malformed","fragmentComplete":true},"captureState":"parseFailed","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T18:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":68,"relativePath":"evidence/server-sup-sync/sup/current/WSUSCtrl.log"
+    }
+  ]
+}

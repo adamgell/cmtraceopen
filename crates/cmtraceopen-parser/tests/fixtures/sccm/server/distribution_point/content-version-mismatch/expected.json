@@ -1,0 +1,81 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "distributionPoint",
+  "scenario": "content-version-mismatch",
+  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
+  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
+  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
+  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId": "dp-version-01-distmgr", "state": "captured"},
+    {"artifactId": "dp-version-02-pkgxfer", "state": "captured"},
+    {"artifactId": "dp-version-03-provider", "state": "captured"},
+    {"artifactId": "dp-version-04-provider-dp02", "state": "captured"}
+  ],
+  "transactions": [
+    {
+      "transactionId": "dp:LAB00005:content-epsilon:v1:safe:dp:lab-dp-01",
+      "key": {"packageId": "LAB00005", "contentId": "content-epsilon", "contentVersion": 1, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
+      "topologyCompatibility": "exact",
+      "correlationEligible": true,
+      "state": "succeeded",
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "lastSuccessfulPhase": "serveOrReport",
+      "nextSourceId": null,
+      "coverageGapArtifactIds": [],
+      "observations": [
+        {"observationId": "01-v1-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 1, "endLine": 1}]},
+        {"observationId": "02-v1-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 2, "endLine": 2}]},
+        {"observationId": "03-v1-transfer", "phase": "transfer", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 1, "endLine": 1}]},
+        {"observationId": "04-v1-validate", "phase": "validate", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-03-provider", "startLine": 1, "endLine": 1}]},
+        {"observationId": "05-v1-available", "phase": "makeAvailable", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-03-provider", "startLine": 2, "endLine": 2}]},
+        {"observationId": "06-v1-report", "phase": "serveOrReport", "disposition": "succeeded", "terminal": true, "evidence": [{"artifactId": "dp-version-03-provider", "startLine": 3, "endLine": 3}]}
+      ]
+    },
+    {
+      "transactionId": "dp:LAB00005:content-epsilon:v1:safe:dp:lab-dp-02",
+      "key": {"packageId": "LAB00005", "contentId": "content-epsilon", "contentVersion": 1, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-02", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
+      "topologyCompatibility": "exact",
+      "correlationEligible": true,
+      "state": "succeeded",
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "lastSuccessfulPhase": "serveOrReport",
+      "nextSourceId": null,
+      "coverageGapArtifactIds": [],
+      "observations": [
+        {"observationId": "01-dp02-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 3, "endLine": 3}]},
+        {"observationId": "02-dp02-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 4, "endLine": 4}]},
+        {"observationId": "03-dp02-transfer", "phase": "transfer", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 2, "endLine": 2}]},
+        {"observationId": "04-dp02-validate", "phase": "validate", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 1, "endLine": 1}]},
+        {"observationId": "05-dp02-available", "phase": "makeAvailable", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 2, "endLine": 2}]},
+        {"observationId": "06-dp02-report", "phase": "serveOrReport", "disposition": "succeeded", "terminal": true, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 3, "endLine": 3}]}
+      ]
+    },
+    {
+      "transactionId": "dp:LAB00005:content-epsilon:v2:safe:dp:lab-dp-01",
+      "key": {"packageId": "LAB00005", "contentId": "content-epsilon", "contentVersion": 2, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
+      "topologyCompatibility": "exact",
+      "correlationEligible": true,
+      "state": "deferred",
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "lastSuccessfulPhase": "distribute",
+      "nextSourceId": null,
+      "coverageGapArtifactIds": [],
+      "observations": [
+        {"observationId": "01-v2-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 5, "endLine": 5}]},
+        {"observationId": "02-v2-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 6, "endLine": 6}]},
+        {"observationId": "03-v2-transfer-retry", "phase": "transfer", "disposition": "retrying", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 3, "endLine": 3}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+}

@@ -1,0 +1,195 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "coverage-states",
+  "workflowFamily": "inventory",
+  "bundle": {
+    "bundleId": "sccm-325-inventory-coverage-states",
+    "role": "client",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "inventory-coverage-states-absent",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "absent",
+      "originalBasename": "InventoryAgent.log",
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "inventory-coverage-states-access-denied",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "accessDenied",
+      "originalBasename": "InventoryProvider.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/InventoryProvider.log",
+      "pathFingerprint": "synthetic-inventory-coverage-states-access-denied-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "inventory-coverage-states-capped",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "capped",
+      "originalBasename": "InventoryAgentProvider.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-c/CCM/Logs/InventoryAgentProvider.log",
+      "pathFingerprint": "synthetic-inventory-coverage-states-capped-root-c",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 58,
+      "relativePath": "evidence/client-inventory/root-c/current/InventoryAgentProvider.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 58,
+        "limitApplied": true
+      },
+      "truncated": true
+    },
+    {
+      "artifactId": "inventory-coverage-states-malformed",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "parseFailed",
+      "originalBasename": "InventoryAgentProvider.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-f/CCM/Logs/InventoryAgentProvider.log",
+      "pathFingerprint": "synthetic-inventory-coverage-states-malformed-root-f",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 41,
+      "relativePath": "evidence/client-inventory/root-f/current/InventoryAgentProvider.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "inventory-coverage-states-partial",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "InventoryAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/InventoryAgent.log",
+      "pathFingerprint": "synthetic-inventory-coverage-states-partial-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 59,
+      "relativePath": "evidence/client-inventory/root-a/current/InventoryAgent.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "inventory-coverage-states-skipped",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "skipped",
+      "originalBasename": "InventoryAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-d/CCM/Logs/InventoryAgent.log",
+      "pathFingerprint": "synthetic-inventory-coverage-states-skipped-root-d",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "inventory-coverage-states-unsupported",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "unsupported",
+      "originalBasename": "InventoryProvider.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-e/CCM/Logs/InventoryProvider.log",
+      "pathFingerprint": "synthetic-inventory-coverage-states-unsupported-root-e",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    }
+  ]
+}

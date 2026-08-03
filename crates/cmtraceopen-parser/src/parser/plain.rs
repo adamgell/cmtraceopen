@@ -9,7 +9,6 @@ use crate::models::log_entry::{LogEntry, LogFormat};
 /// Parse all lines as plain text.
 pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
     let mut entries = Vec::with_capacity(lines.len());
-    let mut next_id = 0u64;
 
     for (i, line) in lines.iter().enumerate() {
         if line.trim().is_empty() {
@@ -19,7 +18,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
         let severity = detect_severity_from_text(line);
 
         entries.push(LogEntry {
-            id: next_id,
+            id: i as u64,
             line_number: (i + 1) as u32,
             message: line.to_string(),
             component: None,
@@ -68,7 +67,6 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             iteration: None,
             tags: None,
         });
-        next_id += 1;
     }
 
     // Plain text never has parse errors (every line is valid)

@@ -1,0 +1,83 @@
+{
+  "cardSchemaVersion": "1.0.0",
+  "cardId": "cloud-service-connection",
+  "cardVersion": "1.0.0",
+  "family": "Cloud and service-connection role diagnostics",
+  "roleScope": [
+    "cloudManagementGatewayConnectionPoint",
+    "serviceConnectionPoint"
+  ],
+  "candidateBasenames": [
+    "CloudMgr.log",
+    "SMS_Cloud_ProxyConnector.log"
+  ],
+  "pathClasses": [
+    "configuredRoleLogRoot",
+    "siteServerLogs"
+  ],
+  "rawParserFamily": "ccm",
+  "sourceVersionScope": {
+    "state": "unknown",
+    "allowedPrefixes": []
+  },
+  "capture": {
+    "classification": "optional",
+    "maxBytes": 4194304,
+    "accessPolicy": "leastPrivilegeNoEscalation",
+    "rotationPolicy": {
+      "kinds": [
+        "current",
+        "lo_"
+      ],
+      "maxFiles": 2
+    }
+  },
+  "privacy": {
+    "sensitivity": "high",
+    "classes": [
+      "certificateIdentity",
+      "cloudEndpoint",
+      "tenantIdentity",
+      "tokenMaterial"
+    ],
+    "redactionRequired": true,
+    "publicProjection": [
+      "captureState",
+      "cardId",
+      "coverageState",
+      "roleScope"
+    ],
+    "rawSensitiveFieldProjection": []
+  },
+  "expectedHealthyEvidence": "A future validated rule must cite a configured cloud operation and explicit terminal service response while retaining only redacted endpoint identity.",
+  "terminalFailureEvidence": "A future terminal rule must cite a corroborated service-connection failure; connectivity gaps, skipped collection, and timestamps alone remain coverage states.",
+  "correlationPolicy": {
+    "keyState": "unvalidated",
+    "allowedKeyKinds": [],
+    "timeOnlyEligible": false,
+    "topologyRequired": true
+  },
+  "fixtureIds": [],
+  "ownerIssue": "#334",
+  "promotion": {
+    "state": "candidate",
+    "observedEvidenceIds": [],
+    "implementationIssue": null,
+    "productionReducer": null,
+    "deferredReason": null
+  },
+  "semanticPolicy": {
+    "captureGuidanceOnly": true,
+    "canCreateTransactions": false,
+    "canCreateFailureFindings": false
+  },
+  "nextEvidence": [
+    "Observe an authorized configured role and capture only sanitized basename, path-class, version, and coverage provenance.",
+    "Complete privacy review for tenant, endpoint, certificate, token, and user-like data before authoring scenario fixtures."
+  ],
+  "supersession": {
+    "state": "active",
+    "supersedes": [],
+    "supersededBy": null
+  }
+}

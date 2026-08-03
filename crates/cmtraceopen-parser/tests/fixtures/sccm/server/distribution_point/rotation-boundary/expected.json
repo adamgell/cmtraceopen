@@ -1,0 +1,25 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "distributionPoint",
+  "scenario": "rotation-boundary",
+  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
+  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
+  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
+  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId": "dp-rotation-01-current-fragment", "state": "captured"},
+    {"artifactId": "dp-rotation-02-lo-fragment", "state": "captured"},
+    {"artifactId": "dp-rotation-03-malformed", "state": "parseFailed"}
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {"observationId": "rotation-01-split", "classification": "rotationSplit", "confidence": "low", "confidenceCeiling": "low", "correlationEligible": false, "artifactIds": ["dp-rotation-01-current-fragment", "dp-rotation-02-lo-fragment"], "evidence": [{"artifactId": "dp-rotation-01-current-fragment", "startLine": 1, "endLine": 1}, {"artifactId": "dp-rotation-02-lo-fragment", "startLine": 1, "endLine": 1}]},
+    {"observationId": "rotation-02-malformed", "classification": "malformedEvidence", "confidence": "low", "confidenceCeiling": "low", "correlationEligible": false, "artifactIds": ["dp-rotation-03-malformed"], "evidence": [{"artifactId": "dp-rotation-03-malformed", "startLine": 1, "endLine": 1}]}
+  ],
+  "artifactRequests": [
+    {"sourceId": "server-dp-distribution", "reasonCode": "coverageMalformed"},
+    {"sourceId": "server-dp-distribution", "reasonCode": "coverageRotationSplit"}
+  ],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+}

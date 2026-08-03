@@ -1,0 +1,86 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "same-minute-collision",
+  "workflow": "compliance",
+  "extractionProfile": {
+    "id": "sccm-client-compliance-5.00.test-v1",
+    "selectionState": "selected",
+    "versionPrefix": "5.00.TEST."
+  },
+  "transactions": [
+    {
+      "transactionId": "compliance-collision-a",
+      "workflow": "compliance",
+      "key": {
+        "CiId": "CI-030",
+        "BaselineId": "BASELINE-030",
+        "StateId": "STATE-030",
+        "ResourceHandle": "safe:resource:compliance-030",
+        "keyProfileKind": "complianceExact",
+        "extractionProfileId": "sccm-client-compliance-5.00.test-v1",
+        "confidence": "exact"
+      },
+      "phase": "Evaluate",
+      "state": "evaluatedNonCompliant",
+      "classification": "evaluationResult",
+      "confidence": "high",
+      "lastSuccessfulPhase": "Evaluate",
+      "evidence": [
+        {
+          "artifactId": "compliance-same-minute-collision-root-a-current",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null
+    },
+    {
+      "transactionId": "compliance-collision-b",
+      "workflow": "compliance",
+      "key": {
+        "CiId": "CI-031",
+        "BaselineId": "BASELINE-031",
+        "StateId": "STATE-031",
+        "ResourceHandle": "safe:resource:compliance-031",
+        "keyProfileKind": "complianceExact",
+        "extractionProfileId": "sccm-client-compliance-5.00.test-v1",
+        "confidence": "exact"
+      },
+      "phase": "Evaluate",
+      "state": "evaluatedCompliant",
+      "classification": "evaluationResult",
+      "confidence": "high",
+      "lastSuccessfulPhase": "Evaluate",
+      "evidence": [
+        {
+          "artifactId": "compliance-same-minute-collision-root-b-current",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null
+    }
+  ],
+  "sourceLocalObservations": [],
+  "coverage": [
+    {
+      "artifactId": "compliance-same-minute-collision-root-a-current",
+      "logicalArtifactId": "client-compliance",
+      "state": "captured"
+    },
+    {
+      "artifactId": "compliance-same-minute-collision-root-b-current",
+      "logicalArtifactId": "client-compliance",
+      "state": "captured"
+    }
+  ],
+  "findings": [],
+  "prohibitedClaims": [
+    "missing or unreadable evidence proves workflow success or failure",
+    "same-minute records are causally related without one exact validated key tuple",
+    "client evidence alone proves a server-side cause",
+    "this preparation corpus is live Windows acceptance"
+  ]
+}

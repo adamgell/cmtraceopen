@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE policy multiline: Schedule succeeded AssignmentId={24242424-2424-2424-2424-242424242424} PolicyId={b6b6b6b6-b6b6-b6b6-b6b6-b6b6b6b6b6b6}]LOG]!><time="13:00:03.000+000" date="7-30-2026" component="Scheduler" context="" type="1" thread="1" file="synthetic.cc:1">

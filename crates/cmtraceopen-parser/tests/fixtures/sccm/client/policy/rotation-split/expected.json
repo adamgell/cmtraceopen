@@ -1,0 +1,48 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "rotation-split",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured","fragmentCount":2,"completeLogicalRecordCount":0}],
+  "artifactProvenance": [
+    {"artifactId":"policy-rotation-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-rotation-lo","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [{
+    "observationId": "policy:source-local:rotation-split",
+    "key": null,
+    "keyConfidence": "none",
+    "phase": null,
+    "state": "incomplete",
+    "classification": "insufficientEvidence",
+    "confidence": "low",
+    "confidenceCeiling": "low",
+    "correlationEligible": false,
+    "lastSuccessfulPhase": null,
+    "nextArtifact": {"logicalArtifactId":"client-policy-agent","reason":"Recapture a bounded complete PolicyAgent logical record across current and supported rotation."},
+    "evidence": [
+      {"artifactId":"policy-rotation-current","startLine":1,"endLine":1},
+      {"artifactId":"policy-rotation-lo","startLine":1,"endLine":1}
+    ]
+  }],
+  "findings": [{
+    "findingId": "finding:policy-rotation-split",
+    "subjectId": "policy:source-local:rotation-split",
+    "class": "insufficientEvidence",
+    "phase": null,
+    "lastSuccessfulPhase": null,
+    "confidence": "low",
+    "confidenceCeiling": "low",
+    "nextArtifact": {"logicalArtifactId":"client-policy-agent","reason":"Recapture a bounded complete PolicyAgent logical record across current and supported rotation."},
+    "evidence": [
+      {"artifactId":"policy-rotation-current","startLine":1,"endLine":1},
+      {"artifactId":"policy-rotation-lo","startLine":1,"endLine":1}
+    ]
+  }],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":false},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}

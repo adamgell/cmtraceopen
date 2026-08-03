@@ -53,8 +53,7 @@ fn map_severity(token: &str) -> Severity {
     match token {
         "Error" => Severity::Error,
         "Warning" | "Warn" => Severity::Warning,
-        "Success" => Severity::Success,
-        // "Info", "Information", or anything else → Info
+        // "Info", "Information", "Success", or anything else → Info
         _ => Severity::Info,
     }
 }
@@ -312,10 +311,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_success_maps_to_success() {
+    fn test_parse_success_maps_to_info() {
         let line = "[2024-12-24 14:44:14.000] [Post-Install] [Test-Function] [Success] :: All good";
         let parsed = parse_line(line).expect("should parse");
-        assert_eq!(parsed.severity, Severity::Success);
+        assert_eq!(parsed.severity, Severity::Info);
     }
 
     #[test]

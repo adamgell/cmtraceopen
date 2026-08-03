@@ -1,0 +1,227 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "reboot-pending",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": [
+      "client-location-services-shared",
+      "client-reboot",
+      "client-updates"
+    ]
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-location-services-shared",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-reboot",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "captured"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-reboot-pending-01-scan",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-reboot-pending-02-sup",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-reboot-pending-03-deployment",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-reboot-pending-04-reboot",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "updates:update:32300000-0000-0000-0000-000000000007",
+      "key": {
+        "updateId": "32300000-0000-0000-0000-000000000007",
+        "ciId": "CI-UPDATE-07",
+        "contentId": "CONTENT-UPDATE-07",
+        "updateJobId": "JOB-UPDATE-07",
+        "clientHandle": "safe:client:updates-07",
+        "siteCode": "LAB",
+        "supHostHandle": "safe:sup:lab-sup-01",
+        "confidence": "exact",
+        "extractionProfileId": "updates-client-5.00.test-v1"
+      },
+      "phase": "reboot",
+      "state": "blockedOrDeferred",
+      "lastSuccessfulPhase": "install",
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "coverageGapArtifactIds": [
+        "client-reboot"
+      ],
+      "nextArtifact": {
+        "logicalArtifactId": "client-reboot",
+        "reason": "Collect the smallest bounded client-reboot continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-reboot-pending-01-scan",
+          "startLine": 1,
+          "endLine": 2
+        },
+        {
+          "artifactId": "updates-reboot-pending-02-sup",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-reboot-pending-03-deployment",
+          "startLine": 1,
+          "endLine": 3
+        },
+        {
+          "artifactId": "updates-reboot-pending-04-reboot",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {
+      "findingId": "finding:updates:reboot-pending",
+      "subjectId": "updates:update:32300000-0000-0000-0000-000000000007",
+      "class": "blockedOrDeferred",
+      "phase": "reboot",
+      "lastSuccessfulPhase": "install",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "nextArtifact": {
+        "logicalArtifactId": "client-reboot",
+        "reason": "Collect the smallest bounded client-reboot continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-reboot-pending-01-scan",
+          "startLine": 1,
+          "endLine": 2
+        },
+        {
+          "artifactId": "updates-reboot-pending-02-sup",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-reboot-pending-03-deployment",
+          "startLine": 1,
+          "endLine": 3
+        },
+        {
+          "artifactId": "updates-reboot-pending-04-reboot",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": true,
+    "counterpartReadyFacts": [
+      {
+        "updateId": "32300000-0000-0000-0000-000000000007",
+        "ciId": "CI-UPDATE-07",
+        "contentId": "CONTENT-UPDATE-07",
+        "updateJobId": "JOB-UPDATE-07",
+        "clientHandle": "safe:client:updates-07",
+        "siteCode": "LAB",
+        "supHostHandle": "safe:sup:lab-sup-01",
+        "keyConfidence": "exact",
+        "correlationEligible": false,
+        "timeOnlyEligible": false,
+        "phase": "locateSup",
+        "extractionProfileId": "updates-client-5.00.test-v1",
+        "timestampProvenance": {
+          "normalizedUtc": "2026-07-30T08:00:02.000Z",
+          "utcMillis": 1785398402000,
+          "offsetMinutes": 0,
+          "orderingState": "normalizedUtc"
+        },
+        "evidence": {
+          "artifactId": "updates-reboot-pending-02-sup",
+          "startLine": 1,
+          "endLine": 1
+        }
+      }
+    ]
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

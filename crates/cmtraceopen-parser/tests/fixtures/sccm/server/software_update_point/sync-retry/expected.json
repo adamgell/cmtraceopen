@@ -1,0 +1,34 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "softwareUpdatePoint",
+  "scenario": "sync-retry",
+  "stateChain": ["configure","synchronize","importOrProcessMetadata","validateWsus","publishAvailability","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"sup-server-5.00.test-v1","validatedRole":"softwareUpdatePoint"},
+  "roleAssessment": {"softwareUpdatePointObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId":"sync-retry-01-wcm","state":"captured"},
+    {"artifactId":"sync-retry-02-wsync","state":"captured"}
+  ],
+  "transactions": [{
+    "transactionId": "sup:sync-04:LAB:safe:sup:lab-sup-01",
+    "key": {"syncRunId":"sync-04","siteCode":"LAB","supHandle":"safe:sup:lab-sup-01","updateId":null,"kbId":null,"confidence":"exact","extractionProfileId":"sup-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "correlationEligible": true,
+    "state": "deferred",
+    "classification": "blockedOrDeferred",
+    "confidence": "medium",
+    "confidenceCeiling": "medium",
+    "lastSuccessfulPhase": "configure",
+    "nextSourceId": null,
+    "coverageGapArtifactIds": [],
+    "observations": [
+      {"observationId":"sync-04-01-configure","phase":"configure","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"sync-retry-01-wcm","startLine":1,"endLine":1}]},
+      {"observationId":"sync-04-02-retry","phase":"synchronize","disposition":"retrying","terminal":false,"evidence":[{"artifactId":"sync-retry-02-wsync","startLine":1,"endLine":1}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

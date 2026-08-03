@@ -1,0 +1,26 @@
+{
+  "contractState":"proposedPending318And319",
+  "workflow":"deployment",
+  "scenario":"cache-failure",
+  "stateChain":["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
+  "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"validatedArtifactFamilies":["client-app-intent","client-content"]},
+  "reorderedInputDeterministic":true,
+  "coverage":[{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"captured"}],
+  "artifactProvenance":[
+    {"artifactId":"deployment-cache-failure-content-current","bytesCopied":799,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"deployment-cache-failure-intent-current","bytesCopied":532,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"deployment-cache-failure-transfer-current","bytesCopied":701,"encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions":[{
+    "transactionId":"deployment:assignment:10000000-0000-0000-0000-000000000008",
+    "key":{"keyProfileKind":"assignmentCiContentTopology","assignmentId":"10000000-0000-0000-0000-000000000008","ciId":"20000000-0000-0000-0000-000000001008","packageId":"LAB00008","contentId":"30000000-0000-0000-0000-000000002008","contentVersion":8,"distributionPointHostHandle":"safe:dp:lab-dp-01","requestId":"40000000-0000-0000-0000-000000003008","bitsJobId":"50000000-0000-0000-0000-000000004008","confidence":"exact","extractionProfileId":"deployment-client-5.00.test-v1"},
+    "counterpartReadyFact":{"factKind":"clientContentRequest","phase":"locateContent","extractionProfileId":"deployment-client-5.00.test-v1","packageId":"LAB00008","contentId":"30000000-0000-0000-0000-000000002008","contentVersion":8,"distributionPointHostHandle":"safe:dp:lab-dp-01","requestId":"40000000-0000-0000-0000-000000003008","timestampProvenance":{"kind":"explicitOffset","offsetMinutes":0,"normalizedUtc":"2026-07-30T04:10:02Z"},"evidence":{"artifactId":"deployment-cache-failure-content-current","startLine":1,"endLine":1}},
+    "phase":"cache","state":"failed","lastSuccessfulPhase":"transfer","classification":"confirmedFailure","confidence":"high","confidenceCeiling":"high","coverageGapArtifactIds":[],"nextArtifact":null,
+    "evidence":[{"artifactId":"deployment-cache-failure-content-current","startLine":1,"endLine":2},{"artifactId":"deployment-cache-failure-intent-current","startLine":1,"endLine":2},{"artifactId":"deployment-cache-failure-transfer-current","startLine":1,"endLine":2}]
+  }],
+  "sourceLocalObservations":[],
+  "findings":[],
+  "correlationHandoff":{"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"serverCauseClaimed":false,"counterpartReadyKeyKinds":["contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"emittedCounterpartReadyFact":true},
+  "prohibitedClaims":["distribution point or server root cause","cache failure proves transfer failure","time-only content-to-DP correlation"]
+}

@@ -1,0 +1,102 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "success",
+  "workflowFamily": "inventory",
+  "bundle": {
+    "bundleId": "sccm-325-inventory-success",
+    "role": "client",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "inventory-success-agent-current",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "InventoryAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/InventoryAgent.log",
+      "pathFingerprint": "synthetic-inventory-success-agent-current-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 308,
+      "relativePath": "evidence/client-inventory/root-a/current/InventoryAgent.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "inventory-success-provider-current",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "InventoryProvider.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/InventoryProvider.log",
+      "pathFingerprint": "synthetic-inventory-success-provider-current-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 625,
+      "relativePath": "evidence/client-inventory/root-a/current/InventoryProvider.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "inventory-success-report-current",
+      "designOnlyCatalog": {
+        "entryId": "client-inventory",
+        "groupMemberships": [
+          "client-inventory"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "InventoryAgentProvider.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/InventoryAgentProvider.log",
+      "pathFingerprint": "synthetic-inventory-success-report-current-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 628,
+      "relativePath": "evidence/client-inventory/root-a/current/InventoryAgentProvider.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    }
+  ]
+}

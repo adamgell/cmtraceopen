@@ -1,0 +1,37 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "reboot-continuation",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":"task-sequence-client-5.00.test-v1","status":"matched"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"captured","pathClasses":["client"]}],
+  "artifactProvenance": [
+    {"artifactId":"task-sequence-reboot-continuation-smsts-current","bytesCopied":468,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smstslog/smsts.log","rotationKind":"current","fragmentComplete":true,"relocationOrdinal":0}
+  ],
+  "transactions": [
+    {
+      "transactionId": "task-sequence-014",
+      "key": {"keyProfileKind":"executionPackageAdvertisementContext","executionId":"72400000-0000-0000-0000-000000000014","taskSequencePackageId":"LAB00324","advertisementId":"LAB20314","runContext":"osd","confidence":"exact","extractionProfileId":"task-sequence-client-5.00.test-v1"},
+      "evidence": [{"artifactId":"task-sequence-reboot-continuation-smsts-current","startLine":1,"endLine":1}],
+      "pathSequence": [{"artifactId":"task-sequence-reboot-continuation-smsts-current","pathClass":"client","relocationOrdinal":0}],
+      "timestampProvenance": {"orderingState":"normalizedUtc","offsetMinutes":0,"normalizedUtc":"2026-07-30T01:44:00Z"},
+      "orderingEvidence": {"artifactId":"task-sequence-reboot-continuation-smsts-current","startLine":1,"endLine":1},
+      "coverageGapArtifactIds": [],
+      "nextArtifact": {"logicalArtifactId":"client-task-sequence-smsts","pathClass":"client","reason":"Collect the resumed client fragment after reboot before declaring failure or completion."},
+      "phase": "postAction",
+      "state": "blockedOrDeferred",
+      "lastSuccessfulPhase": "installSoftware",
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "terminalEvidence": null
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {"findingId":"reboot-continuation-deferred","classification":"blockedOrDeferred","evidence":[{"artifactId":"task-sequence-reboot-continuation-smsts-current","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false}
+  ],
+  "correlationBoundary": {"scope":"clientOnly","joinFields":["executionId","taskSequencePackageId","advertisementId","runContext"],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"]}
+}

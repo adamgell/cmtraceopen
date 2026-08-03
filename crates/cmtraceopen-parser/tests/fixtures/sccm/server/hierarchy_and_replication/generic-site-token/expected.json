@@ -1,0 +1,39 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "generic-site-token",
+  "stateChain": [
+    "initiate",
+    "queueOrSerialize",
+    "send",
+    "receive",
+    "process",
+    "acknowledge",
+    "healthyOrTerminal"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "crossSideCorrelationPerformed": false,
+    "nativeCollectionPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selectedSynthetic",
+    "profileId": "hierarchy-server-5.00.test-v1",
+    "validatedRole": "siteServer"
+  },
+  "coverage": [
+    {
+      "artifactId": "generic-01-sender",
+      "state": "captured"
+    }
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {
+    "issue": "#333",
+    "performed": false,
+    "timeOnlyEligible": false
+  }
+}

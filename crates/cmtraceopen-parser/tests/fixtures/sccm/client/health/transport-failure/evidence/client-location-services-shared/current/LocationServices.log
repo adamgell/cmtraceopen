@@ -1,0 +1,4 @@
+<![LOG[# SYNTHETIC FIXTURE: LAB-CLIENT-01 only; Site assignment succeeded siteCode=LAB clientGuid=44444444-4444-4444-4444-444444444444]LOG]!><time="01:40:03.000+000" date="07-30-2026" component="LocationServices" context="" type="1" thread="1" file="location.cc:1">
+<![LOG[Management point selected managementPointHost=mp-lab.contoso.invalid siteCode=LAB]LOG]!><time="01:40:04.000+000" date="07-30-2026" component="LocationServices" context="" type="1" thread="1" file="location.cc:2">
+<![LOG[Transport request started requestId=REQ-TEST-040 managementPointHost=mp-lab.contoso.invalid]LOG]!><time="01:40:05.000+000" date="07-30-2026" component="CcmMessaging" context="" type="1" thread="1" file="messaging.cc:1">
+<![LOG[Transport terminal failure requestId=REQ-TEST-040 managementPointHost=mp-lab.contoso.invalid error=0x80072EFD]LOG]!><time="01:40:06.000+000" date="07-30-2026" component="CcmMessaging" context="" type="3" thread="1" file="messaging.cc:2">

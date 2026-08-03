@@ -1,0 +1,11 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "success",
+  "workflow": "health",
+  "workflowDiagnosisExpected": false,
+  "lastSuccessfulPhase": "transport",
+  "findings": [
+  ],
+  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"captured"},{"logicalArtifactId":"client-location","state":"captured"}],
+  "assertions": ["all phase transitions require source-local complete records","transport request and response share validated requestId and managementPointHost"]
+}

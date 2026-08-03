@@ -1,0 +1,39 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "request-auth-failure",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-location","state":"absent"},{"logicalArtifactId":"client-policy-agent","state":"captured"}],
+  "artifactProvenance": [{"artifactId":"policy-auth-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}],
+  "transactions": [{
+    "transactionId": "policy:assignment:12121212-1212-1212-1212-121212121212",
+    "key": {"keyProfileKind":"requestPolicyClientTopology","assignmentId":"12121212-1212-1212-1212-121212121212","policyId":"abababab-abab-abab-abab-abababababab","requestId":"27121212-1212-1212-1212-121212121212","clientHandle":"safe:client:policy-12","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","managementPointEvidenceKind":"selected","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "counterpartReadyFact": {"phase":"request","extractionProfileId":"policy-client-5.00.test-v1","evidence":{"artifactId":"policy-auth-agent-current","startLine":1,"endLine":1}},
+    "phase": "request",
+    "state": "failed",
+    "lastSuccessfulPhase": null,
+    "classification": "confirmedFailure",
+    "confidence": "medium",
+    "confidenceCeiling": "medium",
+    "coverageGapArtifactIds": ["client-location"],
+    "nextArtifact": {"logicalArtifactId":"client-location","reason":"Capture bounded client-side location and transport context; do not infer an MP cause."},
+    "evidence": [{"artifactId":"policy-auth-agent-current","startLine":1,"endLine":1}]
+  }],
+  "sourceLocalObservations": [],
+  "findings": [{
+    "findingId": "finding:policy-request-auth-failure",
+    "subjectId": "policy:assignment:12121212-1212-1212-1212-121212121212",
+    "class": "confirmedFailure",
+    "phase": "request",
+    "lastSuccessfulPhase": null,
+    "confidence": "medium",
+    "confidenceCeiling": "medium",
+    "nextArtifact": {"logicalArtifactId":"client-location","reason":"Capture bounded client-side location and transport context; do not infer an MP cause."},
+    "evidence": [{"artifactId":"policy-auth-agent-current","startLine":1,"endLine":1}]
+  }],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":true},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}

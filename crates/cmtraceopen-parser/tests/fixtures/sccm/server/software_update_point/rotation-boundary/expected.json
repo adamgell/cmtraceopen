@@ -1,0 +1,41 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "softwareUpdatePoint",
+  "scenario": "rotation-boundary",
+  "stateChain": ["configure","synchronize","importOrProcessMetadata","validateWsus","publishAvailability","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"sup-server-5.00.test-v1","validatedRole":"softwareUpdatePoint"},
+  "roleAssessment": {"softwareUpdatePointObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId":"rotation-01-current","state":"captured"},
+    {"artifactId":"rotation-02-lo","state":"captured"},
+    {"artifactId":"rotation-03-malformed","state":"parseFailed"}
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {
+      "observationId":"rotation-01-split",
+      "classification":"rotationSplit",
+      "confidence":"low",
+      "confidenceCeiling":"low",
+      "correlationEligible":false,
+      "artifactIds":["rotation-01-current","rotation-02-lo"],
+      "evidence":[]
+    },
+    {
+      "observationId":"rotation-02-malformed",
+      "classification":"malformedEvidence",
+      "confidence":"low",
+      "confidenceCeiling":"low",
+      "correlationEligible":false,
+      "artifactIds":["rotation-03-malformed"],
+      "evidence":[]
+    }
+  ],
+  "artifactRequests": [
+    {"sourceId":"server-sup-sync","reasonCode":"coverageMalformed"},
+    {"sourceId":"server-sup-sync","reasonCode":"coverageRotationSplit"}
+  ],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

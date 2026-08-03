@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {"role":"client","workflow":"policy","captureHost":"LAB-CLIENT-01","siteCode":"LAB","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "artifacts": [
+    {"artifactId":"policy-evaluation-agent-current","designOnlyCatalog":{"entryId":"client-policy-agent","groupMemberships":["client-policy-agent"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"PolicyAgent.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/PolicyAgent.log","pathFingerprint":"synthetic:policy-evaluation-agent","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T06:00:05Z","bytesCopied":948,"relativePath":"evidence/client-policy-agent/current/PolicyAgent.log"},
+    {"artifactId":"policy-evaluation-scheduler-current","designOnlyCatalog":{"entryId":"client-policy-agent","groupMemberships":["client-policy-agent"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"Scheduler.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/Scheduler.log","pathFingerprint":"synthetic:policy-evaluation-scheduler","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T06:00:05Z","bytesCopied":295,"relativePath":"evidence/client-policy-agent/current/Scheduler.log"},
+    {"artifactId":"policy-evaluation-state-current","designOnlyCatalog":{"entryId":"client-policy-state","groupMemberships":["client-policy-state"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"CIAgent.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/CIAgent.log","pathFingerprint":"synthetic:policy-evaluation-state","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T06:00:05Z","bytesCopied":317,"relativePath":"evidence/client-policy-state/current/CIAgent.log"}
+  ]
+}

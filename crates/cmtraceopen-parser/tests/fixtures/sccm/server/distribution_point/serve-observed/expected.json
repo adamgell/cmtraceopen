@@ -1,0 +1,42 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "distributionPoint",
+  "scenario": "serve-observed",
+  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
+  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
+  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
+  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId": "dp-serve-01-distmgr", "state": "captured"},
+    {"artifactId": "dp-serve-02-pkgxfer", "state": "captured"},
+    {"artifactId": "dp-serve-03-provider", "state": "captured"},
+    {"artifactId": "dp-serve-04-status", "state": "captured"}
+  ],
+  "transactions": [
+    {
+      "transactionId": "dp:LAB00006:content-zeta:v1:safe:dp:lab-dp-01",
+      "key": {"packageId": "LAB00006", "contentId": "content-zeta", "contentVersion": 1, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
+      "topologyCompatibility": "exact",
+      "correlationEligible": true,
+      "state": "succeeded",
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "lastSuccessfulPhase": "serveOrReport",
+      "nextSourceId": null,
+      "coverageGapArtifactIds": [],
+      "observations": [
+        {"observationId": "01-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-serve-01-distmgr", "startLine": 1, "endLine": 1}]},
+        {"observationId": "02-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-serve-01-distmgr", "startLine": 2, "endLine": 2}]},
+        {"observationId": "03-transfer", "phase": "transfer", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-serve-02-pkgxfer", "startLine": 1, "endLine": 1}]},
+        {"observationId": "04-validate", "phase": "validate", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-serve-03-provider", "startLine": 1, "endLine": 1}]},
+        {"observationId": "05-available", "phase": "makeAvailable", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-serve-03-provider", "startLine": 2, "endLine": 2}]},
+        {"observationId": "06-serve-observed", "phase": "serveOrReport", "disposition": "succeeded", "terminal": true, "evidence": [{"artifactId": "dp-serve-04-status", "startLine": 1, "endLine": 1}]}
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+}

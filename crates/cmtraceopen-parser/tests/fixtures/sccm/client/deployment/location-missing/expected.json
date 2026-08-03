@@ -1,0 +1,29 @@
+{
+  "contractState":"proposedPending318And319",
+  "workflow":"deployment",
+  "scenario":"location-missing",
+  "stateChain":["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
+  "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","exitCode","packageId","productCode","requestId"],"validatedArtifactFamilies":["client-app-enforce","client-app-intent","client-content","client-policy-state"]},
+  "reorderedInputDeterministic":true,
+  "coverage":[{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"absent"}],
+  "artifactProvenance":[{"artifactId":"deployment-location-missing-intent-current","bytesCopied":532,"encoding":"utf-8","byteLimit":4096,"limitApplied":false}],
+  "transactions":[{
+    "transactionId":"deployment:assignment:10000000-0000-0000-0000-000000000005",
+    "key":{"keyProfileKind":"assignmentCi","assignmentId":"10000000-0000-0000-0000-000000000005","ciId":"20000000-0000-0000-0000-000000001005","confidence":"exact","extractionProfileId":"deployment-client-5.00.test-v1"},
+    "counterpartReadyFact":null,
+    "phase":"locateContent",
+    "state":"insufficientEvidence",
+    "lastSuccessfulPhase":"requirements",
+    "classification":"insufficientEvidence",
+    "confidence":"low",
+    "confidenceCeiling":"low",
+    "coverageGapArtifactIds":["deployment-location-missing-content-absent"],
+    "nextArtifact":{"logicalArtifactId":"client-content","reason":"Capture an exact client content-location response for this assignment and CI."},
+    "evidence":[{"artifactId":"deployment-location-missing-intent-current","startLine":1,"endLine":2}]
+  }],
+  "sourceLocalObservations":[],
+  "findings":[{"findingId":"deployment-location-coverage-gap","class":"insufficientEvidence","phase":"locateContent","role":"client","confidence":"low","evidence":[{"artifactId":"deployment-location-missing-intent-current","startLine":1,"endLine":2}],"coverageGapArtifactIds":["deployment-location-missing-content-absent"],"nextArtifacts":[{"logicalArtifactId":"client-content","reason":"Capture an exact client content-location response for this assignment and CI."}],"mustNotClaim":["client is not targeted","distribution point unavailable","server cause"]}],
+  "correlationHandoff":{"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"serverCauseClaimed":false,"counterpartReadyKeyKinds":["contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"emittedCounterpartReadyFact":false},
+  "prohibitedClaims":["distribution point or server root cause","time-only content-to-DP correlation","policy output required for deployment behavior"]
+}

@@ -577,7 +577,7 @@ dependencies = [
 
 [[package]]
 name = "cmtrace-open"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "anyhow",
  "base64 0.23.0",
@@ -632,6 +632,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.19",
 ]
 

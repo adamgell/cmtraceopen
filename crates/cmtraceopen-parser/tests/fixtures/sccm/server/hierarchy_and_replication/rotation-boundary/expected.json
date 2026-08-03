@@ -1,0 +1,14 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "rotation-boundary",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"rotation-01-current","state":"captured"},{"artifactId":"rotation-02-lo","state":"captured"}],
+  "transactions": [],
+  "sourceLocalObservations": [{"observationId":"rotation-01-split","classification":"rotationSplit","confidence":"low","correlationEligible":false,"artifactIds":["rotation-01-current","rotation-02-lo"],"evidence":[]}],
+  "artifactRequests": [{"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"origin","targetSiteCode":"CHD","basenames":["sender.lo_","sender.log"],"reasonCode":"coverageRotationSplit"}],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

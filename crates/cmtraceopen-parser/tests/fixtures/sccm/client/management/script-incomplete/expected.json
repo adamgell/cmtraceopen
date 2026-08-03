@@ -1,0 +1,72 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "script-incomplete",
+  "workflow": "scripts",
+  "extractionProfile": {
+    "id": "sccm-client-scripts-5.00.test-v1",
+    "versionPrefix": "5.00.TEST.",
+    "selectionState": "selected"
+  },
+  "ownership": {
+    "classification": "SccmOwned",
+    "confidence": "high",
+    "terminalHandoff": false,
+    "workload": "Scripts",
+    "evidence": [
+      {
+        "artifactId": "script-incomplete-owner",
+        "startLine": 1,
+        "endLine": 1
+      }
+    ],
+    "coverageGapArtifactIds": []
+  },
+  "coverage": [
+    {
+      "artifactId": "script-incomplete-current",
+      "logicalArtifactId": "client-scripts",
+      "state": "capped"
+    },
+    {
+      "artifactId": "script-incomplete-lo",
+      "logicalArtifactId": "client-scripts",
+      "state": "partial"
+    },
+    {
+      "artifactId": "script-incomplete-owner",
+      "logicalArtifactId": "client-co-management",
+      "state": "captured"
+    }
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {
+      "observationId": "script-incomplete-cap-gap",
+      "kind": "coverageGap",
+      "claim": "The current Scripts fragment is capped and cannot establish an execution outcome.",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "artifactIds": [
+        "script-incomplete-current"
+      ]
+    },
+    {
+      "observationId": "script-incomplete-rotation-split",
+      "kind": "rotationSplit",
+      "claim": "The physical rotation fragments stay separate because neither contains a complete logical record.",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "artifactIds": [
+        "script-incomplete-current",
+        "script-incomplete-lo"
+      ]
+    }
+  ],
+  "findings": [],
+  "prohibitedClaims": [
+    "time alone proves causality",
+    "Intune handoff is an Intune failure",
+    "unsupported Software Center source is parsed",
+    "missing coverage proves success or failure"
+  ]
+}

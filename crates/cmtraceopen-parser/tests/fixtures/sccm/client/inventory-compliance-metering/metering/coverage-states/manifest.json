@@ -1,0 +1,195 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "coverage-states",
+  "workflowFamily": "metering",
+  "bundle": {
+    "bundleId": "sccm-325-metering-coverage-states",
+    "role": "client",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "metering-coverage-states-absent",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "absent",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": null,
+      "pathFingerprint": null,
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "metering-coverage-states-access-denied",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "accessDenied",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-b/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-coverage-states-access-denied-root-b",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "metering-coverage-states-capped",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "capped",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-c/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-coverage-states-capped-root-c",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 57,
+      "relativePath": "evidence/client-metering/root-c/current/SWMTRReportGen.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 57,
+        "limitApplied": true
+      },
+      "truncated": true
+    },
+    {
+      "artifactId": "metering-coverage-states-malformed",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "parseFailed",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-f/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-coverage-states-malformed-root-f",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 40,
+      "relativePath": "evidence/client-metering/root-f/current/SWMTRReportGen.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "metering-coverage-states-partial",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-g/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-coverage-states-partial-root-g",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 58,
+      "relativePath": "evidence/client-metering/root-g/current/SWMTRReportGen.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    },
+    {
+      "artifactId": "metering-coverage-states-skipped",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "skipped",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-d/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-coverage-states-skipped-root-d",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    },
+    {
+      "artifactId": "metering-coverage-states-unsupported",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "unsupported",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-e/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-coverage-states-unsupported-root-e",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": false
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 0,
+      "relativePath": null
+    }
+  ]
+}

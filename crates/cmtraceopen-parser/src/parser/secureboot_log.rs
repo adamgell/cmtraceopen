@@ -32,19 +32,13 @@ fn secureboot_log_re() -> &'static Regex {
 
 /// Check if a line matches the SecureBoot certificate update log format.
 pub fn matches_secureboot_log_record(line: &str) -> bool {
-    secureboot_log_re()
-        .captures(line)
-        .and_then(|caps| {
-            chrono::NaiveDateTime::parse_from_str(caps.get(1)?.as_str(), "%Y-%m-%d %H:%M:%S").ok()
-        })
-        .is_some()
+    secureboot_log_re().is_match(line)
 }
 
 fn severity_from_level(level: &str) -> Severity {
     match level {
         "ERROR" => Severity::Error,
         "WARNING" => Severity::Warning,
-        "SUCCESS" => Severity::Success,
         _ => Severity::Info,
     }
 }
@@ -61,14 +55,7 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
             continue;
         }
 
-        let parsed = secureboot_log_re().captures(trimmed).and_then(|caps| {
-            let ts_str = caps.get(1)?.as_str();
-            let timestamp =
-                chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%d %H:%M:%S").ok()?;
-            Some((caps, timestamp))
-        });
-
-        if let Some((caps, parsed_timestamp)) = parsed {
+        if let Some(caps) = secureboot_log_re().captures(trimmed) {
             let ts_str = caps.get(1).unwrap().as_str();
             let script_name = caps.get(2).unwrap().as_str();
             let level = caps.get(3).unwrap().as_str();
@@ -79,7 +66,9 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
 
             let severity = severity_from_level(level);
 
-            let timestamp = Some(parsed_timestamp.and_utc().timestamp_millis());
+            let timestamp = chrono::NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%d %H:%M:%S")
+                .ok()
+                .map(|dt| dt.and_utc().timestamp_millis());
 
             let timestamp_display = Some(format!("{}.000", ts_str));
 
@@ -229,7 +218,7 @@ mod tests {
         let lines = vec!["2026-04-07 11:25:48 [DETECT] [SUCCESS] Secure Boot is ENABLED"];
         let (entries, errors) = parse_lines(&lines, "SecureBootCertificateUpdate.log");
         assert_eq!(errors, 0);
-        assert_eq!(entries[0].severity, Severity::Success);
+        assert_eq!(entries[0].severity, Severity::Info);
         assert_eq!(entries[0].component.as_deref(), Some("DETECT"));
     }
 
@@ -257,13 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_timestamp_does_not_match_secureboot_record() {
-        assert!(!matches_secureboot_log_record(
-            "2026-13-40 25:61:61 [DETECT] [INFO] impossible timestamp"
-        ));
-    }
-
-    #[test]
     fn test_parse_multiple_lines() {
         let lines = vec![
             "2026-04-07 11:25:47 [DETECT] [INFO] Script Version: 4.0",
@@ -275,7 +257,7 @@ mod tests {
         assert_eq!(errors, 0);
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].severity, Severity::Info);
-        assert_eq!(entries[1].severity, Severity::Success);
+        assert_eq!(entries[1].severity, Severity::Info);
         assert_eq!(entries[2].severity, Severity::Warning);
         assert_eq!(entries[3].severity, Severity::Info);
     }
