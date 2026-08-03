@@ -648,6 +648,8 @@ interface LogState {
   amendAggregateEntry: (filePath: string, amendment: TailEntryAmendment) => void;
   /** Advance one aggregate file's authoritative physical line count. */
   observeAggregateTailLine: (filePath: string, lineNumber: number) => void;
+  /** Accumulate incremental parser/framing coverage gaps for one aggregate file. */
+  recordAggregateTailParseErrors: (filePath: string, parseErrors: number) => void;
   /** Replace one file's entries in an aggregate stream after it was truncated/rotated. */
   resetAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
   findNext: (trigger: string) => void;
@@ -979,6 +981,27 @@ export const useLogStore = create<LogState>((set, get) => ({
         totalLines: aggregateFiles.reduce(
           (sum, file) => sum + file.totalLines,
           0,
+        ),
+      };
+    });
+  },
+  recordAggregateTailParseErrors: (filePath, parseErrors) => {
+    set((state) => {
+      if (!Number.isSafeInteger(parseErrors) || parseErrors <= 0) {
+        return state;
+      }
+      const targetFile = state.aggregateFiles.find(
+        (file) => file.filePath === filePath,
+      );
+      if (!targetFile) {
+        return state;
+      }
+
+      return {
+        aggregateFiles: state.aggregateFiles.map((file) =>
+          file.filePath === filePath
+            ? { ...file, parseErrors: file.parseErrors + parseErrors }
+            : file,
         ),
       };
     });
