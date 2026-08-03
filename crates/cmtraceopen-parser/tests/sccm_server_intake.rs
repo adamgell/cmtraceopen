@@ -1,6 +1,7 @@
 use cmtraceopen_parser::models::log_entry::Severity;
 use cmtraceopen_parser::sccm::server::windows::{
-    assess_server_intake, SccmServerArtifactPayload, SccmServerIntakeError,
+    assess_server_intake, declared_server_source_catalog, SccmServerArtifactPayload,
+    SccmServerIntakeError, SccmServerSourceKind,
 };
 use cmtraceopen_parser::sccm::{
     SccmConfidence, SccmCoverageState, SccmFinding, SccmFindingBuilder, SccmFindingClass,
@@ -1711,6 +1712,239 @@ fn server_intake_rejects_unversioned_future_unsupported_source_labels() {
         assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
         "future provenance needs a versioned opaque handle, not an arbitrary public label"
     );
+}
+
+#[test]
+fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let assessment = assess_server_intake(&manifest_json, &payloads)
+        .expect("the catalogued optional WSUS supplement is assessable");
+    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
+    let artifact = artifact_json(&serialized, "sup-wsus-health-skipped");
+
+    let source = declared_server_source_catalog()
+        .iter()
+        .find(|source| source.source_id == "server-sup-wsus")
+        .expect("WSUS supplemental source is declared");
+    assert_eq!(source.producer_role, SccmRole::WsUs);
+    assert_eq!(
+        source.workflow_subject_role,
+        Some(SccmRole::SoftwareUpdatePoint)
+    );
+    assert_eq!(source.source_kind, SccmServerSourceKind::ProfileDefined);
+    assert!(source.supplemental);
+
+    assert_eq!(
+        serialized["topology"]["rolesObserved"],
+        json!(["softwareUpdatePoint", "wsUs"])
+    );
+    assert_eq!(artifact["producerRole"], "wsUs");
+    assert_eq!(artifact["workflowSubjectRole"], "softwareUpdatePoint");
+    assert_eq!(artifact["sourceId"], "server-sup-wsus");
+    assert_eq!(artifact["sourceKind"], "profileDefined");
+    assert_eq!(artifact["sourceVersion"], "5.00.TEST");
+    assert_eq!(
+        artifact["pathFingerprint"],
+        "synthetic:path:sup-wsus-health"
+    );
+    assert_eq!(artifact["rotationLineageHandle"], "sup-wsus-health");
+    assert_eq!(artifact["state"], "skipped");
+    assert_eq!(artifact["family"], "softwareUpdatePoint");
+    assert!(!artifact["parserEligible"]
+        .as_bool()
+        .expect("parser eligibility"));
+    assert!(serialized["findings"]
+        .as_array()
+        .expect("findings")
+        .is_empty());
+    assert!(serialized["nextArtifactRequests"]
+        .as_array()
+        .expect("requests")
+        .is_empty());
+
+    for (field, replacement) in [
+        ("artifactId", "free-form-wsus-artifact"),
+        ("sourceId", "free-form-wsus-source"),
+        ("sourceKind", "structuredSupplement"),
+        ("originalBasename", "WSUSHealth.json"),
+    ] {
+        let mut manifest = manifest_value(&manifest_json);
+        manifest["artifacts"][0][field] = Value::String(replacement.to_owned());
+        assert_eq!(
+            assess_server_intake(&serialize_manifest(&manifest), &payloads),
+            Err(SccmServerIntakeError::InvalidArtifact),
+            "{field} must remain in the frozen WSUS supplemental vocabulary"
+        );
+    }
+
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["sourceVersion"] = Value::String("5.00.TEST.0001".to_owned());
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact),
+        "synthetic WSUS supplemental evidence accepts only version 5.00.TEST"
+    );
+}
+
+#[test]
+fn wsus_supplement_expected_coverage_uses_only_serialized_fields() {
+    let expected = load_expected("supplemental-wsus-skipped");
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let assessment = assess_server_intake(&manifest_json, &payloads)
+        .expect("the catalogued optional WSUS supplement is assessable");
+    let actual = serde_json::to_value(&assessment).expect("assessment serializes");
+    let expected_coverage = expected["coverage"]
+        .as_array()
+        .expect("expected coverage is an array");
+    let actual_coverage = actual["coverage"]
+        .as_array()
+        .expect("assessment coverage is an array");
+
+    assert_eq!(actual_coverage.len(), expected_coverage.len());
+    for (actual_row, expected_row) in actual_coverage.iter().zip(expected_coverage) {
+        for (key, expected_value) in expected_row
+            .as_object()
+            .expect("expected coverage row is an object")
+        {
+            assert_eq!(
+                actual_row.get(key),
+                Some(expected_value),
+                "WSUS expected coverage must assert an actual serialized coverage field: {key}"
+            );
+        }
+    }
+}
+
+#[test]
+fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
+    type ManifestMutation = (&'static str, fn(&mut Value));
+
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let mutations: [ManifestMutation; 8] = [
+        ("subject role not observed", |manifest| {
+            manifest["topology"]["rolesObserved"] = json!(["wsUs"]);
+        }),
+        ("workflow subject omitted", |manifest| {
+            manifest["artifacts"][0]
+                .as_object_mut()
+                .expect("artifact is an object")
+                .remove("workflowSubject");
+        }),
+        ("workflow subject role changed", |manifest| {
+            manifest["artifacts"][0]["workflowSubject"]["role"] =
+                Value::String("distributionPoint".to_owned());
+        }),
+        ("producer host rebound", |manifest| {
+            manifest["artifacts"][0]["producerHostHandle"] =
+                Value::String("synthetic:host:mp-01".to_owned());
+        }),
+        ("subject handle rebound", |manifest| {
+            manifest["artifacts"][0]["workflowSubject"]["instanceHandle"] =
+                Value::String("synthetic:subject:dp-01".to_owned());
+        }),
+        ("source version omitted", |manifest| {
+            manifest["artifacts"][0]
+                .as_object_mut()
+                .expect("artifact is an object")
+                .remove("sourceVersion");
+        }),
+        ("path fingerprint substituted", |manifest| {
+            manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"] =
+                Value::String("synthetic:path:site-sup-control".to_owned());
+        }),
+        ("rotation lineage substituted", |manifest| {
+            manifest["artifacts"][0]["rotation"]["lineageId"] =
+                Value::String("sup-sync-lab".to_owned());
+        }),
+    ];
+
+    let mut unexpected = Vec::new();
+    for (name, mutate) in mutations {
+        let mut manifest = manifest_value(&manifest_json);
+        mutate(&mut manifest);
+        match assess_server_intake(&serialize_manifest(&manifest), &payloads) {
+            Err(SccmServerIntakeError::InvalidArtifact) => {}
+            Err(error) => unexpected.push(format!("{name}: returned {error:?}")),
+            Ok(_) => unexpected.push(format!("{name}: was accepted")),
+        }
+    }
+
+    assert!(
+        unexpected.is_empty(),
+        "WSUS supplemental tuple mutations must fail closed:\n{}",
+        unexpected.join("\n")
+    );
+}
+
+#[test]
+fn server_intake_rejects_timestamped_rotation_for_synthetic_wsus_tuple() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["rotation"]["kind"] = Value::String("timestamped".to_owned());
+    manifest["artifacts"][0]["rotation"]["value"] = Value::String("20260729-235700".to_owned());
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact),
+        "the frozen synthetic WSUS tuple cannot discard a valid timestamped rotation"
+    );
+}
+
+#[test]
+fn server_intake_rejects_provider_defined_value_for_synthetic_wsus_tuple() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["rotation"]["value"] =
+        Value::String("unexpected-provider-value".to_owned());
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact),
+        "the frozen synthetic WSUS provider-defined rotation cannot carry a value"
+    );
+}
+
+#[test]
+fn server_intake_accepts_profile_validated_production_wsus_tuple_with_opaque_provenance() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let mut manifest = manifest_value(&manifest_json);
+    let artifact_id = opaque_handle("cmtraceopen.artifact.sha256.v1:", 201);
+
+    manifest["syntheticFixture"] = Value::Bool(false);
+    manifest
+        .as_object_mut()
+        .expect("manifest is an object")
+        .remove("proposalOnly");
+    manifest
+        .as_object_mut()
+        .expect("manifest is an object")
+        .remove("privacy");
+    manifest["topology"]["captureHost"] =
+        Value::String(opaque_handle("cmtraceopen.host.sha256.v1:", 202));
+    manifest["topology"]["siteCode"] =
+        Value::String(opaque_handle("cmtraceopen.site.sha256.v1:", 203));
+    manifest["artifacts"][0]["artifactId"] = Value::String(artifact_id.clone());
+    manifest["artifacts"][0]["producerHostHandle"] =
+        Value::String(opaque_handle("cmtraceopen.host.sha256.v1:", 204));
+    manifest["artifacts"][0]["workflowSubject"]["instanceHandle"] =
+        Value::String(opaque_handle("cmtraceopen.subject.sha256.v1:", 205));
+    manifest["artifacts"][0]["sourceVersion"] = Value::String("5.00.9999.9999".to_owned());
+    manifest["artifacts"][0]["originalPath"] = Value::String("REDACTED".to_owned());
+    manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"] =
+        Value::String(opaque_handle("cmtraceopen.path.sha256.v1:", 206));
+    manifest["artifacts"][0]["rotation"]["lineageId"] =
+        Value::String(opaque_handle("cmtraceopen.lineage.sha256.v1:", 207));
+    manifest["artifacts"][0]["skipReason"] =
+        Value::String(opaque_handle("cmtraceopen.skip-reason.sha256.v1:", 208));
+
+    let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("profile-validated production WSUS provenance remains assessable");
+    let public = serde_json::to_value(assessment).expect("assessment serializes");
+    let artifact = artifact_json(&public, &artifact_id);
+    assert_eq!(artifact["producerRole"], "wsUs");
+    assert_eq!(artifact["workflowSubjectRole"], "softwareUpdatePoint");
+    assert_eq!(artifact["sourceVersion"], "5.00.9999.9999");
+    assert_eq!(artifact["state"], "skipped");
 }
 
 #[test]
