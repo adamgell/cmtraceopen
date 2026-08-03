@@ -17,12 +17,30 @@ categories = [
     "os::windows-apis",
 ]
 
+# Every version below is a FLOOR, not a pin: the lowest release this crate
+# actually compiles against, established with `-Z minimal-versions` (see the
+# minimal-versions job in .github/workflows/cmtrace-ci.yml). This crate is
+# published, so a major-version-only requirement like "1" is a promise we
+# cannot keep: a downstream lockfile may resolve any older 0.x/1.x that
+# satisfies it and then fail to build.
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-regex = "1"
-chrono = { version = "0.4", features = ["serde"] }
+# Older serde_derive releases bundle a syn that cannot parse the token stream
+# current rustc emits and panic inside the derive macro. The observed break is
+# at 1.0.102 (1.0.103 builds), but that boundary is a property of the compiler
+# rather than of this crate, so it drifts as rustc evolves; 1.0.113 keeps a
+# deliberate margin above it instead of sitting on the edge.
+serde = { version = "1.0.113", features = ["derive"] }
+# 1.0.50 added `impl Eq for Value`, required by the `Eq` derives on the ESP and
+# Company Portal models.
+serde_json = "1.0.50"
+# 1.8.0 added `Regex::captures_at`, used by src/esp/redaction.rs.
+regex = "1.8.0"
+# 0.4.34 is the first release where TimeDelta/Duration constructors are
+# `const fn`, required by the `const TEMPORAL_SLOP` in src/esp/correlation.rs.
+chrono = { version = "0.4.34", features = ["serde"] }
 encoding_rs = "0.8"
-log = "0.4"
+# 0.4.4 is the first release whose macros are `$crate`-qualified, which is what
+# makes the path-style `log::warn!` / `log::debug!` calls in this crate expand.
+log = "0.4.4"
 thiserror = "2"
 base64 = "0.22"

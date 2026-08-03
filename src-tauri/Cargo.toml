@@ -48,7 +48,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.23"
 regex = "1"
-chrono = { version = "0.4", features = ["serde"] }
+# Floor, not a pin: 0.4.34 is the first release carrying `chrono::TimeDelta`
+# (used by the `const MAX_INVOCATION` in jamf/policy_log.rs, which additionally
+# needs the constructors to be `const fn` -- also 0.4.34).
+# `DateTime::from_timestamp_millis` (sysmon/evtx_parser.rs) needs only 0.4.32,
+# so 0.4.34 covers both.
+chrono = { version = "0.4.34", features = ["serde"] }
 encoding_rs = "0.8"
 log = "0.4"
 thiserror = "2"

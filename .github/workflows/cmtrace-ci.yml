@@ -136,6 +136,71 @@ jobs:
       - name: Rust MSRV check
         run: cargo +1.88 check --workspace --all-features --locked
 
+  # cmtraceopen-parser is published to crates.io, so its dependency
+  # requirements are a promise to strangers: a consumer whose lockfile resolves
+  # the lowest version we declare must still be able to build us. Every other
+  # Rust job here runs against the committed Cargo.lock, which always resolves
+  # near-latest and therefore cannot see a requirement that is declared lower
+  # than the code actually compiles against. This job is the only one that can:
+  # it throws the lockfile away, re-resolves every requirement to its floor, and
+  # builds the published crate against that.
+  minimal-versions:
+    name: Minimal versions (cmtraceopen-parser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Rust nightly
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: nightly
+
+      # Keyed on the parser manifest rather than Cargo.lock: this job regenerates
+      # the lockfile, so the committed one does not describe what gets built
+      # here. Only the registry is cached -- the build happens in a scratch copy
+      # outside the workspace, so there is no in-repo target dir worth keeping.
+      - name: Cache Rust dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-minimal-versions-${{ hashFiles('crates/cmtraceopen-parser/Cargo.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-minimal-versions-
+
+      # Resolution must treat the published crate as its own workspace root.
+      # Resolving at the repo's workspace root would merge src-tauri's
+      # requirements into the same lockfile, and src-tauri asks for much newer
+      # versions of the crates the two share (regex, log, serde, serde_json).
+      # Those higher requirements win, so the parser would be compiled against
+      # them and its own floors would never be exercised -- this gate would pass
+      # even with a floor declared far below what the code needs, which is
+      # exactly the bug it exists to catch.
+      #
+      # Deleting the root manifest in a throwaway copy detaches the crate from
+      # the workspace. It is done in a copy, and the rest of the tree is left in
+      # place, because the crate include_str!()s files from the repo root.
+      - name: Detach the published crate from the workspace
+        run: |
+          mkdir -p /tmp/minver
+          cp -a . /tmp/minver/repo
+          rm -f /tmp/minver/repo/Cargo.toml /tmp/minver/repo/Cargo.lock
+
+      # -Z minimal-versions lowers third-party crates too, and the tauri graph
+      # carries pre-existing violations that are not ours to fix (for example
+      # tauri-utils -> ... -> debug_unreachable 0.0.1, which no longer compiles).
+      # Gating the whole workspace would therefore be permanently red.
+      # cmtraceopen-parser is the only crate here that anyone else compiles, and
+      # the only one whose floors we can keep honest, so it is the only one gated.
+      - name: Resolve every dependency to its declared floor
+        working-directory: /tmp/minver/repo/crates/cmtraceopen-parser
+        run: cargo +nightly -Z minimal-versions generate-lockfile
+
+      - name: Build the published crate at its dependency floors
+        working-directory: /tmp/minver/repo/crates/cmtraceopen-parser
+        run: cargo +nightly check --locked --all-targets
+
   frontend:
     name: TypeScript Check
     runs-on: ubuntu-latest
