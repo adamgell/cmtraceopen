@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::server::windows::{
-    analyze_distribution_point, assess_server_intake, SccmServerArtifactPayload,
-    SccmServerIntakeAssessment, SccmServerIntakeError,
+    analyze_distribution_point, analyze_distribution_point_content_from_server_intake,
+    assess_server_intake, SccmServerArtifactPayload, SccmServerIntakeAssessment,
+    SccmServerIntakeError,
 };
 use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState};
 use serde_json::Value;
@@ -55,6 +56,33 @@ fn assess_complete_manifest_after(
 fn load_assessment(scenario: &str) -> SccmServerIntakeAssessment {
     let (manifest, payloads) = load_manifest_and_payloads(scenario);
     assess_manifest(&manifest, &payloads).expect("fixture intake is accepted")
+}
+
+fn load_distribution_point_assessment(scenario: &str) -> SccmServerIntakeAssessment {
+    let scenario_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/sccm/server/distribution_point")
+        .join(scenario);
+    let manifest_json =
+        std::fs::read_to_string(scenario_root.join("manifest.json")).expect("manifest is readable");
+    let manifest: Value = serde_json::from_str(&manifest_json).expect("manifest is valid JSON");
+    let payloads = manifest["artifacts"]
+        .as_array()
+        .expect("artifacts are an array")
+        .iter()
+        .filter_map(|artifact| {
+            let relative_path = artifact["relativePath"].as_str()?;
+            Some(SccmServerArtifactPayload {
+                manifest_artifact_id: artifact["artifactId"]
+                    .as_str()
+                    .expect("artifact id is a string")
+                    .to_owned(),
+                bytes: std::fs::read(scenario_root.join(relative_path))
+                    .expect("captured evidence is readable"),
+            })
+        })
+        .collect::<Vec<_>>();
+    assess_server_intake(&manifest_json, &payloads)
+        .expect("distribution point fixture is canonical server intake")
 }
 
 fn dp_manifest_artifact_mut(manifest: &mut Value) -> &mut Value {
@@ -238,6 +266,30 @@ fn distribution_point_adapter_projects_only_canonical_intake_observations_determ
         serde_json::to_value(analyze_distribution_point(&reordered))
             .expect("reordered analysis serializes")
     );
+}
+
+#[test]
+fn healthy_package_reduces_a_sealed_role_local_transaction() {
+    let assessment = load_distribution_point_assessment("healthy-package");
+    let bounded = analyze_distribution_point(&assessment);
+    assert_eq!(bounded.source_observations.len(), 6);
+
+    let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+        .expect("healthy canonical intake must enter the DP semantic reducer");
+
+    assert!(!analysis.cross_side_correlation_performed);
+    assert_eq!(analysis.transactions.len(), 1);
+    assert_eq!(analysis.transactions[0].key.package_id, "LAB00001");
+    assert_eq!(analysis.transactions[0].key.content_id, "content-alpha");
+    assert_eq!(analysis.transactions[0].key.content_version, 1);
+    assert_eq!(
+        analysis.transactions[0]
+            .key
+            .distribution_point_handle
+            .as_str(),
+        "safe:dp:lab-dp-01"
+    );
+    assert_eq!(analysis.transactions[0].evidence.len(), 6);
 }
 
 #[test]
