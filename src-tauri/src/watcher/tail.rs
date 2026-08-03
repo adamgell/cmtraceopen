@@ -496,7 +496,9 @@ impl TailReader {
             || self
                 .pending_fragment_selection
                 .as_ref()
-                .is_some_and(|(selection, _)| selection != &self.parser_selection);
+                .is_some_and(|(selection, _)| selection != &self.parser_selection)
+            || (self.pending_initial_logical_record.is_some()
+                && !InitialLogicalRecord::supports_parser(&self.parser_selection));
 
         let last_updated = self
             .pending_logical_record
@@ -643,6 +645,13 @@ impl TailReader {
     }
 
     fn flush_pending_logical_record(&mut self) -> TailBatch {
+        if self.pending_initial_logical_record.is_some()
+            && !InitialLogicalRecord::supports_parser(&self.parser_selection)
+        {
+            self.pending_initial_logical_record = None;
+            self.discarding_capped_initial_line = false;
+        }
+
         let mut batch = TailBatch::empty(false);
         let mut fragment = std::mem::take(&mut self.pending_fragment);
         let mut fragment_selection = self.pending_fragment_selection.take();
