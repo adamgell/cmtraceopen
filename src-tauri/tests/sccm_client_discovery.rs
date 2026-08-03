@@ -127,6 +127,75 @@ fn expected_evidence_identity(
 }
 
 #[test]
+fn discovery_coverage_issue_ids_with_omitted_state_use_nul_domain_separators() {
+    let capacity = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 1,
+        observations: (0..=MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS)
+            .map(|number| {
+                observation(
+                    &format!("root-{number:064x}"),
+                    "AppEnforce.log",
+                    SccmRotation::Current,
+                    SccmClientDiscoveryObservationState::Found,
+                )
+            })
+            .collect(),
+    })
+    .expect("the global frontier emits a coverage issue");
+    let capacity_issue = capacity
+        .coverage_issues
+        .iter()
+        .find(|issue| {
+            issue.state == SccmClientDiscoveryCoverageIssueState::DeclarationLimitExceeded
+        })
+        .expect("the omitted declaration has a capacity issue");
+    assert_eq!(
+        capacity_issue.artifact_id,
+        format!(
+            "sccm-discovery-coverage:v1:sha256:{}",
+            sha256(concat!(
+                "cmtraceopen.sccm.discovery.coverage.v1\0",
+                "sccm-client-source:v1:none\0",
+                "unknown\0declaration-limit-exceeded\0discovered",
+            ))
+        ),
+        "coverage IDs with an omitted state must hash true NUL-separated fields"
+    );
+}
+
+#[test]
+fn discovery_coverage_issue_ids_without_omitted_state_use_nul_domain_separators() {
+    let invalid_provenance = discover_client_sources(&SccmClientDiscoveryInput {
+        max_found_fragments_per_source: 1,
+        observations: vec![observation(
+            "not-a-root-handle",
+            "AppEnforce.log",
+            SccmRotation::Current,
+            SccmClientDiscoveryObservationState::Found,
+        )],
+    })
+    .expect("invalid provenance remains explicit coverage");
+    let invalid_provenance_issue = invalid_provenance
+        .coverage_issues
+        .iter()
+        .find(|issue| issue.state == SccmClientDiscoveryCoverageIssueState::InvalidProvenance)
+        .expect("invalid provenance has a coverage issue");
+    assert_eq!(
+        invalid_provenance_issue.artifact_id,
+        format!(
+            "sccm-discovery-coverage:v1:sha256:{}",
+            sha256(concat!(
+                "cmtraceopen.sccm.discovery.coverage.v1\0",
+                "sccm-client-source:v1:sha256:",
+                "0e25c53307bce0649d0b969c2ae8354ac27100c97fdc6a532267b9a8c0a3f548\0",
+                "unknown\0invalid-provenance",
+            ))
+        ),
+        "coverage IDs without an omitted state must hash true NUL-separated fields"
+    );
+}
+
+#[test]
 fn discovery_uses_one_global_declaration_budget_and_reports_capacity_coverage() {
     let mut observations = Vec::new();
     for number in 1..=2_048 {
