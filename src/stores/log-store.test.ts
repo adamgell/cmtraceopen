@@ -136,6 +136,22 @@ describe("log-store", () => {
       );
       expect(useLogStore.getState().totalLines).toBe(3);
     });
+
+    it("rejects a future range until its expected predecessor is present", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry(secondAmendment);
+      expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
+
+      useLogStore.getState().amendEntry(firstAmendment);
+      expect(useLogStore.getState().entries[0].message).toBe(
+        "[Sync] started\nrequest failed with 0x80070005",
+      );
+      expect(useLogStore.getState().totalLines).toBe(2);
+    });
   });
 
   describe("resetEntries (tail truncation)", () => {
@@ -217,6 +233,15 @@ describe("log-store", () => {
       ]);
       useLogStore.getState().setTotalLines(2);
 
+      useLogStore.getState().amendAggregateEntry("/a.log", {
+        entryId: 0,
+        entryLineNumber: 1,
+        continuationStartLine: 2,
+        continuationEndLine: 2,
+        messageUtf16Start: 14,
+        messageSuffix: "\nrequest failed",
+        errorCodeSpans: [],
+      });
       useLogStore.getState().amendAggregateEntry("/a.log", {
         entryId: 0,
         entryLineNumber: 1,

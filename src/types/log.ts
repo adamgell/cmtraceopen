@@ -249,12 +249,28 @@ export interface AggregateParseResult {
   files: AggregateParsedFileResult[];
 }
 
+/** A bounded continuation suffix for an already-rendered logical record. */
+export interface TailEntryAmendment {
+  entryId: number;
+  entryLineNumber: number;
+  continuationStartLine: number;
+  continuationEndLine: number;
+  /** Expected JS/UTF-16 length of the message before this suffix is applied. */
+  messageUtf16Start: number;
+  messageSuffix: string;
+  /** Absolute JS/UTF-16 spans in the amended message. */
+  errorCodeSpans: ErrorCodeSpan[];
+}
+
 /** Payload emitted by the Rust tail watcher */
 export interface TailPayload {
   entries: LogEntry[];
-  /** A corrected entry that replaces the initial logical record already rendered for this file. */
-  replacement: LogEntry | null;
+  amendments: TailEntryAmendment[];
   filePath: string;
+  /** Parse/framing coverage gaps observed in this incremental batch. */
+  parseErrors: number;
+  /** Highest physical source line consumed by this batch. */
+  observedThroughLine: number | null;
   parserSelection?: ParserSelectionInfo;
   /**
    * True when the tailed file was truncated/rotated: `entries` are a fresh read

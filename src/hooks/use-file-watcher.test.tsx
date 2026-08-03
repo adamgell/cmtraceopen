@@ -111,6 +111,7 @@ describe("useFileWatcher tail start state", () => {
       ],
       filePath: "/logs/Log_1.log",
       parseErrors: 0,
+      observedThroughLine: 2,
       reset: false,
     };
 

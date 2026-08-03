@@ -9,6 +9,7 @@ import type {
   LogFormat,
   LogSource,
   ParserSelectionInfo,
+  TailEntryAmendment,
 } from "../types/log";
 import {
   type ColumnId,
@@ -88,6 +89,36 @@ export interface ParserSelectionDisplay {
 
 const UNGROUPED_TOOLBAR_GROUP_ID = "ungrouped";
 const UNGROUPED_TOOLBAR_GROUP_LABEL = "Other Sources";
+
+function canApplyTailAmendment(
+  entry: LogEntry,
+  amendment: TailEntryAmendment,
+): boolean {
+  if (
+    amendment.messageSuffix.length === 0 ||
+    amendment.entryLineNumber !== entry.lineNumber ||
+    amendment.continuationStartLine <= amendment.entryLineNumber ||
+    amendment.continuationEndLine < amendment.continuationStartLine ||
+    entry.message.length !== amendment.messageUtf16Start
+  ) {
+    return false;
+  }
+
+  const physicalLineCount =
+    amendment.continuationEndLine - amendment.continuationStartLine + 1;
+  const suffixLineCount = amendment.messageSuffix.split("\n").length - 1;
+  const amendedMessageLength =
+    amendment.messageUtf16Start + amendment.messageSuffix.length;
+  return (
+    suffixLineCount === physicalLineCount &&
+    amendment.errorCodeSpans.every(
+      (span) =>
+        span.start >= amendment.messageUtf16Start &&
+        span.end > span.start &&
+        span.end <= amendedMessageLength,
+    )
+  );
+}
 const LAST_SORT_ORDER = Number.MAX_SAFE_INTEGER;
 
 /**
@@ -566,8 +597,8 @@ interface LogState {
   hasFindSession: () => boolean;
   setEntries: (entries: LogEntry[]) => void;
   appendEntries: (entries: LogEntry[]) => void;
-  /** Amend an entry that was already rendered before its logical record completed. */
-  replaceEntry: (entry: LogEntry) => void;
+  /** Append a validated bounded suffix to an incomplete rendered record. */
+  amendEntry: (amendment: TailEntryAmendment) => void;
   /** Replace the single-file view after a tailed file was truncated/rotated. */
   resetEntries: (entries: LogEntry[]) => void;
   selectEntry: (id: number | null) => void;
@@ -595,8 +626,10 @@ interface LogState {
   setFindUseRegex: (useRegex: boolean) => void;
   recomputeFindMatches: () => void;
   appendAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
-  /** Amend one rendered aggregate entry while preserving its frontend-owned id. */
-  replaceAggregateEntry: (filePath: string, entry: LogEntry) => void;
+  /** Append a validated suffix while preserving an aggregate row's display id. */
+  amendAggregateEntry: (filePath: string, amendment: TailEntryAmendment) => void;
+  /** Advance one aggregate file's authoritative physical line count. */
+  observeAggregateTailLine: (filePath: string, lineNumber: number) => void;
   /** Replace one file's entries in an aggregate stream after it was truncated/rotated. */
   resetAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
   findNext: (trigger: string) => void;
@@ -775,20 +808,34 @@ export const useLogStore = create<LogState>((set, get) => ({
     }));
     recomputeAndSetMatches();
   },
-  replaceEntry: (replacement) => {
+  amendEntry: (amendment) => {
     set((state) => {
-      let replaced = false;
+      let amended = false;
       const entries = state.entries.map((entry) => {
-        if (entry.id !== replacement.id) {
+        if (
+          entry.id !== amendment.entryId ||
+          !canApplyTailAmendment(entry, amendment)
+        ) {
           return entry;
         }
-        replaced = true;
-        return replacement;
+        amended = true;
+        return {
+          ...entry,
+          message: entry.message + amendment.messageSuffix,
+          errorCodeSpans: [
+            ...(entry.errorCodeSpans ?? []),
+            ...amendment.errorCodeSpans,
+          ],
+        };
       });
 
-      return replaced
+      return amended
         ? {
             entries,
+            totalLines: Math.max(
+              state.totalLines,
+              amendment.continuationEndLine,
+            ),
             guidNameMap: buildGuidNameMap(entries),
           }
         : {};
@@ -835,33 +882,72 @@ export const useLogStore = create<LogState>((set, get) => ({
     });
     recomputeAndSetMatches();
   },
-  replaceAggregateEntry: (filePath, replacement) => {
+  amendAggregateEntry: (filePath, amendment) => {
     set((state) => {
-      let replaced = false;
+      let amended = false;
       const entries = state.entries.map((entry) => {
-        if (replaced || entry.filePath !== filePath || entry.lineNumber !== replacement.lineNumber) {
+        if (
+          amended ||
+          entry.filePath !== filePath ||
+          !canApplyTailAmendment(entry, amendment)
+        ) {
           return entry;
         }
-        replaced = true;
+        amended = true;
         return {
-          ...replacement,
-          filePath,
-          id: entry.id,
+          ...entry,
+          message: entry.message + amendment.messageSuffix,
+          errorCodeSpans: [
+            ...(entry.errorCodeSpans ?? []),
+            ...amendment.errorCodeSpans,
+          ],
         };
       });
 
-      if (!replaced) {
+      if (!amended) {
         return {};
       }
 
+      const aggregateFiles = state.aggregateFiles.map((file) =>
+        file.filePath === filePath
+          ? {
+              ...file,
+              totalLines: Math.max(
+                file.totalLines,
+                amendment.continuationEndLine,
+              ),
+            }
+          : file,
+      );
       const fileOrder = buildAggregateFileOrder(state.aggregateFiles);
       entries.sort((left, right) => compareMergedLogEntries(left, right, fileOrder));
       return {
         entries,
+        aggregateFiles,
+        totalLines: aggregateFiles.reduce(
+          (sum, file) => sum + file.totalLines,
+          0,
+        ),
         guidNameMap: buildGuidNameMap(entries),
       };
     });
     recomputeAndSetMatches();
+  },
+  observeAggregateTailLine: (filePath, lineNumber) => {
+    set((state) => {
+      const aggregateFiles = state.aggregateFiles.map((file) =>
+        file.filePath === filePath && lineNumber > file.totalLines
+          ? { ...file, totalLines: lineNumber }
+          : file,
+      );
+      return {
+        aggregateFiles,
+        totalLines: aggregateFiles.reduce(
+          (sum, file) => sum + file.totalLines,
+          0,
+        ),
+      };
+    });
   },
   resetAggregateEntries: (filePath, newEntries) => {
     // One file in the aggregate stream was truncated/rotated: drop its stale
@@ -881,10 +967,17 @@ export const useLogStore = create<LogState>((set, get) => ({
       const entries = [...remaining, ...entriesWithIds].sort((left, right) =>
         compareMergedLogEntries(left, right, fileOrder)
       );
+      const aggregateFiles = state.aggregateFiles.map((file) =>
+        file.filePath === filePath ? { ...file, totalLines: 0 } : file,
+      );
 
       return {
         entries,
-        totalLines: entries.length,
+        aggregateFiles,
+        totalLines:
+          aggregateFiles.length > 0
+            ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0)
+            : entries.length,
         guidNameMap: buildGuidNameMap(entries),
         selectedId:
           state.selectedId !== null &&

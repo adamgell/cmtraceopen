@@ -18,12 +18,14 @@ export function useFileWatcher() {
   const formatDetected = useLogStore((s) => s.formatDetected);
   const isPaused = useLogStore((s) => s.isPaused);
   const appendEntries = useLogStore((s) => s.appendEntries);
-  const replaceEntry = useLogStore((s) => s.replaceEntry);
+  const amendEntry = useLogStore((s) => s.amendEntry);
   const appendAggregateEntries = useLogStore((s) => s.appendAggregateEntries);
-  const replaceAggregateEntry = useLogStore((s) => s.replaceAggregateEntry);
+  const amendAggregateEntry = useLogStore((s) => s.amendAggregateEntry);
+  const observeAggregateTailLine = useLogStore((s) => s.observeAggregateTailLine);
   const resetEntries = useLogStore((s) => s.resetEntries);
   const resetAggregateEntries = useLogStore((s) => s.resetAggregateEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
+  const setTotalLines = useLogStore((s) => s.setTotalLines);
 
   // Start/stop tailing when file changes
   useEffect(() => {
@@ -103,7 +105,15 @@ export function useFileWatcher() {
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
     const unlisten = listen<TailPayload>("tail-new-entries", (event) => {
-      const { entries: newEntries, filePath, parserSelection, replacement, reset } = event.payload;
+      const {
+        amendments,
+        entries: newEntries,
+        filePath,
+        observedThroughLine,
+        parseErrors,
+        parserSelection,
+        reset,
+      } = event.payload;
       const state = useLogStore.getState();
 
       if (state.sourceOpenMode === "aggregate-folder") {
@@ -113,22 +123,33 @@ export function useFileWatcher() {
           return;
         }
 
+        if (parseErrors > 0) {
+          console.warn(
+            `Tail parsing reported ${parseErrors} coverage gap(s) for ${filePath}`,
+          );
+        }
+
         // A truncation reset must clear stale entries even when the fresh read
         // is empty, so it cannot be gated behind the empty-batch guard below.
         if (reset) {
           resetAggregateEntries(filePath, newEntries);
+          if (observedThroughLine !== null) {
+            observeAggregateTailLine(filePath, observedThroughLine);
+          }
           return;
         }
 
-        if (replacement) {
-          replaceAggregateEntry(filePath, replacement);
+        for (const amendment of amendments) {
+          amendAggregateEntry(filePath, amendment);
         }
 
-        if (newEntries.length === 0) {
-          return;
+        if (newEntries.length > 0) {
+          appendAggregateEntries(filePath, newEntries);
         }
 
-        appendAggregateEntries(filePath, newEntries);
+        if (observedThroughLine !== null) {
+          observeAggregateTailLine(filePath, observedThroughLine);
+        }
         return;
       }
 
@@ -138,36 +159,51 @@ export function useFileWatcher() {
         return;
       }
 
+      if (parseErrors > 0) {
+        console.warn(
+          `Tail parsing reported ${parseErrors} coverage gap(s) for ${filePath}`,
+        );
+      }
+
       if (parserSelection) {
         setParserSelection(parserSelection);
       }
 
       if (reset) {
         resetEntries(newEntries);
+        if (observedThroughLine !== null) {
+          setTotalLines(observedThroughLine);
+        }
         return;
       }
 
-      if (replacement) {
-        replaceEntry(replacement);
+      for (const amendment of amendments) {
+        amendEntry(amendment);
       }
 
-      if (newEntries.length === 0) {
-        return;
+      if (newEntries.length > 0) {
+        appendEntries(newEntries);
       }
 
-      appendEntries(newEntries);
+      if (observedThroughLine !== null) {
+        setTotalLines(
+          Math.max(useLogStore.getState().totalLines, observedThroughLine),
+        );
+      }
     });
 
     return () => {
       unlisten.then((fn) => fn());
     };
   }, [
+    amendAggregateEntry,
+    amendEntry,
     appendAggregateEntries,
     appendEntries,
-    replaceAggregateEntry,
-    replaceEntry,
+    observeAggregateTailLine,
     resetAggregateEntries,
     resetEntries,
     setParserSelection,
+    setTotalLines,
   ]);
 }
