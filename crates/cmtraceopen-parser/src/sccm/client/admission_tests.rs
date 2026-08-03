@@ -329,6 +329,32 @@ fn admission_rejects_oversized_payload_work_records_and_retained_evidence() {
 }
 
 #[test]
+fn admission_enforces_logical_record_cap_across_all_payloads() {
+    let bundle = SccmClientIntakeBundle {
+        artifacts: (1..=2).map(numbered_artifact).collect(),
+        capture_gaps: Vec::new(),
+    };
+    let assessment =
+        assess_client_intake(&bundle).expect("two captured rotations are canonical intake");
+    let payloads = bundle
+        .artifacts
+        .iter()
+        .map(|artifact| payload_with_repeated_records(&artifact.artifact.artifact_id, 2_049, "x"))
+        .collect::<Vec<_>>();
+
+    let result = admit_client_evidence(&bundle, &assessment, &payloads);
+    assert!(
+        result.is_err(),
+        "two individually bounded rotations totaling 4,098 records were admitted"
+    );
+    let error = result.expect_err("the logical-record cap must apply across the complete bundle");
+    assert_eq!(
+        error.to_string(),
+        "client evidence admission logical record count exceeds the v1 cap"
+    );
+}
+
+#[test]
 fn admission_reassesses_bundle_and_is_deterministic_across_payload_order() {
     let mut bundle = bundle();
     bundle
