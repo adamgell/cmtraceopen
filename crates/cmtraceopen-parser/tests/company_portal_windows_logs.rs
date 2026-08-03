@@ -490,8 +490,8 @@ fn portal_logs_local_projection_is_the_explicit_opt_out() {
         parse_log_document_preserving_local_values(&local_state_path("Log_1.log"), REDACTION);
     assert!(!local.redacted);
 
-    let json = serde_json::to_string(&local).expect("document must serialize");
-    assert!(json.contains("adele.vance@contoso.onmicrosoft.com"));
+    let original_json = serde_json::to_string(&local).expect("document must serialize");
+    assert!(original_json.contains("adele.vance@contoso.onmicrosoft.com"));
 
     // And the redacting projection over the same input drops everything.
     let safe = redacted_export_projection(&local);
@@ -500,6 +500,11 @@ fn portal_logs_local_projection_is_the_explicit_opt_out() {
         assert!(!safe_json.contains(value), "{value}");
     }
     assert!(!local.redacted, "projection must not mutate its input");
+    assert_eq!(
+        serde_json::to_string(&local).expect("local document still serializes"),
+        original_json,
+        "redacted export must not mutate any local document content"
+    );
 }
 
 #[test]

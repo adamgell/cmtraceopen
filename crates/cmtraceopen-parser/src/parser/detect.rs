@@ -1056,8 +1056,28 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
     }
 
     #[test]
+    fn test_one_company_portal_record_without_path_hint_stays_generic() {
+        let content = "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started";
+
+        let detected = detect_parser("C:/Temp/unrelated.log", content);
+
+        assert_ne!(detected.parser, ParserKind::CompanyPortal);
+    }
+
+    #[test]
     fn test_detect_company_portal_downgrades_unknown_app_version() {
         let content = "2026-02-03T09:15:00.1230000Z  INFO  Event  None  0  1487dc30-3bb0-46bf-98ee-76771bd9953e  13-4-2  [Sync] started";
+
+        let detected = detect_parser(&format!("{COMPANY_PORTAL_LOCALSTATE}/Log_1.log"), content);
+
+        assert_eq!(detected.parser, ParserKind::CompanyPortal);
+        assert_eq!(detected.provenance, ParserProvenance::Heuristic);
+    }
+
+    #[test]
+    fn test_detect_company_portal_downgrades_mixed_app_versions() {
+        let content = "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n\
+             2026-02-03T09:15:00.1230000Z  INFO  Event  None  1  1487dc30-3bb0-46bf-98ee-76771bd9953e  13-4-2  [Sync] complete";
 
         let detected = detect_parser(&format!("{COMPANY_PORTAL_LOCALSTATE}/Log_1.log"), content);
 
