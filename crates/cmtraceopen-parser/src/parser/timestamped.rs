@@ -1,3 +1,4 @@
+use crate::digits::{fraction_to_millis, parse_ascii_u32};
 use crate::parser::ccm::naive_to_utc_millis;
 use regex::Regex;
 
@@ -223,7 +224,7 @@ fn try_iso(line: &str) -> Option<LogEntry> {
     let m: u32 = caps.get(5)?.as_str().parse().ok()?;
     let s: u32 = caps.get(6)?.as_str().parse().ok()?;
 
-    let ms = parse_fractional_millis(caps.get(7).map(|m| m.as_str()));
+    let ms = parse_fractional_millis(caps.get(7).map(|m| m.as_str()))?;
     let tz_offset = parse_tz_offset(caps.get(8).map(|m| m.as_str()));
     let message = caps
         .get(9)
@@ -309,7 +310,7 @@ fn try_slash_date(line: &str, date_order: DateOrder) -> Option<LogEntry> {
     let m: u32 = caps.get(5)?.as_str().parse().ok()?;
     let s: u32 = caps.get(6)?.as_str().parse().ok()?;
 
-    let ms = parse_fractional_millis(caps.get(7).map(|m| m.as_str()));
+    let ms = parse_fractional_millis(caps.get(7).map(|m| m.as_str()))?;
 
     // Handle AM/PM
     if let Some(ampm) = caps.get(8) {
@@ -478,7 +479,7 @@ fn try_time_only(line: &str) -> Option<LogEntry> {
     let h: u32 = caps.get(1)?.as_str().parse().ok()?;
     let m: u32 = caps.get(2)?.as_str().parse().ok()?;
     let s: u32 = caps.get(3)?.as_str().parse().ok()?;
-    let ms = parse_fractional_millis(caps.get(4).map(|m| m.as_str()));
+    let ms = parse_fractional_millis(caps.get(4).map(|m| m.as_str()))?;
     let message = caps
         .get(5)
         .map(|m| m.as_str().to_string())
@@ -550,16 +551,15 @@ fn try_time_only(line: &str) -> Option<LogEntry> {
 // ---------------------------------------------------------------------------
 
 /// Parse fractional seconds like ".123", ",456789" → milliseconds (truncated to 3 digits).
-fn parse_fractional_millis(frac: Option<&str>) -> u32 {
+///
+/// `None` input means the record carried no fraction, which is 0ms. `None`
+/// output means the fraction was present but unusable, which invalidates the
+/// whole timestamp, the same way a non-numeric hour or minute does.
+fn parse_fractional_millis(frac: Option<&str>) -> Option<u32> {
     match frac {
-        Some(s) => {
-            // Strip leading '.' or ','
-            let digits = s.trim_start_matches(['.', ',']);
-            // Pad or truncate to 3 digits
-            let padded = format!("{:0<3}", digits);
-            padded[..3].parse::<u32>().unwrap_or(0)
-        }
-        None => 0,
+        // Strip leading '.' or ','
+        Some(s) => fraction_to_millis(s.trim_start_matches(['.', ','])),
+        None => Some(0),
     }
 }
 
@@ -573,13 +573,13 @@ fn parse_tz_offset(tz: Option<&str>) -> Option<i32> {
             let sign: i32 = if s.starts_with('-') { -1 } else { 1 };
             let digits = s.trim_start_matches(['+', '-']);
             let clean = digits.replace(':', "");
-            if clean.len() >= 4 {
-                let hours: i32 = clean[..2].parse().ok()?;
-                let mins: i32 = clean[2..4].parse().ok()?;
-                Some(sign * (hours * 60 + mins))
-            } else {
-                None
-            }
+            // `clean.len()` is a byte count, so it cannot be used to reason
+            // about where the second digit pair starts unless every digit is
+            // known to be single-byte ASCII.
+            let (hours, mins) = clean.split_at_checked(2)?;
+            let hours = parse_ascii_u32(hours)? as i32;
+            let mins = parse_ascii_u32(mins.get(..2)?)? as i32;
+            Some(sign * (hours * 60 + mins))
         }
     }
 }
@@ -752,10 +752,12 @@ mod tests {
 
     #[test]
     fn test_parse_fractional_millis_helper() {
-        assert_eq!(parse_fractional_millis(Some(".123")), 123);
-        assert_eq!(parse_fractional_millis(Some(",456789")), 456);
-        assert_eq!(parse_fractional_millis(Some(".1")), 100);
-        assert_eq!(parse_fractional_millis(None), 0);
+        assert_eq!(parse_fractional_millis(Some(".123")), Some(123));
+        assert_eq!(parse_fractional_millis(Some(",456789")), Some(456));
+        assert_eq!(parse_fractional_millis(Some(".1")), Some(100));
+        assert_eq!(parse_fractional_millis(None), Some(0));
+        // A fraction of non-ASCII decimal digits is unusable, not zero.
+        assert_eq!(parse_fractional_millis(Some(".\u{0661}\u{0662}")), None);
     }
 
     #[test]
@@ -786,5 +788,80 @@ mod tests {
     fn test_invalid_time_only_rejected() {
         // 25:00:00 is not a valid time
         assert!(parse_line("25:00:00 invalid time", DateOrder::MonthFirst).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Non-ASCII decimal digits (regex `\d` matches all of `\p{Nd}`)
+    //
+    // The hour/minute/second groups already reject a non-ASCII digit by
+    // failing their `parse()`, so the fractional-second group must reject it
+    // the same way rather than reaching a byte-indexed slice. See issue #413.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_time_only_rejects_non_ascii_fraction() {
+        // Arabic-Indic ١٢: two chars, four bytes.
+        assert!(parse_line(
+            "14:30:00.\u{0661}\u{0662} starting the service",
+            DateOrder::MonthFirst
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn test_iso_rejects_non_ascii_fraction() {
+        assert!(parse_line(
+            "2024-01-15T14:30:00.\u{0661}\u{0662} ready",
+            DateOrder::MonthFirst
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn test_slash_date_rejects_non_ascii_fraction() {
+        assert!(parse_line(
+            "01/15/2024 14:30:00.\u{0661}\u{0662} ready",
+            DateOrder::MonthFirst
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn test_iso_rejects_non_ascii_timezone_offset() {
+        // Devanagari ०१:२३ uses three bytes per digit, so the byte-length guard
+        // on the offset passes while the char boundaries do not line up.
+        let entry = parse_line(
+            "2024-01-15T14:30:00+\u{0966}\u{0967}:\u{0968}\u{0969} ready",
+            DateOrder::MonthFirst,
+        )
+        .expect("the record should still parse; only the offset is unusable");
+        assert_eq!(entry.timezone_offset, None);
+        assert_eq!(entry.message, "ready");
+    }
+
+    #[test]
+    fn test_non_ascii_fraction_falls_back_to_plain_text() {
+        let (entries, parse_errors) = parse_lines(
+            &["14:30:00.\u{0661}\u{0662} starting the service"],
+            "test.log",
+            DateOrder::MonthFirst,
+        );
+        assert_eq!(parse_errors, 1);
+        assert_eq!(entries.len(), 1);
+        // The whole line survives as text; nothing is silently dropped.
+        assert_eq!(
+            entries[0].message,
+            "14:30:00.\u{0661}\u{0662} starting the service"
+        );
+        assert_eq!(entries[0].timestamp_display, None);
+    }
+
+    #[test]
+    fn test_ascii_fraction_is_right_padded_to_millis() {
+        let entry = parse_line("14:30:00.12 ready", DateOrder::MonthFirst).unwrap();
+        assert_eq!(entry.timestamp_display.as_deref(), Some("14:30:00.120"));
+
+        let entry = parse_line("14:30:00.123456 ready", DateOrder::MonthFirst).unwrap();
+        assert_eq!(entry.timestamp_display.as_deref(), Some("14:30:00.123"));
     }
 }

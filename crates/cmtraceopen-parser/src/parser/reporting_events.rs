@@ -1,6 +1,7 @@
 use regex::Regex;
 
 use super::severity::detect_severity_from_text;
+use crate::digits::fraction_to_millis;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 use std::sync::OnceLock;
 
@@ -164,7 +165,14 @@ fn parse_timestamp(value: &str) -> Option<(i64, String)> {
     let hour: u32 = caps.get(4)?.as_str().parse().ok()?;
     let minute: u32 = caps.get(5)?.as_str().parse().ok()?;
     let second: u32 = caps.get(6)?.as_str().parse().ok()?;
-    let millis = parse_fractional_millis(caps.get(7).map(|m| m.as_str()));
+    // A fraction that is present but unusable invalidates the timestamp, the
+    // same way a non-numeric hour or minute does. `parse_timestamp` also runs
+    // from `matches_reporting_events_record` during format detection, so it has
+    // to reject rather than panic on any input at all.
+    let millis = match caps.get(7) {
+        Some(fraction) => fraction_to_millis(fraction.as_str())?,
+        None => 0,
+    };
 
     let parsed = chrono::NaiveDate::from_ymd_opt(year, month, day)
         .and_then(|date| date.and_hms_milli_opt(hour, minute, second, millis))?;
@@ -176,16 +184,6 @@ fn parse_timestamp(value: &str) -> Option<(i64, String)> {
             year, month, day, hour, minute, second, millis
         ),
     ))
-}
-
-fn parse_fractional_millis(value: Option<&str>) -> u32 {
-    match value {
-        Some(raw) => {
-            let padded = format!("{:0<3}", raw);
-            padded[..3].parse::<u32>().unwrap_or(0)
-        }
-        None => 0,
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -411,5 +409,52 @@ mod tests {
         assert_eq!(entries[2].message, "orphan raw line");
         assert_eq!(entries[3].severity, Severity::Warning);
         assert_eq!(entries[3].line_number, 4);
+    }
+
+    // -----------------------------------------------------------------------
+    // Non-ASCII decimal digits (regex `\d` matches all of `\p{Nd}`)
+    //
+    // `parse_timestamp` runs from `matches_reporting_events_record`, i.e.
+    // during FORMAT DETECTION, so a panic here aborts every file opened and
+    // not merely ReportingEvents logs. See issue #413.
+    // -----------------------------------------------------------------------
+
+    /// Arabic-Indic ١٢: two chars, four bytes.
+    const NON_ASCII_SUBSECOND_ROW: &str = "{11111111-1111-1111-1111-111111111111}\t2024-01-01 00:00:00.\u{0661}\u{0662}\t1\tSoftware Update\t1\t{22222222-2222-2222-2222-222222222222}\t0x00000000\tWindows Update Agent\tSuccess\tInstallation\tInstallation Successful: KB5034123";
+
+    #[test]
+    fn test_detection_rejects_non_ascii_subsecond() {
+        assert!(!matches_reporting_events_record(NON_ASCII_SUBSECOND_ROW));
+    }
+
+    #[test]
+    fn test_non_ascii_subsecond_falls_back_to_raw_line() {
+        let (entries, parse_errors) = parse_lines(
+            &[NON_ASCII_SUBSECOND_ROW],
+            "C:/Windows/SoftwareDistribution/ReportingEvents.log",
+        );
+
+        assert_eq!(parse_errors, 1);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, NON_ASCII_SUBSECOND_ROW);
+        assert_eq!(entries[0].timestamp_display, None);
+    }
+
+    #[test]
+    fn test_ascii_subsecond_is_right_padded_to_millis() {
+        let lines = [
+            "{11111111-1111-1111-1111-111111111111}\t2024-01-15 08:00:00.12\t1\tSoftware Update\t1\t{22222222-2222-2222-2222-222222222222}\t0x00000000\tWindows Update Agent\tSuccess\tInstallation\tInstallation Successful: KB5034123",
+        ];
+
+        let (entries, parse_errors) = parse_lines(
+            &lines,
+            "C:/Windows/SoftwareDistribution/ReportingEvents.log",
+        );
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(
+            entries[0].timestamp_display.as_deref(),
+            Some("2024-01-15 08:00:00.120")
+        );
     }
 }

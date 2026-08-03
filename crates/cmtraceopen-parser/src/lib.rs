@@ -8,6 +8,7 @@
 // No Tauri, no tokio, no notify, no evtx, no windows/winreg, no rayon, no filesystem I/O.
 
 pub mod collector;
+pub(crate) mod digits;
 pub mod dsregcmd;
 pub mod error_db;
 pub mod esp;

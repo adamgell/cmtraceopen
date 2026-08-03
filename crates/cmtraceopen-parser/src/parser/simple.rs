@@ -11,6 +11,7 @@ use regex::Regex;
 
 use super::ccm::{build_timestamp, format_thread_display};
 use super::severity::detect_severity_from_text;
+use crate::digits::truncate_subsecond_to_millis;
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 use std::sync::OnceLock;
 
@@ -48,12 +49,10 @@ fn parse_line(line: &str) -> Option<SimpleParsed> {
     let h: u32 = caps.get(4)?.as_str().parse().ok()?;
     let m: u32 = caps.get(5)?.as_str().parse().ok()?;
     let s: u32 = caps.get(6)?.as_str().parse().ok()?;
-    let ms_str = caps.get(7)?.as_str();
-    let ms: u32 = if ms_str.len() > 3 {
-        ms_str[..3].parse().ok()?
-    } else {
-        ms_str.parse().ok()?
-    };
+    // Rejects a non-ASCII decimal digit rather than slicing it by byte offset:
+    // the regex `\d` matches all of `\p{Nd}`, so this capture is not guaranteed
+    // to be single-byte.
+    let ms = truncate_subsecond_to_millis(caps.get(7)?.as_str())?;
     let tz: i32 = caps.get(8)?.as_str().parse().ok()?;
 
     // Thread is optional (captured by the combined regex)
@@ -244,5 +243,40 @@ mod tests {
         let line = r#"An error occurred during processing $$<TestComp><01-01-2024 10:00:00.000+000><thread=100>"#;
         let parsed = parse_line(line).expect("should parse");
         assert_eq!(parsed.severity, Severity::Error);
+    }
+
+    /// The regex `\d` matches all of `\p{Nd}`, so the subsecond capture can
+    /// hold multi-byte digits while the byte-length guard below it still
+    /// passes. Reject the record instead of slicing mid-character. See #413.
+    #[test]
+    fn test_rejects_non_ascii_subsecond() {
+        // Arabic-Indic ١٢: two chars, four bytes, so `len() > 3` holds.
+        assert!(parse_line("hello $$<Comp><1-1-2024 1:1:1.\u{0661}\u{0662}+0>").is_none());
+    }
+
+    #[test]
+    fn test_non_ascii_subsecond_falls_back_to_plain_text() {
+        let line = "hello $$<Comp><1-1-2024 1:1:1.\u{0661}\u{0662}+0>";
+        let (entries, parse_errors) = parse_lines(&[line], "test.log");
+        assert_eq!(parse_errors, 1);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, line);
+    }
+
+    /// A short subsecond field is read as-is, not right-padded: this format
+    /// writes milliseconds directly, so `.12` is 12ms rather than 120ms.
+    #[test]
+    fn test_ascii_subsecond_is_truncated_not_padded() {
+        let parsed = parse_line("hello $$<Comp><1-1-2024 1:1:1.12+0>").expect("should parse");
+        assert_eq!(
+            parsed.timestamp_display.as_deref(),
+            Some("01-01-2024 01:01:01.012")
+        );
+
+        let parsed = parse_line("hello $$<Comp><1-1-2024 1:1:1.1234+0>").expect("should parse");
+        assert_eq!(
+            parsed.timestamp_display.as_deref(),
+            Some("01-01-2024 01:01:01.123")
+        );
     }
 }
