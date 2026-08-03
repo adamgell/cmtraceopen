@@ -3037,3 +3037,33 @@ fn bounded_request_documentation_includes_nonphysical_manifest_coverage() {
         "coverage prose must include nonphysical manifest states"
     );
 }
+
+#[test]
+fn reviewer_probe_unknown_source_version_cannot_retain_selected_profile() {
+    let manifest = read_json("sync-success", "manifest.json").expect("manifest loads");
+    let expected = read_json("sync-success", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut unknown_profile = manifest.clone();
+    for artifact in unknown_profile["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are mutable")
+    {
+        artifact["sourceVersion"] = json!("5.00.TEST.UNKNOWN");
+    }
+    if validate_scenario_values("sync-success", &unknown_profile, &expected).is_ok() {
+        accepted.push("unknown profile");
+    }
+
+    let mut mixed_versions = manifest;
+    let wcm = artifact_index(&mixed_versions, "sync-success-01-wcm");
+    mixed_versions["artifacts"][wcm]["sourceVersion"] = json!("5.00.TEST.0002");
+    if validate_scenario_values("sync-success", &mixed_versions, &expected).is_ok() {
+        accepted.push("mixed artifact versions");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "source-version mutations retained a selected extraction profile and high-confidence result: {accepted:?}"
+    );
+}
