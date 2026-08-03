@@ -515,10 +515,10 @@ fn coverage_issue_id(
     });
     let value = match omitted_state {
         Some(omitted_state) => format!(
-            "cmtraceopen.sccm.discovery.coverage.v1\\0{catalog_entry_id}\\0{rotation}\\0{state}\\0{omitted_state}"
+            "cmtraceopen.sccm.discovery.coverage.v1\0{catalog_entry_id}\0{rotation}\0{state}\0{omitted_state}"
         ),
         None => format!(
-            "cmtraceopen.sccm.discovery.coverage.v1\\0{catalog_entry_id}\\0{rotation}\\0{state}"
+            "cmtraceopen.sccm.discovery.coverage.v1\0{catalog_entry_id}\0{rotation}\0{state}"
         ),
     };
     format!(
