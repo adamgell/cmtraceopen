@@ -38,9 +38,16 @@ fn load_manifest_and_payloads(scenario: &str) -> (Value, Vec<SccmServerArtifactP
 
 fn load_assessment(scenario: &str) -> SccmServerIntakeAssessment {
     let (manifest, payloads) = load_manifest_and_payloads(scenario);
+    assess_manifest(&manifest, &payloads)
+}
+
+fn assess_manifest(
+    manifest: &Value,
+    payloads: &[SccmServerArtifactPayload],
+) -> SccmServerIntakeAssessment {
     assess_server_intake(
         &serde_json::to_string(&manifest).expect("manifest serializes"),
-        &payloads,
+        payloads,
     )
     .expect("fixture is accepted by canonical server intake")
 }
@@ -131,6 +138,79 @@ fn captured_wsyncmgr_is_an_observation_without_a_health_or_outcome_interpretatio
 }
 
 #[test]
+fn sup_analysis_excludes_an_unrelated_management_point_recapture_request() {
+    let (mut manifest, mut payloads) = load_manifest_and_payloads("complete-multi-role");
+    let management_point = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "mp-policy-current")
+        .expect("complete multi-role fixture includes MP_GetPolicy");
+    management_point["captureState"] = Value::String("accessDenied".to_owned());
+    management_point["collectionDetail"] = Value::String("synthetic permission denial".to_owned());
+    management_point["relativePath"] = Value::Null;
+    management_point["bytesCopied"] = Value::from(0);
+    let fields = management_point
+        .as_object_mut()
+        .expect("artifact is an object");
+    fields.remove("encoding");
+    fields.remove("collectionLimit");
+    payloads.retain(|payload| payload.manifest_artifact_id != "mp-policy-current");
+
+    let assessment = assess_manifest(&manifest, &payloads);
+    assert_eq!(assessment.next_artifact_requests.len(), 1);
+    assert_eq!(
+        assessment.next_artifact_requests[0].logical_id, "mpGetPolicy",
+        "canonical intake keeps the MP recapture request"
+    );
+    assert_eq!(
+        assessment.next_artifact_requests[0].role,
+        SccmRole::ManagementPoint
+    );
+
+    let analysis = analyze_software_update_point(&assessment);
+
+    assert_eq!(analysis.coverage_rows.len(), 1);
+    assert_eq!(analysis.coverage_rows[0].artifact_id, "sup-sync-current");
+    assert!(analysis.next_artifact_requests.is_empty());
+}
+
+#[test]
+fn non_captured_sup_gaps_report_the_canonical_state_without_claiming_no_capture() {
+    let capped = analyze_software_update_point(&load_assessment("capped-sup"));
+    assert_eq!(capped.coverage_gaps.len(), 1);
+    assert_eq!(
+        capped.coverage_gaps[0].reason,
+        "Canonical intake reports Software Update Point source coverage as capped; no outcome is inferred."
+    );
+
+    let (mut manifest, mut payloads) = load_manifest_and_payloads("complete-multi-role");
+    let payload = payloads
+        .iter_mut()
+        .find(|payload| payload.manifest_artifact_id == "sup-sync-current")
+        .expect("complete multi-role fixture includes wsyncmgr bytes");
+    payload.bytes = b"not a complete CCM logical record".to_vec();
+    let software_update_point = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "sup-sync-current")
+        .expect("complete multi-role fixture includes wsyncmgr");
+    software_update_point["bytesCopied"] = Value::from(payload.bytes.len() as u64);
+
+    let parse_failed = analyze_software_update_point(&assess_manifest(&manifest, &payloads));
+    assert_eq!(parse_failed.coverage_gaps.len(), 1);
+    assert_eq!(
+        parse_failed.coverage_gaps[0].capture_state,
+        SccmCoverageState::ParseFailed
+    );
+    assert_eq!(
+        parse_failed.coverage_gaps[0].reason,
+        "Canonical intake reports Software Update Point source coverage as parseFailed; no outcome is inferred."
+    );
+}
+
+#[test]
 fn skipped_supplemental_wsus_is_coverage_not_wsus_health_proof() {
     let assessment = load_assessment("supplemental-wsus-skipped");
 
@@ -186,6 +266,22 @@ fn tampered_intake_fails_closed_to_one_authority_coverage_gap() {
         SccmCoverageState::ParseFailed
     );
     assert!(!analysis.cross_side_correlation_performed);
+}
+
+#[test]
+fn topology_only_tampering_fails_closed_to_one_authority_coverage_gap() {
+    let mut assessment = load_assessment("complete-multi-role");
+    assessment.topology.roles_observed.pop();
+
+    let analysis = analyze_software_update_point(&assessment);
+
+    assert!(analysis.coverage_rows.is_empty());
+    assert!(analysis.next_artifact_requests.is_empty());
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    assert_eq!(
+        analysis.coverage_gaps[0].reason,
+        "Canonical server intake authority could not be verified."
+    );
 }
 
 #[test]

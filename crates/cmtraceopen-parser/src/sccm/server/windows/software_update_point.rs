@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::sccm::{SccmArtifactFamily, SccmArtifactRequest, SccmCoverageState, SccmRole};
 
-use super::SccmServerIntakeAssessment;
+use super::{declared_server_source_catalog, SccmServerIntakeAssessment};
 
 pub const SCCM_SOFTWARE_UPDATE_POINT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_SOFTWARE_UPDATE_POINT_SYNC_SOURCE_ID: &str = "server-sup-sync";
@@ -115,7 +115,9 @@ pub fn analyze_software_update_point(
         diagnostic_meaning: SccmSoftwareUpdatePointDiagnosticMeaning::CoverageOnly,
         coverage_rows,
         coverage_gaps,
-        next_artifact_requests: intake.next_artifact_requests.clone(),
+        next_artifact_requests: software_update_point_artifact_requests(
+            &intake.next_artifact_requests,
+        ),
         cross_side_correlation_performed: false,
     }
 }
@@ -176,7 +178,7 @@ fn coverage_gap_for_row(
 fn coverage_gap_reason(row: &SccmSoftwareUpdatePointCoverageRow) -> String {
     if row.capture_state != SccmCoverageState::Captured {
         return format!(
-            "Software Update Point source coverage is {}; canonical intake has no captured artifact to interpret.",
+            "Canonical intake reports Software Update Point source coverage as {}; no outcome is inferred.",
             coverage_state_label(&row.capture_state)
         );
     }
@@ -185,6 +187,25 @@ fn coverage_gap_reason(row: &SccmSoftwareUpdatePointCoverageRow) -> String {
             .to_owned();
     }
     "Software Update Point source is outside the canonical intake profile.".to_owned()
+}
+
+fn software_update_point_artifact_requests(
+    requests: &[SccmArtifactRequest],
+) -> Vec<SccmArtifactRequest> {
+    requests
+        .iter()
+        .filter(|request| {
+            declared_server_source_catalog().iter().any(|source| {
+                is_software_update_point_source(source.source_id)
+                    && source.producer_role == request.role
+                    && source
+                        .logical_names
+                        .iter()
+                        .any(|logical_name| *logical_name == request.logical_id)
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 fn coverage_row_sort_key(
