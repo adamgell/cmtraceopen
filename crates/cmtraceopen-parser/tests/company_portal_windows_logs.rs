@@ -485,6 +485,38 @@ fn portal_logs_document_is_redacted_by_default() {
 }
 
 #[test]
+fn portal_logs_untrusted_severity_text_is_redacted_from_default_evidence() {
+    const SENSITIVE_SEVERITY: &str = "adele.vance@contoso.onmicrosoft.com";
+    let content = format!(
+        "2026-05-04T16:00:00.1000000Z  {SENSITIVE_SEVERITY}  Event  None  0  \
+         1a2b3c4d-0001-4000-8000-000000000001  12-0-0  safe message\n"
+    );
+
+    let local =
+        parse_log_document_preserving_local_values(&local_state_path("Log_1.log"), &content);
+    let local_severity = local.records[0]
+        .severity
+        .as_ref()
+        .expect("record must preserve its dedicated severity field");
+    assert_eq!(local_severity.raw_text, SENSITIVE_SEVERITY);
+    assert_eq!(local_severity.level, CompanyPortalSeverityLevel::Unknown);
+
+    let safe = parse_log_document(&local_state_path("Log_1.log"), &content);
+    let safe_json = serde_json::to_string(&safe).expect("document must serialize");
+
+    assert!(safe.redacted);
+    assert!(!safe_json.contains(SENSITIVE_SEVERITY));
+    assert_eq!(
+        safe.records[0]
+            .severity
+            .as_ref()
+            .expect("redaction must retain the typed severity field")
+            .level,
+        CompanyPortalSeverityLevel::Unknown
+    );
+}
+
+#[test]
 fn portal_logs_local_projection_is_the_explicit_opt_out() {
     let local =
         parse_log_document_preserving_local_values(&local_state_path("Log_1.log"), REDACTION);
