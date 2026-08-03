@@ -2031,3 +2031,156 @@ fn a_repeat_capture_never_overwrites_the_existing_manifest_or_evidence() {
         evidence_before
     );
 }
+
+#[test]
+fn adversarial_discovery_cardinality_is_bounded_before_manifest_construction() {
+    let temp = tempdir().expect("temporary test root");
+    let root = temp.path().join("logs");
+    fs::create_dir_all(&root).expect("log root");
+    fs::write(root.join("PolicyAgent.log"), b"current").expect("current log");
+    for index in 1..=app_lib::sccm::MAX_SCCM_MANIFEST_ARTIFACTS {
+        fs::write(root.join(format!("PolicyAgent.log.{index}")), b"rotation")
+            .expect("rotation log");
+    }
+    let mut discovery = input(
+        vec![root],
+        vec![source(
+            "sccm-client-group:v1:client-policy-agent",
+            "client-policy-agent",
+            &["PolicyAgent.log"],
+        )],
+    );
+    discovery.max_files_per_source = 1;
+
+    if let Ok(discovered) = discover_client_sources(&discovery) {
+        assert!(
+            discovered.artifacts.len() <= app_lib::sccm::MAX_SCCM_MANIFEST_ARTIFACTS,
+            "discovery retained {} candidate records before the 4096-entry manifest bound",
+            discovered.artifacts.len()
+        );
+    }
+}
+
+#[test]
+fn file_count_cap_does_not_relabel_a_fully_copied_fragment_as_byte_capped() {
+    let temp = tempdir().expect("temporary test root");
+    let root = temp.path().join("logs");
+    let bundle_root = temp.path().join("bundle");
+    fs::create_dir_all(&root).expect("log root");
+    fs::write(root.join("PolicyAgent.log"), b"complete-current").expect("current log");
+    fs::write(root.join("PolicyAgent.lo_"), b"omitted-rotation").expect("rotation log");
+    let mut discovery = input(
+        vec![root],
+        vec![source(
+            "sccm-client-group:v1:client-policy-agent",
+            "client-policy-agent",
+            &["PolicyAgent.log"],
+        )],
+    );
+    discovery.max_files_per_source = 1;
+
+    let captured = capture_client_bundle(&request(bundle_root, "LAB-CLIENT-01", discovery))
+        .expect("file-count bounded capture");
+    let retained = captured
+        .manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.basename == "PolicyAgent.log")
+        .expect("retained current artifact");
+    assert_eq!(
+        retained.state,
+        SccmManifestSourceState::Captured,
+        "a fully copied physical fragment must remain captured; the omitted rotation is the capped gap"
+    );
+    assert_eq!(retained.capture_limit_kind, None);
+    assert_eq!(retained.limit_applied, None);
+    assert_eq!(captured.manifest.capture_gaps.len(), 1);
+}
+
+#[test]
+fn utf16le_cap_retains_the_exact_raw_prefix_through_a_split_code_unit() {
+    let temp = tempdir().expect("temporary test root");
+    let root = temp.path().join("logs");
+    let bundle_root = temp.path().join("bundle");
+    fs::create_dir_all(&root).expect("log root");
+    let source_bytes = [0x41, 0x00, 0x3d, 0xd8, 0x00, 0xde];
+    fs::write(root.join("PolicyAgent.log"), source_bytes).expect("UTF-16LE source");
+    let mut discovery = input(
+        vec![root],
+        vec![source(
+            "sccm-client-group:v1:client-policy-agent",
+            "client-policy-agent",
+            &["PolicyAgent.log"],
+        )],
+    );
+    discovery.max_bytes_per_source = 3;
+    let mut capture_request = request(bundle_root.clone(), "LAB-CLIENT-01", discovery);
+    capture_request.encoding = Some("utf-16le".to_owned());
+
+    let captured = capture_client_bundle(&capture_request).expect("bounded UTF-16LE capture");
+    let retained = &captured.manifest.artifacts[0];
+    let relative_path = retained.relative_path.as_deref().expect("retained path");
+    assert_eq!(fs::read(bundle_root.join(relative_path)).expect("prefix"), [0x41, 0x00, 0x3d]);
+    assert_eq!(retained.bytes_copied, 3);
+    assert!(!retained.fragment_complete);
+}
+
+#[test]
+fn discovery_debug_output_does_not_expose_native_candidate_or_override_paths() {
+    let temp = tempdir().expect("temporary test root");
+    let private_root = temp.path().join("REALUSER-private-client-root");
+    let private_override = private_root.join("PolicyAgent.log");
+    fs::create_dir_all(&private_root).expect("private root");
+    let mut discovery = input(vec![private_root.clone()], Vec::new());
+    discovery
+        .access_status_overrides
+        .insert(private_override.clone(), SccmCoverageState::AccessDenied);
+
+    let debug = format!("{discovery:?}");
+    assert!(!debug.contains(&private_root.to_string_lossy().into_owned()));
+    assert!(!debug.contains(&private_override.to_string_lossy().into_owned()));
+    assert!(!debug.contains("REALUSER-private-client-root"));
+}
+
+#[test]
+fn missing_legacy_manifest_error_does_not_expose_the_native_bundle_path() {
+    let temp = tempdir().expect("temporary test root");
+    let private_bundle = temp.path().join("REALUSER-private-bundle");
+    fs::create_dir_all(&private_bundle).expect("bundle root");
+    make_private_directory(&private_bundle);
+
+    let error = read_sccm_manifest_or_legacy(&private_bundle).expect_err("missing manifest");
+    let message = error.to_string();
+    assert!(!message.contains(&private_bundle.to_string_lossy().into_owned()));
+    assert!(!message.contains("REALUSER-private-bundle"));
+}
+
+#[test]
+fn oversized_status_provider_maps_are_rejected_before_discovery_work() {
+    let temp = tempdir().expect("temporary test root");
+    let root = temp.path().join("logs");
+    fs::create_dir_all(&root).expect("log root");
+    fs::write(root.join("PolicyAgent.log"), b"policy").expect("policy log");
+    let mut discovery = input(
+        vec![root.clone()],
+        vec![source(
+            "sccm-client-group:v1:client-policy-agent",
+            "client-policy-agent",
+            &["PolicyAgent.log"],
+        )],
+    );
+    for index in 0..=app_lib::sccm::MAX_SCCM_MANIFEST_ARTIFACTS {
+        discovery.access_status_overrides.insert(
+            root.join(format!("override-{index}")).join("PolicyAgent.log"),
+            SccmCoverageState::AccessDenied,
+        );
+        discovery.enumeration_status_overrides.insert(
+            root.join(format!("enumeration-{index}")),
+            SccmCoverageState::AccessDenied,
+        );
+    }
+
+    let error = discover_client_sources(&discovery)
+        .expect_err("oversized test-provider maps must fail before repeated path canonicalization");
+    assert!(error.to_string().contains("status override"));
+}

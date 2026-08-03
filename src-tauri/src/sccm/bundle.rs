@@ -1301,4 +1301,46 @@ mod tests {
         );
         assert!(!bundle_root.join(SCCM_MANIFEST_FILE_NAME).exists());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_failure_does_not_silently_leave_evidence_when_rollback_fails() {
+        use std::cell::RefCell;
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temporary capture root");
+        let source_root = temp.path().join("logs");
+        let bundle_root = temp.path().join("existing-bundle");
+        fs::create_dir_all(&source_root).expect("source root");
+        create_private_dir_all(&bundle_root).expect("private bundle root");
+        fs::write(source_root.join("PolicyAgent.log"), "policy").expect("source");
+        let request = policy_capture_request(bundle_root, source_root);
+        let evidence_path = RefCell::new(None::<PathBuf>);
+        let evidence_parent = RefCell::new(None::<PathBuf>);
+
+        let result = capture_client_bundle_with_publisher(&request, |root, manifest| {
+            let relative = manifest
+                .artifacts
+                .iter()
+                .find_map(|artifact| artifact.relative_path.as_deref())
+                .expect("physical evidence path");
+            let path = root.join(relative);
+            let parent = path.parent().expect("evidence parent").to_path_buf();
+            fs::set_permissions(&parent, fs::Permissions::from_mode(0o500))
+                .expect("make rollback fail");
+            evidence_path.replace(Some(path));
+            evidence_parent.replace(Some(parent));
+            Err(AppError::State("synthetic publication failure".to_owned()))
+        });
+
+        let path = evidence_path.into_inner().expect("captured evidence path");
+        let parent = evidence_parent.into_inner().expect("captured evidence parent");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))
+            .expect("restore cleanup permission");
+        assert!(result.is_err());
+        assert!(
+            !path.exists(),
+            "a failed transaction must not report only the publication error while sensitive evidence remains"
+        );
+    }
 }
