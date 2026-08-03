@@ -593,7 +593,7 @@ dependencies = [
  "log",
  "notify",
  "plist",
- "quick-xml 0.38.4",
+ "quick-xml 0.41.0",
  "rayon",
  "regex",
  "serde",
@@ -3601,15 +3601,6 @@ dependencies = [
  "bitflags 2.11.1",
  "memchr",
  "unicase",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.38.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
