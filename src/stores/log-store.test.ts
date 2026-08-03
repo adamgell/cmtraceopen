@@ -433,6 +433,66 @@ describe("log-store", () => {
       expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
       expect(useLogStore.getState().totalLines).toBe(3);
     });
+
+    it("advances the tracked file total and the derived overall total", () => {
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 3,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 2,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(5);
+
+      useLogStore.getState().observeAggregateTailLine("/a.log", 7);
+
+      expect(useLogStore.getState().aggregateFiles).toMatchObject([
+        { filePath: "/a.log", totalLines: 7 },
+        { filePath: "/b.log", totalLines: 2 },
+      ]);
+      expect(useLogStore.getState().totalLines).toBe(9);
+    });
+  });
+
+  describe("recordAggregateTailParseErrors", () => {
+    it("adds new coverage gaps only to tracked aggregate files", () => {
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 3,
+          parseErrors: 1,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 2,
+          parseErrors: 2,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+
+      useLogStore.getState().recordAggregateTailParseErrors("/a.log", 3);
+
+      expect(useLogStore.getState().aggregateFiles).toMatchObject([
+        { filePath: "/a.log", parseErrors: 4 },
+        { filePath: "/b.log", parseErrors: 2 },
+      ]);
+      const aggregateFiles = useLogStore.getState().aggregateFiles;
+      useLogStore.getState().recordAggregateTailParseErrors("/missing.log", 5);
+      useLogStore.getState().recordAggregateTailParseErrors("/a.log", 0);
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+    });
   });
 
   describe("amendAggregateEntry", () => {
