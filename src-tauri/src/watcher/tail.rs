@@ -472,12 +472,13 @@ impl TailReader {
         let (mut entries, parse_errors) =
             parser::parse_lines_with_selection(&lines, &path_str, &self.parser_selection);
 
-        self.assign_entry_identity(&mut entries);
+        let physical_line_count = u32::try_from(lines.len()).unwrap_or(u32::MAX);
+        self.assign_physical_entry_identity(&mut entries, physical_line_count);
         batch.append(TailBatch {
             entries,
             amendments: Vec::new(),
             parse_errors,
-            observed_through_line: Some(self.next_line.saturating_sub(1)),
+            observed_through_line: self.next_line.checked_sub(1).filter(|line| *line > 0),
             reset: false,
         });
 
@@ -770,8 +771,10 @@ impl TailReader {
         let path_str = self.path.to_string_lossy().to_string();
         let mut entries = Vec::new();
         let mut parse_errors = framing_parse_errors;
+        let mut consumed_physical_lines = 0u32;
 
         for record in records {
+            consumed_physical_lines = consumed_physical_lines.saturating_add(record.physical_lines);
             let parsed =
                 parser::parse_content_with_selection(&record.content, &path_str, selection);
             let mut record_entries = parsed.entries;
@@ -784,7 +787,9 @@ impl TailReader {
             entries,
             amendments: Vec::new(),
             parse_errors,
-            observed_through_line: Some(self.next_line.saturating_sub(1)),
+            observed_through_line: (consumed_physical_lines > 0)
+                .then(|| self.next_line.saturating_sub(1))
+                .filter(|line| *line > 0),
             reset: false,
         }
     }
@@ -809,13 +814,14 @@ impl TailReader {
         self.next_line = record_start.saturating_add(physical_lines);
     }
 
-    fn assign_entry_identity(&mut self, entries: &mut [LogEntry]) {
+    fn assign_physical_entry_identity(&mut self, entries: &mut [LogEntry], physical_lines: u32) {
+        let batch_start = self.next_line;
         for entry in entries {
             entry.id = self.next_id;
-            entry.line_number = self.next_line;
+            entry.line_number = batch_start.saturating_add(entry.line_number.saturating_sub(1));
             self.next_id += 1;
-            self.next_line += 1;
         }
+        self.next_line = batch_start.saturating_add(physical_lines);
     }
 }
 
