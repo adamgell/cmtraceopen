@@ -757,6 +757,16 @@ fn verify_platform_namespace_security(_directory: &File) -> io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
+fn macos_ownership_ignore_mask(flag: libc::c_int) -> io::Result<u32> {
+    u32::try_from(flag).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "SCCM capture destination filesystem flags cannot be validated",
+        )
+    })
+}
+
+#[cfg(target_os = "macos")]
 fn verify_platform_namespace_security(directory: &File) -> io::Result<()> {
     use std::os::fd::AsRawFd;
 
@@ -765,7 +775,7 @@ fn verify_platform_namespace_security(directory: &File) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     let file_system = unsafe { file_system.assume_init() };
-    if file_system.f_flags & u32::try_from(libc::MNT_IGNORE_OWNERSHIP).unwrap_or_default() != 0 {
+    if file_system.f_flags & macos_ownership_ignore_mask(libc::MNT_IGNORE_OWNERSHIP)? != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "SCCM capture destination filesystem ignores ownership",
@@ -817,6 +827,9 @@ fn reject_macos_extended_acl(directory: &File) -> io::Result<()> {
     }
 
     let mut entry = std::ptr::null_mut();
+    // macOS acl_get_entry(3) returns 0 for an entry and -1 with EINVAL when
+    // ACL_FIRST_ENTRY finds no entry. It does not use Linux libacl's positive
+    // end-of-list sentinel, and every unexpected errno remains an error.
     unsafe {
         *libc::__error() = 0;
     }
@@ -1719,29 +1732,6 @@ mod tests {
         assert!(
             matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR),
             "expected a no-follow component rejection, got {error:?}"
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_acl_entry_status_distinguishes_empty_acl_from_error() {
-        assert_eq!(
-            classify_macos_acl_entry_status(0).expect("entry status"),
-            MacosAclEntryStatus::Present
-        );
-        assert_eq!(
-            classify_macos_acl_entry_status(1).expect("empty ACL status"),
-            MacosAclEntryStatus::Empty
-        );
-        assert_eq!(
-            classify_macos_acl_entry_status(-1).expect("error status"),
-            MacosAclEntryStatus::Error
-        );
-        assert_eq!(
-            classify_macos_acl_entry_status(2)
-                .expect_err("unknown ACL status must fail closed")
-                .kind(),
-            io::ErrorKind::InvalidData
         );
     }
 
