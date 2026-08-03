@@ -314,6 +314,32 @@ describe("log-store", () => {
       expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(3);
       expect(useLogStore.getState().totalLines).toBe(4);
     });
+
+    it("ignores rows for an untracked file once aggregate metadata exists", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, filePath: "/a.log", lineNumber: 1 }),
+      ]);
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(1);
+      const entries = useLogStore.getState().entries;
+      const aggregateFiles = useLogStore.getState().aggregateFiles;
+
+      useLogStore.getState().appendAggregateEntries("/missing.log", [
+        makeEntry({ id: 0, filePath: "/missing.log", lineNumber: 2 }),
+      ]);
+
+      expect(useLogStore.getState().entries).toBe(entries);
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
   });
 
   describe("observeAggregateTailLine", () => {
