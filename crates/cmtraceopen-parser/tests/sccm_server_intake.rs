@@ -1787,6 +1787,35 @@ fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() 
 }
 
 #[test]
+fn wsus_supplement_expected_coverage_uses_only_serialized_fields() {
+    let expected = load_expected("supplemental-wsus-skipped");
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let assessment = assess_server_intake(&manifest_json, &payloads)
+        .expect("the catalogued optional WSUS supplement is assessable");
+    let actual = serde_json::to_value(&assessment).expect("assessment serializes");
+    let expected_coverage = expected["coverage"]
+        .as_array()
+        .expect("expected coverage is an array");
+    let actual_coverage = actual["coverage"]
+        .as_array()
+        .expect("assessment coverage is an array");
+
+    assert_eq!(actual_coverage.len(), expected_coverage.len());
+    for (actual_row, expected_row) in actual_coverage.iter().zip(expected_coverage) {
+        for (key, expected_value) in expected_row
+            .as_object()
+            .expect("expected coverage row is an object")
+        {
+            assert_eq!(
+                actual_row.get(key),
+                Some(expected_value),
+                "WSUS expected coverage must assert an actual serialized coverage field: {key}"
+            );
+        }
+    }
+}
+
+#[test]
 fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
     type ManifestMutation = (&'static str, fn(&mut Value));
 
