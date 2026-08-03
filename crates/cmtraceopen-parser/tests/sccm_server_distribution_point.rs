@@ -60,14 +60,21 @@ fn load_assessment(scenario: &str) -> SccmServerIntakeAssessment {
 }
 
 fn load_distribution_point_assessment(scenario: &str) -> SccmServerIntakeAssessment {
+    load_distribution_point_assessment_after(scenario, |_, _| {})
+}
+
+fn load_distribution_point_assessment_after(
+    scenario: &str,
+    mutate: impl FnOnce(&mut Value, &mut Vec<SccmServerArtifactPayload>),
+) -> SccmServerIntakeAssessment {
     let scenario_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sccm/server/distribution_point")
         .join(scenario);
     let fixture_manifest_json =
         std::fs::read_to_string(scenario_root.join("manifest.json")).expect("manifest is readable");
-    let manifest: Value =
+    let mut manifest: Value =
         serde_json::from_str(&fixture_manifest_json).expect("manifest is valid JSON");
-    let payloads = manifest["artifacts"]
+    let mut payloads = manifest["artifacts"]
         .as_array()
         .expect("artifacts are an array")
         .iter()
@@ -83,6 +90,7 @@ fn load_distribution_point_assessment(scenario: &str) -> SccmServerIntakeAssessm
             })
         })
         .collect::<Vec<_>>();
+    mutate(&mut manifest, &mut payloads);
     let canonical_manifest = json!({
         "sccmManifestVersion": 1,
         "syntheticFixture": true,
@@ -375,6 +383,30 @@ fn healthy_package_reduces_a_sealed_role_local_transaction() {
         "safe:dp:lab-dp-01"
     );
     assert_eq!(analysis.transactions[0].evidence.len(), 6);
+}
+
+#[test]
+fn healthy_package_requires_profile_site_token_to_match_sealed_topology() {
+    let assessment = load_distribution_point_assessment_after("healthy-package", |_, payloads| {
+        for payload in payloads {
+            let content =
+                std::str::from_utf8(&payload.bytes).expect("synthetic DP evidence is UTF-8");
+            assert!(
+                content.contains("SiteCode=LAB"),
+                "every healthy source must carry the profile site token"
+            );
+            payload.bytes = content.replace("SiteCode=LAB", "SiteCode=ABC").into_bytes();
+        }
+    });
+    assert_eq!(assessment.topology.site_handle, "synthetic:site:lab");
+
+    let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+        .expect("site-token mismatch remains sealed evidence, not forged authority");
+
+    assert!(
+        analysis.transactions.is_empty(),
+        "valid-looking evidence for another site cannot become a healthy transaction"
+    );
 }
 
 #[test]

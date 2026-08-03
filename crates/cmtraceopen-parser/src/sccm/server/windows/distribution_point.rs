@@ -310,6 +310,8 @@ pub fn analyze_distribution_point_content_from_server_intake(
         .iter()
         .map(|artifact| (artifact.artifact_id.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
+    let expected_site_code =
+        selected_content_profile_site_code(intake.topology.site_handle.as_str());
     let mut facts_by_key = BTreeMap::<DistributionPointFactKey, Vec<DistributionPointFact>>::new();
 
     for observation in &bounded.source_observations {
@@ -320,8 +322,12 @@ pub fn analyze_distribution_point_content_from_server_intake(
         let Some(artifact) = artifacts_by_id.get(observation.artifact_id.as_str()) else {
             continue;
         };
-        let Some(fact) = parse_healthy_distribution_point_fact(observation, artifact, evidence)
-        else {
+        let Some(fact) = parse_healthy_distribution_point_fact(
+            observation,
+            artifact,
+            evidence,
+            expected_site_code,
+        ) else {
             continue;
         };
         facts_by_key.entry(fact.key.clone()).or_default().push(fact);
@@ -352,6 +358,7 @@ fn parse_healthy_distribution_point_fact(
     observation: &SccmDistributionPointSourceObservation,
     artifact: &SccmServerArtifactAssessment,
     evidence: &SccmEvidence,
+    expected_site_code: Option<&str>,
 ) -> Option<DistributionPointFact> {
     let phase = exact_message_token(&evidence.message, "Phase").and_then(content_phase)?;
     let disposition = exact_message_token(&evidence.message, "Disposition")?;
@@ -371,6 +378,7 @@ fn parse_healthy_distribution_point_fact(
         || !safe_package_id(package_id)
         || !safe_content_id(content_id)
         || !safe_site_code(site_code)
+        || expected_site_code != Some(site_code)
         || !safe_distribution_point_handle(distribution_point_handle)
         || !matches!(
             evidence.timestamp.ordering_state,
@@ -429,6 +437,13 @@ fn parse_healthy_distribution_point_fact(
         reference: evidence.reference.clone(),
         timestamp: evidence.timestamp.clone(),
     })
+}
+
+fn selected_content_profile_site_code(topology_site_handle: &str) -> Option<&'static str> {
+    match topology_site_handle {
+        "synthetic:site:lab" => Some("LAB"),
+        _ => None,
+    }
 }
 
 fn reduce_healthy_transaction(
