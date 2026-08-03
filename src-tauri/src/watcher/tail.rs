@@ -1224,6 +1224,26 @@ mod tests {
         (initial, appended)
     }
 
+    struct OneByteAtATime<'a>(&'a [u8]);
+
+    impl Read for OneByteAtATime<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() || buffer.is_empty() {
+                return Ok(0);
+            }
+            buffer[0] = self.0[0];
+            self.0 = &self.0[1..];
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn test_encoding_probe_consumes_a_short_reader_through_the_bom() {
+        let encoding = detect_encoding_from_reader(OneByteAtATime(&[0xff, 0xfe, b'a']));
+
+        assert_eq!(encoding, FileEncoding::Utf16Le);
+    }
+
     fn assert_entries_match(actual: &LogEntry, expected: &LogEntry) {
         assert_eq!(actual.id, expected.id);
         assert_eq!(actual.line_number, expected.line_number);
@@ -1658,6 +1678,7 @@ mod tests {
             .read_new_entries()
             .expect("first continuation read should succeed");
         assert_eq!(first_batch.parse_errors, 0);
+        assert_eq!(first_batch.observed_through_line, Some(2));
         assert!(first_batch.entries.is_empty());
         assert!(
             first_batch.amendments.is_empty(),
@@ -1683,6 +1704,7 @@ mod tests {
             .read_new_entries()
             .expect("boundary read should succeed");
         assert_eq!(boundary_batch.parse_errors, 0);
+        assert_eq!(boundary_batch.observed_through_line, Some(3));
         assert!(boundary_batch.entries.is_empty());
         let amendment = boundary_batch
             .amendments
