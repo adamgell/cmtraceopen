@@ -6,7 +6,10 @@ use app_lib::sccm::{
     SccmManifestProvenance, SccmManifestSourceState, MAX_SCCM_MANIFEST_ARTIFACTS,
     SCCM_MANIFEST_FILE_NAME,
 };
-use cmtraceopen_parser::sccm::{assess_client_intake, SccmCoverageState, SccmRotation};
+use cmtraceopen_parser::sccm::{
+    admit_client_evidence, assess_client_intake, SccmClientCapturedPayload,
+    SccmClientEvidenceAdmissionError, SccmCoverageState, SccmRotation,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -272,15 +275,30 @@ fn validated_v1_reader_projects_one_physical_client_artifact() {
 }
 
 #[test]
-fn validated_v1_reader_preserves_a_complete_fragment() {
+fn native_projection_preserves_completeness_without_sealing_content_binding() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("bundle");
-    let mut current = physical_artifact(SccmRotation::Current, b"complete-policy-current");
+    let exact_bytes = b"complete-policy-current";
+    let mut current = physical_artifact(SccmRotation::Current, exact_bytes);
     current.value["fragmentComplete"] = json!(true);
     write_native_bundle(&bundle_root, &[&current], &[]);
 
     let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("verified pure projection");
-    assert_eq!(bundle.artifacts[0].fragment_complete, Some(true));
+    let projected = &bundle.artifacts[0];
+    assert_eq!(projected.fragment_complete, Some(true));
+    assert_eq!(projected.declared_byte_length, None);
+    assert_eq!(projected.content_sha256, None);
+
+    let assessment = assess_client_intake(&bundle).expect("native projection remains canonical");
+    let payload = SccmClientCapturedPayload::new(
+        projected.artifact.artifact_id.clone(),
+        exact_bytes.to_vec(),
+    )
+    .expect("exact manifest-validated bytes form a bounded payload");
+    assert!(matches!(
+        admit_client_evidence(&bundle, &assessment, &[payload]),
+        Err(SccmClientEvidenceAdmissionError::MissingContentBinding)
+    ));
 }
 
 #[test]
@@ -378,7 +396,7 @@ fn reader_rejects_duplicate_artifact_ids() {
 }
 
 #[test]
-fn legacy_projection_never_invents_native_capture_gaps() {
+fn legacy_projection_never_invents_native_capture_gaps_or_content_binding() {
     let temp = tempdir().expect("temporary root");
     let bundle_root = temp.path().join("legacy-bundle");
     make_private_directory(&bundle_root);
@@ -411,6 +429,8 @@ fn legacy_projection_never_invents_native_capture_gaps() {
     assert!(manifest.capture_gaps.is_empty());
     assert!(bundle.capture_gaps.is_empty());
     assert_eq!(bundle.artifacts.len(), 1);
+    assert_eq!(bundle.artifacts[0].declared_byte_length, None);
+    assert_eq!(bundle.artifacts[0].content_sha256, None);
     let expected_catalog_id = catalog_entry_id_for("ccmsetup.log");
     let expected_artifact_id = format!(
         "sccm-artifact:v1:sha256:{}",
