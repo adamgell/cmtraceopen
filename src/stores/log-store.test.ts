@@ -191,6 +191,42 @@ describe("log-store", () => {
       expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
       expect(useLogStore.getState().totalLines).toBe(1);
     });
+
+    it("accepts a suffix that spans its declared physical range", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        continuationEndLine: 3,
+        messageSuffix: "\nfirst\nsecond",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe(
+        "[Sync] started\nfirst\nsecond",
+      );
+      expect(useLogStore.getState().totalLines).toBe(3);
+    });
+
+    it("rejects a suffix whose line count disagrees with its physical range", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        continuationEndLine: 4,
+        messageSuffix: "\nfirst\nsecond",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
   });
 
   describe("resetEntries (tail truncation)", () => {
@@ -423,6 +459,28 @@ describe("log-store", () => {
       });
       expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(2);
       expect(useLogStore.getState().totalLines).toBe(3);
+    });
+
+    it("keeps a physical total when aggregate file metadata is unavailable", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 4, filePath: "/a.log", lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendAggregateEntry("/a.log", {
+        entryId: 0,
+        entryLineNumber: 1,
+        continuationStartLine: 2,
+        continuationEndLine: 2,
+        messageUtf16Start: 14,
+        messageSuffix: "\nrequest failed",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe(
+        "[Sync] started\nrequest failed",
+      );
+      expect(useLogStore.getState().totalLines).toBe(2);
     });
   });
 
