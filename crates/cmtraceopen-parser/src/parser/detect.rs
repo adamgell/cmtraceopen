@@ -687,7 +687,7 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     } else if (company_portal_path_hint && company_portal_count >= 1) || company_portal_count >= 2 {
         // An app version outside the validated set still parses with the only
         // grammar there is, but the selection says so.
-        if company_portal_validated_count > 0 {
+        if company_portal_validated_count == company_portal_count {
             ResolvedParser::company_portal()
         } else {
             ResolvedParser::company_portal_experimental()

@@ -114,8 +114,9 @@ pub fn parse_record_fields(line: &str) -> Option<CompanyPortalRecordFields> {
     let triple = parse_version_triple(fields[6])?;
     let sequence: u64 = fields[4].parse().ok()?;
 
-    // Fields 3 and 4 carry no validatable shape, but an empty column would mean
-    // the split landed somewhere other than a real record boundary.
+    // Fields 2, 3, and 4 carry no stricter validatable shape, but an empty
+    // column would mean the split landed somewhere other than a real record
+    // boundary.
     if fields[1].is_empty() || fields[2].is_empty() || fields[3].is_empty() {
         return None;
     }
@@ -277,13 +278,18 @@ fn parse_version_component(raw: &str) -> Option<u32> {
 /// [`CompanyPortalSeverityLevel::Unknown`] and keep their raw text, so a future
 /// level never silently becomes `Information`.
 fn severity_level(token: &str) -> CompanyPortalSeverityLevel {
-    match token.to_ascii_uppercase().as_str() {
-        "INFO" => CompanyPortalSeverityLevel::Information,
-        "WARN" | "WARNING" => CompanyPortalSeverityLevel::Warning,
-        "ERROR" => CompanyPortalSeverityLevel::Error,
-        "VERBOSE" | "DEBUG" => CompanyPortalSeverityLevel::Verbose,
-        "CRITICAL" | "FATAL" => CompanyPortalSeverityLevel::Critical,
-        _ => CompanyPortalSeverityLevel::Unknown,
+    if token.eq_ignore_ascii_case("INFO") {
+        CompanyPortalSeverityLevel::Information
+    } else if token.eq_ignore_ascii_case("WARN") || token.eq_ignore_ascii_case("WARNING") {
+        CompanyPortalSeverityLevel::Warning
+    } else if token.eq_ignore_ascii_case("ERROR") {
+        CompanyPortalSeverityLevel::Error
+    } else if token.eq_ignore_ascii_case("VERBOSE") || token.eq_ignore_ascii_case("DEBUG") {
+        CompanyPortalSeverityLevel::Verbose
+    } else if token.eq_ignore_ascii_case("CRITICAL") || token.eq_ignore_ascii_case("FATAL") {
+        CompanyPortalSeverityLevel::Critical
+    } else {
+        CompanyPortalSeverityLevel::Unknown
     }
 }
 
