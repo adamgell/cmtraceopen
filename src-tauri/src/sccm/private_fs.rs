@@ -1,9 +1,10 @@
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Component, Path};
 
 #[cfg(unix)]
-use std::ffi::{CString, OsStr, OsString};
+use std::ffi::{CString, OsStr};
 #[cfg(unix)]
 use std::path::PathBuf;
 
