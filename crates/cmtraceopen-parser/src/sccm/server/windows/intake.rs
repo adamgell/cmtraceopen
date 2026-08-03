@@ -2337,6 +2337,8 @@ fn validate_declared_source_tuple(
             || source_version != Some("5.00.TEST")
             || artifact.configured_path_provenance.path_fingerprint
                 != "synthetic:path:sup-wsus-health"
+            || artifact.rotation.kind != "providerDefined"
+            || artifact.rotation.value.is_some()
             || artifact.rotation.lineage_id != "sup-wsus-health")
     {
         return Err(SccmServerIntakeError::InvalidArtifact);

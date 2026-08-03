@@ -1877,6 +1877,34 @@ fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
 }
 
 #[test]
+fn server_intake_rejects_timestamped_rotation_for_synthetic_wsus_tuple() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["rotation"]["kind"] = Value::String("timestamped".to_owned());
+    manifest["artifacts"][0]["rotation"]["value"] = Value::String("20260729-235700".to_owned());
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact),
+        "the frozen synthetic WSUS tuple cannot discard a valid timestamped rotation"
+    );
+}
+
+#[test]
+fn server_intake_rejects_provider_defined_value_for_synthetic_wsus_tuple() {
+    let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["rotation"]["value"] =
+        Value::String("unexpected-provider-value".to_owned());
+
+    assert_eq!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact),
+        "the frozen synthetic WSUS provider-defined rotation cannot carry a value"
+    );
+}
+
+#[test]
 fn server_intake_accepts_profile_validated_production_wsus_tuple_with_opaque_provenance() {
     let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
     let mut manifest = manifest_value(&manifest_json);
