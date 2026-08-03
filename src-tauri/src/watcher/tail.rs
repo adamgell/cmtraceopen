@@ -1315,6 +1315,193 @@ mod tests {
     }
 
     #[test]
+    fn test_initial_company_portal_continuations_emit_one_replacement_at_next_header() {
+        let root = hinted_test_root("company-portal-initial-multi-batch");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        fs::write(
+            &path,
+            concat!(
+                "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+            ),
+        )
+        .expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        let mut reader = TailReader::new(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "first continuation").expect("should append first continuation");
+        drop(file);
+
+        let first_batch = reader
+            .read_new_entries()
+            .expect("first continuation read should succeed");
+        assert_eq!(first_batch.parse_errors, 0);
+        assert!(first_batch.entries.is_empty());
+        assert!(
+            first_batch.replacement.is_none(),
+            "the initial record should be amended once at a real record boundary"
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(
+            file,
+            concat!(
+                "second continuation\n",
+                "2024-11-15T16:50:08.2850341Z  INFO  Event  None  1  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] finished\n"
+            )
+        )
+        .expect("should append second continuation and next header");
+        drop(file);
+
+        let boundary_batch = reader
+            .read_new_entries()
+            .expect("boundary read should succeed");
+        assert_eq!(boundary_batch.parse_errors, 0);
+        assert!(boundary_batch.entries.is_empty());
+        let replacement = boundary_batch
+            .replacement
+            .expect("the next header should complete one initial-record replacement");
+        assert_eq!(replacement.id, 0);
+        assert_eq!(replacement.line_number, 1);
+        assert_eq!(
+            replacement.message,
+            "[Sync] started\nfirst continuation\nsecond continuation"
+        );
+
+        let flushed = reader.flush_pending_logical_record();
+        assert_eq!(flushed.entries.len(), 1);
+        assert_eq!(flushed.entries[0].id, 1);
+        assert_eq!(flushed.entries[0].line_number, 4);
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
+    fn test_initial_company_portal_tail_does_not_reread_previously_parsed_bytes() {
+        let root = hinted_test_root("company-portal-initial-no-reread");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        let initial = concat!(
+            "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+            "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+        );
+        fs::write(&path, initial).expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        let mut reader = TailReader::new(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+        );
+
+        let changed_prior_bytes = initial.replace("started", "BROKEN!");
+        assert_eq!(changed_prior_bytes.len(), initial.len());
+        fs::write(&path, changed_prior_bytes).expect("should mutate only prior bytes in place");
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(
+            file,
+            concat!(
+                "continuation from the append-only boundary\n",
+                "2024-11-15T16:50:08.2850341Z  INFO  Event  None  1  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] finished\n"
+            )
+        )
+        .expect("should append continuation and next header");
+        drop(file);
+
+        let batch = reader
+            .read_new_entries()
+            .expect("tail boundary read should succeed");
+        let replacement = batch
+            .replacement
+            .expect("tail boundary should amend the entry parsed during initial open");
+        assert_eq!(
+            replacement.message,
+            "[Sync] started\ncontinuation from the append-only boundary"
+        );
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
+    fn test_initial_company_portal_continuation_overflow_reports_the_cap() {
+        let root = hinted_test_root("company-portal-initial-overflow");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        fs::write(
+            &path,
+            concat!(
+                "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+            ),
+        )
+        .expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        let mut reader = TailReader::new(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+        );
+
+        let continuation = "x".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES + 1);
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "{continuation}").expect("should append oversized continuation");
+        drop(file);
+
+        let batch = reader
+            .read_new_entries()
+            .expect("oversized continuation read should succeed");
+        assert_eq!(batch.parse_errors, 1);
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
     fn test_tail_reader_preserves_split_inventory_adaptor_json_record() {
         let path = unique_test_path("inventory-adaptor-split");
         fs::write(&path, "").expect("should create empty adaptor log");
