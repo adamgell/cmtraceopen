@@ -474,8 +474,8 @@ fn coverage_gap_reason(
 ) -> String {
     if coverage.state != SccmCoverageState::Captured {
         return format!(
-            "Distribution Point source coverage is {:?}; recollect the declared source without changing its state.",
-            coverage.state
+            "Distribution Point source coverage is {}; recollect the declared source without changing its state.",
+            coverage_state_label(&coverage.state)
         );
     }
     if coverage
@@ -563,9 +563,25 @@ fn coverage_gap_sort_key(
             .map(role_sort_key)
             .unwrap_or_default()
             .to_owned(),
-        format!("{:?}", gap.state),
+        gap.state
+            .as_ref()
+            .map(coverage_state_label)
+            .unwrap_or_default()
+            .to_owned(),
         gap.artifact_ids.clone(),
     )
+}
+
+fn coverage_state_label(state: &SccmCoverageState) -> &'static str {
+    match state {
+        SccmCoverageState::Captured => "captured",
+        SccmCoverageState::Absent => "absent",
+        SccmCoverageState::AccessDenied => "accessDenied",
+        SccmCoverageState::Capped => "capped",
+        SccmCoverageState::Skipped => "skipped",
+        SccmCoverageState::Unsupported => "unsupported",
+        SccmCoverageState::ParseFailed => "parseFailed",
+    }
 }
 
 fn role_sort_key(role: &SccmRole) -> &str {
