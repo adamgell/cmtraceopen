@@ -23,10 +23,9 @@ use thiserror::Error;
 use crate::parser::ccm::scan_logical_records_bounded;
 use crate::sccm::catalog::classify_artifact_name;
 use crate::sccm::evidence::SccmRawEvidenceSnapshot;
-use crate::sccm::keys::extract_keys_from_admitted_profile;
 use crate::sccm::{
-    SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence, SccmExtractionProfile,
-    SccmKeyExtractionResult, SccmRole, SccmTimeOrderingState,
+    extract_keys, SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence,
+    SccmExtractionProfile, SccmKeyExtractionResult, SccmRole, SccmTimeOrderingState,
 };
 
 use super::{
@@ -141,11 +140,20 @@ impl SccmClientAdmittedEvidence {
         let [artifact_family] = profile.validated_artifact_families.as_slice() else {
             return Err(SccmClientEvidenceAdmissionError::IntegrityViolation);
         };
+        let mut extraction_profile = profile.clone();
+        // Only Policy has executable key-extraction fixtures in the first
+        // client slice. Clearing this sealed family binding selects the public
+        // generic extractor without exposing a crate-wide privileged helper;
+        // the opaque result retains the verified family separately. All other
+        // families remain explicitly unvalidated.
+        if matches!(artifact_family, SccmArtifactFamily::ClientPolicy) {
+            extraction_profile.validated_artifact_families.clear();
+        }
         let results = self
             .evidence
             .iter()
             .filter(|evidence| evidence.reference.artifact_id == *sealed_artifact_id)
-            .map(|evidence| extract_keys_from_admitted_profile(evidence, profile))
+            .map(|evidence| extract_keys(evidence, &extraction_profile))
             .collect::<Vec<_>>();
         if results.is_empty() {
             return Err(SccmClientEvidenceAdmissionError::MissingAdmittedArtifactEvidence);
