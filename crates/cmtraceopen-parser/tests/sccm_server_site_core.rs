@@ -397,32 +397,6 @@ fn assert_malformed_peer_source_fails_closed(analysis: &SccmSiteCoreAnalysis, ma
     assert!(!wire.contains(malformed_id));
 }
 
-fn assert_explicit_gap_and_request(
-    analysis: &SccmSiteCoreAnalysis,
-    artifact_id: &str,
-    source_id: &str,
-) {
-    assert!(analysis.coverage_gaps.iter().any(|gap| {
-        gap.artifact_id == artifact_id && gap.state == SccmCoverageState::ParseFailed
-    }));
-    assert!(analysis.unlinked_observations.iter().any(|observation| {
-        observation.finding_class == SccmFindingClass::InsufficientEvidence
-            && observation
-                .coverage_gap_artifact_ids
-                .iter()
-                .any(|candidate| candidate == artifact_id)
-    }));
-    let request = analysis
-        .artifact_requests
-        .iter()
-        .find(|request| request.logical_name == source_id)
-        .expect("coverage gap has a source-specific artifact request");
-    assert_bounded_request_has_specific_scope(request);
-    for request in &analysis.artifact_requests {
-        assert_bounded_request_has_specific_scope(request);
-    }
-}
-
 fn assert_intake_authority_mutation_fails_closed(analysis: &SccmSiteCoreAnalysis) {
     assert_topology_incongruence_fails_closed(
         analysis,
@@ -879,15 +853,7 @@ fn encoding_profile_coverage_fragment_cap_and_time_provenance_fail_closed() {
         evidence.timestamp.ordering_state = SccmTimeOrderingState::OffsetInvalid;
     }
 
-    for (name, assessment) in [
-        ("encoding", encoding),
-        ("profile", unknown_profile),
-        ("coverage", denied),
-        ("fragment", incomplete_fragment),
-        ("content", missing_content_provenance),
-        ("cap", capped),
-        ("time", invalid_time),
-    ] {
+    for (name, assessment) in [("encoding", encoding), ("cap", capped)] {
         let analysis = analyze_site_core(&assessment);
         assert!(
             !analysis.coverage_gaps.is_empty(),
@@ -916,6 +882,16 @@ fn encoding_profile_coverage_fragment_cap_and_time_provenance_fail_closed() {
             finding.finding.class != SccmFindingClass::ConfirmedFailure
                 || finding.finding.confidence != cmtraceopen_parser::sccm::SccmConfidence::High
         }));
+    }
+
+    for assessment in [
+        unknown_profile,
+        denied,
+        incomplete_fragment,
+        missing_content_provenance,
+        invalid_time,
+    ] {
+        assert_authority_invalid_analysis(&analyze_site_core(&assessment));
     }
 }
 
@@ -1232,22 +1208,11 @@ fn no_provenance_mutation_can_reintroduce_a_confirmed_failure() {
         .expect("captured source provenance")
         .limit_applied = true;
 
-    let analysis = analyze_site_core(&assessment);
-    assert!(analysis.results.is_empty());
-    assert!(analysis
-        .coverage_gaps
-        .iter()
-        .any(|gap| gap.artifact_id == "sitecomp-current"));
-    let request = analysis
-        .artifact_requests
-        .iter()
-        .find(|request| request.logical_name == "server-sitecomp")
-        .expect("provenance coverage gap has a request");
-    assert_bounded_request_has_specific_scope(request);
+    assert_authority_invalid_analysis(&analyze_site_core(&assessment));
 }
 
 #[test]
-fn rejected_role_subject_and_duplicate_sources_become_explicit_parse_gaps() {
+fn post_intake_source_contract_mutations_fail_sealed_authority_closed() {
     let healthy = assess(&[
         Source::sitecomp(HEALTHY_SITECOMP),
         Source::status(HEALTHY_STATUS),
@@ -1260,11 +1225,7 @@ fn rejected_role_subject_and_duplicate_sources_become_explicit_parse_gaps() {
         .find(|artifact| artifact.source_id == "server-status")
         .expect("status artifact")
         .producer_role = SccmRole::ManagementPoint;
-    assert_explicit_gap_and_request(
-        &analyze_site_core(&wrong_role),
-        "z-site-status",
-        "server-status",
-    );
+    assert_authority_invalid_analysis(&analyze_site_core(&wrong_role));
 
     let mut wrong_subject = healthy.clone();
     let sitecomp = wrong_subject
@@ -1274,11 +1235,7 @@ fn rejected_role_subject_and_duplicate_sources_become_explicit_parse_gaps() {
         .expect("sitecomp artifact");
     sitecomp.workflow_subject_role = Some(SccmRole::Client);
     sitecomp.workflow_subject_handle = Some("synthetic:subject:client-01".to_owned());
-    assert_explicit_gap_and_request(
-        &analyze_site_core(&wrong_subject),
-        "sitecomp-current",
-        "server-sitecomp",
-    );
+    assert_authority_invalid_analysis(&analyze_site_core(&wrong_subject));
 
     let mut duplicate = healthy;
     let duplicate_sitecomp = duplicate
@@ -1288,11 +1245,7 @@ fn rejected_role_subject_and_duplicate_sources_become_explicit_parse_gaps() {
         .expect("sitecomp artifact")
         .clone();
     duplicate.artifacts.push(duplicate_sitecomp);
-    assert_explicit_gap_and_request(
-        &analyze_site_core(&duplicate),
-        "sitecomp-current",
-        "server-sitecomp",
-    );
+    assert_authority_invalid_analysis(&analyze_site_core(&duplicate));
 
     let mut rejected_shape = assess(&[
         Source::sitecomp(HEALTHY_SITECOMP),
@@ -1304,11 +1257,7 @@ fn rejected_role_subject_and_duplicate_sources_become_explicit_parse_gaps() {
         .find(|artifact| artifact.source_id == "server-status")
         .expect("status artifact")
         .original_basename = Some("future-status.bin".to_owned());
-    assert_explicit_gap_and_request(
-        &analyze_site_core(&rejected_shape),
-        "z-site-status",
-        "server-status",
-    );
+    assert_authority_invalid_analysis(&analyze_site_core(&rejected_shape));
 }
 
 #[test]
@@ -1374,14 +1323,12 @@ fn post_intake_nonprofile_role_mutation_fails_sealed_authority_closed() {
 }
 
 #[test]
-fn colliding_evidence_identities_are_parse_gaps_not_silent_drops() {
+fn post_intake_evidence_identity_collision_fails_sealed_authority_closed() {
     let mut assessment = assess(&[Source::sitecomp(HEALTHY_SITECOMP), Source::absent_status()]);
     let duplicate = assessment.evidence[0].clone();
     assessment.evidence.push(duplicate);
 
-    let analysis = analyze_site_core(&assessment);
-    assert_explicit_gap_and_request(&analysis, "sitecomp-current", "server-sitecomp");
-    assert!(analysis.results.is_empty());
+    assert_authority_invalid_analysis(&analyze_site_core(&assessment));
 }
 
 #[test]
@@ -1579,9 +1526,10 @@ fn invalid_finding_inputs_become_explicit_gaps_instead_of_clearing_class() {
     }
 
     let analysis = analyze_site_core(&assessment);
-    assert!(analysis.results.is_empty());
-    assert!(!analysis.unlinked_observations.is_empty());
-    assert!(!analysis.artifact_requests.is_empty());
+    assert_authority_invalid_analysis(&analysis);
+    assert!(!serde_json::to_string(&analysis)
+        .expect("analysis serializes")
+        .contains(&oversized_id));
 }
 
 #[test]
@@ -1683,11 +1631,7 @@ fn rotation_provenance_must_match_classification_and_requests_use_exact_pairs() 
         kind: "future".to_owned(),
         value: None,
     }));
-    let unknown = analyze_site_core(&unknown_rotation);
-    assert!(!unknown.artifact_requests.is_empty());
-    for request in &unknown.artifact_requests {
-        assert_bounded_request_has_specific_scope(request);
-    }
+    assert_authority_invalid_analysis(&analyze_site_core(&unknown_rotation));
 }
 
 #[test]

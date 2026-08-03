@@ -33,6 +33,9 @@ pub const SCCM_SITE_CORE_STATUS_GROUP: &str = "server-status";
 const SITE_CORE_PROFILE_VERSION_TOKEN: &str = "5.00.TEST";
 const RECAPTURE_FLOOR_BYTES: u64 = 4096;
 const MAX_SITE_CORE_REQUEST_ARTIFACTS: usize = 2;
+const INTAKE_AUTHORITY_ARTIFACT_ID: &str = "site-core-intake-authority";
+const INTAKE_AUTHORITY_SOURCE_ID: &str = "server-site-core-intake";
+const INTAKE_AUTHORITY_REASON_CODE: &str = "intake-authority-invalid";
 
 const STATE_CHAIN: [SccmSiteCorePhase; 5] = [
     SccmSiteCorePhase::ComponentStart,
@@ -306,24 +309,34 @@ struct SiteCoreContext<'a> {
 impl<'a> SiteCoreContext<'a> {
     fn new(intake: &'a SccmServerIntakeAssessment) -> Self {
         let intake_authority_is_bound = intake.adapter_authority_is_intake_bound();
-        let evidence_identity_is_unique = if intake_authority_is_bound {
-            unique_evidence_identities(&intake.evidence)
-        } else {
-            vec![false; intake.evidence.len()]
-        };
-        let collision_artifact_ids = if intake_authority_is_bound {
-            evidence_collision_artifact_ids(&intake.evidence, &evidence_identity_is_unique)
-        } else {
-            BTreeSet::new()
-        };
-        let (evidence_source_rejections, unresolved_evidence_gaps) = if intake_authority_is_bound {
-            evidence_source_rejections(intake)
-        } else {
-            (BTreeMap::new(), Vec::new())
-        };
-        let coverage_congruent = intake_authority_is_bound
-            && intake.topology_authority_is_intake_bound()
-            && site_core_coverage_is_congruent(intake);
+        if !intake_authority_is_bound {
+            // The public assessment fields are no longer authoritative once the
+            // private intake seal fails. Keep the coverage failure explicit, but
+            // do not use caller-mutable artifact identities or topology to scope
+            // a collection request.
+            return Self {
+                artifacts: &[],
+                sources: BTreeMap::new(),
+                intake_authority_is_bound,
+                evidence_identity_is_unique: Vec::new(),
+                coverage_gaps: vec![SccmSiteCoreCoverageGap {
+                    artifact_id: INTAKE_AUTHORITY_ARTIFACT_ID.to_owned(),
+                    source_id: INTAKE_AUTHORITY_SOURCE_ID.to_owned(),
+                    state: SccmCoverageState::ParseFailed,
+                    reason_code: INTAKE_AUTHORITY_REASON_CODE.to_owned(),
+                    diagnostic_meaning: SccmSiteCoreDiagnosticMeaning::CoverageOnly,
+                }],
+                coverage_gap_producer_hosts: BTreeMap::new(),
+            };
+        }
+
+        let evidence_identity_is_unique = unique_evidence_identities(&intake.evidence);
+        let collision_artifact_ids =
+            evidence_collision_artifact_ids(&intake.evidence, &evidence_identity_is_unique);
+        let (evidence_source_rejections, unresolved_evidence_gaps) =
+            evidence_source_rejections(intake);
+        let coverage_congruent =
+            intake.topology_authority_is_intake_bound() && site_core_coverage_is_congruent(intake);
         let sources = admitted_sources(
             intake,
             &collision_artifact_ids,
