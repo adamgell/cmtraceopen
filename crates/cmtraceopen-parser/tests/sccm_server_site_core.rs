@@ -1780,17 +1780,7 @@ fn changed_coverage_workflow_subject_handle_fails_site_core_congruence_closed() 
         .workflow_subject_handle = Some("synthetic:subject:site-core-01".to_owned());
 
     let analysis = analyze_site_core(&assessment);
-    assert_topology_incongruence_fails_closed(
-        &analysis,
-        &[
-            (
-                "sitecomp-current",
-                "server-sitecomp",
-                "synthetic:host:site-01",
-            ),
-            ("z-site-status", "server-status", "synthetic:host:site-01"),
-        ],
-    );
+    assert_intake_authority_mutation_fails_closed(&analysis);
 }
 
 #[test]
@@ -1823,17 +1813,11 @@ fn post_intake_topology_mutations_fail_site_core_authority_closed() {
         ("observed roles", analyze_site_core(&changed_observed_roles)),
     ];
 
-    for (_, analysis) in &analyses {
-        assert_topology_incongruence_fails_closed(
-            analysis,
-            &[
-                (
-                    "sitecomp-current",
-                    "server-sitecomp",
-                    "synthetic:host:site-01",
-                ),
-                ("z-site-status", "server-status", "synthetic:host:site-01"),
-            ],
+    for (mutation, analysis) in &analyses {
+        assert!(
+            analysis.results.is_empty(),
+            "{mutation} mutation still produced site-core results"
         );
+        assert_intake_authority_mutation_fails_closed(analysis);
     }
 }
