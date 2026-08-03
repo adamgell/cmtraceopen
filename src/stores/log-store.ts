@@ -96,6 +96,7 @@ function canApplyTailAmendment(
 ): boolean {
   if (
     amendment.messageSuffix.length === 0 ||
+    !amendment.messageSuffix.startsWith("\n") ||
     amendment.entryLineNumber !== entry.lineNumber ||
     amendment.continuationStartLine <= amendment.entryLineNumber ||
     amendment.continuationEndLine < amendment.continuationStartLine ||
@@ -873,10 +874,23 @@ export const useLogStore = create<LogState>((set, get) => ({
       const entries = [...state.entries, ...entriesWithIds].sort((left, right) =>
         compareMergedLogEntries(left, right, fileOrder)
       );
+      const highestLine = newEntries.reduce(
+        (maximum, entry) => Math.max(maximum, entry.lineNumber),
+        0,
+      );
+      const aggregateFiles = state.aggregateFiles.map((file) =>
+        file.filePath === filePath
+          ? { ...file, totalLines: Math.max(file.totalLines, highestLine) }
+          : file,
+      );
 
       return {
         entries,
-        totalLines: state.totalLines + entriesWithIds.length,
+        aggregateFiles,
+        totalLines:
+          aggregateFiles.length > 0
+            ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0)
+            : state.totalLines + entriesWithIds.length,
         guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
       };
     });
@@ -967,8 +981,14 @@ export const useLogStore = create<LogState>((set, get) => ({
       const entries = [...remaining, ...entriesWithIds].sort((left, right) =>
         compareMergedLogEntries(left, right, fileOrder)
       );
+      const highestLine = newEntries.reduce(
+        (maximum, entry) => Math.max(maximum, entry.lineNumber),
+        0,
+      );
       const aggregateFiles = state.aggregateFiles.map((file) =>
-        file.filePath === filePath ? { ...file, totalLines: 0 } : file,
+        file.filePath === filePath
+          ? { ...file, totalLines: highestLine }
+          : file,
       );
 
       return {
