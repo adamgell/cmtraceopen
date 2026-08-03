@@ -1023,12 +1023,16 @@ fn artifact_requests(gaps: &[SccmDistributionPointCoverageGap]) -> Vec<SccmArtif
     for gap in gaps {
         if gap.producer_role.is_none() {
             // An unscoped coverage gap does not identify a failed source. Ask
-            // for one bounded representative from each DP side; later
-            // source-specific gaps may request PkgXferMgr or PullDP exactly.
+            // for the bounded sources required by the healthy DP profile.
             requests.push(SccmArtifactRequest {
                 logical_id: "distmgr".to_owned(),
                 role: SccmRole::SiteServer,
                 reason: "Collect the complete distmgr.log file.".to_owned(),
+            });
+            requests.push(SccmArtifactRequest {
+                logical_id: "pkgXferMgr".to_owned(),
+                role: SccmRole::SiteServer,
+                reason: "Collect the complete PkgXferMgr.log file.".to_owned(),
             });
             requests.push(SccmArtifactRequest {
                 logical_id: "smsDpProv".to_owned(),
@@ -1046,6 +1050,11 @@ fn artifact_requests(gaps: &[SccmDistributionPointCoverageGap]) -> Vec<SccmArtif
                 logical_id: "distmgr".to_owned(),
                 role: SccmRole::SiteServer,
                 reason: "Collect the complete distmgr.log file.".to_owned(),
+            });
+            requests.push(SccmArtifactRequest {
+                logical_id: "pkgXferMgr".to_owned(),
+                role: SccmRole::SiteServer,
+                reason: "Collect the complete PkgXferMgr.log file.".to_owned(),
             });
         }
     }
@@ -1127,6 +1136,87 @@ fn role_sort_key(role: &SccmRole) -> &str {
         SccmRole::Provider => "provider",
         SccmRole::AdminService => "adminService",
         SccmRole::Unknown(value) => value,
+    }
+}
+
+#[cfg(test)]
+mod artifact_request_tests {
+    use super::*;
+
+    fn gap(producer_role: Option<SccmRole>) -> SccmDistributionPointCoverageGap {
+        SccmDistributionPointCoverageGap {
+            source_id: SCCM_DISTRIBUTION_POINT_SOURCE_ID.to_owned(),
+            producer_role,
+            workflow_subject_role: Some(SccmRole::DistributionPoint),
+            state: Some(SccmCoverageState::Absent),
+            artifact_ids: Vec::new(),
+            reason: "controlled coverage gap".to_owned(),
+        }
+    }
+
+    fn contracts(requests: &[SccmArtifactRequest]) -> Vec<(&str, SccmRole, &str)> {
+        requests
+            .iter()
+            .map(|request| {
+                (
+                    request.logical_id.as_str(),
+                    request.role.clone(),
+                    request.reason.as_str(),
+                )
+            })
+            .collect()
+    }
+
+    fn expected_site_requests() -> Vec<(&'static str, SccmRole, &'static str)> {
+        vec![
+            (
+                "distmgr",
+                SccmRole::SiteServer,
+                "Collect the complete distmgr.log file.",
+            ),
+            (
+                "pkgXferMgr",
+                SccmRole::SiteServer,
+                "Collect the complete PkgXferMgr.log file.",
+            ),
+        ]
+    }
+
+    fn expected_all_requests() -> Vec<(&'static str, SccmRole, &'static str)> {
+        let mut requests = expected_site_requests();
+        requests.push((
+            "smsDpProv",
+            SccmRole::DistributionPoint,
+            "Collect the complete SMSDPProv.log file.",
+        ));
+        requests
+    }
+
+    fn expected_dp_requests() -> Vec<(&'static str, SccmRole, &'static str)> {
+        vec![(
+            "smsDpProv",
+            SccmRole::DistributionPoint,
+            "Collect the complete SMSDPProv.log file.",
+        )]
+    }
+
+    #[test]
+    fn artifact_requests_cover_required_sources_by_gap_scope_deterministically() {
+        let site_gap = gap(Some(SccmRole::SiteServer));
+        let site_requests = artifact_requests(&[site_gap.clone(), site_gap.clone()]);
+        assert_eq!(contracts(&site_requests), expected_site_requests());
+
+        let unscoped_gap = gap(None);
+        let unscoped_requests = artifact_requests(&[unscoped_gap.clone(), unscoped_gap.clone()]);
+        assert_eq!(contracts(&unscoped_requests), expected_all_requests());
+
+        let dp_gap = gap(Some(SccmRole::DistributionPoint));
+        let dp_requests = artifact_requests(&[dp_gap.clone(), dp_gap.clone()]);
+        assert_eq!(contracts(&dp_requests), expected_dp_requests());
+
+        let forward = artifact_requests(&[site_gap.clone(), unscoped_gap.clone(), dp_gap.clone()]);
+        let reversed = artifact_requests(&[dp_gap, unscoped_gap, site_gap]);
+        assert_eq!(forward, reversed);
     }
 }
 

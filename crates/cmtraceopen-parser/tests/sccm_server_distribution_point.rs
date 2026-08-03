@@ -7,8 +7,56 @@ use cmtraceopen_parser::sccm::server::windows::{
     SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION, SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID,
     SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION,
 };
-use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState};
+use cmtraceopen_parser::sccm::{
+    SccmArtifactRequest, SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState,
+};
 use serde_json::{json, Value};
+
+fn artifact_request_contracts(requests: &[SccmArtifactRequest]) -> Vec<(&str, SccmRole, &str)> {
+    requests
+        .iter()
+        .map(|request| {
+            (
+                request.logical_id.as_str(),
+                request.role.clone(),
+                request.reason.as_str(),
+            )
+        })
+        .collect()
+}
+
+fn expected_site_server_artifact_requests() -> Vec<(&'static str, SccmRole, &'static str)> {
+    vec![
+        (
+            "distmgr",
+            SccmRole::SiteServer,
+            "Collect the complete distmgr.log file.",
+        ),
+        (
+            "pkgXferMgr",
+            SccmRole::SiteServer,
+            "Collect the complete PkgXferMgr.log file.",
+        ),
+    ]
+}
+
+fn expected_all_dp_profile_artifact_requests() -> Vec<(&'static str, SccmRole, &'static str)> {
+    let mut requests = expected_site_server_artifact_requests();
+    requests.push((
+        "smsDpProv",
+        SccmRole::DistributionPoint,
+        "Collect the complete SMSDPProv.log file.",
+    ));
+    requests
+}
+
+fn expected_dp_artifact_requests() -> Vec<(&'static str, SccmRole, &'static str)> {
+    vec![(
+        "smsDpProv",
+        SccmRole::DistributionPoint,
+        "Collect the complete SMSDPProv.log file.",
+    )]
+}
 
 fn intake_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/server/intake")
@@ -314,14 +362,9 @@ fn assert_dp_sealed_guard_rejection(
         "Captured Distribution Point evidence is incomplete or outside the supported intake profile.",
         "{context}"
     );
-    assert_eq!(analysis.artifact_requests.len(), 1, "{context}");
     assert_eq!(
-        analysis.artifact_requests[0].logical_id, "distmgr",
-        "{context}"
-    );
-    assert_eq!(
-        analysis.artifact_requests[0].role,
-        SccmRole::SiteServer,
+        artifact_request_contracts(&analysis.artifact_requests),
+        expected_site_server_artifact_requests(),
         "{context}"
     );
     assert!(!analysis.cross_side_correlation_performed, "{context}");
@@ -352,23 +395,9 @@ fn assert_dp_intake_authority_invalid(
         gap.reason, "Canonical server intake authority could not be verified.",
         "{context}"
     );
-    assert_eq!(analysis.artifact_requests.len(), 2, "{context}");
     assert_eq!(
-        analysis.artifact_requests[0].logical_id, "distmgr",
-        "{context}"
-    );
-    assert_eq!(
-        analysis.artifact_requests[0].role,
-        SccmRole::SiteServer,
-        "{context}"
-    );
-    assert_eq!(
-        analysis.artifact_requests[1].logical_id, "smsDpProv",
-        "{context}"
-    );
-    assert_eq!(
-        analysis.artifact_requests[1].role,
-        SccmRole::DistributionPoint,
+        artifact_request_contracts(&analysis.artifact_requests),
+        expected_all_dp_profile_artifact_requests(),
         "{context}"
     );
     assert!(!analysis.cross_side_correlation_performed, "{context}");
@@ -515,12 +544,8 @@ fn semantic_analysis_preserves_conservative_source_coverage_and_bounded_requests
             "{case}"
         );
         assert_eq!(
-            analysis
-                .artifact_requests
-                .iter()
-                .map(|request| (request.logical_id.as_str(), &request.role))
-                .collect::<Vec<_>>(),
-            vec![("distmgr", &SccmRole::SiteServer)],
+            artifact_request_contracts(&analysis.artifact_requests),
+            expected_site_server_artifact_requests(),
             "{case}"
         );
 
@@ -569,8 +594,8 @@ fn incomplete_and_unknown_profile_evidence_remain_explicit_semantic_gaps() {
         Some(SccmCoverageState::Captured)
     );
     assert_eq!(
-        incomplete_analysis.artifact_requests[0].logical_id,
-        "smsDpProv"
+        artifact_request_contracts(&incomplete_analysis.artifact_requests),
+        expected_dp_artifact_requests()
     );
 
     let unknown_profile =
@@ -595,12 +620,8 @@ fn incomplete_and_unknown_profile_evidence_remain_explicit_semantic_gaps() {
         .iter()
         .all(|gap| gap.state == Some(SccmCoverageState::Captured)));
     assert_eq!(
-        unknown_analysis
-            .artifact_requests
-            .iter()
-            .map(|request| request.logical_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["distmgr", "smsDpProv"]
+        artifact_request_contracts(&unknown_analysis.artifact_requests),
+        expected_all_dp_profile_artifact_requests()
     );
 }
 
@@ -640,7 +661,10 @@ fn healthy_transaction_cannot_hide_a_sealed_coverage_gap_or_keep_high_confidence
         analysis.coverage_gaps[0].state,
         Some(SccmCoverageState::Absent)
     );
-    assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
+    assert_eq!(
+        artifact_request_contracts(&analysis.artifact_requests),
+        expected_site_server_artifact_requests()
+    );
     assert_eq!(
         analysis.transactions[0].confidence,
         SccmDistributionPointContentConfidence::Medium
@@ -881,9 +905,10 @@ fn absent_dp_candidate_is_coverage_not_a_role_diagnosis() {
         analysis.coverage_gaps[0].reason,
         "Distribution Point source coverage is absent; recollect the declared source without changing its state."
     );
-    assert_eq!(analysis.artifact_requests.len(), 1);
-    assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
-    assert_eq!(analysis.artifact_requests[0].role, SccmRole::SiteServer);
+    assert_eq!(
+        artifact_request_contracts(&analysis.artifact_requests),
+        expected_site_server_artifact_requests()
+    );
     serde_json::to_value(&analysis).expect("coverage-only analysis serializes");
 }
 
@@ -897,15 +922,8 @@ fn no_declared_dp_source_requests_both_bounded_sides_without_correlation() {
     assert_eq!(analysis.coverage_gaps.len(), 1);
     assert_eq!(analysis.coverage_gaps[0].producer_role, None);
     assert_eq!(
-        analysis
-            .artifact_requests
-            .iter()
-            .map(|request| (request.logical_id.as_str(), &request.role))
-            .collect::<Vec<_>>(),
-        vec![
-            ("distmgr", &SccmRole::SiteServer),
-            ("smsDpProv", &SccmRole::DistributionPoint),
-        ]
+        artifact_request_contracts(&analysis.artifact_requests),
+        expected_all_dp_profile_artifact_requests()
     );
     assert!(!analysis.cross_side_correlation_performed);
 }
