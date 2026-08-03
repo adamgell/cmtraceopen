@@ -274,6 +274,18 @@ fn portal_logs_invalid_timestamp_becomes_coverage_not_absence() {
     );
 }
 
+#[test]
+fn portal_logs_empty_input_is_not_available_coverage() {
+    let document = document("Log_1.log", "");
+
+    assert!(document.records.is_empty());
+    assert_eq!(
+        document.coverage[0].status,
+        CompanyPortalCoverageStatus::ParseFailed,
+        "zero parsed records must never be reported as available coverage"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 7. truncated first and last records
 // ---------------------------------------------------------------------------
