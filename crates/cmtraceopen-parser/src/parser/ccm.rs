@@ -936,6 +936,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bounded_scan_observer_clears_after_a_panicking_operation() {
+        let panic = std::panic::catch_unwind(|| {
+            let _ = observe_bounded_scans(|| panic!("expected observer probe panic"));
+        });
+        assert!(panic.is_err());
+
+        let (_, observations) = observe_bounded_scans(|| ());
+        assert!(observations.is_empty());
+    }
+
+    #[test]
     fn test_parse_ccm_line() {
         let line = r#"<![LOG[Successfully connected to \\server\share]LOG]!><time="08:06:34.590-060" date="09-02-2016" component="ContentTransferManager" context="" type="1" thread="3692" file="datatransfer.cpp">"#;
         let parsed = parse_line(line).expect("should parse");
