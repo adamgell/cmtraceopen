@@ -1,0 +1,9 @@
+<![LOG[Starting Powershell Execution]LOG]!><time="12:00:00.0000000" date="3-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell script is: C:\Program Files (x86)\Microsoft Intune Management Extension\Policies\Scripts\11111111-1111-4111-8111-111111111111_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1.ps1]LOG]!><time="12:00:00.0000000" date="3-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell execution is done, exitCode = 1]LOG]!><time="12:00:05.0000000" date="3-12-2026" component="AgentExecutor" context="" type="3" thread="12" file="">
+<![LOG[Starting Powershell Execution]LOG]!><time="13:00:00.0000000" date="3-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell script is: C:\Program Files (x86)\Microsoft Intune Management Extension\Policies\Scripts\11111111-1111-4111-8111-111111111111_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1.ps1]LOG]!><time="13:00:00.0000000" date="3-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell execution is done, exitCode = 1]LOG]!><time="13:00:05.0000000" date="3-12-2026" component="AgentExecutor" context="" type="3" thread="12" file="">
+<![LOG[Starting Powershell Execution]LOG]!><time="14:00:00.0000000" date="3-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell script is: C:\Program Files (x86)\Microsoft Intune Management Extension\Policies\Scripts\11111111-1111-4111-8111-111111111111_aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1.ps1]LOG]!><time="14:00:00.0000000" date="3-12-2026" component="AgentExecutor" context="" type="1" thread="12" file="">
+<![LOG[Powershell execution is done, exitCode = 1]LOG]!><time="14:00:05.0000000" date="3-12-2026" component="AgentExecutor" context="" type="3" thread="12" file="">

@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, renderHook, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useLogStore } from "../stores/log-store";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceId } from "../types/log";
 import { useAppMenu } from "./use-app-menu";
@@ -462,5 +463,96 @@ describe("useKeyboard native menu parity", () => {
     useUiStore.setState({ currentPlatform: "windows" });
     fireEvent.keyDown(window, { key: "h", metaKey: true });
     expect(actionMocks.current.toggleDetailsPane).toHaveBeenCalledOnce();
+  });
+
+  it("ignores global shortcuts while the elevation prompt is open", () => {
+    useUiStore.setState({
+      currentPlatform: "windows",
+      elevationPrompt: {
+        request: {
+          reason: "explicitMenu",
+          workspace: "log",
+          target: { kind: "workspace" },
+        },
+      },
+    });
+    renderHook(() => useKeyboard());
+
+    // The prompt traps focus and dims the app, so a shortcut here would act on
+    // content the user can neither see nor reach.
+    fireEvent.keyDown(window, { key: "h", ctrlKey: true });
+    expect(actionMocks.current.toggleDetailsPane).not.toHaveBeenCalled();
+
+    // Suppressing our handler is not enough: the WebView would still run its
+    // own find-in-page or zoom behind the modal.
+    expect(
+      fireEvent.keyDown(window, { key: "f", ctrlKey: true }),
+    ).toBe(false);
+
+    // Plain keys stay untouched, because the dialog's focus trap owns Tab and
+    // its own listener owns Escape.
+    expect(fireEvent.keyDown(window, { key: "Tab" })).toBe(true);
+    expect(fireEvent.keyDown(window, { key: "Escape" })).toBe(true);
+
+    useUiStore.setState({ elevationPrompt: null });
+  });
+
+  it("restarts a non-log workspace without dragging a stale source along", async () => {
+    useUiStore.setState({ activeWorkspace: "esp-diagnostics" });
+    // activeSource survives a workspace switch, so it is still set here even
+    // though the user is looking at ESP.
+    useLogStore.setState({
+      activeSource: { kind: "file", path: "C:\\Logs\\stale.log" },
+    });
+    renderHook(() => useAppMenu());
+
+    await emitMenuAction({ action: "restart_as_administrator" });
+
+    expect(useUiStore.getState().elevationPrompt?.request).toEqual({
+      reason: "explicitMenu",
+      workspace: "esp-diagnostics",
+      target: { kind: "workspace" },
+    });
+
+    useUiStore.setState({ elevationPrompt: null });
+  });
+
+  it("leaves a confirmation already on screen alone", async () => {
+    useUiStore.setState({ activeWorkspace: "log" });
+    renderHook(() => useAppMenu());
+
+    // An Access Denied recovery the user is part-way through.
+    const existing = {
+      reason: "accessDenied" as const,
+      workspace: "log" as const,
+      target: { kind: "file" as const, path: "C:\\Windows\\denied.log" },
+    };
+    useUiStore.getState().setElevationPrompt({ request: existing });
+
+    await emitMenuAction({ action: "restart_as_administrator" });
+
+    // Replacing it would reset the dialog's submitting and failure state
+    // mid-flight and discard the source the user was actually recovering.
+    expect(useUiStore.getState().elevationPrompt?.request).toEqual(existing);
+
+    useUiStore.setState({ elevationPrompt: null });
+  });
+
+  it("restarts the log workspace with the source the user is looking at", async () => {
+    useUiStore.setState({ activeWorkspace: "log" });
+    useLogStore.setState({
+      activeSource: { kind: "file", path: "C:\\Logs\\current.log" },
+    });
+    renderHook(() => useAppMenu());
+
+    await emitMenuAction({ action: "restart_as_administrator" });
+
+    expect(useUiStore.getState().elevationPrompt?.request).toEqual({
+      reason: "explicitMenu",
+      workspace: "log",
+      target: { kind: "file", path: "C:\\Logs\\current.log" },
+    });
+
+    useUiStore.setState({ elevationPrompt: null });
   });
 });

@@ -7,6 +7,7 @@ import argparse
 import json
 import subprocess
 from typing import Any
+from urllib.parse import urlparse
 
 
 QUERY = r"""
@@ -64,13 +65,12 @@ def run_json(command: list[str], stdin: str | None = None) -> dict[str, Any]:
 def current_pr() -> tuple[str, str, int]:
     data = run_json([
         "gh", "pr", "view", "--json",
-        "number,headRepositoryOwner,headRepository",
+        "number,url",
     ])
-    return (
-        data["headRepositoryOwner"]["login"],
-        data["headRepository"]["name"],
-        int(data["number"]),
-    )
+    path = urlparse(data["url"]).path.strip("/").split("/")
+    if len(path) < 4 or path[-2] != "pull":
+        raise SystemExit(f"unexpected pull request URL: {data['url']}")
+    return path[-4], path[-3], int(data["number"])
 
 
 def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
@@ -125,7 +125,10 @@ def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
     assert metadata is not None
     reviews = list({review["id"]: review for review in reviews}.values())
     threads = list({thread["id"]: thread for thread in threads}.values())
-    copilot_reviews = [review for review in reviews if is_copilot(review.get("author"))]
+    copilot_reviews = [
+        review for review in reviews
+        if is_copilot(review.get("author")) and review.get("submittedAt") is not None
+    ]
     copilot_reviews.sort(key=lambda review: review.get("submittedAt") or "")
     unresolved = [thread for thread in threads if not thread["isResolved"]]
     unresolved_copilot = [thread for thread in unresolved if thread_has_copilot(thread)]

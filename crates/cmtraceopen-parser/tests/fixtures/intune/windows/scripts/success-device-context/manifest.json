@@ -1,0 +1,17 @@
+{
+  "description": "A device-context script that ran to a zero exit and whose result reached the service.",
+  "artifacts": [
+    {
+      "artifactId": "ime",
+      "fileName": "IntuneManagementExtension.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log",
+      "contentFile": "IntuneManagementExtension.log"
+    },
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

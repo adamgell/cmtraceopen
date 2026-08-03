@@ -1189,7 +1189,7 @@ describe("ESP elevation recommendation", () => {
       if (cmd === "get_esp_elevation_state") {
         return { isElevated: false, restartSupported: true, restrictedSources: [] };
       }
-      if (cmd === "restart_esp_as_administrator") {
+      if (cmd === "restart_as_administrator") {
         return { launched: true, reason: "launched" };
       }
       return undefined;
@@ -1219,11 +1219,17 @@ describe("ESP elevation recommendation", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Restart as administrator" }),
     );
+    // The banner is a coverage recommendation, so it restores the workspace
+    // and carries no source: it must go through the generic elevation command
+    // rather than owning an ESP-specific relaunch.
     await waitFor(() =>
-      expect(vi.mocked(invoke)).toHaveBeenCalledWith(
-        "restart_esp_as_administrator",
-        undefined,
-      ),
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("restart_as_administrator", {
+        request: {
+          reason: "coverageRecommended",
+          workspace: "esp-diagnostics",
+          target: { kind: "workspace" },
+        },
+      }),
     );
     expect(
       screen.getByText("Administrator restart requested."),

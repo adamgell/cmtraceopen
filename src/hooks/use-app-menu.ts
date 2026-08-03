@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getAvailableWorkspaces, useUiStore } from "../stores/ui-store";
+import { useLogStore } from "../stores/log-store";
+import { buildElevationRequest } from "../lib/elevation-request";
 import type { WorkspaceId } from "../types/log";
 import { useAppActions, type AppCommandState } from "./use-app-actions";
 
@@ -251,6 +253,33 @@ export function useAppMenu() {
           case "open_session": {
             const { openSessionDialog } = await import("../lib/session-restore");
             await openSessionDialog();
+            return;
+          }
+          case "restart_as_administrator": {
+            // Never replace a confirmation already on screen. Overwriting it
+            // resets the dialog's submitting and failure state mid-flight, and
+            // would let a menu click clobber an Access Denied recovery prompt
+            // the user is part-way through. Matches the same guard in
+            // offerElevationForSourceFailure.
+            if (useUiStore.getState().elevationPrompt) return;
+
+            // Confirm first: the backend is never called straight from a menu
+            // click, so UAC can only appear after a second, deliberate action.
+            const activeWorkspace = useUiStore.getState().activeWorkspace;
+            useUiStore.getState().setElevationPrompt({
+              request: buildElevationRequest({
+                reason: "explicitMenu",
+                workspace: activeWorkspace,
+                // The active source rides along only when the user is actually
+                // looking at it. `activeSource` survives a workspace switch, so
+                // restarting from ESP or Intune would otherwise reopen whatever
+                // log was last loaded instead of just the workspace on screen.
+                source:
+                  activeWorkspace === "log"
+                    ? useLogStore.getState().activeSource
+                    : null,
+              }),
+            });
             return;
           }
           case "switch_workspace": {

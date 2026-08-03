@@ -34,6 +34,7 @@ pub const MENU_ID_FILE_NEW_TIMELINE_FROM_FOLDER: &str = "file.new_timeline_from_
 pub const MENU_ID_FILE_NEW_EMPTY_TIMELINE: &str = "file.new_empty_timeline";
 pub const MENU_ID_FILE_SAVE_SESSION: &str = "file.save_session";
 pub const MENU_ID_FILE_OPEN_SESSION: &str = "file.open_session";
+pub const MENU_ID_FILE_RESTART_ELEVATED: &str = "file.restart_elevated";
 pub const MENU_ID_FILE_QUIT: &str = "file.quit";
 
 pub const MENU_ID_EDIT_FIND: &str = "edit.find";
@@ -98,6 +99,23 @@ const FILE_ORDER: &[&str] = &[
     MENU_SEPARATOR,
     MENU_ID_FILE_OPEN_SESSION,
     MENU_ID_FILE_SAVE_SESSION,
+    MENU_SEPARATOR,
+    MENU_ID_FILE_QUIT,
+];
+/// Windows adds the elevation action; UAC exists on no other platform, so the
+/// item is absent rather than present-but-dead everywhere else.
+const FILE_ORDER_WINDOWS: &[&str] = &[
+    MENU_ID_FILE_OPEN_LOG_FILE,
+    MENU_ID_FILE_OPEN_LOG_FOLDER,
+    MENU_ID_FILE_KNOWN_SOURCES,
+    MENU_ID_FILE_RECENT,
+    MENU_SEPARATOR,
+    MENU_ID_FILE_NEW_TIMELINE,
+    MENU_SEPARATOR,
+    MENU_ID_FILE_OPEN_SESSION,
+    MENU_ID_FILE_SAVE_SESSION,
+    MENU_SEPARATOR,
+    MENU_ID_FILE_RESTART_ELEVATED,
     MENU_SEPARATOR,
     MENU_ID_FILE_QUIT,
 ];
@@ -285,6 +303,12 @@ const WORKSPACE_DESCRIPTORS: &[WorkspaceDescriptor] = &[
         platform: WorkspacePlatform::All,
     },
     WorkspaceDescriptor {
+        id: "macos-jamf",
+        label: "macOS JAMF",
+        group: WorkspaceGroup::EndpointManagement,
+        platform: WorkspacePlatform::Macos,
+    },
+    WorkspaceDescriptor {
         id: "dsregcmd",
         label: "dsregcmd",
         group: WorkspaceGroup::EndpointManagement,
@@ -376,10 +400,10 @@ fn top_level_menu_order(platform: MenuPlatform) -> &'static [&'static str] {
 }
 
 fn file_item_order(platform: MenuPlatform) -> &'static [&'static str] {
-    if platform == MenuPlatform::Macos {
-        FILE_ORDER_MAC
-    } else {
-        FILE_ORDER
+    match platform {
+        MenuPlatform::Macos => FILE_ORDER_MAC,
+        MenuPlatform::Windows => FILE_ORDER_WINDOWS,
+        MenuPlatform::Linux => FILE_ORDER,
     }
 }
 
@@ -613,6 +637,15 @@ fn build_file_menu<R: Runtime>(
 
     let open_session = normal_item(app, MENU_ID_FILE_OPEN_SESSION, "Open Session…", platform)?;
     let save_session = normal_item(app, MENU_ID_FILE_SAVE_SESSION, "Save Session…", platform)?;
+    // A process cannot gain elevation without relaunching, so the enabled state is
+    // fixed for this process lifetime and needs no menu-state round trip.
+    let restart_elevated = MenuItem::with_id(
+        app,
+        MENU_ID_FILE_RESTART_ELEVATED,
+        "Restart as Administrator…",
+        !crate::elevation::current_elevation_state().is_elevated,
+        menu_accelerator(MENU_ID_FILE_RESTART_ELEVATED, platform),
+    )?;
     let quit = normal_item(app, MENU_ID_FILE_QUIT, "Exit", platform)?;
 
     let submenu = Submenu::with_id(app, MENU_ID_FILE, "File", true)?;
@@ -625,6 +658,7 @@ fn build_file_menu<R: Runtime>(
             MENU_ID_FILE_NEW_TIMELINE => submenu.append(&new_timeline)?,
             MENU_ID_FILE_OPEN_SESSION => submenu.append(&open_session)?,
             MENU_ID_FILE_SAVE_SESSION => submenu.append(&save_session)?,
+            MENU_ID_FILE_RESTART_ELEVATED => submenu.append(&restart_elevated)?,
             MENU_ID_FILE_QUIT => submenu.append(&quit)?,
             MENU_SEPARATOR => append_separator(app, &submenu)?,
             _ => unreachable!("unknown File menu item: {item_id}"),
@@ -1696,6 +1730,7 @@ fn payload_for_menu_id(menu_id: &str) -> Option<AppMenuActionPayload> {
         MENU_ID_FILE_NEW_EMPTY_TIMELINE => ("timeline_new_empty", "file"),
         MENU_ID_FILE_SAVE_SESSION => ("save_session", "file"),
         MENU_ID_FILE_OPEN_SESSION => ("open_session", "file"),
+        MENU_ID_FILE_RESTART_ELEVATED => ("restart_as_administrator", "file"),
         MENU_ID_EDIT_FIND => ("show_find", "edit"),
         MENU_ID_EDIT_FIND_NEXT => ("find_next", "edit"),
         MENU_ID_EDIT_FIND_PREVIOUS => ("find_previous", "edit"),
@@ -1815,8 +1850,9 @@ mod tests {
 
     #[test]
     fn submenu_order_matches_the_native_menu_design() {
-        assert_eq!(file_item_order(MenuPlatform::Windows), FILE_ORDER);
+        assert_eq!(file_item_order(MenuPlatform::Windows), FILE_ORDER_WINDOWS);
         assert_eq!(file_item_order(MenuPlatform::Macos), FILE_ORDER_MAC);
+        assert_eq!(file_item_order(MenuPlatform::Linux), FILE_ORDER);
         assert_eq!(
             NEW_TIMELINE_ORDER,
             [
@@ -1937,7 +1973,7 @@ mod tests {
                 ("Analysis", vec!["log", "event-log", "timeline"]),
                 (
                     "Endpoint Management",
-                    vec!["intune", "new-intune", "esp-diagnostics"],
+                    vec!["intune", "new-intune", "esp-diagnostics", "macos-jamf"],
                 ),
                 (
                     "System & Security",
@@ -2102,6 +2138,11 @@ mod tests {
             ),
             (MENU_ID_FILE_OPEN_SESSION, "open_session", "file"),
             (MENU_ID_FILE_SAVE_SESSION, "save_session", "file"),
+            (
+                MENU_ID_FILE_RESTART_ELEVATED,
+                "restart_as_administrator",
+                "file",
+            ),
             (MENU_ID_EDIT_FIND, "show_find", "edit"),
             (MENU_ID_EDIT_FIND_NEXT, "find_next", "edit"),
             (MENU_ID_EDIT_FIND_PREVIOUS, "find_previous", "edit"),
@@ -2192,7 +2233,7 @@ mod tests {
 
     #[test]
     fn recent_submenu_appears_after_known_sources_on_every_platform() {
-        for order in [FILE_ORDER, FILE_ORDER_MAC] {
+        for order in [FILE_ORDER, FILE_ORDER_WINDOWS, FILE_ORDER_MAC] {
             let known = order
                 .iter()
                 .position(|id| *id == MENU_ID_FILE_KNOWN_SOURCES)
@@ -2203,6 +2244,81 @@ mod tests {
                 .expect("recent present");
             assert_eq!(recent, known + 1);
         }
+    }
+
+    /// Every clickable item in an ORDER constant must resolve to an action.
+    ///
+    /// A hand-maintained id list in `payload_for_menu_id` cannot prove an item is
+    /// missing from it: forgetting to register one produces a menu entry that
+    /// renders, clicks, and silently does nothing. This walks the orders instead,
+    /// so a new item is wired or this test fails.
+    #[test]
+    fn every_ordered_menu_item_dispatches_an_action() {
+        // Containers and separators legitimately dispatch nothing: a submenu
+        // opens, and Quit is intercepted before payload lookup.
+        const NON_DISPATCHING: &[&str] = &[
+            MENU_SEPARATOR,
+            MENU_ID_FILE_KNOWN_SOURCES,
+            MENU_ID_FILE_RECENT,
+            MENU_ID_FILE_NEW_TIMELINE,
+            MENU_ID_VIEW_TEXT_SIZE,
+            MENU_ID_FILE_QUIT,
+            PREDEFINED_HIDE,
+            PREDEFINED_HIDE_OTHERS,
+            PREDEFINED_SHOW_ALL,
+            PREDEFINED_QUIT,
+        ];
+
+        let orders: &[&[&str]] = &[
+            FILE_ORDER,
+            FILE_ORDER_WINDOWS,
+            FILE_ORDER_MAC,
+            NEW_TIMELINE_ORDER,
+            EDIT_ORDER,
+            VIEW_ORDER,
+            TEXT_SIZE_ORDER,
+            HELP_ORDER,
+            HELP_ORDER_MAC,
+            MAC_APP_ORDER,
+        ];
+
+        for order in orders {
+            for id in *order {
+                if NON_DISPATCHING.contains(id) {
+                    continue;
+                }
+                assert!(
+                    payload_for_menu_id(id).is_some(),
+                    "menu item {id} is rendered but dispatches nothing",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn restart_as_administrator_is_offered_only_on_windows() {
+        assert!(FILE_ORDER_WINDOWS.contains(&MENU_ID_FILE_RESTART_ELEVATED));
+        // UAC has no equivalent elsewhere, so the item is absent rather than
+        // present-but-disabled: a dead entry reads as a bug to the user.
+        assert!(!FILE_ORDER.contains(&MENU_ID_FILE_RESTART_ELEVATED));
+        assert!(!FILE_ORDER_MAC.contains(&MENU_ID_FILE_RESTART_ELEVATED));
+    }
+
+    #[test]
+    fn restart_as_administrator_sits_in_its_own_group_above_quit() {
+        let restart = FILE_ORDER_WINDOWS
+            .iter()
+            .position(|id| *id == MENU_ID_FILE_RESTART_ELEVATED)
+            .expect("restart present on Windows");
+        let quit = FILE_ORDER_WINDOWS
+            .iter()
+            .position(|id| *id == MENU_ID_FILE_QUIT)
+            .expect("quit present");
+
+        assert!(restart < quit);
+        // A destructive-feeling action must not sit flush against Save Session.
+        assert_eq!(FILE_ORDER_WINDOWS[restart - 1], MENU_SEPARATOR);
+        assert_eq!(FILE_ORDER_WINDOWS[restart + 1], MENU_SEPARATOR);
     }
 
     #[test]

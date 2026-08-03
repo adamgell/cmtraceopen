@@ -1,3 +1,3 @@
-//! Windows Company Portal artifacts.
+//! Windows Company Portal contracts.
 
 pub mod company_portal;

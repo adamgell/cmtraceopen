@@ -7,6 +7,7 @@ pub mod deployment;
 pub mod dns_dhcp;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
+pub mod elevation;
 pub mod error_lookup;
 #[cfg(feature = "esp-diagnostics")]
 pub mod esp_diagnostics;
@@ -23,6 +24,8 @@ pub mod intune_bundle;
 #[cfg(feature = "intune-diagnostics")]
 pub mod intune_diagnostics;
 pub mod known_sources;
+#[cfg(feature = "macos-diag")]
+pub mod jamf;
 #[cfg(feature = "macos-diag")]
 pub mod macos_diag;
 pub mod markers;

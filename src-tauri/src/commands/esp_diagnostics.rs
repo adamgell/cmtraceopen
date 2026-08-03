@@ -10,11 +10,14 @@ use std::sync::Arc;
 use cmtraceopen_parser::esp::{EspDiagnosticsSnapshot, EspElevationState};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::commands::elevation::ElevationCommandError;
+use crate::elevation::relaunch::{RelaunchError, RelaunchReason, RelaunchResult};
+use crate::elevation::{AppWorkspace, ElevationReason, ElevationRequest, RestoreTarget};
 use crate::esp::bundle::{analyze_captured_evidence, BundleError};
 use crate::esp::live_session::native_session_dependencies;
-use crate::esp::relaunch::{
-    restart_with_provider, EspRelaunchError, EspRelaunchResult, NativeEspRelaunchProvider,
-};
 use crate::esp::remediation::{
     flip_app_installed, restore_app_state, EspAppFlipBackup, EspAppFlipResult,
 };
@@ -25,6 +28,36 @@ use crate::esp::session::{
 use crate::esp::system::current_elevation_state;
 use crate::esp::{acquisition_capability, EspAcquisitionCapability};
 use crate::state::app_state::AppState;
+
+/// Wire types for the compatibility ESP relaunch command.
+///
+/// These stay ESP-shaped so an older frontend build keeps deserializing the same
+/// payload. They are a projection of the generic relaunch result, not a second
+/// model: nothing here decides relaunch behavior.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum EspRelaunchReason {
+    Launched,
+    AlreadyElevated,
+    ElevationCancelled,
+    UnsupportedPlatform,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EspRelaunchResult {
+    pub launched: bool,
+    pub reason: EspRelaunchReason,
+}
+
+#[derive(Debug, Clone, Serialize, Error, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum EspRelaunchError {
+    #[error("an unsafe startup argument prevented administrator restart")]
+    UnsafeArgument,
+    #[error("administrator restart failed: {message}")]
+    LaunchFailed { message: String },
+}
 
 struct TauriEspSessionEventSink {
     app: AppHandle,
@@ -102,21 +135,54 @@ pub async fn stop_esp_diagnostics_session(
         .map_err(runtime_join_error)?
 }
 
+/// Compatibility wrapper over the application-wide elevation command.
+///
+/// Kept so an older frontend build still has a command to call, but it owns no
+/// relaunch behavior: it forwards to `restart_as_administrator` with the ESP
+/// workspace and no source, which is exactly what the migrated ESP banner sends.
+/// The ESP-specific `ShellExecute` implementation this used to call has been
+/// removed; there is one relaunch owner.
 #[tauri::command]
 pub async fn restart_esp_as_administrator(
     app: AppHandle,
 ) -> Result<EspRelaunchResult, EspRelaunchError> {
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        restart_with_provider(&NativeEspRelaunchProvider)
-    })
-    .await
-    .map_err(|_| EspRelaunchError::LaunchFailed {
-        message: "administrator restart task failed".to_string(),
-    })??;
-    if result.launched {
-        app.exit(0);
+    let request = ElevationRequest {
+        reason: ElevationReason::CoverageRecommended,
+        workspace: AppWorkspace::EspDiagnostics,
+        target: RestoreTarget::Workspace,
+    };
+
+    crate::commands::elevation::restart_as_administrator(app, request)
+        .await
+        .map(esp_relaunch_result)
+        .map_err(esp_relaunch_error)
+}
+
+fn esp_relaunch_result(result: RelaunchResult) -> EspRelaunchResult {
+    EspRelaunchResult {
+        launched: result.launched,
+        reason: match result.reason {
+            RelaunchReason::Launched => EspRelaunchReason::Launched,
+            RelaunchReason::AlreadyElevated => EspRelaunchReason::AlreadyElevated,
+            RelaunchReason::ElevationCancelled => EspRelaunchReason::ElevationCancelled,
+            RelaunchReason::UnsupportedPlatform => EspRelaunchReason::UnsupportedPlatform,
+        },
     }
-    Ok(result)
+}
+
+/// Flattens the generic error into the two shapes the ESP wire type has.
+///
+/// `Display` is used rather than the variant name so the caller still sees the
+/// real reason instead of a humanized enum label.
+fn esp_relaunch_error(error: ElevationCommandError) -> EspRelaunchError {
+    match error {
+        ElevationCommandError::Relaunch {
+            source: RelaunchError::UnsafeArgument,
+        } => EspRelaunchError::UnsafeArgument,
+        other => EspRelaunchError::LaunchFailed {
+            message: other.to_string(),
+        },
+    }
 }
 
 /// Force a failed ESP-tracked app past the Enrollment Status Page by flipping its

@@ -1,9 +1,11 @@
-//! Company Portal evidence surfaces, grouped by platform.
+//! Company Portal evidence surfaces.
 //!
-//! Company Portal is a first-class Intune surface because it spans sign-in,
-//! enrollment, app catalog, compliance, sync, device actions, and support. It
-//! is deliberately kept out of the IME and ESP module trees even where the
-//! workflows overlap, so a Company Portal artifact is never attributed to an
-//! agent that did not write it.
+//! Company Portal spans sign-in, enrollment, the app catalog, compliance, sync,
+//! device actions, and support, so it is a first-class surface rather than a
+//! sub-case of IME or ESP. Platform-specific contracts live under the matching
+//! platform module.
 
+pub mod android;
+pub mod ios_ipados;
+pub mod macos;
 pub mod windows;

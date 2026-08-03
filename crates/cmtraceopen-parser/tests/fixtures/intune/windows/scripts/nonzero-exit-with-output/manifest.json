@@ -1,0 +1,11 @@
+{
+  "description": "A nonzero exit whose output was captured by an in-log record: the outcome is reported, not diagnosed. The retained artifact form is covered by nonzero-exit-with-retained-artifact.",
+  "artifacts": [
+    {
+      "artifactId": "agent",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}
