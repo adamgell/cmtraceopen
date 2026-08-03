@@ -864,7 +864,7 @@ fn canonical_intake_adapter_accepts_reordered_authoritative_records() {
 }
 
 #[test]
-fn canonical_intake_adapter_accepts_coverage_rows_distinguished_by_producer_host() {
+fn canonical_intake_coverage_rows_distinguished_by_producer_host_reach_topology_validation() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sccm/server/intake/collision-same-basename-configured-roots");
     let mut manifest = load_json(&directory.join("manifest.json"));

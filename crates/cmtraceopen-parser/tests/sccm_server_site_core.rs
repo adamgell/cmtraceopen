@@ -397,20 +397,24 @@ fn assert_malformed_peer_source_fails_closed(analysis: &SccmSiteCoreAnalysis, ma
     assert!(!wire.contains(malformed_id));
 }
 
-fn assert_intake_authority_mutation_fails_closed(analysis: &SccmSiteCoreAnalysis) {
+fn assert_intake_authority_mutation_fails_closed(
+    analysis: &SccmSiteCoreAnalysis,
+    intake: &SccmServerIntakeAssessment,
+) {
     // Once the intake seal fails, even the original canonical source values
     // are no longer authority and must not survive the constant quarantine.
-    assert_topology_incongruence_fails_closed(
-        analysis,
-        &[
+    let source_triples = intake
+        .artifacts
+        .iter()
+        .map(|artifact| {
             (
-                "sitecomp-current",
-                "server-sitecomp",
-                "synthetic:host:site-01",
-            ),
-            ("z-site-status", "server-status", "synthetic:host:site-01"),
-        ],
-    );
+                artifact.artifact_id.as_str(),
+                artifact.source_id.as_str(),
+                artifact.producer_host_handle.as_deref().unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_invalid_authority_excludes_source_triples(analysis, &source_triples);
 }
 
 fn assert_authority_invalid_analysis(analysis: &SccmSiteCoreAnalysis) {
@@ -1271,21 +1275,30 @@ fn post_intake_evidence_mutations_fail_sealed_authority_closed() {
 
     let mut wrong_role = healthy.clone();
     wrong_role.evidence[0].role = SccmRole::ManagementPoint;
-    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&wrong_role));
+    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&wrong_role), &wrong_role);
 
     let mut incomplete_reference = healthy.clone();
     incomplete_reference.evidence[0].reference.line_end = None;
-    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&incomplete_reference));
+    assert_intake_authority_mutation_fails_closed(
+        &analyze_site_core(&incomplete_reference),
+        &incomplete_reference,
+    );
 
     let mut cross_source_reference = healthy.clone();
     cross_source_reference.evidence[0].reference.artifact_id = "z-site-status".to_owned();
     cross_source_reference.evidence[0].reference.line_start = Some(10_001);
     cross_source_reference.evidence[0].reference.line_end = Some(10_001);
-    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&cross_source_reference));
+    assert_intake_authority_mutation_fails_closed(
+        &analyze_site_core(&cross_source_reference),
+        &cross_source_reference,
+    );
 
     let mut unresolved_reference = healthy;
     unresolved_reference.evidence[0].reference.artifact_id = "orphan-sitecomp-record".to_owned();
-    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&unresolved_reference));
+    assert_intake_authority_mutation_fails_closed(
+        &analyze_site_core(&unresolved_reference),
+        &unresolved_reference,
+    );
 }
 
 #[test]
@@ -1303,7 +1316,7 @@ fn foreign_post_intake_artifact_identity_cannot_scope_a_site_core_request() {
     assessment.evidence[0].reference.artifact_id = "foreign-artifact".to_owned();
 
     let analysis = analyze_site_core(&assessment);
-    assert_intake_authority_mutation_fails_closed(&analysis);
+    assert_intake_authority_mutation_fails_closed(&analysis, &assessment);
     assert!(analysis.artifact_requests.iter().all(|request| request
         .scope
         .producer_host_handle
@@ -1321,7 +1334,7 @@ fn post_intake_nonprofile_role_mutation_fails_sealed_authority_closed() {
     assessment.evidence[0].message = "ordinary non-profile source prose".to_owned();
     assessment.evidence[0].role = SccmRole::ManagementPoint;
 
-    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&assessment));
+    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&assessment), &assessment);
 }
 
 #[test]
@@ -1598,7 +1611,7 @@ fn rotation_provenance_must_match_classification_and_requests_use_exact_pairs() 
         .expect("sitecomp artifact")
         .rotation = Some(SccmRotation::LoUnderscore);
     let rejected = analyze_site_core(&mismatch);
-    assert_intake_authority_mutation_fails_closed(&rejected);
+    assert_intake_authority_mutation_fails_closed(&rejected, &mismatch);
 
     let backlog = analyze_site_core(&assess(&[
         Source::sitecomp(INBOX_BACKLOG),
@@ -1658,7 +1671,7 @@ fn coordinated_post_intake_producer_host_mutation_fails_site_core_authority_clos
     replace_source_producer_host(&mut assessment, "server-status", "synthetic:host:forged");
 
     let analysis = analyze_site_core(&assessment);
-    assert_topology_incongruence_fails_closed(
+    assert_invalid_authority_excludes_source_triples(
         &analysis,
         &[
             (
@@ -1716,7 +1729,7 @@ fn invalid_intake_authority_never_exports_forged_scope_or_identity() {
     }));
 }
 
-fn assert_topology_incongruence_fails_closed(
+fn assert_invalid_authority_excludes_source_triples(
     analysis: &SccmSiteCoreAnalysis,
     forbidden_source_triples: &[(&str, &str, &str)],
 ) {
@@ -1724,6 +1737,9 @@ fn assert_topology_incongruence_fails_closed(
     let wire = serde_json::to_string(analysis).expect("analysis serializes");
     for (artifact_id, source_id, producer_host_handle) in forbidden_source_triples {
         for forged_or_untrusted_value in [artifact_id, source_id, producer_host_handle] {
+            if forged_or_untrusted_value.is_empty() {
+                continue;
+            }
             assert!(
                 !wire.contains(forged_or_untrusted_value),
                 "invalid authority exported untrusted value {forged_or_untrusted_value}"
@@ -1753,7 +1769,7 @@ fn swapped_coverage_producer_hosts_fail_site_core_congruence_closed() {
         .producer_host_handle = Some("synthetic:host:site-01".to_owned());
 
     let analysis = analyze_site_core(&assessment);
-    assert_topology_incongruence_fails_closed(
+    assert_invalid_authority_excludes_source_triples(
         &analysis,
         &[
             (
@@ -1780,7 +1796,7 @@ fn changed_coverage_workflow_subject_handle_fails_site_core_congruence_closed() 
         .workflow_subject_handle = Some("synthetic:subject:site-core-01".to_owned());
 
     let analysis = analyze_site_core(&assessment);
-    assert_intake_authority_mutation_fails_closed(&analysis);
+    assert_intake_authority_mutation_fails_closed(&analysis, &assessment);
 }
 
 #[test]
@@ -1808,16 +1824,28 @@ fn post_intake_topology_mutations_fail_site_core_authority_closed() {
         .push(SccmRole::ManagementPoint);
 
     let analyses = [
-        ("site handle", analyze_site_core(&changed_site_handle)),
-        ("capture host", analyze_site_core(&changed_capture_host)),
-        ("observed roles", analyze_site_core(&changed_observed_roles)),
+        (
+            "site handle",
+            &changed_site_handle,
+            analyze_site_core(&changed_site_handle),
+        ),
+        (
+            "capture host",
+            &changed_capture_host,
+            analyze_site_core(&changed_capture_host),
+        ),
+        (
+            "observed roles",
+            &changed_observed_roles,
+            analyze_site_core(&changed_observed_roles),
+        ),
     ];
 
-    for (mutation, analysis) in &analyses {
+    for (mutation, mutated_assessment, analysis) in &analyses {
         assert!(
             analysis.results.is_empty(),
             "{mutation} mutation still produced site-core results"
         );
-        assert_intake_authority_mutation_fails_closed(analysis);
+        assert_intake_authority_mutation_fails_closed(analysis, mutated_assessment);
     }
 }
