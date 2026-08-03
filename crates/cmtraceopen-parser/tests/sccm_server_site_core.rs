@@ -1984,3 +1984,67 @@ fn changed_coverage_workflow_subject_handle_fails_site_core_congruence_closed() 
         ],
     );
 }
+
+#[test]
+fn post_intake_topology_mutations_fail_site_core_authority_closed() {
+    let assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    assert_eq!(
+        analyze_site_core(&assessment).results[0].state,
+        SccmSiteCoreState::Healthy,
+        "the canonical control assessment must exercise normal fact reduction"
+    );
+
+    let mut changed_site_handle = assessment.clone();
+    changed_site_handle.topology.site_handle = "synthetic:site:other".to_owned();
+
+    let mut changed_capture_host = assessment.clone();
+    changed_capture_host.topology.capture_host_handle = "synthetic:host:site-02".to_owned();
+
+    let mut changed_observed_roles = assessment;
+    changed_observed_roles
+        .topology
+        .roles_observed
+        .push(SccmRole::ManagementPoint);
+
+    let analyses = [
+        ("site handle", analyze_site_core(&changed_site_handle)),
+        ("capture host", analyze_site_core(&changed_capture_host)),
+        ("observed roles", analyze_site_core(&changed_observed_roles)),
+    ];
+    assert_eq!(
+        analyses
+            .iter()
+            .map(|(name, analysis)| (
+                *name,
+                analysis.results.len(),
+                analysis.coverage_gaps.len(),
+                analysis.unlinked_observations.len(),
+                analysis.findings.len(),
+                analysis.artifact_requests.len(),
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            ("site handle", 0, 2, 2, 2, 2),
+            ("capture host", 0, 2, 2, 2, 2),
+            ("observed roles", 0, 2, 2, 2, 2),
+        ],
+        "no caller-mutated topology may retain normal site-core facts"
+    );
+
+    for (_, analysis) in &analyses {
+        assert_topology_incongruence_fails_closed(
+            analysis,
+            &[
+                (
+                    "sitecomp-current",
+                    "server-sitecomp",
+                    "synthetic:host:site-01",
+                ),
+                ("z-site-status", "server-status", "synthetic:host:site-01"),
+            ],
+        );
+    }
+}
