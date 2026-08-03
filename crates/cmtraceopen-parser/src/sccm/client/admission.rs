@@ -46,6 +46,9 @@ pub(crate) const MAX_SCCM_CLIENT_ADMISSION_LOGICAL_RECORDS: usize = 4_096;
 /// Maximum projected evidence bytes retained for one admitted client bundle.
 pub(crate) const MAX_SCCM_CLIENT_ADMISSION_RETAINED_EVIDENCE_BYTES: usize = 3 * 1024 * 1024;
 /// Maximum bytes streamed into a deterministic client evidence integrity seal.
+/// This is an independent serialization-work cap: JSON escaping may reject a
+/// retained-memory-bounded bundle once its escaped serialization exceeds this
+/// separate hashing-work bound.
 pub(crate) const MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES: usize = 4 * 1024 * 1024;
 
 /// Raw, already-captured bytes offered to the one-shot client evidence

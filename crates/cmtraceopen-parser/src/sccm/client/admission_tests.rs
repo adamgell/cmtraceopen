@@ -569,6 +569,27 @@ fn admission_rejects_oversized_payload_work_records_and_retained_evidence() {
 }
 
 #[test]
+fn admission_applies_the_integrity_seal_cap_independently_of_retained_memory() {
+    let escaped_message = "\0".repeat(700_000);
+    let bytes = repeated_record_bytes(1, &escaped_message);
+    let bundle = bundle_with_bound_policy(&bytes);
+    let assessment = assess_client_intake(&bundle).expect("seal-cap fixture intake is canonical");
+
+    let error = admission_error(
+        admit_client_evidence(
+            &bundle,
+            &assessment,
+            &[payload_from_bytes("fixture-policy-agent", bytes)],
+        ),
+        "JSON escaping must not bypass the independent seal-work cap",
+    );
+    assert_eq!(
+        error,
+        SccmClientEvidenceAdmissionError::IntegritySealLimitExceeded
+    );
+}
+
+#[test]
 fn admission_enforces_logical_record_cap_across_all_payloads() {
     let mut artifacts = Vec::new();
     let mut payloads = Vec::new();
