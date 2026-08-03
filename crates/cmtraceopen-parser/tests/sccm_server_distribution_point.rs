@@ -98,6 +98,13 @@ fn assert_dp_coverage_only(
         "invalid DP evidence must remain an explicit coverage gap"
     );
     assert!(
+        analysis
+            .coverage_gaps
+            .iter()
+            .all(|gap| gap.reason != "Canonical server intake authority could not be verified."),
+        "predicate-focused tests must reach a sealed adapter guard, not the authority quarantine"
+    );
+    assert!(
         !analysis.artifact_requests.is_empty(),
         "invalid DP evidence must request a bounded declared source"
     );
