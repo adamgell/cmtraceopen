@@ -912,6 +912,7 @@ fn discovery_rejects_observations_beyond_its_defensive_contract() {
 #[test]
 fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw_roots() {
     let malformed_root = "C:\\private\\SCCM\\Client\\Logs";
+    let escaped_malformed_root = malformed_root.escape_debug().to_string();
     let input = SccmClientDiscoveryInput {
         max_found_fragments_per_source: 8,
         observations: vec![
@@ -1027,7 +1028,7 @@ fn discovery_preserves_valid_coverage_and_reports_invalid_provenance_without_raw
         "coalesced unsupported metadata retains the bounded count of supplied observations"
     );
     assert!(result.coverage_issues.iter().all(|issue| {
-        !format!("{issue:?}").contains(malformed_root)
+        !format!("{issue:?}").contains(escaped_malformed_root.as_str())
             && !issue.artifact_id.contains(malformed_root)
             && !issue.catalog_entry_id.contains(malformed_root)
     }));
@@ -1138,6 +1139,7 @@ fn discovery_preserves_coverage_issue_cardinality_at_the_exact_admission_boundar
 #[test]
 fn discovery_never_assigns_catalog_memberships_to_rejected_rotation_candidates() {
     let raw_root = "C:\\private\\ccm\\logs";
+    let escaped_raw_root = raw_root.escape_debug().to_string();
     let input = SccmClientDiscoveryInput {
         max_found_fragments_per_source: 8,
         observations: vec![
@@ -1177,7 +1179,7 @@ fn discovery_never_assigns_catalog_memberships_to_rejected_rotation_candidates()
             && issue.logical_artifact_ids.is_empty()
             && issue.rotation_category == SccmClientDiscoveryRotationCategory::Unknown
             && issue.omitted_declaration_state.is_none()
-            && !format!("{issue:?}").contains(raw_root)
+            && !format!("{issue:?}").contains(escaped_raw_root.as_str())
             && !format!("{issue:?}").contains("PolicyAgent.log.backup")
             && !format!("{issue:?}").contains("PolicyAgent.log.1")
     }));
