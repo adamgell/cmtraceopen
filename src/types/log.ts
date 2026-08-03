@@ -252,6 +252,8 @@ export interface AggregateParseResult {
 /** Payload emitted by the Rust tail watcher */
 export interface TailPayload {
   entries: LogEntry[];
+  /** A corrected entry that replaces the initial logical record already rendered for this file. */
+  replacement: LogEntry | null;
   filePath: string;
   parserSelection?: ParserSelectionInfo;
   /**

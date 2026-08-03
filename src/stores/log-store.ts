@@ -566,6 +566,8 @@ interface LogState {
   hasFindSession: () => boolean;
   setEntries: (entries: LogEntry[]) => void;
   appendEntries: (entries: LogEntry[]) => void;
+  /** Amend an entry that was already rendered before its logical record completed. */
+  replaceEntry: (entry: LogEntry) => void;
   /** Replace the single-file view after a tailed file was truncated/rotated. */
   resetEntries: (entries: LogEntry[]) => void;
   selectEntry: (id: number | null) => void;
@@ -593,6 +595,8 @@ interface LogState {
   setFindUseRegex: (useRegex: boolean) => void;
   recomputeFindMatches: () => void;
   appendAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
+  /** Amend one rendered aggregate entry while preserving its frontend-owned id. */
+  replaceAggregateEntry: (filePath: string, entry: LogEntry) => void;
   /** Replace one file's entries in an aggregate stream after it was truncated/rotated. */
   resetAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
   findNext: (trigger: string) => void;
@@ -771,6 +775,26 @@ export const useLogStore = create<LogState>((set, get) => ({
     }));
     recomputeAndSetMatches();
   },
+  replaceEntry: (replacement) => {
+    set((state) => {
+      let replaced = false;
+      const entries = state.entries.map((entry) => {
+        if (entry.id !== replacement.id) {
+          return entry;
+        }
+        replaced = true;
+        return replacement;
+      });
+
+      return replaced
+        ? {
+            entries,
+            guidNameMap: buildGuidNameMap(entries),
+          }
+        : {};
+    });
+    recomputeAndSetMatches();
+  },
   resetEntries: (newEntries) => {
     // The tailed file was truncated/rotated: `newEntries` are a fresh read from
     // the start of the file, so replace the whole view instead of appending.
@@ -807,6 +831,34 @@ export const useLogStore = create<LogState>((set, get) => ({
         entries,
         totalLines: state.totalLines + entriesWithIds.length,
         guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
+      };
+    });
+    recomputeAndSetMatches();
+  },
+  replaceAggregateEntry: (filePath, replacement) => {
+    set((state) => {
+      let replaced = false;
+      const entries = state.entries.map((entry) => {
+        if (replaced || entry.filePath !== filePath || entry.lineNumber !== replacement.lineNumber) {
+          return entry;
+        }
+        replaced = true;
+        return {
+          ...replacement,
+          filePath,
+          id: entry.id,
+        };
+      });
+
+      if (!replaced) {
+        return {};
+      }
+
+      const fileOrder = buildAggregateFileOrder(state.aggregateFiles);
+      entries.sort((left, right) => compareMergedLogEntries(left, right, fileOrder));
+      return {
+        entries,
+        guidNameMap: buildGuidNameMap(entries),
       };
     });
     recomputeAndSetMatches();

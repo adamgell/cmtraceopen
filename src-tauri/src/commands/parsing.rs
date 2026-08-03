@@ -12,6 +12,9 @@ use crate::watcher::tail;
 #[serde(rename_all = "camelCase")]
 pub struct TailPayload {
     pub entries: Vec<LogEntry>,
+    /// A corrected version of the final logical entry initially rendered for
+    /// this file. Consumers replace it before appending `entries`.
+    pub replacement: Option<LogEntry>,
     pub file_path: String,
     /// True when the tailed file was truncated/rotated: `entries` are a fresh
     /// read from the start of the file and the frontend must replace, not
@@ -68,6 +71,7 @@ pub fn start_tail(
         move |batch| {
             let payload = TailPayload {
                 entries: batch.entries,
+                replacement: batch.replacement,
                 file_path: file_path_for_event.clone(),
                 reset: batch.reset,
             };

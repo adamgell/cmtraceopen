@@ -104,6 +104,12 @@ pub struct TailReader {
     pending_fragment_selection: Option<(ResolvedParser, Instant)>,
     /// Newest logical record held for continuation lines.
     pending_logical_record: Option<PendingLogicalRecord>,
+    /// Physical line that ended the whole-file parse before tailing began.
+    ///
+    /// Company Portal records can continue after that boundary. The initial
+    /// entry is already visible, so a non-header append must amend it instead
+    /// of being parsed as a new, orphaned logical record.
+    initial_company_portal_record_end_line: Option<u32>,
     /// File encoding detected from BOM during initial parse.
     encoding: FileEncoding,
     /// Leftover partial byte from a UTF-16 read boundary split.
@@ -123,6 +129,11 @@ impl TailReader {
         let encoding = std::fs::read(&path)
             .map(|bytes| crate::parser::detect_encoding(&bytes))
             .unwrap_or(FileEncoding::Utf8);
+        let initial_company_portal_record_end_line = (parser_selection.parser
+            == cmtraceopen_parser::models::log_entry::ParserKind::CompanyPortal
+            && byte_offset > 0
+            && next_line > 1)
+            .then_some(next_line.saturating_sub(1));
 
         Self {
             path,
@@ -133,6 +144,7 @@ impl TailReader {
             pending_fragment: String::new(),
             pending_fragment_selection: None,
             pending_logical_record: None,
+            initial_company_portal_record_end_line,
             encoding,
             pending_byte: None,
         }
@@ -156,6 +168,7 @@ impl TailReader {
             self.pending_fragment.clear();
             self.pending_fragment_selection = None;
             self.pending_logical_record = None;
+            self.initial_company_portal_record_end_line = None;
             self.pending_byte = None;
             self.next_line = 1;
             reset = true;
@@ -245,6 +258,13 @@ impl TailReader {
             }
 
             if !lines.is_empty() {
+                if let Some(batch) =
+                    self.replace_initial_company_portal_record(dialect, &lines, &selection, now)?
+                {
+                    self.byte_offset = file_size;
+                    return Ok(batch);
+                }
+
                 let prior = self
                     .pending_logical_record
                     .take()
@@ -323,6 +343,96 @@ impl TailReader {
             || last_updated.is_some_and(|updated| {
                 now.saturating_duration_since(updated) >= LOGICAL_RECORD_DEBOUNCE
             })
+    }
+
+    fn replace_initial_company_portal_record(
+        &mut self,
+        dialect: LogicalRecordDialect,
+        lines: &[&str],
+        selection: &ResolvedParser,
+        now: Instant,
+    ) -> Result<Option<TailBatch>, crate::error::AppError> {
+        if !matches!(dialect, LogicalRecordDialect::CompanyPortal) {
+            return Ok(None);
+        }
+        let Some(initial_end_line) = self.initial_company_portal_record_end_line else {
+            return Ok(None);
+        };
+
+        let first_header = lines
+            .iter()
+            .position(|line| looks_like_record_start(line.trim_end()));
+        if first_header == Some(0) {
+            // The first append starts a fresh record, so the entry rendered by
+            // the initial parse is now complete and ordinary tail framing owns
+            // this new record from here on.
+            self.initial_company_portal_record_end_line = None;
+            return Ok(None);
+        }
+
+        let path_str = self.path.to_string_lossy().to_string();
+        let content = parser::read_file_content(&path_str).map_err(|error| {
+            crate::error::AppError::Internal(format!(
+                "Failed to reparse Company Portal logical record at tail boundary: {error}"
+            ))
+        })?;
+        let full_result = parser::parse_content_with_selection(&content, &path_str, selection);
+        let Some(mut replacement) = full_result
+            .entries
+            .into_iter()
+            .rev()
+            .find(|entry| entry.line_number <= initial_end_line)
+        else {
+            // Nothing was rendered for the initial side of this boundary, so
+            // there is no existing entry to amend. Continue with ordinary
+            // framing and let the parser report any malformed input.
+            self.initial_company_portal_record_end_line = None;
+            return Ok(None);
+        };
+
+        // In the single-file view this preserves the already-rendered entry's
+        // identity. Aggregate views match replacements by file and physical
+        // start line, because their merged display ids are frontend-owned.
+        replacement.id = self.next_id.saturating_sub(1);
+
+        let continuation_count = first_header.unwrap_or(lines.len());
+        self.next_line = self
+            .next_line
+            .saturating_add(u32::try_from(continuation_count).unwrap_or(u32::MAX));
+
+        let mut batch = TailBatch {
+            entries: Vec::new(),
+            replacement: Some(replacement),
+            parse_errors: 0,
+            reset: false,
+        };
+
+        let Some(header_index) = first_header else {
+            // The amended record is still the final record in the file, so a
+            // later continuation must amend it again rather than become an
+            // orphan. No unbounded raw record is retained in the tail reader.
+            return Ok(Some(batch));
+        };
+
+        let framed = frame_company_portal_logical_records(
+            None,
+            &lines[header_index..],
+            MAX_PENDING_LOGICAL_RECORD_BYTES,
+        );
+        if let Some(content) = framed.pending_record {
+            self.pending_logical_record = Some(PendingLogicalRecord {
+                content,
+                last_updated: now,
+                parser_selection: selection.clone(),
+            });
+        }
+        self.initial_company_portal_record_end_line = None;
+        batch.append(self.parse_logical_records(
+            framed.completed_records,
+            selection,
+            framed.overflow_count,
+        ));
+        Ok(Some(batch))
     }
 
     fn flush_pending_logical_record(&mut self) -> TailBatch {
@@ -1155,6 +1265,7 @@ mod tests {
         assert_eq!(initial_result.entries.len(), 1);
         assert_eq!(initial_result.entries[0].id, 0);
         assert_eq!(initial_result.entries[0].line_number, 1);
+        assert_eq!(initial_result.entries[0].message, "[Sync] started");
 
         let mut reader = TailReader::new(
             path.clone(),
@@ -1179,9 +1290,7 @@ mod tests {
         .expect("should append continuation and next Company Portal header");
         drop(file);
 
-        let batch = reader
-            .read_new_entries()
-            .expect("tail read should succeed");
+        let batch = reader.read_new_entries().expect("tail read should succeed");
         assert!(!batch.reset);
         assert_eq!(batch.parse_errors, 0);
         assert!(batch.entries.is_empty());

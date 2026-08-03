@@ -65,6 +65,33 @@ describe("log-store", () => {
     });
   });
 
+  describe("replaceEntry", () => {
+    it("amends an initial logical record without changing its id, selection, or line count", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+        makeEntry({ id: 1, lineNumber: 3, message: "later record" }),
+      ]);
+      useLogStore.getState().setTotalLines(3);
+      useLogStore.getState().selectEntry(0);
+
+      useLogStore.getState().replaceEntry(
+        makeEntry({
+          id: 0,
+          lineNumber: 1,
+          message: "[Sync] started\nSystem.Net.Http.HttpRequestException: response status 403",
+        })
+      );
+
+      const state = useLogStore.getState();
+      expect(state.entries).toHaveLength(2);
+      expect(state.entries[0].id).toBe(0);
+      expect(state.entries[0].lineNumber).toBe(1);
+      expect(state.entries[0].message).toContain("HttpRequestException");
+      expect(state.selectedId).toBe(0);
+      expect(state.totalLines).toBe(3);
+    });
+  });
+
   describe("resetEntries (tail truncation)", () => {
     it("replaces the whole view with the fresh read and resets totalLines", () => {
       useLogStore.getState().setEntries([makeEntry({ id: 1 }), makeEntry({ id: 2 })]);
@@ -117,6 +144,36 @@ describe("log-store", () => {
       expect(aEntries).toHaveLength(1);
       expect(aEntries[0].message).toBe("rotated-a");
       expect(useLogStore.getState().totalLines).toBe(2);
+    });
+  });
+
+  describe("replaceAggregateEntry", () => {
+    it("amends the matching file and physical line while preserving its merged display id", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 4, filePath: "/a.log", lineNumber: 1, message: "[Sync] started" }),
+        makeEntry({ id: 5, filePath: "/b.log", lineNumber: 1, message: "unrelated" }),
+      ]);
+
+      useLogStore.getState().replaceAggregateEntry(
+        "/a.log",
+        makeEntry({
+          id: 0,
+          filePath: "/a.log",
+          lineNumber: 1,
+          message: "[Sync] started\nSystem.Net.Http.HttpRequestException: response status 403",
+        })
+      );
+
+      const entries = useLogStore.getState().entries;
+      expect(entries.find((entry) => entry.filePath === "/a.log")).toMatchObject({
+        id: 4,
+        lineNumber: 1,
+        message: expect.stringContaining("HttpRequestException"),
+      });
+      expect(entries.find((entry) => entry.filePath === "/b.log")).toMatchObject({
+        id: 5,
+        message: "unrelated",
+      });
     });
   });
 

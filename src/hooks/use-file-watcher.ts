@@ -18,7 +18,9 @@ export function useFileWatcher() {
   const formatDetected = useLogStore((s) => s.formatDetected);
   const isPaused = useLogStore((s) => s.isPaused);
   const appendEntries = useLogStore((s) => s.appendEntries);
+  const replaceEntry = useLogStore((s) => s.replaceEntry);
   const appendAggregateEntries = useLogStore((s) => s.appendAggregateEntries);
+  const replaceAggregateEntry = useLogStore((s) => s.replaceAggregateEntry);
   const resetEntries = useLogStore((s) => s.resetEntries);
   const resetAggregateEntries = useLogStore((s) => s.resetAggregateEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
@@ -103,7 +105,7 @@ export function useFileWatcher() {
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
     const unlisten = listen<TailPayload>("tail-new-entries", (event) => {
-      const { entries: newEntries, filePath, parserSelection, reset } = event.payload;
+      const { entries: newEntries, filePath, parserSelection, replacement, reset } = event.payload;
       const state = useLogStore.getState();
 
       if (state.sourceOpenMode === "aggregate-folder") {
@@ -118,6 +120,10 @@ export function useFileWatcher() {
         if (reset) {
           resetAggregateEntries(filePath, newEntries);
           return;
+        }
+
+        if (replacement) {
+          replaceAggregateEntry(filePath, replacement);
         }
 
         if (newEntries.length === 0) {
@@ -143,6 +149,10 @@ export function useFileWatcher() {
         return;
       }
 
+      if (replacement) {
+        replaceEntry(replacement);
+      }
+
       if (newEntries.length === 0) {
         return;
       }
@@ -156,6 +166,8 @@ export function useFileWatcher() {
   }, [
     appendAggregateEntries,
     appendEntries,
+    replaceAggregateEntry,
+    replaceEntry,
     resetAggregateEntries,
     resetEntries,
     setParserSelection,
