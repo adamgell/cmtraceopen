@@ -24,6 +24,8 @@ pub const SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID: &str = "sccm-dp-intake-envelope";
 pub const SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION: u32 = 1;
 pub const SCCM_DISTRIBUTION_POINT_SOURCE_ID: &str = "server-dp-distribution";
+const SCCM_DISTRIBUTION_POINT_INTAKE_AUTHORITY_REASON: &str =
+    "Canonical server intake authority could not be verified.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,6 +86,10 @@ pub struct SccmDistributionPointAnalysis {
 pub fn analyze_distribution_point(
     intake: &SccmServerIntakeAssessment,
 ) -> SccmDistributionPointAnalysis {
+    if !intake.adapter_authority_is_intake_bound() || !intake.topology_authority_is_intake_bound() {
+        return intake_authority_invalid_analysis();
+    }
+
     let artifact_id_counts =
         intake
             .artifacts
@@ -158,6 +164,32 @@ pub fn analyze_distribution_point(
             stability: "experimental".to_owned(),
         },
         source_observations,
+        coverage_gaps,
+        artifact_requests,
+        cross_side_correlation_performed: false,
+    }
+}
+
+fn intake_authority_invalid_analysis() -> SccmDistributionPointAnalysis {
+    let coverage_gaps = vec![SccmDistributionPointCoverageGap {
+        source_id: SCCM_DISTRIBUTION_POINT_SOURCE_ID.to_owned(),
+        producer_role: None,
+        workflow_subject_role: Some(SccmRole::DistributionPoint),
+        state: Some(SccmCoverageState::ParseFailed),
+        artifact_ids: Vec::new(),
+        reason: SCCM_DISTRIBUTION_POINT_INTAKE_AUTHORITY_REASON.to_owned(),
+    }];
+    let artifact_requests = artifact_requests(&coverage_gaps);
+
+    SccmDistributionPointAnalysis {
+        schema_version: SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION,
+        workflow: SccmDistributionPointWorkflow::DistributionPointContent,
+        profile: SccmDistributionPointProfile {
+            id: SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID.to_owned(),
+            version: SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION,
+            stability: "experimental".to_owned(),
+        },
+        source_observations: Vec::new(),
         coverage_gaps,
         artifact_requests,
         cross_side_correlation_performed: false,
@@ -315,7 +347,9 @@ fn coverage_is_congruent(
             .count()
             == 1
         && coverage.producer_role == artifact.producer_role
+        && coverage.producer_host_handle == artifact.producer_host_handle
         && coverage.workflow_subject_role == artifact.workflow_subject_role
+        && coverage.workflow_subject_handle == artifact.workflow_subject_handle
         && coverage.source_id == artifact.source_id
         && coverage.state == artifact.state
         && coverage.artifact_ids.iter().all(|artifact_id| {
@@ -325,7 +359,9 @@ fn coverage_is_congruent(
                 && intake.artifacts.iter().any(|candidate| {
                     candidate.artifact_id == *artifact_id
                         && candidate.producer_role == coverage.producer_role
+                        && candidate.producer_host_handle == coverage.producer_host_handle
                         && candidate.workflow_subject_role == coverage.workflow_subject_role
+                        && candidate.workflow_subject_handle == coverage.workflow_subject_handle
                         && candidate.source_id == coverage.source_id
                         && candidate.state == coverage.state
                         && is_dp_distribution_artifact(candidate)
