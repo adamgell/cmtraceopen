@@ -3137,7 +3137,10 @@ fn sidecar_app_state_observation(
     ordinal: usize,
     observation: &EspRegistryObservation,
 ) -> Option<SidecarAppStateObservation> {
-    let field = if observation.value_name.eq_ignore_ascii_case("InstallationState") {
+    let field = if observation
+        .value_name
+        .eq_ignore_ascii_case("InstallationState")
+    {
         SidecarAppField::InstallationState
     } else if observation.value_name.eq_ignore_ascii_case("ErrorHresult") {
         SidecarAppField::ErrorHresult

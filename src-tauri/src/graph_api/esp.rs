@@ -2556,12 +2556,8 @@ mod overlay_tests {
         let mut request = base_request();
         request.app_ids = vec![APP_GUID.to_string()];
 
-        let overlay = fetch_esp_graph_overlay(
-            &provider,
-            &request,
-            &NeverCancelled,
-            "2026-01-01T00:00:00Z",
-        );
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request, &NeverCancelled, "2026-01-01T00:00:00Z");
 
         assert_eq!(overlay.device_match.status, GraphSectionStatus::Available);
         assert_eq!(overlay.apps.status, GraphSectionStatus::Available);
@@ -2581,12 +2577,8 @@ mod overlay_tests {
         };
         let request = base_request(); // app_ids and workload_ids left empty
 
-        let overlay = fetch_esp_graph_overlay(
-            &provider,
-            &request,
-            &NeverCancelled,
-            "2026-01-01T00:00:00Z",
-        );
+        let overlay =
+            fetch_esp_graph_overlay(&provider, &request, &NeverCancelled, "2026-01-01T00:00:00Z");
 
         assert_eq!(overlay.device_match.status, GraphSectionStatus::Available);
         assert_eq!(overlay.apps.status, GraphSectionStatus::Skipped);

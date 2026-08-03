@@ -260,10 +260,13 @@ pub fn validate_descriptor_privacy(scenario: &str, scenario_root: &Path, failure
     for descriptor in ["manifest.json", "expected.json"] {
         let path = scenario_root.join(descriptor);
         match std::fs::read_to_string(&path) {
-            Ok(contents) => {
-                failures.absorb(privacy_problems(&format!("{scenario}/{descriptor}"), &contents))
+            Ok(contents) => failures.absorb(privacy_problems(
+                &format!("{scenario}/{descriptor}"),
+                &contents,
+            )),
+            Err(error) => {
+                failures.push(format!("{scenario}: {descriptor} is not readable: {error}"))
             }
-            Err(error) => failures.push(format!("{scenario}: {descriptor} is not readable: {error}")),
         }
     }
 }
@@ -493,7 +496,9 @@ fn validate_expected_coverage(
         .unwrap_or_default();
 
     let Some(coverage) = expected["coverage"].as_array() else {
-        failures.push(format!("{scenario}: expected.json must have a coverage array"));
+        failures.push(format!(
+            "{scenario}: expected.json must have a coverage array"
+        ));
         return;
     };
 
@@ -626,7 +631,8 @@ fn find_windows_sid(contents: &str) -> Option<String> {
             .split(|c: char| !(c.is_ascii_digit() || c == '-' || c == 'S'))
             .next()
             .unwrap_or_default();
-        if candidate.matches('-').count() >= 4 && candidate.ends_with(|c: char| c.is_ascii_digit()) {
+        if candidate.matches('-').count() >= 4 && candidate.ends_with(|c: char| c.is_ascii_digit())
+        {
             return Some(candidate.to_owned());
         }
     }
@@ -647,7 +653,19 @@ fn find_email(contents: &str) -> Option<String> {
         c.is_whitespace()
             || matches!(
                 c,
-                '"' | '\'' | ',' | ';' | ':' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '='
+                '"' | '\''
+                    | ','
+                    | ';'
+                    | ':'
+                    | '<'
+                    | '>'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '='
                     | '|'
             )
     }) {

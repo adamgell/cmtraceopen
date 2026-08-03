@@ -1,0 +1,59 @@
+{"_comment": "SYNTHETIC FIXTURE: report confirming the device is registered",
+  "autopilotDocument": "autopilot.mdmDiagnosticsReport",
+  "documentVersion": 1,
+  "sections": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rp-s1",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostics-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": null,
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "sectionId": "deviceIdentity",
+      "kind": "deviceIdentity",
+      "outcome": "observed",
+      "error": null,
+      "values": [
+        {
+          "name": "serialNumber",
+          "value": "SYNTH-SERIAL-0001"
+        },
+        {
+          "name": "entraDeviceId",
+          "value": "abcdabcd-1234-5678-9012-abcdabcdabcd"
+        },
+        {
+          "name": "managedDeviceId",
+          "value": "fedcfedc-4321-8765-2109-fedcfedcfedc"
+        },
+        {
+          "name": "tenantId",
+          "value": "00000000-1111-2222-3333-444444444444"
+        },
+        {
+          "name": "tenantDomain",
+          "value": "contoso.example"
+        },
+        {
+          "name": "deviceName",
+          "value": "SYNTH-DEV-01"
+        }
+      ],
+      "message": "Autopilot device registration record read from the diagnostics export."
+    }
+  ]
+}

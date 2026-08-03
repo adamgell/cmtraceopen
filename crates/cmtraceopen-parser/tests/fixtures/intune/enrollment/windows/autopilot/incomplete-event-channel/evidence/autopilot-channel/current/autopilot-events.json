@@ -1,0 +1,133 @@
+{"_comment": "SYNTHETIC FIXTURE: truncated channel that declares its own incompleteness",
+  "autopilotDocument": "autopilot.events",
+  "documentVersion": 1,
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 160,
+            "recordId": 1
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:01Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:01Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 160,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 1,
+      "activityId": null,
+      "namedData": [],
+      "message": "AutopilotRetrieveSettings beginning acquisition."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 2,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 100,
+            "recordId": 2
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:03Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:03Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 100,
+      "level": "warning",
+      "task": null,
+      "keywords": null,
+      "recordId": 2,
+      "activityId": null,
+      "namedData": [],
+      "message": "Autopilot policy SyntheticProfile not found."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 3,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 4242,
+            "recordId": 3
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:04Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:04Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 4242,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 3,
+      "activityId": null,
+      "namedData": [],
+      "message": "An Autopilot record this build has no documented meaning for."
+    }
+  ],
+  "channelComplete": false
+}

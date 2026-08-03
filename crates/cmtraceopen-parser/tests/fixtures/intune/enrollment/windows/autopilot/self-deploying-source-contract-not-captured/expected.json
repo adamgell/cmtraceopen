@@ -1,0 +1,57 @@
+{
+  "assertions": [
+    "a self-deploying or pre-provisioning sample asserts nothing terminal until its actual source contract is captured",
+    "an unsupported document keeps its bytes as evidence and loses only its meaning"
+  ],
+  "confidence": "low",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "self-deploying-contract",
+      "status": "unsupported"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "self-deploying-contract": "unsupported"
+  },
+  "espLinkConfidence": "low",
+  "espLinkState": "notObserved",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-unknown-schema"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "self-deploying-contract"
+      ],
+      "evidence": [],
+      "findingId": "autopilot-unknown-schema",
+      "recommendedChecks": [
+        "Confirm the Windows build and Autopilot diagnostics schema of the source device.",
+        "Re-collect on a build with validated rules, or upgrade CMTrace Open."
+      ],
+      "severity": "warning",
+      "summary": "1 supplied document(s) declare a kind or version this build has no validated rules for. Their bytes are retained as raw evidence; their meaning is not. no validated rules for document kind autopilot.selfDeployingContract",
+      "title": "Autopilot evidence uses a schema or build this release cannot interpret"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "unknownSchema",
+  "phase": "profileDiscovery",
+  "profileApplied": false,
+  "profileCandidateState": "pending",
+  "profileRetrieved": false,
+  "registrationState": "unknown",
+  "scenario": "self-deploying-source-contract-not-captured",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}

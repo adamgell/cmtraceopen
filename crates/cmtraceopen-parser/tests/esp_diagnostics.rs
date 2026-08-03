@@ -5960,10 +5960,10 @@ fn reducer_preserves_elevation_when_the_system_record_is_evicted() {
 
     let snapshot = reducer.snapshot();
     // The elevation record no longer survives in the retained (raw) evidence...
-    assert!(!snapshot
-        .raw_evidence
-        .iter()
-        .any(|record| record.evidence.first().is_some_and(|e| e.evidence_id == "elevation")));
+    assert!(!snapshot.raw_evidence.iter().any(|record| record
+        .evidence
+        .first()
+        .is_some_and(|e| e.evidence_id == "elevation")));
     // ...but the reduced elevation is still authoritative and fully preserved.
     assert!(snapshot.elevation.is_elevated);
     assert!(snapshot.elevation.restart_supported);
@@ -8178,9 +8178,21 @@ fn reducer_review_multiple_office_groups_backpatch_activity_statuses_independent
         r"registry:HKLM\SOFTWARE\Microsoft\Windows\Autopilot\EnrollmentStatusTracking";
     const OFFICE_ROOT: &str = r"registry:HKLM\SOFTWARE\Microsoft\OfficeCSP";
     let groups = [
-        ("11111111-1111-1111-1111-111111111111", 70, EspNormalizedStatus::Succeeded),
-        ("22222222-2222-2222-2222-222222222222", 60, EspNormalizedStatus::Failed),
-        ("33333333-3333-3333-3333-333333333333", 40, EspNormalizedStatus::Downloaded),
+        (
+            "11111111-1111-1111-1111-111111111111",
+            70,
+            EspNormalizedStatus::Succeeded,
+        ),
+        (
+            "22222222-2222-2222-2222-222222222222",
+            60,
+            EspNormalizedStatus::Failed,
+        ),
+        (
+            "33333333-3333-3333-3333-333333333333",
+            40,
+            EspNormalizedStatus::Downloaded,
+        ),
     ];
     let mut reducer = EspDiagnosticsReducer::new("2026-07-15T18:00:00Z".to_string());
     let mut records = Vec::new();
@@ -10471,7 +10483,10 @@ fn redaction_projection_masks_azure_sas_and_account_key_credentials() {
     // Credential values are redacted everywhere they appear.
     assert!(!safe_json.contains("Zx9AbCdEf0"), "SAS sig leaked");
     assert!(!safe_json.contains("abcDEF123"), "AccountKey leaked");
-    assert!(!safe_json.contains("AbC%3D"), "SharedAccessSignature sig leaked");
+    assert!(
+        !safe_json.contains("AbC%3D"),
+        "SharedAccessSignature sig leaked"
+    );
     // The credential-bearing raw record failed closed.
     assert!(safe.raw_evidence.is_empty());
     // Non-secret URL context survives in the narrative message.

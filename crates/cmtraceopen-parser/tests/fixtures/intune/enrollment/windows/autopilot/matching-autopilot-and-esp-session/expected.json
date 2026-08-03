@@ -1,0 +1,105 @@
+{
+  "assertions": [
+    "one explicit shared identifier is enough, and is the only thing that is enough"
+  ],
+  "confidence": "high",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "status": "available"
+    },
+    {
+      "artifactId": "esp-session-facts",
+      "status": "available"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "esp-session-facts": "parsed",
+    "mdm-diagnostics-report": "parsed"
+  },
+  "espLinkConfidence": "high",
+  "espLinkState": "linked",
+  "espSessionIds": [
+    "esp-session-0002"
+  ],
+  "findingIds": [
+    "autopilot-esp-session-linked",
+    "autopilot-phase-completed"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "esp-s1",
+          "sourceArtifactId": "esp-session-facts"
+        },
+        {
+          "evidenceId": "rp-s3",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        }
+      ],
+      "findingId": "autopilot-esp-session-linked",
+      "recommendedChecks": [
+        "Continue the investigation in the ESP workspace for the cited session."
+      ],
+      "severity": "info",
+      "summary": "1 explicit correlation key(s) bind this Autopilot evidence to ESP session(s) esp-session-0002. ESP remains the owner of everything after the handoff.",
+      "title": "Autopilot evidence is bound to an ESP session by an explicit key"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        {
+          "evidenceId": "rp-s2",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        {
+          "evidenceId": "rp-s3",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        }
+      ],
+      "findingId": "autopilot-phase-completed",
+      "recommendedChecks": [
+        "Review the correlated ESP session for what happened after the handoff."
+      ],
+      "severity": "info",
+      "summary": "A profile was retrieved and applied, and the handoff into enrollment and the Enrollment Status Page was observed. Everything after this point belongs to the ESP analysis, not to Autopilot.",
+      "title": "The local Autopilot phase completed and handed off"
+    }
+  ],
+  "matchedKeyKinds": [
+    "entraDeviceId"
+  ],
+  "outcome": "completed",
+  "phase": "espHandoff",
+  "profileApplied": true,
+  "profileCandidateState": "available",
+  "profileRetrieved": true,
+  "registrationState": "unknown",
+  "scenario": "matching-autopilot-and-esp-session",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}

@@ -1,0 +1,84 @@
+{
+  "assertions": [
+    "reaching the handoff is not the same as the deployment succeeding",
+    "the missing ESP bundle stays an explicit coverage gap rather than an assumption"
+  ],
+  "confidence": "medium",
+  "conflictIds": [],
+  "coverage": [
+    {
+      "artifactId": "autopilot-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostics-report",
+      "status": "available"
+    },
+    {
+      "artifactId": "esp-session-facts",
+      "status": "missing"
+    }
+  ],
+  "documentParseStates": {
+    "autopilot-channel": "parsed",
+    "mdm-diagnostics-report": "parsed"
+  },
+  "espLinkConfidence": "high",
+  "espLinkState": "evidenceMissing",
+  "espSessionIds": [],
+  "findingIds": [
+    "autopilot-esp-evidence-missing",
+    "autopilot-evidence-coverage-gap"
+  ],
+  "findings": [
+    {
+      "confidence": "high",
+      "coverageGapIds": [],
+      "evidence": [
+        {
+          "evidenceId": "rp-s2",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        },
+        {
+          "evidenceId": "rp-s3",
+          "sourceArtifactId": "mdm-diagnostics-report"
+        }
+      ],
+      "findingId": "autopilot-esp-evidence-missing",
+      "recommendedChecks": [
+        "Collect the ESP diagnostics bundle for the same enrollment and analyze it with the ESP workspace.",
+        "Carry the enrollment or correlation identifier across so the two analyses bind explicitly."
+      ],
+      "severity": "warning",
+      "summary": "The local Autopilot phase reached the Enrollment Status Page handoff. What happened after that point is owned by the ESP reducer, and this bundle contains none of its evidence, so the deployment cannot be called complete or failed.",
+      "title": "Autopilot handed off to ESP but no ESP evidence was supplied"
+    },
+    {
+      "confidence": "high",
+      "coverageGapIds": [
+        "esp-session-facts"
+      ],
+      "evidence": [],
+      "findingId": "autopilot-evidence-coverage-gap",
+      "recommendedChecks": [
+        "Re-collect the cited artifacts, elevated, before ruling anything out.",
+        "microsoft-windows-moderndeployment-diagnostics-provider-autopilot.evtx carries Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot in full."
+      ],
+      "severity": "warning",
+      "summary": "1 expected artifact(s) were missing, truncated, skipped, or unreadable. The absence of a signal in them proves nothing. esp-sessions.json was not present on the device.",
+      "title": "Expected Autopilot evidence was incomplete"
+    }
+  ],
+  "matchedKeyKinds": [],
+  "outcome": "handoffReachedEspEvidenceMissing",
+  "phase": "espHandoff",
+  "profileApplied": true,
+  "profileCandidateState": "available",
+  "profileRetrieved": true,
+  "registrationState": "registered",
+  "scenario": "completed-without-esp-bundle",
+  "timeBasis": "utc",
+  "timezoneState": "declared",
+  "unclassifiedObservationCount": 0,
+  "workload": "enrollment/windows/autopilot"
+}
