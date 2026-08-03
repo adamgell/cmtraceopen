@@ -24,8 +24,8 @@ use crate::parser::ccm::scan_logical_records_bounded;
 use crate::sccm::catalog::classify_artifact_name;
 use crate::sccm::evidence::SccmRawEvidenceSnapshot;
 use crate::sccm::{
-    SccmArtifact, SccmCoverageState, SccmEvidence, SccmExtractionProfile, SccmRole,
-    SccmTimeOrderingState,
+    extract_keys, SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence,
+    SccmExtractionProfile, SccmKeyExtractionResult, SccmRole, SccmTimeOrderingState,
 };
 
 use super::{
@@ -88,6 +88,29 @@ pub struct SccmClientAdmittedEvidence {
     integrity_seal: String,
 }
 
+/// Artifact-scoped key-extraction results selected only from sealed client
+/// evidence authority. Its private fields and lack of a constructor prevent a
+/// generic extraction result from being substituted for admitted authority.
+pub(crate) struct SccmClientAdmittedKeyExtraction {
+    artifact_id: String,
+    artifact_family: SccmArtifactFamily,
+    results: Vec<SccmKeyExtractionResult>,
+}
+
+impl SccmClientAdmittedKeyExtraction {
+    pub(crate) fn artifact_id(&self) -> &str {
+        &self.artifact_id
+    }
+
+    pub(crate) fn artifact_family(&self) -> &SccmArtifactFamily {
+        &self.artifact_family
+    }
+
+    pub(crate) fn results(&self) -> &[SccmKeyExtractionResult] {
+        &self.results
+    }
+}
+
 impl SccmClientAdmittedEvidence {
     pub(crate) fn evidence(&self) -> Result<&[SccmEvidence], SccmClientEvidenceAdmissionError> {
         self.verify_integrity()?;
@@ -102,12 +125,33 @@ impl SccmClientAdmittedEvidence {
         Ok(self.source_coverage.get(logical_artifact_id))
     }
 
-    pub(crate) fn profile_for_artifact(
+    pub(crate) fn extract_keys_for_artifact(
         &self,
         artifact_id: &str,
-    ) -> Result<Option<&SccmExtractionProfile>, SccmClientEvidenceAdmissionError> {
+    ) -> Result<SccmClientAdmittedKeyExtraction, SccmClientEvidenceAdmissionError> {
         self.verify_integrity()?;
-        Ok(self.profiles_by_artifact.get(artifact_id))
+        let (sealed_artifact_id, profile) = self
+            .profiles_by_artifact
+            .get_key_value(artifact_id)
+            .ok_or(SccmClientEvidenceAdmissionError::MissingAdmittedExtractionProfile)?;
+        let [artifact_family] = profile.validated_artifact_families.as_slice() else {
+            return Err(SccmClientEvidenceAdmissionError::IntegrityViolation);
+        };
+        let results = self
+            .evidence
+            .iter()
+            .filter(|evidence| evidence.reference.artifact_id == *sealed_artifact_id)
+            .map(|evidence| extract_keys(evidence, profile))
+            .collect::<Vec<_>>();
+        if results.is_empty() {
+            return Err(SccmClientEvidenceAdmissionError::MissingAdmittedArtifactEvidence);
+        }
+
+        Ok(SccmClientAdmittedKeyExtraction {
+            artifact_id: sealed_artifact_id.clone(),
+            artifact_family: artifact_family.clone(),
+            results,
+        })
     }
 
     pub(crate) fn integrity_seal(&self) -> &str {
@@ -200,6 +244,10 @@ pub enum SccmClientEvidenceAdmissionError {
     InvalidTimestampProvenance,
     #[error("client evidence admission selected an unregistered extraction profile")]
     UnregisteredProfile,
+    #[error("client evidence admission has no sealed extraction profile for the artifact")]
+    MissingAdmittedExtractionProfile,
+    #[error("client evidence admission has no sealed evidence for the artifact")]
+    MissingAdmittedArtifactEvidence,
     #[error("client evidence admission produced colliding logical evidence identities")]
     CollidingEvidenceIdentity,
     #[error("client evidence admission integrity seal is invalid")]
