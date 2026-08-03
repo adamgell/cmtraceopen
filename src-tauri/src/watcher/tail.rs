@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use cmtraceopen_parser::intune::device::windows::inventory::{
     self, DeviceInventoryLogDialect, FramedLogicalRecord,
 };
+use cmtraceopen_parser::intune::portal::windows::company_portal::logs::looks_like_record_start;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
@@ -65,6 +66,18 @@ struct PendingLogicalRecord {
     parser_selection: ResolvedParser,
 }
 
+#[derive(Clone, Copy)]
+enum LogicalRecordDialect {
+    DeviceInventory(DeviceInventoryLogDialect),
+    CompanyPortal,
+}
+
+struct LogicalRecordFramingResult {
+    completed_records: Vec<FramedLogicalRecord>,
+    pending_record: Option<String>,
+    overflow_count: u32,
+}
+
 /// Manages incremental reading of a log file from a tracked byte offset.
 pub struct TailReader {
     path: PathBuf,
@@ -74,9 +87,9 @@ pub struct TailReader {
     next_line: u32,
     /// Leftover partial record fragment from the previous read.
     pending_fragment: String,
-    /// Selection and activity time for an unterminated Device Inventory line.
+    /// Selection and activity time for an unterminated logical-record line.
     pending_fragment_selection: Option<(ResolvedParser, Instant)>,
-    /// Newest Device Inventory logical record held for continuation lines.
+    /// Newest logical record held for continuation lines.
     pending_logical_record: Option<PendingLogicalRecord>,
     /// File encoding detected from BOM during initial parse.
     encoding: FileEncoding,
@@ -189,7 +202,7 @@ impl TailReader {
             combined
         };
 
-        let inventory_dialect = inventory_logical_dialect(&self.parser_selection);
+        let logical_record_dialect = logical_record_dialect(&self.parser_selection);
         let lines = match self.parser_selection.record_framing {
             RecordFraming::PhysicalLine => {
                 collect_complete_lines(&full_text, &mut self.pending_fragment)
@@ -206,7 +219,7 @@ impl TailReader {
             }
         };
 
-        if let Some(dialect) = inventory_dialect {
+        if let Some(dialect) = logical_record_dialect {
             let selection = self.parser_selection.clone();
             if !self.pending_fragment.is_empty() {
                 self.pending_fragment_selection = Some((selection.clone(), now));
@@ -223,12 +236,8 @@ impl TailReader {
                     .pending_logical_record
                     .take()
                     .map(|pending| pending.content);
-                let framed = inventory::frame_logical_records(
-                    dialect,
-                    prior,
-                    &lines,
-                    MAX_PENDING_LOGICAL_RECORD_BYTES,
-                );
+                let framed =
+                    frame_logical_records(dialect, prior, &lines, MAX_PENDING_LOGICAL_RECORD_BYTES);
 
                 if let Some(content) = framed.pending_record {
                     self.pending_logical_record = Some(PendingLogicalRecord {
@@ -314,7 +323,7 @@ impl TailReader {
         let Some(selection) = selection else {
             return TailBatch::empty(false);
         };
-        let Some(dialect) = inventory_logical_dialect(&selection) else {
+        let Some(dialect) = logical_record_dialect(&selection) else {
             return TailBatch::empty(false);
         };
 
@@ -325,7 +334,7 @@ impl TailReader {
                 .unwrap_or_default()
         } else {
             let fragment_lines = [fragment.as_str()];
-            let framed = inventory::frame_logical_records(
+            let framed = frame_logical_records(
                 dialect,
                 pending.map(|record| record.content),
                 &fragment_lines,
@@ -348,7 +357,7 @@ impl TailReader {
 
     fn enforce_unterminated_logical_bound(
         &mut self,
-        dialect: DeviceInventoryLogDialect,
+        dialect: LogicalRecordDialect,
         selection: &ResolvedParser,
         now: Instant,
     ) -> TailBatch {
@@ -372,7 +381,7 @@ impl TailReader {
         let fragment = std::mem::take(&mut self.pending_fragment);
         self.pending_fragment_selection = None;
         let fragment_lines = [fragment.as_str()];
-        let framed = inventory::frame_logical_records(
+        let framed = frame_logical_records(
             dialect,
             pending,
             &fragment_lines,
@@ -443,7 +452,7 @@ impl TailReader {
     }
 }
 
-fn inventory_logical_dialect(selection: &ResolvedParser) -> Option<DeviceInventoryLogDialect> {
+fn logical_record_dialect(selection: &ResolvedParser) -> Option<LogicalRecordDialect> {
     if selection.record_framing != RecordFraming::LogicalRecord {
         return None;
     }
@@ -452,17 +461,105 @@ fn inventory_logical_dialect(selection: &ResolvedParser) -> Option<DeviceInvento
         // Harvester headers usually frame a single line, but the parser still
         // attaches a non-header line to the record above it, so tailing has to
         // frame it the same way the initial parse does.
-        Some(ParserSpecialization::IntuneDeviceInventoryHarvester) => {
-            Some(DeviceInventoryLogDialect::Harvester)
-        }
-        Some(ParserSpecialization::IntuneDeviceInventoryAdaptor) => {
-            Some(DeviceInventoryLogDialect::InventoryAdaptor)
-        }
-        Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure) => {
-            Some(DeviceInventoryLogDialect::RotationFailure)
+        Some(ParserSpecialization::IntuneDeviceInventoryHarvester) => Some(
+            LogicalRecordDialect::DeviceInventory(DeviceInventoryLogDialect::Harvester),
+        ),
+        Some(ParserSpecialization::IntuneDeviceInventoryAdaptor) => Some(
+            LogicalRecordDialect::DeviceInventory(DeviceInventoryLogDialect::InventoryAdaptor),
+        ),
+        Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure) => Some(
+            LogicalRecordDialect::DeviceInventory(DeviceInventoryLogDialect::RotationFailure),
+        ),
+        None if selection.parser
+            == cmtraceopen_parser::models::log_entry::ParserKind::CompanyPortal =>
+        {
+            Some(LogicalRecordDialect::CompanyPortal)
         }
         _ => None,
     }
+}
+
+fn frame_logical_records(
+    dialect: LogicalRecordDialect,
+    pending_record: Option<String>,
+    new_lines: &[&str],
+    max_pending_bytes: usize,
+) -> LogicalRecordFramingResult {
+    match dialect {
+        LogicalRecordDialect::DeviceInventory(dialect) => {
+            let framed = inventory::frame_logical_records(
+                dialect,
+                pending_record,
+                new_lines,
+                max_pending_bytes,
+            );
+            LogicalRecordFramingResult {
+                completed_records: framed.completed_records,
+                pending_record: framed.pending_record,
+                overflow_count: framed.overflow_count,
+            }
+        }
+        LogicalRecordDialect::CompanyPortal => {
+            frame_company_portal_logical_records(pending_record, new_lines, max_pending_bytes)
+        }
+    }
+}
+
+fn frame_company_portal_logical_records(
+    mut pending_record: Option<String>,
+    new_lines: &[&str],
+    max_pending_bytes: usize,
+) -> LogicalRecordFramingResult {
+    let mut completed_records = Vec::new();
+    let mut overflow_count = 0u32;
+
+    for raw_line in new_lines {
+        let line = raw_line.trim_end();
+        if looks_like_record_start(line) {
+            if let Some(record) = pending_record.take() {
+                completed_records.push(FramedLogicalRecord::complete(record));
+            }
+        }
+
+        match pending_record.as_mut() {
+            Some(record) => {
+                record.push('\n');
+                record.push_str(line);
+            }
+            None => pending_record = Some(line.to_string()),
+        }
+
+        while pending_record
+            .as_ref()
+            .is_some_and(|record| record.len() > max_pending_bytes)
+        {
+            let mut record = pending_record
+                .take()
+                .expect("oversized Company Portal record must exist");
+            let split_at = previous_char_boundary(&record, max_pending_bytes);
+            let remainder = record.split_off(split_at);
+            completed_records.push(FramedLogicalRecord {
+                physical_lines: u32::try_from(record.matches('\n').count()).unwrap_or(u32::MAX),
+                content: record,
+            });
+            overflow_count = overflow_count.saturating_add(1);
+            pending_record = (!remainder.is_empty()).then_some(remainder);
+        }
+    }
+
+    LogicalRecordFramingResult {
+        completed_records,
+        pending_record,
+        overflow_count,
+    }
+}
+
+fn previous_char_boundary(text: &str, maximum: usize) -> usize {
+    let mut boundary = maximum.min(text.len());
+    while !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    boundary
 }
 
 fn collect_complete_lines<'a>(text: &'a str, pending_fragment: &mut String) -> Vec<&'a str> {
@@ -591,7 +688,7 @@ where
 
         // Also do a periodic poll as a fallback (some editors/log writers
         // may not trigger filesystem events reliably)
-        let poll_interval = if inventory_logical_dialect(&tail_reader.parser_selection).is_some() {
+        let poll_interval = if logical_record_dialect(&tail_reader.parser_selection).is_some() {
             LOGICAL_RECORD_DEBOUNCE
         } else {
             Duration::from_millis(500)
@@ -968,13 +1065,7 @@ mod tests {
         let path = unique_test_path("company-portal-split-logical-record");
         fs::write(&path, "").expect("should create empty Company Portal log");
 
-        let mut reader = TailReader::new(
-            path.clone(),
-            0,
-            ResolvedParser::company_portal(),
-            0,
-            1,
-        );
+        let mut reader = TailReader::new(path.clone(), 0, ResolvedParser::company_portal(), 0, 1);
         let first_header = concat!(
             "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
             "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
