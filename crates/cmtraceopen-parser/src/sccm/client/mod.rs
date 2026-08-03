@@ -8,5 +8,7 @@ mod intake;
 
 #[cfg(test)]
 mod admission_tests;
+#[cfg(test)]
+mod authority_contract_tests;
 
 pub use intake::*;
