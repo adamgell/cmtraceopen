@@ -1,0 +1,4 @@
+Timestamp                       Thread     Type        Activity             PID    TTL
+2024-03-15 16:30:00.000001-0700 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Diagnostics) [com.microsoft.CompanyPortal:Diagnostics] Diagnostics subsystem ready
+2024-03-15 16:30:01.000002-0700 0x1a2b3    Info        0x0                  312    0    CompanyPortal: (Enrollment) [com.microsoft.CompanyPortal:Enrollment] Enrollment flow presented
+2024-03-15 16:30:02.000003-0700 0x1a2b3    Info        0x0                  312    0    CompanyPortal: (Authentication) [com.microsoft.CompanyPortal:Authentication] Silent token acquisition succeeded

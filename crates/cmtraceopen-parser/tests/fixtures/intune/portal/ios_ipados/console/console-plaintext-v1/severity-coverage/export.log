@@ -1,0 +1,6 @@
+Timestamp                       Thread     Type        Activity             PID    TTL
+2024-03-15 10:10:00.000001-0700 0x1a2b3    Debug       0x0                  312    0    CompanyPortal: (Networking) [com.microsoft.CompanyPortal:Network] Preparing service request
+2024-03-15 10:10:00.000002-0700 0x1a2b3    Info        0x0                  312    0    CompanyPortal: (Networking) [com.microsoft.CompanyPortal:Network] Service request dispatched
+2024-03-15 10:10:00.000003-0700 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Compliance) [com.microsoft.CompanyPortal:Compliance] Compliance evaluation scheduled
+2024-03-15 10:10:00.000004-0700 0x1a2b3    Error       0x0                  312    0    CompanyPortal: (Compliance) [com.microsoft.CompanyPortal:Compliance] Compliance evaluation failed with status 500
+2024-03-15 10:10:00.000005-0700 0x1a2b3    Fault       0x0                  312    0    CompanyPortal: (Applications) [com.microsoft.CompanyPortal:Applications] Unrecoverable failure staging managed application

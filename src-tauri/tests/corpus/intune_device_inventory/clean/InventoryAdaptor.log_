@@ -1,0 +1,3 @@
+[Thu Jul 30 13:05:01 2026][8604] - Adapter result:
+{"Status":200,"HResult":"0x00000000","Data":{"Example":"value"}}
+[Thu Jul 30 13:05:03 2026][8604] - Completed action with HRESULT 0x0, MI_Result 0x0.

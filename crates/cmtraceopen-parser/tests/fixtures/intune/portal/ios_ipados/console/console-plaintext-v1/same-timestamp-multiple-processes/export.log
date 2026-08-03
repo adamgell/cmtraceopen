@@ -1,0 +1,5 @@
+Timestamp                       Thread     Type        Activity             PID    TTL
+2024-03-15 12:00:00.500000-0700 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Enrollment) [com.microsoft.CompanyPortal:Enrollment] Enrollment step started
+2024-03-15 12:00:00.500000-0700 0x3aa01    Info        0x7f1                98     0    profiled: (ManagedConfiguration) [com.apple.ManagedConfiguration:profiled] Profile install request received
+2024-03-15 12:00:00.500000-0700 0x1a2b9    Info        0x7f2                312    0    CompanyPortal: (Authentication) [com.microsoft.CompanyPortal:Authentication] Interactive sign-in presented
+2024-03-15 12:00:00.500000-0700 0x4bb02    Debug       0x7f3                55     0    SpringBoard: (FrontBoard) [com.apple.FrontBoard:Common] Presenting scene for foreground application

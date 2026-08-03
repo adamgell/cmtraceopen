@@ -1,0 +1,4 @@
+Timestamp                       Thread     Type        Activity             PID    TTL
+2024-03-15 15:00:00.000001 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Enrollment) [com.microsoft.CompanyPortal:Enrollment] Enrollment started without a captured timezone
+2024-03-15 15:00:01.000002 0x1a2b3    Info        0x0                  312    0    CompanyPortal: (Sync) [com.microsoft.CompanyPortal:Sync] Sync requested
+2024-03-15 15:00:02.000003 0x2001     Default     0x0                  60     0    dasd: (duetactivityscheduler) [com.apple.duetactivityscheduler:default] Background activity evaluated

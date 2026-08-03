@@ -9,6 +9,8 @@ use tauri::{AppHandle, Manager};
 
 #[cfg(target_os = "windows")]
 const FILE_ASSOCIATION_PROG_ID: &str = "CMTraceOpen.LogFile";
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+const LOG_FILE_EXTENSIONS: &[&str] = &[".log", ".lo_", ".log_"];
 const FILE_ASSOCIATION_PROMPT_FILE_NAME: &str = "file-association-preferences.json";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -132,7 +134,7 @@ fn is_app_associated_with_log_extensions() -> Result<bool, crate::error::AppErro
         .open_subkey("Software\\Classes")
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
-    for extension in [".log", ".lo_"] {
+    for extension in LOG_FILE_EXTENSIONS {
         let extension_key = match classes.open_subkey(extension) {
             Ok(key) => key,
             Err(_) => return Ok(false),
@@ -196,7 +198,7 @@ fn associate_log_extensions_with_app() -> Result<(), crate::error::AppError> {
         .set_value("", &open_command)
         .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
 
-    for extension in [".log", ".lo_"] {
+    for extension in LOG_FILE_EXTENSIONS {
         let (extension_key, _) = classes
             .create_subkey(extension)
             .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
@@ -276,4 +278,19 @@ pub fn set_file_association_prompt_suppressed(
             suppress_prompt: suppressed,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::LOG_FILE_EXTENSIONS;
+
+    #[test]
+    fn log_file_extensions_include_each_unique_rotation() {
+        assert_eq!(LOG_FILE_EXTENSIONS, &[".log", ".lo_", ".log_"]);
+
+        let unique_extensions: HashSet<_> = LOG_FILE_EXTENSIONS.iter().copied().collect();
+        assert_eq!(unique_extensions.len(), LOG_FILE_EXTENSIONS.len());
+    }
 }

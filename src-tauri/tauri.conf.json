@@ -68,6 +68,13 @@
         ],
         "mimeType": "text/plain",
         "description": "CMTrace Open Log File"
+      },
+      {
+        "ext": [
+          "log_"
+        ],
+        "mimeType": "text/plain",
+        "description": "Rotated Log File"
       }
     ],
     "windows": {

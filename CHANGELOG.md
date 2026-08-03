@@ -35,6 +35,10 @@ All notable changes to this project will be documented in this file.
 - **Rust**: Updated `rayon` 1.10.0 → 1.12.0, `evtx` 0.8.5 → 0.12.2, `glob` 0.3.3 → 0.3.4, `plist` 1.8.0 → 1.10.0, and `log` 0.4.29 → 0.4.33.
 - **GitHub Actions**: Updated `taiki-e/install-action` 2.85.0 → 2.85.2.
 
+### Added
+
+- **Intune Device Inventory log support (#354)**: CMTrace Open now discovers and parses the complete Microsoft Device Inventory Agent log family under `C:\Program Files\Microsoft Device Inventory Agent\Logs` instead of falling back to the generic timestamped or plain-text readers. Three wire formats are recognized by content: the **harvester** dialect (`IntuneInventoryHarvesterLog.log` and its timestamped rotations), where the producer's bracketed `[Information]`/`[Warning]`/`[Error]` level is authoritative and is no longer left in the message or overridden by keyword inference; the **Inventory Adaptor** dialect (`InventoryAdaptor.log` and the literal trailing-underscore `InventoryAdaptor.log_` rotation), which now keeps its timestamp and process ID and holds continuation JSON in the record that introduced it; and a **rotation-failure** dialect, where a .NET exception and its stack trace stay in one logical record. The Device Inventory Agent folder is available from the known-sources menu, folder aggregation includes `.log`, timestamped rotations, and `.log_`, and Windows file association covers the producer's literal `.log_` extension. Real-time tailing preserves logical records across appends.
+
 ## [1.5.0] - 2026-07-27
 
 ### Added
