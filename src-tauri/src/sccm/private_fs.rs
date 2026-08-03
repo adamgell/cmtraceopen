@@ -1719,12 +1719,13 @@ mod tests {
     #[test]
     fn private_capture_root_rejects_a_symlinked_parent_component() {
         let temporary = tempdir().expect("temporary root");
-        let actual_parent = temporary.path().join("actual-parent");
+        let canonical_temporary = temporary.path().canonicalize().expect("canonical root");
+        let actual_parent = canonical_temporary.join("actual-parent");
         let private_root = actual_parent.join("private-root");
         fs::create_dir_all(&private_root).expect("real private root");
         fs::set_permissions(&private_root, fs::Permissions::from_mode(0o700))
             .expect("private permissions");
-        let linked_parent = temporary.path().join("linked-parent");
+        let linked_parent = canonical_temporary.join("linked-parent");
         std::os::unix::fs::symlink(&actual_parent, &linked_parent).expect("parent symlink");
 
         open_private_capture_root(&private_root)
@@ -1949,7 +1950,8 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
 
         let temporary = tempdir().expect("temporary root");
-        let fifo = temporary.path().join("synthetic-fifo");
+        let canonical_temporary = temporary.path().canonicalize().expect("canonical root");
+        let fifo = canonical_temporary.join("synthetic-fifo");
         let fifo_name = CString::new(fifo.as_os_str().as_bytes()).expect("fifo path");
         assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
 
