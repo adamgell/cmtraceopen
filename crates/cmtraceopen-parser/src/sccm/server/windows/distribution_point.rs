@@ -120,6 +120,7 @@ pub struct SccmDistributionPointContentKey {
     pub package_id: String,
     pub content_id: String,
     pub content_version: u32,
+    pub topology_site_handle: String,
     pub site_code: String,
     pub distribution_point_handle: String,
     pub extraction_profile_id: String,
@@ -191,6 +192,7 @@ struct DistributionPointFact {
 /// submit source facts directly.
 #[derive(Debug)]
 struct DistributionPointTransactionEnvelope {
+    topology_site_handle: String,
     key: DistributionPointFactKey,
     facts: Vec<DistributionPointFact>,
 }
@@ -350,7 +352,11 @@ pub fn analyze_distribution_point_content_from_server_intake(
         let missing_roles = missing_healthy_phase_roles(&facts);
         let gap_facts = facts.clone();
         if let Some(transaction) =
-            reduce_healthy_transaction(DistributionPointTransactionEnvelope { key, facts })
+            reduce_healthy_transaction(DistributionPointTransactionEnvelope {
+                topology_site_handle: intake.topology.site_handle.clone(),
+                key,
+                facts,
+            })
         {
             transactions.push(transaction);
             continue;
@@ -622,6 +628,7 @@ fn reduce_healthy_transaction(
         package_id: envelope.key.package_id,
         content_id: envelope.key.content_id,
         content_version: envelope.key.content_version,
+        topology_site_handle: envelope.topology_site_handle,
         site_code: envelope.key.site_code,
         distribution_point_handle: envelope.key.distribution_point_handle,
         extraction_profile_id: SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID.to_owned(),
@@ -658,7 +665,8 @@ fn reduce_healthy_transaction(
 
 fn distribution_point_transaction_id(key: &SccmDistributionPointContentKey) -> String {
     format!(
-        "dp:site={}:package={}:content={}:content-version={}:dp={}:profile={}:profile-version={}",
+        "dp:topology-site={}:site={}:package={}:content={}:content-version={}:dp={}:profile={}:profile-version={}",
+        key.topology_site_handle,
         key.site_code,
         key.package_id,
         key.content_id,
@@ -1135,6 +1143,7 @@ mod content_identity_tests {
             package_id: "LAB00001".to_owned(),
             content_id: "content-alpha".to_owned(),
             content_version: 1,
+            topology_site_handle: "synthetic:site:lab".to_owned(),
             site_code: site_code.to_owned(),
             distribution_point_handle: "safe:dp:lab-dp-01".to_owned(),
             extraction_profile_id: profile_id.to_owned(),
@@ -1150,7 +1159,7 @@ mod content_identity_tests {
 
         assert_eq!(
             distribution_point_transaction_id(&lab),
-            "dp:site=LAB:package=LAB00001:content=content-alpha:content-version=1:dp=safe:dp:lab-dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+            "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00001:content=content-alpha:content-version=1:dp=safe:dp:lab-dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
         );
         assert_ne!(
             distribution_point_transaction_id(&lab),
@@ -1169,6 +1178,35 @@ mod content_identity_tests {
             .into_iter()
             .map(distribution_point_transaction_id)
             .collect::<Vec<_>>();
+        forward.sort();
+        reversed.sort();
+        assert_eq!(forward, reversed);
+    }
+
+    #[test]
+    fn transaction_identity_distinguishes_canonical_topology_with_identical_message_keys() {
+        let lab = SccmDistributionPointContentKey {
+            package_id: "LAB00001".to_owned(),
+            content_id: "content-alpha".to_owned(),
+            content_version: 1,
+            topology_site_handle: "synthetic:site:lab".to_owned(),
+            site_code: "LAB".to_owned(),
+            distribution_point_handle: "safe:dp:lab-dp-01".to_owned(),
+            extraction_profile_id: "dp-server-5.00.test-v1".to_owned(),
+            extraction_profile_version: 1,
+        };
+        let peer = SccmDistributionPointContentKey {
+            topology_site_handle: "synthetic:site:lab-peer".to_owned(),
+            ..lab.clone()
+        };
+
+        let lab_id = distribution_point_transaction_id(&lab);
+        let peer_id = distribution_point_transaction_id(&peer);
+        assert_ne!(lab, peer);
+        assert_ne!(lab_id, peer_id);
+
+        let mut forward = [lab_id.as_str(), peer_id.as_str()];
+        let mut reversed = [peer_id.as_str(), lab_id.as_str()];
         forward.sort();
         reversed.sort();
         assert_eq!(forward, reversed);

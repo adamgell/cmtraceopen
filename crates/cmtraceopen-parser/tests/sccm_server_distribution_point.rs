@@ -449,6 +449,10 @@ fn healthy_package_reduces_a_sealed_role_local_transaction() {
     assert_eq!(analysis.transactions[0].key.content_id, "content-alpha");
     assert_eq!(analysis.transactions[0].key.content_version, 1);
     assert_eq!(
+        analysis.transactions[0].key.topology_site_handle,
+        assessment.topology.site_handle
+    );
+    assert_eq!(
         analysis.transactions[0]
             .key
             .distribution_point_handle
