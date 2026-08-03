@@ -964,6 +964,67 @@ mod tests {
     }
 
     #[test]
+    fn test_tail_reader_preserves_company_portal_continuations_across_writes() {
+        let path = unique_test_path("company-portal-split-logical-record");
+        fs::write(&path, "").expect("should create empty Company Portal log");
+
+        let mut reader = TailReader::new(
+            path.clone(),
+            0,
+            ResolvedParser::company_portal(),
+            0,
+            1,
+        );
+        let first_header = concat!(
+            "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+            "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(file, "{first_header}").expect("should append Company Portal header");
+        drop(file);
+
+        let header_batch = reader
+            .read_new_entries()
+            .expect("header tail read should succeed");
+        assert!(
+            header_batch.entries.is_empty(),
+            "a Company Portal header must remain pending until continuation boundaries are known"
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(
+            file,
+            concat!(
+                "System.Net.Http.HttpRequestException: response status 403\n",
+                "2024-11-15T16:50:08.2850341Z  INFO  Event  None  1  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] finished\n"
+            )
+        )
+        .expect("should append continuation and next Company Portal header");
+        drop(file);
+
+        let continuation_batch = reader
+            .read_new_entries()
+            .expect("continuation tail read should succeed");
+        assert_eq!(continuation_batch.parse_errors, 0);
+        assert_eq!(continuation_batch.entries.len(), 1);
+        assert_eq!(continuation_batch.entries[0].line_number, 1);
+        assert_eq!(
+            continuation_batch.entries[0].message,
+            "[Sync] started\nSystem.Net.Http.HttpRequestException: response status 403"
+        );
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
     fn test_tail_reader_preserves_split_inventory_adaptor_json_record() {
         let path = unique_test_path("inventory-adaptor-split");
         fs::write(&path, "").expect("should create empty adaptor log");
