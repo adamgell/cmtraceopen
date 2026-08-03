@@ -1714,8 +1714,51 @@ mod tests {
         let linked_parent = temporary.path().join("linked-parent");
         std::os::unix::fs::symlink(&actual_parent, &linked_parent).expect("parent symlink");
 
-        open_private_capture_root(&linked_parent.join("private-root"))
+        let error = open_private_capture_root(&linked_parent.join("private-root"))
             .expect_err("capture-root traversal never follows a parent symlink");
+        assert!(
+            matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR),
+            "expected a no-follow component rejection, got {error:?}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_acl_entry_status_distinguishes_empty_acl_from_error() {
+        assert_eq!(
+            classify_macos_acl_entry_status(0).expect("entry status"),
+            MacosAclEntryStatus::Present
+        );
+        assert_eq!(
+            classify_macos_acl_entry_status(1).expect("empty ACL status"),
+            MacosAclEntryStatus::Empty
+        );
+        assert_eq!(
+            classify_macos_acl_entry_status(-1).expect("error status"),
+            MacosAclEntryStatus::Error
+        );
+        assert_eq!(
+            classify_macos_acl_entry_status(2)
+                .expect_err("unknown ACL status must fail closed")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_ownership_flag_mask_conversion_fails_closed() {
+        assert_ne!(
+            macos_ownership_ignore_mask(libc::MNT_IGNORE_OWNERSHIP)
+                .expect("platform ownership flag is representable"),
+            0
+        );
+        assert_eq!(
+            macos_ownership_ignore_mask(-1)
+                .expect_err("negative flag must not disable the ownership check")
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
     }
 
     #[test]
