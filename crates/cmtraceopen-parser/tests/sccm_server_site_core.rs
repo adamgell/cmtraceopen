@@ -1855,6 +1855,29 @@ fn intake_coverage_must_be_congruent_before_facts_can_shape_results() {
     assert!(!analysis.artifact_requests.is_empty());
 }
 
+#[test]
+fn coordinated_post_intake_producer_host_mutation_fails_site_core_authority_closed() {
+    let mut assessment = assess(&[
+        Source::sitecomp(HEALTHY_SITECOMP),
+        Source::status(HEALTHY_STATUS),
+    ]);
+    replace_source_producer_host(&mut assessment, "server-sitecomp", "synthetic:host:forged");
+    replace_source_producer_host(&mut assessment, "server-status", "synthetic:host:forged");
+
+    let analysis = analyze_site_core(&assessment);
+    assert_topology_incongruence_fails_closed(
+        &analysis,
+        &[
+            (
+                "sitecomp-current",
+                "server-sitecomp",
+                "synthetic:host:forged",
+            ),
+            ("z-site-status", "server-status", "synthetic:host:forged"),
+        ],
+    );
+}
+
 fn assert_topology_incongruence_fails_closed(
     analysis: &SccmSiteCoreAnalysis,
     expected_gaps: &[(&str, &str, &str)],
