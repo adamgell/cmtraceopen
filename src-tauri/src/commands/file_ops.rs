@@ -361,8 +361,7 @@ pub fn open_log_folder_aggregate(
                 continue;
             }
         };
-        let initial_logical_record =
-            InitialLogicalRecord::from_parse_result(&result, &parser_selection);
+        let final_entry_line_number = result.entries.last().map(|entry| entry.line_number);
 
         total_lines = total_lines.saturating_add(result.total_lines);
         parse_errors = parse_errors.saturating_add(result.parse_errors);
@@ -376,9 +375,11 @@ pub fn open_log_folder_aggregate(
         });
         open_file_states.push((
             PathBuf::from(&result.file_path),
+            result.file_path.clone(),
             parser_selection,
             result.byte_offset,
-            initial_logical_record,
+            result.total_lines,
+            final_entry_line_number,
         ));
     }
 
@@ -398,7 +399,24 @@ pub fn open_log_folder_aggregate(
         .open_files
         .lock()
         .map_err(|e| crate::error::AppError::State(e.to_string()))?;
-    for (path_buf, parser_selection, byte_offset, initial_logical_record) in open_file_states {
+    for (
+        path_buf,
+        file_path,
+        parser_selection,
+        byte_offset,
+        file_total_lines,
+        final_entry_line_number,
+    ) in open_file_states
+    {
+        let initial_logical_record = final_entry_line_number
+            .and_then(|line_number| {
+                aggregate_entries
+                    .iter()
+                    .find(|entry| entry.file_path == file_path && entry.line_number == line_number)
+            })
+            .and_then(|entry| {
+                InitialLogicalRecord::from_entry(entry, file_total_lines, &parser_selection)
+            });
         open_files.insert(
             path_buf.clone(),
             OpenFile {

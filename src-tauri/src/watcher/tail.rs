@@ -39,17 +39,25 @@ impl InitialLogicalRecord {
         result: &ParseResult,
         parser_selection: &ResolvedParser,
     ) -> Option<Self> {
+        let entry = result.entries.last()?;
+        Self::from_entry(entry, result.total_lines, parser_selection)
+    }
+
+    pub(crate) fn from_entry(
+        entry: &LogEntry,
+        total_lines: u32,
+        parser_selection: &ResolvedParser,
+    ) -> Option<Self> {
         if parser_selection.parser != ParserKind::CompanyPortal
             || parser_selection.record_framing != RecordFraming::LogicalRecord
         {
             return None;
         }
 
-        let entry = result.entries.last()?;
         Some(Self {
             entry_id: entry.id,
             entry_line_number: entry.line_number,
-            next_continuation_line: result.total_lines.saturating_add(1),
+            next_continuation_line: total_lines.saturating_add(1),
             message_utf16_len: entry.message.encode_utf16().count(),
         })
     }
