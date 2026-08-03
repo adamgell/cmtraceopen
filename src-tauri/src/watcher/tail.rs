@@ -9,8 +9,12 @@ use cmtraceopen_parser::intune::device::windows::inventory::{
 };
 use cmtraceopen_parser::intune::portal::windows::company_portal::logs::looks_like_record_start;
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use serde::Serialize;
 
-use crate::models::log_entry::{LogEntry, ParserSpecialization, RecordFraming};
+use crate::error_db::lookup::{detect_error_code_spans, ErrorCodeSpan};
+use crate::models::log_entry::{
+    LogEntry, ParseResult, ParserKind, ParserSpecialization, RecordFraming,
+};
 use crate::parser::{self, FileEncoding, ResolvedParser};
 
 const IME_RECORD_START: &str = "<![LOG[";
@@ -18,18 +22,67 @@ const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
 const LOGICAL_RECORD_DEBOUNCE: Duration = Duration::from_millis(250);
 const MAX_PENDING_LOGICAL_RECORD_BYTES: usize = 1024 * 1024;
 
+/// Minimal initial-parse state needed to continue the final Company Portal
+/// logical record without retaining or rereading the source file.
+#[derive(Debug, Clone)]
+pub struct InitialLogicalRecord {
+    entry_id: u64,
+    entry_line_number: u32,
+    next_continuation_line: u32,
+    message_utf16_len: usize,
+}
+
+impl InitialLogicalRecord {
+    /// Capture only the final rendered record's stable identity and offsets.
+    /// The original message remains frontend-owned.
+    pub fn from_parse_result(
+        result: &ParseResult,
+        parser_selection: &ResolvedParser,
+    ) -> Option<Self> {
+        if parser_selection.parser != ParserKind::CompanyPortal
+            || parser_selection.record_framing != RecordFraming::LogicalRecord
+        {
+            return None;
+        }
+
+        let entry = result.entries.last()?;
+        Some(Self {
+            entry_id: entry.id,
+            entry_line_number: entry.line_number,
+            next_continuation_line: result.total_lines.saturating_add(1),
+            message_utf16_len: entry.message.encode_utf16().count(),
+        })
+    }
+}
+
+/// Bounded suffix for a logical entry that was already rendered by the initial
+/// whole-file parse.
+///
+/// The physical range and expected UTF-16 offset make application idempotent:
+/// duplicate or stale out-of-order watcher events cannot append the same text
+/// twice. Error spans are absolute offsets into the amended message.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TailEntryAmendment {
+    pub entry_id: u64,
+    pub entry_line_number: u32,
+    pub continuation_start_line: u32,
+    pub continuation_end_line: u32,
+    pub message_utf16_start: usize,
+    pub message_suffix: String,
+    pub error_code_spans: Vec<ErrorCodeSpan>,
+}
+
 /// The result of reading new content from a tailed file.
 pub struct TailBatch {
     /// Complete log records parsed since the last read.
     pub entries: Vec<LogEntry>,
-    /// A corrected version of the final entry emitted during the initial open.
-    ///
-    /// A logical record can receive continuation lines after its header was
-    /// already shown by the whole-file parse. Consumers must replace the entry
-    /// with this same id/physical start line before appending `entries`.
-    pub replacement: Option<LogEntry>,
+    /// Bounded, ordered suffixes for entries emitted during the initial open.
+    pub amendments: Vec<TailEntryAmendment>,
     /// Parse errors observed while producing this incremental batch.
     pub parse_errors: u32,
+    /// Highest physical source line consumed by this batch, if any.
+    pub observed_through_line: Option<u32>,
     /// True when the file was detected as truncated/rotated during this read.
     ///
     /// On truncation the reader rewinds to the start of the file, so `entries`
@@ -45,18 +98,18 @@ impl TailBatch {
     fn empty(reset: bool) -> Self {
         Self {
             entries: Vec::new(),
-            replacement: None,
+            amendments: Vec::new(),
             parse_errors: 0,
+            observed_through_line: None,
             reset,
         }
     }
 
     fn append(&mut self, other: Self) {
         self.entries.extend(other.entries);
-        if other.replacement.is_some() {
-            self.replacement = other.replacement;
-        }
+        self.amendments.extend(other.amendments);
         self.parse_errors = self.parse_errors.saturating_add(other.parse_errors);
+        self.observed_through_line = self.observed_through_line.max(other.observed_through_line);
         self.reset |= other.reset;
     }
 
@@ -67,9 +120,42 @@ impl TailBatch {
     /// otherwise those failures stay invisible until the tail stops.
     fn is_reportable(&self) -> bool {
         self.reset
-            || self.replacement.is_some()
+            || !self.amendments.is_empty()
             || !self.entries.is_empty()
             || self.parse_errors > 0
+            || self.observed_through_line.is_some()
+    }
+}
+
+struct PendingInitialLogicalRecord {
+    entry_id: u64,
+    entry_line_number: u32,
+    next_continuation_line: u32,
+    message_utf16_len: usize,
+    retained_suffix_bytes: usize,
+    pending_suffix: String,
+    pending_start_line: Option<u32>,
+    pending_end_line: Option<u32>,
+    last_updated: Instant,
+    capped: bool,
+    cap_reported: bool,
+}
+
+impl PendingInitialLogicalRecord {
+    fn new(record: InitialLogicalRecord) -> Self {
+        Self {
+            entry_id: record.entry_id,
+            entry_line_number: record.entry_line_number,
+            next_continuation_line: record.next_continuation_line,
+            message_utf16_len: record.message_utf16_len,
+            retained_suffix_bytes: 0,
+            pending_suffix: String::new(),
+            pending_start_line: None,
+            pending_end_line: None,
+            last_updated: Instant::now(),
+            capped: false,
+            cap_reported: false,
+        }
     }
 }
 
@@ -91,6 +177,13 @@ struct LogicalRecordFramingResult {
     overflow_count: u32,
 }
 
+struct InitialContinuationResult {
+    batch: TailBatch,
+    /// Index of the first ordinary header in the supplied lines. `None` means
+    /// every supplied line belonged to the initial logical record.
+    remaining_start: Option<usize>,
+}
+
 /// Manages incremental reading of a log file from a tracked byte offset.
 pub struct TailReader {
     path: PathBuf,
@@ -104,12 +197,13 @@ pub struct TailReader {
     pending_fragment_selection: Option<(ResolvedParser, Instant)>,
     /// Newest logical record held for continuation lines.
     pending_logical_record: Option<PendingLogicalRecord>,
-    /// Physical line that ended the whole-file parse before tailing began.
-    ///
-    /// Company Portal records can continue after that boundary. The initial
-    /// entry is already visible, so a non-header append must amend it instead
-    /// of being parsed as a new, orphaned logical record.
-    initial_company_portal_record_end_line: Option<u32>,
+    /// Bounded continuation state for the final Company Portal record emitted
+    /// during initial open.
+    pending_initial_logical_record: Option<PendingInitialLogicalRecord>,
+    /// True after an unterminated initial continuation exceeded the cap. Bytes
+    /// are discarded until its newline arrives so one physical line cannot be
+    /// miscounted as several bounded fragments.
+    discarding_capped_initial_line: bool,
     /// File encoding detected from BOM during initial parse.
     encoding: FileEncoding,
     /// Leftover partial byte from a UTF-16 read boundary split.
@@ -125,15 +219,45 @@ impl TailReader {
         next_id: u64,
         next_line: u32,
     ) -> Self {
-        // Detect encoding from the file's BOM
-        let encoding = std::fs::read(&path)
-            .map(|bytes| crate::parser::detect_encoding(&bytes))
-            .unwrap_or(FileEncoding::Utf8);
-        let initial_company_portal_record_end_line = (parser_selection.parser
-            == cmtraceopen_parser::models::log_entry::ParserKind::CompanyPortal
-            && byte_offset > 0
-            && next_line > 1)
-            .then_some(next_line.saturating_sub(1));
+        Self::new_internal(
+            path,
+            byte_offset,
+            parser_selection,
+            next_id,
+            next_line,
+            None,
+        )
+    }
+
+    pub fn new_with_initial_logical_record(
+        path: PathBuf,
+        byte_offset: u64,
+        parser_selection: ResolvedParser,
+        next_id: u64,
+        next_line: u32,
+        initial_logical_record: InitialLogicalRecord,
+    ) -> Self {
+        Self::new_internal(
+            path,
+            byte_offset,
+            parser_selection,
+            next_id,
+            next_line,
+            Some(initial_logical_record),
+        )
+    }
+
+    fn new_internal(
+        path: PathBuf,
+        byte_offset: u64,
+        parser_selection: ResolvedParser,
+        next_id: u64,
+        next_line: u32,
+        initial_logical_record: Option<InitialLogicalRecord>,
+    ) -> Self {
+        // Encoding is determined by at most the three BOM bytes. The initial
+        // source has already been parsed, so tail setup must not read it again.
+        let encoding = detect_file_encoding(&path);
 
         Self {
             path,
@@ -144,7 +268,9 @@ impl TailReader {
             pending_fragment: String::new(),
             pending_fragment_selection: None,
             pending_logical_record: None,
-            initial_company_portal_record_end_line,
+            pending_initial_logical_record: initial_logical_record
+                .map(PendingInitialLogicalRecord::new),
+            discarding_capped_initial_line: false,
             encoding,
             pending_byte: None,
         }
@@ -168,7 +294,8 @@ impl TailReader {
             self.pending_fragment.clear();
             self.pending_fragment_selection = None;
             self.pending_logical_record = None;
-            self.initial_company_portal_record_end_line = None;
+            self.pending_initial_logical_record = None;
+            self.discarding_capped_initial_line = false;
             self.pending_byte = None;
             self.next_line = 1;
             reset = true;
@@ -219,7 +346,7 @@ impl TailReader {
         let received_text = !new_text.is_empty();
 
         // Prepend any partial record fragment from the last read.
-        let full_text = if self.pending_fragment.is_empty() {
+        let mut full_text = if self.pending_fragment.is_empty() {
             new_text
         } else {
             let combined = format!("{}{}", self.pending_fragment, new_text);
@@ -227,6 +354,15 @@ impl TailReader {
             self.pending_fragment_selection = None;
             combined
         };
+
+        if self.discarding_capped_initial_line {
+            let Some(newline) = full_text.find('\n') else {
+                self.byte_offset = file_size;
+                return Ok(batch);
+            };
+            full_text = full_text[newline + 1..].to_string();
+            self.discarding_capped_initial_line = false;
+        }
 
         let logical_record_dialect = logical_record_dialect(&self.parser_selection);
         let lines = match self.parser_selection.record_framing {
@@ -258,19 +394,31 @@ impl TailReader {
             }
 
             if !lines.is_empty() {
-                if let Some(batch) =
-                    self.replace_initial_company_portal_record(dialect, &lines, &selection, now)?
+                let remaining_start = if let Some(initial) =
+                    self.consume_initial_company_portal_lines(dialect, &lines, now)
                 {
-                    self.byte_offset = file_size;
-                    return Ok(batch);
-                }
+                    let remaining_start = initial.remaining_start;
+                    batch.append(initial.batch);
+                    if remaining_start.is_none() {
+                        batch.append(self.enforce_initial_fragment_bound(now));
+                        self.byte_offset = file_size;
+                        return Ok(batch);
+                    }
+                    remaining_start.unwrap_or_default()
+                } else {
+                    0
+                };
 
                 let prior = self
                     .pending_logical_record
                     .take()
                     .map(|pending| pending.content);
-                let framed =
-                    frame_logical_records(dialect, prior, &lines, MAX_PENDING_LOGICAL_RECORD_BYTES);
+                let framed = frame_logical_records(
+                    dialect,
+                    prior,
+                    &lines[remaining_start..],
+                    MAX_PENDING_LOGICAL_RECORD_BYTES,
+                );
 
                 if let Some(content) = framed.pending_record {
                     self.pending_logical_record = Some(PendingLogicalRecord {
@@ -285,6 +433,12 @@ impl TailReader {
                     &selection,
                     framed.overflow_count,
                 ));
+            }
+
+            if self.pending_initial_logical_record.is_some() {
+                batch.append(self.enforce_initial_fragment_bound(now));
+                self.byte_offset = file_size;
+                return Ok(batch);
             }
 
             batch.append(self.enforce_unterminated_logical_bound(dialect, &selection, now));
@@ -305,8 +459,9 @@ impl TailReader {
         self.assign_entry_identity(&mut entries);
         batch.append(TailBatch {
             entries,
-            replacement: None,
+            amendments: Vec::new(),
             parse_errors,
+            observed_through_line: Some(self.next_line.saturating_sub(1)),
             reset: false,
         });
 
@@ -333,6 +488,12 @@ impl TailReader {
             .map(|pending| pending.last_updated)
             .into_iter()
             .chain(
+                self.pending_initial_logical_record
+                    .as_ref()
+                    .filter(|pending| !pending.pending_suffix.is_empty())
+                    .map(|pending| pending.last_updated),
+            )
+            .chain(
                 self.pending_fragment_selection
                     .as_ref()
                     .map(|(_, updated)| *updated),
@@ -345,110 +506,164 @@ impl TailReader {
             })
     }
 
-    fn replace_initial_company_portal_record(
+    fn consume_initial_company_portal_lines(
         &mut self,
         dialect: LogicalRecordDialect,
         lines: &[&str],
-        selection: &ResolvedParser,
         now: Instant,
-    ) -> Result<Option<TailBatch>, crate::error::AppError> {
+    ) -> Option<InitialContinuationResult> {
         if !matches!(dialect, LogicalRecordDialect::CompanyPortal) {
-            return Ok(None);
+            return None;
         }
-        let Some(initial_end_line) = self.initial_company_portal_record_end_line else {
-            return Ok(None);
-        };
+        self.pending_initial_logical_record.as_ref()?;
 
         let first_header = lines
             .iter()
             .position(|line| looks_like_record_start(line.trim_end()));
-        if first_header == Some(0) {
-            // The first append starts a fresh record, so the entry rendered by
-            // the initial parse is now complete and ordinary tail framing owns
-            // this new record from here on.
-            self.initial_company_portal_record_end_line = None;
-            return Ok(None);
-        }
-
-        let path_str = self.path.to_string_lossy().to_string();
-        let content = parser::read_file_content(&path_str).map_err(|error| {
-            crate::error::AppError::Internal(format!(
-                "Failed to reparse Company Portal logical record at tail boundary: {error}"
-            ))
-        })?;
-        let full_result = parser::parse_content_with_selection(&content, &path_str, selection);
-        let Some(mut replacement) = full_result
-            .entries
-            .into_iter()
-            .rev()
-            .find(|entry| entry.line_number <= initial_end_line)
-        else {
-            // Nothing was rendered for the initial side of this boundary, so
-            // there is no existing entry to amend. Continue with ordinary
-            // framing and let the parser report any malformed input.
-            self.initial_company_portal_record_end_line = None;
-            return Ok(None);
-        };
-
-        // In the single-file view this preserves the already-rendered entry's
-        // identity. Aggregate views match replacements by file and physical
-        // start line, because their merged display ids are frontend-owned.
-        replacement.id = self.next_id.saturating_sub(1);
 
         let continuation_count = first_header.unwrap_or(lines.len());
-        self.next_line = self
-            .next_line
-            .saturating_add(u32::try_from(continuation_count).unwrap_or(u32::MAX));
+        let mut batch = TailBatch::empty(false);
+        let mut newly_capped = false;
 
-        let mut batch = TailBatch {
-            entries: Vec::new(),
-            replacement: Some(replacement),
-            parse_errors: 0,
-            reset: false,
-        };
-
-        let Some(header_index) = first_header else {
-            // The amended record is still the final record in the file, so a
-            // later continuation must amend it again rather than become an
-            // orphan. No unbounded raw record is retained in the tail reader.
-            return Ok(Some(batch));
-        };
-
-        let framed = frame_company_portal_logical_records(
-            None,
-            &lines[header_index..],
-            MAX_PENDING_LOGICAL_RECORD_BYTES,
-        );
-        if let Some(content) = framed.pending_record {
-            self.pending_logical_record = Some(PendingLogicalRecord {
-                content,
-                last_updated: now,
-                parser_selection: selection.clone(),
-            });
+        if let Some(pending) = self.pending_initial_logical_record.as_mut() {
+            for line in &lines[..continuation_count] {
+                newly_capped |= append_initial_continuation(
+                    pending,
+                    line.trim_end(),
+                    now,
+                    MAX_PENDING_LOGICAL_RECORD_BYTES,
+                );
+            }
+            self.next_line = pending.next_continuation_line;
+            if continuation_count > 0 {
+                batch.observed_through_line = Some(self.next_line.saturating_sub(1));
+            }
+            if newly_capped && !pending.cap_reported {
+                pending.cap_reported = true;
+                batch.parse_errors = 1;
+            }
         }
-        self.initial_company_portal_record_end_line = None;
-        batch.append(self.parse_logical_records(
-            framed.completed_records,
-            selection,
-            framed.overflow_count,
-        ));
-        Ok(Some(batch))
+
+        if newly_capped || first_header.is_some() {
+            if let Some(amendment) = self.take_initial_amendment() {
+                batch.amendments.push(amendment);
+            }
+        }
+
+        if first_header.is_some() {
+            self.pending_initial_logical_record = None;
+        }
+
+        Some(InitialContinuationResult {
+            batch,
+            remaining_start: first_header,
+        })
+    }
+
+    fn take_initial_amendment(&mut self) -> Option<TailEntryAmendment> {
+        let pending = self.pending_initial_logical_record.as_mut()?;
+        if pending.pending_suffix.is_empty() {
+            return None;
+        }
+
+        let continuation_start_line = pending.pending_start_line.take()?;
+        let continuation_end_line = pending.pending_end_line.take()?;
+        let message_suffix = std::mem::take(&mut pending.pending_suffix);
+        let message_utf16_start = pending.message_utf16_len;
+        let mut error_code_spans = detect_error_code_spans(&message_suffix);
+        for span in &mut error_code_spans {
+            span.start = span.start.saturating_add(message_utf16_start);
+            span.end = span.end.saturating_add(message_utf16_start);
+        }
+        pending.message_utf16_len = pending
+            .message_utf16_len
+            .saturating_add(message_suffix.encode_utf16().count());
+
+        Some(TailEntryAmendment {
+            entry_id: pending.entry_id,
+            entry_line_number: pending.entry_line_number,
+            continuation_start_line,
+            continuation_end_line,
+            message_utf16_start,
+            message_suffix,
+            error_code_spans,
+        })
+    }
+
+    fn enforce_initial_fragment_bound(&mut self, now: Instant) -> TailBatch {
+        let retained_suffix_bytes = self
+            .pending_initial_logical_record
+            .as_ref()
+            .map_or(0, |pending| pending.retained_suffix_bytes);
+        let pending_bytes = retained_suffix_bytes
+            .saturating_add(usize::from(!self.pending_fragment.is_empty()))
+            .saturating_add(self.pending_fragment.len());
+        if pending_bytes <= MAX_PENDING_LOGICAL_RECORD_BYTES {
+            return TailBatch::empty(false);
+        }
+
+        let fragment = std::mem::take(&mut self.pending_fragment);
+        self.pending_fragment_selection = None;
+        let mut batch = TailBatch::empty(false);
+        if let Some(pending) = self.pending_initial_logical_record.as_mut() {
+            let newly_capped = append_initial_continuation(
+                pending,
+                &fragment,
+                now,
+                MAX_PENDING_LOGICAL_RECORD_BYTES,
+            );
+            self.next_line = pending.next_continuation_line;
+            batch.observed_through_line = Some(self.next_line.saturating_sub(1));
+            if newly_capped && !pending.cap_reported {
+                pending.cap_reported = true;
+                batch.parse_errors = 1;
+            }
+        }
+        if let Some(amendment) = self.take_initial_amendment() {
+            batch.amendments.push(amendment);
+        }
+        self.discarding_capped_initial_line = true;
+        batch
     }
 
     fn flush_pending_logical_record(&mut self) -> TailBatch {
+        let mut batch = TailBatch::empty(false);
+        let mut fragment = std::mem::take(&mut self.pending_fragment);
+        let mut fragment_selection = self.pending_fragment_selection.take();
+
+        if self.pending_initial_logical_record.is_some() {
+            if !fragment.is_empty() {
+                let fragment_lines = [fragment.as_str()];
+                if let Some(initial) = self.consume_initial_company_portal_lines(
+                    LogicalRecordDialect::CompanyPortal,
+                    &fragment_lines,
+                    Instant::now(),
+                ) {
+                    let is_new_header = initial.remaining_start == Some(0);
+                    batch.append(initial.batch);
+                    if !is_new_header {
+                        fragment.clear();
+                        fragment_selection = None;
+                    }
+                }
+            }
+
+            if let Some(amendment) = self.take_initial_amendment() {
+                batch.amendments.push(amendment);
+            }
+        }
+
         let pending = self.pending_logical_record.take();
-        let fragment = std::mem::take(&mut self.pending_fragment);
-        let fragment_selection = self.pending_fragment_selection.take();
 
         let selection = pending
             .as_ref()
             .map(|record| record.parser_selection.clone())
             .or_else(|| fragment_selection.map(|(selection, _)| selection));
         let Some(selection) = selection else {
-            return TailBatch::empty(false);
+            return batch;
         };
         let Some(dialect) = logical_record_dialect(&selection) else {
-            return TailBatch::empty(false);
+            return batch;
         };
 
         let mut overflow_count = 0;
@@ -476,7 +691,8 @@ impl TailReader {
         // either way, but a blank line is still a physical line, and dropping
         // the record here would drop the line it accounts for and shift every
         // later line number down by one.
-        self.parse_logical_records(records, &selection, overflow_count)
+        batch.append(self.parse_logical_records(records, &selection, overflow_count));
+        batch
     }
 
     fn enforce_unterminated_logical_bound(
@@ -541,8 +757,9 @@ impl TailReader {
 
         TailBatch {
             entries,
-            replacement: None,
+            amendments: Vec::new(),
             parse_errors,
+            observed_through_line: Some(self.next_line.saturating_sub(1)),
             reset: false,
         }
     }
@@ -602,6 +819,52 @@ fn logical_record_dialect(selection: &ResolvedParser) -> Option<LogicalRecordDia
         }
         _ => None,
     }
+}
+
+/// Retain at most `max_retained_bytes` across every amendment emitted for the
+/// initial logical record. Once capped, later continuation content is counted
+/// as observed but intentionally not retained; the caller reports that single
+/// coverage gap through `parse_errors`.
+fn append_initial_continuation(
+    pending: &mut PendingInitialLogicalRecord,
+    line: &str,
+    now: Instant,
+    max_retained_bytes: usize,
+) -> bool {
+    let line_number = pending.next_continuation_line;
+    pending.next_continuation_line = pending.next_continuation_line.saturating_add(1);
+    pending.last_updated = now;
+
+    if pending.capped {
+        return false;
+    }
+
+    let required_bytes = 1usize.saturating_add(line.len());
+    let remaining = max_retained_bytes.saturating_sub(pending.retained_suffix_bytes);
+    let accepted_bytes = required_bytes.min(remaining);
+
+    if accepted_bytes > 0 {
+        if pending.pending_start_line.is_none() {
+            pending.pending_start_line = Some(line_number);
+        }
+        pending.pending_end_line = Some(line_number);
+        pending.pending_suffix.push('\n');
+
+        let line_capacity = accepted_bytes.saturating_sub(1);
+        let split_at = previous_char_boundary(line, line_capacity);
+        pending.pending_suffix.push_str(&line[..split_at]);
+        pending.retained_suffix_bytes = pending
+            .retained_suffix_bytes
+            .saturating_add(1)
+            .saturating_add(split_at);
+    }
+
+    if accepted_bytes < required_bytes {
+        pending.capped = true;
+        return true;
+    }
+
+    false
 }
 
 fn frame_logical_records(
@@ -685,6 +948,14 @@ fn previous_char_boundary(text: &str, maximum: usize) -> usize {
         boundary -= 1;
     }
     boundary
+}
+
+fn detect_file_encoding(path: &Path) -> FileEncoding {
+    let mut bom = [0u8; 3];
+    let read = std::fs::File::open(path)
+        .and_then(|mut file| file.read(&mut bom))
+        .unwrap_or(0);
+    crate::parser::detect_encoding(&bom[..read])
 }
 
 fn collect_complete_lines<'a>(text: &'a str, pending_fragment: &mut String) -> Vec<&'a str> {
@@ -774,6 +1045,7 @@ pub fn start_tail_session<F>(
     parser_selection: ResolvedParser,
     next_id: u64,
     next_line: u32,
+    initial_logical_record: Option<InitialLogicalRecord>,
     on_new_entries: F,
 ) -> Result<TailSession, crate::error::AppError>
 where
@@ -787,8 +1059,17 @@ where
     let watch_path = path.clone();
 
     std::thread::spawn(move || {
-        let mut tail_reader =
-            TailReader::new(path, byte_offset, parser_selection, next_id, next_line);
+        let mut tail_reader = match initial_logical_record {
+            Some(initial_logical_record) => TailReader::new_with_initial_logical_record(
+                path,
+                byte_offset,
+                parser_selection,
+                next_id,
+                next_line,
+                initial_logical_record,
+            ),
+            None => TailReader::new(path, byte_offset, parser_selection, next_id, next_line),
+        };
 
         // Create a channel for notify events
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1541,6 +1822,150 @@ mod tests {
     }
 
     #[test]
+    fn test_initial_company_portal_cap_is_cumulative_across_flushes() {
+        let root = hinted_test_root("company-portal-initial-cumulative-cap");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        fs::write(
+            &path,
+            concat!(
+                "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+            ),
+        )
+        .expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+            initial_record,
+        );
+
+        let first_continuation = "a".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES / 2);
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "{first_continuation}").expect("should append first continuation");
+        drop(file);
+        assert!(reader
+            .read_new_entries()
+            .expect("first continuation read should succeed")
+            .amendments
+            .is_empty());
+        let first_amendment = reader.flush_pending_logical_record();
+        assert_eq!(first_amendment.amendments.len(), 1);
+
+        let second_continuation = "b".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES);
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        writeln!(file, "{second_continuation}").expect("should append second continuation");
+        drop(file);
+        let capped = reader
+            .read_new_entries()
+            .expect("second continuation read should succeed");
+        assert_eq!(capped.parse_errors, 1);
+        assert_eq!(capped.amendments.len(), 1);
+        assert_eq!(
+            first_amendment.amendments[0].message_suffix.len()
+                + capped.amendments[0].message_suffix.len(),
+            MAX_PENDING_LOGICAL_RECORD_BYTES,
+            "retained and emitted suffix bytes share one cumulative cap"
+        );
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
+    fn test_initial_company_portal_unterminated_overflow_discards_until_newline() {
+        let root = hinted_test_root("company-portal-initial-unterminated-cap");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        fs::write(
+            &path,
+            concat!(
+                "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+            ),
+        )
+        .expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+            initial_record,
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(file, "{}", "x".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES + 1))
+            .expect("should append oversized unterminated continuation");
+        drop(file);
+
+        let capped = reader
+            .read_new_entries()
+            .expect("unterminated continuation read should succeed");
+        assert_eq!(capped.parse_errors, 1);
+        assert_eq!(capped.amendments.len(), 1);
+        assert!(capped.amendments[0].message_suffix.len() <= MAX_PENDING_LOGICAL_RECORD_BYTES);
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(
+            file,
+            concat!(
+                "discarded tail of the same line\n",
+                "2024-11-15T16:50:08.2850341Z  INFO  Event  None  1  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] finished\n"
+            )
+        )
+        .expect("should terminate the capped line and append a header");
+        drop(file);
+
+        let boundary = reader
+            .read_new_entries()
+            .expect("post-cap boundary read should succeed");
+        assert_eq!(boundary.parse_errors, 0);
+        assert!(boundary.amendments.is_empty());
+        let flushed = reader.flush_pending_logical_record();
+        assert_eq!(flushed.entries.len(), 1);
+        assert_eq!(flushed.entries[0].line_number, 3);
+        assert_eq!(flushed.entries[0].message, "[Sync] finished");
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
     fn test_initial_company_portal_flush_emits_one_bounded_amendment_with_absolute_spans() {
         let root = hinted_test_root("company-portal-initial-flush-span");
         let path = hinted_test_path(
@@ -1589,7 +2014,10 @@ mod tests {
         assert_eq!(flushed.parse_errors, 0);
         assert_eq!(flushed.amendments.len(), 1);
         let amendment = &flushed.amendments[0];
-        assert_eq!(amendment.message_suffix, "\nemoji 🙂 failed with 0x80070005");
+        assert_eq!(
+            amendment.message_suffix,
+            "\nemoji 🙂 failed with 0x80070005"
+        );
         assert_eq!(amendment.message_utf16_start, 14);
         assert_eq!(amendment.error_code_spans.len(), 1);
         assert_eq!(amendment.error_code_spans[0].start, 36);
@@ -1637,8 +2065,7 @@ mod tests {
             .append(true)
             .open(&path)
             .expect("should reopen temp file");
-        writeln!(file, "continuation that must be discarded")
-            .expect("should append continuation");
+        writeln!(file, "continuation that must be discarded").expect("should append continuation");
         drop(file);
         assert!(reader
             .read_new_entries()
@@ -1647,7 +2074,9 @@ mod tests {
             .is_empty());
 
         fs::write(&path, "").expect("should truncate the file");
-        let reset = reader.read_new_entries().expect("reset read should succeed");
+        let reset = reader
+            .read_new_entries()
+            .expect("reset read should succeed");
         assert!(reset.reset);
         assert!(reset.amendments.is_empty());
         assert!(reader.flush_pending_logical_record().amendments.is_empty());
@@ -2024,8 +2453,9 @@ mod tests {
 
         let parse_errors_only = TailBatch {
             entries: Vec::new(),
-            replacement: None,
+            amendments: Vec::new(),
             parse_errors: 1,
+            observed_through_line: None,
             reset: false,
         };
         assert!(parse_errors_only.is_reportable());

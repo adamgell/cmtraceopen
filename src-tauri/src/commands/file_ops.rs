@@ -13,6 +13,7 @@ use crate::models::log_entry::{
 };
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
+use crate::watcher::tail::InitialLogicalRecord;
 
 use super::bundle_ops::{collect_files_recursive, detect_evidence_bundle_metadata};
 use super::known_sources::KnownSourcePathKind;
@@ -157,6 +158,8 @@ pub fn open_log_file(
         Ok(value) => value,
         Err(reason) => return Err(classify_open_failure(&path, reason)),
     };
+    let initial_logical_record =
+        InitialLogicalRecord::from_parse_result(&result, &parser_selection);
 
     // Store in AppState so tail parsing reuses the same backend parser selection.
     let mut open_files = state
@@ -167,8 +170,8 @@ pub fn open_log_file(
         PathBuf::from(&path),
         OpenFile {
             path: PathBuf::from(&path),
-            entries: vec![], // entries live in the frontend
             parser_selection,
+            initial_logical_record,
             byte_offset: result.byte_offset,
         },
     );
@@ -296,12 +299,14 @@ pub fn parse_files_batch(
     for item in results {
         match item {
             Ok((result, parser_selection, path)) => {
+                let initial_logical_record =
+                    InitialLogicalRecord::from_parse_result(&result, &parser_selection);
                 open_files.insert(
                     PathBuf::from(&path),
                     OpenFile {
                         path: PathBuf::from(&path),
-                        entries: vec![],
                         parser_selection,
+                        initial_logical_record,
                         byte_offset: result.byte_offset,
                     },
                 );
@@ -356,6 +361,8 @@ pub fn open_log_folder_aggregate(
                 continue;
             }
         };
+        let initial_logical_record =
+            InitialLogicalRecord::from_parse_result(&result, &parser_selection);
 
         total_lines = total_lines.saturating_add(result.total_lines);
         parse_errors = parse_errors.saturating_add(result.parse_errors);
@@ -371,6 +378,7 @@ pub fn open_log_folder_aggregate(
             PathBuf::from(&result.file_path),
             parser_selection,
             result.byte_offset,
+            initial_logical_record,
         ));
     }
 
@@ -390,13 +398,13 @@ pub fn open_log_folder_aggregate(
         .open_files
         .lock()
         .map_err(|e| crate::error::AppError::State(e.to_string()))?;
-    for (path_buf, parser_selection, byte_offset) in open_file_states {
+    for (path_buf, parser_selection, byte_offset, initial_logical_record) in open_file_states {
         open_files.insert(
             path_buf.clone(),
             OpenFile {
                 path: path_buf,
-                entries: vec![],
                 parser_selection,
+                initial_logical_record,
                 byte_offset,
             },
         );
