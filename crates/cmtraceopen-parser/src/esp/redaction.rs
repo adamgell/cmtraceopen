@@ -529,12 +529,61 @@ fn ipv6_address_pattern() -> &'static Regex {
     CELL.get_or_init(|| {
         // Conservative, greedy IPv6 matcher: a fully-expanded 8-group address or
         // any `::`-compressed form. The greedy quantifiers consume the whole
-        // address so `replace_all` never leaves a trailing fragment un-redacted.
+        // address so the scan never leaves a trailing fragment un-redacted.
+        // Deliberately unanchored: token boundaries are decided by
+        // `redact_ipv6_addresses`, which explains why `\b` cannot express them.
         Regex::new(
-            r"(?i)\b(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)\b",
+            r"(?i)(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)",
         )
         .expect("IPv6 redaction pattern must compile")
     })
+}
+
+/// Replace IPv6 addresses, including every `::`-compressed form.
+///
+/// The boundary is checked against the neighbouring characters instead of with
+/// `\b`, because `\b` expresses the opposite of the rule this needs. A word
+/// boundary requires a word character on exactly one side, so against an address
+/// token it fired in precisely the wrong places:
+///
+/// * a compressed address begins or ends with `:`, so `::1`, `[::1]`, `fe80::`
+///   and a bare `::` had no boundary to anchor on and were exported in the clear;
+/// * a boundary *does* exist between an identifier character and a colon, so the
+///   `::` inside C++ scope resolution matched, and `std::vector` was rewritten to
+///   `std[redacted]vector`.
+///
+/// The regex crate has no lookaround, so the neighbours are inspected directly.
+fn redact_ipv6_addresses(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut cursor = 0;
+
+    for matched in ipv6_address_pattern().find_iter(value) {
+        output.push_str(&value[cursor..matched.start()]);
+        let before = value[..matched.start()].chars().next_back();
+        let after = value[matched.end()..].chars().next();
+        if before.is_some_and(binds_to_neighbouring_word)
+            || after.is_some_and(binds_to_neighbouring_word)
+        {
+            output.push_str(matched.as_str());
+        } else {
+            output.push_str(REDACTED);
+        }
+        cursor = matched.end();
+    }
+
+    output.push_str(&value[cursor..]);
+    output
+}
+
+/// Whether a neighbouring character makes a candidate a slice of a longer word
+/// rather than a whole address token.
+///
+/// Only identifier characters bind. A trailing `:` deliberately does not: an
+/// IPv4-mapped address arrives here as `::ffff:[redacted]` because the IPv4 rule
+/// already took the dotted tail, and the dangling separator must not stop the
+/// `::ffff` head from being redacted.
+fn binds_to_neighbouring_word(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 fn mac_address_pattern() -> &'static Regex {
@@ -1373,9 +1422,9 @@ fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String
         azure_storage_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = ipv4_address_pattern().replace_all(&redacted, REDACTED);
     let redacted = mac_address_pattern().replace_all(&redacted, REDACTED);
-    let redacted = ipv6_address_pattern().replace_all(&redacted, REDACTED);
+    let redacted = redact_ipv6_addresses(&redacted);
     if bounded.len() == value.len() {
-        redacted.into_owned()
+        redacted
     } else {
         format!("{redacted}\n{REMOVED_OVERSIZE}")
     }
