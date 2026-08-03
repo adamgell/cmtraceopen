@@ -16,7 +16,9 @@ use crate::sccm::{
     SccmArtifactRequest, SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
 };
 
-use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
+use super::catalog::{
+    classify_declared_server_source, expected_family, SccmServerSourceKind, SccmServerSourceSpec,
+};
 
 /// Keep parser-side work bounded even when the manifest did not come from the
 /// native collector. These match the existing bounded bundle intake envelope.
@@ -1074,6 +1076,13 @@ fn normalize_artifact(
 
     let (family, original_basename, rotation, mut parser_eligible) =
         if let Some((spec, classified)) = classification {
+            validate_declared_source_tuple(
+                &artifact,
+                spec,
+                source_version.as_deref(),
+                synthetic_fixture,
+                roles_observed,
+            )?;
             let family =
                 expected_family(spec.source_id).ok_or(SccmServerIntakeError::InvalidArtifact)?;
             if let Some(classified) = classified {
@@ -2295,6 +2304,49 @@ fn normalize_source_version(
     Ok(Some(value.to_owned()))
 }
 
+fn validate_declared_source_tuple(
+    artifact: &RawServerArtifact,
+    spec: &SccmServerSourceSpec,
+    source_version: Option<&str>,
+    synthetic_fixture: bool,
+    roles_observed: &[SccmRole],
+) -> Result<(), SccmServerIntakeError> {
+    if spec.source_id != "server-sup-wsus" {
+        return Ok(());
+    }
+
+    let subject = artifact
+        .workflow_subject
+        .as_ref()
+        .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    if spec.source_kind != SccmServerSourceKind::ProfileDefined
+        || artifact.producer_role != SccmRole::WsUs
+        || subject.role != SccmRole::SoftwareUpdatePoint
+        || !roles_observed.contains(&SccmRole::WsUs)
+        || !roles_observed.contains(&SccmRole::SoftwareUpdatePoint)
+        || artifact.producer_host_handle.is_none()
+        || subject.instance_handle.is_none()
+        || source_version.is_none()
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+
+    if synthetic_fixture
+        && (artifact.producer_host_handle.as_deref() != Some("synthetic:host:wsus-01")
+            || subject.instance_handle.as_deref() != Some("synthetic:subject:sup-01")
+            || source_version != Some("5.00.TEST")
+            || artifact.configured_path_provenance.path_fingerprint
+                != "synthetic:path:sup-wsus-health"
+            || artifact.rotation.kind != "providerDefined"
+            || artifact.rotation.value.is_some()
+            || artifact.rotation.lineage_id != "sup-wsus-health")
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
+
+    Ok(())
+}
+
 fn validate_artifact_annotations(
     artifact: &RawServerArtifact,
     synthetic_fixture: bool,
@@ -2406,6 +2458,7 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "sitecomp-current"
                 | "sup-sync-capped"
                 | "sup-sync-current"
+                | "sup-wsus-health-skipped"
                 | "unknown-db-export"
                 | "z-site-status"
         );
@@ -2423,6 +2476,7 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
             | "server-mp-iis"
             | "server-dp-distribution"
             | "server-sup-sync"
+            | "server-sup-wsus"
             | "unknown-db-supplement"
     ) || (allow_unknown
         && !synthetic_fixture
@@ -2432,7 +2486,7 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
 fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
     matches!(
         value,
-        "ccmLog" | "iisW3c" | "structuredSupplement" | "unknown"
+        "ccmLog" | "iisW3c" | "structuredSupplement" | "profileDefined" | "unknown"
     ) || (allow_unknown
         && !synthetic_fixture
         && opaque_sha256_handle(value, "cmtraceopen.source-kind.sha256.v1:"))
@@ -2466,6 +2520,7 @@ fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "sitecomp-lab"
                 | "sup-sync-cap"
                 | "sup-sync-lab"
+                | "sup-wsus-health"
                 | "unknown-db-export"
         );
     }
@@ -2487,6 +2542,7 @@ fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
                 | "synthetic:path:site-default"
                 | "synthetic:path:site-dp-control"
                 | "synthetic:path:site-sup-control"
+                | "synthetic:path:sup-wsus-health"
                 | "synthetic:path:unsupported-db"
                 | "synthetic:path:z-site"
         );
@@ -2612,7 +2668,10 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
     };
     if synthetic_fixture {
         return match domain {
-            "host" => matches!(value, "synthetic:host:mp-01" | "synthetic:host:site-01"),
+            "host" => matches!(
+                value,
+                "synthetic:host:mp-01" | "synthetic:host:site-01" | "synthetic:host:wsus-01"
+            ),
             "subject" => {
                 matches!(
                     value,

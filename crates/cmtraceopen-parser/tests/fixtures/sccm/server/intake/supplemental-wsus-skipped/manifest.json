@@ -1,0 +1,38 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "siteCode": "LAB",
+    "rolesObserved": ["softwareUpdatePoint", "wsUs"]
+  },
+  "artifacts": [
+    {
+      "artifactId": "sup-wsus-health-skipped",
+      "producerRole": "wsUs",
+      "producerHostHandle": "synthetic:host:wsus-01",
+      "workflowSubject": {
+        "role": "softwareUpdatePoint",
+        "instanceHandle": "synthetic:subject:sup-01"
+      },
+      "sourceId": "server-sup-wsus",
+      "sourceKind": "profileDefined",
+      "sourceVersion": "5.00.TEST",
+      "originalPath": "REDACTED_WSUS_HEALTH_EXPORT",
+      "originalBasename": "WsusHealth.json",
+      "configuredPathProvenance": {
+        "state": "notRequested",
+        "pathFingerprint": "synthetic:path:sup-wsus-health"
+      },
+      "rotation": { "kind": "providerDefined", "lineageId": "sup-wsus-health" },
+      "captureState": "skipped",
+      "skipReason": "optional supplemental source not requested",
+      "collectedUtc": "2026-07-30T00:08:00Z",
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}
