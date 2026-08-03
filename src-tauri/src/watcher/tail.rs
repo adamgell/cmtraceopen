@@ -1739,6 +1739,64 @@ mod tests {
     }
 
     #[test]
+    fn test_parser_change_discards_incompatible_initial_company_portal_seed() {
+        let root = hinted_test_root("company-portal-initial-parser-change");
+        let path = hinted_test_path(
+            &root,
+            "Users/Adele/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState/Log_1.log",
+        );
+        let parent = path.parent().expect("fixture path should have a parent");
+        fs::create_dir_all(parent).expect("should create Company Portal fixture directory");
+        fs::write(
+            &path,
+            concat!(
+                "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  ",
+                "1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n"
+            ),
+        )
+        .expect("should write initial Company Portal header");
+
+        let path_str = path.to_string_lossy().to_string();
+        let (initial_result, selection) =
+            parser::parse_file(&path_str).expect("initial fixture should parse");
+        let initial_record = InitialLogicalRecord::from_parse_result(&initial_result, &selection)
+            .expect("initial Company Portal parse should provide a bounded tail seed");
+        let mut reader = TailReader::new_with_initial_logical_record(
+            path.clone(),
+            initial_result.byte_offset,
+            selection,
+            initial_result.entries.len() as u64,
+            initial_result.total_lines + 1,
+            initial_record,
+        );
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("should reopen temp file");
+        write!(file, "unterminated continuation").expect("should append a partial continuation");
+        drop(file);
+        assert!(reader
+            .read_new_entries()
+            .expect("partial continuation read should succeed")
+            .amendments
+            .is_empty());
+
+        reader.parser_selection = ResolvedParser::plain_text();
+        let flushed = reader
+            .read_new_entries()
+            .expect("parser change should flush pending text");
+
+        assert!(
+            flushed.amendments.is_empty(),
+            "a parser change must not amend a record owned by the old Company Portal selection"
+        );
+        assert!(reader.pending_initial_logical_record.is_none());
+
+        fs::remove_dir_all(root).expect("should clean up temp fixture directory");
+    }
+
+    #[test]
     fn test_initial_company_portal_tail_does_not_reread_previously_parsed_bytes() {
         let root = hinted_test_root("company-portal-initial-no-reread");
         let path = hinted_test_path(
