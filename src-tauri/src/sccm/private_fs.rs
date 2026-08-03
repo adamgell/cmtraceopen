@@ -289,11 +289,11 @@ fn begin_private_bundle_transaction(
             "SCCM private publication limits are invalid",
         ));
     }
-    validate_single_component(bundle_name)?;
+    let bundle_component = validate_single_component(bundle_name)?;
 
     #[cfg(unix)]
     {
-        let name = OsStr::new(bundle_name);
+        let name = bundle_component.as_os_str();
         let transaction_parent = private_root.directory.try_clone()?;
         let destination_visibility = clone_directory_anchors(&private_root.visibility)?;
         create_directory_at(&private_root.directory, name)?;
@@ -348,7 +348,7 @@ fn begin_private_bundle_transaction(
 
     #[cfg(not(unix))]
     {
-        let _ = (private_root, bundle_name);
+        let _ = (private_root, bundle_component);
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "handle-bound SCCM destination publication is not implemented on this platform",
@@ -600,20 +600,21 @@ impl Drop for PrivateBundleTransaction {
     }
 }
 
-fn validate_single_component(value: &str) -> io::Result<()> {
+fn validate_single_component(value: &str) -> io::Result<OsString> {
     let path = Path::new(value);
     let components = path.components().collect::<Vec<_>>();
-    if value.is_empty()
-        || value.len() > 160
-        || components.len() != 1
-        || !matches!(components[0], Component::Normal(_))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "SCCM bundle name is unsafe",
-        ));
-    }
-    Ok(())
+    let validated = if value.is_empty() || value.len() > 160 || components.len() != 1 {
+        None
+    } else {
+        match components[0] {
+            Component::Normal(component) if path.as_os_str() == component => {
+                Some(component.to_os_string())
+            }
+            _ => None,
+        }
+    };
+    validated
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "SCCM bundle name is unsafe"))
 }
 
 fn validate_relative_path(relative: &Path) -> io::Result<()> {
@@ -1835,6 +1836,18 @@ mod tests {
             .write_new_file(Path::new("aggregate.log"), b"12345")
             .expect_err("aggregate cap is checked before creation");
         assert!(!path.join("capture-002/aggregate.log").exists());
+    }
+
+    #[test]
+    fn bundle_name_requires_the_exact_validated_component() {
+        let (_temporary, path, root) = private_capture_root();
+
+        let error = begin_private_bundle_transaction(&root, "capture-001/", test_limits())
+            .expect_err("a normalized spelling must not reach handle-relative syscalls");
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("bundle name is unsafe"));
+        assert!(!path.join("capture-001").exists());
     }
 
     #[test]
