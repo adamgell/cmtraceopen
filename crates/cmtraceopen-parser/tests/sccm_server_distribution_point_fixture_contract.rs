@@ -1884,3 +1884,76 @@ fn source_local_classifications_are_bound_to_physical_coverage_semantics() {
         "source-local classifications were detached from physical coverage: {accepted:?}"
     );
 }
+
+#[test]
+fn independent_review_fail_open_mutations() {
+    let healthy_manifest = read_json("healthy-package", "manifest.json").expect("manifest loads");
+    let healthy_expected = read_json("healthy-package", "expected.json").expect("expected loads");
+    let mut accepted = Vec::new();
+
+    let mut duplicate_fingerprint = healthy_manifest.clone();
+    duplicate_fingerprint["artifacts"][1]["pathFingerprint"] =
+        duplicate_fingerprint["artifacts"][0]["pathFingerprint"].clone();
+    if mutation_was_accepted("healthy-package", &duplicate_fingerprint, &healthy_expected) {
+        accepted.push("duplicate pathFingerprint");
+    }
+
+    let mut aliased_destination = healthy_manifest.clone();
+    let original_path = aliased_destination["artifacts"][1]["relativePath"]
+        .as_str()
+        .expect("relative path")
+        .to_owned();
+    aliased_destination["artifacts"][1]["relativePath"] =
+        json!(original_path.replacen("/current/", "/current/./", 1));
+    if mutation_was_accepted("healthy-package", &aliased_destination, &healthy_expected) {
+        accepted.push("dot-segment evidence alias");
+    }
+
+    let mut unsafe_source_path = healthy_manifest.clone();
+    unsafe_source_path["artifacts"][1]["sanitizedSourcePath"] =
+        json!("SYNTHETIC://../../Users/RealUser/SMSDPProv.log");
+    if mutation_was_accepted("healthy-package", &unsafe_source_path, &healthy_expected) {
+        accepted.push("unsafe sanitized source path");
+    }
+
+    let mut unknown_profile_version = healthy_manifest.clone();
+    unknown_profile_version["artifacts"][1]["sourceVersion"] = json!("5.00.TEST.UNKNOWN");
+    if mutation_was_accepted("healthy-package", &unknown_profile_version, &healthy_expected) {
+        accepted.push("unknown version retained exact profile");
+    }
+
+    let mut non_string_role = healthy_manifest.clone();
+    non_string_role["topology"]["rolesObserved"]
+        .as_array_mut()
+        .expect("roles array")
+        .push(json!(7));
+    if mutation_was_accepted("healthy-package", &non_string_role, &healthy_expected) {
+        accepted.push("non-string topology role");
+    }
+
+    let mut noncanonical_rotation = healthy_manifest.clone();
+    noncanonical_rotation["artifacts"][1]["rotation"]["value"] = json!("unexpected");
+    if mutation_was_accepted("healthy-package", &noncanonical_rotation, &healthy_expected) {
+        accepted.push("current rotation with value");
+    }
+
+    let mut duplicate_observation = healthy_expected.clone();
+    let last = duplicate_observation["transactions"][0]["observations"]
+        .as_array()
+        .expect("observations")
+        .last()
+        .expect("last observation")
+        .clone();
+    duplicate_observation["transactions"][0]["observations"]
+        .as_array_mut()
+        .expect("observations")
+        .push(last);
+    if mutation_was_accepted("healthy-package", &healthy_manifest, &duplicate_observation) {
+        accepted.push("duplicate observation and reused evidence");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "independent review mutations were accepted: {accepted:?}"
+    );
+}
