@@ -130,14 +130,25 @@ fn assert_dp_intake_authority_invalid(
         "{context}"
     );
     assert_eq!(analysis.artifact_requests.len(), 2, "{context}");
-    assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
-    assert_eq!(analysis.artifact_requests[0].role, SccmRole::SiteServer);
-    assert_eq!(analysis.artifact_requests[1].logical_id, "smsDpProv");
+    assert_eq!(
+        analysis.artifact_requests[0].logical_id, "distmgr",
+        "{context}"
+    );
+    assert_eq!(
+        analysis.artifact_requests[0].role,
+        SccmRole::SiteServer,
+        "{context}"
+    );
+    assert_eq!(
+        analysis.artifact_requests[1].logical_id, "smsDpProv",
+        "{context}"
+    );
     assert_eq!(
         analysis.artifact_requests[1].role,
-        SccmRole::DistributionPoint
+        SccmRole::DistributionPoint,
+        "{context}"
     );
-    assert!(!analysis.cross_side_correlation_performed);
+    assert!(!analysis.cross_side_correlation_performed, "{context}");
     serde_json::to_value(analysis).expect("authority-invalid analysis serializes")
 }
 
@@ -313,6 +324,10 @@ fn absent_dp_candidate_is_coverage_not_a_role_diagnosis() {
     assert_eq!(
         analysis.coverage_gaps[0].source_id,
         "server-dp-distribution"
+    );
+    assert_eq!(
+        analysis.coverage_gaps[0].reason,
+        "Distribution Point source coverage is absent; recollect the declared source without changing its state."
     );
     assert_eq!(analysis.artifact_requests.len(), 1);
     assert_eq!(analysis.artifact_requests[0].logical_id, "distmgr");
