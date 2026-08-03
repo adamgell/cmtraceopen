@@ -122,6 +122,21 @@ function canApplyTailAmendment(
     )
   );
 }
+
+function applyTailAmendment(
+  entry: LogEntry,
+  amendment: TailEntryAmendment,
+): LogEntry {
+  return {
+    ...entry,
+    message: entry.message + amendment.messageSuffix,
+    errorCodeSpans: [
+      ...(entry.errorCodeSpans ?? []),
+      ...amendment.errorCodeSpans,
+    ],
+  };
+}
+
 const LAST_SORT_ORDER = Number.MAX_SAFE_INTEGER;
 
 /**
@@ -822,14 +837,7 @@ export const useLogStore = create<LogState>((set, get) => ({
           return entry;
         }
         amended = true;
-        return {
-          ...entry,
-          message: entry.message + amendment.messageSuffix,
-          errorCodeSpans: [
-            ...(entry.errorCodeSpans ?? []),
-            ...amendment.errorCodeSpans,
-          ],
-        };
+        return applyTailAmendment(entry, amendment);
       });
 
       return amended
@@ -917,14 +925,7 @@ export const useLogStore = create<LogState>((set, get) => ({
           return entry;
         }
         amended = true;
-        return {
-          ...entry,
-          message: entry.message + amendment.messageSuffix,
-          errorCodeSpans: [
-            ...(entry.errorCodeSpans ?? []),
-            ...amendment.errorCodeSpans,
-          ],
-        };
+        return applyTailAmendment(entry, amendment);
       });
 
       if (!amended) {
