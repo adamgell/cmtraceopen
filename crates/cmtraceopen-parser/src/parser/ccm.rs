@@ -1156,4 +1156,10 @@ mod tests {
         );
         assert_eq!(timestamp.utc_millis, None);
     }
+
+    #[test]
+    fn review_probe_non_ascii_decimal_tail_must_not_panic() {
+        let text = r#"<![LOG[Unicode decimal tail]LOG]!><time="10:00:00.١٢٣٤" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+        let _ = scan_logical_records(text, "PolicyAgent.log");
+    }
 }

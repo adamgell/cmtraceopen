@@ -410,4 +410,16 @@ mod tests {
         let (entries, _) = parse_lines(&line_refs, "test.cmtlog");
         assert_eq!(entries[0].severity, Severity::Error);
     }
+
+    #[test]
+    fn review_probe_microseconds_do_not_fabricate_cmtlog_offset() {
+        let lines = [
+            r#"<![LOG[Microseconds]LOG]!><time="10:32:01.123456" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="">"#,
+        ];
+        let (entries, errors) = parse_lines(&lines, "test.cmtlog");
+        assert_eq!(errors, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].timezone_offset, None);
+        assert_eq!(entries[0].timestamp_display.as_deref(), Some("04-13-2026 10:32:01.123"));
+    }
 }
