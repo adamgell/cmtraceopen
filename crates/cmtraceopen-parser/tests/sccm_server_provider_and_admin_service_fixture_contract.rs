@@ -1633,3 +1633,128 @@ fn schema_and_identity_mutations_fail_closed() {
 
     assert!(accepted.is_empty(), "accepted mutations: {accepted:#?}");
 }
+
+#[test]
+fn independent_review_privacy_topology_profile_and_citation_mutations_fail_closed() {
+    let manifest = read_json("provider-success", "manifest.json").unwrap();
+    let expected = read_json("provider-success", "expected.json").unwrap();
+    let privacy_manifest = read_json("privacy-redaction", "manifest.json").unwrap();
+    let privacy_expected = read_json("privacy-redaction", "expected.json").unwrap();
+    let iis_manifest = read_json("iis-supplemental", "manifest.json").unwrap();
+    let iis_expected = read_json("iis-supplemental", "expected.json").unwrap();
+    let timeout_manifest = read_json("provider-timeout", "manifest.json").unwrap();
+    let timeout_expected = read_json("provider-timeout", "expected.json").unwrap();
+    let mut accepted = Vec::new();
+
+    let mut noncanonical_known_version = manifest.clone();
+    noncanonical_known_version["artifacts"][0]["sourceVersion"] =
+        Value::String("5.00.TEST.1".to_owned());
+    if schema_failures(
+        "provider-success",
+        &noncanonical_known_version,
+        &expected,
+    )
+    .is_empty()
+    {
+        accepted.push("noncanonical synthetic source version selected an exact profile");
+    }
+
+    let mut topology_host_mismatch = manifest.clone();
+    topology_host_mismatch["artifacts"][0]["producerHostHandle"] =
+        Value::String("safe:server:different-host".to_owned());
+    if schema_failures("provider-success", &topology_host_mismatch, &expected).is_empty() {
+        accepted.push("artifact producer host diverged from its endpoint host");
+    }
+
+    let mut identity_bearing_provenance = manifest.clone();
+    identity_bearing_provenance["topology"]["endpoints"][0]["hostHandle"] =
+        Value::String("safe:server:synthetic.user@example.invalid".to_owned());
+    identity_bearing_provenance["artifacts"][0]["producerHostHandle"] =
+        Value::String("safe:server:synthetic.user@example.invalid".to_owned());
+    identity_bearing_provenance["artifacts"][0]["sanitizedSourcePath"] =
+        Value::String("SYNTHETIC://Users/Adam.Gell/LAB/Logs/Smsprov.log".to_owned());
+    identity_bearing_provenance["artifacts"][0]["pathFingerprint"] =
+        Value::String("synthetic:synthetic.user@example.invalid".to_owned());
+    if schema_failures(
+        "provider-success",
+        &identity_bearing_provenance,
+        &expected,
+    )
+    .is_empty()
+    {
+        accepted.push("identity-bearing host/path/fingerprint provenance");
+    }
+
+    let mut duplicate_sanitized_physical_identity = privacy_manifest.clone();
+    duplicate_sanitized_physical_identity["artifacts"][1]["sanitizedSourcePath"] =
+        duplicate_sanitized_physical_identity["artifacts"][0]["sanitizedSourcePath"].clone();
+    if schema_failures(
+        "privacy-redaction",
+        &duplicate_sanitized_physical_identity,
+        &privacy_expected,
+    )
+    .is_empty()
+    {
+        accepted.push("duplicate sanitized physical identity hidden by distinct fingerprints");
+    }
+
+    let mut out_of_range_source_local_citation = iis_expected.clone();
+    out_of_range_source_local_citation["sourceLocalObservations"][0]["evidence"][0]["startLine"] =
+        Value::from(9999_u64);
+    out_of_range_source_local_citation["sourceLocalObservations"][0]["evidence"][0]["endLine"] =
+        Value::from(9999_u64);
+    if schema_failures(
+        "iis-supplemental",
+        &iis_manifest,
+        &out_of_range_source_local_citation,
+    )
+    .is_empty()
+    {
+        accepted.push("source-local citation points outside physical evidence");
+    }
+
+    let mut private_source_local_reason = privacy_expected.clone();
+    private_source_local_reason["sourceLocalObservations"][0]["reason"] =
+        Value::String("Caller synthetic.user@example.invalid used a raw token".to_owned());
+    if schema_failures(
+        "privacy-redaction",
+        &privacy_manifest,
+        &private_source_local_reason,
+    )
+    .is_empty()
+    {
+        accepted.push("source-local public reason leaks caller identity");
+    }
+
+    let mut private_request_reason = timeout_expected.clone();
+    private_request_reason["artifactRequests"][0]["reason"] =
+        Value::String("Capture caller synthetic.user@example.invalid bearer token".to_owned());
+    if schema_failures(
+        "provider-timeout",
+        &timeout_manifest,
+        &private_request_reason,
+    )
+    .is_empty()
+    {
+        accepted.push("artifact request public reason leaks caller and token material");
+    }
+
+    let mut extra_unobserved_endpoint = manifest.clone();
+    extra_unobserved_endpoint["topology"]["endpoints"]
+        .as_array_mut()
+        .unwrap()
+        .insert(
+            0,
+            serde_json::json!({
+                "endpointId": "aaa-unobserved",
+                "layer": "provider",
+                "hostHandle": "safe:server:unused",
+                "producerRole": "provider"
+            }),
+        );
+    if schema_failures("provider-success", &extra_unobserved_endpoint, &expected).is_empty() {
+        accepted.push("unobserved extra endpoint entered exact topology");
+    }
+
+    assert!(accepted.is_empty(), "accepted mutations: {accepted:#?}");
+}
