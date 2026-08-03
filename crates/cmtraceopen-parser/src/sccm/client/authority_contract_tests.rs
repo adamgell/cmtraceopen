@@ -4,7 +4,10 @@ use super::admission::{
     admit_client_evidence, SccmClientAdmittedEvidence, SccmClientCapturedPayload,
     SccmClientEvidenceAdmissionError,
 };
-use super::{assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle};
+use super::{
+    assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle,
+    SccmClientIntakeCaptureGap,
+};
 use crate::sccm::{
     extract_keys, SccmArtifact, SccmArtifactFamily, SccmCorrelationKeyKind, SccmCoverageState,
     SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmKeyConfidence,
@@ -36,6 +39,7 @@ fn source_group(basename: &str) -> &'static str {
         "CAS.log" => "client-content",
         "AppIntentEval.log" => "client-app-intent",
         "AppEnforce.log" => "client-app-enforce",
+        "ccmsetup.log" | "ccmsetup.lo_" => "client-ccmsetup",
         "client.msi.log" => "client-ccmsetup",
         "ReportingEvents.log" => "client-windows-update-supplemental",
         "CustomVendorHook.log" => "unknown",
@@ -499,6 +503,108 @@ fn captured_non_ccm_supplement_does_not_block_or_join_policy_admission() {
         .profile_for_artifact("fixture-reporting-supplemental")
         .expect("valid authority seal")
         .is_none());
+}
+
+#[test]
+fn non_ccm_sibling_coverage_does_not_block_bound_ccmsetup_admission() {
+    for (coverage, identity) in [
+        (SccmCoverageState::Capped, "client-setup-capped"),
+        (SccmCoverageState::AccessDenied, "client-setup-denied"),
+    ] {
+        let setup_bytes = ccm_bytes("bound ccmsetup evidence");
+        let bundle = bundle_with(vec![
+            artifact(
+                "ccmsetup",
+                "ccmsetup.log",
+                SccmCoverageState::Captured,
+                true,
+                Some(&setup_bytes),
+            ),
+            artifact(identity, "client.msi.log", coverage.clone(), false, None),
+        ]);
+        let assessment = assess_client_intake(&bundle).expect("mixed setup intake is canonical");
+        let admitted = admit_client_evidence(
+            &bundle,
+            &assessment,
+            &[payload("fixture-ccmsetup", setup_bytes)],
+        )
+        .expect("a non-CCM sibling must not block exact bound ccmsetup evidence");
+
+        assert!(admitted.require_captured_source("client-ccmsetup").is_ok());
+        assert_eq!(
+            admitted
+                .source_coverage("client-ccmsetup")
+                .expect("valid authority seal"),
+            Some(&coverage),
+            "canonical non-CCM coverage remains visible for evidence-first reporting"
+        );
+        assert_eq!(admitted.evidence().expect("valid authority seal").len(), 1);
+    }
+}
+
+#[test]
+fn raw_ccm_sibling_gap_still_blocks_ccmsetup_group_readiness() {
+    let setup_bytes = ccm_bytes("bound ccmsetup evidence");
+    let mut denied_rollback = artifact(
+        "ccmsetup-denied",
+        "ccmsetup.lo_",
+        SccmCoverageState::AccessDenied,
+        false,
+        None,
+    );
+    denied_rollback.artifact.rotation = SccmRotation::LoUnderscore;
+    let bundle = bundle_with(vec![
+        artifact(
+            "ccmsetup",
+            "ccmsetup.log",
+            SccmCoverageState::Captured,
+            true,
+            Some(&setup_bytes),
+        ),
+        denied_rollback,
+    ]);
+    let assessment = assess_client_intake(&bundle).expect("raw CCM gap intake is canonical");
+    let admitted = admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[payload("fixture-ccmsetup", setup_bytes)],
+    )
+    .expect("a raw CCM gap is local readiness state, not global admission failure");
+
+    assert!(admitted.require_captured_source("client-ccmsetup").is_err());
+    assert_eq!(admitted.evidence().expect("valid authority seal").len(), 1);
+}
+
+#[test]
+fn raw_ccm_capture_gap_still_blocks_ccmsetup_group_readiness() {
+    let setup_bytes = ccm_bytes("bound ccmsetup evidence");
+    let bundle = SccmClientIntakeBundle {
+        artifacts: vec![artifact(
+            "ccmsetup",
+            "ccmsetup.log",
+            SccmCoverageState::Captured,
+            true,
+            Some(&setup_bytes),
+        )],
+        capture_gaps: vec![SccmClientIntakeCaptureGap {
+            artifact_id: "fixture-capped-rotation".to_owned(),
+            basename: "ccmsetup.log.1".to_owned(),
+            rotation: SccmRotation::Numbered(1),
+            coverage: SccmCoverageState::Capped,
+            path_fingerprint: "synthetic-capped-rotation".to_owned(),
+            rotation_lineage: "synthetic:capped-rotation".to_owned(),
+        }],
+    };
+    let assessment = assess_client_intake(&bundle).expect("raw CCM capture gap is canonical");
+    let admitted = admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[payload("fixture-ccmsetup", setup_bytes)],
+    )
+    .expect("a raw CCM capture gap is local readiness state, not admission failure");
+
+    assert!(admitted.require_captured_source("client-ccmsetup").is_err());
+    assert_eq!(admitted.evidence().expect("valid authority seal").len(), 1);
 }
 
 #[test]
