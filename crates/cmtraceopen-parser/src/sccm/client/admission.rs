@@ -238,6 +238,7 @@ pub(crate) fn admit_client_evidence(
     let mut evidence_ids = BTreeSet::new();
     let mut evidence_references = BTreeSet::new();
     let mut retained_evidence_bytes = 0usize;
+    let mut remaining_logical_records = MAX_SCCM_CLIENT_ADMISSION_LOGICAL_RECORDS;
 
     for payload in ordered_payloads {
         if !seen_payload_ids.insert(payload.artifact_id.as_str()) {
@@ -269,6 +270,9 @@ pub(crate) fn admit_client_evidence(
         if scan.records.is_empty() {
             return Err(SccmClientEvidenceAdmissionError::MalformedCcm);
         }
+        remaining_logical_records = remaining_logical_records
+            .checked_sub(scan.records.len())
+            .ok_or(SccmClientEvidenceAdmissionError::LogicalRecordLimitExceeded)?;
 
         for record in scan.records {
             let normalized = SccmRawEvidenceSnapshot::from_record(&artifact, record).export();
