@@ -1,0 +1,177 @@
+{
+  "capture": {
+    "captureId": "capture-golden",
+    "collectedAtUtc": "2026-07-15T12:15:10Z",
+    "collector": {
+      "name": "cmtraceopen-macos-diag",
+      "version": "0.1.1"
+    },
+    "host": {
+      "companyPortalVersion": "5.2506.0",
+      "hostName": {
+        "sensitivity": "sensitive",
+        "value": "synthetic-mac-0001"
+      },
+      "intuneAgentVersion": "2506.001",
+      "osBuild": "24F74",
+      "osVersion": "15.5"
+    },
+    "predicate": {
+      "matchesKnownPreset": true,
+      "predicateId": "intune-agent",
+      "predicateText": "process == \"IntuneMdmAgent\" OR process == \"IntuneMdmDaemon\" OR process == \"CompanyPortal\"",
+      "predicateVersion": 1
+    },
+    "redaction": {
+      "applied": false,
+      "placeholderStyle": null,
+      "policyId": null
+    },
+    "schemaId": "cmtraceopen.intune.portal.macos.companyPortal.unifiedLog",
+    "schemaVersion": 1,
+    "selectionPredicateVersion": 1,
+    "window": {
+      "end": {
+        "kind": "offset",
+        "normalizedUtc": "2026-07-15T12:15:00.000000Z",
+        "originalOffset": "-05:00",
+        "rawText": "2026-07-15 07:15:00.000000-0500"
+      },
+      "last": null,
+      "start": {
+        "kind": "offset",
+        "normalizedUtc": "2026-07-15T12:00:00.000000Z",
+        "originalOffset": "-05:00",
+        "rawText": "2026-07-15 07:00:00.000000-0500"
+      },
+      "timezoneName": "America/Chicago"
+    }
+  },
+  "coverage": [],
+  "rawUnsupported": [],
+  "records": [
+    {
+      "activity": {
+        "activityId": "0x1a2b",
+        "correlationId": "corr-9931",
+        "parentActivityId": "0x0011",
+        "requestId": "req-77e1",
+        "signpostId": "0x9f01",
+        "signpostName": "EnrollmentFlow",
+        "signpostType": "begin",
+        "traceId": "trace-4410"
+      },
+      "bootRelative": {
+        "bootUuid": "0f1e2d3c-4b5a-4968-8776-655443322110",
+        "machTimestamp": 184467440737,
+        "timeSinceBootNs": 76543210987
+      },
+      "category": "Enrollment",
+      "declaredSequence": 0,
+      "eventMessage": {
+        "sensitivity": "sensitive",
+        "value": "Golden record with every schema field populated"
+      },
+      "messageType": {
+        "level": "default",
+        "raw": "Default"
+      },
+      "process": "CompanyPortal",
+      "processId": 5000,
+      "processImagePath": {
+        "sensitivity": "sensitive",
+        "value": "/Applications/Company Portal.app/Contents/MacOS/CompanyPortal"
+      },
+      "recordId": "ul-000000",
+      "redaction": {
+        "applied": true,
+        "policyId": "native-collector-v1",
+        "redactedFields": [
+          "eventMessage"
+        ]
+      },
+      "senderImagePath": {
+        "sensitivity": "sensitive",
+        "value": "/Applications/Company Portal.app/Contents/MacOS/CompanyPortal"
+      },
+      "streamIndex": 0,
+      "subsystem": "com.microsoft.CompanyPortalMac",
+      "threadId": 900000,
+      "timestamp": {
+        "kind": "offset",
+        "normalizedUtc": "2026-07-15T12:13:00.500000Z",
+        "originalOffset": "-05:00",
+        "rawText": "2026-07-15 07:13:00.500000-0500"
+      },
+      "timezoneName": "America/Chicago",
+      "unknownFields": {
+        "vendorExtension": {
+          "attempt": 2,
+          "channel": "beta"
+        }
+      }
+    },
+    {
+      "activity": {
+        "activityId": null,
+        "correlationId": null,
+        "parentActivityId": null,
+        "requestId": null,
+        "signpostId": null,
+        "signpostName": null,
+        "signpostType": null,
+        "traceId": null
+      },
+      "bootRelative": null,
+      "category": "Sync",
+      "declaredSequence": 1,
+      "eventMessage": {
+        "sensitivity": "sensitive",
+        "value": "Golden record with the minimum useful field set"
+      },
+      "messageType": {
+        "level": "info",
+        "raw": "Info"
+      },
+      "process": "IntuneMdmAgent",
+      "processId": 5001,
+      "processImagePath": {
+        "sensitivity": "sensitive",
+        "value": "/Library/Intune/Microsoft Intune Agent.app/Contents/MacOS/IntuneMdmAgent"
+      },
+      "recordId": "ul-000001",
+      "redaction": {
+        "applied": false,
+        "policyId": null,
+        "redactedFields": []
+      },
+      "senderImagePath": {
+        "sensitivity": "sensitive",
+        "value": "/Library/Intune/Microsoft Intune Agent.app/Contents/MacOS/IntuneMdmAgent"
+      },
+      "streamIndex": 1,
+      "subsystem": "com.microsoft.intune.mdm.agent",
+      "threadId": 900001,
+      "timestamp": {
+        "kind": "utc",
+        "normalizedUtc": "2026-07-15T12:13:01.000000Z",
+        "originalOffset": "Z",
+        "rawText": "2026-07-15T12:13:01.000000Z"
+      },
+      "timezoneName": "America/Chicago",
+      "unknownFields": {}
+    }
+  ],
+  "schemaId": "cmtraceopen.intune.portal.macos.companyPortal.unifiedLog",
+  "schemaVersion": 1,
+  "stats": {
+    "capped": false,
+    "recordsMalformed": 0,
+    "recordsParsed": 2,
+    "recordsSelected": 0,
+    "resultCap": 5000,
+    "streamLines": 2,
+    "totalMatched": 2
+  },
+  "supported": true
+}
