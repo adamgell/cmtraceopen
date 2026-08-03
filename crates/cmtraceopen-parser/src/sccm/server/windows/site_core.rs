@@ -18,6 +18,7 @@ use crate::sccm::{
     SccmTimeOrderingState, SccmTimestamp,
 };
 
+use super::intake::CoverageIdentityKey;
 use super::{
     SccmServerArtifactAssessment, SccmServerConfiguredPathState, SccmServerIntakeAssessment,
 };
@@ -32,6 +33,9 @@ pub const SCCM_SITE_CORE_STATUS_GROUP: &str = "server-status";
 const SITE_CORE_PROFILE_VERSION_TOKEN: &str = "5.00.TEST";
 const RECAPTURE_FLOOR_BYTES: u64 = 4096;
 const MAX_SITE_CORE_REQUEST_ARTIFACTS: usize = 2;
+const INTAKE_AUTHORITY_ARTIFACT_ID: &str = "site-core-intake-authority";
+const INTAKE_AUTHORITY_SOURCE_ID: &str = "server-site-core-intake";
+const INTAKE_AUTHORITY_REASON_CODE: &str = "intake-authority-invalid";
 
 const STATE_CHAIN: [SccmSiteCorePhase; 5] = [
     SccmSiteCorePhase::ComponentStart,
@@ -296,6 +300,7 @@ struct AdmittedSource<'a> {
 struct SiteCoreContext<'a> {
     artifacts: &'a [SccmServerArtifactAssessment],
     sources: BTreeMap<&'a str, AdmittedSource<'a>>,
+    intake_authority_is_bound: bool,
     evidence_identity_is_unique: Vec<bool>,
     coverage_gaps: Vec<SccmSiteCoreCoverageGap>,
     coverage_gap_producer_hosts: BTreeMap<String, String>,
@@ -303,12 +308,38 @@ struct SiteCoreContext<'a> {
 
 impl<'a> SiteCoreContext<'a> {
     fn new(intake: &'a SccmServerIntakeAssessment) -> Self {
+        let intake_authority_is_bound = intake.adapter_authority_is_intake_bound();
+        if !intake_authority_is_bound {
+            // The public assessment fields are no longer authoritative once the
+            // private intake seal fails. Keep the coverage failure explicit, but
+            // do not use caller-mutable artifact identities or topology to scope
+            // a collection request.
+            return Self {
+                artifacts: &[],
+                sources: BTreeMap::new(),
+                intake_authority_is_bound,
+                evidence_identity_is_unique: Vec::new(),
+                coverage_gaps: vec![SccmSiteCoreCoverageGap {
+                    artifact_id: INTAKE_AUTHORITY_ARTIFACT_ID.to_owned(),
+                    source_id: INTAKE_AUTHORITY_SOURCE_ID.to_owned(),
+                    state: SccmCoverageState::ParseFailed,
+                    reason_code: INTAKE_AUTHORITY_REASON_CODE.to_owned(),
+                    diagnostic_meaning: SccmSiteCoreDiagnosticMeaning::CoverageOnly,
+                }],
+                coverage_gap_producer_hosts: BTreeMap::new(),
+            };
+        }
+
         let evidence_identity_is_unique = unique_evidence_identities(&intake.evidence);
         let collision_artifact_ids =
             evidence_collision_artifact_ids(&intake.evidence, &evidence_identity_is_unique);
         let (evidence_source_rejections, unresolved_evidence_gaps) =
             evidence_source_rejections(intake);
-        let coverage_congruent = site_core_coverage_is_congruent(intake);
+        // Deliberate defense in depth: the complete adapter seal currently
+        // includes topology, while Site Core also keeps its topology-specific
+        // authority contract explicit at the point that topology scopes facts.
+        let coverage_congruent =
+            intake.topology_authority_is_intake_bound() && site_core_coverage_is_congruent(intake);
         let sources = admitted_sources(
             intake,
             &collision_artifact_ids,
@@ -321,6 +352,7 @@ impl<'a> SiteCoreContext<'a> {
         Self {
             artifacts: &intake.artifacts,
             sources,
+            intake_authority_is_bound,
             evidence_identity_is_unique,
             coverage_gaps,
             coverage_gap_producer_hosts: BTreeMap::new(),
@@ -388,35 +420,37 @@ pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAna
     let mut context = SiteCoreContext::new(intake);
     let mut grouped = BTreeMap::<SccmSiteCoreTransactionKey, Vec<SiteCoreFact>>::new();
     let mut record_observations = Vec::new();
-    for (position, evidence) in intake.evidence.iter().enumerate() {
-        let Some(source) = context.sources.get(evidence.reference.artifact_id.as_str()) else {
-            continue;
-        };
-        if let Some(reason_code) = evidence_record_rejection_reason(evidence, source.group) {
-            if is_profile_record_candidate(&evidence.message) {
-                record_observations.push(rejected_record_observation(
-                    evidence,
-                    source,
-                    reason_code,
-                ));
+    if context.intake_authority_is_bound {
+        for (position, evidence) in intake.evidence.iter().enumerate() {
+            let Some(source) = context.sources.get(evidence.reference.artifact_id.as_str()) else {
+                continue;
+            };
+            if let Some(reason_code) = evidence_record_rejection_reason(evidence, source.group) {
+                if is_profile_record_candidate(&evidence.message) {
+                    record_observations.push(rejected_record_observation(
+                        evidence,
+                        source,
+                        reason_code,
+                    ));
+                }
+                continue;
             }
-            continue;
-        }
-        if !source.fact_eligible || !context.evidence_identity_is_unique[position] {
-            continue;
-        }
-        match parse_fact(evidence, source, &intake.topology.site_handle) {
-            ProfileRecordParse::Accepted(fact) => {
-                grouped.entry(fact.key.clone()).or_default().push(*fact);
+            if !source.fact_eligible || !context.evidence_identity_is_unique[position] {
+                continue;
             }
-            ProfileRecordParse::Rejected(reason_code) => {
-                record_observations.push(rejected_record_observation(
-                    evidence,
-                    source,
-                    reason_code,
-                ));
+            match parse_fact(evidence, source, &intake.topology.site_handle) {
+                ProfileRecordParse::Accepted(fact) => {
+                    grouped.entry(fact.key.clone()).or_default().push(*fact);
+                }
+                ProfileRecordParse::Rejected(reason_code) => {
+                    record_observations.push(rejected_record_observation(
+                        evidence,
+                        source,
+                        reason_code,
+                    ));
+                }
+                ProfileRecordParse::NotCandidate => {}
             }
-            ProfileRecordParse::NotCandidate => {}
         }
     }
     context.add_undeclared_peer_source_gaps(&grouped);
@@ -1934,46 +1968,24 @@ fn evidence_collision_artifact_ids(
 }
 
 fn site_core_coverage_is_congruent(intake: &SccmServerIntakeAssessment) -> bool {
-    type CoverageKey = (String, String, String, String);
-
-    let mut expected = BTreeMap::<CoverageKey, Vec<String>>::new();
+    let mut expected = BTreeMap::<CoverageIdentityKey, Vec<String>>::new();
     for artifact in &intake.artifacts {
         if SiteCoreGroup::from_source_id(&artifact.source_id).is_none() {
             continue;
         }
         expected
-            .entry((
-                role_sort_key(&artifact.producer_role).to_owned(),
-                artifact
-                    .workflow_subject_role
-                    .as_ref()
-                    .map(role_sort_key)
-                    .unwrap_or_default()
-                    .to_owned(),
-                artifact.source_id.clone(),
-                coverage_sort_key(&artifact.state).to_owned(),
-            ))
+            .entry(CoverageIdentityKey::from_artifact(artifact))
             .or_default()
             .push(artifact.artifact_id.clone());
     }
 
-    let mut observed = BTreeMap::<CoverageKey, Vec<String>>::new();
+    let mut observed = BTreeMap::<CoverageIdentityKey, Vec<String>>::new();
     for coverage in &intake.coverage {
         if SiteCoreGroup::from_source_id(&coverage.source_id).is_none() {
             continue;
         }
         observed
-            .entry((
-                role_sort_key(&coverage.producer_role).to_owned(),
-                coverage
-                    .workflow_subject_role
-                    .as_ref()
-                    .map(role_sort_key)
-                    .unwrap_or_default()
-                    .to_owned(),
-                coverage.source_id.clone(),
-                coverage_sort_key(&coverage.state).to_owned(),
-            ))
+            .entry(CoverageIdentityKey::from_coverage(coverage))
             .or_default()
             .extend(coverage.artifact_ids.iter().cloned());
     }

@@ -194,6 +194,26 @@ impl SccmServerIntakeAssessment {
         &self.privacy_extensions
     }
 
+    pub(crate) fn topology_authority_is_intake_bound(&self) -> bool {
+        if self.schema_version != self.intake_integrity.schema_version
+            || self.topology.roles_observed.len() != self.intake_integrity.topology_role_count
+            || topology_string_bytes(&self.topology)
+                != Some(self.intake_integrity.structure.topology_string_bytes)
+        {
+            return false;
+        }
+        let Some(normalized_topology) = normalized_topology_or_none(&self.topology) else {
+            return false;
+        };
+        canonical_record_digest_bounded(
+            b"topology",
+            &normalized_topology,
+            Some(self.intake_integrity.topology.payload_len),
+        )
+        .as_ref()
+        .is_some_and(|topology| topology == &self.intake_integrity.topology)
+    }
+
     pub(crate) fn adapter_authority_is_intake_bound(&self) -> bool {
         if self.schema_version != self.intake_integrity.schema_version
             || self.topology.roles_observed.len() != self.intake_integrity.topology_role_count
@@ -216,6 +236,23 @@ impl SccmServerIntakeAssessment {
     }
 }
 
+fn normalized_topology_or_none(
+    topology: &SccmServerTopologyAssessment,
+) -> Option<SccmServerTopologyAssessment> {
+    let mut normalized = topology.clone();
+    normalized
+        .roles_observed
+        .sort_by(|left, right| role_sort_key(left).cmp(role_sort_key(right)));
+    if normalized
+        .roles_observed
+        .windows(2)
+        .any(|roles| roles[0] == roles[1])
+    {
+        return None;
+    }
+    Some(normalized)
+}
+
 /// Nonserialized canonical-input binding for downstream server-role adapters.
 /// Collection order is not authority: the normalized records are serialized
 /// independently and compared as duplicate-free sets.
@@ -226,7 +263,7 @@ struct SccmServerIntakeIntegrity {
     structure: IntakeIntegrityStructure,
     topology: IntakeIntegrityRecord,
     artifacts: BTreeMap<ArtifactIntegrityIdentity, IntakeIntegrityRecord>,
-    coverage: BTreeMap<CoverageIntegrityIdentity, IntakeIntegrityRecord>,
+    coverage: BTreeMap<CoverageIdentityKey, IntakeIntegrityRecord>,
     evidence: BTreeMap<EvidenceIntegrityIdentity, IntakeIntegrityRecord>,
 }
 
@@ -254,11 +291,55 @@ struct IntakeIntegrityStructure {
 struct ArtifactIntegrityIdentity(String);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct CoverageIntegrityIdentity {
+pub(super) struct CoverageIdentityKey {
     producer_role: String,
-    workflow_subject_role: String,
+    producer_host_handle: Option<String>,
     source_id: String,
+    workflow_subject_role: Option<String>,
+    workflow_subject_handle: Option<String>,
     state: String,
+}
+
+impl CoverageIdentityKey {
+    fn new(
+        producer_role: &SccmRole,
+        producer_host_handle: Option<&str>,
+        source_id: &str,
+        workflow_subject_role: Option<&SccmRole>,
+        workflow_subject_handle: Option<&str>,
+        state: &SccmCoverageState,
+    ) -> Self {
+        Self {
+            producer_role: role_sort_key(producer_role).to_owned(),
+            producer_host_handle: producer_host_handle.map(str::to_owned),
+            source_id: source_id.to_owned(),
+            workflow_subject_role: workflow_subject_role.map(|role| role_sort_key(role).to_owned()),
+            workflow_subject_handle: workflow_subject_handle.map(str::to_owned),
+            state: coverage_sort_key(state).to_owned(),
+        }
+    }
+
+    pub(super) fn from_artifact(artifact: &SccmServerArtifactAssessment) -> Self {
+        Self::new(
+            &artifact.producer_role,
+            artifact.producer_host_handle.as_deref(),
+            &artifact.source_id,
+            artifact.workflow_subject_role.as_ref(),
+            artifact.workflow_subject_handle.as_deref(),
+            &artifact.state,
+        )
+    }
+
+    pub(super) fn from_coverage(coverage: &SccmServerCoverage) -> Self {
+        Self::new(
+            &coverage.producer_role,
+            coverage.producer_host_handle.as_deref(),
+            &coverage.source_id,
+            coverage.workflow_subject_role.as_ref(),
+            coverage.workflow_subject_handle.as_deref(),
+            &coverage.state,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -298,8 +379,16 @@ impl SccmServerIntakeIntegrity {
                 .iter()
                 .map(|(identity, record)| {
                     identity.producer_role.len()
-                        + identity.workflow_subject_role.len()
+                        + identity.producer_host_handle.as_deref().map_or(0, str::len)
                         + identity.source_id.len()
+                        + identity
+                            .workflow_subject_role
+                            .as_deref()
+                            .map_or(0, str::len)
+                        + identity
+                            .workflow_subject_handle
+                            .as_deref()
+                            .map_or(0, str::len)
                         + identity.state.len()
                         + std::mem::size_of_val(&record.payload_len)
                         + record.digest.len()
@@ -474,11 +563,25 @@ pub enum SccmServerConfiguredPathClass {
     NonDefault,
 }
 
+/// A deterministic artifact-membership row in server intake assessment schema v1.
+///
+/// Rows emitted by [`assess_server_intake`] bind membership to the validated,
+/// privacy-safe producer and workflow-subject topology. The two handle fields
+/// are optional additive schema-v1 JSON fields and are omitted when absent;
+/// neither contains a raw host name or path.
+///
+/// Adding these public fields is not Rust struct-literal source compatible,
+/// and strict JSON consumers that reject unknown fields must recognize them
+/// before consuming rows where they are present.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmServerCoverage {
     pub producer_role: SccmRole,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub producer_host_handle: Option<String>,
     pub workflow_subject_role: Option<SccmRole>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_subject_handle: Option<String>,
     pub source_id: String,
     pub state: SccmCoverageState,
     pub artifact_ids: Vec<String>,
@@ -592,8 +695,7 @@ pub fn assess_server_intake(
 
     let mut artifacts = Vec::with_capacity(prepared.len());
     let mut evidence = Vec::new();
-    let mut coverage_by_key: BTreeMap<(String, String, String, String), SccmServerCoverage> =
-        BTreeMap::new();
+    let mut coverage_by_key = BTreeMap::<CoverageIdentityKey, SccmServerCoverage>::new();
     let mut request_keys = BTreeSet::new();
     let mut next_artifact_requests = Vec::new();
     let usable_source_keys = prepared
@@ -606,23 +708,15 @@ pub fn assess_server_intake(
 
     for prepared_artifact in prepared {
         let artifact = prepared_artifact.assessment;
-        let coverage_key = (
-            role_sort_key(&artifact.producer_role).to_owned(),
-            artifact.source_id.clone(),
-            artifact
-                .workflow_subject_role
-                .as_ref()
-                .map(role_sort_key)
-                .unwrap_or_default()
-                .to_owned(),
-            coverage_sort_key(&artifact.state).to_owned(),
-        );
+        let coverage_key = CoverageIdentityKey::from_artifact(&artifact);
         coverage_by_key
             .entry(coverage_key)
             .and_modify(|row| row.artifact_ids.push(artifact.artifact_id.clone()))
             .or_insert_with(|| SccmServerCoverage {
                 producer_role: artifact.producer_role.clone(),
+                producer_host_handle: artifact.producer_host_handle.clone(),
                 workflow_subject_role: artifact.workflow_subject_role.clone(),
+                workflow_subject_handle: artifact.workflow_subject_handle.clone(),
                 source_id: artifact.source_id.clone(),
                 state: artifact.state.clone(),
                 artifact_ids: vec![artifact.artifact_id.clone()],
@@ -1310,10 +1404,12 @@ fn coverage_string_bytes(coverage: &[SccmServerCoverage]) -> Option<usize> {
     let mut total = 0usize;
     for record in coverage {
         checked_add_string_bytes(&mut total, role_sort_key(&record.producer_role))?;
+        checked_add_optional_string_bytes(&mut total, record.producer_host_handle.as_deref())?;
         checked_add_optional_string_bytes(
             &mut total,
             record.workflow_subject_role.as_ref().map(role_sort_key),
         )?;
+        checked_add_optional_string_bytes(&mut total, record.workflow_subject_handle.as_deref())?;
         checked_add_string_bytes(&mut total, &record.source_id)?;
         checked_add_string_bytes(&mut total, coverage_sort_key(&record.state))?;
         for artifact_id in &record.artifact_ids {
@@ -1433,17 +1529,7 @@ fn canonical_intake_integrity_with_structure(
     #[cfg(test)]
     INTAKE_CANONICALIZATION_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
 
-    let mut normalized_topology = topology.clone();
-    normalized_topology
-        .roles_observed
-        .sort_by(|left, right| role_sort_key(left).cmp(role_sort_key(right)));
-    if normalized_topology
-        .roles_observed
-        .windows(2)
-        .any(|roles| roles[0] == roles[1])
-    {
-        return None;
-    }
+    let normalized_topology = normalized_topology_or_none(topology)?;
 
     let mut normalized_coverage = coverage.to_vec();
     for record in &mut normalized_coverage {
@@ -1484,17 +1570,7 @@ fn canonical_intake_integrity_with_structure(
 
     let mut coverage_integrity = BTreeMap::new();
     for record in &normalized_coverage {
-        let identity = CoverageIntegrityIdentity {
-            producer_role: role_sort_key(&record.producer_role).to_owned(),
-            workflow_subject_role: record
-                .workflow_subject_role
-                .as_ref()
-                .map(role_sort_key)
-                .unwrap_or_default()
-                .to_owned(),
-            source_id: record.source_id.clone(),
-            state: coverage_sort_key(&record.state).to_owned(),
-        };
+        let identity = CoverageIdentityKey::from_coverage(record);
         let max_payload_len = match expected {
             Some(expected) => Some(expected.coverage.get(&identity)?.payload_len),
             None => None,

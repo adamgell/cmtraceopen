@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SCCM server coverage topology (#335)**: Normalized server coverage rows now
+  retain optional opaque producer-host and workflow-subject handles, preventing
+  artifacts from distinct physical producers or workflow subjects from
+  collapsing into one row. Site-core analysis also rejects coverage whose
+  topology does not match its artifact membership and emits explicit coverage
+  gaps instead of shaping results from incongruent input. The additive fields
+  remain schema v1 and are omitted from JSON when absent.
+
 ## [1.5.0] - 2026-07-27
 
 ### Added

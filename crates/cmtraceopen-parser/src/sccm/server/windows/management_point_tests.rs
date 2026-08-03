@@ -188,11 +188,23 @@ fn load_bundle(scenario: &str) -> SccmManagementPointBundle {
 fn load_server_intake_fixture(
     directory: &Path,
 ) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
-    let manifest_json = fs::read_to_string(directory.join("manifest.json"))
-        .expect("server intake fixture manifest must be readable");
-    let manifest: Value = serde_json::from_str(&manifest_json)
-        .expect("server intake fixture manifest must be valid JSON");
-    let payloads = manifest["artifacts"]
+    let manifest = load_json(&directory.join("manifest.json"));
+    assess_server_intake_manifest(directory, &manifest)
+}
+
+fn assess_server_intake_manifest(
+    directory: &Path,
+    manifest: &Value,
+) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
+    assess_server_intake_manifest_with_payload_manifest(directory, manifest, manifest)
+}
+
+fn assess_server_intake_manifest_with_payload_manifest(
+    directory: &Path,
+    manifest: &Value,
+    payload_manifest: &Value,
+) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
+    let payloads = payload_manifest["artifacts"]
         .as_array()
         .expect("canonical MP fixture artifacts")
         .iter()
@@ -208,8 +220,11 @@ fn load_server_intake_fixture(
             })
         })
         .collect::<Vec<_>>();
-    assess_server_intake(&manifest_json, &payloads)
-        .expect("fixture must satisfy canonical server intake")
+    assess_server_intake(
+        &serde_json::to_string(manifest).expect("server intake fixture manifest serializes"),
+        &payloads,
+    )
+    .expect("fixture must satisfy canonical server intake")
 }
 
 fn load_canonical_intake(
@@ -822,6 +837,18 @@ fn canonical_intake_adapter_accepts_reordered_authoritative_records() {
         assessment.evidence.len() > 1,
         "fixture must exercise evidence reordering"
     );
+    assert!(
+        assessment.coverage.iter().any(|record| {
+            record.producer_host_handle.is_some() && record.workflow_subject_handle.is_none()
+        }),
+        "fixture must retain rows with an absent optional workflow handle"
+    );
+    assert!(
+        assessment.coverage.iter().any(|record| {
+            record.producer_host_handle.is_some() && record.workflow_subject_handle.is_some()
+        }),
+        "fixture must retain rows with both optional topology handles present"
+    );
     let expected = analyze_management_point_from_server_intake(&assessment)
         .expect("canonical multi-role intake must enter the adapter");
 
@@ -834,6 +861,173 @@ fn canonical_intake_adapter_accepts_reordered_authoritative_records() {
             .expect("record ordering is not intake authority"),
         expected
     );
+}
+
+#[test]
+fn canonical_intake_coverage_rows_distinguished_by_producer_host_reach_topology_validation() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/sccm/server/intake/collision-same-basename-configured-roots");
+    let mut manifest = load_json(&directory.join("manifest.json"));
+    let fingerprint =
+        manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
+    let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
+    manifest["artifacts"][1]["producerHostHandle"] =
+        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+    manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
+
+    let assessment = assess_server_intake_manifest(&directory, &manifest);
+    let coverage = assessment
+        .coverage
+        .iter()
+        .filter(|record| record.source_id == "server-mp-policy")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        coverage.len(),
+        2,
+        "both physical producer rows are retained"
+    );
+    assert_eq!(
+        coverage
+            .iter()
+            .map(|record| record.producer_host_handle.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("synthetic:host:mp-01"), Some("synthetic:host:site-01")],
+    );
+
+    assert!(
+        matches!(
+            analyze_management_point_from_server_intake(&assessment),
+            Err(SccmManagementPointIntakeError::TopologyMismatch)
+        ),
+        "distinct producer-host coverage reaches MP topology validation rather than failing as an unbound intake projection"
+    );
+    let mut reordered = assessment;
+    reordered.artifacts.reverse();
+    reordered.coverage.reverse();
+    reordered.evidence.reverse();
+    assert!(
+        matches!(
+            analyze_management_point_from_server_intake(&reordered),
+            Err(SccmManagementPointIntakeError::TopologyMismatch)
+        ),
+        "producer-host-bound coverage order is not authority"
+    );
+}
+
+#[test]
+fn canonical_intake_adapter_accepts_coverage_rows_distinguished_by_workflow_subject() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/sccm/server/intake/complete-multi-role");
+    let mut manifest = load_json(&directory.join("manifest.json"));
+    let payload_manifest = manifest.clone();
+    let fingerprint =
+        manifest["artifacts"][2]["configuredPathProvenance"]["pathFingerprint"].clone();
+    let artifact = &mut manifest["artifacts"][3];
+    artifact["workflowSubject"] = json!({
+        "role": "distributionPoint",
+        "instanceHandle": "synthetic:subject:dp-02",
+    });
+    artifact["sourceId"] = Value::String("server-dp-distribution".to_owned());
+    artifact["originalPath"] = Value::String("REDACTED_SITE_DP_CONTROL_ROOT_COPY".to_owned());
+    artifact["originalBasename"] = Value::String("distmgr.log".to_owned());
+    artifact["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
+    artifact["relativePath"] = Value::String(
+        "evidence/sccm/server/site-server/server-dp-distribution/subject-distribution-point/instance-bbbbbbbb/current/distmgr.log"
+            .to_owned(),
+    );
+
+    let assessment = assess_server_intake_manifest_with_payload_manifest(
+        &directory,
+        &manifest,
+        &payload_manifest,
+    );
+    let coverage = assessment
+        .coverage
+        .iter()
+        .filter(|record| record.source_id == "server-dp-distribution")
+        .collect::<Vec<_>>();
+    assert_eq!(coverage.len(), 2, "both workflow-subject rows are retained");
+    assert_eq!(
+        coverage
+            .iter()
+            .map(|record| record.workflow_subject_handle.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            Some("synthetic:subject:dp-01"),
+            Some("synthetic:subject:dp-02"),
+        ],
+    );
+
+    let expected = analyze_management_point_from_server_intake(&assessment)
+        .expect("distinct workflow-subject coverage remains adapter-authoritative");
+    let mut reordered = assessment;
+    reordered.artifacts.reverse();
+    reordered.coverage.reverse();
+    reordered.evidence.reverse();
+    assert_eq!(
+        analyze_management_point_from_server_intake(&reordered)
+            .expect("workflow-subject-bound coverage order is not authority"),
+        expected
+    );
+}
+
+#[test]
+fn canonical_intake_adapter_rejects_post_intake_coverage_handle_mutations() {
+    let assessment = load_server_intake_scenario("complete-multi-role");
+    let management_point_index = assessment
+        .coverage
+        .iter()
+        .position(|record| record.source_id == "server-mp-policy")
+        .expect("fixture has management-point coverage");
+    let distribution_point_index = assessment
+        .coverage
+        .iter()
+        .position(|record| record.source_id == "server-dp-distribution")
+        .expect("fixture has distribution-point coverage");
+    let software_update_point_index = assessment
+        .coverage
+        .iter()
+        .position(|record| record.source_id == "server-sup-sync")
+        .expect("fixture has software-update-point coverage");
+
+    let mut added = assessment.clone();
+    added.coverage[management_point_index].workflow_subject_handle =
+        Some("synthetic:subject:mp-added".to_owned());
+    assert_unbound_intake_projection(&added, "coverage handle addition mutation");
+
+    let mut removed_producer = assessment.clone();
+    removed_producer.coverage[management_point_index].producer_host_handle = None;
+    assert_unbound_intake_projection(
+        &removed_producer,
+        "coverage producer-handle removal mutation",
+    );
+
+    let mut removed_subject = assessment.clone();
+    removed_subject.coverage[distribution_point_index].workflow_subject_handle = None;
+    assert_unbound_intake_projection(&removed_subject, "coverage subject-handle removal mutation");
+
+    let mut swapped_producers = assessment.clone();
+    let producer_handle = swapped_producers.coverage[management_point_index]
+        .producer_host_handle
+        .clone();
+    swapped_producers.coverage[management_point_index].producer_host_handle = swapped_producers
+        .coverage[software_update_point_index]
+        .producer_host_handle
+        .clone();
+    swapped_producers.coverage[software_update_point_index].producer_host_handle = producer_handle;
+    assert_unbound_intake_projection(&swapped_producers, "coverage producer-handle swap mutation");
+
+    let mut swapped_subjects = assessment;
+    let subject_handle = swapped_subjects.coverage[distribution_point_index]
+        .workflow_subject_handle
+        .clone();
+    swapped_subjects.coverage[distribution_point_index].workflow_subject_handle = swapped_subjects
+        .coverage[software_update_point_index]
+        .workflow_subject_handle
+        .clone();
+    swapped_subjects.coverage[software_update_point_index].workflow_subject_handle = subject_handle;
+    assert_unbound_intake_projection(&swapped_subjects, "coverage subject-handle swap mutation");
 }
 
 #[test]
