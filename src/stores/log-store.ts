@@ -863,6 +863,13 @@ export const useLogStore = create<LogState>((set, get) => ({
   },
   appendAggregateEntries: (filePath, newEntries) => {
     set((state) => {
+      if (
+        state.aggregateFiles.length > 0 &&
+        !state.aggregateFiles.some((file) => file.filePath === filePath)
+      ) {
+        return state;
+      }
+
       const nextId = state.entries.reduce(
         (maxId, entry) => Math.max(maxId, entry.id),
         -1
