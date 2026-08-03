@@ -1,0 +1,46 @@
+{
+  "scenario": "access-denied-without-compliance-evidence",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "insufficientEvidence",
+    "rationale": "noLocalSourceAvailable"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [],
+  "access": [
+    {
+      "decision": "denied",
+      "linkage": "noMatchingComplianceEvidence",
+      "matchedEvidence": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "compliance-access-denied-uncorrelated",
+      "severity": "info",
+      "confidence": "low",
+      "evidence": [
+        "acc-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a sign-in denial alone produces no compliance cause and no local setting state"
+  ],
+  "coverage": [
+    {
+      "artifactId": "access-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    }
+  ]
+}

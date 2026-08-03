@@ -1,0 +1,69 @@
+{
+  "scenario": "contradictory-ids-and-timestamps",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "insufficientEvidence",
+    "rationale": "contradictoryLocalEvidence"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "contradictory",
+      "timeContradiction": false,
+      "identityContradiction": true,
+      "evidence": [
+        "evt-1",
+        "rpt-1"
+      ]
+    },
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/firewallstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": true,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-2"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-contradictory-evidence",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [
+        "evt-1",
+        "evt-2",
+        "rpt-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "two disagreeing definite sources produce no verdict rather than an arbitrary winner",
+    "an evaluation time after the capture is surfaced instead of trusted"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-report",
+      "status": "available"
+    }
+  ]
+}

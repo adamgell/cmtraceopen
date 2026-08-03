@@ -1,0 +1,58 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "malformed-and-unknown-schema",
+  "workload": "device/windows/compliance",
+  "description": "One source is malformed and one declares a schema version this build does not support. Neither contributes anything and neither is guessed at.",
+  "generatedAtUtc": "2026-07-31T12:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-context",
+      "family": "deviceContext",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device-context.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/device-context/device-context.json",
+      "relativePath": "evidence/device-context/current/device-context.json",
+      "bytesCopied": 1228,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-events",
+      "family": "mdmEvents",
+      "sourceKind": "json",
+      "captureState": "parseFailed",
+      "encoding": "utf-8",
+      "originalBasename": "mdm-events.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/mdm-events/mdm-events.json",
+      "relativePath": "evidence/mdm-events/current/mdm-events.json",
+      "bytesCopied": 215,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-report",
+      "family": "mdmReport",
+      "sourceKind": "json",
+      "captureState": "unsupported",
+      "encoding": "utf-8",
+      "originalBasename": "mdm-report.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/mdm-report/mdm-report.json",
+      "relativePath": "evidence/mdm-report/current/mdm-report.json",
+      "bytesCopied": 167,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}
