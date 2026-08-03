@@ -53,6 +53,11 @@ impl InitialLogicalRecord {
             message_utf16_len: entry.message.encode_utf16().count(),
         })
     }
+
+    #[cfg(test)]
+    pub(crate) fn entry_id_for_test(&self) -> u64 {
+        self.entry_id
+    }
 }
 
 /// Bounded suffix for a logical entry that was already rendered by the initial

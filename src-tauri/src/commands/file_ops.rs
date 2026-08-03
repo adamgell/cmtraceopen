@@ -683,10 +683,12 @@ fn compare_aggregate_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::list_log_folder;
+    use super::{list_log_folder, open_log_folder_aggregate};
+    use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tauri::Manager;
 
     /// Proves the wiring, not just the classifier: an unreadable folder must
     /// reach the frontend as `AccessDenied` rather than as "folder does not
@@ -705,8 +707,7 @@ mod tests {
         let dir = create_temp_dir("file-ops-denied");
         let locked = dir.join("locked");
         fs::create_dir(&locked).expect("create locked dir");
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
-            .expect("drop permissions");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("drop permissions");
 
         let result = list_log_folder(locked.to_string_lossy().to_string());
 
@@ -735,8 +736,7 @@ mod tests {
         let dir = create_temp_dir("file-ops-denied-file");
         let locked = dir.join("locked.log");
         fs::write(&locked, "2026-07-31 log line").expect("write log");
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
-            .expect("drop permissions");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("drop permissions");
 
         let error = super::classify_open_failure(
             locked.to_string_lossy().as_ref(),
@@ -770,7 +770,55 @@ mod tests {
 
         // The file opens fine, so the parser's own message survives and no
         // elevation offer can be produced.
-        assert!(matches!(error, crate::error::AppError::Internal(reason) if reason == "unsupported format"));
+        assert!(
+            matches!(error, crate::error::AppError::Internal(reason) if reason == "unsupported format")
+        );
+    }
+
+    #[test]
+    fn aggregate_tail_seed_uses_the_frontend_visible_entry_id() {
+        let dir = create_temp_dir("file-ops-aggregate-tail-seed");
+        let later_path = dir.join("Log_1.log");
+        let earlier_path = dir.join("Log_2.log");
+        fs::write(
+            &later_path,
+            "2026-05-04T08:12:32.0020000Z  INFO      Event       None        1    \
+             1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Catalog] later\n",
+        )
+        .expect("write later Company Portal log");
+        fs::write(
+            &earlier_path,
+            "2026-05-04T08:12:31.4410000Z  INFO      Event       None        0    \
+             1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [App Catalog] earlier\n",
+        )
+        .expect("write earlier Company Portal log");
+
+        let app = tauri::test::mock_app();
+        assert!(app.manage(AppState::default()));
+        let result =
+            open_log_folder_aggregate(dir.to_string_lossy().to_string(), app.state::<AppState>())
+                .expect("open aggregate folder");
+        let later_path = later_path.to_string_lossy();
+        let visible_entry_id = result
+            .entries
+            .iter()
+            .find(|entry| entry.file_path == later_path)
+            .expect("later aggregate entry")
+            .id;
+        let stored_seed_id = app
+            .state::<AppState>()
+            .open_files
+            .lock()
+            .expect("open files lock")
+            .get(PathBuf::from(later_path.as_ref()).as_path())
+            .and_then(|open_file| open_file.initial_logical_record.as_ref())
+            .expect("later aggregate tail seed")
+            .entry_id_for_test();
+
+        fs::remove_dir_all(&dir).expect("remove temp aggregate folder");
+
+        assert_eq!(visible_entry_id, 1, "fixture must reorder the later record");
+        assert_eq!(stored_seed_id, visible_entry_id);
     }
 
     /// A folder reaching the file lane must be classified by its kind, never by

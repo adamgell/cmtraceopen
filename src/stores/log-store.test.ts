@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useLogStore, getCachedTabSnapshot, setCachedTabSnapshot, clearAllTabSnapshots } from "./log-store";
 import type { LogEntry, TailEntryAmendment } from "../types/log";
 
@@ -143,7 +143,10 @@ describe("log-store", () => {
       ]);
       useLogStore.getState().setTotalLines(1);
 
-      useLogStore.getState().amendEntry(secondAmendment);
+      useLogStore.getState().amendEntry({
+        ...secondAmendment,
+        messageUtf16Start: 14,
+      });
       expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
 
       useLogStore.getState().amendEntry(firstAmendment);
@@ -310,6 +313,32 @@ describe("log-store", () => {
 
       expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(3);
       expect(useLogStore.getState().totalLines).toBe(4);
+    });
+  });
+
+  describe("observeAggregateTailLine", () => {
+    it("does not publish state for untracked or already-observed lines", () => {
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 3,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(3);
+      const aggregateFiles = useLogStore.getState().aggregateFiles;
+      const listener = vi.fn();
+      const unsubscribe = useLogStore.subscribe(listener);
+
+      useLogStore.getState().observeAggregateTailLine("/missing.log", 99);
+      useLogStore.getState().observeAggregateTailLine("/a.log", 3);
+
+      unsubscribe();
+      expect(listener).not.toHaveBeenCalled();
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+      expect(useLogStore.getState().totalLines).toBe(3);
     });
   });
 

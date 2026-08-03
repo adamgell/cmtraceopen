@@ -7,10 +7,16 @@ import { useFileWatcher } from "./use-file-watcher";
 
 const eventMocks = vi.hoisted(() => ({
   tailListener: null as ((event: { payload: TailPayload }) => void) | null,
-  listen: vi.fn(async (_event: string, listener: (event: { payload: TailPayload }) => void) => {
-    eventMocks.tailListener = listener;
-    return vi.fn();
-  }),
+  unlisten: vi.fn(),
+  listen: vi.fn(
+    async (
+      _event: string,
+      listener: (event: { payload: TailPayload }) => void,
+    ) => {
+      eventMocks.tailListener = listener;
+      return eventMocks.unlisten;
+    },
+  ),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -117,13 +123,22 @@ describe("useFileWatcher tail start state", () => {
 
     act(() => {
       eventMocks.tailListener?.({ payload });
-      eventMocks.tailListener?.({ payload });
+      eventMocks.tailListener?.({ payload: structuredClone(payload) });
     });
 
     expect(useLogStore.getState().entries[0].message).toBe(
       "[Sync] started\ncontinuation",
     );
     expect(useLogStore.getState().totalLines).toBe(2);
+  });
+
+  it("unlistens from tail events when the hook unmounts", async () => {
+    const { unmount } = renderHook(() => useFileWatcher());
+    await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+
+    unmount();
+
+    await waitFor(() => expect(eventMocks.unlisten).toHaveBeenCalledOnce());
   });
 
   it("keeps aggregate file counts authoritative and ignores untracked payloads", async () => {
