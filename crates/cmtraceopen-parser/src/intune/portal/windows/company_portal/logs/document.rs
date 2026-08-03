@@ -146,7 +146,7 @@ fn build_coverage(
     coverage.push(CompanyPortalCoverage {
         artifact_id: FILE_COVERAGE_ARTIFACT_ID.to_string(),
         family: COVERAGE_FAMILY.to_string(),
-        status: if unreadable == 0 {
+        status: if parsed_count > 0 && unreadable == 0 {
             CompanyPortalCoverageStatus::Available
         } else {
             CompanyPortalCoverageStatus::ParseFailed
