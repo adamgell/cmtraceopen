@@ -123,6 +123,23 @@ fn rejects_generic_iso_timestamp_content_as_rotation_failure() {
 }
 
 #[test]
+fn rejects_generic_failed_prefix_as_rotation_failure() {
+    // "Failed to ..." without rotation-specific wording must not route to the
+    // Device Inventory rotation-failure parser. This was previously matched by
+    // the removed `starts_with("failed ")` arm.
+    let generic_failed = "2026-07-30T13:05:01.1234567-04:00 Failed to load configuration.";
+    assert_eq!(detect_dialect("unrelated.log", generic_failed), None);
+}
+
+#[test]
+fn rejects_unhandled_prefix_as_rotation_failure() {
+    // "Unhandled ..." is not rotation-specific. This was previously matched by
+    // the removed `starts_with("unhandled ")` arm.
+    let unhandled = "2026-07-30T13:05:01.1234567-04:00 Unhandled exception in service.";
+    assert_eq!(detect_dialect("unrelated.log", unhandled), None);
+}
+
+#[test]
 fn a_device_inventory_selection_without_a_dialect_degrades_instead_of_panicking() {
     // A Device Inventory selection normally carries the dialect detection
     // resolved. One that does not is malformed, not impossible, and the
@@ -428,4 +445,45 @@ fn dispatcher_keeps_path_only_and_generic_timestamp_collisions_out_of_device_inv
         ParserImplementation::GenericTimestamped
     );
     assert_eq!(timestamped.parser_selection.specialization, None);
+}
+
+#[test]
+fn parse_content_caps_continuation_at_one_mib() {
+    // parse_content must apply the same 1 MiB bound as the tailing path so that
+    // opening and tailing a file produce identical framing for oversized records.
+    const ONE_MIB: usize = 1024 * 1024;
+    let header = "2026-07-30T13:05:01.1234567-04:00 Starting rotation.";
+    let oversized_continuation = "x".repeat(ONE_MIB + 1);
+    let content = format!("{header}\n{oversized_continuation}");
+
+    let (entries, _) = parse_content(
+        "IntuneDeviceInventory.log",
+        &content,
+        DeviceInventoryLogDialect::RotationFailure,
+    );
+
+    assert!(
+        entries.iter().all(|e| e.message.len() <= ONE_MIB),
+        "no entry should exceed the 1 MiB continuation bound"
+    );
+}
+
+#[test]
+fn parse_content_caps_harvester_continuation_at_one_mib() {
+    // Same bound applies to all three dialects, not just RotationFailure.
+    const ONE_MIB: usize = 1024 * 1024;
+    let header = "7/30/2026 6:00:53 AM [Information] Starting harvester.";
+    let oversized_continuation = "x".repeat(ONE_MIB + 1);
+    let content = format!("{header}\n{oversized_continuation}");
+
+    let (entries, _) = parse_content(
+        "IntuneInventoryHarvesterLog.log",
+        &content,
+        DeviceInventoryLogDialect::Harvester,
+    );
+
+    assert!(
+        entries.iter().all(|e| e.message.len() <= ONE_MIB),
+        "no Harvester entry should exceed the 1 MiB continuation bound"
+    );
 }

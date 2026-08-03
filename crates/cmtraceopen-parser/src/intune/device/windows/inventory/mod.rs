@@ -13,6 +13,12 @@ use std::sync::OnceLock;
 
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 
+/// Maximum bytes for a logical record's accumulated message in the whole-file
+/// parse path. Mirrors `MAX_PENDING_LOGICAL_RECORD_BYTES` in `watcher/tail.rs`
+/// so that opening and tailing a file produce the same framing for oversized
+/// records.
+const MAX_CONTINUATION_BYTES: usize = 1024 * 1024;
+
 /// The known Windows Device Inventory log dialects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceInventoryLogDialect {
@@ -275,8 +281,18 @@ fn parse_records<'a>(
         {
             records.push(orphan_record(line, line_number));
         } else if let Some(previous) = records.last_mut() {
-            previous.message.push('\n');
-            previous.message.push_str(line);
+            // Apply the same size cap as the tail path so that opening and
+            // tailing a file produce the same framing for oversized records.
+            if previous.message.len().saturating_add(1 + line.len()) <= MAX_CONTINUATION_BYTES {
+                previous.message.push('\n');
+                previous.message.push_str(line);
+            } else {
+                // Force-complete the current record and begin a new orphan.
+                // If the continuation line itself is oversized, truncate it
+                // at the cap so the new record also stays within the bound.
+                let cap = previous_char_boundary(line, MAX_CONTINUATION_BYTES);
+                records.push(orphan_record(&line[..cap], line_number));
+            }
         } else {
             records.push(orphan_record(line, line_number));
         }
@@ -326,8 +342,6 @@ fn rotation_header_states_failure(message: &str) -> bool {
     lowered.contains("failed to rotate")
         || lowered.contains("rotation failed")
         || lowered.contains("failed to roll")
-        || lowered.starts_with("failed ")
-        || lowered.starts_with("unhandled ")
 }
 
 /// Whether a continuation line is .NET exception evidence: either a namespaced
