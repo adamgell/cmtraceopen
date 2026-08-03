@@ -5,7 +5,11 @@ use super::admission::{
     SccmClientEvidenceAdmissionError,
 };
 use super::{assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle};
-use crate::sccm::{SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmRole, SccmRotation};
+use crate::sccm::{
+    extract_keys, SccmArtifact, SccmArtifactFamily, SccmCorrelationKeyKind, SccmCoverageState,
+    SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmKeyConfidence,
+    SccmRole, SccmRotation, SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
+};
 
 fn digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -32,6 +36,8 @@ fn source_group(basename: &str) -> &'static str {
         "CAS.log" => "client-content",
         "AppIntentEval.log" => "client-app-intent",
         "AppEnforce.log" => "client-app-enforce",
+        "client.msi.log" => "client-ccmsetup",
+        "ReportingEvents.log" => "client-windows-update-supplemental",
         "CustomVendorHook.log" => "unknown",
         _ => panic!("authority fixture basename must be declared here"),
     }
@@ -423,6 +429,186 @@ fn admitted_profile_is_bound_to_the_catalogued_source_family() {
     assert_eq!(
         profile.validated_artifact_families,
         [SccmArtifactFamily::ClientPolicy]
+    );
+}
+
+#[test]
+fn recognized_non_ccm_sources_cannot_enter_raw_ccm_admission() {
+    for (identity, basename) in [
+        ("client-setup", "client.msi.log"),
+        ("reporting-supplemental", "ReportingEvents.log"),
+    ] {
+        let bytes = ccm_bytes("CCM-shaped bytes from a non-CCM source");
+        let bundle = bundle_with(vec![artifact(
+            identity,
+            basename,
+            SccmCoverageState::Captured,
+            true,
+            Some(&bytes),
+        )]);
+        let assessment = assess_client_intake(&bundle).expect("bound intake is canonical");
+
+        assert!(
+            admit_client_evidence(
+                &bundle,
+                &assessment,
+                &[payload(&format!("fixture-{identity}"), bytes)],
+            )
+            .is_err(),
+            "{basename} must never authorize raw CCM evidence"
+        );
+    }
+}
+
+#[test]
+fn captured_non_ccm_supplement_does_not_block_or_join_policy_admission() {
+    let policy_bytes = ccm_bytes("policy evidence");
+    let supplemental_bytes = ccm_bytes("CCM-shaped supplemental text");
+    let bundle = bundle_with(vec![
+        artifact(
+            "policy",
+            "PolicyAgent.log",
+            SccmCoverageState::Captured,
+            true,
+            Some(&policy_bytes),
+        ),
+        artifact(
+            "reporting-supplemental",
+            "ReportingEvents.log",
+            SccmCoverageState::Captured,
+            true,
+            Some(&supplemental_bytes),
+        ),
+    ]);
+    let assessment = assess_client_intake(&bundle).expect("mixed intake is canonical");
+    let admitted = admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[payload("fixture-policy", policy_bytes)],
+    )
+    .expect("non-CCM supplemental bytes must not be required for policy admission");
+
+    assert!(admitted
+        .require_captured_source("client-policy-agent")
+        .is_ok());
+    assert!(admitted
+        .require_captured_source("client-windows-update-supplemental")
+        .is_err());
+    assert_eq!(admitted.evidence().expect("valid authority seal").len(), 1);
+    assert!(admitted
+        .profile_for_artifact("fixture-reporting-supplemental")
+        .expect("valid authority seal")
+        .is_none());
+}
+
+#[test]
+fn sealed_policy_profile_extracts_a_low_confidence_assignment_key() {
+    let assignment_id = "12345678-1234-1234-1234-123456789abc";
+    let bytes = ccm_bytes(&format!("Assignment ID = {assignment_id}"));
+    let bundle = bundle_with(vec![artifact(
+        "policy",
+        "PolicyAgent.log",
+        SccmCoverageState::Captured,
+        true,
+        Some(&bytes),
+    )]);
+    let assessment = assess_client_intake(&bundle).expect("bound policy intake is canonical");
+    let admitted = admit_client_evidence(&bundle, &assessment, &[payload("fixture-policy", bytes)])
+        .expect("bound policy evidence must be admitted");
+    let evidence = &admitted.evidence().expect("valid authority seal")[0];
+    let profile = admitted
+        .profile_for_artifact("fixture-policy")
+        .expect("valid authority seal")
+        .expect("policy evidence has a sealed profile");
+
+    let result = extract_keys(evidence, profile);
+
+    assert_eq!(result.keys.len(), 1);
+    assert_eq!(result.keys[0].kind, SccmCorrelationKeyKind::AssignmentId);
+    assert_eq!(result.keys[0].normalized, assignment_id);
+    assert_eq!(result.keys[0].confidence, SccmKeyConfidence::Low);
+    assert!(result
+        .gaps
+        .iter()
+        .any(|gap| gap.kind == SccmExtractionGapKind::ExperimentalProfile));
+    assert!(result
+        .gaps
+        .iter()
+        .all(|gap| gap.kind != SccmExtractionGapKind::UnvalidatedProfile));
+}
+
+#[test]
+fn caller_forged_family_profile_is_rejected_by_key_extraction() {
+    let assignment_id = "12345678-1234-1234-1234-123456789abc";
+    let bytes = ccm_bytes(&format!("Assignment ID = {assignment_id}"));
+    let bundle = bundle_with(vec![artifact(
+        "policy",
+        "PolicyAgent.log",
+        SccmCoverageState::Captured,
+        true,
+        Some(&bytes),
+    )]);
+    let assessment = assess_client_intake(&bundle).expect("bound policy intake is canonical");
+    let admitted = admit_client_evidence(&bundle, &assessment, &[payload("fixture-policy", bytes)])
+        .expect("bound policy evidence must be admitted");
+    let evidence = &admitted.evidence().expect("valid authority seal")[0];
+    let forged = SccmExtractionProfile {
+        profile_id: SCCM_EXPERIMENTAL_KEY_PROFILE_ID.to_owned(),
+        configmgr_version_prefixes: vec!["5.00.9128.".to_owned()],
+        validated_artifact_families: vec![SccmArtifactFamily::Unknown("callerForged".to_owned())],
+        selected_configmgr_version: Some("5.00.9128.1000".to_owned()),
+        maturity: SccmExtractionProfileMaturity::Experimental,
+    };
+
+    let result = extract_keys(evidence, &forged);
+
+    assert!(result.keys.is_empty());
+    assert_eq!(result.gaps.len(), 1);
+    assert_eq!(
+        result.gaps[0].kind,
+        SccmExtractionGapKind::UnvalidatedProfile
+    );
+    assert_eq!(
+        result.gaps[0].candidate_kind,
+        Some(SccmCorrelationKeyKind::AssignmentId)
+    );
+}
+
+#[test]
+fn unregistered_ccm_family_is_admitted_with_an_unvalidated_profile_gap() {
+    let bytes = ccm_bytes("Package ID = LAB00001");
+    let bundle = bundle_with(vec![artifact(
+        "content",
+        "CAS.log",
+        SccmCoverageState::Captured,
+        true,
+        Some(&bytes),
+    )]);
+    let assessment = assess_client_intake(&bundle).expect("bound content intake is canonical");
+    let admitted =
+        admit_client_evidence(&bundle, &assessment, &[payload("fixture-content", bytes)])
+            .expect("raw CCM evidence does not require a validated key-extraction family");
+    let evidence = &admitted.evidence().expect("valid authority seal")[0];
+    let profile = admitted
+        .profile_for_artifact("fixture-content")
+        .expect("valid authority seal")
+        .expect("content evidence has a sealed family-bound profile");
+
+    let result = extract_keys(evidence, profile);
+
+    assert_eq!(
+        profile.validated_artifact_families,
+        [SccmArtifactFamily::ClientContent]
+    );
+    assert!(result.keys.is_empty());
+    assert_eq!(result.gaps.len(), 1);
+    assert_eq!(
+        result.gaps[0].kind,
+        SccmExtractionGapKind::UnvalidatedProfile
+    );
+    assert_eq!(
+        result.gaps[0].candidate_kind,
+        Some(SccmCorrelationKeyKind::PackageId)
     );
 }
 

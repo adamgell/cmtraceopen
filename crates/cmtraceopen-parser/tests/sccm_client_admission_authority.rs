@@ -25,6 +25,8 @@ fn bytes() -> Vec<u8> {
 #[test]
 fn public_bytes_only_facade_uses_intake_bound_content_authority() {
     let bytes = bytes();
+    let expected_length = bytes.len() as u64;
+    let expected_digest = digest(&bytes);
     let bundle = SccmClientIntakeBundle {
         artifacts: vec![SccmClientIntakeArtifact {
             artifact: SccmArtifact {
@@ -43,8 +45,8 @@ fn public_bytes_only_facade_uses_intake_bound_content_authority() {
             rotation_lineage: None,
             relative_path: Some("evidence/client-policy-agent/current/PolicyAgent.log".to_owned()),
             fragment_complete: Some(true),
-            declared_byte_length: Some(bytes.len() as u64),
-            content_sha256: Some(digest(&bytes)),
+            declared_byte_length: Some(expected_length),
+            content_sha256: Some(expected_digest.clone()),
         }],
         capture_gaps: Vec::new(),
     };
@@ -54,10 +56,9 @@ fn public_bytes_only_facade_uses_intake_bound_content_authority() {
         Err(error) => panic!("public payload constructor rejected canonical bytes: {error}"),
     };
 
-    assert!(
-        admit_client_evidence(&bundle, &assessment, &[payload]).is_ok(),
-        "public callers can obtain opaque authority only for intake-bound bytes"
-    );
+    if let Err(error) = admit_client_evidence(&bundle, &assessment, &[payload]) {
+        panic!("public callers can obtain opaque authority only for intake-bound bytes: {error}");
+    }
 
     let wire = serde_json::to_value(&bundle).expect("bound intake serializes");
     assert!(wire["artifacts"][0]["declaredByteLength"].is_u64());
@@ -70,6 +71,10 @@ fn public_bytes_only_facade_uses_intake_bound_content_authority() {
     let projected = assess_client_intake(&round_trip).expect("round trip remains canonical");
     assert_eq!(
         projected.physical_artifacts[0].declared_byte_length,
-        Some(round_trip.artifacts[0].declared_byte_length.unwrap())
+        Some(expected_length)
+    );
+    assert_eq!(
+        projected.physical_artifacts[0].content_sha256.as_deref(),
+        Some(expected_digest.as_str())
     );
 }

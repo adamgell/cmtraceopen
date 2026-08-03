@@ -92,6 +92,23 @@ fn ccm_record(message: &str, offset: &str) -> String {
     )
 }
 
+fn utf16_with_bom(value: &str, little_endian: bool) -> Vec<u8> {
+    let mut bytes = if little_endian {
+        vec![0xff, 0xfe]
+    } else {
+        vec![0xfe, 0xff]
+    };
+    for unit in value.encode_utf16() {
+        let encoded = if little_endian {
+            unit.to_le_bytes()
+        } else {
+            unit.to_be_bytes()
+        };
+        bytes.extend_from_slice(&encoded);
+    }
+    bytes
+}
+
 fn bind_artifact_to_bytes(artifact: &mut SccmClientIntakeArtifact, bytes: &[u8]) {
     artifact.declared_byte_length = Some(bytes.len() as u64);
     artifact.content_sha256 = Some(digest(bytes));
@@ -219,6 +236,28 @@ fn admission_rejects_missing_extra_duplicate_and_swapped_payloads() {
 }
 
 #[test]
+fn admission_distinguishes_within_cap_extra_payloads_from_missing_payloads() {
+    let bundle = bundle();
+    let assessment = assess_client_intake(&bundle).expect("one payload fixture is canonical");
+
+    let missing = admission_error(
+        admit_client_evidence(&bundle, &assessment, &[]),
+        "an omitted eligible payload must fail closed",
+    );
+    assert_eq!(missing, SccmClientEvidenceAdmissionError::MissingPayload);
+
+    let extra = admission_error(
+        admit_client_evidence(
+            &bundle,
+            &assessment,
+            &[payload(), payload_for("fixture-policy-approved", "+000")],
+        ),
+        "an additional within-cap payload must fail closed",
+    );
+    assert_eq!(extra, SccmClientEvidenceAdmissionError::ExtraPayload);
+}
+
+#[test]
 fn admission_rejects_payload_digest_and_length_mismatches() {
     let mut bad_digest_bundle = bundle();
     bad_digest_bundle.artifacts[0].content_sha256 = Some("0".repeat(64));
@@ -237,6 +276,66 @@ fn admission_rejects_payload_digest_and_length_mismatches() {
     assert!(
         admit_client_evidence(&bad_length_bundle, &bad_length_assessment, &[payload()]).is_err()
     );
+}
+
+#[test]
+fn admission_rejects_boms_that_do_not_match_the_declared_encoding() {
+    let record = ccm_record("declared encoding authority", "+000");
+    let mut utf8_bom = vec![0xef, 0xbb, 0xbf];
+    utf8_bom.extend_from_slice(record.as_bytes());
+    let cases = [
+        ("utf-8", utf16_with_bom(&record, true)),
+        ("utf-16le", utf16_with_bom(&record, false)),
+        ("utf-16be", utf8_bom.clone()),
+        ("windows-1252", utf8_bom),
+    ];
+
+    for (declared_encoding, bytes) in cases {
+        let mut bundle = bundle_with_bound_policy(&bytes);
+        bundle.artifacts[0].artifact.encoding = Some(declared_encoding.to_owned());
+        let assessment = assess_client_intake(&bundle)
+            .expect("a declared encoding and byte binding remain canonical intake metadata");
+        let error = admission_error(
+            admit_client_evidence(
+                &bundle,
+                &assessment,
+                &[payload_from_bytes("fixture-policy-agent", bytes)],
+            ),
+            "a mismatched Unicode BOM must not override declared encoding authority",
+        );
+        assert_eq!(
+            error,
+            SccmClientEvidenceAdmissionError::InvalidEncoding,
+            "declared {declared_encoding}"
+        );
+    }
+}
+
+#[test]
+fn admission_accepts_only_matching_unicode_boms() {
+    let record = ccm_record("matching declared encoding", "+000");
+    let mut utf8_bom = vec![0xef, 0xbb, 0xbf];
+    utf8_bom.extend_from_slice(record.as_bytes());
+    let cases = [
+        ("utf-8", utf8_bom),
+        ("utf-16le", utf16_with_bom(&record, true)),
+        ("utf-16be", utf16_with_bom(&record, false)),
+    ];
+
+    for (declared_encoding, bytes) in cases {
+        let mut bundle = bundle_with_bound_policy(&bytes);
+        bundle.artifacts[0].artifact.encoding = Some(declared_encoding.to_owned());
+        let assessment = assess_client_intake(&bundle)
+            .expect("a matching BOM remains canonical intake metadata");
+        admit_client_evidence(
+            &bundle,
+            &assessment,
+            &[payload_from_bytes("fixture-policy-agent", bytes)],
+        )
+        .unwrap_or_else(|error| {
+            panic!("matching {declared_encoding} BOM must be admitted: {error}")
+        });
+    }
 }
 
 #[test]
@@ -260,7 +359,14 @@ fn admission_accepts_the_exact_cap_and_rejects_payload_overflow_before_reassessm
 
     let mut overflow = payloads;
     overflow.push(payload_for("fixture-policy-approved", "+000"));
-    assert!(admit_client_evidence(&bundle, &assessment, &overflow).is_err());
+    let error = admission_error(
+        admit_client_evidence(&bundle, &assessment, &overflow),
+        "the global payload-count guard must reject 4,097 payloads",
+    );
+    assert_eq!(
+        error,
+        SccmClientEvidenceAdmissionError::PayloadLimitExceeded
+    );
 }
 
 #[test]
