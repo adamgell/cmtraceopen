@@ -395,37 +395,51 @@ pub fn open_log_folder_aggregate(
         entry.id = index as u64;
     }
 
-    let mut open_files = state
-        .open_files
-        .lock()
-        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
-    for (
-        path_buf,
-        file_path,
-        parser_selection,
-        byte_offset,
-        file_total_lines,
-        final_entry_line_number,
-    ) in open_file_states
     {
-        let initial_logical_record = final_entry_line_number
-            .and_then(|line_number| {
-                aggregate_entries
-                    .iter()
-                    .find(|entry| entry.file_path == file_path && entry.line_number == line_number)
-            })
-            .and_then(|entry| {
-                InitialLogicalRecord::from_entry(entry, file_total_lines, &parser_selection)
-            });
-        open_files.insert(
-            path_buf.clone(),
-            OpenFile {
-                path: path_buf,
-                parser_selection,
-                initial_logical_record,
-                byte_offset,
-            },
-        );
+        let mut aggregate_entry_lookup = std::collections::HashMap::<(&str, u32), &LogEntry>::new();
+        for entry in &aggregate_entries {
+            aggregate_entry_lookup
+                .entry((entry.file_path.as_str(), entry.line_number))
+                .or_insert(entry);
+        }
+
+        let mut open_files = state
+            .open_files
+            .lock()
+            .map_err(|e| crate::error::AppError::State(e.to_string()))?;
+        for (
+            path_buf,
+            file_path,
+            parser_selection,
+            byte_offset,
+            file_total_lines,
+            final_entry_line_number,
+        ) in open_file_states
+        {
+            let initial_logical_record = if InitialLogicalRecord::supports_parser(&parser_selection)
+            {
+                final_entry_line_number
+                    .and_then(|line_number| {
+                        aggregate_entry_lookup
+                            .get(&(file_path.as_str(), line_number))
+                            .copied()
+                    })
+                    .and_then(|entry| {
+                        InitialLogicalRecord::from_entry(entry, file_total_lines, &parser_selection)
+                    })
+            } else {
+                None
+            };
+            open_files.insert(
+                path_buf.clone(),
+                OpenFile {
+                    path: path_buf,
+                    parser_selection,
+                    initial_logical_record,
+                    byte_offset,
+                },
+            );
+        }
     }
 
     Ok(AggregateParseResult {

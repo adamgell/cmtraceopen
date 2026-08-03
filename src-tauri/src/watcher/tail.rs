@@ -33,6 +33,11 @@ pub struct InitialLogicalRecord {
 }
 
 impl InitialLogicalRecord {
+    pub(crate) fn supports_parser(parser_selection: &ResolvedParser) -> bool {
+        parser_selection.parser == ParserKind::CompanyPortal
+            && parser_selection.record_framing == RecordFraming::LogicalRecord
+    }
+
     /// Capture only the final rendered record's stable identity and offsets.
     /// The original message remains frontend-owned.
     pub fn from_parse_result(
@@ -48,9 +53,7 @@ impl InitialLogicalRecord {
         total_lines: u32,
         parser_selection: &ResolvedParser,
     ) -> Option<Self> {
-        if parser_selection.parser != ParserKind::CompanyPortal
-            || parser_selection.record_framing != RecordFraming::LogicalRecord
-        {
+        if !Self::supports_parser(parser_selection) {
             return None;
         }
 
