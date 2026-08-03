@@ -491,10 +491,16 @@ enum UnicodeBom {
     Utf8,
     Utf16Le,
     Utf16Be,
+    Utf32Le,
+    Utf32Be,
 }
 
 fn recognized_unicode_bom(bytes: &[u8]) -> Option<(UnicodeBom, usize)> {
-    if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+    if bytes.starts_with(&[0xff, 0xfe, 0x00, 0x00]) {
+        Some((UnicodeBom::Utf32Le, 4))
+    } else if bytes.starts_with(&[0x00, 0x00, 0xfe, 0xff]) {
+        Some((UnicodeBom::Utf32Be, 4))
+    } else if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
         Some((UnicodeBom::Utf8, 3))
     } else if bytes.starts_with(&[0xff, 0xfe]) {
         Some((UnicodeBom::Utf16Le, 2))
