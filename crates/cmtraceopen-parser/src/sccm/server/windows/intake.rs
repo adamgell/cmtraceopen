@@ -10,7 +10,14 @@ use crate::sccm::{
     SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
 };
 
-use super::catalog::{classify_declared_server_source, expected_family, SccmServerSourceKind};
+use super::catalog::{
+    classify_declared_server_source, declared_server_source_catalog, expected_family,
+    SccmServerSourceKind,
+};
+use super::synthetic::{
+    safe_contract_label, safe_synthetic_capture_host, safe_synthetic_handle, synthetic_site_handle,
+    SYNTHETIC_SITE_CODE, SYNTHETIC_SOURCE_VERSION,
+};
 
 type PathFingerprintKey = (String, String, String, String);
 type CanonicalArtifactIdentity = (String, String, String, String, String, String, String);
@@ -312,17 +319,13 @@ fn normalize_topology(
     manifest: &RawServerManifest,
 ) -> Result<SccmServerTopologyAssessment, SccmServerIntakeError> {
     let site_handle = if manifest.synthetic_fixture {
-        // Manifest v1 synthetic fixtures use a closed, committed topology vocabulary.
-        // Expanding it requires an explicit fixture/profile review, not a caller-chosen label.
-        if manifest.topology.site_code != "LAB"
-            || !matches!(
-                manifest.topology.capture_host.as_str(),
-                "LAB-CM01" | "LAB-MP01"
-            )
-        {
+        // Manifest v1 synthetic fixtures use the reserved synthetic site code. A real
+        // ConfigMgr site code has the same three-character shape, so this surface is the
+        // one place a grammar cannot widen safely.
+        if manifest.topology.site_code != SYNTHETIC_SITE_CODE {
             return Err(SccmServerIntakeError::InvalidTopology);
         }
-        "synthetic:site:lab".to_owned()
+        synthetic_site_handle()
     } else if opaque_sha256_handle(&manifest.topology.site_code, "cmtraceopen.site.sha256.v1:") {
         manifest.topology.site_code.clone()
     } else {
@@ -330,6 +333,9 @@ fn normalize_topology(
     };
 
     let capture_host_handle = if manifest.synthetic_fixture {
+        if !safe_synthetic_capture_host(&manifest.topology.capture_host) {
+            return Err(SccmServerIntakeError::InvalidTopology);
+        }
         format!(
             "synthetic:host:{}",
             manifest.topology.capture_host.to_ascii_lowercase()
@@ -376,8 +382,13 @@ fn normalize_artifact(
 ) -> Result<PreparedArtifact, SccmServerIntakeError> {
     let source_version =
         normalize_source_version(artifact.source_version.as_deref(), synthetic_fixture)?;
+    // An unclassified supplement declares that it satisfies no source contract,
+    // which is what decides whether the declared catalog can own its source id.
+    let producer_is_observed = roles_observed.contains(&artifact.producer_role);
+    let unsupported_unknown = artifact.capture_state == SccmCoverageState::Unsupported
+        && artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
     if !safe_manifest_artifact_id(&artifact.artifact_id, synthetic_fixture)
-        || !safe_source_id(&artifact.source_id)
+        || !safe_source_id(&artifact.source_id, unsupported_unknown)
         || !safe_lineage_id(&artifact.rotation.lineage_id, synthetic_fixture)
         || !safe_path_fingerprint(
             &artifact.configured_path_provenance.path_fingerprint,
@@ -401,9 +412,6 @@ fn normalize_artifact(
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
 
-    let producer_is_observed = roles_observed.contains(&artifact.producer_role);
-    let unsupported_unknown = artifact.capture_state == SccmCoverageState::Unsupported
-        && artifact.producer_role == SccmRole::Unknown("unclassified".to_owned());
     if (!producer_is_observed && !unsupported_unknown)
         || (producer_is_observed && !is_declared_server_role(&artifact.producer_role))
     {
@@ -883,7 +891,7 @@ fn normalize_source_version(
         return Ok(None);
     };
     let safe = if synthetic_fixture {
-        value == "5.00.TEST"
+        value == SYNTHETIC_SOURCE_VERSION
     } else {
         source_version_is_profile_eligible(value, false)
             || opaque_sha256_handle(value, "cmtraceopen.version.sha256.v1:")
@@ -895,7 +903,7 @@ fn normalize_source_version(
 }
 
 fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> bool {
-    if synthetic_fixture && value == "5.00.TEST" {
+    if synthetic_fixture && value == SYNTHETIC_SOURCE_VERSION {
         return true;
     }
     let mut parts = value.split('.');
@@ -918,91 +926,44 @@ fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> b
 fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
         // The top-level manifest version gate makes this the v1 synthetic-fixture vocabulary.
-        // These public identities must never become free-form based on the manifest flag alone.
-        return matches!(
-            value,
-            "a-mp-policy"
-                | "b-sitecomp"
-                | "dp-dist-current"
-                | "dp-distribution-absent-candidate"
-                | "mp-iis-skipped"
-                | "mp-policy-access-denied"
-                | "mp-policy-configured"
-                | "mp-policy-current"
-                | "mp-policy-lo"
-                | "mp-policy-multiline"
-                | "mp-policy-numbered-2"
-                | "mp-policy-root-a-current"
-                | "mp-policy-root-b-current"
-                | "mp-policy-ts-20260729-235700"
-                | "sitecomp-current"
-                | "sup-sync-capped"
-                | "sup-sync-current"
-                | "unknown-db-export"
-                | "z-site-status"
-        );
+        // These public identities must never become free-form based on the manifest flag alone,
+        // so a synthetic label is held to the closed grammar in `super::synthetic`.
+        return safe_contract_label(value);
     }
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
 }
 
-fn safe_source_id(value: &str) -> bool {
-    matches!(
-        value,
-        "server-sitecomp"
-            | "server-status"
-            | "server-mp-auth"
-            | "server-mp-policy"
-            | "server-mp-iis"
-            | "server-dp-distribution"
-            | "server-sup-sync"
-            | "unknown-db-supplement"
-    )
+/// A `sourceId` names a declared source contract rather than describing the
+/// captured environment, so unlike the other identifier surfaces it is not
+/// conditioned on the synthetic-fixture flag: the declared catalog is its only
+/// authority in both disciplines. Restating that catalog here would mean two
+/// edits per declared source and two places to disagree.
+///
+/// An unclassified supplement is the one artifact that declares it satisfies no
+/// source contract, so no catalog entry can name it. Its declared id is
+/// replaced by the constant `unsupported` before projection and therefore never
+/// reaches a public surface; it is held to the closed label grammar anyway so
+/// that widening this path cannot become a way to smuggle an identity-bearing
+/// value through the deduplication keys.
+fn safe_source_id(value: &str, unclassified_supplement: bool) -> bool {
+    if unclassified_supplement {
+        return safe_contract_label(value);
+    }
+    declared_server_source_catalog()
+        .iter()
+        .any(|spec| spec.source_id == value)
 }
 
 fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return matches!(
-            value,
-            "dp-dist-lab"
-                | "dp-distribution-default"
-                | "mp-iis-supplement"
-                | "mp-policy-a"
-                | "mp-policy-access"
-                | "mp-policy-configured"
-                | "mp-policy-lab"
-                | "mp-policy-multiline"
-                | "mp-policy-root-a"
-                | "mp-policy-root-b"
-                | "mp-policy-rotation"
-                | "site-status-z"
-                | "sitecomp-a"
-                | "sitecomp-lab"
-                | "sup-sync-cap"
-                | "sup-sync-lab"
-                | "unknown-db-export"
-        );
+        return safe_contract_label(value);
     }
     opaque_sha256_handle(value, "cmtraceopen.lineage.sha256.v1:")
 }
 
 fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return matches!(
-            value,
-            "synthetic:path:a-mp"
-                | "synthetic:path:a-site"
-                | "synthetic:path:dp-default"
-                | "synthetic:path:iis-not-requested"
-                | "synthetic:path:mp-configured-a"
-                | "synthetic:path:mp-default"
-                | "synthetic:path:mp-root-a"
-                | "synthetic:path:mp-root-b"
-                | "synthetic:path:site-default"
-                | "synthetic:path:site-dp-control"
-                | "synthetic:path:site-sup-control"
-                | "synthetic:path:unsupported-db"
-                | "synthetic:path:z-site"
-        );
+        return safe_synthetic_handle(value, "path");
     }
     opaque_sha256_handle(value, "cmtraceopen.path.sha256.v1:")
 }
@@ -1023,16 +984,9 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
         return true;
     };
     if synthetic_fixture {
-        return match domain {
-            "host" => matches!(value, "synthetic:host:mp-01" | "synthetic:host:site-01"),
-            "subject" => {
-                matches!(
-                    value,
-                    "synthetic:subject:dp-01" | "synthetic:subject:sup-01"
-                )
-            }
-            _ => false,
-        };
+        // Fail closed on an undeclared domain: a synthetic handle is only meaningful
+        // for the two domains the assessment projects.
+        return matches!(domain, "host" | "subject") && safe_synthetic_handle(value, domain);
     }
     opaque_sha256_handle(value, &format!("cmtraceopen.{domain}.sha256.v1:"))
 }
@@ -1165,4 +1119,223 @@ struct RawServerRotation {
 struct RawCollectionLimit {
     byte_limit: u64,
     limit_applied: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::catalog::declared_server_source_catalog;
+    use super::super::synthetic::contract_anchor_token;
+    use super::*;
+
+    /// Split a declared slug into the lowercase tokens the grammar anchors on,
+    /// accepting the kebab, snake and lower-camel spellings the contract uses.
+    fn vocabulary_tokens(slug: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut current = String::new();
+        for character in slug.chars() {
+            if matches!(character, '-' | '_') {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            } else if character.is_ascii_uppercase() {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                current.push(character.to_ascii_lowercase());
+            } else {
+                current.push(character);
+            }
+        }
+        if !current.is_empty() {
+            tokens.push(current);
+        }
+        tokens
+    }
+
+    /// The synthetic grammar anchors on the contract's own vocabulary. Adding a
+    /// role, coverage state, rotation kind, configured-path state or catalog
+    /// source must not silently leave that anchor set behind, so every slug the
+    /// contract emits has to decompose into anchor tokens.
+    #[test]
+    fn contract_slugs_decompose_into_grammar_anchor_tokens() {
+        let mut slugs = vec![
+            "client".to_owned(),
+            "unknown".to_owned(),
+            "current".to_owned(),
+            "lo_".to_owned(),
+            "numbered".to_owned(),
+            "timestamped".to_owned(),
+            "configured".to_owned(),
+            "defaultCandidate".to_owned(),
+            "notRequested".to_owned(),
+            "supplied".to_owned(),
+        ];
+        for role in [
+            SccmRole::SiteServer,
+            SccmRole::ManagementPoint,
+            SccmRole::DistributionPoint,
+            SccmRole::SoftwareUpdatePoint,
+            SccmRole::WsUs,
+            SccmRole::Provider,
+            SccmRole::AdminService,
+        ] {
+            slugs.push(
+                role_path_segment(&role)
+                    .expect("every declared server role has a path segment")
+                    .to_owned(),
+            );
+        }
+        for state in [
+            SccmCoverageState::Captured,
+            SccmCoverageState::Absent,
+            SccmCoverageState::AccessDenied,
+            SccmCoverageState::Capped,
+            SccmCoverageState::Skipped,
+            SccmCoverageState::Unsupported,
+            SccmCoverageState::ParseFailed,
+        ] {
+            slugs.push(coverage_sort_key(&state).to_owned());
+        }
+        for spec in declared_server_source_catalog() {
+            slugs.push(spec.source_id.to_owned());
+        }
+
+        let orphans = slugs
+            .iter()
+            .flat_map(|slug| vocabulary_tokens(slug))
+            .filter(|token| !contract_anchor_token(token))
+            .collect::<Vec<_>>();
+        assert!(
+            orphans.is_empty(),
+            "declared slugs are missing from the grammar anchor vocabulary: {orphans:?}"
+        );
+    }
+
+    /// The declared catalog is the only authority over a classified `sourceId`.
+    /// Restating it inside intake is what let the two disagree, so every
+    /// declared source must be admitted by derivation, and a source the catalog
+    /// does not declare must not be admitted however well-formed it is.
+    #[test]
+    fn classified_source_ids_are_derived_from_the_declared_catalog() {
+        for spec in declared_server_source_catalog() {
+            assert!(
+                safe_source_id(spec.source_id, false),
+                "declared source {} is not admitted",
+                spec.source_id
+            );
+        }
+        // Well-formed under the label grammar, and still not a source contract:
+        // these are the source ids of server lanes whose contracts the intake
+        // catalog does not declare.
+        for undeclared in [
+            "server-hierarchy-control",
+            "server-hierarchy-transfer",
+            "server-provider",
+            "server-admin-service",
+            "server-dp-serve",
+            "unknown-db-supplement",
+        ] {
+            assert!(safe_contract_label(undeclared), "{undeclared}");
+            assert!(!safe_source_id(undeclared, false), "{undeclared}");
+        }
+    }
+
+    /// The unclassified supplement path has no catalog entry to derive from, so
+    /// it is the one source-id surface held to the grammar instead of the
+    /// catalog. It must not be pinned to a committed spelling, and it must not
+    /// become a free-form field either.
+    #[test]
+    fn unclassified_supplement_source_ids_are_grammar_bound_not_fixture_bound() {
+        for supplement in [
+            "unknown-db-supplement",
+            "unknown-registry-supplement",
+            "unknown-status-export",
+        ] {
+            assert!(safe_source_id(supplement, true), "{supplement}");
+        }
+        for shape in [
+            "realuser",
+            "real-user",
+            "dc01.contoso.com",
+            "contoso\\adminuser",
+            "administrator@contoso.com",
+            "\\\\fileserver\\share",
+            "10.0.0.5",
+            "srv-prd-01",
+        ] {
+            assert!(!safe_source_id(shape, true), "{shape}");
+        }
+    }
+
+    /// Every identifier the committed corpus already uses has to stay valid, so
+    /// the grammar replaces the literal lists without rewriting any fixture.
+    #[test]
+    fn committed_fixture_identifiers_satisfy_the_grammar() {
+        for value in [
+            "a-mp-policy",
+            "b-sitecomp",
+            "dp-dist-current",
+            "dp-distribution-absent-candidate",
+            "mp-iis-skipped",
+            "mp-policy-ts-20260729-235700",
+            "unknown-db-export",
+            "z-site-status",
+            "sup-sync-cap",
+            "site-status-z",
+        ] {
+            assert!(safe_manifest_artifact_id(value, true), "{value}");
+            assert!(safe_lineage_id(value, true), "{value}");
+        }
+        for value in [
+            "synthetic:path:a-mp",
+            "synthetic:path:iis-not-requested",
+            "synthetic:path:site-dp-control",
+            "synthetic:path:unsupported-db",
+        ] {
+            assert!(safe_path_fingerprint(value, true), "{value}");
+        }
+        assert!(safe_optional_handle(
+            Some("synthetic:host:mp-01"),
+            true,
+            "host"
+        ));
+        assert!(safe_optional_handle(
+            Some("synthetic:subject:sup-01"),
+            true,
+            "subject"
+        ));
+        assert!(safe_synthetic_capture_host("LAB-CM01"));
+        assert!(safe_synthetic_capture_host("LAB-MP01"));
+    }
+
+    /// Boundary rules the fixture corpus does not reach on its own.
+    #[test]
+    fn grammar_rejects_unanchored_overlong_and_misdomained_labels() {
+        assert!(!safe_contract_label(""), "empty");
+        assert!(!safe_contract_label("mp"), "single segment");
+        assert!(!safe_contract_label("real-user"), "unanchored head");
+        assert!(!safe_contract_label("a-b-c"), "no anchor token at all");
+        assert!(!safe_contract_label("mp--policy"), "empty segment");
+        assert!(!safe_contract_label("mp-policy-"), "trailing separator");
+        assert!(
+            !safe_contract_label("mp-a-b-c-d-e-f-g-h"),
+            "too many segments"
+        );
+        assert!(
+            !safe_contract_label("mp-abcdefghijklmnopq"),
+            "segment too long"
+        );
+        assert!(
+            !safe_contract_label(&format!("mp-{}", "a-".repeat(30))),
+            "label too long"
+        );
+        // A handle minted for one domain must not satisfy another.
+        assert!(!safe_synthetic_handle("synthetic:host:mp-01", "subject"));
+        assert!(!safe_synthetic_handle("mp-01", "host"));
+        assert!(!safe_optional_handle(
+            Some("synthetic:site:site-01"),
+            true,
+            "site"
+        ));
+    }
 }

@@ -152,12 +152,7 @@ impl SyntheticSurface {
         }
     }
 
-    fn apply(
-        self,
-        manifest: &mut Value,
-        payloads: &mut [SccmServerArtifactPayload],
-        label: &str,
-    ) {
+    fn apply(self, manifest: &mut Value, payloads: &mut [SccmServerArtifactPayload], label: &str) {
         let written = format!("{}{label}", self.namespace());
         let artifact = &mut manifest["artifacts"][self.artifact_index()];
         match self {
@@ -668,7 +663,8 @@ fn server_intake_admits_conforming_new_synthetic_identifiers() {
         ),
     ];
 
-    for (committed_id, artifact_id, host_handle, fingerprint, lineage_id, subject_handle) in rewrites
+    for (committed_id, artifact_id, host_handle, fingerprint, lineage_id, subject_handle) in
+        rewrites
     {
         let artifact = manifest["artifacts"]
             .as_array_mut()
@@ -682,7 +678,8 @@ fn server_intake_admits_conforming_new_synthetic_identifiers() {
             Value::String(fingerprint.to_owned());
         artifact["rotation"]["lineageId"] = Value::String(lineage_id.to_owned());
         if let Some(subject_handle) = subject_handle {
-            artifact["workflowSubject"]["instanceHandle"] = Value::String(subject_handle.to_owned());
+            artifact["workflowSubject"]["instanceHandle"] =
+                Value::String(subject_handle.to_owned());
         }
         for payload in &mut payloads {
             if payload.manifest_artifact_id == committed_id {
@@ -734,9 +731,13 @@ fn server_intake_discriminates_conforming_labels_from_identity_shapes() {
         );
 
         for shape in IDENTITY_SHAPES {
-            assert_unsafe_mutation_is_rejected("complete-multi-role", shape, |manifest, payloads| {
-                surface.apply(manifest, payloads.as_mut_slice(), shape);
-            });
+            assert_unsafe_mutation_is_rejected(
+                "complete-multi-role",
+                shape,
+                |manifest, payloads| {
+                    surface.apply(manifest, payloads.as_mut_slice(), shape);
+                },
+            );
         }
     }
 
