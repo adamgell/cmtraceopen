@@ -3,6 +3,7 @@
 //! This module accepts already-supplied metadata. Native discovery and capture
 //! remain outside `cmtraceopen-parser`.
 
+pub(crate) mod admission;
 mod intake;
 
 #[cfg(test)]
