@@ -6,12 +6,12 @@ import type { LogEntry, TailPayload } from "../types/log";
 import { useFileWatcher } from "./use-file-watcher";
 
 const eventMocks = vi.hoisted(() => ({
-  tailListener: null as ((event: { payload: TailPayload }) => void) | null,
+  tailListener: null as ((event: { payload: unknown }) => void) | null,
   unlisten: vi.fn(),
   listen: vi.fn(
     async (
       _event: string,
-      listener: (event: { payload: TailPayload }) => void,
+      listener: (event: { payload: unknown }) => void,
     ) => {
       eventMocks.tailListener = listener;
       return eventMocks.unlisten;
@@ -47,6 +47,18 @@ function multilineEntry(): LogEntry {
     format: "Timestamped",
     filePath: "/logs/Log_1.log",
     timezoneOffset: 0,
+  };
+}
+
+function emptyTailPayload(overrides: Partial<TailPayload> = {}): TailPayload {
+  return {
+    entries: [],
+    amendments: [],
+    filePath: "/logs/Log_1.log",
+    parseErrors: 0,
+    observedThroughLine: null,
+    reset: false,
+    ...overrides,
   };
 }
 
@@ -139,6 +151,79 @@ describe("useFileWatcher tail start state", () => {
     unmount();
 
     await waitFor(() => expect(eventMocks.unlisten).toHaveBeenCalledOnce());
+  });
+
+  it("clears stale single-file rows on an empty reset while retaining physical coverage", async () => {
+    const staleEntry = multilineEntry();
+    useLogStore.setState({
+      openFilePath: "/logs/Log_1.log",
+      sourceOpenMode: "single-file",
+      formatDetected: "Timestamped",
+      byteOffset: 512,
+      totalLines: 5,
+      entries: [staleEntry],
+    });
+
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+
+    act(() =>
+      eventMocks.tailListener?.({
+        payload: emptyTailPayload({
+          observedThroughLine: 2,
+          reset: true,
+        }),
+      }),
+    );
+
+    expect(useLogStore.getState().entries).toEqual([]);
+    expect(useLogStore.getState().totalLines).toBe(2);
+  });
+
+  it("rejects malformed tail line and amendment coordinates at the event boundary", async () => {
+    const entry = { ...multilineEntry(), message: "[Sync] started" };
+    useLogStore.setState({
+      openFilePath: "/logs/Log_1.log",
+      sourceOpenMode: "single-file",
+      formatDetected: "Timestamped",
+      byteOffset: 512,
+      totalLines: 1,
+      entries: [entry],
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+
+    act(() => {
+      eventMocks.tailListener?.({
+        payload: {
+          ...emptyTailPayload(),
+          observedThroughLine: -1,
+        },
+      });
+      eventMocks.tailListener?.({
+        payload: {
+          ...emptyTailPayload(),
+          amendments: [
+            {
+              entryId: 0,
+              entryLineNumber: 1,
+              continuationStartLine: 0,
+              continuationEndLine: 2,
+              messageUtf16Start: 14,
+              messageSuffix: "\ninvalid",
+              errorCodeSpans: [],
+            },
+          ],
+        },
+      });
+    });
+
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(useLogStore.getState().entries).toEqual([entry]);
+    expect(useLogStore.getState().totalLines).toBe(1);
+    errorSpy.mockRestore();
   });
 
   it("keeps aggregate file counts authoritative and ignores untracked payloads", async () => {
@@ -237,5 +322,58 @@ describe("useFileWatcher tail start state", () => {
 
     expect(useLogStore.getState().entries).toEqual(beforeUntracked);
     expect(useLogStore.getState().totalLines).toBe(4);
+  });
+
+  it("retains aggregate parse gaps and empty-reset physical coverage", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    useLogStore.setState({
+      sourceOpenMode: "aggregate-folder",
+      formatDetected: "Timestamped",
+      totalLines: 6,
+      aggregateFiles: [
+        {
+          filePath: "/logs/a.log",
+          totalLines: 4,
+          parseErrors: 1,
+          fileSize: 512,
+          byteOffset: 512,
+        },
+        {
+          filePath: "/logs/b.log",
+          totalLines: 2,
+          parseErrors: 0,
+          fileSize: 256,
+          byteOffset: 256,
+        },
+      ],
+      entries: [
+        { ...multilineEntry(), filePath: "/logs/a.log", message: "stale" },
+        { ...multilineEntry(), id: 2, filePath: "/logs/b.log", message: "keep" },
+      ],
+    });
+
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+
+    act(() =>
+      eventMocks.tailListener?.({
+        payload: emptyTailPayload({
+          filePath: "/logs/a.log",
+          observedThroughLine: 3,
+          parseErrors: 2,
+          reset: true,
+        }),
+      }),
+    );
+
+    expect(useLogStore.getState().entries).toMatchObject([
+      { filePath: "/logs/b.log", message: "keep" },
+    ]);
+    expect(useLogStore.getState().aggregateFiles).toMatchObject([
+      { filePath: "/logs/a.log", totalLines: 3, parseErrors: 3 },
+      { filePath: "/logs/b.log", totalLines: 2, parseErrors: 0 },
+    ]);
+    expect(useLogStore.getState().totalLines).toBe(5);
+    warnSpy.mockRestore();
   });
 });
