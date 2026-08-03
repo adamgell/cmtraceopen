@@ -26,6 +26,8 @@ pub const MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS: usize =
 /// separately bounded without sharing the declaration budget, so a capture
 /// frontier cannot hide coverage loss.
 pub const MAX_SCCM_CLIENT_DISCOVERY_COVERAGE_ISSUES: usize = MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS;
+/// Privacy-safe catalog identity used when no validated catalog entry exists.
+const NO_CATALOG_ENTRY_ID: &str = "sccm-client-source:v1:none";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SccmClientDiscoveryObservationState {
@@ -393,8 +395,9 @@ fn normalize_observations(
                     }
                 }
             }
-            (root_is_valid, catalog_basename) => {
-                let coverage_issue = coverage_issue_key(root_is_valid, catalog_basename.as_deref());
+            (rejected_root_is_valid, catalog_basename) => {
+                let coverage_issue =
+                    coverage_issue_key(rejected_root_is_valid, catalog_basename.as_deref());
                 add_coverage_issue_count(&mut coverage_issue_counts, coverage_issue, 1);
             }
         }
@@ -416,7 +419,7 @@ fn coverage_issue_key(root_is_valid: bool, catalog_basename: Option<&str>) -> Co
     };
     let catalog_entry_id = catalog_basename
         .map(catalog_entry_id)
-        .unwrap_or_else(|| "sccm-client-source:v1:none".to_owned());
+        .unwrap_or_else(|| NO_CATALOG_ENTRY_ID.to_owned());
     CoverageIssueKey {
         catalog_entry_id,
         logical_artifact_ids: Vec::new(),
@@ -430,7 +433,7 @@ fn declaration_limit_issue_key(
     omitted_declaration_state: SccmClientDiscoveryState,
 ) -> CoverageIssueKey {
     CoverageIssueKey {
-        catalog_entry_id: "sccm-client-source:v1:none".to_owned(),
+        catalog_entry_id: NO_CATALOG_ENTRY_ID.to_owned(),
         logical_artifact_ids: Vec::new(),
         rotation_category: SccmClientDiscoveryRotationCategory::Unknown,
         state: SccmClientDiscoveryCoverageIssueState::DeclarationLimitExceeded,
@@ -438,6 +441,7 @@ fn declaration_limit_issue_key(
     }
 }
 
+const _: () = assert!(MAX_SCCM_CLIENT_DISCOVERY_DECLARATIONS > 0);
 const _: () = assert!(MAX_SCCM_CLIENT_DISCOVERY_OBSERVATIONS <= u16::MAX as usize);
 
 fn add_coverage_issue_count(
