@@ -94,11 +94,13 @@ function canApplyTailAmendment(
   entry: LogEntry,
   amendment: TailEntryAmendment,
 ): boolean {
+  const expectedContinuationStartLine =
+    entry.lineNumber + entry.message.split("\n").length;
   if (
     amendment.messageSuffix.length === 0 ||
     !amendment.messageSuffix.startsWith("\n") ||
     amendment.entryLineNumber !== entry.lineNumber ||
-    amendment.continuationStartLine <= amendment.entryLineNumber ||
+    amendment.continuationStartLine !== expectedContinuationStartLine ||
     amendment.continuationEndLine < amendment.continuationStartLine ||
     entry.message.length !== amendment.messageUtf16Start
   ) {
@@ -949,10 +951,15 @@ export const useLogStore = create<LogState>((set, get) => ({
   },
   observeAggregateTailLine: (filePath, lineNumber) => {
     set((state) => {
+      const targetFile = state.aggregateFiles.find(
+        (file) => file.filePath === filePath,
+      );
+      if (!targetFile || lineNumber <= targetFile.totalLines) {
+        return state;
+      }
+
       const aggregateFiles = state.aggregateFiles.map((file) =>
-        file.filePath === filePath && lineNumber > file.totalLines
-          ? { ...file, totalLines: lineNumber }
-          : file,
+        file.filePath === filePath ? { ...file, totalLines: lineNumber } : file,
       );
       return {
         aggregateFiles,
