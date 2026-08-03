@@ -2700,3 +2700,65 @@ fn source_workflow_root_and_sanitized_role_path_mutation_fails_closed() {
         "cross-workflow evidence root and server-shaped sanitized path were accepted"
     );
 }
+
+#[test]
+fn reviewer_probe_version_and_physical_identity_provenance_fail_closed() {
+    let (script_root, script_manifest, script_expected) = load_contract("script-success");
+    let mut accepted = Vec::new();
+
+    let mut malformed_version = script_manifest.clone();
+    malformed_version["artifacts"][0]["sourceVersion"] =
+        Value::String("5.00.TEST.UNKNOWN".to_owned());
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &malformed_version,
+        &script_expected,
+    ) {
+        accepted.push("malformed source version retained selected profile");
+    }
+
+    let mut leaking_fingerprint = script_manifest.clone();
+    leaking_fingerprint["artifacts"][0]["pathFingerprint"] =
+        Value::String("safe:path:326:C:/Users/RealUser/Scripts.log".to_owned());
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &leaking_fingerprint,
+        &script_expected,
+    ) {
+        accepted.push("identity-bearing path fingerprint");
+    }
+
+    let mut leaking_source_path = script_manifest.clone();
+    leaking_source_path["artifacts"][0]["sanitizedSourcePath"] = Value::String(
+        "SYNTHETIC://client/management/script-success/client-scripts/C:/Users/RealUser/current/Scripts.log"
+            .to_owned(),
+    );
+    if mutation_was_accepted(
+        "script-success",
+        &script_root,
+        &leaking_source_path,
+        &script_expected,
+    ) {
+        accepted.push("identity-bearing synthetic source path");
+    }
+
+    let (mixed_root, mixed_manifest, mixed_expected) = load_contract("mixed-unrelated");
+    let mut duplicate_source_identity = mixed_manifest;
+    duplicate_source_identity["artifacts"][4]["sanitizedSourcePath"] =
+        duplicate_source_identity["artifacts"][3]["sanitizedSourcePath"].clone();
+    if mutation_was_accepted(
+        "mixed-unrelated",
+        &mixed_root,
+        &duplicate_source_identity,
+        &mixed_expected,
+    ) {
+        accepted.push("duplicate physical source identity under distinct fingerprints");
+    }
+
+    assert!(
+        accepted.is_empty(),
+        "version or physical provenance mutations were accepted: {accepted:?}"
+    );
+}
