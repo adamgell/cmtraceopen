@@ -1574,7 +1574,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tail_reader_replaces_initial_company_portal_record_after_late_continuation() {
+    fn test_tail_reader_amends_initial_company_portal_record_after_late_continuation() {
         let root = hinted_test_root("company-portal-initial-logical-record");
         let path = hinted_test_path(
             &root,
@@ -1655,7 +1655,7 @@ mod tests {
     }
 
     #[test]
-    fn test_initial_company_portal_continuations_emit_one_replacement_at_next_header() {
+    fn test_initial_company_portal_continuations_emit_one_amendment_at_next_header() {
         let root = hinted_test_root("company-portal-initial-multi-batch");
         let path = hinted_test_path(
             &root,
