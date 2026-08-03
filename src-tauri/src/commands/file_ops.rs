@@ -715,7 +715,7 @@ fn compare_aggregate_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::{list_log_folder, open_log_folder_aggregate};
+    use super::{index_aggregate_entries, list_log_folder, open_log_folder_aggregate};
     use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
@@ -851,6 +851,30 @@ mod tests {
 
         assert_eq!(visible_entry_id, 1, "fixture must reorder the later record");
         assert_eq!(stored_seed_id, visible_entry_id);
+    }
+
+    #[test]
+    fn aggregate_tail_seed_index_rejects_duplicate_source_lines() {
+        let dir = create_temp_dir("file-ops-aggregate-duplicate-seed");
+        let path = dir.join("Log_1.log");
+        fs::write(
+            &path,
+            "2026-05-04T08:12:31.4410000Z  INFO      Event       None        0    \
+             1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [App Catalog] entry\n",
+        )
+        .expect("write Company Portal log");
+        let (result, _) = crate::parser::parse_file(path.to_string_lossy().as_ref())
+            .expect("parse Company Portal log");
+        let entry = result.entries.first().expect("parsed entry").clone();
+        let entries = [entry.clone(), entry];
+
+        let error = index_aggregate_entries(&entries).expect_err("duplicate key must fail");
+
+        fs::remove_dir_all(&dir).expect("remove temp aggregate folder");
+        assert!(
+            matches!(error, crate::error::AppError::Internal(message) if message.contains("duplicate aggregate entry")),
+            "duplicate source coordinates must fail clearly"
+        );
     }
 
     /// A folder reaching the file lane must be classified by its kind, never by
