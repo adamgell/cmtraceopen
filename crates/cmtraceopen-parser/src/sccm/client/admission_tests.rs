@@ -5,6 +5,7 @@ use super::admission::{
     SccmClientEvidenceAdmissionError,
 };
 use super::{assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle};
+use crate::parser::ccm::{observe_bounded_scans, CcmBoundedScanObservation};
 use crate::sccm::{SccmArtifact, SccmCoverageState, SccmRole, SccmRotation};
 
 fn digest(bytes: &[u8]) -> String {
@@ -593,9 +594,9 @@ fn admission_applies_the_integrity_seal_cap_independently_of_retained_memory() {
 fn admission_enforces_logical_record_cap_across_all_payloads() {
     let mut artifacts = Vec::new();
     let mut payloads = Vec::new();
-    for number in 1..=2 {
+    for (number, record_count) in [(1, 4_095), (2, 4_096)] {
         let artifact_id = format!("sccm-artifact:v1:sha256:{number:064x}");
-        let bytes = repeated_record_bytes(2_049, "x");
+        let bytes = repeated_record_bytes(record_count, "x");
         artifacts.push(numbered_artifact_bound_to(number, &bytes));
         payloads.push(payload_from_bytes(&artifact_id, bytes));
     }
@@ -606,11 +607,8 @@ fn admission_enforces_logical_record_cap_across_all_payloads() {
     let assessment =
         assess_client_intake(&bundle).expect("two captured rotations are canonical intake");
 
-    let result = admit_client_evidence(&bundle, &assessment, &payloads);
-    assert!(
-        result.is_err(),
-        "two individually bounded rotations totaling 4,098 records were admitted"
-    );
+    let (result, observations) =
+        observe_bounded_scans(|| admit_client_evidence(&bundle, &assessment, &payloads));
     let error = admission_error(
         result,
         "the logical-record cap must apply across the complete bundle",
@@ -618,6 +616,30 @@ fn admission_enforces_logical_record_cap_across_all_payloads() {
     assert_eq!(
         error.to_string(),
         "client evidence admission logical record count exceeds the v1 cap"
+    );
+    assert_eq!(
+        observations,
+        vec![
+            CcmBoundedScanObservation {
+                record_limit: 4_096,
+                retained_records: 4_095,
+                record_limit_exceeded: false,
+            },
+            CcmBoundedScanObservation {
+                record_limit: 1,
+                retained_records: 1,
+                record_limit_exceeded: true,
+            },
+        ],
+        "the second scanner must receive and retain only the aggregate remainder"
+    );
+    assert_eq!(
+        observations
+            .iter()
+            .map(|observation| observation.retained_records)
+            .sum::<usize>(),
+        4_096,
+        "admission must never materialize more than the bundle record cap"
     );
 }
 

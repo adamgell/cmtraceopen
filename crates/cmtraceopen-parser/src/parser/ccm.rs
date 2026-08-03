@@ -12,6 +12,8 @@ use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, ParserSpecialization, Severity};
+#[cfg(test)]
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 const CCM_RECORD_OPENER: &str = "<![LOG[";
@@ -371,6 +373,40 @@ pub(crate) struct CcmLogicalRecordScan {
     pub record_limit_exceeded: bool,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CcmBoundedScanObservation {
+    pub record_limit: usize,
+    pub retained_records: usize,
+    pub record_limit_exceeded: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static BOUNDED_SCAN_OBSERVATIONS: RefCell<Option<Vec<CcmBoundedScanObservation>>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn observe_bounded_scans<T>(
+    operation: impl FnOnce() -> T,
+) -> (T, Vec<CcmBoundedScanObservation>) {
+    BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
+        assert!(
+            observations.replace(Some(Vec::new())).is_none(),
+            "bounded scan observation cannot be nested"
+        );
+    });
+    let output = operation();
+    let observations = BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
+        observations
+            .borrow_mut()
+            .take()
+            .expect("bounded scan observation was installed")
+    });
+    (output, observations)
+}
+
 pub(crate) fn scan_logical_records_bounded(
     content: &str,
     file_path: &str,
@@ -382,7 +418,7 @@ pub(crate) fn scan_logical_records_bounded(
         CcmScanMode::SccmEvidence,
         Some(max_records),
     );
-    CcmLogicalRecordScan {
+    let bounded = CcmLogicalRecordScan {
         records: scan
             .records
             .into_iter()
@@ -390,7 +426,18 @@ pub(crate) fn scan_logical_records_bounded(
             .collect(),
         complete: scan.errors == 0 && !scan.record_limit_exceeded,
         record_limit_exceeded: scan.record_limit_exceeded,
-    }
+    };
+    #[cfg(test)]
+    BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
+        if let Some(observations) = observations.borrow_mut().as_mut() {
+            observations.push(CcmBoundedScanObservation {
+                record_limit: max_records,
+                retained_records: bounded.records.len(),
+                record_limit_exceeded: bounded.record_limit_exceeded,
+            });
+        }
+    });
+    bounded
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -686,11 +686,11 @@ fn caller_constructed_policy_profile_cannot_cross_the_admitted_boundary() {
     };
 
     let generic_result = extract_keys(evidence, &caller_constructed);
-    assert_eq!(generic_result.keys.len(), 1);
-    assert_eq!(
-        generic_result.keys[0].kind,
-        SccmCorrelationKeyKind::AssignmentId
-    );
+    assert!(generic_result.keys.is_empty());
+    assert!(generic_result
+        .gaps
+        .iter()
+        .any(|gap| gap.kind == SccmExtractionGapKind::UnvalidatedProfile));
 
     let admitted_result: SccmClientAdmittedKeyExtraction = admitted
         .extract_keys_for_artifact("fixture-policy")
