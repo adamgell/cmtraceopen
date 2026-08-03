@@ -29,9 +29,10 @@ use crate::sccm::{
 };
 
 use super::{
-    assess_client_intake, intake::is_safe_artifact_id, SccmClientIntakeAssessment,
-    SccmClientIntakeBundle, SccmClientIntakeError, SccmClientIntakeFragment,
-    MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    assess_client_intake,
+    intake::{is_safe_artifact_id, source_matches_group},
+    SccmClientIntakeAssessment, SccmClientIntakeBundle, SccmClientIntakeError,
+    SccmClientIntakeFragment, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
 };
 
 /// Maximum raw bytes decoded from one client payload at the parser admission
@@ -132,11 +133,7 @@ impl SccmClientAdmittedEvidence {
         logical_artifact_id: &str,
     ) -> Result<(), SccmClientEvidenceAdmissionError> {
         match self.source_coverage(logical_artifact_id)? {
-            Some(SccmCoverageState::Captured)
-                if self.admitted_source_groups.contains(logical_artifact_id) =>
-            {
-                Ok(())
-            }
+            Some(_) if self.admitted_source_groups.contains(logical_artifact_id) => Ok(()),
             Some(_) => Err(SccmClientEvidenceAdmissionError::SourceCoverageUnavailable),
             None => Err(SccmClientEvidenceAdmissionError::UnknownSourceGroup),
         }
@@ -259,12 +256,19 @@ pub fn admit_client_evidence(
         .iter()
         .filter(|group| {
             group.fragments.iter().any(is_supported_raw_ccm_fragment)
-                && group.coverage == SccmCoverageState::Captured
                 && group
                     .fragments
                     .iter()
                     .filter(|fragment| is_supported_raw_ccm_fragment(fragment))
                     .all(is_bound_complete_capture)
+                && !canonical.capture_gaps.iter().any(|capture_gap| {
+                    is_supported_raw_ccm_source(&capture_gap.basename)
+                        && source_matches_group(
+                            &capture_gap.basename,
+                            &capture_gap.rotation,
+                            &group.logical_artifact_id,
+                        )
+                })
         })
         .map(|group| group.logical_artifact_id.clone())
         .collect::<BTreeSet<_>>();
@@ -394,7 +398,11 @@ fn validate_payload_budget(
 }
 
 fn is_supported_raw_ccm_fragment(fragment: &SccmClientIntakeFragment) -> bool {
-    let classified = classify_artifact_name(&fragment.basename, SccmRole::Client);
+    is_supported_raw_ccm_source(&fragment.basename)
+}
+
+fn is_supported_raw_ccm_source(basename: &str) -> bool {
+    let classified = classify_artifact_name(basename, SccmRole::Client);
     classified.supported_for_diagnosis && classified.uses_ccm_records
 }
 

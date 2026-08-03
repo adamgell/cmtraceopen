@@ -1464,6 +1464,16 @@ fn matching_groups(
         .collect()
 }
 
+pub(super) fn source_matches_group(
+    display_name: &str,
+    rotation: &SccmRotation,
+    logical_artifact_id: &str,
+) -> bool {
+    matching_groups(display_name, rotation)
+        .iter()
+        .any(|group| group.logical_artifact_id == logical_artifact_id)
+}
+
 fn catalogued_client_source(
     display_name: &str,
     rotation: &SccmRotation,
