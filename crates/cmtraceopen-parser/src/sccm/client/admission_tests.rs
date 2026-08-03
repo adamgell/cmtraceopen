@@ -204,9 +204,8 @@ fn admission_seals_canonical_records_from_complete_captured_payloads() {
         Some(&SccmCoverageState::Captured)
     );
     assert!(admitted
-        .profile_for_artifact("fixture-policy-agent")
-        .expect("valid seal")
-        .is_some());
+        .extract_keys_for_artifact("fixture-policy-agent")
+        .is_ok());
     assert!(admitted
         .require_captured_source("client-policy-agent")
         .is_ok());
@@ -658,7 +657,7 @@ fn admission_integrity_rejects_test_only_record_profile_and_identity_collisions(
     profile_mutation.test_only_mutate_first_profile();
     assert!(profile_mutation.verify_integrity().is_err());
     assert!(profile_mutation
-        .profile_for_artifact("fixture-policy-agent")
+        .extract_keys_for_artifact("fixture-policy-agent")
         .is_err());
 
     let mut collision =

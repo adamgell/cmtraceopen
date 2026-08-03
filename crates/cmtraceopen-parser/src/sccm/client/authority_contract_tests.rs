@@ -1,8 +1,8 @@
 use sha2::{Digest, Sha256};
 
 use super::admission::{
-    admit_client_evidence, SccmClientAdmittedEvidence, SccmClientCapturedPayload,
-    SccmClientEvidenceAdmissionError,
+    admit_client_evidence, SccmClientAdmittedEvidence, SccmClientAdmittedKeyExtraction,
+    SccmClientCapturedPayload, SccmClientEvidenceAdmissionError,
 };
 use super::{
     assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle,
@@ -426,14 +426,14 @@ fn admitted_profile_is_bound_to_the_catalogued_source_family() {
             Err(error) => panic!("bound policy evidence must be admitted: {error}"),
         };
 
-    let profile = admitted
-        .profile_for_artifact("fixture-policy")
-        .expect("valid authority seal")
-        .expect("admitted artifact has a profile");
+    let extraction = admitted
+        .extract_keys_for_artifact("fixture-policy")
+        .expect("admitted artifact has sealed key-extraction authority");
     assert_eq!(
-        profile.validated_artifact_families,
-        [SccmArtifactFamily::ClientPolicy]
+        extraction.artifact_family(),
+        &SccmArtifactFamily::ClientPolicy
     );
+    assert_eq!(extraction.artifact_id(), "fixture-policy");
 }
 
 #[test]
@@ -500,9 +500,8 @@ fn captured_non_ccm_supplement_does_not_block_or_join_policy_admission() {
         .is_err());
     assert_eq!(admitted.evidence().expect("valid authority seal").len(), 1);
     assert!(admitted
-        .profile_for_artifact("fixture-reporting-supplemental")
-        .expect("valid authority seal")
-        .is_none());
+        .extract_keys_for_artifact("fixture-reporting-supplemental")
+        .is_err());
 }
 
 #[test]
@@ -608,7 +607,7 @@ fn raw_ccm_capture_gap_still_blocks_ccmsetup_group_readiness() {
 }
 
 #[test]
-fn sealed_policy_profile_extracts_a_low_confidence_assignment_key() {
+fn admitted_policy_extraction_is_sealed_to_the_exact_artifact_and_family() {
     let assignment_id = "12345678-1234-1234-1234-123456789abc";
     let bytes = ccm_bytes(&format!("Assignment ID = {assignment_id}"));
     let bundle = bundle_with(vec![artifact(
@@ -621,14 +620,17 @@ fn sealed_policy_profile_extracts_a_low_confidence_assignment_key() {
     let assessment = assess_client_intake(&bundle).expect("bound policy intake is canonical");
     let admitted = admit_client_evidence(&bundle, &assessment, &[payload("fixture-policy", bytes)])
         .expect("bound policy evidence must be admitted");
-    let evidence = &admitted.evidence().expect("valid authority seal")[0];
-    let profile = admitted
-        .profile_for_artifact("fixture-policy")
-        .expect("valid authority seal")
-        .expect("policy evidence has a sealed profile");
+    let extraction: SccmClientAdmittedKeyExtraction = admitted
+        .extract_keys_for_artifact("fixture-policy")
+        .expect("policy evidence has sealed extraction authority");
+    let result = &extraction.results()[0];
 
-    let result = extract_keys(evidence, profile);
-
+    assert_eq!(extraction.artifact_id(), "fixture-policy");
+    assert_eq!(
+        extraction.artifact_family(),
+        &SccmArtifactFamily::ClientPolicy
+    );
+    assert_eq!(extraction.results().len(), 1);
     assert_eq!(result.keys.len(), 1);
     assert_eq!(result.keys[0].kind, SccmCorrelationKeyKind::AssignmentId);
     assert_eq!(result.keys[0].normalized, assignment_id);
@@ -644,7 +646,7 @@ fn sealed_policy_profile_extracts_a_low_confidence_assignment_key() {
 }
 
 #[test]
-fn caller_forged_family_profile_is_rejected_by_key_extraction() {
+fn caller_constructed_policy_profile_cannot_cross_the_admitted_boundary() {
     let assignment_id = "12345678-1234-1234-1234-123456789abc";
     let bytes = ccm_bytes(&format!("Assignment ID = {assignment_id}"));
     let bundle = bundle_with(vec![artifact(
@@ -658,26 +660,44 @@ fn caller_forged_family_profile_is_rejected_by_key_extraction() {
     let admitted = admit_client_evidence(&bundle, &assessment, &[payload("fixture-policy", bytes)])
         .expect("bound policy evidence must be admitted");
     let evidence = &admitted.evidence().expect("valid authority seal")[0];
-    let forged = SccmExtractionProfile {
+    let caller_constructed = SccmExtractionProfile {
         profile_id: SCCM_EXPERIMENTAL_KEY_PROFILE_ID.to_owned(),
         configmgr_version_prefixes: vec!["5.00.9128.".to_owned()],
-        validated_artifact_families: vec![SccmArtifactFamily::Unknown("callerForged".to_owned())],
+        validated_artifact_families: vec![SccmArtifactFamily::ClientPolicy],
         selected_configmgr_version: Some("5.00.9128.1000".to_owned()),
         maturity: SccmExtractionProfileMaturity::Experimental,
     };
 
-    let result = extract_keys(evidence, &forged);
+    let generic_result = extract_keys(evidence, &caller_constructed);
+    assert_eq!(generic_result.keys.len(), 1);
+    assert_eq!(
+        generic_result.keys[0].kind,
+        SccmCorrelationKeyKind::AssignmentId
+    );
 
-    assert!(result.keys.is_empty());
-    assert_eq!(result.gaps.len(), 1);
+    let admitted_result: SccmClientAdmittedKeyExtraction = admitted
+        .extract_keys_for_artifact("fixture-policy")
+        .expect("only the admitted authority selects the sealed profile");
+    let result = &admitted_result.results()[0];
+
+    assert_eq!(admitted_result.artifact_id(), "fixture-policy");
     assert_eq!(
-        result.gaps[0].kind,
-        SccmExtractionGapKind::UnvalidatedProfile
+        admitted_result.artifact_family(),
+        &SccmArtifactFamily::ClientPolicy
     );
-    assert_eq!(
-        result.gaps[0].candidate_kind,
-        Some(SccmCorrelationKeyKind::AssignmentId)
-    );
+    assert_eq!(admitted_result.results().len(), 1);
+    assert_eq!(result.keys.len(), 1);
+    assert_eq!(result.keys[0].kind, SccmCorrelationKeyKind::AssignmentId);
+    assert_eq!(result.keys[0].normalized, assignment_id);
+    assert_eq!(result.keys[0].confidence, SccmKeyConfidence::Low);
+    assert!(result
+        .gaps
+        .iter()
+        .any(|gap| gap.kind == SccmExtractionGapKind::ExperimentalProfile));
+    assert!(result
+        .gaps
+        .iter()
+        .all(|gap| gap.kind != SccmExtractionGapKind::UnvalidatedProfile));
 }
 
 #[test]
@@ -694,17 +714,14 @@ fn unregistered_ccm_family_is_admitted_with_an_unvalidated_profile_gap() {
     let admitted =
         admit_client_evidence(&bundle, &assessment, &[payload("fixture-content", bytes)])
             .expect("raw CCM evidence does not require a validated key-extraction family");
-    let evidence = &admitted.evidence().expect("valid authority seal")[0];
-    let profile = admitted
-        .profile_for_artifact("fixture-content")
-        .expect("valid authority seal")
-        .expect("content evidence has a sealed family-bound profile");
-
-    let result = extract_keys(evidence, profile);
+    let extraction = admitted
+        .extract_keys_for_artifact("fixture-content")
+        .expect("content evidence has sealed family-bound extraction authority");
+    let result = &extraction.results()[0];
 
     assert_eq!(
-        profile.validated_artifact_families,
-        [SccmArtifactFamily::ClientContent]
+        extraction.artifact_family(),
+        &SccmArtifactFamily::ClientContent
     );
     assert!(result.keys.is_empty());
     assert_eq!(result.gaps.len(), 1);
