@@ -227,6 +227,33 @@ describe("log-store", () => {
       expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
       expect(useLogStore.getState().totalLines).toBe(1);
     });
+
+    it("ignores an amendment whose entry id is not present", () => {
+      const entries = [
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ];
+      const aggregateFiles = [
+        {
+          filePath: "/test.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ];
+      useLogStore.getState().setEntries(entries);
+      useLogStore.getState().setAggregateFiles(aggregateFiles);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        entryId: 99,
+      });
+
+      expect(useLogStore.getState().entries).toBe(entries);
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
   });
 
   describe("resetEntries (tail truncation)", () => {
@@ -481,6 +508,38 @@ describe("log-store", () => {
         "[Sync] started\nrequest failed",
       );
       expect(useLogStore.getState().totalLines).toBe(2);
+    });
+
+    it("ignores an amendment whose file path has no matching entry", () => {
+      const entries = [
+        makeEntry({ id: 4, filePath: "/a.log", lineNumber: 1, message: "[Sync] started" }),
+      ];
+      const aggregateFiles = [
+        {
+          filePath: "/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ];
+      useLogStore.getState().setEntries(entries);
+      useLogStore.getState().setAggregateFiles(aggregateFiles);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendAggregateEntry("/missing.log", {
+        entryId: 0,
+        entryLineNumber: 1,
+        continuationStartLine: 2,
+        continuationEndLine: 2,
+        messageUtf16Start: 14,
+        messageSuffix: "\nrequest failed",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries).toBe(entries);
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+      expect(useLogStore.getState().totalLines).toBe(1);
     });
   });
 
