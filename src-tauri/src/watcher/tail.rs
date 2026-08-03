@@ -1263,6 +1263,37 @@ mod tests {
         assert_eq!(encoding, FileEncoding::Utf16Le);
     }
 
+    #[test]
+    fn test_blank_physical_line_advances_coverage_without_creating_an_entry() {
+        let path = unique_test_path("tail-reader-blank-physical-line");
+        fs::write(&path, "").expect("should create empty log");
+        let mut reader = TailReader::new(path.clone(), 0, ResolvedParser::plain_text(), 0, 1);
+
+        fs::write(&path, "\n").expect("should append one blank physical line");
+        let batch = reader.read_new_entries().expect("tail read should succeed");
+
+        assert!(batch.entries.is_empty());
+        assert_eq!(batch.observed_through_line, Some(1));
+        assert_eq!(reader.next_line, 2);
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
+    #[test]
+    fn test_empty_logical_batch_does_not_report_line_zero() {
+        let path = unique_test_path("tail-reader-empty-logical-batch");
+        fs::write(&path, "").expect("should create empty Company Portal log");
+        let selection = ResolvedParser::company_portal();
+        let mut reader = TailReader::new(path.clone(), 0, selection.clone(), 0, 1);
+
+        let batch = reader.parse_logical_records(Vec::new(), &selection, 0);
+
+        assert_eq!(batch.observed_through_line, None);
+        assert_eq!(reader.next_line, 1);
+
+        fs::remove_file(path).expect("should clean up temp file");
+    }
+
     fn assert_entries_match(actual: &LogEntry, expected: &LogEntry) {
         assert_eq!(actual.id, expected.id);
         assert_eq!(actual.line_number, expected.line_number);
