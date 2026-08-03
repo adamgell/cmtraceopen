@@ -396,12 +396,7 @@ pub fn open_log_folder_aggregate(
     }
 
     {
-        let mut aggregate_entry_lookup = std::collections::HashMap::<(&str, u32), &LogEntry>::new();
-        for entry in &aggregate_entries {
-            aggregate_entry_lookup
-                .entry((entry.file_path.as_str(), entry.line_number))
-                .or_insert(entry);
-        }
+        let aggregate_entry_lookup = index_aggregate_entries(&aggregate_entries)?;
 
         let mut open_files = state
             .open_files
@@ -711,6 +706,24 @@ fn compare_aggregate_entries(
             .then_with(|| left.line_number.cmp(&right.line_number))
             .then_with(|| left.message.cmp(&right.message)),
     }
+}
+
+fn index_aggregate_entries(
+    entries: &[LogEntry],
+) -> Result<std::collections::HashMap<(&str, u32), &LogEntry>, crate::error::AppError> {
+    let mut lookup = std::collections::HashMap::new();
+    for entry in entries {
+        if lookup
+            .insert((entry.file_path.as_str(), entry.line_number), entry)
+            .is_some()
+        {
+            return Err(crate::error::AppError::Internal(format!(
+                "duplicate aggregate entry for {} at physical line {}",
+                entry.file_path, entry.line_number
+            )));
+        }
+    }
+    Ok(lookup)
 }
 
 #[cfg(test)]
