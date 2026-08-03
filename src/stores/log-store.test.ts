@@ -244,12 +244,16 @@ describe("log-store", () => {
       useLogStore.getState().setEntries(entries);
       useLogStore.getState().setAggregateFiles(aggregateFiles);
       useLogStore.getState().setTotalLines(1);
+      const listener = vi.fn();
+      const unsubscribe = useLogStore.subscribe(listener);
 
       useLogStore.getState().amendEntry({
         ...firstAmendment,
         entryId: 99,
       });
 
+      unsubscribe();
+      expect(listener).not.toHaveBeenCalled();
       expect(useLogStore.getState().entries).toBe(entries);
       expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
       expect(useLogStore.getState().totalLines).toBe(1);
@@ -526,6 +530,8 @@ describe("log-store", () => {
       useLogStore.getState().setEntries(entries);
       useLogStore.getState().setAggregateFiles(aggregateFiles);
       useLogStore.getState().setTotalLines(1);
+      const listener = vi.fn();
+      const unsubscribe = useLogStore.subscribe(listener);
 
       useLogStore.getState().amendAggregateEntry("/missing.log", {
         entryId: 0,
@@ -537,6 +543,8 @@ describe("log-store", () => {
         errorCodeSpans: [],
       });
 
+      unsubscribe();
+      expect(listener).not.toHaveBeenCalled();
       expect(useLogStore.getState().entries).toBe(entries);
       expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
       expect(useLogStore.getState().totalLines).toBe(1);
