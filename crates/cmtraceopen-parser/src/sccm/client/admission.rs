@@ -1,13 +1,13 @@
-//! Crate-private sealing of canonical SCCM client evidence.
+//! Sealing of canonical SCCM client evidence behind an opaque capability.
 //!
 //! Raw payload bytes exist only while this constructor verifies their digest
 //! and normalizes their CCM logical records. Reducers receive the resulting
 //! immutable-by-API capability, never bytes or caller-supplied evidence.
 
-// This is deliberately a crate-private shared interface that lands before
-// workflow reducers. No production reducer owns it in this slice, so rustc
-// cannot yet observe a call site; retaining the lint allowance here avoids
-// weakening workspace-wide warning policy while preserving the review gate.
+// The public facade lands before workflow reducers, while its capability
+// accessors deliberately remain crate-private. No production reducer owns
+// them in this slice, so rustc cannot yet observe those call sites; retaining
+// the local lint allowance avoids weakening workspace-wide warning policy.
 #![allow(dead_code)]
 
 use std::{
@@ -21,16 +21,18 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::parser::ccm::scan_logical_records_bounded;
+use crate::sccm::catalog::classify_artifact_name;
 use crate::sccm::evidence::SccmRawEvidenceSnapshot;
 use crate::sccm::{
-    SccmArtifact, SccmCoverageState, SccmEvidence, SccmExtractionProfile,
+    SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence, SccmExtractionProfile,
     SccmExtractionProfileMaturity, SccmRole, SccmTimeOrderingState,
     SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
 };
 
 use super::{
-    assess_client_intake, SccmClientIntakeAssessment, SccmClientIntakeBundle,
-    SccmClientIntakeError, SccmClientIntakeFragment, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    assess_client_intake, intake::is_safe_artifact_id, SccmClientIntakeAssessment,
+    SccmClientIntakeBundle, SccmClientIntakeError, SccmClientIntakeFragment,
+    MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
 };
 
 /// Maximum raw bytes decoded from one client payload at the parser admission
@@ -49,12 +51,28 @@ pub(crate) const MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES: usize = 4 * 1024 * 1024;
 /// Raw, already-captured bytes offered to the one-shot client evidence
 /// admission boundary. This is an input only: the successful capability does
 /// not retain this vector or any decoded raw text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SccmClientCapturedPayload {
-    pub artifact_id: String,
-    pub bytes: Vec<u8>,
-    pub byte_length: u64,
-    pub expected_sha256: String,
+pub struct SccmClientCapturedPayload {
+    artifact_id: String,
+    bytes: Vec<u8>,
+}
+
+impl SccmClientCapturedPayload {
+    /// Constructs one bytes-only admission input. Artifact identity is only a
+    /// routing handle; byte length and digest authority remain exclusively on
+    /// the canonical intake fragment.
+    pub fn new(
+        artifact_id: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Result<Self, SccmClientEvidenceAdmissionError> {
+        let artifact_id = artifact_id.into();
+        if !is_safe_artifact_id(&artifact_id) {
+            return Err(SccmClientEvidenceAdmissionError::InvalidPayloadArtifactId);
+        }
+        if bytes.len() > MAX_SCCM_CLIENT_ADMISSION_PAYLOAD_BYTES {
+            return Err(SccmClientEvidenceAdmissionError::PayloadByteLimitExceeded);
+        }
+        Ok(Self { artifact_id, bytes })
+    }
 }
 
 /// The bounded evidence authority internal client reducers consume.
@@ -62,10 +80,10 @@ pub(crate) struct SccmClientCapturedPayload {
 /// Its fields stay private and it deliberately implements neither serde nor a
 /// public constructor. `verify_integrity` recomputes the deterministic seal so
 /// a reducer can fail closed if future crate-internal code corrupts it.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct SccmClientAdmittedEvidence {
+pub struct SccmClientAdmittedEvidence {
     evidence: Vec<SccmEvidence>,
     source_coverage: BTreeMap<String, SccmCoverageState>,
+    admitted_source_groups: BTreeSet<String>,
     profiles_by_artifact: BTreeMap<String, SccmExtractionProfile>,
     integrity_seal: String,
 }
@@ -100,6 +118,7 @@ impl SccmClientAdmittedEvidence {
         let recomputed = compute_integrity_seal(
             &self.evidence,
             &self.source_coverage,
+            &self.admitted_source_groups,
             &self.profiles_by_artifact,
         )?;
         (recomputed == self.integrity_seal)
@@ -114,7 +133,11 @@ impl SccmClientAdmittedEvidence {
         logical_artifact_id: &str,
     ) -> Result<(), SccmClientEvidenceAdmissionError> {
         match self.source_coverage(logical_artifact_id)? {
-            Some(SccmCoverageState::Captured) => Ok(()),
+            Some(SccmCoverageState::Captured)
+                if self.admitted_source_groups.contains(logical_artifact_id) =>
+            {
+                Ok(())
+            }
             Some(_) => Err(SccmClientEvidenceAdmissionError::SourceCoverageUnavailable),
             None => Err(SccmClientEvidenceAdmissionError::UnknownSourceGroup),
         }
@@ -142,7 +165,7 @@ impl SccmClientAdmittedEvidence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(crate) enum SccmClientEvidenceAdmissionError {
+pub enum SccmClientEvidenceAdmissionError {
     #[error("client evidence admission bundle is invalid: {0}")]
     InvalidBundle(SccmClientIntakeError),
     #[error("client evidence admission assessment is not the canonical bundle projection")]
@@ -153,16 +176,18 @@ pub(crate) enum SccmClientEvidenceAdmissionError {
     PayloadByteLimitExceeded,
     #[error("client evidence admission aggregate payload bytes exceed the v1 cap")]
     AggregatePayloadByteLimitExceeded,
+    #[error("client evidence admission payload artifact ID is invalid")]
+    InvalidPayloadArtifactId,
     #[error("client evidence admission contains duplicate payload artifact IDs")]
     DuplicatePayload,
     #[error("client evidence admission is missing a payload for a captured fragment")]
     MissingPayload,
     #[error("client evidence admission payload has no matching canonical captured fragment")]
     ExtraPayload,
-    #[error("client evidence admission payload targets a noncaptured or incomplete fragment")]
-    NonAdmissibleFragment,
     #[error("client evidence admission payload length or digest is invalid")]
     PayloadIntegrityMismatch,
+    #[error("client evidence admission captured fragment has no intake-bound length and digest")]
+    MissingContentBinding,
     #[error("client evidence admission cannot decode the declared artifact encoding")]
     InvalidEncoding,
     #[error("client evidence admission payload has no complete CCM logical record")]
@@ -191,7 +216,7 @@ pub(crate) enum SccmClientEvidenceAdmissionError {
 
 /// Reassesses a canonical client bundle and seals the logical CCM evidence it
 /// derives from each exact complete captured payload.
-pub(crate) fn admit_client_evidence(
+pub fn admit_client_evidence(
     bundle: &SccmClientIntakeBundle,
     assessment: &SccmClientIntakeAssessment,
     payloads: &[SccmClientCapturedPayload],
@@ -212,19 +237,40 @@ pub(crate) fn admit_client_evidence(
         .iter()
         .map(|group| (group.logical_artifact_id.clone(), group.coverage.clone()))
         .collect::<BTreeMap<_, _>>();
-    let eligible = canonical
-        .physical_artifacts
+    let mut eligible = BTreeMap::new();
+    let mut unbound_complete_captures = BTreeSet::new();
+    for fragment in &canonical.physical_artifacts {
+        if fragment.coverage != SccmCoverageState::Captured
+            || fragment.fragment_complete != Some(true)
+        {
+            continue;
+        }
+        if fragment.declared_byte_length.is_none() || fragment.content_sha256.is_none() {
+            unbound_complete_captures.insert(fragment.artifact_id.as_str());
+            continue;
+        }
+        eligible.insert(fragment.artifact_id.clone(), fragment);
+    }
+    let admitted_source_groups = canonical
+        .groups
         .iter()
-        .map(|fragment| {
-            (fragment.coverage == SccmCoverageState::Captured
-                && fragment.fragment_complete == Some(true))
-            .then_some((fragment.artifact_id.clone(), fragment))
-            .ok_or(SccmClientEvidenceAdmissionError::NonAdmissibleFragment)
+        .filter(|group| {
+            !group.fragments.is_empty()
+                && group.coverage == SccmCoverageState::Captured
+                && group.fragments.iter().all(|fragment| {
+                    fragment.coverage == SccmCoverageState::Captured
+                        && fragment.fragment_complete == Some(true)
+                        && fragment.declared_byte_length.is_some()
+                        && fragment.content_sha256.is_some()
+                })
         })
-        .collect::<Result<BTreeMap<_, _>, _>>()?;
-
-    if eligible.len() != canonical.physical_artifacts.len() {
-        return Err(SccmClientEvidenceAdmissionError::NonAdmissibleFragment);
+        .map(|group| group.logical_artifact_id.clone())
+        .collect::<BTreeSet<_>>();
+    if payloads
+        .iter()
+        .any(|payload| unbound_complete_captures.contains(payload.artifact_id.as_str()))
+    {
+        return Err(SccmClientEvidenceAdmissionError::MissingContentBinding);
     }
     if payloads.len() != eligible.len() {
         return Err(SccmClientEvidenceAdmissionError::MissingPayload);
@@ -248,10 +294,13 @@ pub(crate) fn admit_client_evidence(
             .get(&payload.artifact_id)
             .copied()
             .ok_or(SccmClientEvidenceAdmissionError::ExtraPayload)?;
-        validate_payload(payload)?;
+        validate_payload(payload, fragment)?;
 
-        let profile = SccmExtractionProfile::for_version(fragment.configmgr_version.as_deref());
-        if !is_registered_client_profile(&profile) {
+        let classified = classify_artifact_name(&fragment.basename, SccmRole::Client);
+        let family = classified.family;
+        let mut profile = SccmExtractionProfile::for_version(fragment.configmgr_version.as_deref());
+        profile.validated_artifact_families = vec![family.clone()];
+        if !classified.supported_for_diagnosis || !is_registered_client_profile(&profile, &family) {
             return Err(SccmClientEvidenceAdmissionError::UnregisteredProfile);
         }
         let content = decode_payload(payload, fragment.encoding.as_deref())?;
@@ -308,11 +357,16 @@ pub(crate) fn admit_client_evidence(
     }
 
     evidence.sort_by(compare_evidence);
-    let integrity_seal =
-        compute_integrity_seal(&evidence, &source_coverage, &profiles_by_artifact)?;
+    let integrity_seal = compute_integrity_seal(
+        &evidence,
+        &source_coverage,
+        &admitted_source_groups,
+        &profiles_by_artifact,
+    )?;
     Ok(SccmClientAdmittedEvidence {
         evidence,
         source_coverage,
+        admitted_source_groups,
         profiles_by_artifact,
         integrity_seal,
     })
@@ -338,13 +392,21 @@ fn validate_payload_budget(
 
 fn validate_payload(
     payload: &SccmClientCapturedPayload,
+    fragment: &SccmClientIntakeFragment,
 ) -> Result<(), SccmClientEvidenceAdmissionError> {
     let length = u64::try_from(payload.bytes.len())
         .map_err(|_| SccmClientEvidenceAdmissionError::PayloadIntegrityMismatch)?;
-    if length != payload.byte_length || !is_lowercase_sha256(&payload.expected_sha256) {
+    let declared_length = fragment
+        .declared_byte_length
+        .ok_or(SccmClientEvidenceAdmissionError::MissingContentBinding)?;
+    let declared_digest = fragment
+        .content_sha256
+        .as_deref()
+        .ok_or(SccmClientEvidenceAdmissionError::MissingContentBinding)?;
+    if length != declared_length || !is_lowercase_sha256(declared_digest) {
         return Err(SccmClientEvidenceAdmissionError::PayloadIntegrityMismatch);
     }
-    (digest_hex(&payload.bytes) == payload.expected_sha256)
+    (digest_hex(&payload.bytes) == declared_digest)
         .then_some(())
         .ok_or(SccmClientEvidenceAdmissionError::PayloadIntegrityMismatch)
 }
@@ -417,11 +479,15 @@ fn artifact_for_fragment(fragment: &SccmClientIntakeFragment) -> SccmArtifact {
     }
 }
 
-fn is_registered_client_profile(profile: &SccmExtractionProfile) -> bool {
+fn is_registered_client_profile(
+    profile: &SccmExtractionProfile,
+    family: &SccmArtifactFamily,
+) -> bool {
     profile.profile_id == SCCM_EXPERIMENTAL_KEY_PROFILE_ID
         && profile.maturity == SccmExtractionProfileMaturity::Experimental
         && profile.configmgr_version_prefixes == ["5.00.9128."]
-        && profile.validated_artifact_families.is_empty()
+        && profile.validated_artifact_families.first() == Some(family)
+        && profile.validated_artifact_families.len() == 1
         && profile
             .selected_configmgr_version
             .as_deref()
@@ -450,7 +516,9 @@ fn compare_evidence(left: &SccmEvidence, right: &SccmEvidence) -> std::cmp::Orde
 struct IntegrityProjection<'a> {
     evidence: &'a [SccmEvidence],
     source_coverage: &'a BTreeMap<String, SccmCoverageState>,
-    profiles_by_artifact: &'a BTreeMap<String, SccmExtractionProfile>,
+    admitted_source_groups: &'a BTreeSet<String>,
+    profile_assignments: &'a BTreeMap<&'a str, usize>,
+    profiles: &'a [&'a SccmExtractionProfile],
 }
 
 struct BoundedIntegrityWriter {
@@ -502,15 +570,40 @@ impl Write for BoundedIntegrityWriter {
 fn compute_integrity_seal(
     evidence: &[SccmEvidence],
     source_coverage: &BTreeMap<String, SccmCoverageState>,
+    admitted_source_groups: &BTreeSet<String>,
     profiles_by_artifact: &BTreeMap<String, SccmExtractionProfile>,
 ) -> Result<String, SccmClientEvidenceAdmissionError> {
+    // Many rotations legitimately select the same profile. Seal the complete
+    // profile once and bind each artifact to its deterministic index so the
+    // intake artifact ceiling does not multiply identical profile metadata
+    // past the independent seal cap.
+    let mut profile_indices = BTreeMap::<String, usize>::new();
+    let mut unique_profiles = Vec::new();
+    let mut profile_assignments = BTreeMap::new();
+    for (artifact_id, profile) in profiles_by_artifact {
+        let canonical_profile = serde_json::to_string(profile)
+            .map_err(|_| SccmClientEvidenceAdmissionError::IntegrityViolation)?;
+        let profile_index = match profile_indices.get(&canonical_profile) {
+            Some(index) => *index,
+            None => {
+                let index = unique_profiles.len();
+                profile_indices.insert(canonical_profile, index);
+                unique_profiles.push(profile);
+                index
+            }
+        };
+        profile_assignments.insert(artifact_id.as_str(), profile_index);
+    }
+
     let mut writer = BoundedIntegrityWriter::new(MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES);
     let serialized = serde_json::to_writer(
         &mut writer,
         &IntegrityProjection {
             evidence,
             source_coverage,
-            profiles_by_artifact,
+            admitted_source_groups,
+            profile_assignments: &profile_assignments,
+            profiles: &unique_profiles,
         },
     );
     if serialized.is_err() {

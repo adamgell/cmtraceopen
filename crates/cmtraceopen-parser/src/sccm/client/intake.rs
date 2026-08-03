@@ -185,6 +185,17 @@ pub struct SccmClientIntakeArtifact {
     /// `ParseFailed` fragment may be complete when all bytes were copied but
     /// their contents could not be normalized as CCM evidence.
     pub fragment_complete: Option<bool>,
+    /// Byte length declared by the capture authority for a recognized,
+    /// complete `Captured` fragment. This is optional so legacy intake stays
+    /// assessment-compatible, but admission requires it together with
+    /// `content_sha256` before caller-supplied bytes can become evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_byte_length: Option<u64>,
+    /// Lowercase SHA-256 declared by the capture authority. It is a pair with
+    /// `declared_byte_length` and is forbidden on noncaptured, incomplete, or
+    /// unsupported declarations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
 }
 
 /// A coverage-only declaration for a recognized client source rotation that
@@ -480,6 +491,8 @@ pub struct SccmClientIntakeFragment {
     pub configmgr_version: Option<String>,
     pub collected_at_utc: Option<String>,
     pub encoding: Option<String>,
+    pub declared_byte_length: Option<u64>,
+    pub content_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -544,6 +557,10 @@ struct SccmClientIntakeFragmentWire {
     configmgr_version: Option<String>,
     collected_at_utc: Option<String>,
     encoding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    declared_byte_length: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_sha256: Option<String>,
 }
 
 impl From<SccmClientIntakeFragmentWire> for SccmClientIntakeFragment {
@@ -560,6 +577,8 @@ impl From<SccmClientIntakeFragmentWire> for SccmClientIntakeFragment {
             configmgr_version: wire.configmgr_version,
             collected_at_utc: wire.collected_at_utc,
             encoding: wire.encoding,
+            declared_byte_length: wire.declared_byte_length,
+            content_sha256: wire.content_sha256,
         }
     }
 }
@@ -578,6 +597,8 @@ impl From<&SccmClientIntakeFragment> for SccmClientIntakeFragmentWire {
             configmgr_version: fragment.configmgr_version.clone(),
             collected_at_utc: fragment.collected_at_utc.clone(),
             encoding: fragment.encoding.clone(),
+            declared_byte_length: fragment.declared_byte_length,
+            content_sha256: fragment.content_sha256.clone(),
         }
     }
 }
@@ -835,6 +856,8 @@ pub enum SccmClientIntakeError {
     MissingFragmentCompleteness,
     #[error("client intake fragment completeness contradicts its declared coverage state")]
     InvalidFragmentCompleteness,
+    #[error("client intake content length and digest binding is malformed or not capture-local")]
+    InvalidContentBinding,
     #[error("client intake capture gap is malformed, unsupported, or not coverage-only")]
     InvalidCaptureGap,
 }
@@ -1125,6 +1148,8 @@ fn fragment_as_intake_artifact(fragment: &SccmClientIntakeFragment) -> SccmClien
         rotation_lineage: fragment.rotation_lineage.clone(),
         relative_path: fragment.relative_path.clone(),
         fragment_complete: fragment.fragment_complete,
+        declared_byte_length: fragment.declared_byte_length,
+        content_sha256: fragment.content_sha256.clone(),
     }
 }
 
@@ -1148,6 +1173,8 @@ fn unsupported_as_intake_artifact(
         rotation_lineage: unsupported.rotation_lineage.clone(),
         relative_path: unsupported.relative_path.clone(),
         fragment_complete: unsupported.fragment_complete,
+        declared_byte_length: None,
+        content_sha256: None,
     }
 }
 
@@ -1313,6 +1340,7 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
         let fragment_complete = source
             .fragment_complete
             .ok_or(SccmClientIntakeError::MissingFragmentCompleteness)?;
+        validate_content_binding(source, fragment_complete)?;
         let source_identity = (
             source.artifact.display_name.to_ascii_lowercase(),
             rotation_identity(&source.artifact.rotation),
@@ -1484,7 +1512,33 @@ fn intake_fragment(source: &SccmClientIntakeArtifact) -> SccmClientIntakeFragmen
         configmgr_version: source.artifact.configmgr_version.clone(),
         collected_at_utc: normalized_collected_at(source.artifact.collected_at_utc.as_deref()),
         encoding: source.artifact.encoding.clone(),
+        declared_byte_length: source.declared_byte_length,
+        content_sha256: source.content_sha256.clone(),
     }
+}
+
+fn validate_content_binding(
+    source: &SccmClientIntakeArtifact,
+    fragment_complete: bool,
+) -> Result<(), SccmClientIntakeError> {
+    let has_binding = match (
+        source.declared_byte_length,
+        source.content_sha256.as_deref(),
+    ) {
+        (None, None) => false,
+        (Some(_), Some(digest)) if is_sha256_digest(digest) => true,
+        _ => return Err(SccmClientIntakeError::InvalidContentBinding),
+    };
+
+    if has_binding
+        && (source.artifact.coverage != SccmCoverageState::Captured
+            || !fragment_complete
+            || matching_groups(&source.artifact.display_name, &source.artifact.rotation).is_empty())
+    {
+        return Err(SccmClientIntakeError::InvalidContentBinding);
+    }
+
+    Ok(())
 }
 
 fn normalized_collected_at(value: Option<&str>) -> Option<String> {
@@ -1678,7 +1732,7 @@ fn is_physical_state(coverage: &SccmCoverageState) -> bool {
     )
 }
 
-fn is_safe_artifact_id(value: &str) -> bool {
+pub(super) fn is_safe_artifact_id(value: &str) -> bool {
     if value.is_empty() || value.chars().count() > MAX_ARTIFACT_ID_CHARS {
         return false;
     }

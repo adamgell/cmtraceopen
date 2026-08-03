@@ -28,7 +28,7 @@ fn public_bytes_only_facade_uses_intake_bound_content_authority() {
     let bundle = SccmClientIntakeBundle {
         artifacts: vec![SccmClientIntakeArtifact {
             artifact: SccmArtifact {
-                artifact_id: "fixture-public-authority".to_owned(),
+                artifact_id: "fixture-policy-approved".to_owned(),
                 display_name: "PolicyAgent.log".to_owned(),
                 original_path: None,
                 host: None,
@@ -39,7 +39,7 @@ fn public_bytes_only_facade_uses_intake_bound_content_authority() {
                 coverage: SccmCoverageState::Captured,
                 encoding: Some("utf-8".to_owned()),
             },
-            path_fingerprint: Some("synthetic-public-authority".to_owned()),
+            path_fingerprint: Some("synthetic-policy-approved".to_owned()),
             rotation_lineage: None,
             relative_path: Some("evidence/client-policy-agent/current/PolicyAgent.log".to_owned()),
             fragment_complete: Some(true),
@@ -49,7 +49,7 @@ fn public_bytes_only_facade_uses_intake_bound_content_authority() {
         capture_gaps: Vec::new(),
     };
     let assessment = assess_client_intake(&bundle).expect("public intake is canonical");
-    let payload = match SccmClientCapturedPayload::new("fixture-public-authority", bytes) {
+    let payload = match SccmClientCapturedPayload::new("fixture-policy-approved", bytes) {
         Ok(payload) => payload,
         Err(error) => panic!("public payload constructor rejected canonical bytes: {error}"),
     };

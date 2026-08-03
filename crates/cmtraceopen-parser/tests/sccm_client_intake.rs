@@ -224,6 +224,8 @@ fn load_bundle(scenario: &str) -> SccmClientIntakeBundle {
                     rotation_lineage: fixture.rotation.lineage_id,
                     relative_path: fixture.relative_path,
                     fragment_complete: fixture.rotation.fragment_complete,
+                    declared_byte_length: None,
+                    content_sha256: None,
                 }
             })
             .collect(),
@@ -412,6 +414,8 @@ fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntake
         rotation_lineage: None,
         relative_path: Some(relative_path),
         fragment_complete: Some(true),
+        declared_byte_length: None,
+        content_sha256: None,
     }
 }
 
@@ -449,6 +453,8 @@ fn opaque_numbered_artifact(number: usize) -> SccmClientIntakeArtifact {
             "evidence/client-policy-agent/numbered-{number}/PolicyAgent.log.{number}"
         )),
         fragment_complete: Some(true),
+        declared_byte_length: None,
+        content_sha256: None,
     }
 }
 
@@ -1720,6 +1726,8 @@ fn capped_cas_fragment_cannot_claim_complete() {
         rotation_lineage: None,
         relative_path: Some("evidence/client-content/current/CAS.log".to_owned()),
         fragment_complete: Some(true),
+        declared_byte_length: None,
+        content_sha256: None,
     };
 
     assert_eq!(

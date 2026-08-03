@@ -31,6 +31,7 @@ fn source_group(basename: &str) -> &'static str {
         "PolicyAgent.log" => "client-policy-agent",
         "CAS.log" => "client-content",
         "AppIntentEval.log" => "client-app-intent",
+        "AppEnforce.log" => "client-app-enforce",
         "CustomVendorHook.log" => "unknown",
         _ => panic!("authority fixture basename must be declared here"),
     }
@@ -131,6 +132,26 @@ fn admission_rejects_substituted_valid_ccm_bytes_against_the_intake_binding() {
 }
 
 #[test]
+fn admission_rejects_a_mutated_assessment_content_binding() {
+    let bytes = ccm_bytes("bound policy evidence");
+    let bundle = bundle_with(vec![artifact(
+        "policy",
+        "PolicyAgent.log",
+        SccmCoverageState::Captured,
+        true,
+        Some(&bytes),
+    )]);
+    let mut assessment = assess_client_intake(&bundle).expect("bound intake is canonical");
+    assessment.physical_artifacts[0].content_sha256 = Some("0".repeat(64));
+
+    let error = admission_error(
+        admit_client_evidence(&bundle, &assessment, &[payload("fixture-policy", bytes)]),
+        "a caller-mutated assessment binding must not become authority",
+    );
+    assert_eq!(error, SccmClientEvidenceAdmissionError::AssessmentMutation);
+}
+
+#[test]
 fn intake_content_binding_is_paired_lowercase_and_capture_local() {
     let bytes = ccm_bytes("bound policy evidence");
     let valid = artifact(
@@ -218,7 +239,7 @@ fn intake_content_binding_is_paired_lowercase_and_capture_local() {
 fn legacy_intake_remains_assessable_but_cannot_admit_bytes() {
     let bytes = ccm_bytes("legacy policy evidence");
     let legacy = artifact(
-        "legacy",
+        "policy-approved",
         "PolicyAgent.log",
         SccmCoverageState::Captured,
         true,
@@ -231,7 +252,11 @@ fn legacy_intake_remains_assessable_but_cannot_admit_bytes() {
     assert!(wire["artifacts"][0].get("contentSha256").is_none());
 
     let error = admission_error(
-        admit_client_evidence(&bundle, &assessment, &[payload("fixture-legacy", bytes)]),
+        admit_client_evidence(
+            &bundle,
+            &assessment,
+            &[payload("fixture-policy-approved", bytes)],
+        ),
         "legacy intake must not authorize caller-supplied bytes",
     );
     assert_eq!(
@@ -300,7 +325,7 @@ fn admission_rejects_swapped_duplicate_extra_and_missing_payloads() {
             &assessment,
             &[
                 payload("fixture-policy", policy_bytes.clone()),
-                payload("fixture-extra", ccm_bytes("extra evidence")),
+                payload("fixture-policy-two", ccm_bytes("extra evidence")),
             ],
         ),
         "an extra syntactically valid payload identity must fail closed",
@@ -343,6 +368,13 @@ fn incomplete_and_capped_sources_fail_locally_without_blocking_bound_policy() {
             false,
             None,
         ),
+        artifact(
+            "enforce-missing",
+            "AppEnforce.log",
+            SccmCoverageState::Captured,
+            true,
+            None,
+        ),
     ]);
     let assessment = assess_client_intake(&bundle).expect("mixed source coverage is canonical");
     let admitted = match admit_client_evidence(
@@ -360,6 +392,9 @@ fn incomplete_and_capped_sources_fail_locally_without_blocking_bound_policy() {
     assert!(admitted.require_captured_source("client-content").is_err());
     assert!(admitted
         .require_captured_source("client-app-intent")
+        .is_err());
+    assert!(admitted
+        .require_captured_source("client-app-enforce")
         .is_err());
     assert_eq!(admitted.evidence().expect("valid authority seal").len(), 1);
 }

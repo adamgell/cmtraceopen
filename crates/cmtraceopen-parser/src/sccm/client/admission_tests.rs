@@ -1,6 +1,9 @@
 use sha2::{Digest, Sha256};
 
-use super::admission::{admit_client_evidence, SccmClientCapturedPayload};
+use super::admission::{
+    admit_client_evidence, SccmClientAdmittedEvidence, SccmClientCapturedPayload,
+    SccmClientEvidenceAdmissionError,
+};
 use super::{assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle};
 use crate::sccm::{SccmArtifact, SccmCoverageState, SccmRole, SccmRotation};
 
@@ -18,7 +21,19 @@ fn bundle() -> SccmClientIntakeBundle {
     }
 }
 
+fn bundle_with_bound_policy(bytes: &[u8]) -> SccmClientIntakeBundle {
+    let mut bundle = bundle();
+    bind_artifact_to_bytes(&mut bundle.artifacts[0], bytes);
+    bundle
+}
+
 fn artifact(identity: &str, basename: &str) -> SccmClientIntakeArtifact {
+    let artifact_id = format!("fixture-{identity}");
+    let bytes = payload_bytes_for(&artifact_id, "+000");
+    artifact_bound_to(identity, basename, &bytes)
+}
+
+fn artifact_bound_to(identity: &str, basename: &str, bytes: &[u8]) -> SccmClientIntakeArtifact {
     let group = match basename {
         "PolicyAgent.log" => "client-policy-agent",
         "CIAgent.log" => "client-policy-state",
@@ -41,6 +56,8 @@ fn artifact(identity: &str, basename: &str) -> SccmClientIntakeArtifact {
         rotation_lineage: None,
         relative_path: Some(format!("evidence/{group}/current/{basename}")),
         fragment_complete: Some(true),
+        declared_byte_length: Some(bytes.len() as u64),
+        content_sha256: Some(digest(bytes)),
     }
 }
 
@@ -49,12 +66,17 @@ fn payload() -> SccmClientCapturedPayload {
 }
 
 fn payload_for(artifact_id: &str, offset: &str) -> SccmClientCapturedPayload {
-    let bytes = ccm_record("SYNTHETIC FIXTURE admitted policy", offset).into_bytes();
-    SccmClientCapturedPayload {
-        artifact_id: artifact_id.to_owned(),
-        byte_length: bytes.len() as u64,
-        expected_sha256: digest(&bytes),
-        bytes,
+    payload_from_bytes(artifact_id, payload_bytes_for(artifact_id, offset))
+}
+
+fn payload_bytes_for(artifact_id: &str, offset: &str) -> Vec<u8> {
+    ccm_record(&format!("SYNTHETIC FIXTURE {artifact_id}"), offset).into_bytes()
+}
+
+fn payload_from_bytes(artifact_id: &str, bytes: Vec<u8>) -> SccmClientCapturedPayload {
+    match SccmClientCapturedPayload::new(artifact_id.to_owned(), bytes) {
+        Ok(payload) => payload,
+        Err(error) => panic!("test payload must satisfy its public boundary: {error}"),
     }
 }
 
@@ -70,39 +92,31 @@ fn ccm_record(message: &str, offset: &str) -> String {
     )
 }
 
-fn refresh_payload_integrity(payload: &mut SccmClientCapturedPayload) {
-    payload.byte_length = payload.bytes.len() as u64;
-    payload.expected_sha256 = digest(&payload.bytes);
+fn bind_artifact_to_bytes(artifact: &mut SccmClientIntakeArtifact, bytes: &[u8]) {
+    artifact.declared_byte_length = Some(bytes.len() as u64);
+    artifact.content_sha256 = Some(digest(bytes));
 }
 
-fn payload_padded_to(artifact_id: &str, total_bytes: usize) -> SccmClientCapturedPayload {
-    let mut payload = payload_for(artifact_id, "+000");
-    assert!(
-        payload.bytes.len() <= total_bytes,
-        "test payload remains valid"
-    );
-    payload.bytes.resize(total_bytes, b' ');
-    refresh_payload_integrity(&mut payload);
-    payload
+fn payload_bytes_padded_to(artifact_id: &str, total_bytes: usize) -> Vec<u8> {
+    let mut bytes = payload_bytes_for(artifact_id, "+000");
+    assert!(bytes.len() <= total_bytes, "test payload remains valid");
+    bytes.resize(total_bytes, b' ');
+    bytes
 }
 
-fn payload_with_repeated_records(
-    artifact_id: &str,
-    record_count: usize,
-    message: &str,
-) -> SccmClientCapturedPayload {
-    let bytes = ccm_record(message, "+000")
+fn repeated_record_bytes(record_count: usize, message: &str) -> Vec<u8> {
+    ccm_record(message, "+000")
         .repeat(record_count)
-        .into_bytes();
-    SccmClientCapturedPayload {
-        artifact_id: artifact_id.to_owned(),
-        byte_length: bytes.len() as u64,
-        expected_sha256: digest(&bytes),
-        bytes,
-    }
+        .into_bytes()
 }
 
 fn numbered_artifact(number: u32) -> SccmClientIntakeArtifact {
+    let artifact_id = format!("sccm-artifact:v1:sha256:{number:064x}");
+    let bytes = payload_bytes_for(&artifact_id, "+000");
+    numbered_artifact_bound_to(number, &bytes)
+}
+
+fn numbered_artifact_bound_to(number: u32, bytes: &[u8]) -> SccmClientIntakeArtifact {
     let artifact_id = format!("sccm-artifact:v1:sha256:{number:064x}");
     let basename = format!("PolicyAgent.log.{number}");
     SccmClientIntakeArtifact {
@@ -124,6 +138,18 @@ fn numbered_artifact(number: u32) -> SccmClientIntakeArtifact {
             "evidence/client-policy-agent/numbered-{number}/{basename}"
         )),
         fragment_complete: Some(true),
+        declared_byte_length: Some(bytes.len() as u64),
+        content_sha256: Some(digest(bytes)),
+    }
+}
+
+fn admission_error(
+    result: Result<SccmClientAdmittedEvidence, SccmClientEvidenceAdmissionError>,
+    context: &str,
+) -> SccmClientEvidenceAdmissionError {
+    match result {
+        Ok(_) => panic!("{context}"),
+        Err(error) => error,
     }
 }
 
@@ -163,34 +189,54 @@ fn admission_rejects_missing_extra_duplicate_and_swapped_payloads() {
         .artifacts
         .push(artifact("policy-state", "CIAgent.log"));
     let assessment = assess_client_intake(&bundle).expect("two payload fixture is canonical");
-    let agent = payload();
-    let state = payload_for("fixture-policy-state", "+000");
+    assert!(admit_client_evidence(&bundle, &assessment, &[payload()]).is_err());
 
-    assert!(admit_client_evidence(&bundle, &assessment, std::slice::from_ref(&agent)).is_err());
+    assert!(admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[
+            payload(),
+            payload_for("fixture-policy-state", "+000"),
+            payload_for("fixture-unknown", "+000"),
+        ]
+    )
+    .is_err());
 
-    let mut extra = vec![agent.clone(), state.clone()];
-    extra.push(payload_for("fixture-unknown", "+000"));
-    assert!(admit_client_evidence(&bundle, &assessment, &extra).is_err());
+    assert!(admit_client_evidence(&bundle, &assessment, &[payload(), payload()]).is_err());
 
-    assert!(admit_client_evidence(&bundle, &assessment, &[agent.clone(), agent]).is_err());
-
-    let mut swapped = state;
-    swapped.artifact_id = "fixture-policy-agent".to_owned();
-    assert!(admit_client_evidence(&bundle, &assessment, &[payload(), swapped]).is_err());
+    assert!(admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[
+            payload(),
+            payload_from_bytes(
+                "fixture-policy-state",
+                payload_bytes_for("fixture-policy-agent", "+000"),
+            ),
+        ]
+    )
+    .is_err());
 }
 
 #[test]
 fn admission_rejects_payload_digest_and_length_mismatches() {
-    let bundle = bundle();
-    let assessment = assess_client_intake(&bundle).expect("fixture assessment is canonical");
+    let mut bad_digest_bundle = bundle();
+    bad_digest_bundle.artifacts[0].content_sha256 = Some("0".repeat(64));
+    let bad_digest_assessment =
+        assess_client_intake(&bad_digest_bundle).expect("wrong digest remains canonical metadata");
+    assert!(
+        admit_client_evidence(&bad_digest_bundle, &bad_digest_assessment, &[payload()]).is_err()
+    );
 
-    let mut bad_digest = payload();
-    bad_digest.expected_sha256 = "0".repeat(64);
-    assert!(admit_client_evidence(&bundle, &assessment, &[bad_digest]).is_err());
-
-    let mut bad_length = payload();
-    bad_length.byte_length += 1;
-    assert!(admit_client_evidence(&bundle, &assessment, &[bad_length]).is_err());
+    let mut bad_length_bundle = bundle();
+    bad_length_bundle.artifacts[0].declared_byte_length = bad_length_bundle.artifacts[0]
+        .declared_byte_length
+        .and_then(|length| length.checked_add(1));
+    let bad_length_assessment =
+        assess_client_intake(&bad_length_bundle).expect("wrong length remains canonical metadata");
+    assert!(
+        admit_client_evidence(&bad_length_bundle, &bad_length_assessment, &[payload()]).is_err()
+    );
 }
 
 #[test]
@@ -208,10 +254,12 @@ fn admission_accepts_the_exact_cap_and_rejects_payload_overflow_before_reassessm
         .iter()
         .map(|artifact| payload_for(&artifact.artifact.artifact_id, "+000"))
         .collect::<Vec<_>>();
-    assert!(admit_client_evidence(&bundle, &assessment, &payloads).is_ok());
+    if let Err(error) = admit_client_evidence(&bundle, &assessment, &payloads) {
+        panic!("the exact payload and record cap must remain admissible: {error}");
+    }
 
     let mut overflow = payloads;
-    overflow.push(payload_for("fixture-overflow", "+000"));
+    overflow.push(payload_for("fixture-policy-approved", "+000"));
     assert!(admit_client_evidence(&bundle, &assessment, &overflow).is_err());
 }
 
@@ -220,11 +268,15 @@ fn admission_rejects_noncaptured_incomplete_malformed_and_invalid_offset_payload
     let mut capped = bundle();
     capped.artifacts[0].artifact.coverage = SccmCoverageState::Capped;
     capped.artifacts[0].fragment_complete = Some(false);
+    capped.artifacts[0].declared_byte_length = None;
+    capped.artifacts[0].content_sha256 = None;
     let capped_assessment = assess_client_intake(&capped).expect("capped state is explicit");
     assert!(admit_client_evidence(&capped, &capped_assessment, &[payload()]).is_err());
 
     let mut incomplete = bundle();
     incomplete.artifacts[0].fragment_complete = Some(false);
+    incomplete.artifacts[0].declared_byte_length = None;
+    incomplete.artifacts[0].content_sha256 = None;
     let incomplete_assessment =
         assess_client_intake(&incomplete).expect("incomplete boundary is explicit");
     assert!(admit_client_evidence(&incomplete, &incomplete_assessment, &[payload()]).is_err());
@@ -238,35 +290,46 @@ fn admission_rejects_noncaptured_incomplete_malformed_and_invalid_offset_payload
             .is_err()
     );
 
-    let malformed = SccmClientCapturedPayload {
-        artifact_id: "fixture-policy-agent".to_owned(),
-        bytes: b"not a CCM logical record".to_vec(),
-        byte_length: 24,
-        expected_sha256: digest(b"not a CCM logical record"),
-    };
-    let assessment = assess_client_intake(&bundle()).expect("fixture assessment is canonical");
-    assert!(admit_client_evidence(&bundle(), &assessment, &[malformed]).is_err());
-
+    let malformed_bytes = b"not a CCM logical record".to_vec();
+    let malformed_bundle = bundle_with_bound_policy(&malformed_bytes);
+    let malformed_assessment =
+        assess_client_intake(&malformed_bundle).expect("malformed bytes remain bound intake");
     assert!(admit_client_evidence(
-        &bundle(),
-        &assessment,
-        &[payload_for("fixture-policy-agent", "+9999",)]
+        &malformed_bundle,
+        &malformed_assessment,
+        &[payload_from_bytes("fixture-policy-agent", malformed_bytes)]
+    )
+    .is_err());
+
+    let invalid_offset_bytes = payload_bytes_for("fixture-policy-agent", "+9999");
+    let invalid_offset_bundle = bundle_with_bound_policy(&invalid_offset_bytes);
+    let invalid_offset_assessment = assess_client_intake(&invalid_offset_bundle)
+        .expect("invalid record time remains bound intake metadata");
+    assert!(admit_client_evidence(
+        &invalid_offset_bundle,
+        &invalid_offset_assessment,
+        &[payload_from_bytes(
+            "fixture-policy-agent",
+            invalid_offset_bytes,
+        )]
     )
     .is_err());
 }
 
 #[test]
 fn admission_rejects_unclosed_ccm_suffix_even_when_manifest_claims_complete() {
-    let bundle = bundle();
+    let mut truncated_bytes = payload_bytes_for("fixture-policy-agent", "+000");
+    truncated_bytes.extend_from_slice(b"<![LOG[unclosed synthetic CCM suffix");
+    let bundle = bundle_with_bound_policy(&truncated_bytes);
     let assessment = assess_client_intake(&bundle).expect("fixture assessment is canonical");
-    let mut truncated = payload();
-    truncated
-        .bytes
-        .extend_from_slice(b"<![LOG[unclosed synthetic CCM suffix");
-    refresh_payload_integrity(&mut truncated);
-
-    let error = admit_client_evidence(&bundle, &assessment, &[truncated])
-        .expect_err("manifest completeness must not promote an unclosed CCM suffix");
+    let error = admission_error(
+        admit_client_evidence(
+            &bundle,
+            &assessment,
+            &[payload_from_bytes("fixture-policy-agent", truncated_bytes)],
+        ),
+        "manifest completeness must not promote an unclosed CCM suffix",
+    );
     assert_eq!(
         error.to_string(),
         "client evidence admission CCM framing is incomplete or ambiguous"
@@ -275,53 +338,79 @@ fn admission_rejects_unclosed_ccm_suffix_even_when_manifest_claims_complete() {
 
 #[test]
 fn admission_rejects_oversized_payload_work_records_and_retained_evidence() {
-    let bundle = bundle();
-    let assessment = assess_client_intake(&bundle).expect("fixture assessment is canonical");
-
-    let oversized_payload = payload_padded_to("fixture-policy-agent", 4 * 1024 * 1024 + 1);
-    let error = admit_client_evidence(&bundle, &assessment, &[oversized_payload])
-        .expect_err("per-payload work must be capped before decoding and parsing");
+    let oversized_bytes = payload_bytes_padded_to("fixture-policy-agent", 4 * 1024 * 1024 + 1);
+    let error = match SccmClientCapturedPayload::new("fixture-policy-agent", oversized_bytes) {
+        Err(error) => error,
+        Ok(_) => panic!("the bytes-only constructor must cap per-payload parser work"),
+    };
     assert_eq!(
         error.to_string(),
         "client evidence admission payload exceeds the v1 per-payload byte cap"
     );
 
+    let mut aggregate_artifacts = Vec::new();
+    let mut aggregate_payloads = Vec::new();
+    for number in 1..=5 {
+        let artifact_id = format!("sccm-artifact:v1:sha256:{number:064x}");
+        let bytes = payload_bytes_padded_to(&artifact_id, 4 * 1024 * 1024);
+        aggregate_artifacts.push(numbered_artifact_bound_to(number, &bytes));
+        aggregate_payloads.push(payload_from_bytes(&artifact_id, bytes));
+    }
     let aggregate_bundle = SccmClientIntakeBundle {
-        artifacts: (1..=5).map(numbered_artifact).collect(),
+        artifacts: aggregate_artifacts,
         capture_gaps: Vec::new(),
     };
     let aggregate_assessment =
         assess_client_intake(&aggregate_bundle).expect("aggregate fixture assessment is canonical");
-    let aggregate_payloads = aggregate_bundle
-        .artifacts
-        .iter()
-        .map(|artifact| payload_padded_to(&artifact.artifact.artifact_id, 4 * 1024 * 1024))
-        .collect::<Vec<_>>();
-    let error = admit_client_evidence(
-        &aggregate_bundle,
-        &aggregate_assessment,
-        &aggregate_payloads,
-    )
-    .expect_err("aggregate parser work must be capped before hashing every payload");
+    let error = admission_error(
+        admit_client_evidence(
+            &aggregate_bundle,
+            &aggregate_assessment,
+            &aggregate_payloads,
+        ),
+        "aggregate parser work must be capped before hashing every payload",
+    );
     assert_eq!(
         error.to_string(),
         "client evidence admission aggregate payload bytes exceed the v1 cap"
     );
 
-    let too_many_records =
-        payload_with_repeated_records("fixture-policy-agent", 4_097, "synthetic record");
-    let error = admit_client_evidence(&bundle, &assessment, &[too_many_records])
-        .expect_err("logical-record expansion must be capped before evidence retention");
+    let too_many_record_bytes = repeated_record_bytes(4_097, "synthetic record");
+    let too_many_record_bundle = bundle_with_bound_policy(&too_many_record_bytes);
+    let too_many_record_assessment = assess_client_intake(&too_many_record_bundle)
+        .expect("record-limit fixture intake is canonical");
+    let error = admission_error(
+        admit_client_evidence(
+            &too_many_record_bundle,
+            &too_many_record_assessment,
+            &[payload_from_bytes(
+                "fixture-policy-agent",
+                too_many_record_bytes,
+            )],
+        ),
+        "logical-record expansion must be capped before evidence retention",
+    );
     assert_eq!(
         error.to_string(),
         "client evidence admission logical record count exceeds the v1 cap"
     );
 
     let retained_message = "x".repeat(3_000);
-    let oversized_retained =
-        payload_with_repeated_records("fixture-policy-agent", 1_024, &retained_message);
-    let error = admit_client_evidence(&bundle, &assessment, &[oversized_retained])
-        .expect_err("retained evidence and seal input must remain bounded");
+    let oversized_retained_bytes = repeated_record_bytes(1_024, &retained_message);
+    let oversized_retained_bundle = bundle_with_bound_policy(&oversized_retained_bytes);
+    let oversized_retained_assessment = assess_client_intake(&oversized_retained_bundle)
+        .expect("retained-limit fixture intake is canonical");
+    let error = admission_error(
+        admit_client_evidence(
+            &oversized_retained_bundle,
+            &oversized_retained_assessment,
+            &[payload_from_bytes(
+                "fixture-policy-agent",
+                oversized_retained_bytes,
+            )],
+        ),
+        "retained evidence and seal input must remain bounded",
+    );
     assert_eq!(
         error.to_string(),
         "client evidence admission retained evidence exceeds the v1 byte cap"
@@ -330,24 +419,30 @@ fn admission_rejects_oversized_payload_work_records_and_retained_evidence() {
 
 #[test]
 fn admission_enforces_logical_record_cap_across_all_payloads() {
+    let mut artifacts = Vec::new();
+    let mut payloads = Vec::new();
+    for number in 1..=2 {
+        let artifact_id = format!("sccm-artifact:v1:sha256:{number:064x}");
+        let bytes = repeated_record_bytes(2_049, "x");
+        artifacts.push(numbered_artifact_bound_to(number, &bytes));
+        payloads.push(payload_from_bytes(&artifact_id, bytes));
+    }
     let bundle = SccmClientIntakeBundle {
-        artifacts: (1..=2).map(numbered_artifact).collect(),
+        artifacts,
         capture_gaps: Vec::new(),
     };
     let assessment =
         assess_client_intake(&bundle).expect("two captured rotations are canonical intake");
-    let payloads = bundle
-        .artifacts
-        .iter()
-        .map(|artifact| payload_with_repeated_records(&artifact.artifact.artifact_id, 2_049, "x"))
-        .collect::<Vec<_>>();
 
     let result = admit_client_evidence(&bundle, &assessment, &payloads);
     assert!(
         result.is_err(),
         "two individually bounded rotations totaling 4,098 records were admitted"
     );
-    let error = result.expect_err("the logical-record cap must apply across the complete bundle");
+    let error = admission_error(
+        result,
+        "the logical-record cap must apply across the complete bundle",
+    );
     assert_eq!(
         error.to_string(),
         "client evidence admission logical record count exceeds the v1 cap"
