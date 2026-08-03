@@ -2,6 +2,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use super::catalog::SccmArtifactFamily;
 use super::findings::{has_at_most_chars, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS};
 use super::models::{
     SccmCorrelationKey, SccmCorrelationKeyKind, SccmEvidence, SccmExtractionGap,
@@ -47,6 +48,24 @@ impl SccmExtractionProfile {
                 maturity: SccmExtractionProfileMaturity::Unvalidated,
             },
         }
+    }
+
+    /// Selects the centrally defined built-in version profile and binds it to
+    /// the catalog family that produced one admitted raw-CCM artifact.
+    ///
+    /// Family binding does not validate a new extractor family. `extract_keys`
+    /// independently recognizes only the executable-fixture registry below;
+    /// other families remain visible through `UnvalidatedProfile` gaps.
+    pub(crate) fn for_artifact_family(
+        configmgr_version: Option<&str>,
+        family: &SccmArtifactFamily,
+    ) -> Option<Self> {
+        let mut profile = Self::for_version(configmgr_version);
+        if !is_builtin_experimental_core(&profile) {
+            return None;
+        }
+        profile.validated_artifact_families = vec![family.clone()];
+        Some(profile)
     }
 }
 
@@ -231,9 +250,20 @@ fn profile_gap_kind(profile: &SccmExtractionProfile) -> Option<SccmExtractionGap
 }
 
 fn is_builtin_experimental(profile: &SccmExtractionProfile) -> bool {
+    is_builtin_experimental_core(profile)
+        && match profile.validated_artifact_families.as_slice() {
+            // Preserve the generic public `for_version` contract while the
+            // admitted-evidence path always seals a catalog family.
+            [] => true,
+            [family] => is_validated_builtin_experimental_family(family),
+            _ => false,
+        }
+}
+
+fn is_builtin_experimental_core(profile: &SccmExtractionProfile) -> bool {
     profile.profile_id == SCCM_EXPERIMENTAL_KEY_PROFILE_ID
+        && profile.maturity == SccmExtractionProfileMaturity::Experimental
         && profile.configmgr_version_prefixes == [EXPERIMENTAL_VERSION_PREFIX]
-        && profile.validated_artifact_families.is_empty()
         && profile
             .selected_configmgr_version
             .as_deref()
@@ -241,6 +271,13 @@ fn is_builtin_experimental(profile: &SccmExtractionProfile) -> bool {
                 is_canonical_configmgr_version(version)
                     && version.starts_with(EXPERIMENTAL_VERSION_PREFIX)
             })
+}
+
+fn is_validated_builtin_experimental_family(family: &SccmArtifactFamily) -> bool {
+    // Only Policy has executable key-extraction fixtures in the first client
+    // implementation slice. Expanding this registry requires those fixtures
+    // and a review; catalog membership alone is never validation authority.
+    matches!(family, SccmArtifactFamily::ClientPolicy)
 }
 
 fn is_canonical_configmgr_version(version: &str) -> bool {

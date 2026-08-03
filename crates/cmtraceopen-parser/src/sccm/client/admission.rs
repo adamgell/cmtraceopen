@@ -24,9 +24,8 @@ use crate::parser::ccm::scan_logical_records_bounded;
 use crate::sccm::catalog::classify_artifact_name;
 use crate::sccm::evidence::SccmRawEvidenceSnapshot;
 use crate::sccm::{
-    SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence, SccmExtractionProfile,
-    SccmExtractionProfileMaturity, SccmRole, SccmTimeOrderingState,
-    SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
+    SccmArtifact, SccmCoverageState, SccmEvidence, SccmExtractionProfile, SccmRole,
+    SccmTimeOrderingState,
 };
 
 use super::{
@@ -240,6 +239,10 @@ pub fn admit_client_evidence(
     let mut eligible = BTreeMap::new();
     let mut unbound_complete_captures = BTreeSet::new();
     for fragment in &canonical.physical_artifacts {
+        let classified = classify_artifact_name(&fragment.basename, SccmRole::Client);
+        if !classified.supported_for_diagnosis || !classified.uses_ccm_records {
+            continue;
+        }
         if fragment.coverage != SccmCoverageState::Captured
             || fragment.fragment_complete != Some(true)
         {
@@ -249,20 +252,19 @@ pub fn admit_client_evidence(
             unbound_complete_captures.insert(fragment.artifact_id.as_str());
             continue;
         }
-        eligible.insert(fragment.artifact_id.clone(), fragment);
+        eligible.insert(fragment.artifact_id.clone(), (fragment, classified.family));
     }
     let admitted_source_groups = canonical
         .groups
         .iter()
         .filter(|group| {
-            !group.fragments.is_empty()
+            group.fragments.iter().any(is_supported_raw_ccm_fragment)
                 && group.coverage == SccmCoverageState::Captured
-                && group.fragments.iter().all(|fragment| {
-                    fragment.coverage == SccmCoverageState::Captured
-                        && fragment.fragment_complete == Some(true)
-                        && fragment.declared_byte_length.is_some()
-                        && fragment.content_sha256.is_some()
-                })
+                && group
+                    .fragments
+                    .iter()
+                    .filter(|fragment| is_supported_raw_ccm_fragment(fragment))
+                    .all(is_bound_complete_capture)
         })
         .map(|group| group.logical_artifact_id.clone())
         .collect::<BTreeSet<_>>();
@@ -272,8 +274,11 @@ pub fn admit_client_evidence(
     {
         return Err(SccmClientEvidenceAdmissionError::MissingContentBinding);
     }
-    if payloads.len() != eligible.len() {
+    if payloads.len() < eligible.len() {
         return Err(SccmClientEvidenceAdmissionError::MissingPayload);
+    }
+    if payloads.len() > eligible.len() {
+        return Err(SccmClientEvidenceAdmissionError::ExtraPayload);
     }
 
     let mut ordered_payloads = payloads.iter().collect::<Vec<_>>();
@@ -290,19 +295,17 @@ pub fn admit_client_evidence(
         if !seen_payload_ids.insert(payload.artifact_id.as_str()) {
             return Err(SccmClientEvidenceAdmissionError::DuplicatePayload);
         }
-        let fragment = eligible
+        let (fragment, family) = eligible
             .get(&payload.artifact_id)
-            .copied()
             .ok_or(SccmClientEvidenceAdmissionError::ExtraPayload)?;
+        let fragment = *fragment;
         validate_payload(payload, fragment)?;
 
-        let classified = classify_artifact_name(&fragment.basename, SccmRole::Client);
-        let family = classified.family;
-        let mut profile = SccmExtractionProfile::for_version(fragment.configmgr_version.as_deref());
-        profile.validated_artifact_families = vec![family.clone()];
-        if !classified.supported_for_diagnosis || !is_registered_client_profile(&profile, &family) {
-            return Err(SccmClientEvidenceAdmissionError::UnregisteredProfile);
-        }
+        let profile = SccmExtractionProfile::for_artifact_family(
+            fragment.configmgr_version.as_deref(),
+            family,
+        )
+        .ok_or(SccmClientEvidenceAdmissionError::UnregisteredProfile)?;
         let content = decode_payload(payload, fragment.encoding.as_deref())?;
         let artifact = artifact_for_fragment(fragment);
         let scan = scan_logical_records_bounded(
@@ -390,6 +393,18 @@ fn validate_payload_budget(
     Ok(())
 }
 
+fn is_supported_raw_ccm_fragment(fragment: &SccmClientIntakeFragment) -> bool {
+    let classified = classify_artifact_name(&fragment.basename, SccmRole::Client);
+    classified.supported_for_diagnosis && classified.uses_ccm_records
+}
+
+fn is_bound_complete_capture(fragment: &SccmClientIntakeFragment) -> bool {
+    fragment.coverage == SccmCoverageState::Captured
+        && fragment.fragment_complete == Some(true)
+        && fragment.declared_byte_length.is_some()
+        && fragment.content_sha256.is_some()
+}
+
 fn validate_payload(
     payload: &SccmClientCapturedPayload,
     fragment: &SccmClientIntakeFragment,
@@ -451,17 +466,43 @@ fn decode_payload(
     payload: &SccmClientCapturedPayload,
     encoding: Option<&str>,
 ) -> Result<String, SccmClientEvidenceAdmissionError> {
-    let encoding = match encoding {
-        Some("utf-8") => UTF_8,
-        Some("utf-16le") => UTF_16LE,
-        Some("utf-16be") => UTF_16BE,
-        Some("windows-1252") => WINDOWS_1252,
+    let (encoding, declared_bom) = match encoding {
+        Some("utf-8") => (UTF_8, Some(UnicodeBom::Utf8)),
+        Some("utf-16le") => (UTF_16LE, Some(UnicodeBom::Utf16Le)),
+        Some("utf-16be") => (UTF_16BE, Some(UnicodeBom::Utf16Be)),
+        Some("windows-1252") => (WINDOWS_1252, None),
         _ => return Err(SccmClientEvidenceAdmissionError::InvalidEncoding),
     };
-    let (decoded, _, had_errors) = encoding.decode(&payload.bytes);
+    let bytes = match recognized_unicode_bom(&payload.bytes) {
+        Some((actual_bom, bom_len)) if Some(actual_bom) == declared_bom => {
+            &payload.bytes[bom_len..]
+        }
+        Some(_) => return Err(SccmClientEvidenceAdmissionError::InvalidEncoding),
+        None => payload.bytes.as_slice(),
+    };
+    let (decoded, had_errors) = encoding.decode_without_bom_handling(bytes);
     (!had_errors)
         .then_some(decoded.into_owned())
         .ok_or(SccmClientEvidenceAdmissionError::InvalidEncoding)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnicodeBom {
+    Utf8,
+    Utf16Le,
+    Utf16Be,
+}
+
+fn recognized_unicode_bom(bytes: &[u8]) -> Option<(UnicodeBom, usize)> {
+    if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+        Some((UnicodeBom::Utf8, 3))
+    } else if bytes.starts_with(&[0xff, 0xfe]) {
+        Some((UnicodeBom::Utf16Le, 2))
+    } else if bytes.starts_with(&[0xfe, 0xff]) {
+        Some((UnicodeBom::Utf16Be, 2))
+    } else {
+        None
+    }
 }
 
 fn artifact_for_fragment(fragment: &SccmClientIntakeFragment) -> SccmArtifact {
@@ -477,21 +518,6 @@ fn artifact_for_fragment(fragment: &SccmClientIntakeFragment) -> SccmArtifact {
         coverage: fragment.coverage.clone(),
         encoding: fragment.encoding.clone(),
     }
-}
-
-fn is_registered_client_profile(
-    profile: &SccmExtractionProfile,
-    family: &SccmArtifactFamily,
-) -> bool {
-    profile.profile_id == SCCM_EXPERIMENTAL_KEY_PROFILE_ID
-        && profile.maturity == SccmExtractionProfileMaturity::Experimental
-        && profile.configmgr_version_prefixes == ["5.00.9128."]
-        && profile.validated_artifact_families.first() == Some(family)
-        && profile.validated_artifact_families.len() == 1
-        && profile
-            .selected_configmgr_version
-            .as_deref()
-            .is_some_and(|version| version.starts_with("5.00.9128."))
 }
 
 fn compare_evidence(left: &SccmEvidence, right: &SccmEvidence) -> std::cmp::Ordering {
