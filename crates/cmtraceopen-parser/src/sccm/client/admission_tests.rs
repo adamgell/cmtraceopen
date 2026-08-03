@@ -77,7 +77,10 @@ fn refresh_payload_integrity(payload: &mut SccmClientCapturedPayload) {
 
 fn payload_padded_to(artifact_id: &str, total_bytes: usize) -> SccmClientCapturedPayload {
     let mut payload = payload_for(artifact_id, "+000");
-    assert!(payload.bytes.len() <= total_bytes, "test payload remains valid");
+    assert!(
+        payload.bytes.len() <= total_bytes,
+        "test payload remains valid"
+    );
     payload.bytes.resize(total_bytes, b' ');
     refresh_payload_integrity(&mut payload);
     payload
@@ -294,8 +297,12 @@ fn admission_rejects_oversized_payload_work_records_and_retained_evidence() {
         .iter()
         .map(|artifact| payload_padded_to(&artifact.artifact.artifact_id, 4 * 1024 * 1024))
         .collect::<Vec<_>>();
-    let error = admit_client_evidence(&aggregate_bundle, &aggregate_assessment, &aggregate_payloads)
-        .expect_err("aggregate parser work must be capped before hashing every payload");
+    let error = admit_client_evidence(
+        &aggregate_bundle,
+        &aggregate_assessment,
+        &aggregate_payloads,
+    )
+    .expect_err("aggregate parser work must be capped before hashing every payload");
     assert_eq!(
         error.to_string(),
         "client evidence admission aggregate payload bytes exceed the v1 cap"
@@ -311,11 +318,8 @@ fn admission_rejects_oversized_payload_work_records_and_retained_evidence() {
     );
 
     let retained_message = "x".repeat(3_000);
-    let oversized_retained = payload_with_repeated_records(
-        "fixture-policy-agent",
-        1_024,
-        &retained_message,
-    );
+    let oversized_retained =
+        payload_with_repeated_records("fixture-policy-agent", 1_024, &retained_message);
     let error = admit_client_evidence(&bundle, &assessment, &[oversized_retained])
         .expect_err("retained evidence and seal input must remain bounded");
     assert_eq!(

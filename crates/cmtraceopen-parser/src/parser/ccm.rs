@@ -344,7 +344,7 @@ pub fn parse_content(
 /// matched as a single logical record.  Text between matched records is
 /// emitted as individual plain-text entries, preserving line numbers.
 fn parse_content_multiline(content: &str, file_path: &str) -> (Vec<LogEntry>, u32) {
-    let scan = scan_ccm_content(content, file_path, CcmScanMode::PublicProjection);
+    let scan = scan_ccm_content(content, file_path, CcmScanMode::PublicProjection, None);
     (
         scan.records
             .into_iter()
@@ -355,11 +355,42 @@ fn parse_content_multiline(content: &str, file_path: &str) -> (Vec<LogEntry>, u3
 }
 
 pub(crate) fn scan_logical_records(content: &str, file_path: &str) -> Vec<CcmLogicalRecord> {
-    scan_ccm_content(content, file_path, CcmScanMode::SccmEvidence)
+    scan_ccm_content(content, file_path, CcmScanMode::SccmEvidence, None)
         .records
         .into_iter()
         .filter(|record| record.entry.format == LogFormat::Ccm)
         .collect()
+}
+
+/// Bounded SCCM evidence framing projection. This preserves the raw CCM
+/// grammar while exposing whether a complete claimed payload contained
+/// unmatched or ambiguous input that cannot be promoted to evidence.
+pub(crate) struct CcmLogicalRecordScan {
+    pub records: Vec<CcmLogicalRecord>,
+    pub complete: bool,
+    pub record_limit_exceeded: bool,
+}
+
+pub(crate) fn scan_logical_records_bounded(
+    content: &str,
+    file_path: &str,
+    max_records: usize,
+) -> CcmLogicalRecordScan {
+    let scan = scan_ccm_content(
+        content,
+        file_path,
+        CcmScanMode::SccmEvidence,
+        Some(max_records),
+    );
+    CcmLogicalRecordScan {
+        records: scan
+            .records
+            .into_iter()
+            .filter(|record| record.entry.format == LogFormat::Ccm)
+            .collect(),
+        complete: scan.errors == 0 && !scan.record_limit_exceeded,
+        record_limit_exceeded: scan.record_limit_exceeded,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -371,13 +402,57 @@ enum CcmScanMode {
 struct CcmScan {
     records: Vec<CcmLogicalRecord>,
     errors: u32,
+    record_limit_exceeded: bool,
 }
 
-fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmScan {
+struct CcmScanBuild {
+    records: Vec<CcmLogicalRecord>,
+    errors: u32,
+    id_counter: u64,
+    record_limit: Option<usize>,
+    record_limit_exceeded: bool,
+}
+
+impl CcmScanBuild {
+    fn new(record_limit: Option<usize>) -> Self {
+        Self {
+            records: Vec::new(),
+            errors: 0,
+            id_counter: 0,
+            record_limit,
+            record_limit_exceeded: false,
+        }
+    }
+
+    fn record_limit_reached(&mut self) -> bool {
+        if self
+            .record_limit
+            .is_some_and(|limit| self.records.len() >= limit)
+        {
+            self.record_limit_exceeded = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn finish(self) -> CcmScan {
+        CcmScan {
+            records: self.records,
+            errors: self.errors,
+            record_limit_exceeded: self.record_limit_exceeded,
+        }
+    }
+}
+
+fn scan_ccm_content(
+    content: &str,
+    file_path: &str,
+    mode: CcmScanMode,
+    record_limit: Option<usize>,
+) -> CcmScan {
     let line_starts = build_line_starts(content);
-    let mut records = Vec::new();
-    let mut errors = 0u32;
-    let mut id_counter = 0u64;
+    let mut build = CcmScanBuild::new(record_limit);
     let mut cursor = 0usize;
     let mut search_cursor = 0usize;
     let mut matched_any = false;
@@ -404,9 +479,7 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
                 cursor,
                 &line_starts,
                 file_path,
-                &mut records,
-                &mut id_counter,
-                &mut errors,
+                &mut build,
             );
             cursor = full_match.end();
             search_cursor = full_match.end();
@@ -420,27 +493,29 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
             cursor,
             &line_starts,
             file_path,
-            &mut records,
-            &mut id_counter,
-            &mut errors,
+            &mut build,
         );
 
         let line_start = line_number_for_offset(&line_starts, full_match.start());
         let line_end = line_number_for_offset(&line_starts, full_match.end().saturating_sub(1));
         if let Some(parsed) = parse_captures(&caps) {
             if parsed.public_compatible || mode == CcmScanMode::SccmEvidence {
-                records
-                    .push(parsed.into_logical_record(id_counter, line_start, line_end, file_path));
-                id_counter += 1;
+                if !build.record_limit_reached() {
+                    build.records.push(parsed.into_logical_record(
+                        build.id_counter,
+                        line_start,
+                        line_end,
+                        file_path,
+                    ));
+                    build.id_counter += 1;
+                }
             } else {
                 push_unmatched_plain(
                     full_match.as_str(),
                     full_match.start(),
                     &line_starts,
                     file_path,
-                    &mut records,
-                    &mut id_counter,
-                    &mut errors,
+                    &mut build,
                 );
             }
         } else {
@@ -449,9 +524,7 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
                 full_match.start(),
                 &line_starts,
                 file_path,
-                &mut records,
-                &mut id_counter,
-                &mut errors,
+                &mut build,
             );
         }
 
@@ -466,10 +539,12 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
         cursor,
         &line_starts,
         file_path,
-        &mut records,
-        &mut id_counter,
-        &mut errors,
+        &mut build,
     );
+
+    if !matched_any && record_limit.is_some() {
+        return build.finish();
+    }
 
     if !matched_any {
         let lines: Vec<&str> = content.lines().collect();
@@ -487,10 +562,14 @@ fn scan_ccm_content(content: &str, file_path: &str, mode: CcmScanMode) -> CcmSca
                 }
             })
             .collect();
-        return CcmScan { records, errors };
+        return CcmScan {
+            records,
+            errors,
+            record_limit_exceeded: build.record_limit_exceeded,
+        };
     }
 
-    CcmScan { records, errors }
+    build.finish()
 }
 
 fn newest_nested_opener(
@@ -636,18 +715,19 @@ fn push_unmatched_plain(
     base_offset: usize,
     line_starts: &[usize],
     file_path: &str,
-    records: &mut Vec<CcmLogicalRecord>,
-    id_counter: &mut u64,
-    errors: &mut u32,
+    build: &mut CcmScanBuild,
 ) {
     let mut local_offset = 0usize;
     for piece in segment.split_inclusive('\n') {
         let line = piece.trim_end_matches(['\r', '\n']);
         let trimmed = line.trim();
         if !trimmed.is_empty() {
+            if build.record_limit_reached() {
+                return;
+            }
             let line_number = line_number_for_offset(line_starts, base_offset + local_offset);
             let entry = LogEntry {
-                id: *id_counter,
+                id: build.id_counter,
                 line_number,
                 message: trimmed.to_string(),
                 component: None,
@@ -696,15 +776,15 @@ fn push_unmatched_plain(
                 iteration: None,
                 tags: None,
             };
-            records.push(CcmLogicalRecord {
+            build.records.push(CcmLogicalRecord {
                 entry,
                 context: None,
                 line_start: line_number,
                 line_end: line_number,
                 timestamp: CcmTimestampParse::missing(),
             });
-            *id_counter += 1;
-            *errors += 1;
+            build.id_counter += 1;
+            build.errors += 1;
         }
         local_offset += piece.len();
     }

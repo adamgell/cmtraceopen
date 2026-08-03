@@ -10,14 +10,17 @@
 // weakening workspace-wide warning policy while preserving the review gate.
 #![allow(dead_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::{self, Write},
+};
 
 use encoding_rs::{UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::parser::ccm::scan_logical_records;
+use crate::parser::ccm::scan_logical_records_bounded;
 use crate::sccm::evidence::SccmRawEvidenceSnapshot;
 use crate::sccm::{
     SccmArtifact, SccmCoverageState, SccmEvidence, SccmExtractionProfile,
@@ -29,6 +32,19 @@ use super::{
     assess_client_intake, SccmClientIntakeAssessment, SccmClientIntakeBundle,
     SccmClientIntakeError, SccmClientIntakeFragment, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
 };
+
+/// Maximum raw bytes decoded from one client payload at the parser admission
+/// boundary. This is intentionally below the native physical-file cap: the
+/// pure parser must remain safe for wasm and non-native callers too.
+pub(crate) const MAX_SCCM_CLIENT_ADMISSION_PAYLOAD_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum raw bytes admitted across one client evidence bundle.
+pub(crate) const MAX_SCCM_CLIENT_ADMISSION_TOTAL_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum logical CCM records retained from one admitted client bundle.
+pub(crate) const MAX_SCCM_CLIENT_ADMISSION_LOGICAL_RECORDS: usize = 4_096;
+/// Maximum projected evidence bytes retained for one admitted client bundle.
+pub(crate) const MAX_SCCM_CLIENT_ADMISSION_RETAINED_EVIDENCE_BYTES: usize = 3 * 1024 * 1024;
+/// Maximum bytes streamed into a deterministic client evidence integrity seal.
+pub(crate) const MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES: usize = 4 * 1024 * 1024;
 
 /// Raw, already-captured bytes offered to the one-shot client evidence
 /// admission boundary. This is an input only: the successful capability does
@@ -133,6 +149,10 @@ pub(crate) enum SccmClientEvidenceAdmissionError {
     AssessmentMutation,
     #[error("client evidence admission payload count exceeds the v1 bound")]
     PayloadLimitExceeded,
+    #[error("client evidence admission payload exceeds the v1 per-payload byte cap")]
+    PayloadByteLimitExceeded,
+    #[error("client evidence admission aggregate payload bytes exceed the v1 cap")]
+    AggregatePayloadByteLimitExceeded,
     #[error("client evidence admission contains duplicate payload artifact IDs")]
     DuplicatePayload,
     #[error("client evidence admission is missing a payload for a captured fragment")]
@@ -147,6 +167,14 @@ pub(crate) enum SccmClientEvidenceAdmissionError {
     InvalidEncoding,
     #[error("client evidence admission payload has no complete CCM logical record")]
     MalformedCcm,
+    #[error("client evidence admission CCM framing is incomplete or ambiguous")]
+    IncompleteCcmFraming,
+    #[error("client evidence admission logical record count exceeds the v1 cap")]
+    LogicalRecordLimitExceeded,
+    #[error("client evidence admission retained evidence exceeds the v1 byte cap")]
+    RetainedEvidenceLimitExceeded,
+    #[error("client evidence admission integrity seal exceeds the v1 byte cap")]
+    IntegritySealLimitExceeded,
     #[error("client evidence admission record timestamp provenance is not comparable")]
     InvalidTimestampProvenance,
     #[error("client evidence admission selected an unregistered extraction profile")]
@@ -171,6 +199,7 @@ pub(crate) fn admit_client_evidence(
     if payloads.len() > MAX_SCCM_CLIENT_INTAKE_ARTIFACTS {
         return Err(SccmClientEvidenceAdmissionError::PayloadLimitExceeded);
     }
+    validate_payload_budget(payloads)?;
 
     let canonical =
         assess_client_intake(bundle).map_err(SccmClientEvidenceAdmissionError::InvalidBundle)?;
@@ -208,6 +237,7 @@ pub(crate) fn admit_client_evidence(
     let mut profiles_by_artifact = BTreeMap::new();
     let mut evidence_ids = BTreeSet::new();
     let mut evidence_references = BTreeSet::new();
+    let mut retained_evidence_bytes = 0usize;
 
     for payload in ordered_payloads {
         if !seen_payload_ids.insert(payload.artifact_id.as_str()) {
@@ -225,12 +255,22 @@ pub(crate) fn admit_client_evidence(
         }
         let content = decode_payload(payload, fragment.encoding.as_deref())?;
         let artifact = artifact_for_fragment(fragment);
-        let records = scan_logical_records(&content, &fragment.basename);
-        if records.is_empty() {
+        let scan = scan_logical_records_bounded(
+            &content,
+            &fragment.basename,
+            MAX_SCCM_CLIENT_ADMISSION_LOGICAL_RECORDS,
+        );
+        if scan.record_limit_exceeded {
+            return Err(SccmClientEvidenceAdmissionError::LogicalRecordLimitExceeded);
+        }
+        if !scan.complete {
+            return Err(SccmClientEvidenceAdmissionError::IncompleteCcmFraming);
+        }
+        if scan.records.is_empty() {
             return Err(SccmClientEvidenceAdmissionError::MalformedCcm);
         }
 
-        for record in records {
+        for record in scan.records {
             let normalized = SccmRawEvidenceSnapshot::from_record(&artifact, record).export();
             if normalized.evidence_id != normalized.reference.entry_id
                 || normalized.reference.line_start.is_none()
@@ -252,6 +292,12 @@ pub(crate) fn admit_client_evidence(
             {
                 return Err(SccmClientEvidenceAdmissionError::CollidingEvidenceIdentity);
             }
+            retained_evidence_bytes = retained_evidence_bytes
+                .checked_add(retained_evidence_size(&normalized)?)
+                .ok_or(SccmClientEvidenceAdmissionError::RetainedEvidenceLimitExceeded)?;
+            if retained_evidence_bytes > MAX_SCCM_CLIENT_ADMISSION_RETAINED_EVIDENCE_BYTES {
+                return Err(SccmClientEvidenceAdmissionError::RetainedEvidenceLimitExceeded);
+            }
             evidence.push(normalized);
         }
         profiles_by_artifact.insert(fragment.artifact_id.clone(), profile);
@@ -268,6 +314,24 @@ pub(crate) fn admit_client_evidence(
     })
 }
 
+fn validate_payload_budget(
+    payloads: &[SccmClientCapturedPayload],
+) -> Result<(), SccmClientEvidenceAdmissionError> {
+    let mut total_payload_bytes = 0usize;
+    for payload in payloads {
+        if payload.bytes.len() > MAX_SCCM_CLIENT_ADMISSION_PAYLOAD_BYTES {
+            return Err(SccmClientEvidenceAdmissionError::PayloadByteLimitExceeded);
+        }
+        total_payload_bytes = total_payload_bytes
+            .checked_add(payload.bytes.len())
+            .ok_or(SccmClientEvidenceAdmissionError::AggregatePayloadByteLimitExceeded)?;
+        if total_payload_bytes > MAX_SCCM_CLIENT_ADMISSION_TOTAL_PAYLOAD_BYTES {
+            return Err(SccmClientEvidenceAdmissionError::AggregatePayloadByteLimitExceeded);
+        }
+    }
+    Ok(())
+}
+
 fn validate_payload(
     payload: &SccmClientCapturedPayload,
 ) -> Result<(), SccmClientEvidenceAdmissionError> {
@@ -279,6 +343,42 @@ fn validate_payload(
     (digest_hex(&payload.bytes) == payload.expected_sha256)
         .then_some(())
         .ok_or(SccmClientEvidenceAdmissionError::PayloadIntegrityMismatch)
+}
+
+fn retained_evidence_size(
+    evidence: &SccmEvidence,
+) -> Result<usize, SccmClientEvidenceAdmissionError> {
+    let execution_context_bytes = match evidence.execution_context.as_ref() {
+        Some(handle) => handle
+            .scheme
+            .len()
+            .checked_add(handle.value.len())
+            .ok_or(SccmClientEvidenceAdmissionError::RetainedEvidenceLimitExceeded)?,
+        None => 0,
+    };
+    let mut total = 0usize;
+    for size in [
+        evidence.evidence_id.len(),
+        evidence.reference.artifact_id.len(),
+        evidence.reference.entry_id.len(),
+        evidence.component.as_deref().map_or(0, str::len),
+        evidence.ccm_source_file.as_deref().map_or(0, str::len),
+        evidence.message.len(),
+        evidence
+            .timestamp
+            .original_display
+            .as_deref()
+            .map_or(0, str::len),
+        execution_context_bytes,
+        // Reserve fixed-field and container overhead so the retained-memory
+        // cap remains conservative without serializing a second copy.
+        256,
+    ] {
+        total = total
+            .checked_add(size)
+            .ok_or(SccmClientEvidenceAdmissionError::RetainedEvidenceLimitExceeded)?;
+    }
+    Ok(total)
 }
 
 fn decode_payload(
@@ -349,18 +449,74 @@ struct IntegrityProjection<'a> {
     profiles_by_artifact: &'a BTreeMap<String, SccmExtractionProfile>,
 }
 
+struct BoundedIntegrityWriter {
+    hasher: Sha256,
+    byte_limit: usize,
+    bytes_written: usize,
+    limit_exceeded: bool,
+}
+
+impl BoundedIntegrityWriter {
+    fn new(byte_limit: usize) -> Self {
+        Self {
+            hasher: Sha256::new(),
+            byte_limit,
+            bytes_written: 0,
+            limit_exceeded: false,
+        }
+    }
+
+    fn finish(self) -> String {
+        self.hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+}
+
+impl Write for BoundedIntegrityWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(next_size) = self.bytes_written.checked_add(bytes.len()) else {
+            self.limit_exceeded = true;
+            return Err(io::Error::other("integrity seal byte limit exceeded"));
+        };
+        if next_size > self.byte_limit {
+            self.limit_exceeded = true;
+            return Err(io::Error::other("integrity seal byte limit exceeded"));
+        }
+        self.hasher.update(bytes);
+        self.bytes_written = next_size;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 fn compute_integrity_seal(
     evidence: &[SccmEvidence],
     source_coverage: &BTreeMap<String, SccmCoverageState>,
     profiles_by_artifact: &BTreeMap<String, SccmExtractionProfile>,
 ) -> Result<String, SccmClientEvidenceAdmissionError> {
-    let bytes = serde_json::to_vec(&IntegrityProjection {
-        evidence,
-        source_coverage,
-        profiles_by_artifact,
-    })
-    .map_err(|_| SccmClientEvidenceAdmissionError::IntegrityViolation)?;
-    Ok(digest_hex(&bytes))
+    let mut writer = BoundedIntegrityWriter::new(MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES);
+    let serialized = serde_json::to_writer(
+        &mut writer,
+        &IntegrityProjection {
+            evidence,
+            source_coverage,
+            profiles_by_artifact,
+        },
+    );
+    if serialized.is_err() {
+        return Err(if writer.limit_exceeded {
+            SccmClientEvidenceAdmissionError::IntegritySealLimitExceeded
+        } else {
+            SccmClientEvidenceAdmissionError::IntegrityViolation
+        });
+    }
+    Ok(writer.finish())
 }
 
 fn digest_hex(bytes: &[u8]) -> String {
