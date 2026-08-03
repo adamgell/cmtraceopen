@@ -102,9 +102,13 @@ fn load_distribution_point_assessment(scenario: &str) -> SccmServerIntakeAssessm
                 "artifactId": artifact["artifactId"],
                 "producerRole": artifact["producerRole"],
                 "producerHostHandle": artifact["producerHostHandle"],
-                "workflowSubject": {
-                    "role": artifact["workflowSubjectRole"],
-                    "instanceHandle": artifact["workflowSubjectHandle"],
+                "workflowSubject": if artifact["producerRole"] == "distributionPoint" {
+                    Value::Null
+                } else {
+                    json!({
+                        "role": artifact["workflowSubjectRole"],
+                        "instanceHandle": artifact["workflowSubjectHandle"],
+                    })
                 },
                 "sourceId": artifact["sourceId"],
                 "sourceKind": artifact["sourceKind"],
@@ -123,7 +127,7 @@ fn load_distribution_point_assessment(scenario: &str) -> SccmServerIntakeAssessm
                 "encoding": artifact["encoding"],
                 "collectionLimit": artifact["collectionLimit"],
                 "collectedUtc": artifact["collectedUtc"],
-                "relativePath": artifact["relativePath"],
+                "relativePath": canonical_distribution_point_relative_path(artifact),
                 "bytesCopied": artifact["bytesCopied"],
             }))
             .collect::<Vec<_>>(),
@@ -132,6 +136,25 @@ fn load_distribution_point_assessment(scenario: &str) -> SccmServerIntakeAssessm
         serde_json::to_string(&canonical_manifest).expect("canonical manifest serializes");
     assess_server_intake(&canonical_manifest_json, &payloads)
         .expect("distribution point fixture is canonical server intake")
+}
+
+fn canonical_distribution_point_relative_path(artifact: &Value) -> String {
+    let role_segment = match artifact["producerRole"].as_str() {
+        Some("siteServer") => "site-server",
+        Some("distributionPoint") => "distribution-point",
+        _ => panic!("DP fixture has a supported producer role"),
+    };
+    let basename = artifact["originalBasename"]
+        .as_str()
+        .expect("DP fixture has a source basename");
+    let subject_segment = if artifact["producerRole"] == "distributionPoint" {
+        ""
+    } else {
+        "subject-distribution-point/"
+    };
+    format!(
+        "evidence/sccm/server/{role_segment}/server-dp-distribution/{subject_segment}current/{basename}"
+    )
 }
 
 fn dp_manifest_artifact_mut(manifest: &mut Value) -> &mut Value {

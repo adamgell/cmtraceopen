@@ -2649,7 +2649,10 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
         return match domain {
             "host" => matches!(
                 value,
-                "synthetic:host:mp-01" | "synthetic:host:site-01" | "safe:server:lab-pri-01"
+                "synthetic:host:mp-01"
+                    | "synthetic:host:site-01"
+                    | "safe:server:lab-pri-01"
+                    | "safe:dp:lab-dp-01"
             ),
             "subject" => {
                 matches!(

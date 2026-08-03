@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
+use thiserror::Error;
 
 use crate::sccm::{
     classify_artifact_name, SccmArtifactFamily, SccmArtifactRequest, SccmCoverageState,
@@ -24,6 +25,9 @@ pub const SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID: &str = "sccm-dp-intake-envelope";
 pub const SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION: u32 = 1;
 pub const SCCM_DISTRIBUTION_POINT_SOURCE_ID: &str = "server-dp-distribution";
+pub const SCCM_DISTRIBUTION_POINT_CONTENT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
+pub const SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID: &str = "dp-server-5.00.test-v1";
+pub const SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_VERSION: u32 = 1;
 const SCCM_DISTRIBUTION_POINT_INTAKE_AUTHORITY_REASON: &str =
     "Canonical server intake authority could not be verified.";
 
@@ -78,6 +82,113 @@ pub struct SccmDistributionPointAnalysis {
     pub coverage_gaps: Vec<SccmDistributionPointCoverageGap>,
     pub artifact_requests: Vec<SccmArtifactRequest>,
     pub cross_side_correlation_performed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDistributionPointContentPhase {
+    ReceiveContent,
+    Distribute,
+    Transfer,
+    Validate,
+    MakeAvailable,
+    ServeOrReport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDistributionPointContentState {
+    Succeeded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDistributionPointContentClassification {
+    Success,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmDistributionPointContentConfidence {
+    High,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDistributionPointContentKey {
+    pub package_id: String,
+    pub content_id: String,
+    pub content_version: u32,
+    pub site_code: String,
+    pub distribution_point_handle: String,
+    pub extraction_profile_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDistributionPointContentObservation {
+    pub phase: SccmDistributionPointContentPhase,
+    pub terminal: bool,
+    pub timestamp: SccmTimestamp,
+    pub evidence: SccmEvidenceRef,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDistributionPointContentTransaction {
+    pub transaction_id: String,
+    pub key: SccmDistributionPointContentKey,
+    pub state: SccmDistributionPointContentState,
+    pub classification: SccmDistributionPointContentClassification,
+    pub confidence: SccmDistributionPointContentConfidence,
+    pub last_successful_phase: SccmDistributionPointContentPhase,
+    pub evidence: Vec<SccmEvidenceRef>,
+    pub observations: Vec<SccmDistributionPointContentObservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmDistributionPointContentAnalysis {
+    pub schema_version: u32,
+    pub workflow: SccmDistributionPointWorkflow,
+    pub profile: SccmDistributionPointProfile,
+    pub transactions: Vec<SccmDistributionPointContentTransaction>,
+    pub cross_side_correlation_performed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum SccmDistributionPointContentIntakeError {
+    #[error("canonical server intake authority could not be verified")]
+    IntakeAuthority,
+    #[error("Distribution Point topology is not compatible with the admitted profile")]
+    Topology,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct DistributionPointFactKey {
+    package_id: String,
+    content_id: String,
+    content_version: u32,
+    site_code: String,
+    distribution_point_handle: String,
+}
+
+#[derive(Debug, Clone)]
+struct DistributionPointFact {
+    key: DistributionPointFactKey,
+    phase: SccmDistributionPointContentPhase,
+    terminal: bool,
+    reference: SccmEvidenceRef,
+    timestamp: SccmTimestamp,
+}
+
+/// Private canonical transaction envelope. Facts only originate from an
+/// integrity-bound server intake assessment; callers cannot construct or
+/// submit source facts directly.
+#[derive(Debug)]
+struct DistributionPointTransactionEnvelope {
+    key: DistributionPointFactKey,
+    facts: Vec<DistributionPointFact>,
 }
 
 /// Project only complete, profile-eligible logical CCM records from the
@@ -168,6 +279,289 @@ pub fn analyze_distribution_point(
         artifact_requests,
         cross_side_correlation_performed: false,
     }
+}
+
+/// Reduce the approved synthetic DP package profile from canonical server
+/// intake. This first slice recognizes only a complete, source-local healthy
+/// transaction; incomplete, retry, and terminal-failure facts intentionally
+/// remain outside this API until their dedicated contracts are reviewed.
+pub fn analyze_distribution_point_content_from_server_intake(
+    intake: &SccmServerIntakeAssessment,
+) -> Result<SccmDistributionPointContentAnalysis, SccmDistributionPointContentIntakeError> {
+    if !intake.adapter_authority_is_intake_bound() || !intake.topology_authority_is_intake_bound() {
+        return Err(SccmDistributionPointContentIntakeError::IntakeAuthority);
+    }
+    if !intake
+        .topology
+        .roles_observed
+        .contains(&SccmRole::DistributionPoint)
+    {
+        return Err(SccmDistributionPointContentIntakeError::Topology);
+    }
+
+    let bounded = analyze_distribution_point(intake);
+    let evidence_by_entry_id = intake
+        .evidence
+        .iter()
+        .map(|evidence| (evidence.reference.entry_id.as_str(), evidence))
+        .collect::<BTreeMap<_, _>>();
+    let artifacts_by_id = intake
+        .artifacts
+        .iter()
+        .map(|artifact| (artifact.artifact_id.as_str(), artifact))
+        .collect::<BTreeMap<_, _>>();
+    let mut facts_by_key = BTreeMap::<DistributionPointFactKey, Vec<DistributionPointFact>>::new();
+
+    for observation in &bounded.source_observations {
+        let Some(evidence) = evidence_by_entry_id.get(observation.evidence.entry_id.as_str())
+        else {
+            continue;
+        };
+        let Some(artifact) = artifacts_by_id.get(observation.artifact_id.as_str()) else {
+            continue;
+        };
+        let Some(fact) = parse_healthy_distribution_point_fact(observation, artifact, evidence)
+        else {
+            continue;
+        };
+        facts_by_key.entry(fact.key.clone()).or_default().push(fact);
+    }
+
+    let mut transactions = facts_by_key
+        .into_iter()
+        .filter_map(|(key, facts)| {
+            reduce_healthy_transaction(DistributionPointTransactionEnvelope { key, facts })
+        })
+        .collect::<Vec<_>>();
+    transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+
+    Ok(SccmDistributionPointContentAnalysis {
+        schema_version: SCCM_DISTRIBUTION_POINT_CONTENT_ANALYSIS_SCHEMA_VERSION,
+        workflow: SccmDistributionPointWorkflow::DistributionPointContent,
+        profile: SccmDistributionPointProfile {
+            id: SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID.to_owned(),
+            version: SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_VERSION,
+            stability: "experimental".to_owned(),
+        },
+        transactions,
+        cross_side_correlation_performed: false,
+    })
+}
+
+fn parse_healthy_distribution_point_fact(
+    observation: &SccmDistributionPointSourceObservation,
+    artifact: &SccmServerArtifactAssessment,
+    evidence: &SccmEvidence,
+) -> Option<DistributionPointFact> {
+    let phase = exact_message_token(&evidence.message, "Phase").and_then(content_phase)?;
+    let disposition = exact_message_token(&evidence.message, "Disposition")?;
+    let terminal = exact_message_token(&evidence.message, "Terminal")?;
+    let package_id = exact_message_token(&evidence.message, "PackageId")?;
+    let content_id = exact_message_token(&evidence.message, "ContentId")?;
+    let content_version = exact_message_token(&evidence.message, "ContentVersion")?
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)?;
+    let site_code = exact_message_token(&evidence.message, "SiteCode")?;
+    let distribution_point_handle = exact_message_token(&evidence.message, "DpHandle")?;
+    let profile_id = exact_message_token(&evidence.message, "ProfileId")?;
+
+    if disposition != "succeeded"
+        || profile_id != SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID
+        || !safe_package_id(package_id)
+        || !safe_content_id(content_id)
+        || !safe_site_code(site_code)
+        || !safe_distribution_point_handle(distribution_point_handle)
+        || !matches!(
+            evidence.timestamp.ordering_state,
+            SccmTimeOrderingState::NormalizedUtc
+        )
+        || evidence.timestamp.offset_minutes.is_none()
+        || evidence.timestamp.utc_millis.is_none()
+    {
+        return None;
+    }
+
+    let expected_source = match phase {
+        SccmDistributionPointContentPhase::ReceiveContent
+        | SccmDistributionPointContentPhase::Distribute => {
+            observation.producer_role == SccmRole::SiteServer
+                && artifact.original_basename.as_deref() == Some("distmgr.log")
+        }
+        SccmDistributionPointContentPhase::Transfer => {
+            observation.producer_role == SccmRole::SiteServer
+                && artifact.original_basename.as_deref() == Some("PkgXferMgr.log")
+        }
+        SccmDistributionPointContentPhase::Validate
+        | SccmDistributionPointContentPhase::MakeAvailable
+        | SccmDistributionPointContentPhase::ServeOrReport => {
+            observation.producer_role == SccmRole::DistributionPoint
+                && artifact.original_basename.as_deref() == Some("SMSDPProv.log")
+        }
+    };
+    let observed_distribution_point = match observation.producer_role {
+        SccmRole::SiteServer => observation.workflow_subject_handle.as_deref(),
+        SccmRole::DistributionPoint => observation.producer_host_handle.as_deref(),
+        _ => None,
+    };
+    let expected_terminal = if phase == SccmDistributionPointContentPhase::ServeOrReport {
+        "true"
+    } else {
+        "false"
+    };
+    if !expected_source
+        || observed_distribution_point != Some(distribution_point_handle)
+        || terminal != expected_terminal
+    {
+        return None;
+    }
+
+    Some(DistributionPointFact {
+        key: DistributionPointFactKey {
+            package_id: package_id.to_owned(),
+            content_id: content_id.to_owned(),
+            content_version,
+            site_code: site_code.to_owned(),
+            distribution_point_handle: distribution_point_handle.to_owned(),
+        },
+        phase,
+        terminal: terminal == "true",
+        reference: evidence.reference.clone(),
+        timestamp: evidence.timestamp.clone(),
+    })
+}
+
+fn reduce_healthy_transaction(
+    mut envelope: DistributionPointTransactionEnvelope,
+) -> Option<SccmDistributionPointContentTransaction> {
+    envelope.facts.sort_by(|left, right| {
+        (
+            left.phase,
+            left.timestamp.utc_millis,
+            left.reference.entry_id.as_str(),
+        )
+            .cmp(&(
+                right.phase,
+                right.timestamp.utc_millis,
+                right.reference.entry_id.as_str(),
+            ))
+    });
+    let expected_phases = [
+        SccmDistributionPointContentPhase::ReceiveContent,
+        SccmDistributionPointContentPhase::Distribute,
+        SccmDistributionPointContentPhase::Transfer,
+        SccmDistributionPointContentPhase::Validate,
+        SccmDistributionPointContentPhase::MakeAvailable,
+        SccmDistributionPointContentPhase::ServeOrReport,
+    ];
+    if envelope.facts.len() != expected_phases.len()
+        || envelope
+            .facts
+            .iter()
+            .zip(expected_phases)
+            .any(|(fact, expected)| fact.phase != expected)
+    {
+        return None;
+    }
+
+    let mut previous_timestamp = None;
+    for fact in &envelope.facts {
+        let timestamp = fact.timestamp.utc_millis?;
+        if previous_timestamp.is_some_and(|previous| timestamp <= previous) {
+            return None;
+        }
+        previous_timestamp = Some(timestamp);
+    }
+    if envelope.facts.iter().any(|fact| {
+        fact.terminal != (fact.phase == SccmDistributionPointContentPhase::ServeOrReport)
+    }) {
+        return None;
+    }
+
+    let key = SccmDistributionPointContentKey {
+        package_id: envelope.key.package_id,
+        content_id: envelope.key.content_id,
+        content_version: envelope.key.content_version,
+        site_code: envelope.key.site_code,
+        distribution_point_handle: envelope.key.distribution_point_handle,
+        extraction_profile_id: SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID.to_owned(),
+    };
+    let transaction_id = format!(
+        "dp:{}:{}:v{}:{}",
+        key.package_id, key.content_id, key.content_version, key.distribution_point_handle
+    );
+    let evidence = envelope
+        .facts
+        .iter()
+        .map(|fact| fact.reference.clone())
+        .collect::<Vec<_>>();
+    let observations = envelope
+        .facts
+        .into_iter()
+        .map(|fact| SccmDistributionPointContentObservation {
+            phase: fact.phase,
+            terminal: fact.terminal,
+            timestamp: fact.timestamp,
+            evidence: fact.reference,
+        })
+        .collect::<Vec<_>>();
+
+    Some(SccmDistributionPointContentTransaction {
+        transaction_id,
+        key,
+        state: SccmDistributionPointContentState::Succeeded,
+        classification: SccmDistributionPointContentClassification::Success,
+        confidence: SccmDistributionPointContentConfidence::High,
+        last_successful_phase: SccmDistributionPointContentPhase::ServeOrReport,
+        evidence,
+        observations,
+    })
+}
+
+fn exact_message_token<'a>(message: &'a str, label: &str) -> Option<&'a str> {
+    let prefix = format!("{label}=");
+    let mut values = message
+        .split(';')
+        .map(str::trim)
+        .filter_map(|segment| segment.strip_prefix(&prefix));
+    let value = values.next()?;
+    values.next().is_none().then_some(value)
+}
+
+fn content_phase(value: &str) -> Option<SccmDistributionPointContentPhase> {
+    match value {
+        "receiveContent" => Some(SccmDistributionPointContentPhase::ReceiveContent),
+        "distribute" => Some(SccmDistributionPointContentPhase::Distribute),
+        "transfer" => Some(SccmDistributionPointContentPhase::Transfer),
+        "validate" => Some(SccmDistributionPointContentPhase::Validate),
+        "makeAvailable" => Some(SccmDistributionPointContentPhase::MakeAvailable),
+        "serveOrReport" => Some(SccmDistributionPointContentPhase::ServeOrReport),
+        _ => None,
+    }
+}
+
+fn safe_package_id(value: &str) -> bool {
+    (3..=32).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+}
+
+fn safe_content_id(value: &str) -> bool {
+    (3..=128).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+fn safe_site_code(value: &str) -> bool {
+    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+fn safe_distribution_point_handle(value: &str) -> bool {
+    value
+        .strip_prefix("safe:dp:")
+        .is_some_and(|handle| !handle.is_empty() && handle.len() <= 128 && !handle.contains(".."))
 }
 
 fn intake_authority_invalid_analysis() -> SccmDistributionPointAnalysis {
