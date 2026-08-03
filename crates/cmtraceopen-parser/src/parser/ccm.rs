@@ -547,15 +547,16 @@ fn scan_ccm_content(
         let line_end = line_number_for_offset(&line_starts, full_match.end().saturating_sub(1));
         if let Some(parsed) = parse_captures(&caps) {
             if parsed.public_compatible || mode == CcmScanMode::SccmEvidence {
-                if !build.record_limit_reached() {
-                    build.records.push(parsed.into_logical_record(
-                        build.id_counter,
-                        line_start,
-                        line_end,
-                        file_path,
-                    ));
-                    build.id_counter += 1;
+                if build.record_limit_reached() {
+                    return build.finish();
                 }
+                build.records.push(parsed.into_logical_record(
+                    build.id_counter,
+                    line_start,
+                    line_end,
+                    file_path,
+                ));
+                build.id_counter += 1;
             } else {
                 push_unmatched_plain(
                     full_match.as_str(),

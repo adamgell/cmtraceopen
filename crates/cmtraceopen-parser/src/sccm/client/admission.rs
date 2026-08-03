@@ -364,11 +364,8 @@ pub fn admit_client_evidence(
         .ok_or(SccmClientEvidenceAdmissionError::UnregisteredProfile)?;
         let content = decode_payload(payload, fragment.encoding.as_deref())?;
         let artifact = artifact_for_fragment(fragment);
-        let scan = scan_logical_records_bounded(
-            &content,
-            &fragment.basename,
-            MAX_SCCM_CLIENT_ADMISSION_LOGICAL_RECORDS,
-        );
+        let scan =
+            scan_logical_records_bounded(&content, &fragment.basename, remaining_logical_records);
         if scan.record_limit_exceeded {
             return Err(SccmClientEvidenceAdmissionError::LogicalRecordLimitExceeded);
         }
