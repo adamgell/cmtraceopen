@@ -827,31 +827,32 @@ export const useLogStore = create<LogState>((set, get) => ({
     recomputeAndSetMatches();
   },
   amendEntry: (amendment) => {
+    let amendmentApplied = false;
     set((state) => {
-      let amended = false;
-      const entries = state.entries.map((entry) => {
-        if (
-          entry.id !== amendment.entryId ||
-          !canApplyTailAmendment(entry, amendment)
-        ) {
-          return entry;
-        }
-        amended = true;
-        return applyTailAmendment(entry, amendment);
-      });
+      const entryIndex = state.entries.findIndex(
+        (entry) =>
+          entry.id === amendment.entryId &&
+          canApplyTailAmendment(entry, amendment),
+      );
+      if (entryIndex < 0) {
+        return state;
+      }
 
-      return amended
-        ? {
-            entries,
-            totalLines: Math.max(
-              state.totalLines,
-              amendment.continuationEndLine,
-            ),
-            guidNameMap: buildGuidNameMap(entries),
-          }
-        : {};
+      amendmentApplied = true;
+      const entries = [...state.entries];
+      entries[entryIndex] = applyTailAmendment(entries[entryIndex], amendment);
+      return {
+        entries,
+        totalLines: Math.max(
+          state.totalLines,
+          amendment.continuationEndLine,
+        ),
+        guidNameMap: buildGuidNameMap(entries),
+      };
     });
-    recomputeAndSetMatches();
+    if (amendmentApplied) {
+      recomputeAndSetMatches();
+    }
   },
   resetEntries: (newEntries) => {
     // The tailed file was truncated/rotated: `newEntries` are a fresh read from
@@ -914,50 +915,52 @@ export const useLogStore = create<LogState>((set, get) => ({
     recomputeAndSetMatches();
   },
   amendAggregateEntry: (filePath, amendment) => {
+    let amendmentApplied = false;
     set((state) => {
-      let amended = false;
-      const entries = state.entries.map((entry) => {
-        if (
-          amended ||
-          entry.filePath !== filePath ||
-          !canApplyTailAmendment(entry, amendment)
-        ) {
-          return entry;
-        }
-        amended = true;
-        return applyTailAmendment(entry, amendment);
-      });
-
-      if (!amended) {
-        return {};
+      const entryIndex = state.entries.findIndex(
+        (entry) =>
+          entry.filePath === filePath &&
+          canApplyTailAmendment(entry, amendment),
+      );
+      if (entryIndex < 0) {
+        return state;
       }
 
+      amendmentApplied = true;
+      const amendedEntry = applyTailAmendment(
+        state.entries[entryIndex],
+        amendment,
+      );
+      const entries = [...state.entries];
+      entries[entryIndex] = amendedEntry;
       const isTrackedFile = state.aggregateFiles.some(
         (file) => file.filePath === filePath,
       );
-      const aggregateFiles = state.aggregateFiles.map((file) =>
-        file.filePath === filePath
-          ? {
-              ...file,
-              totalLines: Math.max(
-                file.totalLines,
-                amendment.continuationEndLine,
-              ),
-            }
-          : file,
-      );
-      const fileOrder = buildAggregateFileOrder(state.aggregateFiles);
-      entries.sort((left, right) => compareMergedLogEntries(left, right, fileOrder));
+      const aggregateFiles = isTrackedFile
+        ? state.aggregateFiles.map((file) =>
+            file.filePath === filePath
+              ? {
+                  ...file,
+                  totalLines: Math.max(
+                    file.totalLines,
+                    amendment.continuationEndLine,
+                  ),
+                }
+              : file,
+          )
+        : state.aggregateFiles;
       return {
         entries,
         aggregateFiles,
         totalLines: isTrackedFile
           ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0)
           : Math.max(state.totalLines, amendment.continuationEndLine),
-        guidNameMap: buildGuidNameMap(entries),
+        guidNameMap: mergeGuidNameMap(state.guidNameMap, [amendedEntry]),
       };
     });
-    recomputeAndSetMatches();
+    if (amendmentApplied) {
+      recomputeAndSetMatches();
+    }
   },
   observeAggregateTailLine: (filePath, lineNumber) => {
     set((state) => {
