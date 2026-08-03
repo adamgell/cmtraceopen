@@ -1760,6 +1760,7 @@ fn finding_artifact_requests_reject_unbounded_reason_language_and_globs() {
     }
 }
 
+
 #[test]
 fn finding_deserialization_rejects_unsound_high_and_forged_terminal_state() {
     let evidence = finding_evidence_ref("client-app-enforce", "client-app-enforce:1-1");
