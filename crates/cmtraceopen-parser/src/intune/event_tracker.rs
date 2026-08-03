@@ -591,7 +591,7 @@ fn extract_appworkload_event(
             .map(|m| m.as_str().to_string());
         let short = guid
             .as_deref()
-            .map(|g| &g[..8.min(g.len())])
+            .map(|g| char_prefix(g, 8))
             .unwrap_or("unknown");
         let phase = if flags.sidecar_script_complete {
             "Complete"
@@ -1494,6 +1494,18 @@ fn short_guid(value: &str) -> &str {
     value
 }
 
+/// Borrow at most the first `max_chars` characters of `value`.
+///
+/// Slicing by byte count (`&value[..n]`) panics when `n` lands inside a
+/// multi-byte character, and values pulled out of a log file are not guaranteed
+/// to be ASCII, so truncation is done on character boundaries.
+fn char_prefix(value: &str, max_chars: usize) -> &str {
+    match value.char_indices().nth(max_chars) {
+        Some((byte_index, _)) => &value[..byte_index],
+        None => value,
+    }
+}
+
 fn contains_case_insensitive(value: &str, needle: &str) -> bool {
     contains_ascii_case_insensitive(value, needle)
 }
@@ -2032,5 +2044,38 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].status, IntuneStatus::Success);
         assert_eq!(events[0].detail, message);
+    }
+
+    #[test]
+    fn char_prefix_never_splits_a_multibyte_character() {
+        // Byte-slicing at 8 would land inside the 3-byte '你' (bytes 6..9).
+        assert_eq!(char_prefix("aaaaaa你好", 8), "aaaaaa你好");
+        assert_eq!(char_prefix("aaaaaa你好世界", 8), "aaaaaa你好");
+        assert_eq!(char_prefix("你好世界之光", 3), "你好世");
+        // ASCII behaviour is unchanged.
+        assert_eq!(char_prefix("a1b2c3d4-e5f6-7890", 8), "a1b2c3d4");
+        assert_eq!(char_prefix("abc", 8), "abc");
+        assert_eq!(char_prefix("", 8), "");
+    }
+
+    #[test]
+    fn sidecar_event_with_multibyte_non_guid_app_id_does_not_panic() {
+        // "aaaaaa你好" is 6 ASCII bytes followed by a 3-byte character spanning
+        // bytes 6..9, so truncating at byte 8 lands mid-character.
+        let events = extract_events(
+            &[line(
+                r#"SidecarScriptDetectionManager launch {"AppId":"aaaaaa你好"}"#,
+                "01-15-2024 10:00:05.000",
+                1,
+            )],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, IntuneEventType::PowerShellScript);
+        // A non-GUID AppId is not an identity: it must not be reported as one.
+        assert_eq!(events[0].guid, None);
+        assert_eq!(events[0].name, "Script Detection Running (unknown)");
     }
 }

@@ -280,19 +280,26 @@ fn extract_all_field_values(msg: &str, prefix: &str, suffix: &str) -> Vec<String
 ///
 /// Checks (in order): `"AppId"`, `"Id"`, then falls back to a generic
 /// GUID regex when a name field is also present on the same line.
+///
+/// Every strategy validates that the value really is a GUID. Log files are
+/// untrusted input, so a JSON field can hold arbitrary text; returning that
+/// text would key the registry (and every event's `guid`) on something that is
+/// not an identity. When a field fails validation the next strategy is tried,
+/// so a GUID embedded in a decorated value like `Win32App_<guid>_1` is still
+/// recovered by the generic fallback.
 pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
     // Try "AppId" — direct and escaped JSON
-    if let Some(value) = extract_json_field(msg, "\"AppId\":\"", "\"") {
-        return Some(value.to_string());
-    }
-    if let Some(value) = extract_json_field(msg, "\\\"AppId\\\":\\\"", "\\\"") {
-        return Some(value.to_string());
-    }
-    // Try "Id" — appears in policy payloads like Get policies = [{"Id":"<GUID>","Name":"..."}]
-    if let Some(value) = extract_guid_from_id_field(msg, "\"Id\":\"", "\"") {
+    if let Some(value) = extract_guid_field(msg, "\"AppId\":\"", "\"") {
         return Some(value);
     }
-    if let Some(value) = extract_guid_from_id_field(msg, "\\\"Id\\\":\\\"", "\\\"") {
+    if let Some(value) = extract_guid_field(msg, "\\\"AppId\\\":\\\"", "\\\"") {
+        return Some(value);
+    }
+    // Try "Id" — appears in policy payloads like Get policies = [{"Id":"<GUID>","Name":"..."}]
+    if let Some(value) = extract_guid_field(msg, "\"Id\":\"", "\"") {
+        return Some(value);
+    }
+    if let Some(value) = extract_guid_field(msg, "\\\"Id\\\":\\\"", "\\\"") {
         return Some(value);
     }
     // Try regex for "AppId" specifically
@@ -314,10 +321,10 @@ pub(crate) fn extract_app_id(msg: &str) -> Option<String> {
         })
 }
 
-/// Extract a GUID from an `"Id"` field, validating it looks like a UUID.
-/// This is more conservative than `extract_json_field` alone because `"Id"`
-/// is a very generic key — we only accept values that are 36-char UUIDs.
-fn extract_guid_from_id_field(msg: &str, prefix: &str, suffix: &str) -> Option<String> {
+/// Extract a GUID from an identity field, validating it looks like a UUID.
+/// This is more conservative than `extract_json_field` alone: the value is
+/// untrusted log text, so we only accept 36-char UUIDs.
+fn extract_guid_field(msg: &str, prefix: &str, suffix: &str) -> Option<String> {
     let value = extract_json_field(msg, prefix, suffix)?;
     if value.len() == 36 && guid_re().is_match(value) {
         Some(value.to_string())
@@ -747,6 +754,60 @@ mod tests {
         );
         assert_eq!(strip_short_guid_suffix("Some Name (not-hex...)"), None);
         assert_eq!(strip_short_guid_suffix("Some Name (not a guid)"), None);
+    }
+
+    #[test]
+    fn extract_app_id_rejects_non_guid_value() {
+        // The "AppId" JSON field is attacker-controlled text in an untrusted log
+        // file; only a real GUID is an identity we can key on.
+        assert_eq!(extract_app_id(r#"launch {"AppId":"aaaaaa你好"}"#), None);
+        assert_eq!(extract_app_id(r#"launch {"AppId":"not-a-guid"}"#), None);
+        assert_eq!(extract_app_id(r#"launch {"AppId":""}"#), None);
+        // 36 characters, but not hex — length alone is not enough.
+        assert_eq!(
+            extract_app_id(r#"launch {"AppId":"zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_app_id_rejects_escaped_non_guid_value() {
+        assert_eq!(extract_app_id(r#"launch {\"AppId\":\"aaaaaa你好\"}"#), None);
+    }
+
+    #[test]
+    fn extract_app_id_still_accepts_a_real_guid() {
+        assert_eq!(
+            extract_app_id(r#"launch {"AppId":"a1b2c3d4-e5f6-7890-abcd-ef1234567890"}"#),
+            Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string())
+        );
+        assert_eq!(
+            extract_app_id(r#"launch {\"AppId\":\"a1b2c3d4-e5f6-7890-abcd-ef1234567890\"}"#),
+            Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890".to_string())
+        );
+    }
+
+    #[test]
+    fn non_guid_app_id_does_not_pollute_the_registry() {
+        let mut reg = GuidRegistry::new();
+        reg.ingest_lines(&[line(
+            r#"Processing app: {"AppId":"aaaaaa你好","ApplicationName":"Contoso App"}"#,
+        )]);
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn embedded_guid_is_still_recovered_from_a_decorated_app_id() {
+        // A decorated identifier is not itself a GUID, but the GUID it carries is
+        // still recoverable via the generic fallback when a name field is present.
+        let mut reg = GuidRegistry::new();
+        reg.ingest_lines(&[line(
+            r#"Processing app: {"AppId":"Win32App_a1b2c3d4-e5f6-7890-abcd-ef1234567890_1","ApplicationName":"Contoso App"}"#,
+        )]);
+        assert_eq!(
+            reg.resolve("a1b2c3d4-e5f6-7890-abcd-ef1234567890"),
+            Some("Contoso App")
+        );
     }
 
     #[test]
