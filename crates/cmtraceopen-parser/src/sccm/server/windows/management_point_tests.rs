@@ -188,11 +188,7 @@ fn load_bundle(scenario: &str) -> SccmManagementPointBundle {
 fn load_server_intake_fixture(
     directory: &Path,
 ) -> cmtraceopen_parser::sccm::server::windows::SccmServerIntakeAssessment {
-    let manifest: Value = serde_json::from_str(
-        &fs::read_to_string(directory.join("manifest.json"))
-            .expect("server intake fixture manifest must be readable"),
-    )
-    .expect("server intake fixture manifest must be valid JSON");
+    let manifest = load_json(&directory.join("manifest.json"));
     assess_server_intake_manifest(directory, &manifest)
 }
 

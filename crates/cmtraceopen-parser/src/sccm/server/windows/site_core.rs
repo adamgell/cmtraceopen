@@ -335,6 +335,9 @@ impl<'a> SiteCoreContext<'a> {
             evidence_collision_artifact_ids(&intake.evidence, &evidence_identity_is_unique);
         let (evidence_source_rejections, unresolved_evidence_gaps) =
             evidence_source_rejections(intake);
+        // Deliberate defense in depth: the complete adapter seal currently
+        // includes topology, while Site Core also keeps its topology-specific
+        // authority contract explicit at the point that topology scopes facts.
         let coverage_congruent =
             intake.topology_authority_is_intake_bound() && site_core_coverage_is_congruent(intake);
         let sources = admitted_sources(
@@ -417,38 +420,37 @@ pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAna
     let mut context = SiteCoreContext::new(intake);
     let mut grouped = BTreeMap::<SccmSiteCoreTransactionKey, Vec<SiteCoreFact>>::new();
     let mut record_observations = Vec::new();
-    for (position, evidence) in intake.evidence.iter().enumerate() {
-        if !context.intake_authority_is_bound {
-            break;
-        }
-        let Some(source) = context.sources.get(evidence.reference.artifact_id.as_str()) else {
-            continue;
-        };
-        if let Some(reason_code) = evidence_record_rejection_reason(evidence, source.group) {
-            if is_profile_record_candidate(&evidence.message) {
-                record_observations.push(rejected_record_observation(
-                    evidence,
-                    source,
-                    reason_code,
-                ));
+    if context.intake_authority_is_bound {
+        for (position, evidence) in intake.evidence.iter().enumerate() {
+            let Some(source) = context.sources.get(evidence.reference.artifact_id.as_str()) else {
+                continue;
+            };
+            if let Some(reason_code) = evidence_record_rejection_reason(evidence, source.group) {
+                if is_profile_record_candidate(&evidence.message) {
+                    record_observations.push(rejected_record_observation(
+                        evidence,
+                        source,
+                        reason_code,
+                    ));
+                }
+                continue;
             }
-            continue;
-        }
-        if !source.fact_eligible || !context.evidence_identity_is_unique[position] {
-            continue;
-        }
-        match parse_fact(evidence, source, &intake.topology.site_handle) {
-            ProfileRecordParse::Accepted(fact) => {
-                grouped.entry(fact.key.clone()).or_default().push(*fact);
+            if !source.fact_eligible || !context.evidence_identity_is_unique[position] {
+                continue;
             }
-            ProfileRecordParse::Rejected(reason_code) => {
-                record_observations.push(rejected_record_observation(
-                    evidence,
-                    source,
-                    reason_code,
-                ));
+            match parse_fact(evidence, source, &intake.topology.site_handle) {
+                ProfileRecordParse::Accepted(fact) => {
+                    grouped.entry(fact.key.clone()).or_default().push(*fact);
+                }
+                ProfileRecordParse::Rejected(reason_code) => {
+                    record_observations.push(rejected_record_observation(
+                        evidence,
+                        source,
+                        reason_code,
+                    ));
+                }
+                ProfileRecordParse::NotCandidate => {}
             }
-            ProfileRecordParse::NotCandidate => {}
         }
     }
     context.add_undeclared_peer_source_gaps(&grouped);

@@ -398,6 +398,8 @@ fn assert_malformed_peer_source_fails_closed(analysis: &SccmSiteCoreAnalysis, ma
 }
 
 fn assert_intake_authority_mutation_fails_closed(analysis: &SccmSiteCoreAnalysis) {
+    // Once the intake seal fails, even the original canonical source values
+    // are no longer authority and must not survive the constant quarantine.
     assert_topology_incongruence_fails_closed(
         analysis,
         &[
@@ -1716,11 +1718,11 @@ fn invalid_intake_authority_never_exports_forged_scope_or_identity() {
 
 fn assert_topology_incongruence_fails_closed(
     analysis: &SccmSiteCoreAnalysis,
-    expected_gaps: &[(&str, &str, &str)],
+    forbidden_source_triples: &[(&str, &str, &str)],
 ) {
     assert_authority_invalid_analysis(analysis);
     let wire = serde_json::to_string(analysis).expect("analysis serializes");
-    for (artifact_id, source_id, producer_host_handle) in expected_gaps {
+    for (artifact_id, source_id, producer_host_handle) in forbidden_source_triples {
         for forged_or_untrusted_value in [artifact_id, source_id, producer_host_handle] {
             assert!(
                 !wire.contains(forged_or_untrusted_value),
