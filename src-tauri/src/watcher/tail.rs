@@ -964,11 +964,18 @@ fn previous_char_boundary(text: &str, maximum: usize) -> usize {
 }
 
 fn detect_file_encoding(path: &Path) -> FileEncoding {
-    let mut bom = [0u8; 3];
-    let read = std::fs::File::open(path)
-        .and_then(|mut file| file.read(&mut bom))
-        .unwrap_or(0);
-    crate::parser::detect_encoding(&bom[..read])
+    std::fs::File::open(path).map_or_else(
+        |_| crate::parser::detect_encoding(&[]),
+        detect_encoding_from_reader,
+    )
+}
+
+fn detect_encoding_from_reader(reader: impl Read) -> FileEncoding {
+    let mut bom = Vec::with_capacity(3);
+    match reader.take(3).read_to_end(&mut bom) {
+        Ok(_) => crate::parser::detect_encoding(&bom),
+        Err(_) => crate::parser::detect_encoding(&[]),
+    }
 }
 
 fn collect_complete_lines<'a>(text: &'a str, pending_fragment: &mut String) -> Vec<&'a str> {
