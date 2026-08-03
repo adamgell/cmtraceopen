@@ -4,6 +4,7 @@
 //! remain outside `cmtraceopen-parser`.
 
 pub(crate) mod admission;
+mod health;
 mod intake;
 
 #[cfg(test)]
@@ -15,4 +16,5 @@ pub use admission::{
     admit_client_evidence, SccmClientAdmittedEvidence, SccmClientCapturedPayload,
     SccmClientEvidenceAdmissionError,
 };
+pub use health::*;
 pub use intake::*;
