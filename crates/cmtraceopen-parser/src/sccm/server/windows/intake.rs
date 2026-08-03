@@ -64,6 +64,9 @@ pub struct SccmServerIntakeAssessment {
     pub evidence: Vec<SccmEvidence>,
     pub findings: Vec<SccmFinding>,
     pub next_artifact_requests: Vec<SccmArtifactRequest>,
+    /// Private fixture provenance retained so downstream test-only profiles
+    /// reuse the canonical source-version predicate rather than copying it.
+    synthetic_fixture: bool,
     /// Private integrity binding for the canonical projection that server-role
     /// reducers consume. It is sequence-independent, but every authoritative
     /// schema, topology, artifact, coverage, and evidence field remains bound
@@ -233,6 +236,10 @@ impl SccmServerIntakeAssessment {
         )
         .as_ref()
         .is_some_and(|integrity| integrity == &self.intake_integrity)
+    }
+
+    pub(crate) fn source_version_is_profile_eligible(&self, value: Option<&str>) -> bool {
+        value.is_some_and(|value| source_version_is_profile_eligible(value, self.synthetic_fixture))
     }
 }
 
@@ -782,6 +789,7 @@ pub fn assess_server_intake(
         evidence,
         findings: Vec::new(),
         next_artifact_requests,
+        synthetic_fixture: manifest.synthetic_fixture,
         intake_integrity,
         extensions: normalize_opaque_extensions(
             &manifest.extensions,
@@ -1737,6 +1745,20 @@ mod intake_integrity_tests {
 
     use super::*;
 
+    #[test]
+    fn source_version_profile_predicate_keeps_synthetic_test_scope_exact() {
+        assert!(source_version_is_profile_eligible("5.00.TEST", true));
+        assert!(source_version_is_profile_eligible("5.00.TEST.0001", true));
+        assert!(!source_version_is_profile_eligible("5.00.TEST.1", true));
+        assert!(!source_version_is_profile_eligible(
+            "5.00.TEST.0001.extra",
+            true
+        ));
+        assert!(!source_version_is_profile_eligible("5.00.9128.1000", true));
+        assert!(source_version_is_profile_eligible("5.00.9128.1000", false));
+        assert!(!source_version_is_profile_eligible("5.00.TEST.0001", false));
+    }
+
     fn canonical_assessment() -> SccmServerIntakeAssessment {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/sccm/server/management-point/canonical-intake-policy-scope");
@@ -2283,12 +2305,8 @@ fn normalize_source_version(
     let Some(value) = value else {
         return Ok(None);
     };
-    let safe = if synthetic_fixture {
-        value == "5.00.TEST"
-    } else {
-        source_version_is_profile_eligible(value, false)
-            || opaque_sha256_handle(value, "cmtraceopen.version.sha256.v1:")
-    };
+    let safe = source_version_is_profile_eligible(value, synthetic_fixture)
+        || (!synthetic_fixture && opaque_sha256_handle(value, "cmtraceopen.version.sha256.v1:"));
     if !safe {
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
@@ -2362,9 +2380,17 @@ fn validate_artifact_annotations(
     Ok(())
 }
 
-fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> bool {
-    if synthetic_fixture && value == "5.00.TEST" {
-        return true;
+pub(crate) fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> bool {
+    if synthetic_fixture {
+        if value == "5.00.TEST" {
+            return true;
+        }
+        let mut parts = value.split('.');
+        return matches!(
+            (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()),
+            (Some("5"), Some("00"), Some("TEST"), Some(revision), None)
+                if revision.len() == 4 && revision.bytes().all(|byte| byte.is_ascii_digit())
+        );
     }
     let mut parts = value.split('.');
     matches!(
@@ -2393,6 +2419,9 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "b-sitecomp"
                 | "dp-dist-current"
                 | "dp-distribution-absent-candidate"
+                | "dp-healthy-01-distmgr"
+                | "dp-healthy-02-pkgxfer"
+                | "dp-healthy-03-provider"
                 | "mp-iis-skipped"
                 | "mp-policy-access-denied"
                 | "mp-policy-configured"
@@ -2452,6 +2481,9 @@ fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
             value,
             "dp-dist-lab"
                 | "dp-distribution-default"
+                | "healthy-distmgr"
+                | "healthy-pkgxfer"
+                | "healthy-provider"
                 | "mp-iis-supplement"
                 | "mp-policy-a"
                 | "mp-policy-access"
@@ -2479,6 +2511,9 @@ fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
             "synthetic:path:a-mp"
                 | "synthetic:path:a-site"
                 | "synthetic:path:dp-default"
+                | "synthetic:healthy-distmgr"
+                | "synthetic:healthy-pkgxfer"
+                | "synthetic:healthy-provider"
                 | "synthetic:path:iis-not-requested"
                 | "synthetic:path:mp-configured-a"
                 | "synthetic:path:mp-default"
@@ -2612,13 +2647,17 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
     };
     if synthetic_fixture {
         return match domain {
-            "host" => matches!(value, "synthetic:host:mp-01" | "synthetic:host:site-01"),
+            "host" => matches!(
+                value,
+                "synthetic:host:mp-01" | "synthetic:host:site-01" | "safe:server:lab-pri-01"
+            ),
             "subject" => {
                 matches!(
                     value,
                     "synthetic:subject:dp-01"
                         | "synthetic:subject:dp-02"
                         | "synthetic:subject:sup-01"
+                        | "safe:dp:lab-dp-01"
                 )
             }
             _ => false,

@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::sccm::server::windows::{
     analyze_distribution_point, analyze_distribution_point_content_from_server_intake,
     assess_server_intake, SccmServerArtifactPayload, SccmServerIntakeAssessment,
-    SccmServerIntakeError,
+    SccmServerIntakeError, SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION,
+    SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID, SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION,
 };
 use cmtraceopen_parser::sccm::{SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 fn intake_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/server/intake")
@@ -62,9 +63,10 @@ fn load_distribution_point_assessment(scenario: &str) -> SccmServerIntakeAssessm
     let scenario_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sccm/server/distribution_point")
         .join(scenario);
-    let manifest_json =
+    let fixture_manifest_json =
         std::fs::read_to_string(scenario_root.join("manifest.json")).expect("manifest is readable");
-    let manifest: Value = serde_json::from_str(&manifest_json).expect("manifest is valid JSON");
+    let manifest: Value =
+        serde_json::from_str(&fixture_manifest_json).expect("manifest is valid JSON");
     let payloads = manifest["artifacts"]
         .as_array()
         .expect("artifacts are an array")
@@ -81,7 +83,54 @@ fn load_distribution_point_assessment(scenario: &str) -> SccmServerIntakeAssessm
             })
         })
         .collect::<Vec<_>>();
-    assess_server_intake(&manifest_json, &payloads)
+    let canonical_manifest = json!({
+        "sccmManifestVersion": 1,
+        "syntheticFixture": true,
+        "proposalOnly": true,
+        "privacy": {"synthetic": true, "rawPaths": "redacted"},
+        "bundleRole": "server",
+        "topology": {
+            "captureHost": "LAB-CM01",
+            "siteCode": manifest["topology"]["siteCode"],
+            "rolesObserved": manifest["topology"]["rolesObserved"],
+        },
+        "artifacts": manifest["artifacts"]
+            .as_array()
+            .expect("artifacts are an array")
+            .iter()
+            .map(|artifact| json!({
+                "artifactId": artifact["artifactId"],
+                "producerRole": artifact["producerRole"],
+                "producerHostHandle": artifact["producerHostHandle"],
+                "workflowSubject": {
+                    "role": artifact["workflowSubjectRole"],
+                    "instanceHandle": artifact["workflowSubjectHandle"],
+                },
+                "sourceId": artifact["sourceId"],
+                "sourceKind": artifact["sourceKind"],
+                "sourceVersion": artifact["sourceVersion"],
+                "originalPath": "REDACTED_DP_SOURCE_ROOT",
+                "originalBasename": artifact["originalBasename"],
+                "configuredPathProvenance": {
+                    "state": "configured",
+                    "pathFingerprint": artifact["pathFingerprint"],
+                },
+                "rotation": {
+                    "kind": artifact["rotation"]["kind"],
+                    "lineageId": artifact["rotation"]["lineageId"],
+                },
+                "captureState": artifact["captureState"],
+                "encoding": artifact["encoding"],
+                "collectionLimit": artifact["collectionLimit"],
+                "collectedUtc": artifact["collectedUtc"],
+                "relativePath": artifact["relativePath"],
+                "bytesCopied": artifact["bytesCopied"],
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let canonical_manifest_json =
+        serde_json::to_string(&canonical_manifest).expect("canonical manifest serializes");
+    assess_server_intake(&canonical_manifest_json, &payloads)
         .expect("distribution point fixture is canonical server intake")
 }
 
@@ -229,6 +278,19 @@ fn distribution_point_adapter_projects_only_canonical_intake_observations_determ
     let analysis = analyze_distribution_point(&assessment);
 
     assert!(!analysis.cross_side_correlation_performed);
+    assert_eq!(
+        analysis.schema_version,
+        SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION
+    );
+    assert_eq!(
+        analysis.profile.id,
+        SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID
+    );
+    assert_eq!(
+        analysis.profile.version,
+        SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION
+    );
+    assert_eq!(analysis.profile.stability, "experimental");
     assert!(analysis.coverage_gaps.is_empty());
     assert!(analysis.artifact_requests.is_empty());
     assert_eq!(analysis.source_observations.len(), 1);

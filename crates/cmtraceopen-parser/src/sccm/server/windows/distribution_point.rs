@@ -220,7 +220,7 @@ fn is_dp_distribution_artifact(artifact: &SccmServerArtifactAssessment) -> bool 
 
 fn admitted_for_source_observation(
     artifact: &SccmServerArtifactAssessment,
-    evidence: &crate::sccm::SccmEvidence,
+    evidence: &SccmEvidence,
 ) -> bool {
     artifact.state == SccmCoverageState::Captured
         && artifact.profile_eligible
@@ -239,7 +239,7 @@ fn artifact_metadata_is_congruent(
         && artifact.profile_eligible
         && artifact.parser_eligible
         && artifact.fragment_complete != Some(false)
-        && supported_source_version(artifact.source_version.as_deref())
+        && intake.source_version_is_profile_eligible(artifact.source_version.as_deref())
         && rotation_is_canonical_for_artifact(artifact)
         && safe_assessed_handle(&intake.topology.capture_host_handle)
         && safe_assessed_handle(&intake.topology.site_handle)
@@ -250,30 +250,6 @@ fn artifact_metadata_is_congruent(
         && subject_handle_is_congruent(artifact)
         && topology_is_congruent(intake, artifact)
         && coverage_is_congruent(intake, artifact, artifact_id_counts)
-}
-
-fn supported_source_version(value: Option<&str>) -> bool {
-    let Some(value) = value else {
-        return false;
-    };
-    if value == "5.00.TEST" {
-        return true;
-    }
-    let mut parts = value.split('.');
-    matches!(
-        (
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-            parts.next(),
-        ),
-        (Some("5"), Some("00"), Some(build), Some(revision), None)
-            if build.len() == 4
-                && revision.len() == 4
-                && build.bytes().all(|byte| byte.is_ascii_digit())
-                && revision.bytes().all(|byte| byte.is_ascii_digit())
-    )
 }
 
 fn rotation_is_canonical_for_artifact(artifact: &SccmServerArtifactAssessment) -> bool {
@@ -493,6 +469,9 @@ fn artifact_requests(gaps: &[SccmDistributionPointCoverageGap]) -> Vec<SccmArtif
     let mut requests = Vec::with_capacity(gaps.len());
     for gap in gaps {
         if gap.producer_role.is_none() {
+            // An unscoped coverage gap does not identify a failed source. Ask
+            // for one bounded representative from each DP side; later
+            // source-specific gaps may request PkgXferMgr or PullDP exactly.
             requests.push(SccmArtifactRequest {
                 logical_id: "distmgr".to_owned(),
                 role: SccmRole::SiteServer,
