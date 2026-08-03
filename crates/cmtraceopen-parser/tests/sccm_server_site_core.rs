@@ -267,6 +267,26 @@ impl<'a> Source<'a> {
 }
 
 fn assess(sources: &[Source<'_>]) -> SccmServerIntakeAssessment {
+    assess_with_producer_hosts(sources, &[])
+}
+
+fn assess_with_producer_hosts(
+    sources: &[Source<'_>],
+    producer_hosts: &[(&str, &str)],
+) -> SccmServerIntakeAssessment {
+    let artifacts = sources
+        .iter()
+        .map(|source| {
+            let mut artifact = source.manifest_artifact();
+            if let Some((_, producer_host)) = producer_hosts
+                .iter()
+                .find(|(source_id, _)| *source_id == source.source_id)
+            {
+                artifact["producerHostHandle"] = Value::String((*producer_host).to_owned());
+            }
+            artifact
+        })
+        .collect::<Vec<_>>();
     let manifest = json!({
         "sccmManifestVersion": 1,
         "syntheticFixture": true,
@@ -278,7 +298,7 @@ fn assess(sources: &[Source<'_>]) -> SccmServerIntakeAssessment {
             "siteCode": "LAB",
             "rolesObserved": ["siteServer"],
         },
-        "artifacts": sources.iter().map(Source::manifest_artifact).collect::<Vec<_>>(),
+        "artifacts": artifacts,
     });
     let payloads = sources
         .iter()
@@ -371,51 +391,9 @@ fn assert_bounded_request_has_specific_scope(request: &SccmSiteCoreArtifactReque
     );
 }
 
-fn assert_malformed_peer_source_fails_closed(
-    analysis: &SccmSiteCoreAnalysis,
-    malformed_id: &str,
-    required_source_id: &str,
-    required_reason_code: &str,
-) {
-    assert_eq!(analysis.results.len(), 1);
-    let result = &analysis.results[0];
-    assert_eq!(result.state, SccmSiteCoreState::Incomplete);
-    assert_eq!(
-        result.finding_class,
-        Some(SccmFindingClass::InsufficientEvidence)
-    );
-    assert!(!result.evidence.is_empty());
-
-    let synthetic_gap = analysis
-        .coverage_gaps
-        .iter()
-        .find(|gap| {
-            gap.source_id == required_source_id
-                && gap.state == SccmCoverageState::Absent
-                && gap.reason_code == required_reason_code
-        })
-        .expect("ineligible peer leaves a synthetic missing-source gap");
-    assert!(synthetic_gap
-        .artifact_id
-        .starts_with("site-core:missing-source:v1:"));
-    assert_eq!(
-        result.coverage_gap_artifact_ids,
-        vec![synthetic_gap.artifact_id.clone()]
-    );
-
-    let rejected_gap = analysis
-        .coverage_gaps
-        .iter()
-        .find(|gap| {
-            gap.source_id == required_source_id
-                && gap.state == SccmCoverageState::ParseFailed
-                && gap.reason_code == "evidence-reference-rejected"
-        })
-        .expect("malformed peer remains explicit rejected coverage");
-    assert!(rejected_gap
-        .artifact_id
-        .starts_with("site-core:rejected-artifact:v1:"));
-    assert_ne!(rejected_gap.artifact_id, malformed_id);
+fn assert_malformed_peer_source_fails_closed(analysis: &SccmSiteCoreAnalysis, malformed_id: &str) {
+    assert!(analysis.results.is_empty());
+    assert_eq!(analysis.coverage_gaps.len(), 2);
     assert!(analysis.coverage_gaps.iter().all(|gap| {
         gap.artifact_id != malformed_id
             && !gap.artifact_id.is_empty()
@@ -424,22 +402,11 @@ fn assert_malformed_peer_source_fails_closed(
             && gap.artifact_id.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b':' | b'_' | b'-')
             })
+            && gap.state == SccmCoverageState::ParseFailed
+            && gap.reason_code == "intake-coverage-incongruent"
     }));
-
-    let result_finding = analysis
-        .findings
-        .iter()
-        .find(|finding| finding.subject_id == result.result_id)
-        .expect("malformed peer retains a validated result finding");
-    assert_eq!(
-        result_finding.finding.class,
-        SccmFindingClass::InsufficientEvidence
-    );
-    assert_eq!(result_finding.finding.coverage_gaps.len(), 1);
-    assert_eq!(
-        result_finding.finding.coverage_gaps[0].artifact_id,
-        synthetic_gap.artifact_id
-    );
+    assert_eq!(analysis.unlinked_observations.len(), 2);
+    assert_eq!(analysis.findings.len(), 2);
 
     for gap in &analysis.coverage_gaps {
         let observation = analysis
@@ -463,13 +430,8 @@ fn assert_malformed_peer_source_fails_closed(
             .any(|finding_gap| finding_gap.artifact_id == gap.artifact_id));
     }
 
-    let requests = analysis
-        .artifact_requests
-        .iter()
-        .filter(|request| request.logical_name == required_source_id)
-        .collect::<Vec<_>>();
-    assert!(!requests.is_empty());
-    for request in requests {
+    assert!(!analysis.artifact_requests.is_empty());
+    for request in &analysis.artifact_requests {
         assert_bounded_request_has_specific_scope(request);
         assert_eq!(
             request.scope.producer_host_handle.as_deref(),
@@ -505,12 +467,18 @@ fn assert_explicit_gap_and_request(
     }
 }
 
-fn assert_gap_reason(analysis: &SccmSiteCoreAnalysis, artifact_id: &str, reason_code: &str) {
-    assert!(analysis.coverage_gaps.iter().any(|gap| {
-        gap.artifact_id == artifact_id
-            && gap.state == SccmCoverageState::ParseFailed
-            && gap.reason_code == reason_code
-    }));
+fn assert_intake_authority_mutation_fails_closed(analysis: &SccmSiteCoreAnalysis) {
+    assert_topology_incongruence_fails_closed(
+        analysis,
+        &[
+            (
+                "sitecomp-current",
+                "server-sitecomp",
+                "synthetic:host:site-01",
+            ),
+            ("z-site-status", "server-status", "synthetic:host:site-01"),
+        ],
+    );
 }
 
 fn assert_delimiter_attached_unknown_label_fails_closed(delimiter: char) {
@@ -812,11 +780,13 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
         .iter()
         .any(|result| result.state == SccmSiteCoreState::TerminalFailure));
 
-    let mut split_hosts = assess(&[
-        Source::sitecomp(HEALTHY_SITECOMP),
-        Source::status(HEALTHY_STATUS),
-    ]);
-    replace_source_producer_host(&mut split_hosts, "server-status", "synthetic:host:site-02");
+    let split_hosts = assess_with_producer_hosts(
+        &[
+            Source::sitecomp(HEALTHY_SITECOMP),
+            Source::status(HEALTHY_STATUS),
+        ],
+        &[("server-status", "synthetic:host:mp-01")],
+    );
     let split = analyze_site_core(&split_hosts);
     assert_eq!(split.results.len(), 2);
     assert_ne!(
@@ -834,10 +804,12 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
     assert!(split
         .results
         .iter()
-        .any(|result| { result.transaction_key.producer_host_handle == "synthetic:host:site-02" }));
+        .any(|result| { result.transaction_key.producer_host_handle == "synthetic:host:mp-01" }));
 
-    let mut foreign_gap = assess(&[Source::sitecomp(HEALTHY_SITECOMP), Source::absent_status()]);
-    replace_source_producer_host(&mut foreign_gap, "server-status", "synthetic:host:site-02");
+    let foreign_gap = assess_with_producer_hosts(
+        &[Source::sitecomp(HEALTHY_SITECOMP), Source::absent_status()],
+        &[("server-status", "synthetic:host:mp-01")],
+    );
     let foreign_gap_analysis = analyze_site_core(&foreign_gap);
     assert_eq!(foreign_gap_analysis.results.len(), 1);
     assert_eq!(
@@ -1161,12 +1133,7 @@ fn malformed_status_peer_cannot_hide_required_status_coverage() {
         ]);
         replace_source_artifact_id(&mut assessment, "server-status", &malformed_id);
 
-        assert_malformed_peer_source_fails_closed(
-            &analyze_site_core(&assessment),
-            &malformed_id,
-            "server-status",
-            "required-status-source-not-declared",
-        );
+        assert_malformed_peer_source_fails_closed(&analyze_site_core(&assessment), &malformed_id);
     }
 }
 
@@ -1179,12 +1146,7 @@ fn malformed_component_peer_cannot_hide_required_component_coverage() {
         ]);
         replace_source_artifact_id(&mut assessment, "server-sitecomp", &malformed_id);
 
-        assert_malformed_peer_source_fails_closed(
-            &analyze_site_core(&assessment),
-            &malformed_id,
-            "server-sitecomp",
-            "required-component-source-not-declared",
-        );
+        assert_malformed_peer_source_fails_closed(&analyze_site_core(&assessment), &malformed_id);
     }
 }
 
@@ -1215,11 +1177,13 @@ fn undeclared_component_gap_is_deterministic_under_status_only_assessment_permut
 
 #[test]
 fn undeclared_component_gap_does_not_attach_across_producer_hosts() {
-    let mut assessment = assess(&[
-        Source::status(HEALTHY_STATUS),
-        Source::sitecomp(HEALTHY_SITECOMP),
-    ]);
-    replace_source_producer_host(&mut assessment, "server-sitecomp", "synthetic:host:site-02");
+    let assessment = assess_with_producer_hosts(
+        &[
+            Source::status(HEALTHY_STATUS),
+            Source::sitecomp(HEALTHY_SITECOMP),
+        ],
+        &[("server-sitecomp", "synthetic:host:mp-01")],
+    );
 
     let analysis = analyze_site_core(&assessment);
     let status_only_result = analysis
@@ -1246,7 +1210,7 @@ fn undeclared_component_gap_does_not_attach_across_producer_hosts() {
     let foreign_component_result = analysis
         .results
         .iter()
-        .find(|result| result.transaction_key.producer_host_handle == "synthetic:host:site-02")
+        .find(|result| result.transaction_key.producer_host_handle == "synthetic:host:mp-01")
         .expect("foreign component host result");
     assert!(foreign_component_result
         .coverage_gap_artifact_ids
@@ -1365,7 +1329,7 @@ fn rejected_role_subject_and_duplicate_sources_become_explicit_parse_gaps() {
 }
 
 #[test]
-fn rejected_evidence_contracts_become_source_gaps_with_scoped_requests() {
+fn post_intake_evidence_mutations_fail_sealed_authority_closed() {
     let healthy = assess(&[
         Source::sitecomp(HEALTHY_SITECOMP),
         Source::status(HEALTHY_STATUS),
@@ -1373,78 +1337,25 @@ fn rejected_evidence_contracts_become_source_gaps_with_scoped_requests() {
 
     let mut wrong_role = healthy.clone();
     wrong_role.evidence[0].role = SccmRole::ManagementPoint;
-    let analysis = analyze_site_core(&wrong_role);
-    assert_explicit_gap_and_request(&analysis, "sitecomp-current", "server-sitecomp");
-    assert_gap_reason(&analysis, "sitecomp-current", "evidence-role-rejected");
-    assert!(analysis.unlinked_observations.iter().any(|observation| {
-        observation.finding_class == SccmFindingClass::Symptom
-            && observation
-                .evidence
-                .iter()
-                .any(|evidence| evidence.entry_id == wrong_role.evidence[0].evidence_id)
-    }));
-    assert_eq!(analysis.results.len(), 1);
-    assert!(analysis.results.iter().all(|result| {
-        result.state != SccmSiteCoreState::Healthy
-            || result.confidence != SccmSiteCoreConfidence::High
-    }));
+    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&wrong_role));
 
     let mut incomplete_reference = healthy.clone();
     incomplete_reference.evidence[0].reference.line_end = None;
-    let analysis = analyze_site_core(&incomplete_reference);
-    assert_explicit_gap_and_request(&analysis, "sitecomp-current", "server-sitecomp");
-    assert_gap_reason(&analysis, "sitecomp-current", "evidence-reference-rejected");
-    assert!(analysis.unlinked_observations.iter().any(|observation| {
-        observation.finding_class == SccmFindingClass::Symptom && observation.evidence.is_empty()
-    }));
-    assert_eq!(analysis.results.len(), 1);
-    assert!(analysis.results.iter().all(|result| {
-        result.state != SccmSiteCoreState::Healthy
-            || result.confidence != SccmSiteCoreConfidence::High
-    }));
+    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&incomplete_reference));
 
     let mut cross_source_reference = healthy.clone();
     cross_source_reference.evidence[0].reference.artifact_id = "z-site-status".to_owned();
     cross_source_reference.evidence[0].reference.line_start = Some(10_001);
     cross_source_reference.evidence[0].reference.line_end = Some(10_001);
-    let analysis = analyze_site_core(&cross_source_reference);
-    assert_explicit_gap_and_request(&analysis, "z-site-status", "server-status");
-    assert_gap_reason(
-        &analysis,
-        "z-site-status",
-        "evidence-source-attribution-rejected",
-    );
-    assert!(analysis.unlinked_observations.iter().any(|observation| {
-        observation.finding_class == SccmFindingClass::Symptom
-            && observation
-                .evidence
-                .iter()
-                .any(|evidence| evidence.entry_id == cross_source_reference.evidence[0].evidence_id)
-    }));
-    assert_eq!(analysis.results.len(), 1);
-    assert!(analysis.results.iter().all(|result| {
-        result.state != SccmSiteCoreState::Healthy
-            || result.confidence != SccmSiteCoreConfidence::High
-    }));
+    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&cross_source_reference));
 
     let mut unresolved_reference = healthy;
     unresolved_reference.evidence[0].reference.artifact_id = "orphan-sitecomp-record".to_owned();
-    let analysis = analyze_site_core(&unresolved_reference);
-    assert_explicit_gap_and_request(&analysis, "orphan-sitecomp-record", "server-sitecomp");
-    assert_gap_reason(
-        &analysis,
-        "orphan-sitecomp-record",
-        "evidence-source-unresolved",
-    );
-    assert_eq!(analysis.results.len(), 1);
-    assert!(analysis.results.iter().all(|result| {
-        result.state != SccmSiteCoreState::Healthy
-            || result.confidence != SccmSiteCoreConfidence::High
-    }));
+    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&unresolved_reference));
 }
 
 #[test]
-fn foreign_artifact_identity_cannot_scope_an_unresolved_site_core_request() {
+fn foreign_post_intake_artifact_identity_cannot_scope_a_site_core_request() {
     let mut assessment = assess(&[
         Source::sitecomp(HEALTHY_SITECOMP),
         Source::status(HEALTHY_STATUS),
@@ -1458,35 +1369,17 @@ fn foreign_artifact_identity_cannot_scope_an_unresolved_site_core_request() {
     assessment.evidence[0].reference.artifact_id = "foreign-artifact".to_owned();
 
     let analysis = analyze_site_core(&assessment);
-    let gap = analysis
-        .coverage_gaps
-        .iter()
-        .find(|gap| {
-            gap.source_id == "server-sitecomp" && gap.reason_code == "evidence-source-unresolved"
-        })
-        .expect("foreign attribution becomes a site-core coverage gap");
-    assert_ne!(gap.artifact_id, "foreign-artifact");
-    assert!(gap
-        .artifact_id
-        .starts_with("site-core:rejected-artifact:v1:"));
-    let request = analysis
-        .artifact_requests
-        .iter()
-        .find(|request| request.logical_name == "server-sitecomp")
-        .expect("unresolved site-core evidence has a bounded request");
-    assert_bounded_request_has_specific_scope(request);
-    assert_eq!(
-        request.scope.producer_host_handle.as_deref(),
-        Some("synthetic:host:site-01")
-    );
-    assert_ne!(
-        request.scope.rotation_lineage_handle.as_deref(),
-        Some("foreign-lineage")
-    );
+    assert_intake_authority_mutation_fails_closed(&analysis);
+    assert!(analysis.artifact_requests.iter().all(|request| request
+        .scope
+        .producer_host_handle
+        .as_deref()
+        != Some("synthetic:host:foreign")
+        && request.scope.rotation_lineage_handle.as_deref() != Some("foreign-lineage")));
 }
 
 #[test]
-fn rejected_nonprofile_prose_is_coverage_not_a_profile_symptom() {
+fn post_intake_nonprofile_role_mutation_fails_sealed_authority_closed() {
     let mut assessment = assess(&[
         Source::sitecomp(HEALTHY_SITECOMP),
         Source::status(HEALTHY_STATUS),
@@ -1494,15 +1387,7 @@ fn rejected_nonprofile_prose_is_coverage_not_a_profile_symptom() {
     assessment.evidence[0].message = "ordinary non-profile source prose".to_owned();
     assessment.evidence[0].role = SccmRole::ManagementPoint;
 
-    let analysis = analyze_site_core(&assessment);
-    assert_explicit_gap_and_request(&analysis, "sitecomp-current", "server-sitecomp");
-    assert_gap_reason(&analysis, "sitecomp-current", "evidence-role-rejected");
-    assert_eq!(analysis.unlinked_observations.len(), 1);
-    assert_eq!(
-        analysis.unlinked_observations[0].finding_class,
-        SccmFindingClass::InsufficientEvidence
-    );
-    assert!(analysis.unlinked_observations[0].evidence.is_empty());
+    assert_intake_authority_mutation_fails_closed(&analyze_site_core(&assessment));
 }
 
 #[test]
@@ -1518,15 +1403,14 @@ fn colliding_evidence_identities_are_parse_gaps_not_silent_drops() {
 
 #[test]
 fn closed_profile_schema_rejects_arbitrary_keys_and_retains_safe_unknown_facts() {
-    let mut arbitrary_work = assess(&[
-        Source::sitecomp(HEALTHY_SITECOMP),
-        Source::status(HEALTHY_STATUS),
+    let arbitrary_sitecomp =
+        HEALTHY_SITECOMP.replace("workItemId=SC-HEALTH-001", "workItemId=ARBITRARY-001");
+    let arbitrary_status =
+        HEALTHY_STATUS.replace("workItemId=SC-HEALTH-001", "workItemId=ARBITRARY-001");
+    let arbitrary_work = assess(&[
+        Source::sitecomp(&arbitrary_sitecomp),
+        Source::status(&arbitrary_status),
     ]);
-    for evidence in &mut arbitrary_work.evidence {
-        evidence.message = evidence
-            .message
-            .replace("workItemId=SC-HEALTH-001", "workItemId=ARBITRARY-001");
-    }
     let arbitrary = analyze_site_core(&arbitrary_work);
     assert!(arbitrary.results.is_empty());
     assert_eq!(
@@ -1539,14 +1423,13 @@ fn closed_profile_schema_rejects_arbitrary_keys_and_retains_safe_unknown_facts()
         .iter()
         .all(|evidence| arbitrary_wire.contains(&evidence.evidence_id)));
 
-    let mut unknown_status = assess(&[
-        Source::sitecomp(HEALTHY_SITECOMP),
+    let unknown_sitecomp =
+        HEALTHY_SITECOMP.replace("SC_COMPONENT_START_OK", "SC_UNREVIEWED_STATUS");
+    let unknown_status = assess(&[
+        Source::sitecomp(&unknown_sitecomp),
         Source::status(HEALTHY_STATUS),
     ]);
     let rejected_id = unknown_status.evidence[0].evidence_id.clone();
-    unknown_status.evidence[0].message = unknown_status.evidence[0]
-        .message
-        .replace("SC_COMPONENT_START_OK", "SC_UNREVIEWED_STATUS");
     let unknown = analyze_site_core(&unknown_status);
     let unknown_wire = serde_json::to_string(&unknown).expect("analysis serializes");
     assert!(unknown_wire.contains(&rejected_id));
@@ -1626,28 +1509,17 @@ fn delimiter_separated_known_profile_labels_and_safe_prose_remain_accepted() {
 
 #[test]
 fn every_required_source_coverage_state_emits_insufficient_evidence_and_a_request() {
-    for state in [
-        SccmCoverageState::Absent,
-        SccmCoverageState::AccessDenied,
-        SccmCoverageState::Skipped,
-        SccmCoverageState::Unsupported,
+    for (state_token, state) in [
+        ("absent", SccmCoverageState::Absent),
+        ("accessDenied", SccmCoverageState::AccessDenied),
+        ("skipped", SccmCoverageState::Skipped),
+        ("unsupported", SccmCoverageState::Unsupported),
     ] {
-        let mut assessment = assess(&[
-            Source::sitecomp(HEALTHY_SITECOMP),
-            Source::status(HEALTHY_STATUS),
-        ]);
-        assessment
-            .artifacts
-            .iter_mut()
-            .find(|artifact| artifact.source_id == "server-sitecomp")
-            .expect("sitecomp artifact")
-            .state = state.clone();
-        assessment
-            .coverage
-            .iter_mut()
-            .find(|coverage| coverage.source_id == "server-sitecomp")
-            .expect("sitecomp coverage")
-            .state = state.clone();
+        let mut sitecomp = Source::sitecomp(HEALTHY_SITECOMP);
+        sitecomp.content = None;
+        sitecomp.capture_state = state_token;
+        sitecomp.encoding = None;
+        let assessment = assess(&[sitecomp, Source::status(HEALTHY_STATUS)]);
 
         let analysis = analyze_site_core(&assessment);
         assert!(analysis
@@ -1793,12 +1665,7 @@ fn rotation_provenance_must_match_classification_and_requests_use_exact_pairs() 
         .expect("sitecomp artifact")
         .rotation = Some(SccmRotation::LoUnderscore);
     let rejected = analyze_site_core(&mismatch);
-    assert_explicit_gap_and_request(&rejected, "sitecomp-current", "server-sitecomp");
-    assert_eq!(rejected.results.len(), 1);
-    assert!(rejected.results.iter().all(|result| {
-        result.state != SccmSiteCoreState::Healthy
-            || result.confidence != SccmSiteCoreConfidence::High
-    }));
+    assert_intake_authority_mutation_fails_closed(&rejected);
 
     let backlog = analyze_site_core(&assess(&[
         Source::sitecomp(INBOX_BACKLOG),

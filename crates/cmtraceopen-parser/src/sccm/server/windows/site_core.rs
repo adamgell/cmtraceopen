@@ -296,6 +296,7 @@ struct AdmittedSource<'a> {
 struct SiteCoreContext<'a> {
     artifacts: &'a [SccmServerArtifactAssessment],
     sources: BTreeMap<&'a str, AdmittedSource<'a>>,
+    intake_authority_is_bound: bool,
     evidence_identity_is_unique: Vec<bool>,
     coverage_gaps: Vec<SccmSiteCoreCoverageGap>,
     coverage_gap_producer_hosts: BTreeMap<String, String>,
@@ -303,13 +304,25 @@ struct SiteCoreContext<'a> {
 
 impl<'a> SiteCoreContext<'a> {
     fn new(intake: &'a SccmServerIntakeAssessment) -> Self {
-        let evidence_identity_is_unique = unique_evidence_identities(&intake.evidence);
-        let collision_artifact_ids =
-            evidence_collision_artifact_ids(&intake.evidence, &evidence_identity_is_unique);
-        let (evidence_source_rejections, unresolved_evidence_gaps) =
-            evidence_source_rejections(intake);
-        let coverage_congruent =
-            intake.topology_authority_is_intake_bound() && site_core_coverage_is_congruent(intake);
+        let intake_authority_is_bound = intake.adapter_authority_is_intake_bound();
+        let evidence_identity_is_unique = if intake_authority_is_bound {
+            unique_evidence_identities(&intake.evidence)
+        } else {
+            vec![false; intake.evidence.len()]
+        };
+        let collision_artifact_ids = if intake_authority_is_bound {
+            evidence_collision_artifact_ids(&intake.evidence, &evidence_identity_is_unique)
+        } else {
+            BTreeSet::new()
+        };
+        let (evidence_source_rejections, unresolved_evidence_gaps) = if intake_authority_is_bound {
+            evidence_source_rejections(intake)
+        } else {
+            (BTreeMap::new(), Vec::new())
+        };
+        let coverage_congruent = intake_authority_is_bound
+            && intake.topology_authority_is_intake_bound()
+            && site_core_coverage_is_congruent(intake);
         let sources = admitted_sources(
             intake,
             &collision_artifact_ids,
@@ -322,6 +335,7 @@ impl<'a> SiteCoreContext<'a> {
         Self {
             artifacts: &intake.artifacts,
             sources,
+            intake_authority_is_bound,
             evidence_identity_is_unique,
             coverage_gaps,
             coverage_gap_producer_hosts: BTreeMap::new(),
@@ -390,6 +404,9 @@ pub fn analyze_site_core(intake: &SccmServerIntakeAssessment) -> SccmSiteCoreAna
     let mut grouped = BTreeMap::<SccmSiteCoreTransactionKey, Vec<SiteCoreFact>>::new();
     let mut record_observations = Vec::new();
     for (position, evidence) in intake.evidence.iter().enumerate() {
+        if !context.intake_authority_is_bound {
+            break;
+        }
         let Some(source) = context.sources.get(evidence.reference.artifact_id.as_str()) else {
             continue;
         };
