@@ -609,17 +609,34 @@ fn raw_ccm_capture_gap_still_blocks_ccmsetup_group_readiness() {
 #[test]
 fn admitted_policy_extraction_is_sealed_to_the_exact_artifact_and_family() {
     let assignment_id = "12345678-1234-1234-1234-123456789abc";
-    let bytes = ccm_bytes(&format!("Assignment ID = {assignment_id}"));
-    let bundle = bundle_with(vec![artifact(
-        "policy",
-        "PolicyAgent.log",
-        SccmCoverageState::Captured,
-        true,
-        Some(&bytes),
-    )]);
+    let policy_bytes = ccm_bytes(&format!("Assignment ID = {assignment_id}"));
+    let content_bytes = ccm_bytes("Package ID = LAB00001");
+    let bundle = bundle_with(vec![
+        artifact(
+            "policy",
+            "PolicyAgent.log",
+            SccmCoverageState::Captured,
+            true,
+            Some(&policy_bytes),
+        ),
+        artifact(
+            "content",
+            "CAS.log",
+            SccmCoverageState::Captured,
+            true,
+            Some(&content_bytes),
+        ),
+    ]);
     let assessment = assess_client_intake(&bundle).expect("bound policy intake is canonical");
-    let admitted = admit_client_evidence(&bundle, &assessment, &[payload("fixture-policy", bytes)])
-        .expect("bound policy evidence must be admitted");
+    let admitted = admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[
+            payload("fixture-content", content_bytes),
+            payload("fixture-policy", policy_bytes),
+        ],
+    )
+    .expect("bound policy and content evidence must be admitted");
     let extraction: SccmClientAdmittedKeyExtraction = admitted
         .extract_keys_for_artifact("fixture-policy")
         .expect("policy evidence has sealed extraction authority");
