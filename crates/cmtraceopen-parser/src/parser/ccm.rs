@@ -388,6 +388,18 @@ thread_local! {
 }
 
 #[cfg(test)]
+struct BoundedScanObservationGuard;
+
+#[cfg(test)]
+impl Drop for BoundedScanObservationGuard {
+    fn drop(&mut self) {
+        BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
+            observations.borrow_mut().take();
+        });
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn observe_bounded_scans<T>(
     operation: impl FnOnce() -> T,
 ) -> (T, Vec<CcmBoundedScanObservation>) {
@@ -397,6 +409,7 @@ pub(crate) fn observe_bounded_scans<T>(
             "bounded scan observation cannot be nested"
         );
     });
+    let _cleanup = BoundedScanObservationGuard;
     let output = operation();
     let observations = BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
         observations
