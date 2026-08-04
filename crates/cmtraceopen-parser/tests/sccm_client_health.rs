@@ -338,13 +338,30 @@ fn translate_artifact_ids(value: &mut Value, artifact_ids: &BTreeMap<String, Str
     }
 }
 
+fn canonicalize_json(value: Value) -> Value {
+    match value {
+        Value::Array(values) => Value::Array(values.into_iter().map(canonicalize_json).collect()),
+        Value::Object(fields) => {
+            let mut entries = fields.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, canonicalize_json(value)))
+                    .collect(),
+            )
+        }
+        scalar => scalar,
+    }
+}
+
 fn normalized_output(
     analysis: &SccmClientHealthAnalysis,
     artifact_ids: &BTreeMap<String, String>,
 ) -> Value {
     let mut normalized = serde_json::to_value(analysis).expect("health analysis serializes");
     translate_artifact_ids(&mut normalized, artifact_ids);
-    normalized
+    canonicalize_json(normalized)
 }
 
 fn admitted_record(phase: &str) -> SccmClientAdmittedEvidence {
