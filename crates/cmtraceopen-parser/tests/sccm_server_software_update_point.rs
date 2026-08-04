@@ -285,12 +285,32 @@ fn topology_only_tampering_fails_closed_to_one_authority_coverage_gap() {
 }
 
 #[test]
+fn same_size_catalog_valid_request_tampering_fails_closed_to_one_authority_coverage_gap() {
+    let mut assessment = load_assessment("capped-sup");
+    assert_eq!(assessment.next_artifact_requests.len(), 1);
+    assessment.next_artifact_requests[0]
+        .reason
+        .replace_range(0..1, "X");
+
+    let analysis = analyze_software_update_point(&assessment);
+
+    assert!(analysis.coverage_rows.is_empty());
+    assert!(analysis.next_artifact_requests.is_empty());
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    assert_eq!(
+        analysis.coverage_gaps[0].reason,
+        "Canonical server intake authority could not be verified."
+    );
+}
+
+#[test]
 fn reordered_sealed_intake_serializes_to_identical_coverage_analysis() {
     let assessment = load_assessment("complete-multi-role");
     let mut reordered = assessment.clone();
     reordered.artifacts.reverse();
     reordered.coverage.reverse();
     reordered.evidence.reverse();
+    reordered.next_artifact_requests.reverse();
     reordered.topology.roles_observed.reverse();
 
     assert_eq!(

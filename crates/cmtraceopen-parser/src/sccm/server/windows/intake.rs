@@ -68,8 +68,8 @@ pub struct SccmServerIntakeAssessment {
     pub next_artifact_requests: Vec<SccmArtifactRequest>,
     /// Private integrity binding for the canonical projection that server-role
     /// reducers consume. It is sequence-independent, but every authoritative
-    /// schema, topology, artifact, coverage, and evidence field remains bound
-    /// to the assessment produced by intake.
+    /// schema, topology, artifact, coverage, evidence, and artifact-request
+    /// field remains bound to the assessment produced by intake.
     intake_integrity: SccmServerIntakeIntegrity,
     /// Versioned opaque manifest extensions retained without interpreting them.
     extensions: Vec<SccmServerOpaqueExtension>,
@@ -222,6 +222,7 @@ impl SccmServerIntakeAssessment {
             || self.artifacts.len() != self.intake_integrity.artifacts.len()
             || self.coverage.len() != self.intake_integrity.coverage.len()
             || self.evidence.len() != self.intake_integrity.evidence.len()
+            || self.next_artifact_requests.len() != self.intake_integrity.request_count
         {
             return false;
         }
@@ -231,6 +232,7 @@ impl SccmServerIntakeAssessment {
             &self.artifacts,
             &self.coverage,
             &self.evidence,
+            &self.next_artifact_requests,
             &self.intake_integrity,
         )
         .as_ref()
@@ -267,6 +269,8 @@ struct SccmServerIntakeIntegrity {
     artifacts: BTreeMap<ArtifactIntegrityIdentity, IntakeIntegrityRecord>,
     coverage: BTreeMap<CoverageIdentityKey, IntakeIntegrityRecord>,
     evidence: BTreeMap<EvidenceIntegrityIdentity, IntakeIntegrityRecord>,
+    request_count: usize,
+    requests: IntakeIntegrityRecord,
 }
 
 type IntakeIntegrityDigest = [u8; 32];
@@ -286,6 +290,7 @@ struct IntakeIntegrityStructure {
     artifact_string_bytes: usize,
     coverage_string_bytes: usize,
     evidence_string_bytes: usize,
+    request_string_bytes: usize,
     coverage_artifact_memberships: usize,
 }
 
@@ -405,6 +410,9 @@ impl SccmServerIntakeIntegrity {
                         + record.digest.len()
                 })
                 .sum::<usize>()
+            + std::mem::size_of_val(&self.request_count)
+            + std::mem::size_of_val(&self.requests.payload_len)
+            + self.requests.digest.len()
     }
 }
 
@@ -772,9 +780,15 @@ pub fn assess_server_intake(
             ))
     });
     let schema_version = 1;
-    let intake_integrity =
-        canonical_intake_integrity(schema_version, &topology, &artifacts, &coverage, &evidence)
-            .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+    let intake_integrity = canonical_intake_integrity(
+        schema_version,
+        &topology,
+        &artifacts,
+        &coverage,
+        &evidence,
+        &next_artifact_requests,
+    )
+    .ok_or(SccmServerIntakeError::InvalidArtifact)?;
 
     Ok(SccmServerIntakeAssessment {
         schema_version,
@@ -1450,11 +1464,22 @@ fn evidence_string_bytes(evidence: &[SccmEvidence]) -> Option<usize> {
     Some(total)
 }
 
+fn request_string_bytes(requests: &[SccmArtifactRequest]) -> Option<usize> {
+    let mut total = 0usize;
+    for request in requests {
+        checked_add_string_bytes(&mut total, &request.logical_id)?;
+        checked_add_string_bytes(&mut total, role_sort_key(&request.role))?;
+        checked_add_string_bytes(&mut total, &request.reason)?;
+    }
+    Some(total)
+}
+
 fn intake_integrity_structure(
     topology: &SccmServerTopologyAssessment,
     artifacts: &[SccmServerArtifactAssessment],
     coverage: &[SccmServerCoverage],
     evidence: &[SccmEvidence],
+    requests: &[SccmArtifactRequest],
     coverage_artifact_memberships: usize,
 ) -> Option<IntakeIntegrityStructure> {
     Some(IntakeIntegrityStructure {
@@ -1462,6 +1487,7 @@ fn intake_integrity_structure(
         artifact_string_bytes: artifact_string_bytes(artifacts)?,
         coverage_string_bytes: coverage_string_bytes(coverage)?,
         evidence_string_bytes: evidence_string_bytes(evidence)?,
+        request_string_bytes: request_string_bytes(requests)?,
         coverage_artifact_memberships,
     })
 }
@@ -1472,6 +1498,7 @@ fn canonical_intake_integrity(
     artifacts: &[SccmServerArtifactAssessment],
     coverage: &[SccmServerCoverage],
     evidence: &[SccmEvidence],
+    requests: &[SccmArtifactRequest],
 ) -> Option<SccmServerIntakeIntegrity> {
     let coverage_artifact_memberships = coverage_artifact_memberships(coverage)?;
     let structure = intake_integrity_structure(
@@ -1479,6 +1506,7 @@ fn canonical_intake_integrity(
         artifacts,
         coverage,
         evidence,
+        requests,
         coverage_artifact_memberships,
     )?;
     canonical_intake_integrity_with_structure(
@@ -1487,6 +1515,7 @@ fn canonical_intake_integrity(
         artifacts,
         coverage,
         evidence,
+        requests,
         structure,
         None,
     )
@@ -1498,6 +1527,7 @@ fn canonical_intake_integrity_for_adapter(
     artifacts: &[SccmServerArtifactAssessment],
     coverage: &[SccmServerCoverage],
     evidence: &[SccmEvidence],
+    requests: &[SccmArtifactRequest],
     expected: &SccmServerIntakeIntegrity,
 ) -> Option<SccmServerIntakeIntegrity> {
     let coverage_artifact_memberships = coverage_artifact_memberships(coverage)?;
@@ -1509,6 +1539,7 @@ fn canonical_intake_integrity_for_adapter(
         artifacts,
         coverage,
         evidence,
+        requests,
         coverage_artifact_memberships,
     )?;
     if structure != expected.structure {
@@ -1520,6 +1551,7 @@ fn canonical_intake_integrity_for_adapter(
         artifacts,
         coverage,
         evidence,
+        requests,
         structure,
         Some(expected),
     )
@@ -1532,6 +1564,7 @@ fn canonical_intake_integrity_with_structure(
     artifacts: &[SccmServerArtifactAssessment],
     coverage: &[SccmServerCoverage],
     evidence: &[SccmEvidence],
+    requests: &[SccmArtifactRequest],
     structure: IntakeIntegrityStructure,
     expected: Option<&SccmServerIntakeIntegrity>,
 ) -> Option<SccmServerIntakeIntegrity> {
@@ -1539,6 +1572,25 @@ fn canonical_intake_integrity_with_structure(
     INTAKE_CANONICALIZATION_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
 
     let normalized_topology = normalized_topology_or_none(topology)?;
+    let mut normalized_requests = requests.to_vec();
+    normalized_requests.sort_by(|left, right| {
+        (
+            left.logical_id.as_str(),
+            role_sort_key(&left.role),
+            left.reason.as_str(),
+        )
+            .cmp(&(
+                right.logical_id.as_str(),
+                role_sort_key(&right.role),
+                right.reason.as_str(),
+            ))
+    });
+    if normalized_requests
+        .windows(2)
+        .any(|requests| requests[0] == requests[1])
+    {
+        return None;
+    }
 
     let mut normalized_coverage = coverage.to_vec();
     for record in &mut normalized_coverage {
@@ -1629,6 +1681,12 @@ fn canonical_intake_integrity_with_structure(
         artifacts: artifact_integrity,
         coverage: coverage_integrity,
         evidence: evidence_integrity,
+        request_count: normalized_requests.len(),
+        requests: canonical_record_digest_bounded(
+            b"artifact-requests",
+            &normalized_requests,
+            expected.map(|expected| expected.requests.payload_len),
+        )?,
     })
 }
 
@@ -1777,6 +1835,7 @@ mod intake_integrity_tests {
             &assessment.artifacts,
             &assessment.coverage,
             &assessment.evidence,
+            &assessment.next_artifact_requests,
         )
     }
 
@@ -1869,6 +1928,42 @@ mod intake_integrity_tests {
             .roles_observed
             .push(SccmRole::ManagementPoint);
         assert_eq!(integrity(&duplicate_topology_role), None);
+    }
+
+    #[test]
+    fn oversized_request_mutation_fails_before_canonical_serialization() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sccm/server/intake/capped-sup");
+        let manifest_json =
+            fs::read_to_string(directory.join("manifest.json")).expect("fixture manifest");
+        let manifest: Value = serde_json::from_str(&manifest_json).expect("fixture JSON");
+        let payloads = manifest["artifacts"]
+            .as_array()
+            .expect("fixture artifacts")
+            .iter()
+            .filter_map(|artifact| {
+                let relative_path = artifact["relativePath"].as_str()?;
+                Some(SccmServerArtifactPayload {
+                    manifest_artifact_id: artifact["artifactId"]
+                        .as_str()
+                        .expect("fixture artifact ID")
+                        .to_owned(),
+                    bytes: fs::read(directory.join(relative_path)).expect("fixture payload"),
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut assessment =
+            assess_server_intake(&manifest_json, &payloads).expect("canonical fixture");
+        assert_eq!(assessment.next_artifact_requests.len(), 1);
+        assessment.next_artifact_requests[0].reason = "x".repeat(1024 * 1024);
+
+        reset_intake_integrity_work_probe();
+        assert!(!assessment.adapter_authority_is_intake_bound());
+        assert_eq!(
+            intake_integrity_work_probe(),
+            (0, 0),
+            "request aggregate bounds must reject oversized mutations before canonical JSON"
+        );
     }
 
     #[test]

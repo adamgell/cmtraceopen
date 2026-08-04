@@ -192,7 +192,7 @@ fn coverage_gap_reason(row: &SccmSoftwareUpdatePointCoverageRow) -> String {
 fn software_update_point_artifact_requests(
     requests: &[SccmArtifactRequest],
 ) -> Vec<SccmArtifactRequest> {
-    requests
+    let mut requests = requests
         .iter()
         .filter(|request| {
             declared_server_source_catalog().iter().any(|source| {
@@ -205,7 +205,20 @@ fn software_update_point_artifact_requests(
             })
         })
         .cloned()
-        .collect()
+        .collect::<Vec<_>>();
+    requests.sort_by(|left, right| {
+        (
+            left.logical_id.as_str(),
+            role_sort_key(&left.role),
+            left.reason.as_str(),
+        )
+            .cmp(&(
+                right.logical_id.as_str(),
+                role_sort_key(&right.role),
+                right.reason.as_str(),
+            ))
+    });
+    requests
 }
 
 fn coverage_row_sort_key(
@@ -248,5 +261,40 @@ fn role_sort_key(role: &SccmRole) -> &str {
         SccmRole::Provider => "provider",
         SccmRole::AdminService => "adminService",
         SccmRole::Unknown(value) => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eligible_requests_are_projected_in_canonical_order() {
+        let requests = vec![
+            SccmArtifactRequest {
+                logical_id: "wsyncmgr".to_owned(),
+                role: SccmRole::SiteServer,
+                reason: "Collect the complete wsyncmgr.log file.".to_owned(),
+            },
+            SccmArtifactRequest {
+                logical_id: "wcm".to_owned(),
+                role: SccmRole::SiteServer,
+                reason: "Collect the complete WCM.log file.".to_owned(),
+            },
+        ];
+        let mut reordered = requests.clone();
+        reordered.reverse();
+
+        assert_eq!(
+            software_update_point_artifact_requests(&requests),
+            software_update_point_artifact_requests(&reordered)
+        );
+        assert_eq!(
+            software_update_point_artifact_requests(&requests)
+                .iter()
+                .map(|request| request.logical_id.as_str())
+                .collect::<Vec<_>>(),
+            ["wcm", "wsyncmgr"]
+        );
     }
 }
