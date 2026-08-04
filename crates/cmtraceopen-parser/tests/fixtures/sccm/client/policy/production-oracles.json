@@ -1200,7 +1200,7 @@
           "policyId": "b8b8b8b8-b8b8-b8b8-b8b8-b8b8b8b8b8b8",
           "requestId": "27262626-2626-2626-2626-262626262626"
         },
-        "lastConfirmedPhase": "request",
+        "lastConfirmedPhase": "schedule",
         "nextArtifacts": [
           {
             "logicalId": "ciAgent",

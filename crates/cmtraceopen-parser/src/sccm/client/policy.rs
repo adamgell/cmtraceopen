@@ -569,13 +569,13 @@ fn reduce_transaction(
     });
 
     let (phase, state, classification, condition, last_confirmed_phase, mut confidence) =
-        if let Some((earlier, later)) = chronology_conflict {
+        if let Some((_earlier, later)) = chronology_conflict {
             (
                 later,
                 SccmPolicyState::Contradictory,
                 SccmPolicyClassification::ContradictoryEvidence,
                 Some(SccmPolicyCondition::OrderingUnavailable),
-                Some(earlier),
+                last_confirmed_successful_prefix(&facts),
                 SccmConfidence::Low,
             )
         } else if let Some((phase, resolution)) = decisive {
@@ -906,6 +906,38 @@ fn last_contiguous_success(
         last = Some(phase);
     }
     last
+}
+
+fn last_confirmed_successful_prefix(facts: &[PolicyFact]) -> Option<SccmPolicyPhase> {
+    let mut last_phase = None;
+    let mut last_utc_millis = None;
+    for phase in PHASES {
+        let phase_facts = facts
+            .iter()
+            .filter(|fact| fact.phase == phase)
+            .collect::<Vec<_>>();
+        if phase_facts.is_empty() {
+            if phase == SccmPolicyPhase::TransferAuth {
+                continue;
+            }
+            break;
+        }
+        let (resolution, representative) = resolve_phase(&phase_facts);
+        if resolution != PhaseResolution::Succeeded
+            || representative.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
+        {
+            break;
+        }
+        let Some(utc_millis) = representative.timestamp.utc_millis else {
+            break;
+        };
+        if last_utc_millis.is_some_and(|confirmed| utc_millis <= confirmed) {
+            break;
+        }
+        last_phase = Some(phase);
+        last_utc_millis = Some(utc_millis);
+    }
+    last_phase
 }
 
 fn first_missing_required_phase(

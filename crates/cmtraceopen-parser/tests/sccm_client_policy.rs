@@ -6,8 +6,8 @@ use cmtraceopen_parser::sccm::{
     analyze_client_policy, assess_client_intake, SccmArtifact, SccmClientCapturedPayload,
     SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientIntakeCaptureGap, SccmConfidence,
     SccmCoverageState, SccmFindingClass, SccmKeyConfidence, SccmPolicyClassification,
-    SccmPolicyCondition, SccmPolicyProfileSelectionState, SccmPolicyState, SccmRole, SccmRotation,
-    SCCM_POLICY_KEY_PROFILE_ID,
+    SccmPolicyCondition, SccmPolicyPhase, SccmPolicyProfileSelectionState, SccmPolicyState,
+    SccmRole, SccmRotation, SCCM_POLICY_KEY_PROFILE_ID,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -533,6 +533,49 @@ fn cross_phase_chronology_precedes_failure_deferred_and_success_decisions() {
         assert_eq!(
             transaction.classification,
             SccmPolicyClassification::ContradictoryEvidence,
+            "{artifact_id}"
+        );
+        assert_eq!(analysis.findings[0].class, SccmFindingClass::Symptom);
+        assert!(analysis.findings[0].terminal_evidence.is_empty());
+    }
+}
+
+#[test]
+fn chronology_conflict_confirms_only_a_successful_ordered_prefix() {
+    let cases = [
+        ("policy-failure", "Request failed terminal", None),
+        ("policy-deferred", "Request deferred", None),
+        (
+            "policy-success",
+            "Request succeeded",
+            Some(SccmPolicyPhase::Request),
+        ),
+    ];
+
+    for (artifact_id, earlier, expected_last_confirmed) in cases {
+        let records = vec![
+            policy_record(earlier, "12:10:00.000", "+000", "PolicyAgent"),
+            policy_record("Download succeeded", "12:05:00.000", "+000", "PolicyAgent"),
+        ];
+        let analysis = analyze_policy_records(artifact_id, &records);
+        let transaction = &analysis.transactions[0];
+        assert_eq!(
+            transaction.phase,
+            SccmPolicyPhase::Download,
+            "{artifact_id}"
+        );
+        assert_eq!(
+            transaction.state,
+            SccmPolicyState::Contradictory,
+            "{artifact_id}"
+        );
+        assert_eq!(
+            transaction.condition,
+            Some(SccmPolicyCondition::OrderingUnavailable),
+            "{artifact_id}"
+        );
+        assert_eq!(
+            transaction.last_confirmed_phase, expected_last_confirmed,
             "{artifact_id}"
         );
         assert_eq!(analysis.findings[0].class, SccmFindingClass::Symptom);
