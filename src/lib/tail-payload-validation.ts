@@ -296,19 +296,29 @@ export function parseTailPayload(value: unknown): TailPayload | null {
   }
 
   const payload = value as unknown as TailPayload;
-  const entryEndLines = payload.entries.map(physicalEndLine);
-  if (entryEndLines.some((line) => line === null)) {
-    return null;
+  let highestObservedLine: number | null = null;
+  for (const entry of payload.entries) {
+    const endLine = physicalEndLine(entry);
+    if (endLine === null) {
+      return null;
+    }
+    highestObservedLine =
+      highestObservedLine === null
+        ? endLine
+        : Math.max(highestObservedLine, endLine);
   }
 
-  const observedRanges = [
-    ...(entryEndLines as number[]),
-    ...payload.amendments.map((amendment) => amendment.continuationEndLine),
-  ];
+  for (const amendment of payload.amendments) {
+    highestObservedLine =
+      highestObservedLine === null
+        ? amendment.continuationEndLine
+        : Math.max(highestObservedLine, amendment.continuationEndLine);
+  }
+
   if (
-    observedRanges.length > 0 &&
+    highestObservedLine !== null &&
     (payload.observedThroughLine === null ||
-      payload.observedThroughLine < Math.max(...observedRanges))
+      payload.observedThroughLine < highestObservedLine)
   ) {
     return null;
   }

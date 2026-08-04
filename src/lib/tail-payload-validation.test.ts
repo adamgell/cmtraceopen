@@ -233,6 +233,18 @@ describe("parseTailPayload", () => {
     expect(parseTailPayload(value)).toEqual(value);
   });
 
+  it("validates large tail batches without spreading them into function arguments", () => {
+    const entries = Array.from({ length: 200_000 }, (_, index) =>
+      entry({ id: index, lineNumber: index + 1 }),
+    );
+    const value = payload({
+      entries,
+      observedThroughLine: entries.length,
+    });
+
+    expect(parseTailPayload(value)).toEqual(value);
+  });
+
   it.each(
     Object.keys(validOptionalFields).map((field) => [
       field,
