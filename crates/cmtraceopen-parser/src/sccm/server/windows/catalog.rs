@@ -41,6 +41,24 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         supplemental: false,
     },
     SccmServerSourceSpec {
+        source_id: "server-hierarchy-control",
+        producer_role: SccmRole::SiteServer,
+        workflow_subject_role: None,
+        logical_names: &["replmgr", "rcmctrl"],
+        explicit_basename: None,
+        source_kind: SccmServerSourceKind::CcmLog,
+        supplemental: false,
+    },
+    SccmServerSourceSpec {
+        source_id: "server-hierarchy-transfer",
+        producer_role: SccmRole::SiteServer,
+        workflow_subject_role: None,
+        logical_names: &["sender", "despool"],
+        explicit_basename: None,
+        source_kind: SccmServerSourceKind::CcmLog,
+        supplemental: false,
+    },
+    SccmServerSourceSpec {
         source_id: "server-mp-auth",
         producer_role: SccmRole::ManagementPoint,
         workflow_subject_role: None,
@@ -180,6 +198,7 @@ pub(crate) fn expected_family(source_id: &str) -> Option<SccmArtifactFamily> {
     Some(match source_id {
         "server-sitecomp" => SccmArtifactFamily::SiteComponent,
         "server-status" => SccmArtifactFamily::SiteStatus,
+        "server-hierarchy-control" | "server-hierarchy-transfer" => SccmArtifactFamily::Hierarchy,
         "server-mp-auth" | "server-mp-policy" | "server-mp-iis" => {
             SccmArtifactFamily::ManagementPoint
         }
