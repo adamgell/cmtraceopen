@@ -611,7 +611,8 @@ pub fn analyze_hierarchy_replication(
             } else {
                 SccmHierarchyRemoteCausality::NotEstablished
             };
-            let next_artifacts = artifact_requests
+            let topology = topology_link(intake, &candidate.key)?;
+            let mut next_artifacts = artifact_requests
                 .iter()
                 .filter(|request| {
                     request.origin_site_code == candidate.key.origin_site_code
@@ -623,7 +624,19 @@ pub fn analyze_hierarchy_replication(
                     request
                 })
                 .collect::<Vec<_>>();
-            let topology = topology_link(intake, &candidate.key)?;
+            if state == SccmHierarchyState::Incomplete
+                && last_successful_phase
+                    .as_ref()
+                    .is_some_and(|phase| phase.rank() >= SccmHierarchyPhase::Send.rank())
+            {
+                next_artifacts.extend(missing_target_side_requests(
+                    &artifacts,
+                    topology,
+                    &transaction_id,
+                ));
+            }
+            next_artifacts.sort_by(request_order);
+            next_artifacts.dedup_by(|left, right| request_order(left, right).is_eq());
             let target_host_handle = Some(topology.target_host_handle.clone());
             let correlation_eligible = matches!(
                 state,
@@ -1229,6 +1242,38 @@ fn coverage_requests(
     requests.sort_by(request_order);
     requests.dedup_by(|left, right| request_order(left, right).is_eq());
     requests
+}
+
+fn missing_target_side_requests(
+    artifacts: &[&SccmServerArtifactAssessment],
+    topology: &SccmServerHierarchyLinkTopology,
+    transaction_id: &str,
+) -> Vec<SccmHierarchyArtifactRequest> {
+    let target_side_declared = artifacts.iter().any(|artifact| {
+        artifact_direction(artifact) == Some(SccmHierarchyDirection::Target)
+            && artifact.producer_host_handle.as_deref()
+                == Some(topology.target_host_handle.as_str())
+    });
+    if target_side_declared {
+        return Vec::new();
+    }
+
+    [
+        ("server-hierarchy-transfer", "despool.log"),
+        ("server-hierarchy-control", "rcmctrl.log"),
+    ]
+    .into_iter()
+    .map(|(source_id, basename)| SccmHierarchyArtifactRequest {
+        transaction_id: Some(transaction_id.to_owned()),
+        source_id: source_id.to_owned(),
+        producer_role: SccmRole::SiteServer,
+        direction: SccmHierarchyDirection::Target,
+        origin_site_code: topology.origin_site_code.clone(),
+        target_site_code: topology.target_site_code.clone(),
+        basenames: vec![basename.to_owned()],
+        reason_code: "missingTargetReceiveProcessApply".to_owned(),
+    })
+    .collect()
 }
 
 fn exact_artifact_scope(

@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::models::log_entry::Severity;
 use cmtraceopen_parser::sccm::server::windows::{
     analyze_hierarchy_replication, assess_server_intake, declared_server_source_catalog,
-    SccmHierarchyProfileSelectionState, SccmHierarchyState, SccmHierarchyTimestampOrdering,
-    SccmServerArtifactPayload, SccmServerIntakeAssessment, SCCM_HIERARCHY_PROFILE_ID,
-    SCCM_HIERARCHY_SOURCE_VERSION,
+    SccmHierarchyDirection, SccmHierarchyProfileSelectionState, SccmHierarchyRemoteCausality,
+    SccmHierarchyState, SccmHierarchyTimestampOrdering, SccmServerArtifactPayload,
+    SccmServerIntakeAssessment, SCCM_HIERARCHY_PROFILE_ID, SCCM_HIERARCHY_SOURCE_VERSION,
 };
 use cmtraceopen_parser::sccm::{
     SccmConfidence, SccmCorrelationKeyKind, SccmFindingClass, SccmKeyConfidence, SccmRole,
@@ -507,6 +507,54 @@ fn gaps_and_requests_are_transaction_and_exact_topology_scoped() {
             && request.origin_site_code == "LAB"
             && request.target_site_code == "CHD"
     }));
+}
+
+#[test]
+fn omitted_target_side_emits_transaction_scoped_receive_process_apply_requests() {
+    let (mut manifest, mut payloads, _) = fixture_parts("healthy-link");
+    let target_ids = manifest["artifacts"]
+        .as_array()
+        .expect("artifacts")
+        .iter()
+        .filter(|artifact| {
+            matches!(
+                required_str(artifact, "originalBasename"),
+                "despool.log" | "rcmctrl.log"
+            )
+        })
+        .map(|artifact| required_str(artifact, "artifactId").to_owned())
+        .collect::<BTreeSet<_>>();
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts")
+        .retain(|artifact| !target_ids.contains(required_str(artifact, "artifactId")));
+    payloads.retain(|payload| !target_ids.contains(&payload.manifest_artifact_id));
+
+    let analysis = analyze_hierarchy_replication(&assess(&manifest, &payloads)).expect("sealed");
+    assert_eq!(analysis.transactions.len(), 1);
+    let transaction = &analysis.transactions[0];
+    assert_eq!(transaction.state, SccmHierarchyState::Incomplete);
+    assert_eq!(transaction.confidence, SccmConfidence::Low);
+    assert_eq!(
+        transaction.remote_causality,
+        SccmHierarchyRemoteCausality::NotEstablished
+    );
+
+    assert_eq!(transaction.next_artifacts.len(), 2);
+    assert!(transaction.next_artifacts.iter().all(|request| {
+        request.transaction_id.as_deref() == Some(transaction.transaction_id.as_str())
+            && request.direction == SccmHierarchyDirection::Target
+            && request.origin_site_code == "LAB"
+            && request.target_site_code == "CHD"
+            && request.reason_code == "missingTargetReceiveProcessApply"
+    }));
+    let requested = transaction
+        .next_artifacts
+        .iter()
+        .flat_map(|request| request.basenames.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(requested, BTreeSet::from(["despool.log", "rcmctrl.log"]));
+    assert_eq!(analysis.artifact_requests, transaction.next_artifacts);
 }
 
 #[test]
