@@ -1187,6 +1187,8 @@ fn validate_contract(
             "sourceLocalObservations",
             "coverage",
             "findings",
+            "productionAdmissionError",
+            "productionOutputSha256",
             "prohibitedClaims",
         ],
         "expected",
@@ -1549,6 +1551,24 @@ fn validate_contract(
         || expected["workflow"] != family
     {
         return Err("expected contract identity is invalid".to_owned());
+    }
+    if scenario == "malformed-unknown-profile-invalid-offset" {
+        if !expected["productionOutputSha256"].is_null()
+            || expected["productionAdmissionError"]
+                != "fixture-update-numbered-03: client intake artifact ConfigMgr version is unsafe or too long"
+        {
+            return Err("rejected production outcome is not the exact committed oracle".to_owned());
+        }
+    } else {
+        let digest = required_string(expected, "productionOutputSha256", "expected")?;
+        if digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || !expected["productionAdmissionError"].is_null()
+        {
+            return Err("admitted production outcome is not a lowercase SHA-256 oracle".to_owned());
+        }
     }
     if expected["extractionProfile"]["id"] != profile
         || expected["extractionProfile"]["versionPrefix"] != "5.00.TEST."

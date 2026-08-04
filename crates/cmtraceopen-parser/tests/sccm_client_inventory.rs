@@ -120,7 +120,6 @@ fn corpus_scenarios() -> Vec<(String, PathBuf)> {
 struct CorpusAdmission {
     admitted: cmtraceopen_parser::sccm::client::SccmClientAdmittedEvidence,
     artifact_ids: BTreeMap<String, String>,
-    logical_artifact_ids: BTreeMap<String, String>,
 }
 
 fn corpus_admitted(scenario_dir: &Path) -> Result<CorpusAdmission, String> {
@@ -131,7 +130,6 @@ fn corpus_admitted(scenario_dir: &Path) -> Result<CorpusAdmission, String> {
     let mut artifacts = Vec::new();
     let mut payloads = Vec::new();
     let mut artifact_ids = BTreeMap::new();
-    let mut logical_artifact_ids = BTreeMap::new();
     for (index, source) in manifest["artifacts"]
         .as_array()
         .ok_or("manifest artifacts missing")?
@@ -177,7 +175,6 @@ fn corpus_admitted(scenario_dir: &Path) -> Result<CorpusAdmission, String> {
         let preparation_artifact_id = source["artifactId"].as_str().unwrap_or_default();
         let artifact_id = format!("fixture-update-numbered-{:02}", index + 1);
         artifact_ids.insert(preparation_artifact_id.to_owned(), artifact_id.clone());
-        logical_artifact_ids.insert(preparation_artifact_id.to_owned(), group.to_owned());
         let payload_bytes = (coverage == SccmCoverageState::Captured && fragment_complete)
             .then(|| {
                 let relative_path = source["relativePath"]
@@ -264,8 +261,45 @@ fn corpus_admitted(scenario_dir: &Path) -> Result<CorpusAdmission, String> {
     Ok(CorpusAdmission {
         admitted,
         artifact_ids,
-        logical_artifact_ids,
     })
+}
+
+fn translate_admitted_artifact_ids(
+    value: &mut serde_json::Value,
+    artifact_ids: &BTreeMap<String, String>,
+) {
+    match value {
+        serde_json::Value::String(text) => {
+            let mut translations = artifact_ids.iter().collect::<Vec<_>>();
+            translations.sort_by_key(|(_, admitted)| std::cmp::Reverse(admitted.len()));
+            for (fixture, admitted) in translations {
+                *text = text.replace(admitted, fixture);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                translate_admitted_artifact_ids(value, artifact_ids);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for value in fields.values_mut() {
+                translate_admitted_artifact_ids(value, artifact_ids);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
+}
+
+fn production_output_digest(
+    analysis: &cmtraceopen_parser::sccm::client::SccmClientExtendedAnalysis,
+    artifact_ids: &BTreeMap<String, String>,
+) -> String {
+    let mut normalized = serde_json::to_value(analysis).expect("serializable production analysis");
+    translate_admitted_artifact_ids(&mut normalized, artifact_ids);
+    Sha256::digest(serde_json::to_vec(&normalized).expect("canonical production JSON"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[test]
@@ -438,10 +472,20 @@ fn all_committed_extended_scenarios_execute_the_exported_analyzer() {
         )
         .expect("valid expected contract");
         if scenario == "compliance/malformed-unknown-profile-invalid-offset" {
-            assert!(
-                corpus_admitted(&scenario_dir).is_err(),
-                "{scenario}: invalid time and unknown profile must be rejected, not rewritten"
-            );
+            match corpus_admitted(&scenario_dir) {
+                Ok(_) => panic!("{scenario}: invalid time and unknown profile were admitted"),
+                Err(error) => {
+                    assert!(
+                        expected["productionOutputSha256"].is_null(),
+                        "{scenario}: rejected input has no production output"
+                    );
+                    assert_eq!(
+                        expected["productionAdmissionError"].as_str(),
+                        Some(error.as_str()),
+                        "{scenario}: exact committed admission rejection"
+                    );
+                }
+            }
             continue;
         }
         let corpus = corpus_admitted(&scenario_dir)
@@ -454,6 +498,16 @@ fn all_committed_extended_scenarios_execute_the_exported_analyzer() {
         )
         .expect("serializable repeated analysis");
         assert_eq!(actual, repeated, "{scenario}: full output is deterministic");
+        assert!(
+            expected["productionAdmissionError"].is_null(),
+            "{scenario}: admitted input has no admission rejection"
+        );
+        let actual_digest = production_output_digest(&analysis, &corpus.artifact_ids);
+        assert_eq!(
+            expected["productionOutputSha256"].as_str(),
+            Some(actual_digest.as_str()),
+            "{scenario}: complete normalized production output"
+        );
         assert_eq!(actual["schemaVersion"], 1, "{scenario}: schema");
         let expected_transactions = expected["transactions"]
             .as_array()
@@ -630,7 +684,6 @@ fn all_committed_extended_scenarios_execute_the_exported_analyzer() {
             .map(|item| {
                 (
                     corpus.artifact_ids[item["artifactId"].as_str().unwrap()].clone(),
-                    corpus.logical_artifact_ids[item["artifactId"].as_str().unwrap()].clone(),
                     item["state"].as_str().unwrap().to_ascii_lowercase(),
                 )
             })
@@ -641,7 +694,6 @@ fn all_committed_extended_scenarios_execute_the_exported_analyzer() {
             .map(|item| {
                 (
                     item.source.artifact_id.clone(),
-                    item.logical_artifact_id.clone(),
                     if item.source.coverage == SccmCoverageState::Captured
                         && !item.source.fragment_complete
                     {

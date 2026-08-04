@@ -1,4 +1,6 @@
 {
+  "productionOutputSha256": "6b41b847d6da16fd477e2f93e9924069e71a7764147ca9ce9957780e0398bd0f",
+  "productionAdmissionError": null,
   "contractState": "proposedPending318And319",
   "scenario": "deferred",
   "workflow": "metering",

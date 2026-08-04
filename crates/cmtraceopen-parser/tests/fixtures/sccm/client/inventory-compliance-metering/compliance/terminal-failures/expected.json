@@ -1,4 +1,6 @@
 {
+  "productionOutputSha256": "fe1a43836ebdea8dff0db51d1f23c0e306404a5d5cd855825604d9a1ebb8db05",
+  "productionAdmissionError": null,
   "contractState": "proposedPending318And319",
   "scenario": "terminal-failures",
   "workflow": "compliance",

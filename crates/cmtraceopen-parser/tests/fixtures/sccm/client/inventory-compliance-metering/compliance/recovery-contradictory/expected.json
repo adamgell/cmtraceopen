@@ -1,4 +1,6 @@
 {
+  "productionOutputSha256": "9420cd58fec433b10b7d79dcee80d031238a64bd0e054bc1f2e0d1511c5e256e",
+  "productionAdmissionError": null,
   "contractState": "proposedPending318And319",
   "scenario": "recovery-contradictory",
   "workflow": "compliance",

@@ -20,7 +20,9 @@ Every scenario contains:
   source-version, and provenance design;
 - `expected.json`: proposed exact-key transaction or source-local coverage
   outcomes with cited evidence, closed non-causal schemas, evidence-backed phase
-  state, and canonical output ordering;
+  state, canonical output ordering, and an exact SHA-256 oracle over the complete
+  normalized serialized production result (or the exact admission error for a
+  rejected scenario);
 - optional `evidence/`: raw CCM transport records or deliberately incomplete
   synthetic input.
 

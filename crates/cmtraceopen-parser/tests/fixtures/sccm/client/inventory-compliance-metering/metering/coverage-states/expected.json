@@ -1,4 +1,6 @@
 {
+  "productionOutputSha256": "1dc0660d03506bf246aa0f40cd874f680419102c5ae9ee1722a9df11bf32cb93",
+  "productionAdmissionError": null,
   "contractState": "proposedPending318And319",
   "scenario": "coverage-states",
   "workflow": "metering",

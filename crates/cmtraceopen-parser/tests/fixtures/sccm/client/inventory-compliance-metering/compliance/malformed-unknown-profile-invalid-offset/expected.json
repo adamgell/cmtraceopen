@@ -1,4 +1,6 @@
 {
+  "productionOutputSha256": null,
+  "productionAdmissionError": "fixture-update-numbered-03: client intake artifact ConfigMgr version is unsafe or too long",
   "contractState": "proposedPending318And319",
   "scenario": "malformed-unknown-profile-invalid-offset",
   "workflow": "compliance",

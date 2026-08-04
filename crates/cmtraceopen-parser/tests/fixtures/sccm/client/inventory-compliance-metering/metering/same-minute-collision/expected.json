@@ -1,4 +1,6 @@
 {
+  "productionOutputSha256": "f5d19ce7883b60b618a124b5a967038b5e956e77462ee4e848307a30319c41d8",
+  "productionAdmissionError": null,
   "contractState": "proposedPending318And319",
   "scenario": "same-minute-collision",
   "workflow": "metering",
