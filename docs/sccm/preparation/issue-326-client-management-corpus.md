@@ -250,3 +250,88 @@ formatting/whitespace, and wasm32 compilation. It does not exercise native
 candidate discovery, permissions, Windows layout, ConfigMgr version, Software
 Center filename classes, notification transport, Intune behavior, or live SCCM
 acceptance. Passing this preparation corpus is not an issue-closure condition.
+
+## Production source-contract gate review
+
+Reviewed on 2026-08-03 against integration head
+`8329522742a4889565fba2c838f832208b7e7443`.
+
+**Decision: no-go for a production reducer.** The checked-in corpus is a
+strong preparation and adversarial contract, but it is not production source
+evidence:
+
+- every management fixture still declares
+  `contractState: proposedPending318And319` and `proposalOnly: true`;
+- every admitted fixture profile is synthetic (`5.00.TEST.*`);
+- the production client intake catalog has no co-management, scripts, client
+  notification, or Software Center source group;
+- `SccmExtractionProfile::for_artifact_family` admits only the existing
+  experimental `5.00.9128.*` core profile, and management has no verified
+  artifact family or extraction profile;
+- the stable correlation-profile registry is intentionally empty, so exact
+  fixture keys cannot become production corroboration; and
+- the Microsoft Configuration Manager log reference verifies the existence
+  and broad purpose of `CoManagementHandler.log`, `Scripts.log`,
+  `CCMNotificationAgent.log`, and the per-user `SCClient_*`/`SCNotify_*`
+  filename classes, but it does not define the exact record fields,
+  transaction keys, phase transitions, terminal dispositions, or
+  version-specific grammar required by this issue.
+
+Sources:
+
+- Microsoft, *Log file reference - Configuration Manager*, content commit
+  `4e0c3fafed5dd00514a189f3b0ae8b23d08553d8`:
+  <https://learn.microsoft.com/en-us/intune/configmgr/core/plan-design/hierarchy/log-files>
+- `crates/cmtraceopen-parser/src/sccm/catalog.rs`
+- `crates/cmtraceopen-parser/src/sccm/client/intake.rs`
+- `crates/cmtraceopen-parser/src/sccm/keys.rs`
+- `crates/cmtraceopen-parser/src/sccm/findings.rs`
+
+Cataloging these names now would establish only filename recognition while
+leaving lifecycle semantics synthetic. That would violate the issue boundary
+and could turn an Intune-owned workload or a user-facing observation into an
+SCCM failure.
+
+## Required split and smallest acquisition plan
+
+The four artifact families do not share one lifecycle and must not be shipped
+through one catch-all reducer:
+
+1. **Co-management ownership:** acquire sanitized, independently reviewed
+   `CoManagementHandler.log` logical records for SCCM-owned, Intune-owned,
+   transitioning/shared, contradictory, and unknown-coverage cases from an
+   authorized development client. Record the ConfigMgr version and preserve
+   exact field names, complete CCM framing, offsets, and ordering.
+2. **Scripts execution:** separately acquire policy, execution, and report
+   records that prove the real versioned equivalents of `ScriptId`,
+   `ExecutionId`, `ResourceHandle`, phase, disposition, and terminal result.
+   A failure profile requires at least one completed, failed, deferred or
+   incomplete, rotation, malformed, and unrelated-same-time case.
+3. **Client notification:** separately acquire receive, dispatch/defer, and
+   acknowledgement records with the real versioned notification/channel keys.
+   Server BGB evidence stays outside the client reducer.
+4. **Software Center:** keep dynamic `SCClient_*` and `SCNotify_*` files
+   unsupported until native discovery can privacy-safely recognize the
+   per-user filename class and sanitized records establish an observational
+   request/action/outcome contract. UI state and user intent remain out of
+   scope.
+
+For each family, the next implementation brief must provide:
+
+- a native #319 capture/admission contract with exact basename or bounded
+  filename-class matching, role, rotation, encoding, byte/digest binding, and
+  privacy-safe provenance;
+- a real ConfigMgr version prefix and an exact extraction profile derived from
+  sanitized source records rather than the `5.00.TEST.*` proposal;
+- red tests for field lookalikes, duplicate/conflicting keys, incomplete
+  records, invalid offsets, coverage gaps, raw identity leakage, input
+  reordering, and unrelated same-time evidence;
+- a focused reducer that emits explicit ownership, deferred, insufficient, or
+  terminal states only from that family's cited evidence; and
+- a Windows development-client evidence pack naming the target build,
+  viewing/reproduction conditions, observed claims, and untested variants.
+
+Only after one family clears those gates should its catalog entry, stable
+profile, and reducer land together. The smallest safe first slice is
+co-management ownership alone; scripts, notification, and Software Center
+remain separate follow-up slices.
