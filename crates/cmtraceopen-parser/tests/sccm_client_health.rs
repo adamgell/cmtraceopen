@@ -242,6 +242,20 @@ fn analyze_success_regression(name: &str) -> (SccmClientHealthAnalysis, BTreeMap
                     "Phase=managementPointLocation Disposition=succeeded Terminal=true ClientGuid=22222222-2222-2222-2222-222222222222 SiteCode=LAB",
                 )
             }
+            ("service-retry-after-success", "health-success-evaluation-current") => format!(
+                "{content}<![LOG[Family=health Phase=service Disposition=started Terminal=false ClientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time=\"01:00:01.500+000\" date=\"07-30-2026\" component=\"CcmEval\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmeval.cc:4\">\n"
+            ),
+            ("service-equal-time-retry-after-success", "health-success-evaluation-current") => {
+                format!(
+                    "{content}<![LOG[Family=health Phase=service Disposition=started Terminal=false ClientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time=\"01:00:01.000+000\" date=\"07-30-2026\" component=\"CcmEval\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmeval.cc:4\">\n"
+                )
+            }
+            ("repair-retry-after-install-success", "health-success-ccmsetup-current") => format!(
+                "{content}<![LOG[Family=health Phase=repair Disposition=started Terminal=false ClientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time=\"01:00:00.500+000\" date=\"07-30-2026\" component=\"ccmsetup\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmsetup.cc:2\">\n"
+            ),
+            ("repair-retry-terminal-after-pending", "health-success-ccmsetup-current") => format!(
+                "{content}<![LOG[Family=health Phase=repair Disposition=started Terminal=false ClientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time=\"01:00:00.500+000\" date=\"07-30-2026\" component=\"ccmsetup\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmsetup.cc:2\">\n<![LOG[Family=health Phase=repair Disposition=succeeded Terminal=true ClientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time=\"01:00:00.750+000\" date=\"07-30-2026\" component=\"ccmsetup\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmsetup.cc:3\">\n"
+            ),
             _ => return,
         };
         *bytes = mutated.into_bytes();
@@ -432,6 +446,78 @@ fn post_lifecycle_phases_require_strict_monotonic_time() {
 }
 
 #[test]
+fn newest_attempt_controls_lifecycle_and_service_resolution() {
+    let (service_retry, _) = analyze_success_regression("service-retry-after-success");
+    assert_eq!(
+        service_retry.lifecycle_phase,
+        Some(SccmClientHealthPhase::Install)
+    );
+    assert_eq!(
+        service_retry.last_confirmed_successful_phase,
+        Some(SccmClientHealthPhase::Install)
+    );
+    assert_eq!(
+        service_retry.hops.last().map(|hop| (hop.phase, hop.state)),
+        Some((
+            SccmClientHealthPhase::Service,
+            SccmClientHealthHopState::Pending
+        ))
+    );
+
+    let (repair_retry, _) = analyze_success_regression("repair-retry-after-install-success");
+    assert_eq!(
+        repair_retry.lifecycle_phase,
+        Some(SccmClientHealthPhase::Repair)
+    );
+    assert_eq!(repair_retry.last_confirmed_successful_phase, None);
+    assert_eq!(
+        repair_retry.hops.last().map(|hop| (hop.phase, hop.state)),
+        Some((
+            SccmClientHealthPhase::Repair,
+            SccmClientHealthHopState::Pending
+        ))
+    );
+
+    let (resolved_retry, _) = analyze_success_regression("repair-retry-terminal-after-pending");
+    assert_eq!(
+        resolved_retry.lifecycle_phase,
+        Some(SccmClientHealthPhase::Repair)
+    );
+    assert_eq!(
+        resolved_retry.last_confirmed_successful_phase,
+        Some(SccmClientHealthPhase::Transport)
+    );
+    assert_eq!(
+        resolved_retry
+            .hops
+            .first()
+            .map(|hop| (hop.phase, hop.state)),
+        Some((
+            SccmClientHealthPhase::Repair,
+            SccmClientHealthHopState::Succeeded
+        ))
+    );
+}
+
+#[test]
+fn equal_time_terminal_and_retry_evidence_fails_closed() {
+    let (analysis, _) = analyze_success_regression("service-equal-time-retry-after-success");
+    assert_eq!(
+        analysis.last_confirmed_successful_phase,
+        Some(SccmClientHealthPhase::Install)
+    );
+    assert_eq!(
+        analysis.hops.last().map(|hop| (hop.phase, hop.state)),
+        Some((
+            SccmClientHealthPhase::Service,
+            SccmClientHealthHopState::Contradictory
+        ))
+    );
+    assert_eq!(analysis.hops.last().expect("service hop").evidence.len(), 2);
+    assert_eq!(analysis.findings[0].class, SccmFindingClass::Symptom);
+}
+
+#[test]
 fn management_point_identity_cannot_cross_clients_on_a_shared_site() {
     let (analysis, _) = analyze_success_regression("cross-client-management-point");
     assert_eq!(
@@ -453,7 +539,13 @@ fn management_point_identity_cannot_cross_clients_on_a_shared_site() {
 fn sealed_admission_regressions_match_exact_full_output_oracles() {
     let oracle_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sccm/client/health-regression-oracles");
-    for name in ["service-before-install", "cross-client-management-point"] {
+    for name in [
+        "service-before-install",
+        "cross-client-management-point",
+        "service-retry-after-success",
+        "repair-retry-after-install-success",
+        "repair-retry-terminal-after-pending",
+    ] {
         let (analysis, artifact_ids) = analyze_success_regression(name);
         let actual = normalized_output(&analysis, &artifact_ids);
         let path = oracle_root.join(format!("{name}.json"));

@@ -529,43 +529,49 @@ fn resolve_candidates<'a>(
     if candidates.is_empty() {
         return Resolution::Missing;
     }
-    let terminal = candidates
-        .iter()
-        .copied()
-        .filter(|fact| fact.terminal)
-        .collect::<Vec<_>>();
-    if terminal.is_empty() {
-        return Resolution::Pending(candidates);
-    }
     if phase.is_none()
-        && terminal
-            .iter()
-            .map(|fact| fact.phase)
-            .collect::<BTreeSet<_>>()
-            .len()
-            != 1
-    {
-        return Resolution::Contradictory(terminal);
-    }
-    if phase.is_none()
-        && terminal
+        && candidates
             .iter()
             .filter_map(|fact| fact.keys.client_guid.as_deref())
             .collect::<BTreeSet<_>>()
             .len()
             != 1
     {
-        return Resolution::Contradictory(terminal);
+        return Resolution::Contradictory(candidates);
     }
-    let last = *terminal
+    let newest_utc_millis = candidates
         .iter()
-        .max_by_key(|fact| (fact.utc_millis, reference_identity(&fact.reference)))
-        .expect("terminal set is nonempty");
-    if terminal
+        .map(|fact| fact.utc_millis)
+        .max()
+        .expect("candidate set is nonempty");
+    let newest = candidates
         .iter()
-        .any(|fact| fact.utc_millis == last.utc_millis && fact.disposition != last.disposition)
+        .copied()
+        .filter(|fact| fact.utc_millis == newest_utc_millis)
+        .collect::<Vec<_>>();
+    if phase.is_none()
+        && newest
+            .iter()
+            .map(|fact| fact.phase)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != 1
     {
-        return Resolution::Contradictory(terminal);
+        return Resolution::Contradictory(newest);
+    }
+    let newest_disposition = newest[0].disposition;
+    if newest
+        .iter()
+        .any(|fact| fact.disposition != newest_disposition)
+    {
+        return Resolution::Contradictory(newest);
+    }
+    let last = *newest
+        .iter()
+        .max_by_key(|fact| reference_identity(&fact.reference))
+        .expect("newest candidate set is nonempty");
+    if !last.terminal {
+        return Resolution::Pending(newest);
     }
     if transport {
         let started = candidates.iter().any(|fact| {
