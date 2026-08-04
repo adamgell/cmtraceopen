@@ -10,7 +10,7 @@ pub const SCCM_DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 const INVALID_SCCM_ROLE_MESSAGE: &str =
     "InvalidRole: unknown SCCM role must be canonical and must not shadow a declared role";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SccmCoverageState {
     Captured,
@@ -196,6 +196,14 @@ pub enum SccmCorrelationKeyKind {
     RequestId,
     TopicId,
     StateMessageId,
+    InventoryCycleId,
+    ReportId,
+    ResourceHandle,
+    ComplianceCiId,
+    BaselineId,
+    ComplianceStateId,
+    MeteringCycleId,
+    RuleId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

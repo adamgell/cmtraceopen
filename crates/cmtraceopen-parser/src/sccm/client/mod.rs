@@ -5,6 +5,7 @@
 
 pub(crate) mod admission;
 mod intake;
+mod inventory;
 
 #[cfg(test)]
 mod admission_tests;
@@ -16,3 +17,7 @@ pub use admission::{
     SccmClientEvidenceAdmissionError,
 };
 pub use intake::*;
+pub use inventory::{
+    analyze_client_extended, SccmClientAnalysis, SccmCoverageGap, SccmPhase, SccmSourceObservation,
+    SccmTransaction, SccmTransactionState, SccmWorkflow,
+};
