@@ -1213,7 +1213,7 @@ fn canonical_client_admission_rejects_an_artifact_from_another_role() {
 }
 
 #[test]
-fn canonical_admission_rejects_unorderable_terminal_records() {
+fn reducer_fails_closed_on_admitted_unorderable_terminal_records() {
     let failing_transfer = format!(
         "{}{}",
         record(
@@ -1231,24 +1231,41 @@ fn canonical_admission_rejects_unorderable_terminal_records() {
             "DataTransferService",
         ),
     );
-    assert!(
-        try_bundle_from(vec![
-            (
-                client_artifact("synthetic-intent", "AppIntentEval.log"),
-                intent_content(),
-            ),
-            (
-                client_artifact("synthetic-content", "CAS.log"),
-                content_content(),
-            ),
-            (
-                client_artifact("synthetic-transfer", "DataTransferService.log"),
-                failing_transfer,
-            ),
-        ])
-        .is_err(),
-        "timestamp provenance must fail before reducer authority exists"
+    let bundle = try_bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            intent_content(),
+        ),
+        (
+            client_artifact("synthetic-content", "CAS.log"),
+            content_content(),
+        ),
+        (
+            client_artifact("synthetic-transfer", "DataTransferService.log"),
+            failing_transfer,
+        ),
+    ])
+    .expect("coherent unorderable timestamps are admitted");
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(transaction.phase, SccmDeploymentPhase::Transfer);
+    assert_eq!(transaction.state, SccmDeploymentState::InsufficientEvidence);
+    assert_eq!(
+        transaction.classification,
+        SccmDeploymentClassification::Symptom
     );
+    assert_eq!(transaction.confidence, SccmDeploymentConfidence::Low);
+    assert_eq!(
+        transaction.last_successful_phase,
+        Some(SccmDeploymentPhase::LocateContent)
+    );
+    assert!(analysis.findings.iter().all(|finding| {
+        finding.finding.terminal_evidence.is_empty()
+            && finding
+                .finding
+                .finding_id
+                .starts_with("deployment-chronology-uncertain")
+    }));
 }
 
 #[test]
@@ -2067,7 +2084,7 @@ fn a_punctuation_adjacent_duplicate_label_is_ambiguity_not_a_first_win() {
 }
 
 #[test]
-fn canonical_admission_rejects_cross_phase_records_with_unorderable_timestamps() {
+fn reducer_fails_closed_on_admitted_cross_phase_unorderable_timestamps() {
     let unorderable_requirements = record(
         &format!(
             "Requirements terminal failure assignmentId={OTHER_ASSIGNMENT} ciId={CI} requirementId=REQ-TEST-902 terminal=true"
@@ -2090,36 +2107,56 @@ fn canonical_admission_rejects_cross_phase_records_with_unorderable_timestamps()
         "AppEnforce",
     );
 
-    assert!(
-        try_bundle_from(vec![
-            (
-                client_artifact("synthetic-intent", "AppIntentEval.log"),
-                format!("{}{other_intent}", intent_content()),
+    let bundle = try_bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            format!("{}{other_intent}", intent_content()),
+        ),
+        (
+            rotated_artifact(
+                "synthetic-intent-rotated",
+                "AppIntentEval.log.1",
+                SccmRotation::Numbered(1),
             ),
-            (
-                rotated_artifact(
-                    "synthetic-intent-rotated",
-                    "AppIntentEval.log.1",
-                    SccmRotation::Numbered(1),
-                ),
-                unorderable_requirements,
-            ),
-            (
-                client_artifact("synthetic-content", "CAS.log"),
-                content_content(),
-            ),
-            (
-                client_artifact("synthetic-transfer", "DataTransferService.log"),
-                transfer_content("05:00:03.000+000", "05:00:04.000+000"),
-            ),
-            (
-                client_artifact("synthetic-enforce", "AppEnforce.log"),
-                unorderable_enforce,
-            ),
-        ])
-        .is_err(),
-        "unorderable records must fail before reducer authority exists"
-    );
+            unorderable_requirements,
+        ),
+        (
+            client_artifact("synthetic-content", "CAS.log"),
+            content_content(),
+        ),
+        (
+            client_artifact("synthetic-transfer", "DataTransferService.log"),
+            transfer_content("05:00:03.000+000", "05:00:04.000+000"),
+        ),
+        (
+            client_artifact("synthetic-enforce", "AppEnforce.log"),
+            unorderable_enforce,
+        ),
+    ])
+    .expect("coherent unorderable timestamps are admitted");
+    let analysis = analyze_client_deployment(&bundle);
+    assert_eq!(analysis.transactions.len(), 2);
+    assert!(analysis.transactions.iter().all(|transaction| {
+        transaction.state == SccmDeploymentState::InsufficientEvidence
+            && transaction.classification == SccmDeploymentClassification::Symptom
+            && transaction.confidence == SccmDeploymentConfidence::Low
+    }));
+    assert!(analysis.transactions.iter().any(|transaction| {
+        transaction.phase == SccmDeploymentPhase::Requirements
+            && transaction.last_successful_phase == Some(SccmDeploymentPhase::Intent)
+    }));
+    assert!(analysis.transactions.iter().any(|transaction| {
+        transaction.phase == SccmDeploymentPhase::Enforce
+            && transaction.last_successful_phase == Some(SccmDeploymentPhase::Cache)
+    }));
+    assert_eq!(analysis.findings.len(), 2);
+    assert!(analysis.findings.iter().all(|finding| {
+        finding.finding.terminal_evidence.is_empty()
+            && finding
+                .finding
+                .finding_id
+                .starts_with("deployment-chronology-uncertain")
+    }));
 }
 
 #[test]
@@ -2282,7 +2319,7 @@ fn a_repeated_identical_content_request_publishes_the_earliest_record_only() {
 }
 
 #[test]
-fn canonical_admission_rejects_an_unorderable_repeated_content_request() {
+fn reducer_suppresses_an_admitted_unorderable_repeated_content_request() {
     let located = |time: &str| {
         record(
             &format!(
@@ -2292,26 +2329,38 @@ fn canonical_admission_rejects_an_unorderable_repeated_content_request() {
             "CAS",
         )
     };
-    assert!(
-        try_bundle_from(vec![
-            (
-                client_artifact("synthetic-intent", "AppIntentEval.log"),
-                intent_content(),
+    let bundle = try_bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            intent_content(),
+        ),
+        (
+            client_artifact("synthetic-content-a", "CAS.log"),
+            located("05:00:02.000+000"),
+        ),
+        (
+            rotated_artifact(
+                "synthetic-content-b",
+                "CAS.log.1",
+                SccmRotation::Numbered(1),
             ),
-            (
-                client_artifact("synthetic-content-a", "CAS.log"),
-                located("05:00:02.000+000"),
-            ),
-            (
-                rotated_artifact(
-                    "synthetic-content-b",
-                    "CAS.log.1",
-                    SccmRotation::Numbered(1),
-                ),
-                located("05:00:09.000"),
-            ),
-        ])
-        .is_err(),
-        "incomparable record timestamps must fail before reducer authority exists"
+            located("05:00:09.000"),
+        ),
+    ])
+    .expect("coherent unorderable timestamps are admitted");
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(transaction.phase, SccmDeploymentPhase::Transfer);
+    assert_eq!(transaction.state, SccmDeploymentState::InsufficientEvidence);
+    assert_eq!(
+        transaction.classification,
+        SccmDeploymentClassification::Symptom
     );
+    assert_eq!(transaction.confidence, SccmDeploymentConfidence::Low);
+    assert!(transaction.counterpart_ready_fact.is_none());
+    assert!(!analysis.correlation_handoff.emitted_counterpart_ready_fact);
+    assert!(analysis
+        .findings
+        .iter()
+        .all(|finding| finding.finding.terminal_evidence.is_empty()));
 }
