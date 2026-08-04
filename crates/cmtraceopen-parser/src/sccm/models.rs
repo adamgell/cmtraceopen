@@ -183,6 +183,7 @@ pub struct SccmEvidence {
 #[serde(rename_all = "camelCase")]
 pub enum SccmCorrelationKeyKind {
     AssignmentId,
+    PolicyId,
     ClientGuid,
     PackageId,
     ContentId,

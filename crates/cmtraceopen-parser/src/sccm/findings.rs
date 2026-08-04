@@ -40,7 +40,7 @@ const MAX_SCCM_FINDING_SUMMARY_CHARS: usize = 2048;
 pub(crate) const MAX_SCCM_CORRELATION_KEY_VALUE_CHARS: usize = 256;
 // Intentionally empty: no extraction profile is verified as stable enough to
 // authorize key-only High confidence. Adding one requires contract review.
-const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] = &[];
+const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] = &["policy-client-5.00.test-v1"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2681,27 +2681,28 @@ fn coverage_state_order(coverage: &SccmCoverageState) -> u8 {
 fn correlation_key_kind_order(kind: &SccmCorrelationKeyKind) -> u8 {
     match kind {
         SccmCorrelationKeyKind::AssignmentId => 0,
-        SccmCorrelationKeyKind::ClientGuid => 1,
-        SccmCorrelationKeyKind::PackageId => 2,
-        SccmCorrelationKeyKind::ContentId => 3,
-        SccmCorrelationKeyKind::SiteCode => 4,
-        SccmCorrelationKeyKind::ServerHost => 5,
-        SccmCorrelationKeyKind::CiId => 6,
-        SccmCorrelationKeyKind::UpdateId => 7,
-        SccmCorrelationKeyKind::KbId => 8,
-        SccmCorrelationKeyKind::BitsJobId => 9,
-        SccmCorrelationKeyKind::TaskSequenceExecutionId => 10,
-        SccmCorrelationKeyKind::RequestId => 11,
-        SccmCorrelationKeyKind::TopicId => 12,
-        SccmCorrelationKeyKind::StateMessageId => 13,
-        SccmCorrelationKeyKind::InventoryCycleId => 14,
-        SccmCorrelationKeyKind::ReportId => 15,
-        SccmCorrelationKeyKind::ResourceHandle => 16,
-        SccmCorrelationKeyKind::ComplianceCiId => 17,
-        SccmCorrelationKeyKind::BaselineId => 18,
-        SccmCorrelationKeyKind::ComplianceStateId => 19,
-        SccmCorrelationKeyKind::MeteringCycleId => 20,
-        SccmCorrelationKeyKind::RuleId => 21,
+        SccmCorrelationKeyKind::PolicyId => 1,
+        SccmCorrelationKeyKind::ClientGuid => 2,
+        SccmCorrelationKeyKind::PackageId => 3,
+        SccmCorrelationKeyKind::ContentId => 4,
+        SccmCorrelationKeyKind::SiteCode => 5,
+        SccmCorrelationKeyKind::ServerHost => 6,
+        SccmCorrelationKeyKind::CiId => 7,
+        SccmCorrelationKeyKind::UpdateId => 8,
+        SccmCorrelationKeyKind::KbId => 9,
+        SccmCorrelationKeyKind::BitsJobId => 10,
+        SccmCorrelationKeyKind::TaskSequenceExecutionId => 11,
+        SccmCorrelationKeyKind::RequestId => 12,
+        SccmCorrelationKeyKind::TopicId => 13,
+        SccmCorrelationKeyKind::StateMessageId => 14,
+        SccmCorrelationKeyKind::InventoryCycleId => 15,
+        SccmCorrelationKeyKind::ReportId => 16,
+        SccmCorrelationKeyKind::ResourceHandle => 17,
+        SccmCorrelationKeyKind::ComplianceCiId => 18,
+        SccmCorrelationKeyKind::BaselineId => 19,
+        SccmCorrelationKeyKind::ComplianceStateId => 20,
+        SccmCorrelationKeyKind::MeteringCycleId => 21,
+        SccmCorrelationKeyKind::RuleId => 22,
     }
 }
 

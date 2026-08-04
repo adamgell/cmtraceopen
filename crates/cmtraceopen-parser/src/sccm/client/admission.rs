@@ -24,8 +24,9 @@ use crate::parser::ccm::scan_logical_records_bounded;
 use crate::sccm::catalog::classify_artifact_name;
 use crate::sccm::evidence::SccmRawEvidenceSnapshot;
 use crate::sccm::{
-    extract_keys, SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence,
-    SccmExtractionProfile, SccmKeyExtractionResult, SccmRole, SccmRotation, SccmTimeOrderingState,
+    extract_admitted_keys, SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence,
+    SccmExtractionProfile, SccmExtractionProfileMaturity, SccmKeyExtractionResult, SccmRole,
+    SccmRotation, SccmTimeOrderingState,
 };
 
 use super::{
@@ -193,19 +194,16 @@ impl SccmClientAdmittedEvidence {
             return Err(SccmClientEvidenceAdmissionError::IntegrityViolation);
         };
         let mut extraction_profile = profile.clone();
-        // Only Policy has executable key-extraction fixtures in the first
-        // client slice. Clearing this sealed family binding selects the public
-        // generic extractor without exposing a crate-wide privileged helper;
-        // the opaque result retains the verified family separately. All other
-        // families remain explicitly unvalidated.
-        if matches!(artifact_family, SccmArtifactFamily::ClientPolicy) {
+        if matches!(artifact_family, SccmArtifactFamily::ClientPolicy)
+            && profile.maturity == SccmExtractionProfileMaturity::Experimental
+        {
             extraction_profile.validated_artifact_families.clear();
         }
         let results = self
             .evidence
             .iter()
             .filter(|evidence| evidence.reference.artifact_id == *sealed_artifact_id)
-            .map(|evidence| extract_keys(evidence, &extraction_profile))
+            .map(|evidence| extract_admitted_keys(evidence, &extraction_profile))
             .collect::<Vec<_>>();
         if results.is_empty() {
             return Err(SccmClientEvidenceAdmissionError::MissingAdmittedArtifactEvidence);
@@ -322,8 +320,6 @@ pub enum SccmClientEvidenceAdmissionError {
     IntegritySealLimitExceeded,
     #[error("client evidence admission record timestamp provenance is not comparable")]
     InvalidTimestampProvenance,
-    #[error("client evidence admission selected an unregistered extraction profile")]
-    UnregisteredProfile,
     #[error("client evidence admission has no sealed extraction profile for the artifact")]
     MissingAdmittedExtractionProfile,
     #[error("client evidence admission has no sealed evidence for the artifact")]
@@ -517,8 +513,7 @@ pub fn admit_client_evidence(
         let profile = SccmExtractionProfile::for_artifact_family(
             fragment.configmgr_version.as_deref(),
             family,
-        )
-        .ok_or(SccmClientEvidenceAdmissionError::UnregisteredProfile)?;
+        );
         let content = decode_payload(payload, fragment.encoding.as_deref())?;
         let artifact = artifact_for_fragment(fragment);
         let scan =
@@ -541,9 +536,7 @@ pub fn admit_client_evidence(
             if normalized.evidence_id != normalized.reference.entry_id
                 || normalized.reference.line_start.is_none()
                 || normalized.reference.line_end.is_none()
-                || normalized.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
-                || normalized.timestamp.offset_minutes.is_none()
-                || normalized.timestamp.utc_millis.is_none()
+                || !has_consistent_timestamp_provenance(&normalized)
             {
                 return Err(SccmClientEvidenceAdmissionError::InvalidTimestampProvenance);
             }
@@ -593,6 +586,22 @@ pub fn admit_client_evidence(
         profiles_by_artifact,
         integrity_seal,
     })
+}
+
+fn has_consistent_timestamp_provenance(evidence: &SccmEvidence) -> bool {
+    match evidence.timestamp.ordering_state {
+        SccmTimeOrderingState::NormalizedUtc => {
+            evidence.timestamp.original_display.is_some()
+                && evidence.timestamp.offset_minutes.is_some()
+                && evidence.timestamp.utc_millis.is_some()
+        }
+        SccmTimeOrderingState::OffsetMissing | SccmTimeOrderingState::OffsetInvalid => {
+            evidence.timestamp.original_display.is_some() && evidence.timestamp.utc_millis.is_none()
+        }
+        SccmTimeOrderingState::TimestampMissing => {
+            evidence.timestamp.utc_millis.is_none() && evidence.timestamp.offset_minutes.is_none()
+        }
+    }
 }
 
 fn validate_payload_budget(

@@ -11,7 +11,9 @@ use super::models::{
 };
 
 pub const SCCM_EXPERIMENTAL_KEY_PROFILE_ID: &str = "sccm-keys-5.00.9128-experimental-v1";
+pub const SCCM_POLICY_KEY_PROFILE_ID: &str = "policy-client-5.00.test-v1";
 const EXPERIMENTAL_VERSION_PREFIX: &str = "5.00.9128.";
+const POLICY_TEST_VERSION: &str = "5.00.TEST.0000";
 
 impl SccmExtractionProfile {
     pub fn for_version(configmgr_version: Option<&str>) -> Self {
@@ -59,13 +61,21 @@ impl SccmExtractionProfile {
     pub(crate) fn for_artifact_family(
         configmgr_version: Option<&str>,
         family: &SccmArtifactFamily,
-    ) -> Option<Self> {
-        let mut profile = Self::for_version(configmgr_version);
-        if !is_builtin_experimental_core(&profile) {
-            return None;
+    ) -> Self {
+        if configmgr_version == Some(POLICY_TEST_VERSION)
+            && matches!(family, SccmArtifactFamily::ClientPolicy)
+        {
+            return Self {
+                profile_id: SCCM_POLICY_KEY_PROFILE_ID.to_owned(),
+                configmgr_version_prefixes: vec![POLICY_TEST_VERSION.to_owned()],
+                validated_artifact_families: vec![SccmArtifactFamily::ClientPolicy],
+                selected_configmgr_version: Some(POLICY_TEST_VERSION.to_owned()),
+                maturity: SccmExtractionProfileMaturity::Stable,
+            };
         }
+        let mut profile = Self::for_version(configmgr_version);
         profile.validated_artifact_families = vec![family.clone()];
-        Some(profile)
+        profile
     }
 }
 
@@ -88,7 +98,11 @@ fn key_patterns() -> &'static [KeyPattern] {
         [
             (
                 SccmCorrelationKeyKind::AssignmentId,
-                r"(?i:\b(?:assignment|policy)[ \t]*id)[ \t]*=[ \t]*(?P<value>\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?[A-Za-z0-9_.-]*)",
+                r"(?i:\bassignment[ \t]*id)[ \t]*=[ \t]*(?P<value>\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?[A-Za-z0-9_.-]*)",
+            ),
+            (
+                SccmCorrelationKeyKind::PolicyId,
+                r"(?i:\bpolicy[ \t]*id)[ \t]*=[ \t]*(?P<value>\{?[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}?[A-Za-z0-9_.-]*)",
             ),
             (
                 SccmCorrelationKeyKind::ClientGuid,
@@ -170,6 +184,21 @@ pub fn extract_keys(
     evidence: &SccmEvidence,
     profile: &SccmExtractionProfile,
 ) -> SccmKeyExtractionResult {
+    extract_keys_with_authority(evidence, profile, false)
+}
+
+pub(crate) fn extract_admitted_keys(
+    evidence: &SccmEvidence,
+    profile: &SccmExtractionProfile,
+) -> SccmKeyExtractionResult {
+    extract_keys_with_authority(evidence, profile, true)
+}
+
+fn extract_keys_with_authority(
+    evidence: &SccmEvidence,
+    profile: &SccmExtractionProfile,
+    admitted_profile_authority: bool,
+) -> SccmKeyExtractionResult {
     let candidates = find_candidates(&evidence.message);
     let mut result = SccmKeyExtractionResult {
         profile_id: profile.profile_id.clone(),
@@ -177,7 +206,7 @@ pub fn extract_keys(
         gaps: Vec::new(),
     };
 
-    if let Some(kind) = profile_gap_kind(profile) {
+    if let Some(kind) = profile_gap_kind(profile, admitted_profile_authority) {
         if candidates.is_empty() {
             result.gaps.push(gap_for(kind, profile, evidence, None));
         } else {
@@ -190,12 +219,15 @@ pub fn extract_keys(
         return result;
     }
 
-    result.gaps.push(gap_for(
-        SccmExtractionGapKind::ExperimentalProfile,
-        profile,
-        evidence,
-        None,
-    ));
+    let stable_policy = admitted_profile_authority && is_builtin_stable_policy(profile);
+    if !stable_policy {
+        result.gaps.push(gap_for(
+            SccmExtractionGapKind::ExperimentalProfile,
+            profile,
+            evidence,
+            None,
+        ));
+    }
 
     for candidate in candidates {
         let mut key = normalize_key(candidate.kind.clone(), candidate.raw);
@@ -214,7 +246,11 @@ pub fn extract_keys(
             continue;
         }
 
-        key.confidence = SccmKeyConfidence::Low;
+        key.confidence = if stable_policy {
+            SccmKeyConfidence::Exact
+        } else {
+            SccmKeyConfidence::Low
+        };
         key.extraction_profile_id = Some(profile.profile_id.clone());
         key.evidence = Some(evidence.reference.clone());
         key.start = Some(candidate.start);
@@ -233,7 +269,10 @@ fn is_bounded_key_value(key: &SccmCorrelationKey) -> bool {
         && has_at_most_chars(&key.normalized, MAX_SCCM_CORRELATION_KEY_VALUE_CHARS)
 }
 
-fn profile_gap_kind(profile: &SccmExtractionProfile) -> Option<SccmExtractionGapKind> {
+fn profile_gap_kind(
+    profile: &SccmExtractionProfile,
+    admitted_profile_authority: bool,
+) -> Option<SccmExtractionGapKind> {
     if profile.selected_configmgr_version.is_none() {
         return Some(SccmExtractionGapKind::MissingVersion);
     }
@@ -243,10 +282,23 @@ fn profile_gap_kind(profile: &SccmExtractionProfile) -> Option<SccmExtractionGap
             Some(SccmExtractionGapKind::UnvalidatedVersion)
         }
         SccmExtractionProfileMaturity::Experimental if is_builtin_experimental(profile) => None,
+        SccmExtractionProfileMaturity::Stable
+            if admitted_profile_authority && is_builtin_stable_policy(profile) =>
+        {
+            None
+        }
         SccmExtractionProfileMaturity::Experimental | SccmExtractionProfileMaturity::Stable => {
             Some(SccmExtractionGapKind::UnvalidatedProfile)
         }
     }
+}
+
+fn is_builtin_stable_policy(profile: &SccmExtractionProfile) -> bool {
+    profile.profile_id == SCCM_POLICY_KEY_PROFILE_ID
+        && profile.maturity == SccmExtractionProfileMaturity::Stable
+        && profile.configmgr_version_prefixes == [POLICY_TEST_VERSION]
+        && profile.validated_artifact_families == [SccmArtifactFamily::ClientPolicy]
+        && profile.selected_configmgr_version.as_deref() == Some(POLICY_TEST_VERSION)
 }
 
 fn is_builtin_experimental(profile: &SccmExtractionProfile) -> bool {
@@ -360,6 +412,7 @@ fn normalize_value(kind: &SccmCorrelationKeyKind, raw: &str) -> (String, SccmKey
     let trimmed = raw.trim();
     let normalized = match kind {
         SccmCorrelationKeyKind::AssignmentId
+        | SccmCorrelationKeyKind::PolicyId
         | SccmCorrelationKeyKind::ClientGuid
         | SccmCorrelationKeyKind::UpdateId
         | SccmCorrelationKeyKind::BitsJobId
@@ -492,26 +545,27 @@ fn normalize_resource_handle(value: &str) -> Option<String> {
 fn key_kind_order(kind: &SccmCorrelationKeyKind) -> u8 {
     match kind {
         SccmCorrelationKeyKind::AssignmentId => 0,
-        SccmCorrelationKeyKind::ClientGuid => 1,
-        SccmCorrelationKeyKind::PackageId => 2,
-        SccmCorrelationKeyKind::ContentId => 3,
-        SccmCorrelationKeyKind::SiteCode => 4,
-        SccmCorrelationKeyKind::ServerHost => 5,
-        SccmCorrelationKeyKind::CiId => 6,
-        SccmCorrelationKeyKind::UpdateId => 7,
-        SccmCorrelationKeyKind::KbId => 8,
-        SccmCorrelationKeyKind::BitsJobId => 9,
-        SccmCorrelationKeyKind::TaskSequenceExecutionId => 10,
-        SccmCorrelationKeyKind::RequestId => 11,
-        SccmCorrelationKeyKind::TopicId => 12,
-        SccmCorrelationKeyKind::StateMessageId => 13,
-        SccmCorrelationKeyKind::InventoryCycleId => 14,
-        SccmCorrelationKeyKind::ReportId => 15,
-        SccmCorrelationKeyKind::ResourceHandle => 16,
-        SccmCorrelationKeyKind::ComplianceCiId => 17,
-        SccmCorrelationKeyKind::BaselineId => 18,
-        SccmCorrelationKeyKind::ComplianceStateId => 19,
-        SccmCorrelationKeyKind::MeteringCycleId => 20,
-        SccmCorrelationKeyKind::RuleId => 21,
+        SccmCorrelationKeyKind::PolicyId => 1,
+        SccmCorrelationKeyKind::ClientGuid => 2,
+        SccmCorrelationKeyKind::PackageId => 3,
+        SccmCorrelationKeyKind::ContentId => 4,
+        SccmCorrelationKeyKind::SiteCode => 5,
+        SccmCorrelationKeyKind::ServerHost => 6,
+        SccmCorrelationKeyKind::CiId => 7,
+        SccmCorrelationKeyKind::UpdateId => 8,
+        SccmCorrelationKeyKind::KbId => 9,
+        SccmCorrelationKeyKind::BitsJobId => 10,
+        SccmCorrelationKeyKind::TaskSequenceExecutionId => 11,
+        SccmCorrelationKeyKind::RequestId => 12,
+        SccmCorrelationKeyKind::TopicId => 13,
+        SccmCorrelationKeyKind::StateMessageId => 14,
+        SccmCorrelationKeyKind::InventoryCycleId => 15,
+        SccmCorrelationKeyKind::ReportId => 16,
+        SccmCorrelationKeyKind::ResourceHandle => 17,
+        SccmCorrelationKeyKind::ComplianceCiId => 18,
+        SccmCorrelationKeyKind::BaselineId => 19,
+        SccmCorrelationKeyKind::ComplianceStateId => 20,
+        SccmCorrelationKeyKind::MeteringCycleId => 21,
+        SccmCorrelationKeyKind::RuleId => 22,
     }
 }

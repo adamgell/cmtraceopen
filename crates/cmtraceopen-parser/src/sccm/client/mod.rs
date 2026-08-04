@@ -7,6 +7,7 @@ pub(crate) mod admission;
 mod deployment;
 mod intake;
 mod inventory;
+mod policy;
 mod updates;
 
 #[cfg(test)]
@@ -26,4 +27,5 @@ pub use inventory::{
     SccmClientExtendedPhase, SccmClientExtendedSourceCitation, SccmClientExtendedState,
     SccmClientExtendedTransaction, SccmClientExtendedWorkflow,
 };
+pub use policy::*;
 pub use updates::*;

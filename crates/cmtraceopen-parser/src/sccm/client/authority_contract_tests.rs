@@ -11,7 +11,7 @@ use super::{
 use crate::sccm::{
     extract_keys, SccmArtifact, SccmArtifactFamily, SccmCorrelationKeyKind, SccmCoverageState,
     SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmKeyConfidence,
-    SccmRole, SccmRotation, SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
+    SccmRole, SccmRotation, SCCM_EXPERIMENTAL_KEY_PROFILE_ID, SCCM_POLICY_KEY_PROFILE_ID,
 };
 
 fn digest(bytes: &[u8]) -> String {
@@ -758,6 +758,51 @@ fn caller_constructed_policy_profile_cannot_cross_the_admitted_boundary() {
         .gaps
         .iter()
         .all(|gap| gap.kind != SccmExtractionGapKind::UnvalidatedProfile));
+}
+
+#[test]
+fn caller_constructed_stable_policy_profile_does_not_mint_exact_keys() {
+    let bytes = ccm_bytes(concat!(
+        "Request succeeded ",
+        "AssignmentId={12345678-1234-1234-1234-123456789abc} ",
+        "PolicyId={abcdefab-cdef-cdef-cdef-abcdefabcdef}"
+    ));
+    let mut policy = artifact(
+        "policy",
+        "PolicyAgent.log",
+        SccmCoverageState::Captured,
+        true,
+        Some(&bytes),
+    );
+    policy.artifact.configmgr_version = Some("5.00.TEST.0000".to_owned());
+    let bundle = bundle_with(vec![policy]);
+    let assessment = assess_client_intake(&bundle).expect("stable policy intake is canonical");
+    let admitted = admit_client_evidence(&bundle, &assessment, &[payload("fixture-policy", bytes)])
+        .expect("stable policy bytes are sealed");
+    let evidence = &admitted.evidence().expect("valid seal")[0];
+    let caller_constructed = SccmExtractionProfile {
+        profile_id: SCCM_POLICY_KEY_PROFILE_ID.to_owned(),
+        configmgr_version_prefixes: vec!["5.00.TEST.0000".to_owned()],
+        validated_artifact_families: vec![SccmArtifactFamily::ClientPolicy],
+        selected_configmgr_version: Some("5.00.TEST.0000".to_owned()),
+        maturity: SccmExtractionProfileMaturity::Stable,
+    };
+
+    let generic = extract_keys(evidence, &caller_constructed);
+    assert!(generic.keys.is_empty());
+    assert!(generic
+        .gaps
+        .iter()
+        .all(|gap| gap.kind == SccmExtractionGapKind::UnvalidatedProfile));
+
+    let sealed = admitted
+        .extract_keys_for_artifact("fixture-policy")
+        .expect("admission owns stable profile authority");
+    assert_eq!(sealed.results()[0].keys.len(), 2);
+    assert!(sealed.results()[0]
+        .keys
+        .iter()
+        .all(|key| key.confidence == SccmKeyConfidence::Exact));
 }
 
 #[test]

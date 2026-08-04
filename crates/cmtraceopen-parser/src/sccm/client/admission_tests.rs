@@ -7,7 +7,10 @@ use super::admission::{
 };
 use super::{assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle};
 use crate::parser::ccm::{observe_bounded_scans, CcmBoundedScanObservation};
-use crate::sccm::{SccmArtifact, SccmCoverageState, SccmRole, SccmRotation};
+use crate::sccm::{
+    SccmArtifact, SccmCoverageState, SccmExtractionGapKind, SccmRole, SccmRotation,
+    SccmTimeOrderingState,
+};
 
 fn digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
@@ -429,7 +432,7 @@ fn admission_accepts_the_exact_cap_and_rejects_payload_overflow_before_reassessm
 }
 
 #[test]
-fn admission_rejects_noncaptured_incomplete_malformed_and_invalid_offset_payloads() {
+fn admission_rejects_unusable_bytes_but_retains_profile_and_time_gaps() {
     let mut capped = bundle();
     capped.artifacts[0].artifact.coverage = SccmCoverageState::Capped;
     capped.artifacts[0].fragment_complete = Some(false);
@@ -450,10 +453,16 @@ fn admission_rejects_noncaptured_incomplete_malformed_and_invalid_offset_payload
     unknown_profile.artifacts[0].artifact.configmgr_version = Some("5.00.9999.1000".to_owned());
     let unknown_profile_assessment =
         assess_client_intake(&unknown_profile).expect("unknown version remains canonical coverage");
-    assert!(
-        admit_client_evidence(&unknown_profile, &unknown_profile_assessment, &[payload()],)
-            .is_err()
-    );
+    let unknown =
+        admit_client_evidence(&unknown_profile, &unknown_profile_assessment, &[payload()])
+            .expect("unknown profile remains sealed evidence");
+    let unknown_extraction = unknown
+        .extract_keys_for_artifact("fixture-policy-agent")
+        .expect("unknown profile has a sealed extraction gap");
+    assert!(unknown_extraction.results()[0]
+        .gaps
+        .iter()
+        .any(|gap| gap.kind == SccmExtractionGapKind::UnvalidatedVersion));
 
     let malformed_bytes = b"not a CCM logical record".to_vec();
     let malformed_bundle = bundle_with_bound_policy(&malformed_bytes);
@@ -470,15 +479,21 @@ fn admission_rejects_noncaptured_incomplete_malformed_and_invalid_offset_payload
     let invalid_offset_bundle = bundle_with_bound_policy(&invalid_offset_bytes);
     let invalid_offset_assessment = assess_client_intake(&invalid_offset_bundle)
         .expect("invalid record time remains bound intake metadata");
-    assert!(admit_client_evidence(
+    let invalid_offset = admit_client_evidence(
         &invalid_offset_bundle,
         &invalid_offset_assessment,
         &[payload_from_bytes(
             "fixture-policy-agent",
             invalid_offset_bytes,
-        )]
+        )],
     )
-    .is_err());
+    .expect("non-comparable time remains sealed evidence");
+    assert_eq!(
+        invalid_offset.evidence().expect("sealed evidence")[0]
+            .timestamp
+            .ordering_state,
+        SccmTimeOrderingState::OffsetInvalid
+    );
 }
 
 #[test]
