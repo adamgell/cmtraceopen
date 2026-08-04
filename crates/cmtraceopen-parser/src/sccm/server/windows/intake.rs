@@ -1239,7 +1239,7 @@ fn normalize_artifact(
             }) {
                 return Err(SccmServerIntakeError::InvalidArtifact);
             }
-            if parse_errors > 0 {
+            if parse_errors > 0 && artifact.fragment_complete != Some(false) {
                 state = SccmCoverageState::ParseFailed;
             }
         } else {
@@ -2293,7 +2293,7 @@ fn normalize_source_version(
         return Ok(None);
     };
     let safe = if synthetic_fixture {
-        value == "5.00.TEST"
+        matches!(value, "5.00.TEST" | "5.00.TEST.0001")
     } else {
         source_version_is_profile_eligible(value, false)
             || opaque_sha256_handle(value, "cmtraceopen.version.sha256.v1:")
@@ -2408,6 +2408,7 @@ fn validate_artifact_annotations(
 
     match (artifact.truncated, artifact.fragment_complete) {
         (None, None) => {}
+        (Some(false), Some(false)) if artifact.capture_state == SccmCoverageState::Captured => {}
         (Some(true), Some(false)) if artifact.capture_state == SccmCoverageState::Capped => {}
         _ => return Err(SccmServerIntakeError::InvalidArtifact),
     }
@@ -2415,7 +2416,7 @@ fn validate_artifact_annotations(
 }
 
 fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> bool {
-    if synthetic_fixture && value == "5.00.TEST" {
+    if synthetic_fixture && matches!(value, "5.00.TEST" | "5.00.TEST.0001") {
         return true;
     }
     let mut parts = value.split('.');
@@ -2455,11 +2456,36 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "mp-policy-root-a-current"
                 | "mp-policy-root-b-current"
                 | "mp-policy-ts-20260729-235700"
+                | "incomplete-01-wcm"
+                | "incomplete-02-wsync-denied"
+                | "incomplete-03-wsus-absent"
+                | "metadata-failure-01-wcm"
+                | "metadata-failure-02-wsync"
+                | "rotation-01-current"
+                | "rotation-02-lo"
+                | "rotation-03-malformed"
                 | "sitecomp-current"
+                | "sup-setup-failure-01-setup"
                 | "sup-sync-capped"
                 | "sup-sync-current"
                 | "sup-wsus-health-skipped"
+                | "supplemental-01-wcm"
+                | "supplemental-02-wsync"
+                | "supplemental-03-wsus"
+                | "supplemental-04-wsus-health"
+                | "sync-retry-01-wcm"
+                | "sync-retry-02-wsync"
+                | "sync-success-01-wcm"
+                | "sync-success-02-wsync"
+                | "sync-success-03-wsus"
                 | "unknown-db-export"
+                | "unrelated-02-wcm"
+                | "unrelated-03-wsync"
+                | "unrelated-04-wsus"
+                | "wcm-failure-01-wcm"
+                | "wsus-failure-01-wcm"
+                | "wsus-failure-02-wsync"
+                | "wsus-failure-03-wsus"
                 | "z-site-status"
         );
     }
@@ -2678,6 +2704,7 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
                     "synthetic:subject:dp-01"
                         | "synthetic:subject:dp-02"
                         | "synthetic:subject:sup-01"
+                        | "safe:sup:lab-sup-01"
                 )
             }
             _ => false,

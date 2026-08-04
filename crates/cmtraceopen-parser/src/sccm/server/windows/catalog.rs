@@ -106,7 +106,7 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
     SccmServerSourceSpec {
         source_id: "server-sup-sync",
         producer_role: SccmRole::SoftwareUpdatePoint,
-        workflow_subject_role: None,
+        workflow_subject_role: Some(SccmRole::SoftwareUpdatePoint),
         logical_names: &["wsusCtrl", "supSetup"],
         explicit_basename: None,
         source_kind: SccmServerSourceKind::CcmLog,
