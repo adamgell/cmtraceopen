@@ -623,6 +623,12 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
         family: SccmArtifactFamily::DistributionPoint,
     },
     CatalogSpec {
+        basename: "SMSdpmon",
+        logical_name: "smsDpmon",
+        role: SccmRole::DistributionPoint,
+        family: SccmArtifactFamily::DistributionPoint,
+    },
+    CatalogSpec {
         basename: "PullDP",
         logical_name: "pullDp",
         role: SccmRole::DistributionPoint,

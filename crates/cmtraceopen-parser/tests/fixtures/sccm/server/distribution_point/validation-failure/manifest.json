@@ -22,7 +22,7 @@
       "collectedUtc": "2026-07-30T12:20:00Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
-      "bytesCopied": 698,
+      "bytesCopied": 642,
       "relativePath": "evidence/server-dp-distribution/site/current/distmgr.log"
     },
     {
@@ -42,7 +42,7 @@
       "collectedUtc": "2026-07-30T12:20:00Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
-      "bytesCopied": 351,
+      "bytesCopied": 323,
       "relativePath": "evidence/server-dp-distribution/site/current/PkgXferMgr.log"
     },
     {
@@ -62,7 +62,7 @@
       "collectedUtc": "2026-07-30T12:20:00Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
-      "bytesCopied": 345,
+      "bytesCopied": 317,
       "relativePath": "evidence/server-dp-distribution/dp/current/SMSDPProv.log"
     }
   ]

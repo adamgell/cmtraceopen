@@ -1,81 +1,420 @@
 {
-  "contractState": "proposedPendingReviewed318And335",
-  "workflow": "distributionPoint",
-  "scenario": "content-version-mismatch",
-  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
-  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
-  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
-  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
-  "coverage": [
-    {"artifactId": "dp-version-01-distmgr", "state": "captured"},
-    {"artifactId": "dp-version-02-pkgxfer", "state": "captured"},
-    {"artifactId": "dp-version-03-provider", "state": "captured"},
-    {"artifactId": "dp-version-04-provider-dp02", "state": "captured"}
-  ],
-  "transactions": [
+  "artifactRequests": [
     {
-      "transactionId": "dp:LAB00005:content-epsilon:v1:safe:dp:lab-dp-01",
-      "key": {"packageId": "LAB00005", "contentId": "content-epsilon", "contentVersion": 1, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
-      "topologyCompatibility": "exact",
-      "correlationEligible": true,
-      "state": "succeeded",
-      "classification": "success",
-      "confidence": "high",
-      "confidenceCeiling": "high",
-      "lastSuccessfulPhase": "serveOrReport",
-      "nextSourceId": null,
-      "coverageGapArtifactIds": [],
-      "observations": [
-        {"observationId": "01-v1-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 1, "endLine": 1}]},
-        {"observationId": "02-v1-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 2, "endLine": 2}]},
-        {"observationId": "03-v1-transfer", "phase": "transfer", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 1, "endLine": 1}]},
-        {"observationId": "04-v1-validate", "phase": "validate", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-03-provider", "startLine": 1, "endLine": 1}]},
-        {"observationId": "05-v1-available", "phase": "makeAvailable", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-03-provider", "startLine": 2, "endLine": 2}]},
-        {"observationId": "06-v1-report", "phase": "serveOrReport", "disposition": "succeeded", "terminal": true, "evidence": [{"artifactId": "dp-version-03-provider", "startLine": 3, "endLine": 3}]}
-      ]
-    },
-    {
-      "transactionId": "dp:LAB00005:content-epsilon:v1:safe:dp:lab-dp-02",
-      "key": {"packageId": "LAB00005", "contentId": "content-epsilon", "contentVersion": 1, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-02", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
-      "topologyCompatibility": "exact",
-      "correlationEligible": true,
-      "state": "succeeded",
-      "classification": "success",
-      "confidence": "high",
-      "confidenceCeiling": "high",
-      "lastSuccessfulPhase": "serveOrReport",
-      "nextSourceId": null,
-      "coverageGapArtifactIds": [],
-      "observations": [
-        {"observationId": "01-dp02-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 3, "endLine": 3}]},
-        {"observationId": "02-dp02-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 4, "endLine": 4}]},
-        {"observationId": "03-dp02-transfer", "phase": "transfer", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 2, "endLine": 2}]},
-        {"observationId": "04-dp02-validate", "phase": "validate", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 1, "endLine": 1}]},
-        {"observationId": "05-dp02-available", "phase": "makeAvailable", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 2, "endLine": 2}]},
-        {"observationId": "06-dp02-report", "phase": "serveOrReport", "disposition": "succeeded", "terminal": true, "evidence": [{"artifactId": "dp-version-04-provider-dp02", "startLine": 3, "endLine": 3}]}
-      ]
-    },
-    {
-      "transactionId": "dp:LAB00005:content-epsilon:v2:safe:dp:lab-dp-01",
-      "key": {"packageId": "LAB00005", "contentId": "content-epsilon", "contentVersion": 2, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
-      "topologyCompatibility": "exact",
-      "correlationEligible": true,
-      "state": "deferred",
-      "classification": "blockedOrDeferred",
-      "confidence": "medium",
-      "confidenceCeiling": "medium",
-      "lastSuccessfulPhase": "distribute",
-      "nextSourceId": null,
-      "coverageGapArtifactIds": [],
-      "observations": [
-        {"observationId": "01-v2-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 5, "endLine": 5}]},
-        {"observationId": "02-v2-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-version-01-distmgr", "startLine": 6, "endLine": 6}]},
-        {"observationId": "03-v2-transfer-retry", "phase": "transfer", "disposition": "retrying", "terminal": false, "evidence": [{"artifactId": "dp-version-02-pkgxfer", "startLine": 3, "endLine": 3}]}
-      ]
+      "logicalId": "pkgXferMgr",
+      "reason": "Collect the complete PkgXferMgr.log file.",
+      "role": "siteServer"
     }
   ],
-  "sourceLocalObservations": [],
-  "artifactRequests": [],
-  "clientCausalClaims": [],
-  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "success",
+      "confidence": "medium",
+      "contentVersionMismatch": true,
+      "evidence": [
+        {
+          "artifactId": "dp-version-01-distmgr",
+          "entryId": "dp-version-01-distmgr:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-version-01-distmgr",
+          "entryId": "dp-version-01-distmgr:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "dp-version-02-pkgxfer",
+          "entryId": "dp-version-02-pkgxfer:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-version-03-provider",
+          "entryId": "dp-version-03-provider:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-version-03-provider",
+          "entryId": "dp-version-03-provider:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-epsilon",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:dp-01",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00005",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "makeAvailable",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-01-distmgr",
+            "entryId": "dp-version-01-distmgr:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:00.000",
+            "utcMillis": 1785413100000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-01-distmgr",
+            "entryId": "dp-version-01-distmgr:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:01.000",
+            "utcMillis": 1785413101000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-02-pkgxfer",
+            "entryId": "dp-version-02-pkgxfer:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:02.000",
+            "utcMillis": 1785413102000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-03-provider",
+            "entryId": "dp-version-03-provider:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "validate",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:03.000",
+            "utcMillis": 1785413103000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-03-provider",
+            "entryId": "dp-version-03-provider:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "makeAvailable",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:04.000",
+            "utcMillis": 1785413104000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Success",
+      "state": "succeeded",
+      "stopPhase": null,
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00005:content=content-epsilon:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+    },
+    {
+      "classification": "success",
+      "confidence": "medium",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "dp-version-05-distmgr-dp02",
+          "entryId": "dp-version-05-distmgr-dp02:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-version-05-distmgr-dp02",
+          "entryId": "dp-version-05-distmgr-dp02:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "dp-version-06-pkgxfer-dp02",
+          "entryId": "dp-version-06-pkgxfer-dp02:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-version-04-provider-dp02",
+          "entryId": "dp-version-04-provider-dp02:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-version-04-provider-dp02",
+          "entryId": "dp-version-04-provider-dp02:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-epsilon",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:dp-02",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00005",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "makeAvailable",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-05-distmgr-dp02",
+            "entryId": "dp-version-05-distmgr-dp02:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:00.000",
+            "utcMillis": 1785413400000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-05-distmgr-dp02",
+            "entryId": "dp-version-05-distmgr-dp02:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:01.000",
+            "utcMillis": 1785413401000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-06-pkgxfer-dp02",
+            "entryId": "dp-version-06-pkgxfer-dp02:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:02.000",
+            "utcMillis": 1785413402000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-04-provider-dp02",
+            "entryId": "dp-version-04-provider-dp02:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "validate",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:03.000",
+            "utcMillis": 1785413403000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-04-provider-dp02",
+            "entryId": "dp-version-04-provider-dp02:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "makeAvailable",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:04.000",
+            "utcMillis": 1785413404000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Success",
+      "state": "succeeded",
+      "stopPhase": null,
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00005:content=content-epsilon:content-version=1:dp=synthetic:subject:dp-02:profile=dp-server-5.00.test-v1:profile-version=1"
+    },
+    {
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "contentVersionMismatch": true,
+      "evidence": [
+        {
+          "artifactId": "dp-version-01-distmgr",
+          "entryId": "dp-version-01-distmgr:3-3",
+          "lineEnd": 3,
+          "lineStart": 3
+        },
+        {
+          "artifactId": "dp-version-01-distmgr",
+          "entryId": "dp-version-01-distmgr:4-4",
+          "lineEnd": 4,
+          "lineStart": 4
+        },
+        {
+          "artifactId": "dp-version-02-pkgxfer",
+          "entryId": "dp-version-02-pkgxfer:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-epsilon",
+        "contentVersion": 2,
+        "distributionPointHandle": "synthetic:subject:dp-01",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00005",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "distribute",
+      "nextArtifact": {
+        "logicalId": "pkgXferMgr",
+        "reason": "Collect the complete PkgXferMgr.log file.",
+        "role": "siteServer"
+      },
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-01-distmgr",
+            "entryId": "dp-version-01-distmgr:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:15:00.000",
+            "utcMillis": 1785413700000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-version-01-distmgr",
+            "entryId": "dp-version-01-distmgr:4-4",
+            "lineEnd": 4,
+            "lineStart": 4
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:15:01.000",
+            "utcMillis": 1785413701000
+          }
+        },
+        {
+          "disposition": "retrying",
+          "evidence": {
+            "artifactId": "dp-version-02-pkgxfer",
+            "entryId": "dp-version-02-pkgxfer:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:15:02.000",
+            "utcMillis": 1785413702000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Warning",
+      "state": "retrying",
+      "stopPhase": "transfer",
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00005:content=content-epsilon:content-version=2:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
 }

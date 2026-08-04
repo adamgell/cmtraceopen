@@ -22,7 +22,7 @@
       "collectedUtc": "2026-07-30T12:20:00Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
-      "bytesCopied": 696,
+      "bytesCopied": 640,
       "relativePath": "evidence/server-dp-distribution/site/current/distmgr.log"
     },
     {
@@ -42,7 +42,7 @@
       "collectedUtc": "2026-07-30T12:20:00Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
-      "bytesCopied": 350,
+      "bytesCopied": 322,
       "relativePath": "evidence/server-dp-distribution/site/current/PkgXferMgr.log"
     },
     {
@@ -62,7 +62,7 @@
       "collectedUtc": "2026-07-30T12:20:00Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
-      "bytesCopied": 701,
+      "bytesCopied": 645,
       "relativePath": "evidence/server-dp-distribution/dp/current/SMSDPProv.log"
     },
     {
@@ -82,7 +82,7 @@
       "collectedUtc": "2026-07-30T12:20:00Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
-      "bytesCopied": 350,
+      "bytesCopied": 322,
       "relativePath": "evidence/server-dp-serve/dp/current/SMSdpmon.log"
     }
   ]

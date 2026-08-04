@@ -2,16 +2,16 @@
 
 This directory is test-only input for Issue `#329`.
 
-Site-server logs are physical captures, not per-DP projections. The multi-DP
-scenario therefore stores `distmgr.log` and `PkgXferMgr.log` once and binds
-exact DP/content/version identity from each normalized logical CCM record.
+Each site-server artifact has one sealed Distribution Point workflow subject.
+The multi-DP scenario therefore uses separate synthetic captures per subject;
+one physical artifact never becomes authority for two DPs.
 
 - Every evidence file is authored synthetic CCM text and contains the literal
   `SYNTHETIC FIXTURE` marker.
 - `manifest.json` records physical producer, workflow subject, coverage,
   rotation, bounded path, encoding, and exact byte-count provenance.
-- `expected.json` is a preparation label, not a frozen production API.
-- Exact package/content/version/DP/profile keys keep versions and DPs
+- `expected.json` is the frozen whole-output oracle from the exported analyzer.
+- Exact package/content/version/DP/extraction-profile keys keep versions and DPs
   independent.
 - Case-folded path fingerprints stay unique, sanitized roots and rotated
   basenames stay synthetic, and topology arrays retain only typed declared
@@ -26,6 +26,9 @@ exact DP/content/version identity from each normalized logical CCM record.
 - Client records and timestamps alone never establish a DP transaction or
   cross-side cause.
 
+The preparation manifests retain the canonical intake contract's required
+`proposalOnly` synthetic marker. It is never emitted as an analyzer claim.
 The focused Rust contract resolves every manifest path, runs captured CCM
 files through the existing SCCM logical-record envelope, verifies normalized
-timestamp/line provenance, and rejects adversarial mutations.
+timestamp/line provenance, compares every output field, and rejects
+adversarial mutations.

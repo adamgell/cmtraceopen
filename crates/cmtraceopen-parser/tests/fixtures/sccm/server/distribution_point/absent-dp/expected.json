@@ -1,20 +1,50 @@
 {
-  "contractState": "proposedPendingReviewed318And335",
-  "workflow": "distributionPoint",
-  "scenario": "absent-dp",
-  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
-  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
-  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
-  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
-  "coverage": [
-    {"artifactId": "dp-absent-01-distmgr", "state": "absent"},
-    {"artifactId": "dp-absent-02-provider", "state": "absent"}
-  ],
-  "transactions": [],
-  "sourceLocalObservations": [],
   "artifactRequests": [
-    {"sourceId": "server-dp-distribution", "reasonCode": "coverageAbsent"}
+    {
+      "logicalId": "distmgr",
+      "reason": "Collect the complete distmgr.log file.",
+      "role": "siteServer"
+    },
+    {
+      "logicalId": "pkgXferMgr",
+      "reason": "Collect the complete PkgXferMgr.log file.",
+      "role": "siteServer"
+    },
+    {
+      "logicalId": "smsDpProv",
+      "reason": "Collect the complete SMSDPProv.log file.",
+      "role": "distributionPoint"
+    }
   ],
-  "clientCausalClaims": [],
-  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+  "coverageGaps": [
+    {
+      "artifactIds": [
+        "dp-absent-02-provider"
+      ],
+      "producerRole": "distributionPoint",
+      "reason": "Distribution Point source coverage is absent; recollect the declared source without changing its state.",
+      "sourceId": "server-dp-distribution",
+      "state": "absent",
+      "workflowSubjectRole": null
+    },
+    {
+      "artifactIds": [
+        "dp-absent-01-distmgr"
+      ],
+      "producerRole": "siteServer",
+      "reason": "Distribution Point source coverage is absent; recollect the declared source without changing its state.",
+      "sourceId": "server-dp-distribution",
+      "state": "absent",
+      "workflowSubjectRole": "distributionPoint"
+    }
+  ],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [],
+  "workflow": "distributionPointContent"
 }

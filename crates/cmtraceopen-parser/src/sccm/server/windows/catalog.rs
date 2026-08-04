@@ -95,6 +95,15 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         supplemental: false,
     },
     SccmServerSourceSpec {
+        source_id: "server-dp-serve",
+        producer_role: SccmRole::DistributionPoint,
+        workflow_subject_role: None,
+        logical_names: &["smsDpmon"],
+        explicit_basename: None,
+        source_kind: SccmServerSourceKind::CcmLog,
+        supplemental: true,
+    },
+    SccmServerSourceSpec {
         source_id: "server-sup-sync",
         producer_role: SccmRole::SiteServer,
         workflow_subject_role: Some(SccmRole::SoftwareUpdatePoint),
@@ -174,7 +183,7 @@ pub(crate) fn expected_family(source_id: &str) -> Option<SccmArtifactFamily> {
         "server-mp-auth" | "server-mp-policy" | "server-mp-iis" => {
             SccmArtifactFamily::ManagementPoint
         }
-        "server-dp-distribution" => SccmArtifactFamily::DistributionPoint,
+        "server-dp-distribution" | "server-dp-serve" => SccmArtifactFamily::DistributionPoint,
         "server-sup-sync" | "server-sup-wsus" => SccmArtifactFamily::SoftwareUpdatePoint,
         _ => return None,
     })

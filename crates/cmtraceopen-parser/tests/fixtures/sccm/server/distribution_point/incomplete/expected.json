@@ -1,40 +1,131 @@
 {
-  "contractState": "proposedPendingReviewed318And335",
-  "workflow": "distributionPoint",
-  "scenario": "incomplete",
-  "stateChain": ["receiveContent", "distribute", "transfer", "validate", "makeAvailable", "serveOrReport"],
-  "analysisContract": {"independentReducer": true, "consumesClientOutput": false, "crossSideCorrelationPerformed": false},
-  "extractionProfile": {"selectionState": "selectedSynthetic", "profileId": "dp-server-5.00.test-v1", "validatedRole": "distributionPoint"},
-  "roleAssessment": {"distributionPointObserved": true, "roleAbsentInferred": false, "missingDefaultPathInterpretation": "sourceCoverageOnly"},
-  "coverage": [
-    {"artifactId": "dp-incomplete-01-distmgr", "state": "captured"},
-    {"artifactId": "dp-incomplete-02-pkgxfer-denied", "state": "accessDenied"},
-    {"artifactId": "dp-incomplete-03-provider-absent", "state": "absent"}
-  ],
-  "transactions": [
+  "artifactRequests": [
     {
-      "transactionId": "dp:LAB00007:content-eta:v1:safe:dp:lab-dp-01",
-      "key": {"packageId": "LAB00007", "contentId": "content-eta", "contentVersion": 1, "siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "confidence": "exact", "extractionProfileId": "dp-server-5.00.test-v1"},
-      "topologyCompatibility": "exact",
-      "correlationEligible": true,
-      "state": "incomplete",
-      "classification": "insufficientEvidence",
-      "confidence": "low",
-      "confidenceCeiling": "low",
-      "lastSuccessfulPhase": "distribute",
-      "nextSourceId": "server-dp-distribution",
-      "coverageGapArtifactIds": ["dp-incomplete-02-pkgxfer-denied", "dp-incomplete-03-provider-absent"],
-      "observations": [
-        {"observationId": "01-receive", "phase": "receiveContent", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-incomplete-01-distmgr", "startLine": 1, "endLine": 1}]},
-        {"observationId": "02-distribute", "phase": "distribute", "disposition": "succeeded", "terminal": false, "evidence": [{"artifactId": "dp-incomplete-01-distmgr", "startLine": 2, "endLine": 2}]}
-      ]
+      "logicalId": "distmgr",
+      "reason": "Collect the complete distmgr.log file.",
+      "role": "siteServer"
+    },
+    {
+      "logicalId": "pkgXferMgr",
+      "reason": "Collect the complete PkgXferMgr.log file.",
+      "role": "siteServer"
+    },
+    {
+      "logicalId": "smsDpProv",
+      "reason": "Collect the complete SMSDPProv.log file.",
+      "role": "distributionPoint"
     }
   ],
-  "sourceLocalObservations": [],
-  "artifactRequests": [
-    {"sourceId": "server-dp-distribution", "reasonCode": "coverageAbsent"},
-    {"sourceId": "server-dp-distribution", "reasonCode": "coverageAccessDenied"}
+  "coverageGaps": [
+    {
+      "artifactIds": [
+        "dp-incomplete-03-provider-absent"
+      ],
+      "producerRole": "distributionPoint",
+      "reason": "Distribution Point source coverage is absent; recollect the declared source without changing its state.",
+      "sourceId": "server-dp-distribution",
+      "state": "absent",
+      "workflowSubjectRole": null
+    },
+    {
+      "artifactIds": [
+        "dp-incomplete-02-pkgxfer-denied"
+      ],
+      "producerRole": "siteServer",
+      "reason": "Distribution Point source coverage is accessDenied; recollect the declared source without changing its state.",
+      "sourceId": "server-dp-distribution",
+      "state": "accessDenied",
+      "workflowSubjectRole": "distributionPoint"
+    }
   ],
-  "clientCausalClaims": [],
-  "correlationHandoff": {"issue": "#333", "performed": false, "timeOnlyEligible": false}
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "dp-incomplete-01-distmgr",
+          "entryId": "dp-incomplete-01-distmgr:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-incomplete-01-distmgr",
+          "entryId": "dp-incomplete-01-distmgr:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-eta",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:dp-01",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00007",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "distribute",
+      "nextArtifact": {
+        "logicalId": "pkgXferMgr",
+        "reason": "Collect the complete PkgXferMgr.log file.",
+        "role": "siteServer"
+      },
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-incomplete-01-distmgr",
+            "entryId": "dp-incomplete-01-distmgr:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:08:00.000",
+            "utcMillis": 1785413280000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-incomplete-01-distmgr",
+            "entryId": "dp-incomplete-01-distmgr:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:08:01.000",
+            "utcMillis": 1785413281000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Warning",
+      "state": "incomplete",
+      "stopPhase": "transfer",
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00007:content=content-eta:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
 }

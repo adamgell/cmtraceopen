@@ -22,7 +22,7 @@
       "collectedUtc": "2026-07-30T12:20:00Z",
       "encoding": "utf-8",
       "collectionLimit": {"byteLimit": 4096, "limitApplied": false},
-      "bytesCopied": 692,
+      "bytesCopied": 636,
       "relativePath": "evidence/server-dp-distribution/site/current/distmgr.log"
     }
   ]

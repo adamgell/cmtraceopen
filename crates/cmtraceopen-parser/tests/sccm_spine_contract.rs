@@ -6980,6 +6980,11 @@ fn catalog_requires_exact_producer_roles_for_server_workflow_sources() {
             SccmArtifactFamily::DistributionPoint,
         ),
         (
+            "SMSdpmon.log",
+            SccmRole::DistributionPoint,
+            SccmArtifactFamily::DistributionPoint,
+        ),
+        (
             "PullDP.log",
             SccmRole::DistributionPoint,
             SccmArtifactFamily::DistributionPoint,
@@ -7487,6 +7492,14 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             "SMSDPProv.log",
             SccmRole::DistributionPoint,
             "smsDpProv",
+            SccmArtifactFamily::DistributionPoint,
+            true,
+            true,
+        ),
+        (
+            "SMSdpmon.log",
+            SccmRole::DistributionPoint,
+            "smsDpmon",
             SccmArtifactFamily::DistributionPoint,
             true,
             true,
