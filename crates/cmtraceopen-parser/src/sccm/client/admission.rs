@@ -363,8 +363,10 @@ pub fn admit_client_evidence(
         .collect::<BTreeMap<_, _>>();
     let mut source_coverage_by_basename = BTreeMap::new();
     for fragment in canonical.groups.iter().flat_map(|group| &group.fragments) {
+        let canonical_basename =
+            classify_artifact_name(&fragment.basename, SccmRole::Client).basename;
         source_coverage_by_basename
-            .entry(fragment.basename.clone())
+            .entry(canonical_basename)
             .and_modify(|coverage| {
                 if source_coverage_priority(&fragment.coverage) > source_coverage_priority(coverage)
                 {
@@ -374,8 +376,10 @@ pub fn admit_client_evidence(
             .or_insert_with(|| fragment.coverage.clone());
     }
     for capture_gap in &canonical.capture_gaps {
+        let canonical_basename =
+            classify_artifact_name(&capture_gap.basename, SccmRole::Client).basename;
         source_coverage_by_basename
-            .entry(capture_gap.basename.clone())
+            .entry(canonical_basename)
             .and_modify(|coverage| {
                 if source_coverage_priority(&capture_gap.coverage)
                     > source_coverage_priority(coverage)
@@ -418,7 +422,7 @@ pub fn admit_client_evidence(
         .capture_gaps
         .iter()
         .filter(|gap| is_supported_diagnostic_source(&gap.basename))
-        .map(|gap| gap.basename.clone())
+        .map(|gap| classify_artifact_name(&gap.basename, SccmRole::Client).basename)
         .collect::<BTreeSet<_>>();
     unavailable_source_basenames.extend(
         canonical
@@ -430,7 +434,7 @@ pub fn admit_client_evidence(
                     && (fragment.coverage != SccmCoverageState::Captured
                         || fragment.fragment_complete != Some(true))
             })
-            .map(|fragment| fragment.basename.clone()),
+            .map(|fragment| classify_artifact_name(&fragment.basename, SccmRole::Client).basename),
     );
     let mut unbound_complete_captures = BTreeSet::new();
     for fragment in &canonical.physical_artifacts {
@@ -441,19 +445,19 @@ pub fn admit_client_evidence(
         if fragment.coverage != SccmCoverageState::Captured
             || fragment.fragment_complete != Some(true)
         {
-            unavailable_source_basenames.insert(fragment.basename.clone());
+            unavailable_source_basenames.insert(classified.basename.clone());
             continue;
         }
         if fragment.declared_byte_length.is_none() || fragment.content_sha256.is_none() {
             unbound_complete_captures.insert(fragment.artifact_id.as_str());
-            unavailable_source_basenames.insert(fragment.basename.clone());
+            unavailable_source_basenames.insert(classified.basename.clone());
             continue;
         }
         if !has_supported_payload_encoding(fragment) {
-            unavailable_source_basenames.insert(fragment.basename.clone());
+            unavailable_source_basenames.insert(classified.basename.clone());
             continue;
         }
-        source_basename_by_artifact.insert(fragment.artifact_id.clone(), fragment.basename.clone());
+        source_basename_by_artifact.insert(fragment.artifact_id.clone(), classified.basename);
         eligible.insert(fragment.artifact_id.clone(), (fragment, classified.family));
     }
     let admitted_source_groups = canonical

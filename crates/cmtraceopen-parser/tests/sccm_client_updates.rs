@@ -69,6 +69,16 @@ fn admitted(
     let mut artifacts = Vec::new();
     let mut payloads = Vec::new();
     for record in records {
+        let rotation = if record.basename.ends_with(".lo_") {
+            SccmRotation::LoUnderscore
+        } else {
+            SccmRotation::Current
+        };
+        let rotation_segment = if matches!(rotation, SccmRotation::LoUnderscore) {
+            "lo"
+        } else {
+            "current"
+        };
         let artifact_id = format!("fixture-{}", record.id);
         let path_fingerprint = format!("synthetic-{}", record.id);
         let time = format!("{}+000", record.time);
@@ -88,14 +98,14 @@ fn admitted(
                 role: SccmRole::Client,
                 configmgr_version: Some("5.00.9128.1000".to_owned()),
                 collected_at_utc: Some("2026-07-30T23:59:59Z".to_owned()),
-                rotation: SccmRotation::Current,
+                rotation,
                 coverage: SccmCoverageState::Captured,
                 encoding: Some("utf-8".to_owned()),
             },
             path_fingerprint: Some(path_fingerprint),
             rotation_lineage: None,
             relative_path: Some(format!(
-                "evidence/{}/current/{}",
+                "evidence/{}/{rotation_segment}/{}",
                 record.group, record.basename
             )),
             fragment_complete: Some(true),
@@ -607,7 +617,7 @@ fn canonical_capture_gap_keeps_the_transaction_incomplete() {
         record.message, record.time, record.component
     )
     .into_bytes();
-    let bundle = SccmClientIntakeBundle {
+    let mut bundle = SccmClientIntakeBundle {
         artifacts: vec![SccmClientIntakeArtifact {
             artifact: SccmArtifact {
                 artifact_id: artifact_id.clone(),
@@ -641,7 +651,10 @@ fn canonical_capture_gap_keeps_the_transaction_incomplete() {
     let admitted = admit_client_evidence(
         &bundle,
         &assessment,
-        &[SccmClientCapturedPayload::new(artifact_id, bytes).expect("bounded payload")],
+        &[
+            SccmClientCapturedPayload::new(artifact_id.clone(), bytes.clone())
+                .expect("bounded payload"),
+        ],
     )
     .expect("sealed evidence with canonical gap");
 
@@ -655,6 +668,45 @@ fn canonical_capture_gap_keeps_the_transaction_incomplete() {
         SccmClientUpdatePhase::Install
     );
     assert_eq!(analysis.findings.len(), 1);
+
+    bundle.capture_gaps.clear();
+    bundle.artifacts.push(SccmClientIntakeArtifact {
+        artifact: SccmArtifact {
+            artifact_id: "fixture-update-b".to_owned(),
+            display_name: "ScanAgent.lo_".to_owned(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: Some("5.00.9128.1000".to_owned()),
+            collected_at_utc: Some("2026-07-30T23:59:59Z".to_owned()),
+            rotation: SccmRotation::LoUnderscore,
+            coverage: SccmCoverageState::Captured,
+            encoding: Some("utf-8".to_owned()),
+        },
+        path_fingerprint: Some("synthetic-update-b".to_owned()),
+        rotation_lineage: None,
+        relative_path: Some("evidence/client-updates/lo/ScanAgent.lo_".to_owned()),
+        fragment_complete: Some(false),
+        declared_byte_length: None,
+        content_sha256: None,
+    });
+    let assessment = assess_client_intake(&bundle).expect("canonical rotation gap intake");
+    let admitted = admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[SccmClientCapturedPayload::new(artifact_id, bytes).expect("bounded payload")],
+    )
+    .expect("sealed evidence with canonical rotation gap");
+    let analysis = analyze_client_updates(&admitted).expect("rotation gap analysis");
+    let updates = analysis
+        .coverage
+        .iter()
+        .find(|coverage| coverage.logical_artifact_id == "client-updates")
+        .expect("updates coverage");
+    assert_eq!(
+        serde_json::to_value(updates).expect("coverage")["state"],
+        "partial"
+    );
 }
 
 #[test]
@@ -670,6 +722,22 @@ fn partial_rotation_is_reported_as_partial_coverage() {
         serde_json::to_value(updates).expect("coverage")["state"],
         "partial"
     );
+}
+
+#[test]
+fn complete_rotated_source_uses_its_canonical_basename_authority() {
+    let rotated = Record {
+        id: "update-a",
+        basename: "ScanAgent.lo_",
+        group: "client-updates",
+        component: "ScanAgent",
+        time: "09:30:00.000",
+        message: keyed(UPDATE_ID, CI_ID, "Scan succeeded"),
+    };
+
+    let analysis = analyze_client_updates(&admitted(&[rotated])).expect("rotated update analysis");
+    assert_eq!(analysis.transactions.len(), 1);
+    assert_eq!(analysis.transactions[0].phase, SccmClientUpdatePhase::Scan);
 }
 
 #[test]
