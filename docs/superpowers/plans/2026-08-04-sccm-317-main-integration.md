@@ -4,7 +4,7 @@
 
 **Goal:** Integrate the independently accepted SCCM diagnostics candidate with current `origin/main`, preserve both product lines at the two conflicting seams, and produce a newly validated frozen SHA for PR #490.
 
-**Architecture:** Merge `origin/main` into the dedicated SCCM worktree so the reviewed SCCM history remains inspectable. Keep the parser crate's new private wire module alongside the public SCCM module, and accept main's application-wide elevation replacement by deleting the obsolete ESP-specific relaunch module. Re-run the complete cross-platform gate and obtain independent review of the new merge SHA before changing PR readiness.
+**Architecture:** Merge `origin/main` into the dedicated SCCM worktree so the reviewed SCCM history remains inspectable. Keep the parser crate's new private wire module alongside the public SCCM module, and accept main's application-wide elevation replacement by deleting the obsolete ESP-specific relaunch module. Re-run the complete cross-platform gate, compare formatting against main's inherited baseline, and obtain independent review of the new merge SHA before changing PR readiness.
 
 **Tech Stack:** Git, Rust/Cargo, Tauri v2, TypeScript, GitHub Actions
 
@@ -150,12 +150,12 @@ Run:
 
 ```bash
 npx tsc --noEmit
-cargo fmt --all -- --check
+rustfmt --edition 2021 --check --config skip_children=true crates/cmtraceopen-parser/src/lib.rs
 git diff --check
 test -z "$(git status --porcelain)"
 ```
 
-Expected: every command exits `0` and the worktree remains clean.
+Expected: every command exits `0` and the worktree remains clean. A detached `origin/main` comparison establishes that repo-wide `cargo fmt --all -- --check` already fails on inherited Jamf, Intune, ESP, and elevation files; do not churn those unrelated files in this integration.
 
 ### Task 6: Freeze, review, and publish the successor
 
