@@ -15,6 +15,9 @@ export function useFileWatcher() {
   const openFilePath = useLogStore((s) => s.openFilePath);
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const aggregateFiles = useLogStore((s) => s.aggregateFiles);
+  const aggregateTailGeneration = useLogStore(
+    (s) => s.aggregateTailGeneration,
+  );
   const formatDetected = useLogStore((s) => s.formatDetected);
   const isPaused = useLogStore((s) => s.isPaused);
   const appendEntries = useLogStore((s) => s.appendEntries);
@@ -30,7 +33,10 @@ export function useFileWatcher() {
   const setParserSelection = useLogStore((s) => s.setParserSelection);
   const setTotalLines = useLogStore((s) => s.setTotalLines);
   const aggregateTailKey = JSON.stringify(
-    aggregateFiles.map(({ filePath, byteOffset }) => [filePath, byteOffset]),
+    [
+      aggregateTailGeneration,
+      aggregateFiles.map(({ filePath, byteOffset }) => [filePath, byteOffset]),
+    ],
   );
 
   // Start/stop tailing when file changes

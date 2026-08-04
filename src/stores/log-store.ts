@@ -578,6 +578,8 @@ interface LogState {
   selectedSourceFilePath: string | null;
   /** Included files when the active source is loaded as an aggregate folder stream. */
   aggregateFiles: AggregateParsedFileResult[];
+  /** Changes only when an aggregate source is explicitly loaded or replaced. */
+  aggregateTailGeneration: number;
   /** User-visible source loading/selection state. */
   sourceStatus: SourceStatus;
   highlightText: string;
@@ -774,6 +776,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   knownSourceToolbarFamilies: [],
   selectedSourceFilePath: null,
   aggregateFiles: [],
+  aggregateTailGeneration: 0,
   sourceStatus: {
     kind: "idle",
     message: "Ready",
@@ -1061,7 +1064,11 @@ export const useLogStore = create<LogState>((set, get) => ({
   setParserSelection: (selection) => set({ parserSelection: selection }),
   setTotalLines: (count) => set({ totalLines: count }),
   setSourceOpenMode: (mode) => set({ sourceOpenMode: mode }),
-  setAggregateFiles: (files) => set({ aggregateFiles: files }),
+  setAggregateFiles: (files) =>
+    set((state) => ({
+      aggregateFiles: files,
+      aggregateTailGeneration: state.aggregateTailGeneration + 1,
+    })),
   setOpenFilePath: (path) =>
     set({ openFilePath: path, selectedSourceFilePath: path }),
   setActiveSource: (source) => set({ activeSource: source }),
@@ -1135,6 +1142,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       openFilePath: null,
       selectedSourceFilePath: null,
       aggregateFiles: [],
+      aggregateTailGeneration: 0,
       activeColumns: DEFAULT_COLUMNS,
       byteOffset: 0,
       guidNameMap: {},
@@ -1163,6 +1171,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       knownSourceToolbarFamilies: [],
       selectedSourceFilePath: null,
       aggregateFiles: [],
+      aggregateTailGeneration: 0,
       activeColumns: DEFAULT_COLUMNS,
       sourceStatus: {
         kind: "idle",

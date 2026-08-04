@@ -365,6 +365,39 @@ describe("useFileWatcher tail start state", () => {
     expect(stopTailMock).not.toHaveBeenCalled();
   });
 
+  it("restarts aggregate tails when the same files are explicitly reloaded", async () => {
+    const aggregateFiles = [
+      {
+        filePath: "/logs/a.log",
+        totalLines: 1,
+        parseErrors: 0,
+        fileSize: 512,
+        byteOffset: 512,
+      },
+    ];
+    useLogStore.setState({
+      sourceOpenMode: "aggregate-folder",
+      formatDetected: "Timestamped",
+      totalLines: 1,
+      aggregateFiles,
+      entries: [
+        {
+          ...multilineEntry(),
+          filePath: "/logs/a.log",
+          message: "[Sync] started",
+        },
+      ],
+    });
+
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(startTailMock).toHaveBeenCalledOnce());
+
+    act(() => useLogStore.getState().setAggregateFiles(structuredClone(aggregateFiles)));
+
+    await waitFor(() => expect(startTailMock).toHaveBeenCalledTimes(2));
+    expect(stopTailMock).toHaveBeenCalledWith("/logs/a.log");
+  });
+
   it("retains aggregate parse gaps and empty-reset physical coverage", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     useLogStore.setState({
