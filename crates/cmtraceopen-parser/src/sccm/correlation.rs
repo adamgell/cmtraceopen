@@ -19,9 +19,9 @@ use super::server::windows::{
     SccmDistributionPointContentAnalysis, SccmDistributionPointContentState,
     SccmManagementPointAnalysis, SccmManagementPointState, SccmSoftwareUpdatePointAnalysis,
     SccmSoftwareUpdatePointDisposition, SccmSoftwareUpdatePointProfileSelection,
-    SccmSoftwareUpdatePointState, SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID,
-    SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_VERSION, SCCM_MANAGEMENT_POINT_TEST_PROFILE_ID,
-    SCCM_SOFTWARE_UPDATE_POINT_PROFILE_ID,
+    SccmSoftwareUpdatePointSourceLocalClassification, SccmSoftwareUpdatePointState,
+    SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID, SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_VERSION,
+    SCCM_MANAGEMENT_POINT_TEST_PROFILE_ID, SCCM_SOFTWARE_UPDATE_POINT_PROFILE_ID,
 };
 use super::{
     SccmCorrelationKeyKind, SccmCoverageState, SccmKeyConfidence, SccmTimeOrderingState,
@@ -610,9 +610,8 @@ impl SccmUpdatesSoftwareUpdatePointInput {
                     .iter()
                     .any(|item| item.reason.to_ascii_lowercase().contains("rotation")),
                 server_rotation_complete: !server.source_local_observations.iter().any(|item| {
-                    item.observation_id
-                        .to_ascii_lowercase()
-                        .contains("rotation")
+                    item.classification
+                        == SccmSoftwareUpdatePointSourceLocalClassification::RotationSplit
                 }),
                 input_capped: false,
             }

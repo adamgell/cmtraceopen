@@ -3,7 +3,14 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::server::windows::{
     analyze_software_update_point, assess_server_intake, SccmServerArtifactPayload,
-    SccmServerIntakeAssessment,
+    SccmServerIntakeAssessment, SccmSoftwareUpdatePointSourceLocalClassification,
+};
+use cmtraceopen_parser::sccm::{
+    correlate_updates_software_update_point, SccmClientUpdateCorrelationHandoff,
+    SccmClientUpdateCoverage, SccmClientUpdateCoverageState, SccmClientUpdateExtractionProfile,
+    SccmClientUpdatesAnalysis, SccmCorrelationGuard, SccmCorrelationGuardState,
+    SccmCorrelationReason, SccmCorrelationSide, SccmKeyConfidence,
+    SccmUpdatesSoftwareUpdatePointInput, SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
 };
 use serde_json::Value;
 
@@ -274,6 +281,39 @@ fn production_projection(mut expected: Value) -> Value {
     expected
 }
 
+fn empty_client_updates_analysis() -> SccmClientUpdatesAnalysis {
+    SccmClientUpdatesAnalysis {
+        schema_version: 1,
+        transactions: Vec::new(),
+        observations: Vec::new(),
+        findings: Vec::new(),
+        coverage: vec![SccmClientUpdateCoverage {
+            logical_artifact_id: "client-updates".to_owned(),
+            state: SccmClientUpdateCoverageState::Captured,
+        }],
+        extraction_profile: SccmClientUpdateExtractionProfile {
+            selection_state: "selected".to_owned(),
+            profile_id: SCCM_EXPERIMENTAL_KEY_PROFILE_ID.to_owned(),
+            key_confidence_ceiling: SccmKeyConfidence::Exact,
+            validated_artifact_families: Vec::new(),
+        },
+        correlation_handoff: SccmClientUpdateCorrelationHandoff {
+            issue: "#333".to_owned(),
+            server_prerequisite_issue: "#330".to_owned(),
+            performed: false,
+            time_only_eligible: false,
+            topology_compatibility_evaluated: false,
+            server_cause_claimed: false,
+            native_acceptance_claimed: false,
+            bundle_capture_host_used_as_sup_evidence: false,
+            counterpart_ready_key_kinds: Vec::new(),
+            emitted_counterpart_ready_fact: false,
+            counterpart_ready_facts: Vec::new(),
+        },
+        prohibited_claims: Vec::new(),
+    }
+}
+
 #[test]
 fn every_committed_scenario_runs_through_the_exported_production_analyzer() {
     for scenario in SCENARIOS {
@@ -287,6 +327,91 @@ fn every_committed_scenario_runs_through_the_exported_production_analyzer() {
             "scenario {scenario}"
         );
     }
+}
+
+#[test]
+fn accepted_sup_rotation_split_triggers_the_typed_correlation_guard() {
+    let (mut manifest, mut payloads) = prepared_scenario("rotation-boundary");
+    for (old_id, new_id) in [
+        ("rotation-01-current", "sync-success-01-wcm"),
+        ("rotation-02-lo", "sync-success-02-wsync"),
+        ("rotation-03-malformed", "sync-success-03-wsus"),
+    ] {
+        manifest["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array")
+            .iter_mut()
+            .find(|artifact| artifact["artifactId"] == old_id)
+            .expect("rotation artifact exists")["artifactId"] = Value::String(new_id.to_owned());
+        payloads
+            .iter_mut()
+            .find(|payload| payload.manifest_artifact_id == old_id)
+            .expect("rotation payload exists")
+            .manifest_artifact_id = new_id.to_owned();
+    }
+
+    let sup = analyze_software_update_point(&assess_prepared_manifest(manifest, &payloads));
+    let split = sup
+        .source_local_observations
+        .iter()
+        .find(|observation| {
+            observation.classification
+                == SccmSoftwareUpdatePointSourceLocalClassification::RotationSplit
+        })
+        .expect("accepted endpoint emits the typed rotation split");
+    assert_eq!(split.observation_id, "sync-01-split");
+    assert!(!split.observation_id.contains("rotation"));
+
+    let updates = empty_client_updates_analysis();
+    let correlated = correlate_updates_software_update_point(
+        &SccmUpdatesSoftwareUpdatePointInput::from_analyses(&updates, &sup),
+    );
+    let result = correlated.results.first().expect("one correlation result");
+    assert!(result.guard_checks.iter().any(|check| {
+        check.guard_id == SccmCorrelationGuard::RotationSplit
+            && check.state == SccmCorrelationGuardState::Triggered
+    }));
+    assert!(result
+        .reason_codes
+        .contains(&SccmCorrelationReason::RotationIncomplete));
+    let rotation_requests = result
+        .artifact_requests
+        .iter()
+        .filter(|request| request.reason_code == SccmCorrelationReason::RotationIncomplete)
+        .collect::<Vec<_>>();
+    assert_eq!(rotation_requests.len(), 1);
+    assert_eq!(rotation_requests[0].side, SccmCorrelationSide::Server);
+    assert_eq!(rotation_requests[0].logical_artifact_id, "server-sup-sync");
+
+    let mut string_decoy = sup;
+    let decoy = string_decoy
+        .source_local_observations
+        .iter_mut()
+        .find(|observation| {
+            observation.classification
+                == SccmSoftwareUpdatePointSourceLocalClassification::RotationSplit
+        })
+        .expect("typed split exists for the negative adapter control");
+    decoy.classification = SccmSoftwareUpdatePointSourceLocalClassification::MalformedEvidence;
+    decoy.observation_id = "rotation-decoy".to_owned();
+    let decoy_correlation = correlate_updates_software_update_point(
+        &SccmUpdatesSoftwareUpdatePointInput::from_analyses(&updates, &string_decoy),
+    );
+    let decoy_result = decoy_correlation
+        .results
+        .first()
+        .expect("one decoy correlation result");
+    assert!(decoy_result.guard_checks.iter().any(|check| {
+        check.guard_id == SccmCorrelationGuard::RotationSplit
+            && check.state == SccmCorrelationGuardState::Passed
+    }));
+    assert!(!decoy_result
+        .reason_codes
+        .contains(&SccmCorrelationReason::RotationIncomplete));
+    assert!(decoy_result
+        .artifact_requests
+        .iter()
+        .all(|request| request.reason_code != SccmCorrelationReason::RotationIncomplete));
 }
 
 #[test]
