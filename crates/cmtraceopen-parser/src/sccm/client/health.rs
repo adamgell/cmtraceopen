@@ -510,9 +510,22 @@ fn resolve_phase<'a>(
     phase: SccmClientHealthPhase,
     chain: &ChainKeys,
 ) -> Resolution<'a> {
-    let candidates = facts
+    let matching_candidates = facts
         .iter()
         .filter(|fact| fact.phase == phase && fact_matches_chain(fact, chain))
+        .collect::<Vec<_>>();
+    let Some(newest_matching_utc_millis) =
+        matching_candidates.iter().map(|fact| fact.utc_millis).max()
+    else {
+        return Resolution::Missing;
+    };
+    let candidates = facts
+        .iter()
+        .filter(|fact| {
+            fact.phase == phase
+                && (fact_matches_chain(fact, chain)
+                    || fact.utc_millis == newest_matching_utc_millis)
+        })
         .collect::<Vec<_>>();
     resolve_candidates(
         candidates,

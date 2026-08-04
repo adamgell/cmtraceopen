@@ -254,6 +254,36 @@ fn analyze_success_regression(name: &str) -> (SccmClientHealthAnalysis, BTreeMap
             ) => format!(
                 "{content}<![LOG[Family=health Phase=transport Disposition=succeeded Terminal=true RequestId=b2222222-2222-2222-2222-222222222222 ServerHost=mp-lab.contoso.invalid]LOG]!><time=\"01:00:10.000+000\" date=\"07-30-2026\" component=\"CcmMessaging\" context=\"\" type=\"1\" thread=\"1\" file=\"messaging.cc:3\">\n"
             ),
+            (
+                "equal-time-service-guid-conflict",
+                "health-success-evaluation-current",
+            ) => format!(
+                "{content}<![LOG[Family=health Phase=service Disposition=succeeded Terminal=true ClientGuid=22222222-2222-2222-2222-222222222222]LOG]!><time=\"01:00:01.000+000\" date=\"07-30-2026\" component=\"CcmEval\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmeval.cc:5\">\n"
+            ),
+            (
+                "equal-time-assignment-guid-conflict",
+                "health-success-location-services-current",
+            ) => format!(
+                "{content}<![LOG[Family=health Phase=assignment Disposition=succeeded Terminal=true ClientGuid=22222222-2222-2222-2222-222222222222 SiteCode=LAB]LOG]!><time=\"01:00:06.000+000\" date=\"07-30-2026\" component=\"LocationServices\" context=\"\" type=\"1\" thread=\"1\" file=\"location.cc:7\">\n"
+            ),
+            (
+                "equal-time-clientless-mp-site-conflict",
+                "health-success-location-services-current",
+            ) => format!(
+                "{content}<![LOG[Family=health Phase=managementPointLocation Disposition=succeeded Terminal=true SiteCode=ALT ServerHost=mp-lab.contoso.invalid]LOG]!><time=\"01:00:08.000+000\" date=\"07-30-2026\" component=\"LocationServices\" context=\"\" type=\"1\" thread=\"1\" file=\"location.cc:8\">\n"
+            ),
+            (
+                "equal-time-clientless-transport-host-conflict",
+                "health-success-location-services-current",
+            ) => format!(
+                "{content}<![LOG[Family=health Phase=transport Disposition=succeeded Terminal=true RequestId=a1111111-1111-1111-1111-111111111111 ServerHost=mp-other.contoso.invalid]LOG]!><time=\"01:00:10.000+000\" date=\"07-30-2026\" component=\"CcmMessaging\" context=\"\" type=\"1\" thread=\"1\" file=\"messaging.cc:4\">\n"
+            ),
+            ("equal-time-identical-tuples", "health-success-evaluation-current") => format!(
+                "{content}<![LOG[Family=health Phase=service Disposition=succeeded Terminal=true ClientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time=\"01:00:01.000+000\" date=\"07-30-2026\" component=\"CcmEval\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmeval.cc:6\">\n"
+            ),
+            ("equal-time-identical-tuples", "health-success-location-services-current") => format!(
+                "{content}<![LOG[Family=health Phase=assignment Disposition=succeeded Terminal=true ClientGuid=11111111-1111-1111-1111-111111111111 SiteCode=LAB]LOG]!><time=\"01:00:06.000+000\" date=\"07-30-2026\" component=\"LocationServices\" context=\"\" type=\"1\" thread=\"1\" file=\"location.cc:9\">\n<![LOG[Family=health Phase=managementPointLocation Disposition=succeeded Terminal=true SiteCode=LAB ServerHost=mp-lab.contoso.invalid]LOG]!><time=\"01:00:08.000+000\" date=\"07-30-2026\" component=\"LocationServices\" context=\"\" type=\"1\" thread=\"1\" file=\"location.cc:10\">\n<![LOG[Family=health Phase=transport Disposition=succeeded Terminal=true RequestId=a1111111-1111-1111-1111-111111111111 ServerHost=mp-lab.contoso.invalid]LOG]!><time=\"01:00:10.000+000\" date=\"07-30-2026\" component=\"CcmMessaging\" context=\"\" type=\"1\" thread=\"1\" file=\"messaging.cc:5\">\n"
+            ),
             ("service-retry-after-success", "health-success-evaluation-current") => format!(
                 "{content}<![LOG[Family=health Phase=service Disposition=started Terminal=false ClientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time=\"01:00:01.500+000\" date=\"07-30-2026\" component=\"CcmEval\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmeval.cc:4\">\n"
             ),
@@ -602,6 +632,68 @@ fn equal_time_transport_requests_are_contradictory() {
 }
 
 #[test]
+fn equal_time_conflicts_hidden_by_chain_coordinates_are_contradictory() {
+    for (scenario, phase, last_success) in [
+        (
+            "equal-time-service-guid-conflict",
+            SccmClientHealthPhase::Service,
+            SccmClientHealthPhase::Install,
+        ),
+        (
+            "equal-time-assignment-guid-conflict",
+            SccmClientHealthPhase::Assignment,
+            SccmClientHealthPhase::Authentication,
+        ),
+        (
+            "equal-time-clientless-mp-site-conflict",
+            SccmClientHealthPhase::ManagementPointLocation,
+            SccmClientHealthPhase::Boundary,
+        ),
+        (
+            "equal-time-clientless-transport-host-conflict",
+            SccmClientHealthPhase::Transport,
+            SccmClientHealthPhase::ManagementPointLocation,
+        ),
+    ] {
+        let (analysis, _) = analyze_success_regression(scenario);
+        assert_eq!(
+            analysis.last_confirmed_successful_phase,
+            Some(last_success),
+            "{scenario}"
+        );
+        assert_eq!(
+            analysis.hops.last().map(|hop| (hop.phase, hop.state)),
+            Some((phase, SccmClientHealthHopState::Contradictory)),
+            "{scenario}"
+        );
+        assert_eq!(
+            analysis
+                .hops
+                .last()
+                .expect("contradictory hop")
+                .evidence
+                .len(),
+            2,
+            "{scenario}"
+        );
+    }
+}
+
+#[test]
+fn equal_time_identical_phase_tuples_still_resolve() {
+    let (analysis, _) = analyze_success_regression("equal-time-identical-tuples");
+    assert_eq!(
+        analysis.last_confirmed_successful_phase,
+        Some(SccmClientHealthPhase::Transport)
+    );
+    assert!(analysis
+        .hops
+        .iter()
+        .all(|hop| hop.state == SccmClientHealthHopState::Succeeded));
+    assert!(analysis.findings.is_empty());
+}
+
+#[test]
 fn sealed_admission_regressions_match_exact_full_output_oracles() {
     let oracle_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sccm/client/health-regression-oracles");
@@ -629,6 +721,26 @@ fn equal_time_correlation_regressions_match_exact_full_output_oracles() {
         (
             "equal-time-clientless-transport-request-conflict",
             "88befd8cf5e8cd5d3e0e8af90a2d4ca7c636d4db3c54503e5b4ab8825262609b",
+        ),
+        (
+            "equal-time-service-guid-conflict",
+            "6d2679fba3f3520969ecce84e56cb29705a3dd0e4cc93d09f58fc014d4607c12",
+        ),
+        (
+            "equal-time-assignment-guid-conflict",
+            "19e6ca3aa338a92b43c3fe0a80dee9877a5aaa17a622b62596db9caba4420acf",
+        ),
+        (
+            "equal-time-clientless-mp-site-conflict",
+            "6f15ed4df3c1cf2827a453a13828c53ac7aa2d6d667cc69fecc60fcad12645aa",
+        ),
+        (
+            "equal-time-clientless-transport-host-conflict",
+            "88befd8cf5e8cd5d3e0e8af90a2d4ca7c636d4db3c54503e5b4ab8825262609b",
+        ),
+        (
+            "equal-time-identical-tuples",
+            "95ceca4807c1718c1b718a262a483b71723ba0579911b2a00182a4e6c6f40606",
         ),
     ] {
         let (analysis, artifact_ids) = analyze_success_regression(name);
