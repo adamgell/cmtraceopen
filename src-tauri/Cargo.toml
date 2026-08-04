@@ -23,7 +23,7 @@ tauri-build = { version = "2", features = [] }
 
 [features]
 default = ["full"]
-full = ["collector", "deployment", "dsregcmd", "esp-diagnostics", "event-log", "intune-diagnostics", "macos-diag", "secureboot", "sysmon"]
+full = ["collector", "deployment", "dsregcmd", "esp-diagnostics", "event-log", "intune-diagnostics", "macos-diag", "sccm-diagnostics", "secureboot", "sysmon"]
 sysmon = ["dep:evtx"]
 event-log = ["dep:evtx"]
 collector = []
@@ -137,6 +137,10 @@ required-features = ["sccm-diagnostics"]
 
 [[test]]
 name = "sccm_client_discovery"
+required-features = ["sccm-diagnostics"]
+
+[[test]]
+name = "sccm_native_collection"
 required-features = ["sccm-diagnostics"]
 
 [[bench]]

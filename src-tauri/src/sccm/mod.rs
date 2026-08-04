@@ -4,6 +4,7 @@
 //! This module validates native bundle provenance and projects it into those
 //! pure contracts without changing the generic collection manifest.
 
+pub mod collector;
 mod contract;
 mod discovery;
 mod manifest;
