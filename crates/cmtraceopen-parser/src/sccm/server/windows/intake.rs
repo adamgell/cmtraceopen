@@ -738,7 +738,7 @@ pub fn assess_server_intake(
             let request_key = (
                 request.logical_id.clone(),
                 role_sort_key(&request.role).to_owned(),
-                request.reason.clone(),
+                request.reason.trim().to_owned(),
             );
             if request_keys.insert(request_key) {
                 next_artifact_requests.push(request);
@@ -771,12 +771,12 @@ pub fn assess_server_intake(
         (
             left.logical_id.as_str(),
             role_sort_key(&left.role),
-            left.reason.as_str(),
+            left.reason.trim(),
         )
             .cmp(&(
                 right.logical_id.as_str(),
                 role_sort_key(&right.role),
-                right.reason.as_str(),
+                right.reason.trim(),
             ))
     });
     let schema_version = 1;
