@@ -280,6 +280,11 @@ struct Fact {
     utc_millis: i64,
 }
 
+enum ParsedFact {
+    Valid(Fact),
+    Poisoned(FactKey),
+}
+
 pub fn analyze_software_update_point(
     intake: &SccmServerIntakeAssessment,
 ) -> SccmSoftwareUpdatePointAnalysis {
@@ -328,6 +333,7 @@ pub fn analyze_software_update_point(
     let source_local_observations = source_local_observations(&scoped_artifacts);
 
     let mut facts_by_key = BTreeMap::<FactKey, Vec<Fact>>::new();
+    let mut poisoned_keys = BTreeSet::<FactKey>::new();
     for artifact in &scoped_artifacts {
         if !synthetic_profile_selected || !artifact_admits_transaction_facts(artifact) {
             continue;
@@ -337,12 +343,19 @@ pub fn analyze_software_update_point(
             .iter()
             .filter(|evidence| evidence.reference.artifact_id == artifact.artifact_id)
         {
-            if let Some(fact) = parse_fact(intake, artifact, evidence) {
-                facts_by_key.entry(fact.key.clone()).or_default().push(fact);
+            match parse_fact(intake, artifact, evidence) {
+                Some(ParsedFact::Valid(fact)) => {
+                    facts_by_key.entry(fact.key.clone()).or_default().push(fact);
+                }
+                Some(ParsedFact::Poisoned(key)) => {
+                    poisoned_keys.insert(key);
+                }
+                None => {}
             }
         }
     }
 
+    facts_by_key.retain(|key, _| !poisoned_keys.contains(key));
     reject_conflicting_transaction_keys(&mut facts_by_key);
     let mut transactions = facts_by_key
         .into_iter()
@@ -467,7 +480,7 @@ fn parse_fact(
     intake: &SccmServerIntakeAssessment,
     artifact: &SccmServerArtifactAssessment,
     evidence: &SccmEvidence,
-) -> Option<Fact> {
+) -> Option<ParsedFact> {
     let fields = parse_fixture_fields(&evidence.message)?;
     if fields.contains_key("ClientHandle") {
         return None;
@@ -501,25 +514,29 @@ fn parse_fact(
         (None, None) => (None, None),
         _ => return None,
     };
+    let key = FactKey {
+        sync_run_id,
+        site_code,
+        sup_handle,
+        update_id,
+        kb_id,
+        profile_id,
+    };
+    let utc_millis = match (
+        &evidence.timestamp.ordering_state,
+        evidence.timestamp.utc_millis,
+    ) {
+        (SccmTimeOrderingState::NormalizedUtc, Some(utc_millis)) => utc_millis,
+        _ => return Some(ParsedFact::Poisoned(key)),
+    };
     let start_line = evidence.reference.line_start?;
     let end_line = evidence.reference.line_end?;
-    let utc_millis = evidence.timestamp.utc_millis?;
-    if start_line == 0
-        || end_line < start_line
-        || evidence.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
-    {
+    if start_line == 0 || end_line < start_line {
         return None;
     }
 
-    Some(Fact {
-        key: FactKey {
-            sync_run_id,
-            site_code,
-            sup_handle,
-            update_id,
-            kb_id,
-            profile_id,
-        },
+    Some(ParsedFact::Valid(Fact {
+        key,
         phase,
         disposition,
         terminal,
@@ -529,7 +546,7 @@ fn parse_fact(
             end_line,
         },
         utc_millis,
-    })
+    }))
 }
 
 fn site_code_is_topology_compatible(site_code: &str, site_handle: &str) -> bool {

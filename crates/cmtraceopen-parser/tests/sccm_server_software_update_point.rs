@@ -475,3 +475,35 @@ fn tied_or_unusable_timestamps_fail_closed_without_artifact_id_chronology() {
         analyze_software_update_point(&assess_prepared_manifest(manifest, &unusable_payloads));
     assert!(unusable.transactions.is_empty());
 }
+
+#[test]
+fn unusable_later_phase_timestamp_poisons_the_exact_sup_transaction() {
+    let (mut manifest, mut payloads) = prepared_scenario("incomplete");
+    let later_bytes = b"<![LOG[SYNTHETIC FIXTURE; Phase=synchronize; Disposition=succeeded; Terminal=false; SyncRunId=sync-10; SiteCode=LAB; SupHandle=safe:sup:lab-sup-01; ProfileId=sup-server-5.00.test-v1]LOG]!><time=\"15:31:00.000+9999\" date=\"7-30-2026\" component=\"SMS_WSUS_SYNC_MANAGER\" context=\"\" type=\"1\" thread=\"192\" file=\"wsyncmgr.cpp:1202\">\n".to_vec();
+    let later_manifest = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "incomplete-02-wsync-denied")
+        .expect("later-phase manifest artifact exists");
+    later_manifest["captureState"] = Value::String("captured".to_owned());
+    later_manifest["encoding"] = Value::String("utf-8".to_owned());
+    later_manifest["collectionLimit"] =
+        serde_json::json!({ "byteLimit": 4096, "limitApplied": false });
+    later_manifest["bytesCopied"] = Value::from(later_bytes.len());
+    later_manifest["relativePath"] = Value::String(
+        "evidence/sccm/server/site-server/server-sup-sync/subject-software-update-point/current/wsyncmgr.log"
+            .to_owned(),
+    );
+    payloads.push(SccmServerArtifactPayload {
+        manifest_artifact_id: "incomplete-02-wsync-denied".to_owned(),
+        bytes: later_bytes,
+    });
+
+    let analysis = analyze_software_update_point(&assess_prepared_manifest(manifest, &payloads));
+
+    assert!(
+        analysis.transactions.is_empty(),
+        "a timestamp-poisoned exact subject cannot retain a correlatable prefix"
+    );
+}
