@@ -33,7 +33,7 @@ npm run frontend:build          # tsc + vite build
 cargo check                     # Type check
 cargo test                      # Run all tests
 cargo clippy -- -D warnings     # Lint (CI enforces zero warnings)
-cargo bench                     # Criterion benchmarks (intune_pipeline)
+cargo bench                     # Criterion benchmarks (intune_pipeline, timeline)
 ```
 
 ### TypeScript Check
@@ -59,18 +59,20 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 
 ### Backend Module Map (`src-tauri/src/`)
 
+Pure log/Intune/ESP/DSRegCmd parsing lives in the separate `crates/cmtraceopen-parser/` crate (wasm32-compatible, no OS I/O). The `src-tauri` crate hosts the Tauri app and the native, OS-facing modules:
+
 | Module | Purpose |
 |--------|---------|
 | `commands/` | Tauri IPC command handlers — the API surface between frontend and backend |
-| `parser/` | Log format auto-detection and parsing (CCM, simple, CBS, DISM, Panther, plain text) |
-| `intune/` | IME diagnostics pipeline: event tracking, timeline, download stats, EVTX parsing |
-| `dsregcmd/` | Device registration analysis: output parsing, diagnostic rules, registry hives |
-| `error_db/` | Embedded error code database (700+ Windows/SCCM/Intune/MSI codes) |
-| `models/` | Shared types: `LogEntry`, `ParseResult`, `FilterCriteria` |
+| `intune/`, `esp/`, `dsregcmd/`, `sysmon/`, `secureboot/`, `macos_diag/`, `jamf/`, `event_log/` | Native, OS-facing halves of each workspace (registry, EVTX, process, live capture) |
+| `graph_api/` | Microsoft Graph / WAM client |
+| `timeline/`, `collector/`, `elevation/` | Cross-source timeline, evidence collection, admin elevation |
+| `parser/` | App-local parse glue (e.g. DNS audit); the log parsers themselves live in the parser crate |
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
-| `sysmon/` | Sysmon event log analysis: EVTX parsing, event models |
 | `menu.rs` | Native application menu |
+
+Shared types (`LogEntry`, `FilterCriteria`) and the embedded error-code database (700+ Windows/SCCM/Intune/MSI codes) live in the parser crate's `models/` and `error_db/` modules.
 
 ### Frontend Module Map (`src/`)
 
@@ -79,16 +81,14 @@ Communication is through Tauri's `invoke()` (frontend→backend) and `emit()` (b
 | `components/log-view/` | Main log list with virtual scrolling, row rendering, info pane |
 | `components/layout/` | AppShell, toolbar, sidebar, status bar |
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
-| `components/intune/` | Intune analysis workspace |
-| `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
-| `components/sysmon/` | Sysmon event log analysis workspace |
-| `stores/` | 6 Zustand stores: log, filter, intune, dsregcmd, sysmon, ui |
+| `workspaces/` | Feature workspaces: log, intune, esp-diagnostics, dsregcmd, sysmon, secureboot, event-log, dns-dhcp, deployment, macos-diag, macos-jamf, timeline |
+| `stores/` | Zustand stores: log, filter, ui, marker, registry, timeline (workspaces add their own domain stores) |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 
 ### Parser Architecture
 
-The parser system in `src-tauri/src/parser/` uses a `ResolvedParser` that bundles:
+The parser system lives in the `crates/cmtraceopen-parser/` crate (pure Rust, wasm32-compatible, no OS I/O) and uses a `ResolvedParser` that bundles:
 - `ParserKind` — format variant (CCM, Simple, ReportingEvents, etc.)
 - `ParserImplementation` — actual parsing logic
 - `ParseQuality` — Structured / SemiStructured / Unstructured
@@ -108,8 +108,8 @@ Format detection (`detect.rs`) samples the first lines of a file to auto-select 
 
 ## Testing
 
-- **Unit/integration tests**: `src-tauri/tests/` — parser regression tests with synthetic fixtures
-- **Benchmarks**: `src-tauri/benches/intune_pipeline.rs` — Criterion benchmarks for the Intune pipeline (10K records)
+- **Unit/integration tests**: `src-tauri/tests/` and `crates/cmtraceopen-parser/tests/` — parser regression and workspace tests with synthetic fixtures
+- **Benchmarks**: `src-tauri/benches/` — Criterion benchmarks for the Intune pipeline (`intune_pipeline`, 10K records) and the cross-source timeline (`timeline`)
 - Run a single test: `cargo test test_name` from `src-tauri/`
 - Run benchmarks: `cargo bench` from `src-tauri/`
 
