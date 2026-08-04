@@ -39,7 +39,7 @@ const FULL_OUTPUT_SHA256: &[(&str, &str)] = &[
     ),
     (
         "clock-offset-unknown",
-        "0c14d94209cc7765303b429353732990ef775aef69f994c5894796f5cd0a25b8",
+        "da02ddec04085e5c729365212b2c741d92fc1ec025bfe7bb01ed481e93f6fa71",
     ),
     (
         "generic-site-token",
@@ -71,7 +71,7 @@ const FULL_OUTPUT_SHA256: &[(&str, &str)] = &[
     ),
     (
         "topology-mismatch",
-        "cd0bbb73af63157f91a9f703e2cf3f4812818a48c5a1ed0c0c489c0397c23ba9",
+        "6747a6b9e63c88ff544be788bf0ce1c51dfa2dfb04dedf45cc67dcb76efc6304",
     ),
 ];
 
@@ -518,6 +518,17 @@ fn gaps_and_requests_are_transaction_and_exact_topology_scoped() {
 
 fn assert_missing_target_sources(missing: &[(&str, &str)]) {
     let (mut manifest, mut payloads, _) = fixture_parts("healthy-link");
+    remove_target_sources(&mut manifest, &mut payloads, missing);
+
+    let analysis = analyze_hierarchy_replication(&assess(&manifest, &payloads)).expect("sealed");
+    assert_missing_target_gate(&analysis, missing);
+}
+
+fn remove_target_sources(
+    manifest: &mut Value,
+    payloads: &mut Vec<SccmServerArtifactPayload>,
+    missing: &[(&str, &str)],
+) {
     let missing_basenames = missing
         .iter()
         .map(|(_, basename)| *basename)
@@ -534,8 +545,41 @@ fn assert_missing_target_sources(missing: &[(&str, &str)]) {
         .expect("artifacts")
         .retain(|artifact| !target_ids.contains(required_str(artifact, "artifactId")));
     payloads.retain(|payload| !target_ids.contains(&payload.manifest_artifact_id));
+}
 
-    let analysis = analyze_hierarchy_replication(&assess(&manifest, &payloads)).expect("sealed");
+fn add_target_sources_from_healthy(
+    manifest: &mut Value,
+    payloads: &mut Vec<SccmServerArtifactPayload>,
+    basenames: &[&str],
+) {
+    let (healthy_manifest, healthy_payloads, _) = fixture_parts("healthy-link");
+    for basename in basenames {
+        let artifact = healthy_manifest["artifacts"]
+            .as_array()
+            .expect("healthy artifacts")
+            .iter()
+            .find(|artifact| required_str(artifact, "originalBasename") == *basename)
+            .expect("registered healthy target artifact")
+            .clone();
+        let artifact_id = required_str(&artifact, "artifactId").to_owned();
+        manifest["artifacts"]
+            .as_array_mut()
+            .expect("artifacts")
+            .push(artifact);
+        payloads.push(
+            healthy_payloads
+                .iter()
+                .find(|payload| payload.manifest_artifact_id == artifact_id)
+                .expect("registered healthy target payload")
+                .clone(),
+        );
+    }
+}
+
+fn assert_missing_target_gate(
+    analysis: &cmtraceopen_parser::sccm::server::windows::SccmHierarchyAnalysis,
+    missing: &[(&str, &str)],
+) {
     assert_eq!(analysis.transactions.len(), 1);
     let transaction = &analysis.transactions[0];
     assert_eq!(transaction.state, SccmHierarchyState::Incomplete);
@@ -581,6 +625,94 @@ fn omitted_both_target_sources_emit_both_requests() {
         ("server-hierarchy-transfer", "despool.log"),
         ("server-hierarchy-control", "rcmctrl.log"),
     ]);
+}
+
+#[test]
+fn missing_target_gate_precedes_cross_artifact_contradiction_and_terminal_success() {
+    let (mut manifest, mut payloads, _) = fixture_parts("healthy-link");
+    let sender = String::from_utf8(payload_mut(&mut payloads, "healthy-02-sender").clone())
+        .expect("utf8")
+        .replace("15:03:02.000+000", "15:03:01.000+000");
+    *payload_mut(&mut payloads, "healthy-02-sender") = sender.into_bytes();
+    sync_payload_length(&mut manifest, &payloads);
+
+    let both_present =
+        analyze_hierarchy_replication(&assess(&manifest, &payloads)).expect("sealed control");
+    assert_eq!(both_present.transactions.len(), 1);
+    assert_eq!(
+        both_present.transactions[0].timestamp_ordering,
+        SccmHierarchyTimestampOrdering::Contradictory
+    );
+    assert_eq!(
+        both_present.transactions[0].state,
+        SccmHierarchyState::Contradictory
+    );
+    assert!(both_present.transactions[0].terminal_evidence);
+
+    for missing in [
+        [("server-hierarchy-transfer", "despool.log")],
+        [("server-hierarchy-control", "rcmctrl.log")],
+    ] {
+        let mut missing_manifest = manifest.clone();
+        let mut missing_payloads = payloads.clone();
+        remove_target_sources(&mut missing_manifest, &mut missing_payloads, &missing);
+        let analysis = analyze_hierarchy_replication(&assess(&missing_manifest, &missing_payloads))
+            .expect("sealed missing-target case");
+        assert_eq!(
+            analysis.transactions[0].timestamp_ordering,
+            SccmHierarchyTimestampOrdering::Contradictory
+        );
+        assert_missing_target_gate(&analysis, &missing);
+    }
+}
+
+#[test]
+fn both_target_sources_preserve_terminal_retry_and_recovery_selection() {
+    for (scenario, message_id, added, expected) in [
+        (
+            "backlog-retry",
+            "msg-backlog-01",
+            &["despool.log", "rcmctrl.log"][..],
+            SccmHierarchyState::Deferred,
+        ),
+        (
+            "sender-failure",
+            "msg-send-chd",
+            &["despool.log", "rcmctrl.log"][..],
+            SccmHierarchyState::Failed,
+        ),
+        (
+            "receiver-processing-failure",
+            "msg-receiver-01",
+            &["rcmctrl.log"][..],
+            SccmHierarchyState::Failed,
+        ),
+        (
+            "recovery",
+            "msg-recovery-01",
+            &["rcmctrl.log"][..],
+            SccmHierarchyState::Recovered,
+        ),
+    ] {
+        let (mut manifest, mut payloads, _) = fixture_parts(scenario);
+        add_target_sources_from_healthy(&mut manifest, &mut payloads, added);
+        let analysis = analyze_hierarchy_replication(&assess(&manifest, &payloads))
+            .expect("sealed both-present control");
+        let transaction = analysis
+            .transactions
+            .iter()
+            .find(|transaction| transaction.key.message_id == message_id)
+            .expect("control transaction");
+        assert_eq!(transaction.state, expected, "{scenario}");
+        assert!(transaction
+            .next_artifacts
+            .iter()
+            .all(|request| { request.reason_code != "missingTargetReceiveProcessApply" }));
+    }
+
+    let (intake, _) = load_assessment("healthy-link");
+    let healthy = analyze_hierarchy_replication(&intake).expect("sealed success control");
+    assert_eq!(healthy.transactions[0].state, SccmHierarchyState::Succeeded);
 }
 
 #[test]

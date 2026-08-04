@@ -27,6 +27,7 @@ const FIXTURE_MARKER: &str = "SYNTHETIC FIXTURE";
 pub const SCCM_HIERARCHY_PROFILE_ID: &str = SCCM_HIERARCHY_KEY_PROFILE_ID;
 pub const SCCM_HIERARCHY_SOURCE_VERSION: &str = "5.00.TEST";
 pub const SCCM_HIERARCHY_PROFILE_VERSION: u32 = 1;
+const MISSING_TARGET_REASON_CODE: &str = "missingTargetReceiveProcessApply";
 
 // Exact raw-payload registry for the synthetic profile. A caller can invoke
 // canonical intake, but cannot turn arbitrary CCM text into reviewed hierarchy
@@ -538,12 +539,14 @@ pub fn analyze_hierarchy_replication(
             let transaction_id = transaction_id(&candidate.key);
             let missing_target_requests =
                 missing_target_source_requests(&artifacts, topology, &transaction_id);
+            let missing_target_gate = !missing_target_requests.is_empty();
             let gaps = missing_required_artifacts(intake, &artifacts, &candidate.key);
             if candidate.observations.len() == 1
                 && !terminal_failure
                 && !terminal_success
                 && !retrying
                 && gaps.is_empty()
+                && !missing_target_gate
             {
                 let observation = &candidate.observations[0];
                 source_local_observations.push(SccmHierarchySourceLocalObservation {
@@ -558,12 +561,17 @@ pub fn analyze_hierarchy_replication(
                 return None;
             }
             let unusable_time = ordering != SccmHierarchyTimestampOrdering::Usable;
-            let (state, finding_class) = if contradictory {
+            let (state, finding_class) = if missing_target_gate {
+                (
+                    SccmHierarchyState::Incomplete,
+                    Some(SccmFindingClass::InsufficientEvidence),
+                )
+            } else if contradictory {
                 (
                     SccmHierarchyState::Contradictory,
                     Some(SccmFindingClass::Symptom),
                 )
-            } else if unusable_time || !gaps.is_empty() || !missing_target_requests.is_empty() {
+            } else if unusable_time || !gaps.is_empty() {
                 (
                     SccmHierarchyState::Incomplete,
                     Some(SccmFindingClass::InsufficientEvidence),
@@ -668,7 +676,12 @@ pub fn analyze_hierarchy_replication(
         .collect::<Vec<_>>();
     transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
     for transaction in &mut transactions {
-        if transaction.timestamp_ordering == SccmHierarchyTimestampOrdering::Usable {
+        if transaction.timestamp_ordering == SccmHierarchyTimestampOrdering::Usable
+            || transaction
+                .next_artifacts
+                .iter()
+                .any(|request| request.reason_code == MISSING_TARGET_REASON_CODE)
+        {
             continue;
         }
         let mut requests = invalid_time_requests(intake, transaction);
@@ -1264,7 +1277,7 @@ fn missing_target_source_requests(
         origin_site_code: topology.origin_site_code.clone(),
         target_site_code: topology.target_site_code.clone(),
         basenames: vec![basename.to_owned()],
-        reason_code: "missingTargetReceiveProcessApply".to_owned(),
+        reason_code: MISSING_TARGET_REASON_CODE.to_owned(),
     })
     .collect()
 }

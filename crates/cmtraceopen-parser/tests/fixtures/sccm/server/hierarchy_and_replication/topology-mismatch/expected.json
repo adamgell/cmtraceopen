@@ -6,12 +6,34 @@
   "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
   "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
   "coverage": [{"artifactId":"mismatch-01-sender","state":"captured"},{"artifactId":"mismatch-02-despool","state":"captured"}],
-  "transactions": [],
-  "sourceLocalObservations": [
-    {"observationId":"mismatch-01-origin","classification":"topologyMismatch","confidence":"low","correlationEligible":false,"artifactIds":["mismatch-01-sender"],"evidence":[{"artifactId":"mismatch-01-sender","startLine":1,"endLine":1}]},
-    {"observationId":"mismatch-02-target","classification":"topologyMismatch","confidence":"low","correlationEligible":false,"artifactIds":["mismatch-02-despool"],"evidence":[{"artifactId":"mismatch-02-despool","startLine":1,"endLine":1}]}
+  "transactions": [
+    {
+      "transactionId":"hierarchy:msg-mismatch-01:LAB:CHD:link-lab-chd",
+      "key":{"messageId":"msg-mismatch-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":false,
+      "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
+      "coverageGapArtifactIds":[],
+      "observations":[
+        {"observationId":"mismatch-01-origin","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"mismatch-01-sender","startLine":1,"endLine":1}]}
+      ]
+    },
+    {
+      "transactionId":"hierarchy:msg-mismatch-01:LAB:SEC:link-lab-sec",
+      "key":{"messageId":"msg-mismatch-01","linkId":"link-lab-sec","originSiteCode":"LAB","targetSiteCode":"SEC","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
+      "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":false,
+      "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
+      "coverageGapArtifactIds":[],
+      "observations":[
+        {"observationId":"mismatch-02-target","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"mismatch-02-despool","startLine":1,"endLine":1}]}
+      ]
+    }
   ],
-  "artifactRequests": [],
+  "sourceLocalObservations": [],
+  "artifactRequests": [
+    {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["despool.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"SEC","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"}
+  ],
   "crossSideCausalClaims": [],
   "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
 }

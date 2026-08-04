@@ -826,9 +826,11 @@ fn expected_transaction_ids(scenario: &str) -> Option<&'static [&'static str]> {
             "hierarchy:msg-send-chd:LAB:CHD:link-lab-chd",
             "hierarchy:msg-send-sec:LAB:SEC:link-lab-sec",
         ]),
-        "generic-site-token" | "incomplete" | "rotation-boundary" | "topology-mismatch" => {
-            Some(&[])
-        }
+        "topology-mismatch" => Some(&[
+            "hierarchy:msg-mismatch-01:LAB:CHD:link-lab-chd",
+            "hierarchy:msg-mismatch-01:LAB:SEC:link-lab-sec",
+        ]),
+        "generic-site-token" | "incomplete" | "rotation-boundary" => Some(&[]),
         _ => None,
     }
 }
@@ -860,9 +862,8 @@ fn expected_observation_ids(scenario: &str) -> Option<&'static [&'static str]> {
             "recovery-05-terminal",
         ]),
         "sender-failure" => Some(&["sender-01-chd-failure", "sender-02-sec-failure"]),
-        "generic-site-token" | "incomplete" | "rotation-boundary" | "topology-mismatch" => {
-            Some(&[])
-        }
+        "topology-mismatch" => Some(&["mismatch-01-origin", "mismatch-02-target"]),
+        "generic-site-token" | "incomplete" | "rotation-boundary" => Some(&[]),
         _ => None,
     }
 }
@@ -871,7 +872,6 @@ fn expected_source_local_ids(scenario: &str) -> Option<&'static [&'static str]> 
     match scenario {
         "incomplete" => Some(&["incomplete-01-fragment"]),
         "rotation-boundary" => Some(&["rotation-01-split"]),
-        "topology-mismatch" => Some(&["mismatch-01-origin", "mismatch-02-target"]),
         "absent-remote-source"
         | "backlog-retry"
         | "clock-offset-unknown"
@@ -879,7 +879,8 @@ fn expected_source_local_ids(scenario: &str) -> Option<&'static [&'static str]> 
         | "healthy-link"
         | "receiver-processing-failure"
         | "recovery"
-        | "sender-failure" => Some(&[]),
+        | "sender-failure"
+        | "topology-mismatch" => Some(&[]),
         _ => None,
     }
 }
@@ -1176,13 +1177,16 @@ fn derived_artifact_requests(
             }
         }
     }
-    if let Some(basis) = invalid_offset_request_basis(scenario, manifest) {
-        requests.insert(ArtifactRequestContract {
-            basis,
-            reason_code: "invalidOffset".to_owned(),
-        });
+    let missing_target_requests = missing_target_source_requests(manifest, expected);
+    if missing_target_requests.is_empty() {
+        if let Some(basis) = invalid_offset_request_basis(scenario, manifest) {
+            requests.insert(ArtifactRequestContract {
+                basis,
+                reason_code: "invalidOffset".to_owned(),
+            });
+        }
     }
-    requests.extend(missing_target_source_requests(manifest, expected));
+    requests.extend(missing_target_requests);
     requests
 }
 
@@ -2737,7 +2741,19 @@ fn hierarchy_transactions_require_exact_keys_topology_time_and_citations() {
                 Some("low"),
             )],
             "healthy-link" => &[(Some("succeeded"), Some("success"), Some("high"))],
-            "incomplete" | "rotation-boundary" | "topology-mismatch" => &[],
+            "incomplete" | "rotation-boundary" => &[],
+            "topology-mismatch" => &[
+                (
+                    Some("incomplete"),
+                    Some("insufficientEvidence"),
+                    Some("low"),
+                ),
+                (
+                    Some("incomplete"),
+                    Some("insufficientEvidence"),
+                    Some("low"),
+                ),
+            ],
             "sender-failure" => &[
                 (
                     Some("incomplete"),
@@ -2803,12 +2819,17 @@ fn hierarchy_gaps_requests_and_source_local_controls_are_bounded() {
                 "missingTargetReceiveProcessApply",
                 "missingTargetReceiveProcessApply",
             ],
-            "clock-offset-unknown" => &["missingTargetReceiveProcessApply", "invalidOffset"],
+            "clock-offset-unknown" => &["missingTargetReceiveProcessApply"],
             "incomplete" => &["coverageCapped"],
             "receiver-processing-failure" | "recovery" => &["missingTargetReceiveProcessApply"],
             "rotation-boundary" => &["coverageRotationSplit"],
             "sender-failure" => &[
                 "missingTargetReceiveProcessApply",
+                "missingTargetReceiveProcessApply",
+                "missingTargetReceiveProcessApply",
+                "missingTargetReceiveProcessApply",
+            ],
+            "topology-mismatch" => &[
                 "missingTargetReceiveProcessApply",
                 "missingTargetReceiveProcessApply",
                 "missingTargetReceiveProcessApply",
@@ -2829,7 +2850,6 @@ fn hierarchy_gaps_requests_and_source_local_controls_are_bounded() {
         let expected_classes: &[&str] = match *scenario {
             "incomplete" => &["coverageOnly"],
             "rotation-boundary" => &["rotationSplit"],
-            "topology-mismatch" => &["topologyMismatch", "topologyMismatch"],
             _ => &[],
         };
         if source_local_classes != expected_classes {
@@ -3153,18 +3173,18 @@ fn hierarchy_artifact_request_mutations_fail_closed() {
         read_json("clock-offset-unknown", "expected.json").expect("clock expected loads");
     assert!(
         identity_and_schema_failures("clock-offset-unknown", &manifest, &expected).is_empty(),
-        "the committed invalid-offset request is the bounded control"
+        "the committed missing-target request is the bounded control"
     );
     assert!(
         artifact_request_failures("clock-offset-unknown", &manifest, &expected).is_empty(),
-        "the shared request loader accepts the bounded both-direction control"
+        "the shared request loader accepts the exact target-scoped control"
     );
 
     let mutations = [
         (
             "wrong source ID",
             "sourceId",
-            serde_json::json!("server-hierarchy-control"),
+            serde_json::json!("server-hierarchy-transfer"),
         ),
         ("wrong direction", "direction", serde_json::json!("origin")),
         (
@@ -3178,21 +3198,21 @@ fn hierarchy_artifact_request_mutations_fail_closed() {
             serde_json::json!(["replmgr.log"]),
         ),
         (
-            "missing origin companion",
+            "extra origin basename",
             "basenames",
-            serde_json::json!(["despool.log"]),
+            serde_json::json!(["rcmctrl.log", "replmgr.log"]),
         ),
         (
-            "missing target companion",
-            "basenames",
-            serde_json::json!(["sender.log"]),
+            "wrong reason",
+            "reasonCode",
+            serde_json::json!("invalidOffset"),
         ),
     ];
 
     let mut accepted = Vec::new();
     for (label, field, value) in mutations {
         let mut mutated = expected.clone();
-        mutated["artifactRequests"][1][field] = value;
+        mutated["artifactRequests"][0][field] = value;
         if artifact_request_failures("clock-offset-unknown", &manifest, &mutated).is_empty()
             || identity_and_schema_failures("clock-offset-unknown", &manifest, &mutated).is_empty()
         {
