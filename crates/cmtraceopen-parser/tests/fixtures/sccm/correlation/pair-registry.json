@@ -6,10 +6,10 @@
       "workflow": "contentDistributionPoint",
       "clientIssue": "#322",
       "serverIssue": "#329",
-      "state": "contractPrepared",
-      "productionEnabled": false,
-      "ruleValidated": false,
-      "implementationModule": null,
+      "state": "ruleValidated",
+      "productionEnabled": true,
+      "ruleValidated": true,
+      "implementationModule": "sccm::correlation",
       "requiredGuardIds": [
         "conflicting-exact-key",
         "incompatible-topology",
@@ -25,21 +25,17 @@
         "unrelated-terminal-error",
         "version-mismatch"
       ],
-      "blockers": [
-        "#318 finding interface exact-head review pending",
-        "#322 public fact interface not implemented",
-        "#329 public fact interface not independently accepted"
-      ]
+      "blockers": []
     },
     {
       "pairId": "policy-management-point",
       "workflow": "policyManagementPoint",
       "clientIssue": "#321",
       "serverIssue": "#328",
-      "state": "contractPrepared",
-      "productionEnabled": false,
-      "ruleValidated": false,
-      "implementationModule": null,
+      "state": "ruleValidated",
+      "productionEnabled": true,
+      "ruleValidated": true,
+      "implementationModule": "sccm::correlation",
       "requiredGuardIds": [
         "conflicting-exact-key",
         "incompatible-topology",
@@ -55,21 +51,17 @@
         "unrelated-terminal-error",
         "version-mismatch"
       ],
-      "blockers": [
-        "#318 finding interface exact-head review pending",
-        "#321 public fact interface not implemented",
-        "#328 public fact interface not implemented"
-      ]
+      "blockers": []
     },
     {
       "pairId": "updates-software-update-point",
       "workflow": "updatesSoftwareUpdatePoint",
       "clientIssue": "#323",
       "serverIssue": "#330",
-      "state": "candidate",
-      "productionEnabled": false,
-      "ruleValidated": false,
-      "implementationModule": null,
+      "state": "ruleValidated",
+      "productionEnabled": true,
+      "ruleValidated": true,
+      "implementationModule": "sccm::correlation",
       "requiredGuardIds": [
         "conflicting-exact-key",
         "incompatible-topology",
@@ -85,12 +77,7 @@
         "unrelated-terminal-error",
         "version-mismatch"
       ],
-      "blockers": [
-        "#318 finding interface exact-head review pending",
-        "#323 source facts not independently accepted",
-        "#330 source facts not independently accepted",
-        "dedicated pair subplan not approved"
-      ]
+      "blockers": []
     }
   ]
 }

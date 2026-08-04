@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod client;
+pub mod correlation;
 mod evidence;
 mod findings;
 mod ingest;
@@ -11,6 +12,7 @@ mod signals;
 
 pub use catalog::*;
 pub use client::*;
+pub use correlation::*;
 pub use findings::*;
 pub use ingest::*;
 pub use keys::*;

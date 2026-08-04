@@ -1,537 +1,204 @@
 {
   "schemaVersion": "1.0.0",
-  "workflow": "policyManagementPoint",
+  "pair": "policyManagementPoint",
   "scenarios": [
     {
-      "scenarioId": "policy-client-only",
-      "guardIds": [
-        "missing-server-counterpart"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/request-auth-failure",
-      "serverFixtureRef": "absent",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "incomplete",
-      "timestampProvenance": "missing",
-      "coverage": "clientOnly",
-      "rotation": "complete",
-      "terminalRelation": "missing",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "counterpartRequested",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "unlinked",
-        "confidenceCeiling": "low",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "server-counterpart-missing"
-        ],
-        "artifactRequests": [
-          "server-mp-auth",
-          "server-mp-policy"
-        ],
-        "deterministicResultId": "corr-contract:policy:client-only"
-      }
+      "scenarioId": "policy-healthy",
+      "mutation": "healthy",
+      "expectedOutcome": "causalFinding",
+      "expectedLinkStrength": "exactCorroborated",
+      "expectedConfidence": "high",
+      "expectedReasonCodes": [],
+      "expectedTriggeredGuards": [],
+      "expectedOutputSha256": "c3ebc9911c021195611ffbdc8c497f906c7fadf60f5dae419da95eddaf47a46b"
     },
     {
       "scenarioId": "policy-conflicting-key",
-      "guardIds": [
+      "mutation": "conflictingExactKey",
+      "expectedOutcome": "incompatible",
+      "expectedLinkStrength": "incompatible",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "exact-key-conflict"
+      ],
+      "expectedTriggeredGuards": [
         "conflicting-exact-key"
       ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/complete",
-      "serverFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/unrelated-client-like-key",
-      "profileState": "validated",
-      "keyRelation": "conflicting",
-      "topology": "compatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "contradictory",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "incompatible",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "incompatible",
-        "confidenceCeiling": "low",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "exact-key-conflict"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:conflicting-key"
-      }
-    },
-    {
-      "scenarioId": "policy-invalid-offset",
-      "guardIds": [
-        "invalid-timestamp-offset"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/contradictory-offset",
-      "serverFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/healthy-policy",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "compatible",
-      "timestampProvenance": "invalidOffset",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "corroborating",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "ordering": "unavailable",
-        "outcome": "notCausal",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "exactPartial",
-        "confidenceCeiling": "medium",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "invalid-offset"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:invalid-offset"
-      }
-    },
-    {
-      "scenarioId": "policy-partial-capture",
-      "guardIds": [
-        "partial-capture"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/incomplete",
-      "serverFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/incomplete",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "incomplete",
-      "timestampProvenance": "missing",
-      "coverage": "partial",
-      "rotation": "complete",
-      "terminalRelation": "missing",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "coverageGap",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "exactPartial",
-        "confidenceCeiling": "medium",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "partial-source-coverage"
-        ],
-        "artifactRequests": [
-          "server-mp-policy"
-        ],
-        "deterministicResultId": "corr-contract:policy:partial-capture"
-      }
-    },
-    {
-      "scenarioId": "policy-redaction",
-      "guardIds": [
-        "redaction-boundary"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "synthetic:policy-private-client-input",
-      "serverFixtureRef": "synthetic:policy-private-server-input",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "compatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "corroborating",
-      "privateInputMarkers": [
-        "LAB\\SyntheticUser",
-        "https://mp.lab.invalid/policy?token=SYNTHETIC-TOKEN"
-      ],
-      "expectedPublicProjection": {
-        "clientHandle": "client-safe-001",
-        "outcome": "notCausal",
-        "serverHandle": "mp-safe-001",
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "exactPartial",
-        "confidenceCeiling": "medium",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "redacted-contract-only"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:redaction"
-      }
-    },
-    {
-      "scenarioId": "policy-reordered-input-a",
-      "guardIds": [
-        "reordered-input"
-      ],
-      "orderedInputEvidence": [
-        "client:policy-request-assignments",
-        "client:policy-evaluation-summary",
-        "server:mp-policy-response",
-        "server:mp-endpoint-ack"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/complete",
-      "serverFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/healthy-policy",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "compatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "corroborating",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "contractOnly",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "exactPartial",
-        "confidenceCeiling": "medium",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "upstream-facts-not-stable"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:reordered"
-      }
-    },
-    {
-      "scenarioId": "policy-reordered-input-b",
-      "guardIds": [
-        "reordered-input"
-      ],
-      "orderedInputEvidence": [
-        "server:mp-endpoint-ack",
-        "server:mp-policy-response",
-        "client:policy-evaluation-summary",
-        "client:policy-request-assignments"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/complete",
-      "serverFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/healthy-policy",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "compatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "corroborating",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "contractOnly",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "exactPartial",
-        "confidenceCeiling": "medium",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "upstream-facts-not-stable"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:reordered"
-      }
-    },
-    {
-      "scenarioId": "policy-rotation-split",
-      "guardIds": [
-        "partial-capture",
-        "rotation-split"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/rotation-split",
-      "serverFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/rotation-boundary",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "incomplete",
-      "timestampProvenance": "missing",
-      "coverage": "partial",
-      "rotation": "split",
-      "terminalRelation": "missing",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "coverageGap",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "exactPartial",
-        "confidenceCeiling": "medium",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "rotation-split"
-        ],
-        "artifactRequests": [
-          "server-mp-policy"
-        ],
-        "deterministicResultId": "corr-contract:policy:rotation-split"
-      }
-    },
-    {
-      "scenarioId": "policy-same-time-no-key",
-      "guardIds": [
-        "same-time-no-key"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "synthetic:policy-same-time-client",
-      "serverFixtureRef": "synthetic:policy-same-time-server",
-      "profileState": "validated",
-      "keyRelation": "missing",
-      "topology": "compatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "contradictory",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "candidateOnly",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "candidate",
-        "confidenceCeiling": "low",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "time-only-not-causal"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:same-time-no-key"
-      }
-    },
-    {
-      "scenarioId": "policy-server-only",
-      "guardIds": [
-        "missing-client-counterpart"
-      ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "absent",
-      "serverFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/policy-failure",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "incomplete",
-      "timestampProvenance": "missing",
-      "coverage": "serverOnly",
-      "rotation": "complete",
-      "terminalRelation": "corroborating",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "counterpartRequested",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "unlinked",
-        "confidenceCeiling": "low",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "client-counterpart-missing"
-        ],
-        "artifactRequests": [
-          "client-policy-agent"
-        ],
-        "deterministicResultId": "corr-contract:policy:server-only"
-      }
+      "expectedOutputSha256": "8f1dd8e33138013e162411a8c2d4221a346e4fbab113ba629c7b0846b8d34555"
     },
     {
       "scenarioId": "policy-topology-mismatch",
-      "guardIds": [
+      "mutation": "incompatibleTopology",
+      "expectedOutcome": "incompatible",
+      "expectedLinkStrength": "incompatible",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "topology-mismatch"
+      ],
+      "expectedTriggeredGuards": [
         "incompatible-topology"
       ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "synthetic:policy-client-site-lab",
-      "serverFixtureRef": "synthetic:policy-server-site-other",
-      "profileState": "validated",
-      "keyRelation": "exact",
-      "topology": "incompatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "corroborating",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "incompatible",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "incompatible",
-        "confidenceCeiling": "low",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "site-or-mp-mismatch"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:topology-mismatch"
-      }
+      "expectedOutputSha256": "b2dadae5c089876db567510611254811ab277d17ddb0c7aae7737feb837ba5a5"
+    },
+    {
+      "scenarioId": "policy-invalid-offset",
+      "mutation": "invalidTimestampOffset",
+      "expectedOutcome": "notCausal",
+      "expectedLinkStrength": "exactPartial",
+      "expectedConfidence": "medium",
+      "expectedReasonCodes": [
+        "ordering-unavailable"
+      ],
+      "expectedTriggeredGuards": [
+        "invalid-timestamp-offset"
+      ],
+      "expectedOutputSha256": "3a6fa01021ca34b579662cc598e4e78ffc2279699562a05abcf679123fe15434"
+    },
+    {
+      "scenarioId": "policy-client-only",
+      "mutation": "missingServerCounterpart",
+      "expectedOutcome": "counterpartRequested",
+      "expectedLinkStrength": "unlinked",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "server-counterpart-missing"
+      ],
+      "expectedTriggeredGuards": [
+        "missing-server-counterpart"
+      ],
+      "expectedOutputSha256": "61bc960e21763e7964293fa79b6508e28e65ac49a2172ea302c77e86536eb00e"
+    },
+    {
+      "scenarioId": "policy-server-only",
+      "mutation": "missingClientCounterpart",
+      "expectedOutcome": "counterpartRequested",
+      "expectedLinkStrength": "unlinked",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "client-counterpart-missing"
+      ],
+      "expectedTriggeredGuards": [
+        "missing-client-counterpart"
+      ],
+      "expectedOutputSha256": "6fba97248a83d7664f42c5fc5767225d394620b9f5791d91fa32e81d4ee42628"
+    },
+    {
+      "scenarioId": "policy-partial-capture",
+      "mutation": "partialCapture",
+      "expectedOutcome": "coverageGap",
+      "expectedLinkStrength": "exactPartial",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "partial-source-coverage"
+      ],
+      "expectedTriggeredGuards": [
+        "partial-capture"
+      ],
+      "expectedOutputSha256": "1484872bdf1783a11cd1d8e9f43218eea755ff3ed3dc8b9234a96137b43bff1a"
+    },
+    {
+      "scenarioId": "policy-redaction",
+      "mutation": "redactionBoundary",
+      "expectedOutcome": "causalFinding",
+      "expectedLinkStrength": "exactCorroborated",
+      "expectedConfidence": "high",
+      "expectedReasonCodes": [],
+      "expectedTriggeredGuards": [],
+      "expectedOutputSha256": "997942ab5a47842cbe50e126e03151b8fd9a2843843b26635bc083e0b7b88521"
+    },
+    {
+      "scenarioId": "policy-reordered-input-a",
+      "mutation": "reorderedInputA",
+      "expectedOutcome": "causalFinding",
+      "expectedLinkStrength": "exactCorroborated",
+      "expectedConfidence": "high",
+      "expectedReasonCodes": [],
+      "expectedTriggeredGuards": [],
+      "expectedOutputSha256": "7b9cc92b8084b0c61933c5fc606211e404c7f06dce9e742ae157d971589b2fd0"
+    },
+    {
+      "scenarioId": "policy-reordered-input-b",
+      "mutation": "reorderedInputB",
+      "expectedOutcome": "causalFinding",
+      "expectedLinkStrength": "exactCorroborated",
+      "expectedConfidence": "high",
+      "expectedReasonCodes": [],
+      "expectedTriggeredGuards": [],
+      "expectedOutputSha256": "7b9cc92b8084b0c61933c5fc606211e404c7f06dce9e742ae157d971589b2fd0"
+    },
+    {
+      "scenarioId": "policy-rotation-split",
+      "mutation": "rotationSplit",
+      "expectedOutcome": "coverageGap",
+      "expectedLinkStrength": "exactPartial",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "rotation-incomplete"
+      ],
+      "expectedTriggeredGuards": [
+        "rotation-split"
+      ],
+      "expectedOutputSha256": "0e5cd3e0f384249e02cdb839ad211d2a450e29ccd6402a0bd570a1cdc98e1165"
+    },
+    {
+      "scenarioId": "policy-same-time-no-key",
+      "mutation": "sameTimeNoKey",
+      "expectedOutcome": "candidateOnly",
+      "expectedLinkStrength": "candidate",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "exact-key-conflict",
+        "same-time-without-exact-key"
+      ],
+      "expectedTriggeredGuards": [
+        "conflicting-exact-key",
+        "same-time-no-key"
+      ],
+      "expectedOutputSha256": "7b031625aebbd2f82edd3aefe6a0ea6a8ce50f991bcd3a2befe149d9110fc3c8"
     },
     {
       "scenarioId": "policy-unknown-profile",
-      "guardIds": [
+      "mutation": "unknownExtractionProfile",
+      "expectedOutcome": "profileGap",
+      "expectedLinkStrength": "candidate",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "profile-unvalidated"
+      ],
+      "expectedTriggeredGuards": [
         "unknown-extraction-profile"
       ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "synthetic:policy-client-unknown-profile",
-      "serverFixtureRef": "synthetic:policy-server-unknown-profile",
-      "profileState": "unknown",
-      "keyRelation": "exact",
-      "topology": "compatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "corroborating",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "profileGap",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "candidate",
-        "confidenceCeiling": "low",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "profile-unvalidated"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:unknown-profile"
-      }
+      "expectedOutputSha256": "2a114d06ca9156e924216e8cec28ae4afe238d4b801640218061718e478e46ac"
     },
     {
       "scenarioId": "policy-unrelated-terminal-error",
-      "guardIds": [
+      "mutation": "unrelatedTerminalError",
+      "expectedOutcome": "incompatible",
+      "expectedLinkStrength": "incompatible",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "exact-key-conflict",
+        "unrelated-server-terminal"
+      ],
+      "expectedTriggeredGuards": [
         "conflicting-exact-key",
         "unrelated-terminal-error"
       ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/client/policy/complete",
-      "serverFixtureRef": "repo:crates/cmtraceopen-parser/tests/fixtures/sccm/server/management-point/policy-failure",
-      "profileState": "validated",
-      "keyRelation": "conflicting",
-      "topology": "compatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "unrelated",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "incompatible",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "incompatible",
-        "confidenceCeiling": "low",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "unrelated-server-terminal"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:unrelated-terminal"
-      }
+      "expectedOutputSha256": "ec6fb443597a7c99cdb90ef70f898039156a18bae55d3e22b9983a203bb3d4b7"
     },
     {
       "scenarioId": "policy-version-mismatch",
-      "guardIds": [
+      "mutation": "versionMismatch",
+      "expectedOutcome": "incompatible",
+      "expectedLinkStrength": "incompatible",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "profile-version-mismatch"
+      ],
+      "expectedTriggeredGuards": [
         "version-mismatch"
       ],
-      "clientIssue": "#321",
-      "serverIssue": "#328",
-      "clientFixtureRef": "synthetic:policy-client-profile-v1",
-      "serverFixtureRef": "synthetic:policy-server-profile-v2",
-      "profileState": "versionMismatch",
-      "keyRelation": "versionMismatch",
-      "topology": "compatible",
-      "timestampProvenance": "usable",
-      "coverage": "complete",
-      "rotation": "complete",
-      "terminalRelation": "corroborating",
-      "privateInputMarkers": [],
-      "expectedPublicProjection": {
-        "outcome": "incompatible",
-        "schemaVersion": "1.0.0",
-        "sourceFindingsPreserved": true,
-        "workflow": "policyManagementPoint"
-      },
-      "expected": {
-        "linkStrengthCeiling": "incompatible",
-        "confidenceCeiling": "low",
-        "highConfidenceCauseAllowed": false,
-        "exactCorroboratedAllowed": false,
-        "sourceFindingsMutable": false,
-        "reasonCodes": [
-          "profile-version-mismatch"
-        ],
-        "artifactRequests": [],
-        "deterministicResultId": "corr-contract:policy:version-mismatch"
-      }
+      "expectedOutputSha256": "10f24737a3cbe41cb17529d9a1eef4786b24c8fb57cce2c57f9fa37533d7af55"
     }
   ]
 }

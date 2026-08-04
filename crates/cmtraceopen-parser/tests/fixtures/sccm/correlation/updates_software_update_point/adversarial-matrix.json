@@ -1,19 +1,19 @@
 {
   "schemaVersion": "1.0.0",
-  "pair": "contentDistributionPoint",
+  "pair": "updatesSoftwareUpdatePoint",
   "scenarios": [
     {
-      "scenarioId": "content-healthy",
+      "scenarioId": "updates-healthy",
       "mutation": "healthy",
       "expectedOutcome": "causalFinding",
       "expectedLinkStrength": "exactCorroborated",
       "expectedConfidence": "high",
       "expectedReasonCodes": [],
       "expectedTriggeredGuards": [],
-      "expectedOutputSha256": "86389112bae52c1a2bbeef7f697492567968dbdf622216f6d0ea6b4003c4d050"
+      "expectedOutputSha256": "6209151d77bf897d4facc40d35d818971279b0a1233cce8380972fe15c0bb905"
     },
     {
-      "scenarioId": "content-conflicting-key",
+      "scenarioId": "updates-conflicting-key",
       "mutation": "conflictingExactKey",
       "expectedOutcome": "incompatible",
       "expectedLinkStrength": "incompatible",
@@ -24,10 +24,10 @@
       "expectedTriggeredGuards": [
         "conflicting-exact-key"
       ],
-      "expectedOutputSha256": "b5b601930465afff796f08d85ed246f2a110f8ab4266f7185a15fdc643b959e0"
+      "expectedOutputSha256": "54f0a9cd9fabcd367f9a41bfec83dde43aaa98570b30ee6993538f481bf8d9f6"
     },
     {
-      "scenarioId": "content-topology-mismatch",
+      "scenarioId": "updates-topology-mismatch",
       "mutation": "incompatibleTopology",
       "expectedOutcome": "incompatible",
       "expectedLinkStrength": "incompatible",
@@ -38,10 +38,10 @@
       "expectedTriggeredGuards": [
         "incompatible-topology"
       ],
-      "expectedOutputSha256": "4628070a37f0bc7463ccd5aa9969a2cd4104b915621dee223aefc185f4f6b1b8"
+      "expectedOutputSha256": "c82f2b5198d71a9a470e9db9d8c79dc81243ee33a595b15956b03141da4c3a67"
     },
     {
-      "scenarioId": "content-invalid-offset",
+      "scenarioId": "updates-invalid-offset",
       "mutation": "invalidTimestampOffset",
       "expectedOutcome": "notCausal",
       "expectedLinkStrength": "exactPartial",
@@ -52,10 +52,10 @@
       "expectedTriggeredGuards": [
         "invalid-timestamp-offset"
       ],
-      "expectedOutputSha256": "836a042ef4ea3e143d99e3d9d18c1fcbade969ad1cd3d6bb4d5d0262718fba7b"
+      "expectedOutputSha256": "39b9d2615a07ffb603ceee9ea2f12b3a1a8651cc419ffea9aa2137022f7c5c7a"
     },
     {
-      "scenarioId": "content-client-only",
+      "scenarioId": "updates-client-only",
       "mutation": "missingServerCounterpart",
       "expectedOutcome": "counterpartRequested",
       "expectedLinkStrength": "unlinked",
@@ -66,10 +66,10 @@
       "expectedTriggeredGuards": [
         "missing-server-counterpart"
       ],
-      "expectedOutputSha256": "ed1df2c80beea6c274d80969e358d4019f431d898e260fcdda70afdc83cc45f2"
+      "expectedOutputSha256": "df411c0b3787d4895b7c90ce2dd975f5f2f5f974a969246a59d4f9cbb87dbbad"
     },
     {
-      "scenarioId": "content-server-only",
+      "scenarioId": "updates-server-only",
       "mutation": "missingClientCounterpart",
       "expectedOutcome": "counterpartRequested",
       "expectedLinkStrength": "unlinked",
@@ -80,10 +80,10 @@
       "expectedTriggeredGuards": [
         "missing-client-counterpart"
       ],
-      "expectedOutputSha256": "6feaf58475e9db6bd955bb737b7ccf139eb3fa108a379da94c251cb5748851bd"
+      "expectedOutputSha256": "f734aa5280a74c73e2dbe4ed225fc1085e90fc89be31a88a2de2f651a5049262"
     },
     {
-      "scenarioId": "content-partial-capture",
+      "scenarioId": "updates-partial-capture",
       "mutation": "partialCapture",
       "expectedOutcome": "coverageGap",
       "expectedLinkStrength": "exactPartial",
@@ -94,40 +94,40 @@
       "expectedTriggeredGuards": [
         "partial-capture"
       ],
-      "expectedOutputSha256": "bebd381f8582b28f01f77deec1d06b45d342ff125548674d52d95c823d32b408"
+      "expectedOutputSha256": "132c4c17fa0c6116aec2311b561f81762094e94d7c7ec7adeb0035617cc28d9a"
     },
     {
-      "scenarioId": "content-redaction",
+      "scenarioId": "updates-redaction",
       "mutation": "redactionBoundary",
       "expectedOutcome": "causalFinding",
       "expectedLinkStrength": "exactCorroborated",
       "expectedConfidence": "high",
       "expectedReasonCodes": [],
       "expectedTriggeredGuards": [],
-      "expectedOutputSha256": "aa8a7be47b8f6c549c13dd9f4931dcc1145845cb14456505c596b82ab25e0195"
+      "expectedOutputSha256": "d30b6570a9d3b6f28d56fae8e616e94a380fcbc552673f2de07ef287a3678d9a"
     },
     {
-      "scenarioId": "content-reordered-input-a",
+      "scenarioId": "updates-reordered-input-a",
       "mutation": "reorderedInputA",
       "expectedOutcome": "causalFinding",
       "expectedLinkStrength": "exactCorroborated",
       "expectedConfidence": "high",
       "expectedReasonCodes": [],
       "expectedTriggeredGuards": [],
-      "expectedOutputSha256": "2a5799dc5aee79fe823efa879f3eb0ac36eda19ed68436e59407086ea59d3834"
+      "expectedOutputSha256": "f3a5154447fb347009adcf451fb306b364fe9c1b07d82fbbaadecd0615fac85f"
     },
     {
-      "scenarioId": "content-reordered-input-b",
+      "scenarioId": "updates-reordered-input-b",
       "mutation": "reorderedInputB",
       "expectedOutcome": "causalFinding",
       "expectedLinkStrength": "exactCorroborated",
       "expectedConfidence": "high",
       "expectedReasonCodes": [],
       "expectedTriggeredGuards": [],
-      "expectedOutputSha256": "2a5799dc5aee79fe823efa879f3eb0ac36eda19ed68436e59407086ea59d3834"
+      "expectedOutputSha256": "f3a5154447fb347009adcf451fb306b364fe9c1b07d82fbbaadecd0615fac85f"
     },
     {
-      "scenarioId": "content-rotation-split",
+      "scenarioId": "updates-rotation-split",
       "mutation": "rotationSplit",
       "expectedOutcome": "coverageGap",
       "expectedLinkStrength": "exactPartial",
@@ -138,10 +138,10 @@
       "expectedTriggeredGuards": [
         "rotation-split"
       ],
-      "expectedOutputSha256": "c24696833c0315f587d13fc67c20c77babd14621cab4bbedc1089b2bbe4ddbc3"
+      "expectedOutputSha256": "99e2b1706471b9d73660c024d92ced448375544a4c56cf2873a4fe32a8f767c0"
     },
     {
-      "scenarioId": "content-same-time-no-key",
+      "scenarioId": "updates-same-time-no-key",
       "mutation": "sameTimeNoKey",
       "expectedOutcome": "candidateOnly",
       "expectedLinkStrength": "candidate",
@@ -154,10 +154,10 @@
         "conflicting-exact-key",
         "same-time-no-key"
       ],
-      "expectedOutputSha256": "3e67925e5a00f66ca2066ddd2368c6a3f1717646b5b25c375b0a4aeb7e9a7e31"
+      "expectedOutputSha256": "e9867dcc84a6d27c105b2f65222c34147624ebe5ee02309157bf3b2f6c9e27dd"
     },
     {
-      "scenarioId": "content-unknown-profile",
+      "scenarioId": "updates-unknown-profile",
       "mutation": "unknownExtractionProfile",
       "expectedOutcome": "profileGap",
       "expectedLinkStrength": "candidate",
@@ -168,10 +168,10 @@
       "expectedTriggeredGuards": [
         "unknown-extraction-profile"
       ],
-      "expectedOutputSha256": "18dd98da80a684ab7c41b6698bbe4a63e42a99a38371d3419c2b52c93f289507"
+      "expectedOutputSha256": "391959d259027be1b42dfea412c51c9e466516ba3ba72e8fc92c3501778e4375"
     },
     {
-      "scenarioId": "content-unrelated-terminal-error",
+      "scenarioId": "updates-unrelated-terminal-error",
       "mutation": "unrelatedTerminalError",
       "expectedOutcome": "incompatible",
       "expectedLinkStrength": "incompatible",
@@ -184,10 +184,10 @@
         "conflicting-exact-key",
         "unrelated-terminal-error"
       ],
-      "expectedOutputSha256": "93521f8e12a33ce19659f1a0ce33c39145bc71f611db87f57fc9df9c8c419bac"
+      "expectedOutputSha256": "657b98dd6291b6dc712e956e6a179353ccebf9abe9ac165e19885675e5fcfc2b"
     },
     {
-      "scenarioId": "content-version-mismatch",
+      "scenarioId": "updates-version-mismatch",
       "mutation": "versionMismatch",
       "expectedOutcome": "incompatible",
       "expectedLinkStrength": "incompatible",
@@ -198,7 +198,7 @@
       "expectedTriggeredGuards": [
         "version-mismatch"
       ],
-      "expectedOutputSha256": "9475b623ea0f594c15c3b669eb19ec76f47c2a8b7835752042475b3b7bd96305"
+      "expectedOutputSha256": "05727fbf39e7f95a56378ff8fa101a8ccf3db33aa765f079109ff2dd7752cb2b"
     }
   ]
 }

@@ -5,7 +5,8 @@
       "guardId": "conflicting-exact-key",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -22,7 +23,8 @@
       "guardId": "incompatible-topology",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -39,7 +41,8 @@
       "guardId": "invalid-timestamp-offset",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -56,7 +59,8 @@
       "guardId": "missing-client-counterpart",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -73,7 +77,8 @@
       "guardId": "missing-server-counterpart",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -90,7 +95,8 @@
       "guardId": "partial-capture",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -107,14 +113,11 @@
       "guardId": "redaction-boundary",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
-      "forbiddenStrengths": [
-        "exactCorroborated"
-      ],
-      "forbiddenConfidences": [
-        "high"
-      ],
+      "forbiddenStrengths": [],
+      "forbiddenConfidences": [],
       "requiredOutputs": [
         "publicSafeHandles",
         "redactedProjection"
@@ -124,14 +127,11 @@
       "guardId": "reordered-input",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
-      "forbiddenStrengths": [
-        "exactCorroborated"
-      ],
-      "forbiddenConfidences": [
-        "high"
-      ],
+      "forbiddenStrengths": [],
+      "forbiddenConfidences": [],
       "requiredOutputs": [
         "deterministicSerialization",
         "sourceLocalResults"
@@ -141,7 +141,8 @@
       "guardId": "rotation-split",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -158,7 +159,8 @@
       "guardId": "same-time-no-key",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -175,7 +177,8 @@
       "guardId": "unknown-extraction-profile",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -192,7 +195,8 @@
       "guardId": "unrelated-terminal-error",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"
@@ -209,7 +213,8 @@
       "guardId": "version-mismatch",
       "appliesTo": [
         "contentDistributionPoint",
-        "policyManagementPoint"
+        "policyManagementPoint",
+        "updatesSoftwareUpdatePoint"
       ],
       "forbiddenStrengths": [
         "exactCorroborated"

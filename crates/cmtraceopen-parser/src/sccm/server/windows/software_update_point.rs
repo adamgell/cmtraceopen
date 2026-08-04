@@ -8,7 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::sccm::{SccmCoverageState, SccmEvidence, SccmRole, SccmTimeOrderingState};
+use crate::sccm::{
+    SccmCoverageState, SccmEvidence, SccmRole, SccmTimeOrderingState, SccmTimestamp,
+};
 
 use super::{SccmServerArtifactAssessment, SccmServerIntakeAssessment};
 
@@ -196,6 +198,12 @@ pub struct SccmSoftwareUpdatePointObservation {
     pub phase: SccmSoftwareUpdatePointPhase,
     pub disposition: SccmSoftwareUpdatePointDisposition,
     pub terminal: bool,
+    /// Comparable time retained for the #333 typed correlation adapter. The
+    /// accepted #330 source-local JSON contract predates correlation and must
+    /// remain byte-identical, so this canonical fact field is intentionally
+    /// excluded from that projection.
+    #[serde(skip_serializing)]
+    pub timestamp: SccmTimestamp,
     pub evidence: Vec<SccmSoftwareUpdatePointEvidence>,
 }
 
@@ -717,6 +725,12 @@ fn reduce_transaction(
                 phase: fact.phase,
                 disposition: fact.disposition,
                 terminal: fact.terminal,
+                timestamp: SccmTimestamp {
+                    original_display: None,
+                    offset_minutes: Some(0),
+                    utc_millis: Some(fact.utc_millis),
+                    ordering_state: SccmTimeOrderingState::NormalizedUtc,
+                },
                 evidence: vec![fact.evidence.clone()],
             }
         })
