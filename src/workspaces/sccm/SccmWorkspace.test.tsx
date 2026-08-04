@@ -86,6 +86,14 @@ const DISCOVERY: SccmEnvironmentDiscovery = {
   issues: [{ code: "registryAccessDenied", role: "client" }],
 };
 
+const ROLELESS_DISCOVERY: SccmEnvironmentDiscovery = {
+  supported: true,
+  configmgrVersion: null,
+  roles: [],
+  sources: [],
+  issues: [],
+};
+
 const CAPTURE: SccmCaptureResult = {
   bundleRoot: "C:\\Users\\TEST\\AppData\\Local\\cmtrace-open\\sccm\\bundle-id",
   capturedAtUtc: "2026-08-04T14:30:00Z",
@@ -139,6 +147,32 @@ describe("SccmWorkspace", () => {
     expect(
       screen.getByRole("button", { name: "Capture diagnostic bundle" }),
     ).toBeEnabled();
+  });
+
+  it("keeps capture unavailable when discovery finds no SCCM roles", async () => {
+    vi.mocked(discoverSccmEnvironment).mockResolvedValue(ROLELESS_DISCOVERY);
+    vi.mocked(captureSccmDiagnostics).mockResolvedValue(CAPTURE);
+    render(<SccmWorkspace />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discover SCCM environment" }),
+    );
+
+    expect(await screen.findByText("No SCCM roles detected")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This host is supported, but discovery found no Configuration Manager roles to collect.",
+      ),
+    ).toBeInTheDocument();
+    const capture = screen.getByRole("button", {
+      name: "Capture diagnostic bundle",
+    });
+    expect(capture).toBeDisabled();
+
+    fireEvent.click(capture);
+
+    expect(captureSccmDiagnostics).not.toHaveBeenCalled();
+    expect(screen.queryByText("Bundle retained")).not.toBeInTheDocument();
   });
 
   it("disables capture while native work is in flight", async () => {

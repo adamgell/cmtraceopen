@@ -62,7 +62,7 @@ export interface SccmDiscoveryIssue {
 
 export interface SccmEnvironmentDiscovery {
   supported: boolean;
-  configmgrVersion?: string;
+  configmgrVersion: string | null;
   roles: SccmDetectedRole[];
   sources: SccmSourceStatus[];
   issues: SccmDiscoveryIssue[];

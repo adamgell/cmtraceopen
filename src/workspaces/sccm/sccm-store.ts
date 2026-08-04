@@ -32,7 +32,12 @@ export const useSccmStore = create<SccmState>((set) => ({
   beginDiscovery: () => set({ phase: "discovering", error: null }),
   completeDiscovery: (discovery) =>
     set({ phase: "ready", discovery, capture: null, error: null }),
-  beginCapture: () => set({ phase: "capturing", error: null }),
+  beginCapture: () =>
+    set((state) =>
+      state.discovery?.supported && state.discovery.roles.length > 0
+        ? { phase: "capturing", error: null }
+        : state,
+    ),
   completeCapture: (capture) => set({ phase: "ready", capture, error: null }),
   fail: (message) =>
     set((state) => ({

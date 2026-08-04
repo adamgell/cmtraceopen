@@ -251,10 +251,36 @@
 }
 
 .sccm-error-banner,
+.sccm-no-roles-state,
 .sccm-issue-rail,
 .sccm-capture-receipt {
   border: 1px solid var(--colorNeutralStroke1);
   background: var(--colorNeutralBackground1);
+}
+
+.sccm-no-roles-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 13px;
+  border-left: 4px solid var(--colorBrandStroke1);
+  color: var(--colorNeutralForeground1);
+}
+
+.sccm-no-roles-state > svg {
+  color: var(--colorBrandForeground1);
+  font-size: 18px;
+}
+
+.sccm-no-roles-state div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.sccm-no-roles-state span {
+  color: var(--colorNeutralForeground3);
 }
 
 .sccm-error-banner {

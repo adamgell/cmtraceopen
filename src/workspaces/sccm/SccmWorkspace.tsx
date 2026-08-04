@@ -6,6 +6,7 @@ import {
   DatabaseSearchRegular,
   DismissCircleRegular,
   FolderOpenRegular,
+  InfoRegular,
   WarningRegular,
 } from "@fluentui/react-icons";
 import {
@@ -188,6 +189,9 @@ export function SccmWorkspace() {
   const completeCapture = useSccmStore((state) => state.completeCapture);
   const fail = useSccmStore((state) => state.fail);
   const isBusy = phase === "discovering" || phase === "capturing";
+  const canCapture = Boolean(
+    discovery?.supported && discovery.roles.length > 0,
+  );
   const sources = capture?.sources ?? discovery?.sources ?? [];
 
   const discover = async () => {
@@ -201,7 +205,7 @@ export function SccmWorkspace() {
   };
 
   const captureBundle = async () => {
-    if (isBusy || !discovery?.supported) return;
+    if (isBusy || !canCapture) return;
     beginCapture();
     try {
       completeCapture(await captureSccmDiagnostics());
@@ -257,7 +261,7 @@ export function SccmWorkspace() {
             <Button
               appearance="primary"
               icon={phase === "capturing" ? <Spinner size="tiny" /> : <ArchiveRegular />}
-              disabled={isBusy || !discovery.supported}
+              disabled={isBusy || !canCapture}
               onClick={() => void captureBundle()}
               aria-label={
                 phase === "capturing"
@@ -317,6 +321,22 @@ export function SccmWorkspace() {
               </div>
             </div>
           </section>
+
+          {discovery.supported && discovery.roles.length === 0 ? (
+            <section
+              className="sccm-no-roles-state"
+              aria-labelledby="sccm-no-roles-title"
+            >
+              <InfoRegular aria-hidden="true" />
+              <div>
+                <strong id="sccm-no-roles-title">No SCCM roles detected</strong>
+                <span>
+                  This host is supported, but discovery found no Configuration
+                  Manager roles to collect.
+                </span>
+              </div>
+            </section>
+          ) : null}
 
           {error ? (
             <div className="sccm-error-banner" role="alert">

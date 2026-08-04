@@ -4,6 +4,7 @@ import type { SccmEnvironmentDiscovery } from "./types";
 
 const discovery: SccmEnvironmentDiscovery = {
   supported: true,
+  configmgrVersion: null,
   roles: [{ role: "client", basis: "registry" }],
   sources: [],
   issues: [],
@@ -36,6 +37,23 @@ describe("useSccmStore", () => {
     expect(useSccmStore.getState()).toMatchObject({
       phase: "capturing",
       discovery,
+      error: null,
+    });
+  });
+
+  it("refuses capture state when a supported discovery has no SCCM roles", () => {
+    const rolelessDiscovery: SccmEnvironmentDiscovery = {
+      ...discovery,
+      roles: [],
+    };
+    const store = useSccmStore.getState();
+    store.completeDiscovery(rolelessDiscovery);
+    store.beginCapture();
+
+    expect(useSccmStore.getState()).toMatchObject({
+      phase: "ready",
+      discovery: rolelessDiscovery,
+      capture: null,
       error: null,
     });
   });
