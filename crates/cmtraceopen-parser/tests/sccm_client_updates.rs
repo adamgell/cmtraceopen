@@ -2,8 +2,13 @@ use cmtraceopen_parser::sccm::client::{
     admit_client_evidence, analyze_client_updates, assess_client_intake, SccmClientCapturedPayload,
     SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientUpdatePhase, SccmClientUpdateState,
 };
-use cmtraceopen_parser::sccm::{SccmArtifact, SccmCoverageState, SccmRole, SccmRotation};
+use cmtraceopen_parser::sccm::{
+    classify_artifact_name, SccmArtifact, SccmCoverageState, SccmRole, SccmRotation,
+};
+use serde::Deserialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::{fs, path::PathBuf};
 
 const UPDATE_ID: &str = "32300000-0000-0000-0000-000000000003";
 const CI_ID: &str = "323003";
@@ -23,6 +28,38 @@ struct Record<'a> {
     component: &'a str,
     time: &'a str,
     message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CorpusManifest {
+    artifacts: Vec<CorpusArtifact>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CorpusArtifact {
+    design_only_catalog: CorpusCatalog,
+    capture_state: String,
+    encoding: Option<String>,
+    original_basename: String,
+    rotation: CorpusRotation,
+    source_version: Option<String>,
+    captured_utc: Option<String>,
+    relative_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CorpusCatalog {
+    entry_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CorpusRotation {
+    kind: String,
+    fragment_complete: Option<bool>,
 }
 
 fn admitted(
@@ -95,6 +132,110 @@ fn keyed(update_id: &str, ci_id: &str, disposition: &str) -> String {
     )
 }
 
+fn corpus_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/client/updates")
+}
+
+fn corpus_admitted(
+    scenario: &str,
+) -> Result<cmtraceopen_parser::sccm::client::SccmClientAdmittedEvidence, String> {
+    let scenario_dir = corpus_root().join(scenario);
+    let manifest: CorpusManifest = serde_json::from_slice(
+        &fs::read(scenario_dir.join("manifest.json")).expect("corpus manifest"),
+    )
+    .expect("valid corpus manifest");
+    let mut artifacts = Vec::new();
+    let mut payloads = Vec::new();
+    for (index, source) in manifest.artifacts.into_iter().enumerate() {
+        let coverage = match source.capture_state.as_str() {
+            "captured" => SccmCoverageState::Captured,
+            "absent" => SccmCoverageState::Absent,
+            "accessDenied" => SccmCoverageState::AccessDenied,
+            "capped" => SccmCoverageState::Capped,
+            "skipped" => SccmCoverageState::Skipped,
+            "unsupported" => SccmCoverageState::Unsupported,
+            "parseFailed" => SccmCoverageState::ParseFailed,
+            other => panic!("unsupported corpus coverage {other}"),
+        };
+        let rotation = match source.rotation.kind.as_str() {
+            "current" => SccmRotation::Current,
+            "lo" | "loUnderscore" => SccmRotation::LoUnderscore,
+            other => panic!("unsupported corpus rotation {other}"),
+        };
+        let artifact_id = format!("fixture-update-numbered-{:02}", index + 1);
+        let classified = classify_artifact_name(&source.original_basename, SccmRole::Client);
+        let eligible_payload = coverage == SccmCoverageState::Captured
+            && source.rotation.fragment_complete == Some(true)
+            && classified.supported_for_diagnosis
+            && classified.uses_ccm_records;
+        let bytes = eligible_payload.then(|| {
+            fs::read(
+                scenario_dir.join(
+                    source
+                        .relative_path
+                        .as_deref()
+                        .expect("captured corpus relative path"),
+                ),
+            )
+            .expect("captured corpus bytes")
+        });
+        let relative_path = source.relative_path.or_else(|| {
+            matches!(
+                coverage,
+                SccmCoverageState::Captured
+                    | SccmCoverageState::Capped
+                    | SccmCoverageState::ParseFailed
+            )
+            .then(|| {
+                let rotation_segment = match &rotation {
+                    SccmRotation::LoUnderscore => "lo",
+                    _ => "current",
+                };
+                format!(
+                    "evidence/{}/{rotation_segment}/{}",
+                    source.design_only_catalog.entry_id, source.original_basename
+                )
+            })
+        });
+        artifacts.push(SccmClientIntakeArtifact {
+            artifact: SccmArtifact {
+                artifact_id: artifact_id.clone(),
+                display_name: source.original_basename,
+                original_path: None,
+                host: None,
+                role: SccmRole::Client,
+                configmgr_version: if classified.uses_ccm_records {
+                    Some("5.00.9128.1000".to_owned())
+                } else {
+                    source.source_version
+                },
+                collected_at_utc: source.captured_utc,
+                rotation,
+                coverage,
+                encoding: source.encoding,
+            },
+            path_fingerprint: Some(format!("synthetic:numbered-{:02}", index + 1)),
+            rotation_lineage: None,
+            relative_path,
+            fragment_complete: Some(source.rotation.fragment_complete.unwrap_or(false)),
+            declared_byte_length: bytes.as_ref().map(|bytes| bytes.len() as u64),
+            content_sha256: bytes.as_ref().map(|bytes| sha256(bytes)),
+        });
+        if let Some(bytes) = bytes {
+            payloads.push(
+                SccmClientCapturedPayload::new(artifact_id, bytes)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+    }
+    let bundle = SccmClientIntakeBundle {
+        artifacts,
+        capture_gaps: Vec::new(),
+    };
+    let assessment = assess_client_intake(&bundle).map_err(|error| error.to_string())?;
+    admit_client_evidence(&bundle, &assessment, &payloads).map_err(|error| error.to_string())
+}
+
 #[test]
 fn scan_failure_uses_sealed_exact_key_evidence_without_server_cause() {
     let admitted = admitted_scan(&format!(
@@ -109,6 +250,10 @@ fn scan_failure_uses_sealed_exact_key_evidence_without_server_cause() {
     assert_eq!(transaction.key.ci_id, CI_ID);
     assert_eq!(transaction.phase, SccmClientUpdatePhase::Scan);
     assert_eq!(transaction.state, SccmClientUpdateState::Failed);
+    assert_eq!(
+        serde_json::to_value(transaction.classification).expect("classification"),
+        "symptom"
+    );
     assert_eq!(transaction.last_successful_phase, None);
     assert_eq!(transaction.evidence.len(), 1);
     assert_eq!(
@@ -202,6 +347,31 @@ fn full_success_proves_all_eight_phases_without_cross_side_correlation() {
     assert!(analysis.findings.is_empty());
     assert!(!analysis.correlation_handoff.performed);
     assert!(!analysis.correlation_handoff.server_cause_claimed);
+    assert!(analysis.correlation_handoff.emitted_counterpart_ready_fact);
+    assert_eq!(
+        analysis.correlation_handoff.counterpart_ready_facts.len(),
+        1
+    );
+    let counterpart = &analysis.correlation_handoff.counterpart_ready_facts[0];
+    assert_eq!(counterpart.update_id, UPDATE_ID);
+    assert_eq!(counterpart.ci_id, CI_ID);
+    assert_eq!(counterpart.phase, SccmClientUpdatePhase::LocateSup);
+    assert_eq!(
+        counterpart.key_confidence,
+        cmtraceopen_parser::sccm::SccmKeyConfidence::Low
+    );
+    assert_eq!(
+        counterpart.timestamp_provenance.normalized_utc,
+        "2026-07-30T02:00:02.000Z"
+    );
+    assert_eq!(counterpart.evidence.artifact_id, "fixture-update-location");
+    assert!(!counterpart.correlation_eligible);
+    assert!(!counterpart.time_only_eligible);
+    assert!(
+        !analysis
+            .correlation_handoff
+            .topology_compatibility_evaluated
+    );
 }
 
 #[test]
@@ -262,9 +432,54 @@ fn maintenance_window_defer_is_not_a_failure() {
         Some(SccmClientUpdatePhase::Download)
     );
     assert_eq!(
+        transaction.coverage_gap_artifact_ids,
+        ["client-maintenance-window"]
+    );
+    assert_eq!(
+        transaction
+            .next_artifact
+            .as_ref()
+            .map(|request| request.logical_artifact_id.as_str()),
+        Some("client-maintenance-window")
+    );
+    assert_eq!(
         analysis.findings[0].class,
         cmtraceopen_parser::sccm::SccmFindingClass::BlockedOrDeferred
     );
+}
+
+#[test]
+fn evaluate_only_does_not_infer_a_missing_sup_without_a_declared_gap() {
+    let records = vec![
+        Record {
+            id: "update-a",
+            basename: "ScanAgent.log",
+            group: "client-updates",
+            component: "ScanAgent",
+            time: "03:00:00.000",
+            message: keyed(UPDATE_ID, CI_ID, "Scan succeeded"),
+        },
+        Record {
+            id: "update-b",
+            basename: "WUAHandler.log",
+            group: "client-updates",
+            component: "WUAHandler",
+            time: "03:00:01.000",
+            message: keyed(UPDATE_ID, CI_ID, "Evaluate applicable"),
+        },
+    ];
+
+    let analysis = analyze_client_updates(&admitted(&records)).expect("update analysis");
+    let transaction = &analysis.transactions[0];
+    assert_eq!(transaction.phase, SccmClientUpdatePhase::Evaluate);
+    assert_eq!(transaction.state, SccmClientUpdateState::Succeeded);
+    assert_eq!(
+        transaction.last_successful_phase,
+        Some(SccmClientUpdatePhase::Evaluate)
+    );
+    assert!(transaction.coverage_gap_artifact_ids.is_empty());
+    assert!(transaction.next_artifact.is_none());
+    assert!(!analysis.correlation_handoff.server_cause_claimed);
 }
 
 #[test]
@@ -298,4 +513,156 @@ fn same_minute_updates_remain_separate_and_input_order_is_deterministic() {
         serde_json::to_value(original).expect("serialize"),
         serde_json::to_value(reversed).expect("serialize")
     );
+}
+
+#[test]
+fn counterpart_fact_requires_location_services_and_every_exact_field() {
+    let missing_sup = Record {
+        id: "update-a",
+        basename: "LocationServices.log",
+        group: "client-location-services-shared",
+        component: "LocationServices",
+        time: "05:00:00.000",
+        message: format!(
+            "LocateSup selected UpdateId={{{UPDATE_ID}}} CIId={CI_ID} \
+             ContentId=CONTENT-{CI_ID} UpdateJobId=JOB-{CI_ID} \
+             ClientHandle=safe:client:{CI_ID} SiteCode=LAB"
+        ),
+    };
+    let wrong_source = Record {
+        id: "update-b",
+        basename: "UpdatesDeployment.log",
+        group: "client-updates",
+        component: "UpdatesDeployment",
+        time: "05:00:01.000",
+        message: keyed(UPDATE_ID, CI_ID, "LocateSup selected"),
+    };
+    let raw_host = Record {
+        id: "update-c",
+        basename: "LocationServices.log",
+        group: "client-location-services-shared",
+        component: "LocationServices",
+        time: "05:00:02.000",
+        message: keyed(UPDATE_ID, CI_ID, "LocateSup selected")
+            .replace("safe:sup:lab", "LAB-SUP-01"),
+    };
+
+    for record in [missing_sup, wrong_source, raw_host] {
+        let analysis = analyze_client_updates(&admitted(&[record])).expect("update analysis");
+        assert!(!analysis.correlation_handoff.emitted_counterpart_ready_fact);
+        assert!(analysis
+            .correlation_handoff
+            .counterpart_ready_facts
+            .is_empty());
+    }
+}
+
+#[test]
+fn later_same_phase_success_recovers_an_earlier_terminal_marker() {
+    let records = vec![
+        Record {
+            id: "update-a",
+            basename: "UpdatesHandler.log",
+            group: "client-updates",
+            component: "UpdatesHandler",
+            time: "06:00:00.000",
+            message: keyed(UPDATE_ID, CI_ID, "Install terminal failure"),
+        },
+        Record {
+            id: "update-b",
+            basename: "UpdatesDeployment.log",
+            group: "client-updates",
+            component: "UpdatesDeployment",
+            time: "06:00:01.000",
+            message: keyed(UPDATE_ID, CI_ID, "Install succeeded"),
+        },
+    ];
+
+    let analysis = analyze_client_updates(&admitted(&records)).expect("update analysis");
+    let transaction = &analysis.transactions[0];
+    assert_eq!(transaction.phase, SccmClientUpdatePhase::Install);
+    assert_eq!(transaction.state, SccmClientUpdateState::Succeeded);
+    assert_eq!(
+        transaction.last_successful_phase,
+        Some(SccmClientUpdatePhase::Install)
+    );
+    assert!(analysis.findings.is_empty());
+}
+
+#[test]
+fn all_committed_update_scenarios_execute_through_the_exported_analyzer() {
+    let mut scenarios = fs::read_dir(corpus_root())
+        .expect("updates corpus directory")
+        .map(|entry| entry.expect("scenario entry"))
+        .filter(|entry| entry.file_type().expect("scenario type").is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    scenarios.sort();
+    assert_eq!(
+        scenarios.len(),
+        17,
+        "the complete committed corpus is executable"
+    );
+
+    for scenario in scenarios {
+        let expected: Value = serde_json::from_slice(
+            &fs::read(corpus_root().join(&scenario).join("expected.json"))
+                .expect("scenario expected contract"),
+        )
+        .expect("valid scenario expected contract");
+        let admitted = corpus_admitted(&scenario)
+            .unwrap_or_else(|error| panic!("{scenario}: sealed corpus admission: {error}"));
+        let analysis = analyze_client_updates(&admitted)
+            .unwrap_or_else(|error| panic!("{scenario}: exported analyzer: {error}"));
+        let actual = serde_json::to_value(&analysis).expect("serializable analysis");
+
+        assert_eq!(
+            actual["transactions"].as_array().map(Vec::len),
+            expected["transactions"].as_array().map(Vec::len),
+            "{scenario}: transaction count"
+        );
+        assert_eq!(
+            actual["findings"].as_array().map(Vec::len),
+            expected["findings"].as_array().map(Vec::len),
+            "{scenario}: finding count"
+        );
+        for expected_transaction in expected["transactions"]
+            .as_array()
+            .expect("expected transactions")
+        {
+            let update_id = &expected_transaction["key"]["updateId"];
+            let actual_transaction = actual["transactions"]
+                .as_array()
+                .expect("actual transactions")
+                .iter()
+                .find(|transaction| transaction["key"]["updateId"] == *update_id)
+                .unwrap_or_else(|| panic!("{scenario}: missing transaction {update_id}"));
+            for field in ["phase", "state", "lastSuccessfulPhase"] {
+                assert_eq!(
+                    actual_transaction[field], expected_transaction[field],
+                    "{scenario}: {field}"
+                );
+            }
+            if actual_transaction["state"] == "failed" {
+                assert_eq!(
+                    actual_transaction["classification"], "symptom",
+                    "{scenario}: experimental keys cannot establish causal failure"
+                );
+            }
+            assert_eq!(
+                actual_transaction["nextArtifact"]["logicalArtifactId"],
+                expected_transaction["nextArtifact"]["logicalArtifactId"],
+                "{scenario}: bounded next artifact"
+            );
+        }
+        assert_eq!(
+            actual["correlationHandoff"]["counterpartReadyFacts"]
+                .as_array()
+                .map(Vec::len),
+            expected["correlationHandoff"]["counterpartReadyFacts"]
+                .as_array()
+                .map(Vec::len),
+            "{scenario}: counterpart-ready fact count"
+        );
+    }
 }

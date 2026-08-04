@@ -189,7 +189,11 @@ const CLIENT_SOURCE_MEMBERSHIPS: &[SccmClientSourceMembership] = &[
     },
     SccmClientSourceMembership {
         basename: "LocationServices.log",
-        logical_artifact_ids: &["client-location", "client-content"],
+        logical_artifact_ids: &[
+            "client-location",
+            "client-content",
+            "client-location-services-shared",
+        ],
     },
     SccmClientSourceMembership {
         basename: "PolicyAgent.log",
@@ -242,6 +246,18 @@ const CLIENT_SOURCE_MEMBERSHIPS: &[SccmClientSourceMembership] = &[
     SccmClientSourceMembership {
         basename: "WUAHandler.log",
         logical_artifact_ids: &["client-updates"],
+    },
+    SccmClientSourceMembership {
+        basename: "ServiceWindowManager.log",
+        logical_artifact_ids: &["client-maintenance-window"],
+    },
+    SccmClientSourceMembership {
+        basename: "RebootCoordinator.log",
+        logical_artifact_ids: &["client-reboot"],
+    },
+    SccmClientSourceMembership {
+        basename: "CBS.log",
+        logical_artifact_ids: &["client-windows-update-supplemental"],
     },
     SccmClientSourceMembership {
         basename: "ReportingEvents.log",
@@ -425,6 +441,24 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "UpdatesStore",
         logical_name: "updatesStore",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientUpdates,
+    },
+    CatalogSpec {
+        basename: "ServiceWindowManager",
+        logical_name: "serviceWindowManager",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientUpdates,
+    },
+    CatalogSpec {
+        basename: "RebootCoordinator",
+        logical_name: "rebootCoordinator",
+        role: SccmRole::Client,
+        family: SccmArtifactFamily::ClientUpdates,
+    },
+    CatalogSpec {
+        basename: "CBS",
+        logical_name: "componentBasedServicing",
         role: SccmRole::Client,
         family: SccmArtifactFamily::ClientUpdates,
     },
@@ -693,7 +727,10 @@ fn declared_catalog_entry(entry: &CatalogSpec, role: SccmRole) -> SccmSourceCata
 }
 
 fn catalog_entry_uses_ccm_records(entry: &CatalogSpec) -> bool {
-    !matches!(entry.logical_name, "clientMsi" | "reportingEvents")
+    !matches!(
+        entry.logical_name,
+        "clientMsi" | "reportingEvents" | "componentBasedServicing"
+    )
 }
 
 struct ParsedArtifactName<'a> {

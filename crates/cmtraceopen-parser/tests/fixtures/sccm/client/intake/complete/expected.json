@@ -55,6 +55,20 @@
         ]
       },
       {
+        "logicalArtifactId": "client-location-services-shared",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-location-services-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-updates-root-a-numbered-01"
+        ]
+      },
+      {
         "logicalArtifactId": "client-policy-agent",
         "coverage": "captured",
         "fragmentArtifactIds": [
@@ -66,6 +80,13 @@
         "coverage": "captured",
         "fragmentArtifactIds": [
           "fixture-complete-policy-state-root-a-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-reboot",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-updates-root-a-numbered-02"
         ]
       },
       {
@@ -237,6 +258,34 @@
         "configmgrVersion": "5.00.TEST.0000",
         "collectedAtUtc": "2026-07-30T00:00:09Z",
         "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-updates-root-a-numbered-01",
+        "basename": "ServiceWindowManager.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic:updates-numbered-01",
+        "relativePath": "evidence/client-maintenance-window/current/ServiceWindowManager.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:09Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-updates-root-a-numbered-02",
+        "basename": "RebootCoordinator.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic:updates-numbered-02",
+        "relativePath": "evidence/client-reboot/current/RebootCoordinator.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:10Z",
+        "encoding": "utf-8"
       }
     ],
     "physicalArtifactIds": [
@@ -250,7 +299,9 @@
       "fixture-complete-policy-agent-root-a-current",
       "fixture-complete-policy-state-root-a-current",
       "fixture-complete-update-supplemental-root-a-current",
-      "fixture-complete-updates-root-a-current"
+      "fixture-complete-updates-root-a-current",
+      "fixture-complete-updates-root-a-numbered-01",
+      "fixture-complete-updates-root-a-numbered-02"
     ],
     "unsupportedArtifacts": [],
     "coverageGaps": []
@@ -322,6 +373,18 @@
         "byteLimit": 4096,
         "limitApplied": false,
         "bytesCopied": 174
+      },
+      {
+        "artifactId": "fixture-complete-updates-root-a-numbered-01",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 195
+      },
+      {
+        "artifactId": "fixture-complete-updates-root-a-numbered-02",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 180
       }
     ]
   },

@@ -873,6 +873,8 @@ const HEALTH: &[SccmClientWorkflow] = &[SccmClientWorkflow::Health];
 const POLICY: &[SccmClientWorkflow] = &[SccmClientWorkflow::Policy];
 const DEPLOYMENT: &[SccmClientWorkflow] = &[SccmClientWorkflow::Deployment];
 const UPDATES: &[SccmClientWorkflow] = &[SccmClientWorkflow::Updates];
+const DEPLOYMENT_UPDATES: &[SccmClientWorkflow] =
+    &[SccmClientWorkflow::Deployment, SccmClientWorkflow::Updates];
 const HEALTH_DEPLOYMENT: &[SccmClientWorkflow] =
     &[SccmClientWorkflow::Health, SccmClientWorkflow::Deployment];
 
@@ -894,7 +896,7 @@ const CLIENT_SOURCE_GROUPS: &[ClientSourceGroupSpec] = &[
     },
     ClientSourceGroupSpec {
         logical_artifact_id: "client-content",
-        workflows: DEPLOYMENT,
+        workflows: DEPLOYMENT_UPDATES,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
@@ -913,6 +915,16 @@ const CLIENT_SOURCE_GROUPS: &[ClientSourceGroupSpec] = &[
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
+        logical_artifact_id: "client-location-services-shared",
+        workflows: UPDATES,
+        requiredness: SccmClientSourceRequiredness::Required,
+    },
+    ClientSourceGroupSpec {
+        logical_artifact_id: "client-maintenance-window",
+        workflows: UPDATES,
+        requiredness: SccmClientSourceRequiredness::Required,
+    },
+    ClientSourceGroupSpec {
         logical_artifact_id: "client-policy-agent",
         workflows: POLICY,
         requiredness: SccmClientSourceRequiredness::Required,
@@ -920,6 +932,11 @@ const CLIENT_SOURCE_GROUPS: &[ClientSourceGroupSpec] = &[
     ClientSourceGroupSpec {
         logical_artifact_id: "client-policy-state",
         workflows: POLICY,
+        requiredness: SccmClientSourceRequiredness::Required,
+    },
+    ClientSourceGroupSpec {
+        logical_artifact_id: "client-reboot",
+        workflows: UPDATES,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {

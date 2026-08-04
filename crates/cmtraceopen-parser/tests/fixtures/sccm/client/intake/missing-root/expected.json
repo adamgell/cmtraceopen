@@ -55,6 +55,18 @@
         ]
       },
       {
+        "logicalArtifactId": "client-location-services-shared",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-location-services-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
         "logicalArtifactId": "client-policy-agent",
         "coverage": "absent",
         "fragmentArtifactIds": [
@@ -67,6 +79,11 @@
         "fragmentArtifactIds": [
           "fixture-missing-policy-state-current"
         ]
+      },
+      {
+        "logicalArtifactId": "client-reboot",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
       },
       {
         "logicalArtifactId": "client-updates",
@@ -299,6 +316,20 @@
         "reason": "No artifact for client source LocationServices.log was supplied."
       },
       {
+        "logicalArtifactId": "client-location-services-shared",
+        "artifactId": "fixture-missing-location-services-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source LocationServices.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
         "logicalArtifactId": "client-policy-agent",
         "artifactId": "fixture-missing-policy-agent-current",
         "role": "client",
@@ -311,6 +342,13 @@
         "role": "client",
         "coverage": "absent",
         "reason": "No artifact for client source CIAgent.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-reboot",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
       },
       {
         "logicalArtifactId": "client-updates",

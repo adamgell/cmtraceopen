@@ -42,12 +42,27 @@
         "fragmentArtifactIds": []
       },
       {
+        "logicalArtifactId": "client-location-services-shared",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
         "logicalArtifactId": "client-policy-agent",
         "coverage": "absent",
         "fragmentArtifactIds": []
       },
       {
         "logicalArtifactId": "client-policy-state",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-reboot",
         "coverage": "absent",
         "fragmentArtifactIds": []
       },
@@ -133,6 +148,20 @@
         "reason": "No artifact for this bounded client source group was supplied."
       },
       {
+        "logicalArtifactId": "client-location-services-shared",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
         "logicalArtifactId": "client-policy-agent",
         "artifactId": null,
         "role": "client",
@@ -141,6 +170,13 @@
       },
       {
         "logicalArtifactId": "client-policy-state",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-reboot",
         "artifactId": null,
         "role": "client",
         "coverage": "absent",

@@ -86,6 +86,7 @@ impl SccmClientCapturedPayload {
 pub struct SccmClientAdmittedEvidence {
     evidence: Vec<SccmEvidence>,
     source_coverage: BTreeMap<String, SccmCoverageState>,
+    source_coverage_by_basename: BTreeMap<String, SccmCoverageState>,
     admitted_source_groups: BTreeSet<String>,
     profiles_by_artifact: BTreeMap<String, SccmExtractionProfile>,
     integrity_seal: String,
@@ -126,6 +127,14 @@ impl SccmClientAdmittedEvidence {
     ) -> Result<Option<&SccmCoverageState>, SccmClientEvidenceAdmissionError> {
         self.verify_integrity()?;
         Ok(self.source_coverage.get(logical_artifact_id))
+    }
+
+    pub(crate) fn source_coverage_for_basename(
+        &self,
+        basename: &str,
+    ) -> Result<Option<&SccmCoverageState>, SccmClientEvidenceAdmissionError> {
+        self.verify_integrity()?;
+        Ok(self.source_coverage_by_basename.get(basename))
     }
 
     pub(crate) fn extract_keys_for_artifact(
@@ -174,6 +183,7 @@ impl SccmClientAdmittedEvidence {
         let recomputed = compute_integrity_seal(
             &self.evidence,
             &self.source_coverage,
+            &self.source_coverage_by_basename,
             &self.admitted_source_groups,
             &self.profiles_by_artifact,
         )?;
@@ -293,6 +303,18 @@ pub fn admit_client_evidence(
         .iter()
         .map(|group| (group.logical_artifact_id.clone(), group.coverage.clone()))
         .collect::<BTreeMap<_, _>>();
+    let mut source_coverage_by_basename = BTreeMap::new();
+    for fragment in canonical.groups.iter().flat_map(|group| &group.fragments) {
+        source_coverage_by_basename
+            .entry(fragment.basename.clone())
+            .and_modify(|coverage| {
+                if source_coverage_priority(&fragment.coverage) > source_coverage_priority(coverage)
+                {
+                    *coverage = fragment.coverage.clone();
+                }
+            })
+            .or_insert_with(|| fragment.coverage.clone());
+    }
     let mut eligible = BTreeMap::new();
     let mut unbound_complete_captures = BTreeSet::new();
     for fragment in &canonical.physical_artifacts {
@@ -427,12 +449,14 @@ pub fn admit_client_evidence(
     let integrity_seal = compute_integrity_seal(
         &evidence,
         &source_coverage,
+        &source_coverage_by_basename,
         &admitted_source_groups,
         &profiles_by_artifact,
     )?;
     Ok(SccmClientAdmittedEvidence {
         evidence,
         source_coverage,
+        source_coverage_by_basename,
         admitted_source_groups,
         profiles_by_artifact,
         integrity_seal,
@@ -624,6 +648,7 @@ fn compare_evidence(left: &SccmEvidence, right: &SccmEvidence) -> std::cmp::Orde
 struct IntegrityProjection<'a> {
     evidence: &'a [SccmEvidence],
     source_coverage: &'a BTreeMap<String, SccmCoverageState>,
+    source_coverage_by_basename: &'a BTreeMap<String, SccmCoverageState>,
     admitted_source_groups: &'a BTreeSet<String>,
     profile_assignments: &'a BTreeMap<&'a str, usize>,
     profiles: &'a [&'a SccmExtractionProfile],
@@ -678,6 +703,7 @@ impl Write for BoundedIntegrityWriter {
 fn compute_integrity_seal(
     evidence: &[SccmEvidence],
     source_coverage: &BTreeMap<String, SccmCoverageState>,
+    source_coverage_by_basename: &BTreeMap<String, SccmCoverageState>,
     admitted_source_groups: &BTreeSet<String>,
     profiles_by_artifact: &BTreeMap<String, SccmExtractionProfile>,
 ) -> Result<String, SccmClientEvidenceAdmissionError> {
@@ -709,6 +735,7 @@ fn compute_integrity_seal(
         &IntegrityProjection {
             evidence,
             source_coverage,
+            source_coverage_by_basename,
             admitted_source_groups,
             profile_assignments: &profile_assignments,
             profiles: &unique_profiles,
@@ -722,6 +749,18 @@ fn compute_integrity_seal(
         });
     }
     Ok(writer.finish())
+}
+
+fn source_coverage_priority(coverage: &SccmCoverageState) -> u8 {
+    match coverage {
+        SccmCoverageState::Captured => 0,
+        SccmCoverageState::Absent => 1,
+        SccmCoverageState::Skipped => 2,
+        SccmCoverageState::Unsupported => 3,
+        SccmCoverageState::ParseFailed => 4,
+        SccmCoverageState::Capped => 5,
+        SccmCoverageState::AccessDenied => 6,
+    }
 }
 
 fn digest_hex(bytes: &[u8]) -> String {

@@ -40,6 +40,16 @@
         "fragmentArtifactIds": []
       },
       {
+        "logicalArtifactId": "client-location-services-shared",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
         "logicalArtifactId": "client-policy-agent",
         "coverage": "accessDenied",
         "fragmentArtifactIds": [
@@ -52,6 +62,11 @@
         "fragmentArtifactIds": [
           "fixture-access-policy-state-root-a-current"
         ]
+      },
+      {
+        "logicalArtifactId": "client-reboot",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
       },
       {
         "logicalArtifactId": "client-updates",
@@ -149,11 +164,32 @@
         "reason": "No artifact for this bounded client source group was supplied."
       },
       {
+        "logicalArtifactId": "client-location-services-shared",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
         "logicalArtifactId": "client-policy-agent",
         "artifactId": "fixture-access-policy-agent-root-a-current",
         "role": "client",
         "coverage": "accessDenied",
         "reason": "Access was denied for client source PolicyAgent.log."
+      },
+      {
+        "logicalArtifactId": "client-reboot",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
       },
       {
         "logicalArtifactId": "client-updates",

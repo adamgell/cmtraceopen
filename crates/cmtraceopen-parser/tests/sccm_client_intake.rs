@@ -1195,7 +1195,10 @@ fn every_declared_client_basename_is_supported_by_the_authoritative_catalog() {
             );
             assert_eq!(
                 classified.uses_ccm_records,
-                !matches!(basename.as_str(), "client.msi.log" | "ReportingEvents.log"),
+                !matches!(
+                    basename.as_str(),
+                    "client.msi.log" | "ReportingEvents.log" | "CBS.log"
+                ),
                 "the shared catalog must not route a non-CCM supplement through raw CCM"
             );
         }
@@ -1481,7 +1484,7 @@ fn complete_client_intake_covers_every_declared_group_without_a_diagnosis() {
     let declared = declared_client_source_groups();
     let intake = assessment("complete");
 
-    assert_eq!(declared.len(), 11);
+    assert_eq!(declared.len(), 14);
     assert_eq!(intake.groups.len(), declared.len());
     assert!(intake
         .groups
@@ -1660,8 +1663,8 @@ fn missing_access_denied_and_capped_sources_remain_exact_coverage_states() {
         .all(|group| group.coverage == SccmCoverageState::Absent));
     assert_eq!(
         missing.coverage_gaps.len(),
-        12,
-        "the shared LocationServices declaration contributes one gap to each consumer group"
+        15,
+        "the shared LocationServices declaration contributes one gap to each consumer group, while maintenance and reboot remain explicit"
     );
     assert_eq!(
         missing
