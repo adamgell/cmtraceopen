@@ -7,7 +7,7 @@ use super::rotation::{is_canonical_rotation_number, is_canonical_rotation_timest
 
 pub const SCCM_DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SccmCoverageState {
     Captured,
@@ -162,6 +162,14 @@ pub enum SccmCorrelationKeyKind {
     RequestId,
     TopicId,
     StateMessageId,
+    InventoryCycleId,
+    ReportId,
+    ResourceHandle,
+    ComplianceCiId,
+    BaselineId,
+    ComplianceStateId,
+    MeteringCycleId,
+    RuleId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

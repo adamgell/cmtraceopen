@@ -340,6 +340,14 @@ fn normalize_value(kind: &SccmCorrelationKeyKind, raw: &str) -> (String, SccmKey
             normalize_decimal(trimmed)
         }
         SccmCorrelationKeyKind::KbId => normalize_kb_id(trimmed),
+        SccmCorrelationKeyKind::InventoryCycleId
+        | SccmCorrelationKeyKind::ReportId
+        | SccmCorrelationKeyKind::ComplianceCiId
+        | SccmCorrelationKeyKind::BaselineId
+        | SccmCorrelationKeyKind::ComplianceStateId
+        | SccmCorrelationKeyKind::MeteringCycleId
+        | SccmCorrelationKeyKind::RuleId => is_opaque_id(trimmed).then(|| trimmed.to_owned()),
+        SccmCorrelationKeyKind::ResourceHandle => normalize_resource_handle(trimmed),
     };
 
     normalized.map_or_else(
@@ -432,6 +440,15 @@ fn normalize_kb_id(value: &str) -> Option<String> {
     normalize_decimal(digits).map(|digits| format!("KB{digits}"))
 }
 
+fn normalize_resource_handle(value: &str) -> Option<String> {
+    let valid = value.len() <= 128
+        && value.starts_with("safe:")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'.' | b'-'));
+    valid.then(|| value.to_owned())
+}
+
 fn key_kind_order(kind: &SccmCorrelationKeyKind) -> u8 {
     match kind {
         SccmCorrelationKeyKind::AssignmentId => 0,
@@ -448,5 +465,13 @@ fn key_kind_order(kind: &SccmCorrelationKeyKind) -> u8 {
         SccmCorrelationKeyKind::RequestId => 11,
         SccmCorrelationKeyKind::TopicId => 12,
         SccmCorrelationKeyKind::StateMessageId => 13,
+        SccmCorrelationKeyKind::InventoryCycleId => 14,
+        SccmCorrelationKeyKind::ReportId => 15,
+        SccmCorrelationKeyKind::ResourceHandle => 16,
+        SccmCorrelationKeyKind::ComplianceCiId => 17,
+        SccmCorrelationKeyKind::BaselineId => 18,
+        SccmCorrelationKeyKind::ComplianceStateId => 19,
+        SccmCorrelationKeyKind::MeteringCycleId => 20,
+        SccmCorrelationKeyKind::RuleId => 21,
     }
 }
