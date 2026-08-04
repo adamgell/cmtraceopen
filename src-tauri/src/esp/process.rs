@@ -442,8 +442,7 @@ fn sanitize_json_command_value(value: &mut serde_json::Value) -> bool {
 fn redact_cross_element_string_secrets(values: &mut [serde_json::Value]) -> bool {
     let mut changed = false;
     for index in 0..values.len().saturating_sub(1) {
-        let (Some(prefix), Some(candidate)) =
-            (values[index].as_str(), values[index + 1].as_str())
+        let (Some(prefix), Some(candidate)) = (values[index].as_str(), values[index + 1].as_str())
         else {
             continue;
         };

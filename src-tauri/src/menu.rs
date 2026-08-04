@@ -1304,7 +1304,10 @@ fn recent_entry_hash(entry: &RecentEntry) -> String {
 /// (concurrent pushes, or a prune dropping an earlier row) — so the hash lets
 /// `enrich_recent_payload` detect a stale index before acting on it.
 fn recent_menu_id(index: usize, entry: &RecentEntry) -> String {
-    format!("{RECENT_MENU_ID_PREFIX}{index}.{}", recent_entry_hash(entry))
+    format!(
+        "{RECENT_MENU_ID_PREFIX}{index}.{}",
+        recent_entry_hash(entry)
+    )
 }
 
 /// Inverse of `recent_menu_id`: splits `recent.{index}.{hash}` into its parts.
@@ -2229,10 +2232,7 @@ mod tests {
             opened_at_unix_ms: 0,
         };
 
-        assert_eq!(
-            recent_entry_label(&entry),
-            "IME — bundle-01 (Log Explorer)"
-        );
+        assert_eq!(recent_entry_label(&entry), "IME — bundle-01 (Log Explorer)");
     }
 
     #[test]
@@ -2274,7 +2274,8 @@ mod tests {
 
         assert_eq!(hash.len(), 16, "expected a full 64-bit digest");
         assert!(
-            hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            hash.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "expected lowercase hex, got {hash}"
         );
     }

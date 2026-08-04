@@ -1747,8 +1747,7 @@ mod tests {
 
         // More than the per-element cap is rejected before quick-xml's O(n^2)
         // duplicate-attribute check (RUSTSEC-2026-0194) can blow up.
-        let oversized =
-            esp_record_xml_with_root_attributes(MAX_ESP_XML_ATTRIBUTES_PER_ELEMENT + 1);
+        let oversized = esp_record_xml_with_root_attributes(MAX_ESP_XML_ATTRIBUTES_PER_ELEMENT + 1);
         let started = std::time::Instant::now();
         assert!(
             parse_esp_event_xml(&oversized, "attr-cap.evtx", Some(1), None, "Unknown").is_none(),

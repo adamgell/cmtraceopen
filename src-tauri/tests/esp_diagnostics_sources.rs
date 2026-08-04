@@ -62,11 +62,10 @@ use cmtraceopen_parser::esp::{
     EspArtifactCoverage, EspArtifactStatus, EspDiagnosticsReducer, EspDiagnosticsSnapshot,
     EspElevationState, EspEvidenceProvenance, EspEvidenceRecord, EspEvidenceRef,
     EspGraphObservation, EspGraphObservationSection, EspHardwareEvidence, EspImeObservation,
-    EspObservationContext,
-    EspObservationValue, EspParseState, EspProcessObservation, EspRegistryObservation,
-    EspRegistryProvenance, EspScope, EspSensitivity, EspSourceAccessState, EspSourceKind,
-    EspSystemFact, EspSystemObservation, EspTimestamp, EspTimestampKind, GraphApiVersion,
-    MAX_EVIDENCE_IDENTITY_SOURCES, MAX_RETAINED_EVIDENCE_RECORDS,
+    EspObservationContext, EspObservationValue, EspParseState, EspProcessObservation,
+    EspRegistryObservation, EspRegistryProvenance, EspScope, EspSensitivity, EspSourceAccessState,
+    EspSourceKind, EspSystemFact, EspSystemObservation, EspTimestamp, EspTimestampKind,
+    GraphApiVersion, MAX_EVIDENCE_IDENTITY_SOURCES, MAX_RETAINED_EVIDENCE_RECORDS,
 };
 use tempfile::tempdir;
 
@@ -8043,9 +8042,11 @@ fn bundle_legacy_fallback_is_depth_extension_and_basename_allowlisted() {
         Some("Legacy Profile")
     );
     assert!(snapshot.raw_evidence.iter().all(|record| {
-        record.provenance.file_path.as_deref().is_none_or(|path| {
-            !path.ends_with("arbitrary.json") && !path.ends_with("ignored.exe")
-        })
+        record
+            .provenance
+            .file_path
+            .as_deref()
+            .is_none_or(|path| !path.ends_with("arbitrary.json") && !path.ends_with("ignored.exe"))
     }));
 }
 
