@@ -6,7 +6,7 @@
   "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
   "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","exitCode","packageId","productCode","requestId"],"validatedArtifactFamilies":["client-app-enforce","client-app-intent","client-content"]},
   "reorderedInputDeterministic":true,
-  "coverage":[{"logicalArtifactId":"client-app-enforce","state":"captured"},{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"captured"},{"logicalArtifactId":"client-installer-supplemental","state":"captured"}],
+  "coverage":[{"logicalArtifactId":"client-app-enforce","state":"captured"},{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"captured"}],
   "artifactProvenance":[
     {"artifactId":"deployment-enforcement-exit-content-current","bytesCopied":757,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
     {"artifactId":"deployment-enforcement-exit-enforce-current","bytesCopied":360,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
@@ -21,7 +21,7 @@
     "phase":"enforce","state":"failed","lastSuccessfulPhase":"cache","classification":"confirmedFailure","confidence":"high","confidenceCeiling":"high","coverageGapArtifactIds":[],"nextArtifact":null,
     "evidence":[{"artifactId":"deployment-enforcement-exit-content-current","startLine":1,"endLine":2},{"artifactId":"deployment-enforcement-exit-enforce-current","startLine":1,"endLine":1},{"artifactId":"deployment-enforcement-exit-intent-current","startLine":1,"endLine":2},{"artifactId":"deployment-enforcement-exit-transfer-current","startLine":1,"endLine":2}]
   }],
-  "sourceLocalObservations":[{"observationId":"supplemental:installer:enforcement-exit","artifactId":"deployment-enforcement-exit-supplemental-current","completeLogicalRecord":true,"keyConfidence":"none","confidenceCeiling":"low","correlationEligible":false,"reason":"unvalidated supplemental text at a similar time cannot override the exact AppEnforce transaction","evidence":{"artifactId":"deployment-enforcement-exit-supplemental-current","startLine":1,"endLine":1}}],
+  "sourceLocalObservations":[],
   "findings":[],
   "correlationHandoff":{"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"serverCauseClaimed":false,"counterpartReadyKeyKinds":["contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"emittedCounterpartReadyFact":true},
   "prohibitedClaims":["supplemental installer text overrides exact CCM evidence","distribution point or server root cause","time-only content-to-DP correlation"]

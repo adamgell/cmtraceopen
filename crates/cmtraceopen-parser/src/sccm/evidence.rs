@@ -3,8 +3,7 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 use super::models::{
-    SccmArtifact, SccmEvidence, SccmEvidenceRef, SccmRecordCompleteness, SccmRole,
-    SccmTimeOrderingState, SccmTimestamp,
+    SccmArtifact, SccmEvidence, SccmEvidenceRef, SccmRole, SccmTimeOrderingState, SccmTimestamp,
 };
 
 const PUBLIC_MESSAGE_PROFILE: &str = "sccm-public-message-v1";
@@ -290,7 +289,6 @@ fn redact_email_identities(value: &str) -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SccmRawEvidenceSnapshot {
     evidence_id: String,
-    completeness: SccmRecordCompleteness,
     reference: SccmEvidenceRef,
     role: SccmRole,
     component: Option<String>,
@@ -313,7 +311,6 @@ impl SccmRawEvidenceSnapshot {
 
         Self {
             evidence_id: entry_id.clone(),
-            completeness: SccmRecordCompleteness::LogicalRecord,
             reference: SccmEvidenceRef {
                 artifact_id: artifact.artifact_id.clone(),
                 entry_id,
@@ -329,44 +326,9 @@ impl SccmRawEvidenceSnapshot {
         }
     }
 
-    /// One physical line that never became a logical record.
-    ///
-    /// The snapshot carries no timestamp: a fragment has no provable instant,
-    /// so it can never be ordered against, or attached to, a real record.
-    pub(crate) fn from_physical_line(
-        artifact: &SccmArtifact,
-        line_number: u32,
-        text: &str,
-    ) -> Self {
-        let entry_id = format!("{}:{line_number}-{line_number}", artifact.artifact_id);
-
-        Self {
-            evidence_id: entry_id.clone(),
-            completeness: SccmRecordCompleteness::PhysicalFragment,
-            reference: SccmEvidenceRef {
-                artifact_id: artifact.artifact_id.clone(),
-                entry_id,
-                line_start: Some(line_number),
-                line_end: Some(line_number),
-            },
-            role: artifact.role.clone(),
-            component: None,
-            ccm_source_file: None,
-            message: text.to_owned(),
-            timestamp: SccmTimestamp {
-                original_display: None,
-                offset_minutes: None,
-                utc_millis: None,
-                ordering_state: SccmTimeOrderingState::TimestampMissing,
-            },
-            raw_execution_context: None,
-        }
-    }
-
     pub(crate) fn export(&self) -> SccmEvidence {
         SccmEvidence {
             evidence_id: self.evidence_id.clone(),
-            completeness: self.completeness,
             reference: self.reference.clone(),
             role: self.role.clone(),
             component: self.component.as_deref().map(project_public_text_v1),

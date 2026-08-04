@@ -6,7 +6,7 @@
   "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
   "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","ciId"],"validatedArtifactFamilies":["client-app-intent","client-content"]},
   "reorderedInputDeterministic":true,
-  "coverage":[{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"partial","artifactIds":["deployment-rotation-boundary-content-current","deployment-rotation-boundary-content-lo"]}],
+  "coverage":[{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"capped","artifactIds":["deployment-rotation-boundary-content-current","deployment-rotation-boundary-content-lo"]}],
   "artifactProvenance":[
     {"artifactId":"deployment-rotation-boundary-content-current","bytesCopied":207,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
     {"artifactId":"deployment-rotation-boundary-content-lo","bytesCopied":147,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
@@ -19,10 +19,7 @@
     "phase":"locateContent","state":"insufficientEvidence","lastSuccessfulPhase":"requirements","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low","coverageGapArtifactIds":["deployment-rotation-boundary-content-current","deployment-rotation-boundary-content-lo"],"nextArtifact":{"logicalArtifactId":"client-content","reason":"capture a complete logical CCM content record without joining physical rotation fragments"},
     "evidence":[{"artifactId":"deployment-rotation-boundary-intent-current","startLine":1,"endLine":2}]
   }],
-  "sourceLocalObservations":[
-    {"observationId":"fragment:deployment-rotation-boundary-content-current","artifactId":"deployment-rotation-boundary-content-current","completeLogicalRecord":false,"keyConfidence":"candidate","confidenceCeiling":"low","correlationEligible":false,"reason":"current-file fragment cannot complete the archived physical record","evidence":{"artifactId":"deployment-rotation-boundary-content-current","startLine":1,"endLine":1}},
-    {"observationId":"fragment:deployment-rotation-boundary-content-lo","artifactId":"deployment-rotation-boundary-content-lo","completeLogicalRecord":false,"keyConfidence":"candidate","confidenceCeiling":"low","correlationEligible":false,"reason":"archived-file fragment cannot be joined across a physical rotation boundary","evidence":{"artifactId":"deployment-rotation-boundary-content-lo","startLine":1,"endLine":1}}
-  ],
+  "sourceLocalObservations":[],
   "findings":[],
   "adversarialControls":{"crossPhysicalFileRecordJoinForbidden":true,"canonicalLoSuffix":".lo_","sameTimestampDoesNotRepairFragment":true},
   "correlationHandoff":{"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"serverCauseClaimed":false,"counterpartReadyKeyKinds":["contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"emittedCounterpartReadyFact":false},

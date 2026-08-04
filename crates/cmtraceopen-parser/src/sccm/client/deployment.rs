@@ -1,6 +1,6 @@
 //! Issue #322: application, package, and content deployment transactions.
 //!
-//! The reducer is pure. It turns a normalized client bundle into conservative
+//! The reducer is pure. It turns sealed client evidence into conservative
 //! transactions whose every claim cites complete logical records. It never
 //! reads the file system, never contacts a server, and never states a
 //! distribution-point or site-server cause: the only cross-side output is a
@@ -21,15 +21,15 @@ use crate::models::log_entry::Severity;
 use crate::sccm::{
     classify_artifact_name, SccmArtifact, SccmArtifactRequest, SccmConfidence, SccmCoverageState,
     SccmEvidence, SccmEvidenceRef, SccmFinding, SccmFindingBuilder, SccmFindingClass,
-    SccmFindingCoverageGap, SccmPhase, SccmRecordCompleteness, SccmRole, SccmRotation,
-    SccmTerminalEvidence, SccmTimeOrderingState,
+    SccmFindingCoverageGap, SccmPhase, SccmRole, SccmTerminalEvidence, SccmTimeOrderingState,
+    SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
 };
 
-use super::SccmNormalizedBundle;
+use super::{SccmClientAdmittedEvidence, SccmClientEvidenceAdmissionError};
 
 pub const SCCM_DEPLOYMENT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
-pub const SCCM_DEPLOYMENT_TEST_PROFILE_ID: &str = "deployment-client-5.00.test-v1";
-pub const SCCM_DEPLOYMENT_TEST_VERSION_PREFIX: &str = "5.00.TEST.";
+pub const SCCM_DEPLOYMENT_PROFILE_ID: &str = SCCM_EXPERIMENTAL_KEY_PROFILE_ID;
+pub const SCCM_DEPLOYMENT_VERSION_PREFIX: &str = "5.00.9128.";
 
 const GROUP_APP_INTENT: &str = "client-app-intent";
 const GROUP_APP_ENFORCE: &str = "client-app-enforce";
@@ -324,35 +324,42 @@ pub struct SccmDeploymentAnalysis {
     pub correlation_handoff: SccmDeploymentCorrelationHandoff,
 }
 
-/// Reduce a normalized client bundle into deployment transactions.
-pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymentAnalysis {
-    let coverage = coverage_rows(bundle);
-
-    if bundle_identity_collides(bundle) {
-        return finalize(
-            selection_state(bundle),
-            coverage,
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        );
-    }
-
-    // Only client-role artifacts may participate. Building this map from the
-    // full artifact list would let another role's identical artifact ID decide
-    // which source a record came from.
-    let artifacts_by_id = bundle
-        .artifacts
+/// Reduce intake-bound client evidence into deployment transactions.
+pub fn analyze_client_deployment(
+    admitted: &SccmClientAdmittedEvidence,
+) -> Result<SccmDeploymentAnalysis, SccmClientEvidenceAdmissionError> {
+    admitted.verify_integrity()?;
+    let artifacts = admitted
+        .source_artifacts()?
         .iter()
-        .filter(|artifact| artifact.role == SccmRole::Client)
+        .map(|(artifact_id, source)| SccmArtifact {
+            artifact_id: artifact_id.clone(),
+            display_name: source.basename.clone(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: None,
+            collected_at_utc: None,
+            rotation: source.rotation.clone(),
+            coverage: if source.coverage == SccmCoverageState::Captured
+                && source.fragment_complete != Some(true)
+            {
+                SccmCoverageState::Capped
+            } else {
+                source.coverage.clone()
+            },
+            encoding: None,
+        })
+        .collect::<Vec<_>>();
+    let coverage = coverage_rows(&artifacts);
+    let artifacts_by_id = artifacts
+        .iter()
         .map(|artifact| (artifact.artifact_id.as_str(), artifact))
         .collect::<BTreeMap<_, _>>();
 
-    let mut facts = bundle
-        .evidence
+    let evidence = admitted.evidence()?;
+    let mut facts = evidence
         .iter()
-        .filter(|evidence| evidence.role == SccmRole::Client)
         .flat_map(|evidence| {
             artifacts_by_id
                 .get(evidence.reference.artifact_id.as_str())
@@ -398,28 +405,22 @@ pub fn analyze_client_deployment(bundle: &SccmNormalizedBundle) -> SccmDeploymen
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let observations = source_local_observations(bundle, &artifacts_by_id, &admitted_artifact_ids);
+    let observations =
+        source_local_observations(evidence, &artifacts_by_id, &admitted_artifact_ids);
     let findings = build_findings(&seeds, &artifacts_by_id);
 
-    finalize(
-        selection_state(bundle),
+    Ok(finalize(
+        selection_state(evidence),
         coverage,
         transactions,
         observations,
         findings,
         validated_artifact_families,
-    )
+    ))
 }
 
-fn selection_state(bundle: &SccmNormalizedBundle) -> SccmDeploymentProfileSelectionState {
-    let declared = bundle.artifacts.iter().any(|artifact| {
-        artifact.role == SccmRole::Client
-            && artifact
-                .configmgr_version
-                .as_deref()
-                .is_some_and(|version| version.starts_with(SCCM_DEPLOYMENT_TEST_VERSION_PREFIX))
-    });
-    if declared {
+fn selection_state(evidence: &[SccmEvidence]) -> SccmDeploymentProfileSelectionState {
+    if !evidence.is_empty() {
         SccmDeploymentProfileSelectionState::Selected
     } else {
         SccmDeploymentProfileSelectionState::Unselected
@@ -519,8 +520,8 @@ fn extraction_profile(
 
     SccmDeploymentExtractionProfile {
         selection_state,
-        profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
-        source_version_prefix: SCCM_DEPLOYMENT_TEST_VERSION_PREFIX.to_owned(),
+        profile_id: SCCM_DEPLOYMENT_PROFILE_ID.to_owned(),
+        source_version_prefix: SCCM_DEPLOYMENT_VERSION_PREFIX.to_owned(),
         content_version_required: true,
         key_kinds: key_kinds.into_iter().map(str::to_owned).collect(),
         validated_artifact_families,
@@ -528,57 +529,12 @@ fn extraction_profile(
 }
 
 // ---------------------------------------------------------------------------
-// Identity guards
-// ---------------------------------------------------------------------------
-
-/// Duplicate artifact or evidence identities make source authority ambiguous.
-/// The reducer then reports coverage only: vector order must never elect one.
-fn bundle_identity_collides(bundle: &SccmNormalizedBundle) -> bool {
-    let mut artifact_ids = BTreeSet::new();
-    for artifact in bundle
-        .artifacts
-        .iter()
-        .filter(|artifact| artifact.role == SccmRole::Client)
-    {
-        if !artifact_ids.insert(artifact.artifact_id.as_str()) {
-            return true;
-        }
-    }
-
-    let mut evidence_ids = BTreeSet::new();
-    let mut references = BTreeSet::new();
-    for evidence in bundle
-        .evidence
-        .iter()
-        .filter(|evidence| evidence.role == SccmRole::Client)
-    {
-        if !evidence_ids.insert(evidence.evidence_id.as_str()) {
-            return true;
-        }
-        if !references.insert((
-            evidence.reference.artifact_id.as_str(),
-            evidence.reference.entry_id.as_str(),
-            evidence.reference.line_start,
-            evidence.reference.line_end,
-        )) {
-            return true;
-        }
-    }
-
-    false
-}
-
-// ---------------------------------------------------------------------------
 // Coverage
 // ---------------------------------------------------------------------------
 
-fn coverage_rows(bundle: &SccmNormalizedBundle) -> Vec<SccmDeploymentCoverage> {
+fn coverage_rows(artifacts: &[SccmArtifact]) -> Vec<SccmDeploymentCoverage> {
     let mut grouped = BTreeMap::<String, Vec<&SccmArtifact>>::new();
-    for artifact in bundle
-        .artifacts
-        .iter()
-        .filter(|artifact| artifact.role == SccmRole::Client)
-    {
+    for artifact in artifacts {
         grouped
             .entry(deployment_group_id(&artifact.display_name))
             .or_default()
@@ -613,11 +569,7 @@ fn coverage_rows(bundle: &SccmNormalizedBundle) -> Vec<SccmDeploymentCoverage> {
 /// incomplete state wins. Conflicting noncapture states stay `ParseFailed` so
 /// no caller can read a single cause out of a mixed group.
 fn combine_coverage(states: &[SccmCoverageState]) -> SccmCoverageState {
-    for candidate in [
-        SccmCoverageState::Captured,
-        SccmCoverageState::Capped,
-        SccmCoverageState::Partial,
-    ] {
+    for candidate in [SccmCoverageState::Captured, SccmCoverageState::Capped] {
         if states.contains(&candidate) {
             return candidate;
         }
@@ -637,13 +589,12 @@ fn combine_coverage(states: &[SccmCoverageState]) -> SccmCoverageState {
 fn coverage_order(coverage: &SccmCoverageState) -> u8 {
     match coverage {
         SccmCoverageState::Captured => 0,
-        SccmCoverageState::Partial => 1,
-        SccmCoverageState::Absent => 2,
-        SccmCoverageState::AccessDenied => 3,
-        SccmCoverageState::Capped => 4,
-        SccmCoverageState::Skipped => 5,
-        SccmCoverageState::Unsupported => 6,
-        SccmCoverageState::ParseFailed => 7,
+        SccmCoverageState::Absent => 1,
+        SccmCoverageState::AccessDenied => 2,
+        SccmCoverageState::Capped => 3,
+        SccmCoverageState::Skipped => 4,
+        SccmCoverageState::Unsupported => 5,
+        SccmCoverageState::ParseFailed => 6,
     }
 }
 
@@ -829,25 +780,14 @@ fn parse_deployment_facts(evidence: &SccmEvidence, artifact: &SccmArtifact) -> V
         .collect()
 }
 
-/// Record completeness, version profile, role, coverage, rotation, and catalog
-/// identity must all agree before a record may become a fact.
-///
-/// Completeness is read from the record, never inferred from the artifact: a
-/// fully collected file can still hold a physical line that no logical record
-/// covers, and that line is not evidence of anything.
+/// Admission, role, coverage, rotation, and catalog identity must all agree
+/// before a record may become a fact. Logical framing and version-profile
+/// selection were already sealed by `SccmClientAdmittedEvidence`.
 fn admitted_source(evidence: &SccmEvidence, artifact: &SccmArtifact) -> Option<DeploymentSource> {
-    if evidence.completeness != SccmRecordCompleteness::LogicalRecord
-        || artifact.role != SccmRole::Client
+    if artifact.role != SccmRole::Client
         || evidence.role != SccmRole::Client
         || artifact.coverage != SccmCoverageState::Captured
         || !valid_reference(&evidence.reference)
-    {
-        return None;
-    }
-    if !artifact
-        .configmgr_version
-        .as_deref()
-        .is_some_and(|version| version.starts_with(SCCM_DEPLOYMENT_TEST_VERSION_PREFIX))
     {
         return None;
     }
@@ -1305,7 +1245,7 @@ fn build_key(assignment_id: &str, ci_id: &str, facts: &[&DeploymentFact]) -> Scc
                 .filter_map(|fact| fact.exit_code.clone()),
         ),
         confidence: SccmDeploymentKeyConfidence::Exact,
-        extraction_profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
+        extraction_profile_id: SCCM_DEPLOYMENT_PROFILE_ID.to_owned(),
     }
 }
 
@@ -1486,7 +1426,7 @@ fn counterpart_ready_fact(
     Some(SccmDeploymentCounterpartFact {
         fact_kind: SccmDeploymentCounterpartFactKind::ClientContentRequest,
         phase: SccmDeploymentPhase::LocateContent,
-        extraction_profile_id: SCCM_DEPLOYMENT_TEST_PROFILE_ID.to_owned(),
+        extraction_profile_id: SCCM_DEPLOYMENT_PROFILE_ID.to_owned(),
         package_id,
         content_id,
         content_version,
@@ -1592,7 +1532,7 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
             REASON_LOCATION_RESPONSE_MISSING
         } else {
             match coverage_for_group(coverage, GROUP_CONTENT).map(|row| &row.state) {
-                Some(SccmCoverageState::Partial) => REASON_LOCATION_ROTATION,
+                Some(SccmCoverageState::Capped) => REASON_LOCATION_ROTATION,
                 Some(SccmCoverageState::AccessDenied) => REASON_LOCATION_ACCESS_DENIED,
                 _ => REASON_LOCATION_ABSENT,
             }
@@ -1861,76 +1801,53 @@ fn insufficient(
 /// physical lines no record covers. The second shape is why the sweep keys on
 /// record completeness rather than on whether the artifact contributed facts.
 fn source_local_observations(
-    bundle: &SccmNormalizedBundle,
+    evidence: &[SccmEvidence],
     artifacts_by_id: &BTreeMap<&str, &SccmArtifact>,
     admitted_artifact_ids: &BTreeSet<&str>,
 ) -> Vec<SccmDeploymentObservation> {
     let mut evidence_by_artifact = BTreeMap::<&str, Vec<&SccmEvidence>>::new();
-    for evidence in bundle
-        .evidence
-        .iter()
-        .filter(|evidence| evidence.role == SccmRole::Client)
-    {
-        let artifact_id = evidence.reference.artifact_id.as_str();
-        if !artifacts_by_id.contains_key(artifact_id) || !valid_reference(&evidence.reference) {
+    for item in evidence.iter().filter(|item| item.role == SccmRole::Client) {
+        let artifact_id = item.reference.artifact_id.as_str();
+        if !artifacts_by_id.contains_key(artifact_id) || !valid_reference(&item.reference) {
             continue;
         }
         evidence_by_artifact
             .entry(artifact_id)
             .or_default()
-            .push(evidence);
+            .push(item);
     }
 
     evidence_by_artifact
         .into_iter()
         .filter_map(|(artifact_id, evidence)| {
-            let artifact = artifacts_by_id.get(artifact_id)?;
-            let fragments = evidence
-                .iter()
-                .copied()
-                .filter(|item| item.completeness == SccmRecordCompleteness::PhysicalFragment)
-                .collect::<Vec<_>>();
-            if fragments.is_empty() && admitted_artifact_ids.contains(artifact_id) {
+            let _artifact = artifacts_by_id.get(artifact_id)?;
+            if admitted_artifact_ids.contains(artifact_id) {
                 return None;
             }
-
-            // Cite the fragments when there are any: they are what no fact
-            // represents. Otherwise the whole artifact went unrepresented.
-            let cited = if fragments.is_empty() {
-                &evidence
-            } else {
-                &fragments
-            };
-            let start = cited
+            let start = evidence
                 .iter()
                 .filter_map(|item| item.reference.line_start)
                 .min()?;
-            let end = cited
+            let end = evidence
                 .iter()
                 .filter_map(|item| item.reference.line_end)
                 .max()?;
-            let key_confidence = if cited.iter().any(|item| has_candidate_key(&item.message)) {
+            let key_confidence = if evidence.iter().any(|item| has_candidate_key(&item.message)) {
                 SccmDeploymentObservationKeyConfidence::Candidate
             } else {
                 SccmDeploymentObservationKeyConfidence::None
             };
-            let complete_logical_record = observation_is_complete(artifact, &fragments);
 
             Some(SccmDeploymentObservation {
-                observation_id: format!(
-                    "{}:{artifact_id}",
-                    if complete_logical_record {
-                        "supplemental"
-                    } else {
-                        "fragment"
-                    }
-                ),
+                observation_id: format!("supplemental:{artifact_id}"),
                 artifact_id: artifact_id.to_owned(),
-                complete_logical_record,
+                complete_logical_record: true,
                 key_confidence,
                 confidence_ceiling: SccmDeploymentConfidence::Low,
                 correlation_eligible: false,
-                reason: observation_reason(artifact, complete_logical_record).to_owned(),
+                reason:
+                    "unvalidated complete record cannot override an exact keyed client transaction"
+                        .to_owned(),
                 evidence: SccmEvidenceRef {
                     artifact_id: artifact_id.to_owned(),
                     entry_id: format!("{artifact_id}:{start}-{end}"),
@@ -1940,42 +1857,6 @@ fn source_local_observations(
             })
         })
         .collect()
-}
-
-/// Completeness of what the observation cites, decided by the record and by the
-/// source's framing rather than by the artifact's coverage state.
-///
-/// A source that frames CCM records has no complete unit smaller than a record,
-/// so any fragment is incomplete. For an unframed text source the physical line
-/// is itself the unit, and it is complete unless the collected bytes were cut
-/// short.
-fn observation_is_complete(artifact: &SccmArtifact, fragments: &[&SccmEvidence]) -> bool {
-    if fragments.is_empty() {
-        return true;
-    }
-    let catalog = classify_artifact_name(&artifact.display_name, SccmRole::Client);
-    !catalog.uses_ccm_records && artifact.coverage == SccmCoverageState::Captured
-}
-
-fn observation_reason(artifact: &SccmArtifact, complete_logical_record: bool) -> &'static str {
-    if complete_logical_record {
-        return "unvalidated supplemental text cannot override an exact keyed client transaction";
-    }
-    match (&artifact.coverage, &artifact.rotation) {
-        (SccmCoverageState::Partial, SccmRotation::Current) => {
-            "current-file fragment cannot complete the archived physical record"
-        }
-        (SccmCoverageState::Partial, SccmRotation::LoUnderscore) => {
-            "archived-file fragment cannot be joined across a physical rotation boundary"
-        }
-        (SccmCoverageState::Partial, _) => {
-            "a physical rotation fragment cannot form a logical record"
-        }
-        (SccmCoverageState::Capped, _) => {
-            "capped bytes do not form a logical record and cannot attach by time"
-        }
-        _ => "an unframed physical line is not a logical record and cannot attach by time",
-    }
 }
 
 /// A fragment may still show something that looks like a key. Saying so is not
@@ -2199,7 +2080,7 @@ fn build_findings(
                     coverage_gaps.push(SccmFindingCoverageGap {
                         artifact_id: group.to_owned(),
                         role: SccmRole::Client,
-                        coverage: SccmCoverageState::Partial,
+                        coverage: SccmCoverageState::Absent,
                     });
                 }
             }

@@ -2,12 +2,11 @@ use cmtraceopen_parser::models::log_entry::{LogFormat, ParserKind, Severity};
 use cmtraceopen_parser::parser::detect::detect_parser;
 use cmtraceopen_parser::sccm::{
     classify_artifact_name, declared_source_catalog, extract_keys, extract_signals,
-    normalize_ccm_artifact, normalize_key, normalize_physical_lines, SccmArtifact,
-    SccmArtifactFamily, SccmArtifactRequest, SccmConfidence, SccmCorrelationKey,
-    SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence, SccmEvidenceRef,
-    SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmFinding,
-    SccmFindingBuilder, SccmFindingClass, SccmFindingCoverageGap, SccmFindingValidationError,
-    SccmKeyConfidence, SccmKeyExtractionResult, SccmPhase, SccmRecordCompleteness, SccmRole,
+    normalize_ccm_artifact, normalize_key, SccmArtifact, SccmArtifactFamily, SccmArtifactRequest,
+    SccmConfidence, SccmCorrelationKey, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence,
+    SccmEvidenceRef, SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity,
+    SccmFinding, SccmFindingBuilder, SccmFindingClass, SccmFindingCoverageGap,
+    SccmFindingValidationError, SccmKeyConfidence, SccmKeyExtractionResult, SccmPhase, SccmRole,
     SccmRotation, SccmSignal, SccmSignalKind, SccmTerminalEvidence, SccmTerminalEvidenceKind,
     SccmTimeOrderingState, SccmTimestamp, SccmUnknownRotation,
     MAX_SCCM_ARTIFACT_REQUEST_REASON_CHARS, MAX_SCCM_NEXT_ARTIFACT_REQUESTS,
@@ -32,7 +31,6 @@ fn client_policy_artifact() -> SccmArtifact {
 fn evidence_with_message(message: &str) -> SccmEvidence {
     SccmEvidence {
         evidence_id: "client-policy-agent:1-1".into(),
-        completeness: SccmRecordCompleteness::LogicalRecord,
         reference: SccmEvidenceRef {
             artifact_id: "client-policy-agent".into(),
             entry_id: "client-policy-agent:1-1".into(),
@@ -6964,60 +6962,6 @@ fn catalog_rotation_grammar_preserves_unknown_suffix_and_initialism() {
 }
 
 #[test]
-fn physical_line_normalization_emits_exactly_the_lines_no_record_covers() {
-    // Line 1 is a fragment, lines 2-3 are one multi-line record, line 4 is a
-    // fragment, line 5 is blank, line 6 is a record, line 7 is a fragment.
-    let content = concat!(
-        "leading fragment\n",
-        "<![LOG[first line\n",
-        "second line]LOG]!><time=\"05:00:00.000+000\" date=\"07-30-2026\" component=\"PolicyAgent\" context=\"\" type=\"1\" thread=\"1\" file=\"synthetic.cc:1\">\n",
-        "interior fragment\n",
-        "   \n",
-        "<![LOG[single line]LOG]!><time=\"05:00:01.000+000\" date=\"07-30-2026\" component=\"PolicyAgent\" context=\"\" type=\"1\" thread=\"1\" file=\"synthetic.cc:2\">\n",
-        "trailing fragment\n",
-    );
-
-    let artifact = client_policy_artifact();
-    let records = normalize_ccm_artifact(artifact.clone(), content);
-    let covered = records
-        .iter()
-        .flat_map(|record| {
-            let start = record.reference.line_start.expect("record line start");
-            let end = record.reference.line_end.expect("record line end");
-            start..=end
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        covered.contains(&2) && covered.contains(&3),
-        "the fixture must contain a multi-line record so nested spans are exercised"
-    );
-
-    let fragments = normalize_physical_lines(&artifact, content);
-    assert_eq!(
-        fragments
-            .iter()
-            .map(|fragment| fragment.reference.line_start.expect("fragment line start"))
-            .collect::<Vec<_>>(),
-        vec![1, 4, 7],
-        "only uncovered, non-blank lines are fragments"
-    );
-    for fragment in &fragments {
-        assert_eq!(
-            fragment.completeness,
-            SccmRecordCompleteness::PhysicalFragment
-        );
-        assert_eq!(
-            fragment.reference.line_start, fragment.reference.line_end,
-            "a fragment spans exactly one physical line"
-        );
-        assert!(
-            !covered.contains(&fragment.reference.line_start.expect("fragment line start")),
-            "a line a record already covers is never a fragment"
-        );
-    }
-}
-
-#[test]
 fn catalog_requires_exact_producer_roles_for_server_workflow_sources() {
     let cases = [
         (
@@ -7247,14 +7191,6 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
             "Scheduler.log",
             SccmRole::Client,
             "scheduler",
-            SccmArtifactFamily::ClientPolicy,
-            true,
-            true,
-        ),
-        (
-            "StateMessage.log",
-            SccmRole::Client,
-            "stateMessage",
             SccmArtifactFamily::ClientPolicy,
             true,
             true,

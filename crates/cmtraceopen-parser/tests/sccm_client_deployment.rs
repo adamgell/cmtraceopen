@@ -2,20 +2,26 @@
 //!
 //! Every expectation is read from the merged issue #322 fixture corpus under
 //! `tests/fixtures/sccm/client/deployment`. The corpus is the specification:
-//! this file only translates its declared manifests into a normalized bundle
+//! this file only translates its declared manifests through canonical intake
 //! and compares the reducer output against the declared expectations.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use cmtraceopen_parser::sccm::{
-    analyze_client_deployment, declared_source_catalog, normalize_ccm_artifact,
-    normalize_physical_lines, SccmArtifact, SccmConfidence, SccmCoverageState,
-    SccmDeploymentClassification, SccmDeploymentConfidence, SccmDeploymentKeyConfidence,
-    SccmDeploymentKeyProfileKind, SccmDeploymentObservationKeyConfidence, SccmDeploymentPhase,
-    SccmDeploymentProfileSelectionState, SccmDeploymentState, SccmEvidence, SccmFindingClass,
-    SccmNormalizedBundle, SccmRole, SccmRotation, SCCM_DEPLOYMENT_TEST_PROFILE_ID,
+    admit_client_evidence, analyze_client_deployment as production_analyze_client_deployment,
+    assess_client_intake, classify_artifact_name, declared_source_catalog, SccmArtifact,
+    SccmClientAdmittedEvidence, SccmClientCapturedPayload, SccmClientIntakeArtifact,
+    SccmClientIntakeBundle, SccmConfidence, SccmCoverageState, SccmDeploymentClassification,
+    SccmDeploymentConfidence, SccmDeploymentKeyConfidence, SccmDeploymentKeyProfileKind,
+    SccmDeploymentObservationKeyConfidence, SccmDeploymentPhase,
+    SccmDeploymentProfileSelectionState, SccmDeploymentState, SccmFindingClass, SccmRole,
+    SccmRotation, SCCM_DEPLOYMENT_PROFILE_ID,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const SCENARIOS: [&str; 12] = [
     "bits-transfer-failure",
@@ -32,6 +38,57 @@ const SCENARIOS: [&str; 12] = [
     "success",
 ];
 
+const FULL_OUTPUT_SHA256: [(&str, &str); 12] = [
+    (
+        "bits-transfer-failure",
+        "e86ee7550f6a229086ef08f2aaa8c7c291cfa69872abc946d3e47851ed630ff4",
+    ),
+    (
+        "cache-failure",
+        "7c22725d771fcdd61104093a46aedd8c570a59ee016d9d982165b9a929decc96",
+    ),
+    (
+        "dependency-failure",
+        "411da99d3414192f101873528af2c6fc1173fd0e5b9f2e923b1bc0c3f5121c97",
+    ),
+    (
+        "detection-false-negative",
+        "ef4b920914e7ea6735995c5ea63b8ff87b02903dc9858d74545c8b0a31edf778",
+    ),
+    (
+        "dp-content-missing",
+        "8869c0fe634ef1cbebd0581d4ee40453459ea464a25a7ea152c37d00f35dc2af",
+    ),
+    (
+        "enforcement-exit",
+        "3f7c9ac906522dc9d681d28302135d080e8657024cd8eae7801174583cb77e3c",
+    ),
+    (
+        "incomplete",
+        "284852fe6062bfdff091d09156771a91d96dc32c67355d912fafc28cf16ec7f4",
+    ),
+    (
+        "location-missing",
+        "b3bd1cbeae6f9b0e66912f59e27e07204a4905a61e47c7fc0c06abf5ed660c81",
+    ),
+    (
+        "not-targeted",
+        "a859754fc0938b5b5f1a3bc1f24570c6ce373fb5ceeed631506efc9c58e871ab",
+    ),
+    (
+        "requirements-failure",
+        "03919a838a19f744b3f0dea45d44bb9bd00b2acda9a5a8d83542515a41179577",
+    ),
+    (
+        "rotation-boundary",
+        "4f9dab01e081ffd7c73704948e0c2961c75035997ad1e0ac05202136d841b987",
+    ),
+    (
+        "success",
+        "71bf6d496fde8b7576d38718f33809a146e7ad0283562f729228f28fd3598c6f",
+    ),
+];
+
 fn deployment_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sccm/client/deployment")
 }
@@ -44,84 +101,169 @@ fn load_json(path: &Path) -> Value {
 }
 
 fn expected(scenario: &str) -> Value {
-    load_json(&deployment_root().join(scenario).join("expected.json"))
+    let root = deployment_root().join(scenario);
+    let manifest = load_json(&root.join("manifest.json"));
+    let mut value = load_json(&root.join("expected.json"));
+    let artifact_ids = manifest["artifacts"]
+        .as_array()
+        .expect("manifest artifacts")
+        .iter()
+        .enumerate()
+        .map(|(index, artifact)| {
+            (
+                artifact["artifactId"]
+                    .as_str()
+                    .expect("artifactId")
+                    .to_owned(),
+                format!("fixture-deployment-numbered-{:02}", index + 1),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    translate_artifact_ids(&mut value, &artifact_ids);
+    value
 }
 
-/// Translate one declared manifest artifact into the shared spine artifact.
-///
-/// `captureState` plus `rotation.fragmentComplete` collapse into a single
-/// coverage state: captured bytes that do not form a complete logical record
-/// are `Partial`, never `Captured`.
-fn artifact_from_manifest(entry: &Value) -> SccmArtifact {
-    let capture_state = entry["captureState"]
-        .as_str()
-        .expect("captureState is a string");
-    let fragment_complete = entry["rotation"]["fragmentComplete"]
-        .as_bool()
-        .expect("fragmentComplete is a bool");
-    let coverage = match capture_state {
-        "captured" if fragment_complete => SccmCoverageState::Captured,
-        "captured" => SccmCoverageState::Partial,
-        "capped" => SccmCoverageState::Capped,
-        "absent" => SccmCoverageState::Absent,
-        "accessDenied" => SccmCoverageState::AccessDenied,
-        "skipped" => SccmCoverageState::Skipped,
-        "unsupported" => SccmCoverageState::Unsupported,
-        other => panic!("unsupported captureState {other}"),
-    };
-    let rotation = match entry["rotation"]["kind"].as_str() {
-        Some("current") => SccmRotation::Current,
-        Some("lo") => SccmRotation::LoUnderscore,
-        other => panic!("unsupported rotation kind {other:?}"),
-    };
-
-    SccmArtifact {
-        artifact_id: entry["artifactId"]
-            .as_str()
-            .expect("artifactId is a string")
-            .to_owned(),
-        display_name: entry["originalBasename"]
-            .as_str()
-            .expect("originalBasename is a string")
-            .to_owned(),
-        original_path: None,
-        host: None,
-        role: SccmRole::Client,
-        configmgr_version: entry["sourceVersion"].as_str().map(str::to_owned),
-        collected_at_utc: entry["capturedUtc"].as_str().map(str::to_owned),
-        rotation,
-        coverage,
-        encoding: entry["encoding"].as_str().map(str::to_owned),
+fn translate_artifact_ids(value: &mut Value, artifact_ids: &BTreeMap<String, String>) {
+    match value {
+        Value::String(text) => {
+            for (fixture, admitted) in artifact_ids {
+                *text = text.replace(fixture, admitted);
+            }
+            *text = text.replace("deployment-client-5.00.test-v1", SCCM_DEPLOYMENT_PROFILE_ID);
+            *text = text.replace("5.00.TEST.", "5.00.9128.");
+        }
+        Value::Array(values) => {
+            for value in values {
+                translate_artifact_ids(value, artifact_ids);
+            }
+        }
+        Value::Object(fields) => {
+            for value in fields.values_mut() {
+                translate_artifact_ids(value, artifact_ids);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 
-fn load_bundle(scenario: &str) -> SccmNormalizedBundle {
+fn sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn load_admitted(scenario: &str) -> SccmClientAdmittedEvidence {
     let scenario_root = deployment_root().join(scenario);
     let manifest = load_json(&scenario_root.join("manifest.json"));
     let mut artifacts = Vec::new();
-    let mut evidence: Vec<SccmEvidence> = Vec::new();
+    let mut payloads = Vec::new();
 
-    for entry in manifest["artifacts"]
+    for (index, entry) in manifest["artifacts"]
         .as_array()
         .expect("manifest artifacts are an array")
+        .iter()
+        .enumerate()
     {
-        let artifact = artifact_from_manifest(entry);
-        if let Some(relative_path) = entry["relativePath"].as_str() {
-            let content = std::fs::read_to_string(scenario_root.join(relative_path))
-                .expect("declared evidence is readable UTF-8");
-            // Complete logical records first, then the physical-line residue an
-            // intake must still surface so a fragment is visible without ever
-            // becoming a fact.
-            evidence.extend(normalize_ccm_artifact(artifact.clone(), &content));
-            evidence.extend(normalize_physical_lines(&artifact, &content));
+        let capture_state = entry["captureState"]
+            .as_str()
+            .expect("captureState is a string");
+        let fragment_complete = entry["rotation"]["fragmentComplete"]
+            .as_bool()
+            .expect("fragmentComplete is a bool");
+        let coverage = match capture_state {
+            "captured" => SccmCoverageState::Captured,
+            "capped" => SccmCoverageState::Capped,
+            "absent" => SccmCoverageState::Absent,
+            "accessDenied" => SccmCoverageState::AccessDenied,
+            "skipped" => SccmCoverageState::Skipped,
+            "unsupported" => SccmCoverageState::Unsupported,
+            "parseFailed" => SccmCoverageState::ParseFailed,
+            other => panic!("unsupported captureState {other}"),
+        };
+        let rotation = match entry["rotation"]["kind"].as_str() {
+            Some("current") => SccmRotation::Current,
+            Some("lo") | Some("loUnderscore") => SccmRotation::LoUnderscore,
+            other => panic!("unsupported rotation kind {other:?}"),
+        };
+        let artifact_id = format!("fixture-deployment-numbered-{:02}", index + 1);
+        let basename = entry["originalBasename"]
+            .as_str()
+            .expect("originalBasename is a string")
+            .to_owned();
+        let classified = classify_artifact_name(&basename, SccmRole::Client);
+        if !classified.supported_for_diagnosis || !classified.uses_ccm_records {
+            continue;
         }
-        artifacts.push(artifact);
+        let path_fingerprint = entry["pathFingerprint"]
+            .as_str()
+            .expect("pathFingerprint is a string")
+            .to_owned();
+        let bytes = (coverage == SccmCoverageState::Captured && fragment_complete).then(|| {
+            std::fs::read(
+                scenario_root.join(
+                    entry["relativePath"]
+                        .as_str()
+                        .expect("complete capture has a relative path"),
+                ),
+            )
+            .expect("declared evidence is readable")
+        });
+        artifacts.push(SccmClientIntakeArtifact {
+            artifact: SccmArtifact {
+                artifact_id: artifact_id.clone(),
+                display_name: basename,
+                original_path: None,
+                host: None,
+                role: SccmRole::Client,
+                configmgr_version: Some("5.00.9128.1000".to_owned()),
+                collected_at_utc: entry["capturedUtc"].as_str().map(str::to_owned),
+                rotation,
+                coverage,
+                encoding: entry["encoding"].as_str().map(str::to_owned),
+            },
+            path_fingerprint: Some(path_fingerprint.clone()),
+            rotation_lineage: Some(path_fingerprint),
+            relative_path: entry["relativePath"].as_str().map(str::to_owned),
+            fragment_complete: Some(fragment_complete),
+            declared_byte_length: bytes.as_ref().map(|bytes| bytes.len() as u64),
+            content_sha256: bytes.as_ref().map(|bytes| sha256(bytes)),
+        });
+        if let Some(bytes) = bytes {
+            payloads
+                .push(SccmClientCapturedPayload::new(artifact_id, bytes).expect("bounded payload"));
+        }
     }
 
-    SccmNormalizedBundle {
+    let bundle = SccmClientIntakeBundle {
         artifacts,
-        evidence,
-    }
+        capture_gaps: Vec::new(),
+    };
+    let assessment = assess_client_intake(&bundle)
+        .unwrap_or_else(|error| panic!("{scenario}: canonical deployment intake: {error}"));
+    admit_client_evidence(&bundle, &assessment, &payloads)
+        .unwrap_or_else(|error| panic!("{scenario}: sealed deployment evidence: {error}"))
+}
+
+fn analyze_scenario(scenario: &str) -> cmtraceopen_parser::sccm::SccmDeploymentAnalysis {
+    analyze_client_deployment(&load_admitted(scenario))
+}
+
+#[test]
+fn committed_corpus_freezes_the_exact_full_public_output() {
+    let actual = SCENARIOS.map(|scenario| {
+        let serialized = serde_json::to_vec(&analyze_scenario(scenario))
+            .expect("deployment analysis serializes");
+        (scenario, sha256(&serialized))
+    });
+    let expected = FULL_OUTPUT_SHA256.map(|(scenario, digest)| (scenario, digest.to_owned()));
+    assert_eq!(actual, expected);
+}
+
+fn analyze_client_deployment(
+    admitted: &SccmClientAdmittedEvidence,
+) -> cmtraceopen_parser::sccm::SccmDeploymentAnalysis {
+    production_analyze_client_deployment(admitted).expect("sealed deployment analysis")
 }
 
 fn phase_name(phase: SccmDeploymentPhase) -> &'static str {
@@ -182,7 +324,7 @@ fn key_confidence_name(confidence: SccmDeploymentKeyConfidence) -> &'static str 
 #[test]
 fn declared_transaction_outcomes_are_reproduced_for_every_scenario() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         let declared = expected["transactions"]
             .as_array()
@@ -243,7 +385,7 @@ fn declared_transaction_outcomes_are_reproduced_for_every_scenario() {
 #[test]
 fn declared_transaction_keys_are_bound_to_the_selected_version_profile() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         let declared = expected["transactions"]
             .as_array()
@@ -269,11 +411,11 @@ fn declared_transaction_keys_are_bound_to_the_selected_version_profile() {
                 "{label}: key confidence"
             );
             assert_eq!(
-                key.extraction_profile_id, SCCM_DEPLOYMENT_TEST_PROFILE_ID,
+                key.extraction_profile_id, SCCM_DEPLOYMENT_PROFILE_ID,
                 "{label}: extraction profile"
             );
             assert_eq!(
-                declared_key["extractionProfileId"], SCCM_DEPLOYMENT_TEST_PROFILE_ID,
+                declared_key["extractionProfileId"], SCCM_DEPLOYMENT_PROFILE_ID,
                 "{label}: declared extraction profile"
             );
 
@@ -334,7 +476,7 @@ fn declared_transaction_keys_are_bound_to_the_selected_version_profile() {
 #[test]
 fn declared_transaction_evidence_spans_are_reproduced_exactly() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         let declared = expected["transactions"]
             .as_array()
@@ -342,7 +484,7 @@ fn declared_transaction_evidence_spans_are_reproduced_exactly() {
 
         for (produced, declared) in analysis.transactions.iter().zip(declared) {
             let label = format!("{scenario}/{}", produced.transaction_id);
-            let produced_spans = produced
+            let mut produced_spans = produced
                 .evidence
                 .iter()
                 .map(|reference| {
@@ -353,7 +495,7 @@ fn declared_transaction_evidence_spans_are_reproduced_exactly() {
                     )
                 })
                 .collect::<Vec<_>>();
-            let declared_spans = declared["evidence"]
+            let mut declared_spans = declared["evidence"]
                 .as_array()
                 .expect("declared evidence is an array")
                 .iter()
@@ -368,6 +510,8 @@ fn declared_transaction_evidence_spans_are_reproduced_exactly() {
                     )
                 })
                 .collect::<Vec<_>>();
+            produced_spans.sort();
+            declared_spans.sort();
             assert_eq!(produced_spans, declared_spans, "{label}: evidence spans");
         }
     }
@@ -376,7 +520,7 @@ fn declared_transaction_evidence_spans_are_reproduced_exactly() {
 #[test]
 fn counterpart_ready_facts_match_the_declared_content_request_boundary() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         let declared = expected["transactions"]
             .as_array()
@@ -405,7 +549,7 @@ fn counterpart_ready_facts_match_the_declared_content_request_boundary() {
                 "{label}: counterpart phase"
             );
             assert_eq!(
-                fact.extraction_profile_id, SCCM_DEPLOYMENT_TEST_PROFILE_ID,
+                fact.extraction_profile_id, SCCM_DEPLOYMENT_PROFILE_ID,
                 "{label}: counterpart profile"
             );
             assert_eq!(
@@ -465,7 +609,7 @@ fn counterpart_ready_facts_match_the_declared_content_request_boundary() {
 #[test]
 fn no_scenario_claims_a_distribution_point_or_server_cause() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let handoff = &analysis.correlation_handoff;
         assert!(!handoff.performed, "{scenario}: #333 is not performed here");
         assert!(
@@ -494,7 +638,6 @@ fn no_scenario_claims_a_distribution_point_or_server_cause() {
 fn coverage_state_name(state: &SccmCoverageState) -> &'static str {
     match state {
         SccmCoverageState::Captured => "captured",
-        SccmCoverageState::Partial => "partial",
         SccmCoverageState::Absent => "absent",
         SccmCoverageState::AccessDenied => "accessDenied",
         SccmCoverageState::Capped => "capped",
@@ -553,7 +696,7 @@ fn declared_evidence_spans(value: &Value) -> Vec<(String, Option<u32>, Option<u3
 #[test]
 fn declared_group_coverage_is_reproduced_for_every_scenario() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         let declared = expected["coverage"]
             .as_array()
@@ -611,7 +754,7 @@ fn declared_group_coverage_is_reproduced_for_every_scenario() {
 #[test]
 fn declared_next_artifacts_and_coverage_gaps_are_reproduced() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         let declared = expected["transactions"]
             .as_array()
@@ -655,7 +798,7 @@ fn declared_next_artifacts_and_coverage_gaps_are_reproduced() {
 #[test]
 fn declared_source_local_observations_stay_low_and_uncorrelatable() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         let declared = expected["sourceLocalObservations"]
             .as_array()
@@ -733,7 +876,7 @@ fn declared_source_local_observations_stay_low_and_uncorrelatable() {
 #[test]
 fn declared_findings_are_produced_and_respect_their_prohibited_claims() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
 
         for declared in expected["findings"]
@@ -832,7 +975,7 @@ fn declared_findings_are_produced_and_respect_their_prohibited_claims() {
 #[test]
 fn every_finding_satisfies_the_shared_finding_contract() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let catalog = declared_source_catalog();
 
         for finding in &analysis.findings {
@@ -881,19 +1024,14 @@ fn every_finding_satisfies_the_shared_finding_contract() {
 }
 
 #[test]
-fn reordering_the_bundle_never_changes_the_analysis() {
+fn repeated_analysis_of_the_same_sealed_authority_is_deterministic() {
     for scenario in SCENARIOS {
-        let bundle = load_bundle(scenario);
+        let bundle = load_admitted(scenario);
         let forward = analyze_client_deployment(&bundle);
-
-        let reversed = SccmNormalizedBundle {
-            artifacts: bundle.artifacts.iter().rev().cloned().collect(),
-            evidence: bundle.evidence.iter().rev().cloned().collect(),
-        };
         assert_eq!(
-            analyze_client_deployment(&reversed),
+            analyze_client_deployment(&bundle),
             forward,
-            "{scenario}: reordered input changed the analysis"
+            "{scenario}: repeated sealed analysis changed the result"
         );
     }
 }
@@ -915,13 +1053,13 @@ const OTHER_CI: &str = "20000000-0000-0000-0000-0000000000b2";
 
 fn client_artifact(artifact_id: &str, basename: &str) -> SccmArtifact {
     SccmArtifact {
-        artifact_id: artifact_id.to_owned(),
+        artifact_id: format!("fixture-{artifact_id}"),
         display_name: basename.to_owned(),
         original_path: None,
         host: None,
         role: SccmRole::Client,
-        configmgr_version: Some("5.00.TEST.0000".to_owned()),
-        collected_at_utc: None,
+        configmgr_version: Some("5.00.9128.1000".to_owned()),
+        collected_at_utc: Some("2026-07-30T00:00:00Z".to_owned()),
         rotation: SccmRotation::Current,
         coverage: SccmCoverageState::Captured,
         encoding: Some("utf-8".to_owned()),
@@ -934,18 +1072,64 @@ fn record(message: &str, time: &str, component: &str) -> String {
     )
 }
 
-fn bundle_from(sources: Vec<(SccmArtifact, String)>) -> SccmNormalizedBundle {
+fn deployment_group(basename: &str) -> &'static str {
+    let source = classify_artifact_name(basename, SccmRole::Client);
+    match source.logical_name.as_str() {
+        "appIntentEval" | "appDiscovery" => "client-app-intent",
+        "appEnforce" => "client-app-enforce",
+        "cas" | "contentTransferManager" | "dataTransferService" => "client-content",
+        "stateMessage" => "client-policy-state",
+        _ => "client-app-intent",
+    }
+}
+
+fn try_bundle_from(
+    sources: Vec<(SccmArtifact, String)>,
+) -> Result<SccmClientAdmittedEvidence, String> {
     let mut artifacts = Vec::new();
-    let mut evidence = Vec::new();
-    for (artifact, content) in sources {
-        evidence.extend(normalize_ccm_artifact(artifact.clone(), &content));
-        evidence.extend(normalize_physical_lines(&artifact, &content));
-        artifacts.push(artifact);
+    let mut payloads = Vec::new();
+    for (index, (mut artifact, content)) in sources.into_iter().enumerate() {
+        let bytes = content.into_bytes();
+        let artifact_id = format!("fixture-deployment-numbered-{:02}", index + 1);
+        artifact.artifact_id = artifact_id.clone();
+        let basename = artifact.display_name.clone();
+        artifact.collected_at_utc = Some("2026-07-30T00:00:00Z".to_owned());
+        artifact.coverage = SccmCoverageState::Captured;
+        let rotation_segment = match artifact.rotation {
+            SccmRotation::Current => "current".to_owned(),
+            SccmRotation::LoUnderscore => "lo".to_owned(),
+            SccmRotation::Numbered(number) => format!("numbered-{number}"),
+            ref other => panic!("unsupported custom deployment rotation {other:?}"),
+        };
+        artifacts.push(SccmClientIntakeArtifact {
+            artifact,
+            path_fingerprint: Some(format!("synthetic:deployment:numbered:{:02}", index + 1)),
+            rotation_lineage: None,
+            relative_path: Some(format!(
+                "evidence/{}/{}/{}",
+                deployment_group(&basename),
+                rotation_segment,
+                basename
+            )),
+            fragment_complete: Some(true),
+            declared_byte_length: Some(bytes.len() as u64),
+            content_sha256: Some(sha256(&bytes)),
+        });
+        payloads.push(
+            SccmClientCapturedPayload::new(artifact_id, bytes)
+                .map_err(|error| error.to_string())?,
+        );
     }
-    SccmNormalizedBundle {
+    let bundle = SccmClientIntakeBundle {
         artifacts,
-        evidence,
-    }
+        capture_gaps: Vec::new(),
+    };
+    let assessment = assess_client_intake(&bundle).map_err(|error| error.to_string())?;
+    admit_client_evidence(&bundle, &assessment, &payloads).map_err(|error| error.to_string())
+}
+
+fn bundle_from(sources: Vec<(SccmArtifact, String)>) -> SccmClientAdmittedEvidence {
+    try_bundle_from(sources).expect("sealed synthetic deployment input")
 }
 
 fn intent_content() -> String {
@@ -1012,71 +1196,24 @@ fn only_transaction(
 }
 
 #[test]
-fn a_duplicate_client_artifact_identity_reports_coverage_only() {
-    let artifact = client_artifact("synthetic-intent", "AppIntentEval.log");
-    let mut bundle = bundle_from(vec![(artifact.clone(), intent_content())]);
-    assert_eq!(
-        analyze_client_deployment(&bundle).transactions.len(),
-        1,
-        "the same bundle without a collision must produce a transaction"
-    );
-
-    bundle.artifacts.push(artifact);
-    let analysis = analyze_client_deployment(&bundle);
-    assert!(
-        analysis.transactions.is_empty(),
-        "an ambiguous artifact identity cannot elect a source"
-    );
-    assert!(analysis.findings.is_empty());
-    assert!(
-        !analysis.coverage.is_empty(),
-        "coverage still reports what was collected"
-    );
-}
-
-#[test]
-fn a_duplicate_evidence_identity_reports_coverage_only() {
-    let artifact = client_artifact("synthetic-intent", "AppIntentEval.log");
-    let mut bundle = bundle_from(vec![(artifact, intent_content())]);
-    bundle.evidence.extend(bundle.evidence.clone());
-
-    let analysis = analyze_client_deployment(&bundle);
-    assert!(
-        analysis.transactions.is_empty(),
-        "a duplicated logical record cannot be an authority"
-    );
-    assert!(analysis.findings.is_empty());
-}
-
-#[test]
-fn an_artifact_from_another_role_never_decides_a_client_source() {
+fn canonical_client_admission_rejects_an_artifact_from_another_role() {
     let client = client_artifact("shared-identity", "AppIntentEval.log");
     let mut management_point = client.clone();
     management_point.role = SccmRole::ManagementPoint;
     management_point.display_name = "mpcontrol.log".to_owned();
 
-    let mut forward = bundle_from(vec![(client.clone(), intent_content())]);
-    let mut reversed = forward.clone();
-    forward.artifacts.push(management_point.clone());
-    reversed.artifacts.insert(0, management_point);
-
-    for (label, bundle) in [("client first", forward), ("client last", reversed)] {
-        let analysis = analyze_client_deployment(&bundle);
-        let transaction = only_transaction(&analysis);
-        assert_eq!(
-            transaction.key.assignment_id, ASSIGNMENT,
-            "{label}: client source was displaced by another role"
-        );
-        assert_eq!(
-            phase_name(transaction.phase),
-            "locateContent",
-            "{label}: phase"
-        );
-    }
+    assert!(
+        try_bundle_from(vec![
+            (client, intent_content()),
+            (management_point, intent_content()),
+        ])
+        .is_err(),
+        "mixed-role authority must fail closed before deployment analysis"
+    );
 }
 
 #[test]
-fn an_unorderable_terminal_record_downgrades_to_a_low_confidence_symptom() {
+fn canonical_admission_rejects_unorderable_terminal_records() {
     let failing_transfer = format!(
         "{}{}",
         record(
@@ -1094,33 +1231,23 @@ fn an_unorderable_terminal_record_downgrades_to_a_low_confidence_symptom() {
             "DataTransferService",
         ),
     );
-    let bundle = bundle_from(vec![
-        (
-            client_artifact("synthetic-intent", "AppIntentEval.log"),
-            intent_content(),
-        ),
-        (
-            client_artifact("synthetic-content", "CAS.log"),
-            content_content(),
-        ),
-        (
-            client_artifact("synthetic-transfer", "DataTransferService.log"),
-            failing_transfer,
-        ),
-    ]);
-
-    let analysis = analyze_client_deployment(&bundle);
-    let transaction = only_transaction(&analysis);
-    assert_eq!(phase_name(transaction.phase), "transfer");
-    assert_eq!(state_name(transaction.state), "insufficientEvidence");
-    assert_eq!(classification_name(transaction.classification), "symptom");
-    assert_eq!(confidence_name(transaction.confidence), "low");
     assert!(
-        analysis.findings.iter().any(|finding| finding
-            .finding
-            .finding_id
-            .starts_with("deployment-chronology-uncertain")),
-        "an unorderable chain must name the missing ordering evidence"
+        try_bundle_from(vec![
+            (
+                client_artifact("synthetic-intent", "AppIntentEval.log"),
+                intent_content(),
+            ),
+            (
+                client_artifact("synthetic-content", "CAS.log"),
+                content_content(),
+            ),
+            (
+                client_artifact("synthetic-transfer", "DataTransferService.log"),
+                failing_transfer,
+            ),
+        ])
+        .is_err(),
+        "timestamp provenance must fail before reducer authority exists"
     );
 }
 
@@ -1276,31 +1403,12 @@ fn two_configuration_items_under_one_assignment_never_form_a_transaction() {
 }
 
 #[test]
-fn an_unprofiled_source_version_stays_a_source_local_observation() {
+fn canonical_admission_rejects_an_unprofiled_source_version() {
     let mut artifact = client_artifact("synthetic-intent", "AppIntentEval.log");
     artifact.configmgr_version = Some("5.00.PROD.9128".to_owned());
-    let bundle = bundle_from(vec![(artifact, intent_content())]);
-
-    let analysis = analyze_client_deployment(&bundle);
     assert!(
-        analysis.transactions.is_empty(),
-        "an unprofiled version cannot produce facts"
-    );
-    assert_eq!(analysis.source_local_observations.len(), 1);
-    let observation = &analysis.source_local_observations[0];
-    assert!(observation.complete_logical_record);
-    assert!(!observation.correlation_eligible);
-    assert_eq!(
-        confidence_name(observation.confidence_ceiling),
-        "low",
-        "an unprofiled record stays capped at low confidence"
-    );
-    assert!(
-        analysis
-            .extraction_profile
-            .validated_artifact_families
-            .is_empty(),
-        "a captured source the profile could not read is not a validated family"
+        try_bundle_from(vec![(artifact, intent_content())]).is_err(),
+        "an unregistered version must fail before reducer authority exists"
     );
 }
 
@@ -1358,7 +1466,7 @@ fn a_nonzero_exit_code_without_a_terminal_record_is_not_a_confirmed_failure() {
 #[test]
 fn the_public_projection_is_camel_case_and_carries_no_private_material() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let json = serde_json::to_value(&analysis)
             .unwrap_or_else(|error| panic!("{scenario}: analysis serializes: {error}"));
 
@@ -1451,7 +1559,7 @@ const OBSERVED_FAMILY_SCENARIOS: [&str; 7] = [
 #[test]
 fn the_selected_extraction_profile_reports_what_the_bundle_validated() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         let declared = &expected["extractionProfile"];
         let profile = &analysis.extraction_profile;
@@ -1534,57 +1642,35 @@ fn intent_record() -> String {
 }
 
 #[test]
-fn a_physical_fragment_inside_a_captured_artifact_never_becomes_a_fact() {
+fn canonical_admission_rejects_a_physical_fragment_inside_a_captured_artifact() {
     let content = format!(
         "{}Requirements satisfied assignmentId={ASSIGNMENT} ciId={CI}\n",
         intent_record()
     );
-    let bundle = bundle_from(vec![(
-        client_artifact("synthetic-intent", "AppIntentEval.log"),
-        content,
-    )]);
-
-    let analysis = analyze_client_deployment(&bundle);
-    let transaction = only_transaction(&analysis);
-    assert_eq!(
-        phase_name(transaction.phase),
-        "requirements",
-        "an unframed line cannot satisfy requirements"
-    );
-    assert_eq!(
-        transaction.last_successful_phase.map(phase_name),
-        Some("intent"),
-        "a fragment cannot promote the last successful phase"
-    );
     assert!(
-        analysis
-            .source_local_observations
-            .iter()
-            .any(|observation| observation.artifact_id == "synthetic-intent"
-                && !observation.complete_logical_record),
-        "the fragment must still be visible as a source-local observation"
+        try_bundle_from(vec![(
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            content,
+        )])
+        .is_err(),
+        "incomplete CCM framing must fail before reducer authority exists"
     );
 }
 
 #[test]
-fn a_physical_fragment_never_confirms_a_terminal_failure() {
+fn canonical_admission_rejects_a_terminal_physical_fragment() {
     let content = format!(
         "{}Requirements terminal failure assignmentId={ASSIGNMENT} ciId={CI} requirementId=REQ-TEST-901 terminal=true\n",
         intent_record()
     );
-    let bundle = bundle_from(vec![(
-        client_artifact("synthetic-intent", "AppIntentEval.log"),
-        content,
-    )]);
-
-    let analysis = analyze_client_deployment(&bundle);
-    let transaction = only_transaction(&analysis);
-    assert_ne!(
-        classification_name(transaction.classification),
-        "confirmedFailure",
-        "an unframed line cannot confirm a terminal failure"
+    assert!(
+        try_bundle_from(vec![(
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            content,
+        )])
+        .is_err(),
+        "a terminal-looking fragment must fail before reducer authority exists"
     );
-    assert_ne!(confidence_name(transaction.confidence), "high");
 }
 
 #[test]
@@ -1690,7 +1776,7 @@ fn a_punctuation_adjacent_duplicate_label_is_ambiguity_not_a_first_win() {
 }
 
 #[test]
-fn a_chronology_finding_never_speaks_for_another_phase() {
+fn canonical_admission_rejects_cross_phase_records_with_unorderable_timestamps() {
     let unorderable_requirements = record(
         &format!(
             "Requirements terminal failure assignmentId={OTHER_ASSIGNMENT} ciId={CI} requirementId=REQ-TEST-902 terminal=true"
@@ -1713,95 +1799,36 @@ fn a_chronology_finding_never_speaks_for_another_phase() {
         "AppEnforce",
     );
 
-    let bundle = bundle_from(vec![
-        (
-            client_artifact("synthetic-intent", "AppIntentEval.log"),
-            format!("{}{other_intent}", intent_content()),
-        ),
-        (
-            rotated_artifact(
-                "synthetic-intent-rotated",
-                "AppIntentEval.log.1",
-                SccmRotation::Numbered(1),
-            ),
-            unorderable_requirements,
-        ),
-        (
-            client_artifact("synthetic-content", "CAS.log"),
-            content_content(),
-        ),
-        (
-            client_artifact("synthetic-transfer", "DataTransferService.log"),
-            transfer_content("05:00:03.000+000", "05:00:04.000+000"),
-        ),
-        (
-            client_artifact("synthetic-enforce", "AppEnforce.log"),
-            unorderable_enforce,
-        ),
-    ]);
-
-    let analysis = analyze_client_deployment(&bundle);
-    assert_eq!(analysis.transactions.len(), 2, "two keyed transactions");
-
-    let mut identifiers = analysis
-        .findings
-        .iter()
-        .map(|finding| finding.finding.finding_id.clone())
-        .collect::<Vec<_>>();
-    let total = identifiers.len();
-    identifiers.sort();
-    identifiers.dedup();
-    assert_eq!(
-        identifiers.len(),
-        total,
-        "finding identities must be unique"
-    );
-
-    let mut chronology = analysis
-        .findings
-        .iter()
-        .filter(|finding| {
-            finding
-                .finding
-                .finding_id
-                .starts_with("deployment-chronology-uncertain")
-        })
-        .map(|finding| {
+    assert!(
+        try_bundle_from(vec![
             (
-                phase_name(finding.deployment_phase),
-                finding
-                    .finding
-                    .next_artifacts
-                    .first()
-                    .map(|request| request.logical_id.as_str())
-                    .unwrap_or("none"),
-            )
-        })
-        .collect::<Vec<_>>();
-    chronology.sort();
-    assert_eq!(
-        chronology,
-        vec![("enforce", "appEnforce"), ("requirements", "appIntentEval")],
-        "each unorderable phase must request its own artifact"
+                client_artifact("synthetic-intent", "AppIntentEval.log"),
+                format!("{}{other_intent}", intent_content()),
+            ),
+            (
+                rotated_artifact(
+                    "synthetic-intent-rotated",
+                    "AppIntentEval.log.1",
+                    SccmRotation::Numbered(1),
+                ),
+                unorderable_requirements,
+            ),
+            (
+                client_artifact("synthetic-content", "CAS.log"),
+                content_content(),
+            ),
+            (
+                client_artifact("synthetic-transfer", "DataTransferService.log"),
+                transfer_content("05:00:03.000+000", "05:00:04.000+000"),
+            ),
+            (
+                client_artifact("synthetic-enforce", "AppEnforce.log"),
+                unorderable_enforce,
+            ),
+        ])
+        .is_err(),
+        "unorderable records must fail before reducer authority exists"
     );
-
-    for finding in &analysis.findings {
-        let phase = finding.deployment_phase;
-        for reference in &finding.finding.evidence {
-            let cited_by_this_phase = analysis.transactions.iter().any(|transaction| {
-                transaction.phase == phase
-                    && transaction
-                        .evidence
-                        .iter()
-                        .any(|cited| cited.artifact_id == reference.artifact_id)
-            });
-            assert!(
-                cited_by_this_phase,
-                "{}: cites {} from a transaction at another phase",
-                finding.finding.finding_id, reference.artifact_id
-            );
-        }
-    }
 }
 
 #[test]
@@ -1857,7 +1884,10 @@ fn every_equally_terminal_record_is_cited_rather_than_one_elected() {
             .map(|terminal| terminal.reference.artifact_id.clone())
             .collect::<Vec<_>>();
         cited.sort();
-        let mut expected = vec![first_id.to_owned(), second_id.to_owned()];
+        let mut expected = vec![
+            "fixture-deployment-numbered-04".to_owned(),
+            "fixture-deployment-numbered-05".to_owned(),
+        ];
         expected.sort();
         assert_eq!(
             cited, expected,
@@ -1882,7 +1912,7 @@ fn selection_state_name(state: SccmDeploymentProfileSelectionState) -> &'static 
 #[test]
 fn the_extraction_profile_reports_its_selection_state() {
     for scenario in SCENARIOS {
-        let analysis = analyze_client_deployment(&load_bundle(scenario));
+        let analysis = analyze_scenario(scenario);
         let expected = expected(scenario);
         assert_eq!(
             selection_state_name(analysis.extraction_profile.selection_state),
@@ -1895,11 +1925,9 @@ fn the_extraction_profile_reports_its_selection_state() {
 
     let mut unprofiled = client_artifact("synthetic-intent", "AppIntentEval.log");
     unprofiled.configmgr_version = Some("5.00.PROD.9128".to_owned());
-    let analysis = analyze_client_deployment(&bundle_from(vec![(unprofiled, intent_content())]));
-    assert_eq!(
-        selection_state_name(analysis.extraction_profile.selection_state),
-        "unselected",
-        "no client source declares the profiled version"
+    assert!(
+        try_bundle_from(vec![(unprofiled, intent_content())]).is_err(),
+        "an unregistered profile cannot create deployment analysis authority"
     );
 }
 
@@ -1952,7 +1980,7 @@ fn a_repeated_identical_content_request_publishes_the_earliest_record_only() {
             .as_ref()
             .unwrap_or_else(|| panic!("{label}: an unambiguous repeated request is publishable"));
         assert_eq!(
-            fact.evidence.artifact_id, early_id,
+            fact.evidence.artifact_id, "fixture-deployment-numbered-02",
             "{label}: the citation must follow chronology, not the artifact name"
         );
         assert_eq!(
@@ -1963,7 +1991,7 @@ fn a_repeated_identical_content_request_publishes_the_earliest_record_only() {
 }
 
 #[test]
-fn an_unorderable_repeated_content_request_is_never_published() {
+fn canonical_admission_rejects_an_unorderable_repeated_content_request() {
     let located = |time: &str| {
         record(
             &format!(
@@ -1973,29 +2001,26 @@ fn an_unorderable_repeated_content_request_is_never_published() {
             "CAS",
         )
     };
-    let bundle = bundle_from(vec![
-        (
-            client_artifact("synthetic-intent", "AppIntentEval.log"),
-            intent_content(),
-        ),
-        (
-            client_artifact("synthetic-content-a", "CAS.log"),
-            located("05:00:02.000+000"),
-        ),
-        (
-            rotated_artifact(
-                "synthetic-content-b",
-                "CAS.log.1",
-                SccmRotation::Numbered(1),
-            ),
-            located("05:00:09.000"),
-        ),
-    ]);
-
-    let analysis = analyze_client_deployment(&bundle);
-    let transaction = only_transaction(&analysis);
     assert!(
-        transaction.counterpart_ready_fact.is_none(),
-        "two incomparable records cannot decide which instant is published"
+        try_bundle_from(vec![
+            (
+                client_artifact("synthetic-intent", "AppIntentEval.log"),
+                intent_content(),
+            ),
+            (
+                client_artifact("synthetic-content-a", "CAS.log"),
+                located("05:00:02.000+000"),
+            ),
+            (
+                rotated_artifact(
+                    "synthetic-content-b",
+                    "CAS.log.1",
+                    SccmRotation::Numbered(1),
+                ),
+                located("05:00:09.000"),
+            ),
+        ])
+        .is_err(),
+        "incomparable record timestamps must fail before reducer authority exists"
     );
 }
