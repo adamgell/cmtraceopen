@@ -91,17 +91,20 @@ Communication uses Tauri's `invoke()` (frontend to backend) and `emit()` (backen
 
 ### Backend Modules (`src-tauri/src/`)
 
+Pure log/Intune/ESP/DSRegCmd parsing lives in the separate `crates/cmtraceopen-parser/` crate (wasm32-compatible, no OS I/O). The `src-tauri` crate hosts the Tauri app and the native, OS-facing modules:
+
 | Module | Purpose |
 |--------|---------|
 | `commands/` | Tauri IPC command handlers — the API surface |
-| `parser/` | Log format auto-detection and parsing (CCM, simple, CBS, DISM, Panther, plain text) |
-| `intune/` | IME diagnostics pipeline: event tracking, timeline, download stats, EVTX parsing |
-| `dsregcmd/` | Device registration analysis: output parsing, diagnostic rules, registry hives |
-| `error_db/` | Embedded error code database (700+ Windows/SCCM/Intune/MSI codes) |
-| `models/` | Shared types: `LogEntry`, `ParseResult`, `FilterCriteria` |
+| `intune/`, `esp/`, `dsregcmd/`, `sysmon/`, `secureboot/`, `macos_diag/`, `jamf/`, `event_log/` | Native, OS-facing halves of each workspace (registry, EVTX, process, live capture) |
+| `graph_api/` | Microsoft Graph / WAM client |
+| `timeline/`, `collector/`, `elevation/` | Cross-source timeline, evidence collection, admin elevation |
+| `parser/` | App-local parse glue (e.g. DNS audit); the log parsers themselves live in the parser crate |
 | `state/` | `AppState` (Mutex-wrapped) — tracks open files, tail sessions |
 | `watcher/` | File watching and real-time tailing via `notify` crate |
 | `menu.rs` | Native application menu |
+
+Shared types (`LogEntry`, `FilterCriteria`) and the embedded error-code database (700+ Windows/SCCM/Intune/MSI codes) live in the parser crate's `models/` and `error_db/` modules.
 
 ### Frontend Modules (`src/`)
 
@@ -110,15 +113,14 @@ Communication uses Tauri's `invoke()` (frontend to backend) and `emit()` (backen
 | `components/log-view/` | Main log list with virtual scrolling, row rendering, info pane |
 | `components/layout/` | AppShell, toolbar, sidebar, status bar |
 | `components/dialogs/` | Modal dialogs (find, filter, error lookup) |
-| `components/intune/` | Intune analysis workspace |
-| `components/dsregcmd/` | DSRegCmd troubleshooting workspace |
-| `stores/` | Zustand stores: log, filter, intune, dsregcmd, ui |
+| `workspaces/` | Feature workspaces: log, intune, esp-diagnostics, dsregcmd, sysmon, secureboot, event-log, dns-dhcp, deployment, macos-diag, macos-jamf, timeline |
+| `stores/` | Zustand stores: log, filter, ui, marker, registry, timeline (workspaces add their own domain stores) |
 | `hooks/` | Custom hooks for drag-drop, menus, file association |
 | `types/` | TypeScript type definitions |
 
 ### Parser Architecture
 
-The parser system in `src-tauri/src/parser/` uses a `ResolvedParser` that bundles:
+The parser system lives in the `crates/cmtraceopen-parser/` crate (pure Rust, wasm32-compatible, no OS I/O) and uses a `ResolvedParser` that bundles:
 
 - `ParserKind` — format variant (CCM, Simple, ReportingEvents, etc.)
 - `ParserImplementation` — actual parsing logic
@@ -155,6 +157,5 @@ cd src-tauri && cargo bench
 ## Project Links
 
 - [Changelog](CHANGELOG.md)
-- [Feature Roadmap](FEATURE_IMPROVEMENTS.md)
-- [DSRegCmd Troubleshooting Guide](DSREGCMD_TROUBLESHOOTING.md)
+- [DSRegCmd Workspace guide (wiki)](https://github.com/adamgell/CMTraceOpen/wiki/DSRegCmd-Workspace)
 - [Disclaimer](DISCLAIMER.md)

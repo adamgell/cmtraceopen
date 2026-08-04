@@ -154,7 +154,7 @@ Triage Entra join, hybrid join, PRT, MDM, and Windows Hello for Business issues.
 - Registry-backed Windows Hello for Business policy correlation
 - Export as JSON or summary for case handoff
 
-See the [DSRegCmd troubleshooting guide](DSREGCMD_TROUBLESHOOTING.md) for a detailed walkthrough.
+See the [DSRegCmd Workspace wiki page](https://github.com/adamgell/CMTraceOpen/wiki/DSRegCmd-Workspace) for a detailed walkthrough.
 
 ## Quick Start
 
