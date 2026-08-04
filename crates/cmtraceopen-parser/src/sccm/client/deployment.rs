@@ -1436,17 +1436,6 @@ fn opposing_outcomes_are_ambiguous(
         })
 }
 
-fn facts_of_kind<'a>(
-    facts: &[&'a DeploymentFact],
-    kind: DeploymentFactKind,
-) -> Vec<&'a DeploymentFact> {
-    facts
-        .iter()
-        .copied()
-        .filter(|fact| fact.kind == kind)
-        .collect()
-}
-
 /// The one cross-side output, and the only place a client key value leaves this
 /// reducer. It republishes the transaction key that already survived the
 /// ambiguity guard, and only when exactly one complete content record carries
@@ -1560,7 +1549,12 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
         );
     }
 
-    if let Some(not_applicable) = first_fact(facts, DeploymentFactKind::IntentNotApplicable) {
+    let not_applicable = unrecovered_failures(
+        facts,
+        DeploymentFactKind::IntentNotApplicable,
+        DeploymentFactKind::IntentTargeted,
+    );
+    if let Some(not_applicable) = not_applicable.first().copied() {
         return conclude(
             &[not_applicable],
             SccmDeploymentPhase::Intent,
@@ -1595,8 +1589,16 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
         );
     }
 
-    let requirement_failures = facts_of_kind(facts, DeploymentFactKind::RequirementsFailed);
-    let dependency_failures = facts_of_kind(facts, DeploymentFactKind::DependencyFailed);
+    let requirement_failures = unrecovered_failures(
+        facts,
+        DeploymentFactKind::RequirementsFailed,
+        DeploymentFactKind::RequirementsSatisfied,
+    );
+    let dependency_failures = unrecovered_failures(
+        facts,
+        DeploymentFactKind::DependencyFailed,
+        DeploymentFactKind::RequirementsSatisfied,
+    );
     if !requirement_failures.is_empty() || !dependency_failures.is_empty() {
         // A failed requirement gates the dependency check, so it names the
         // cause when both are present; the citations stay per cause.
@@ -1807,11 +1809,21 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
         );
     }
 
-    if let Some(mismatch) = next_fact_after(
+    let detection_mismatches = unrecovered_failures(
         facts,
         DeploymentFactKind::DetectionMismatch,
-        chain.last().copied(),
-    ) {
+        DeploymentFactKind::Detected,
+    );
+    if let Some(mismatch) = detection_mismatches
+        .iter()
+        .copied()
+        .find(|mismatch| {
+            chain
+                .last()
+                .is_none_or(|earlier| fact_is_strictly_before(earlier, mismatch))
+        })
+        .or_else(|| detection_mismatches.first().copied())
+    {
         let mut mismatch_chain = chain.clone();
         mismatch_chain.push(mismatch);
         return conclude(
@@ -1951,8 +1963,11 @@ fn insufficient(
     coverage: &[SccmDeploymentCoverage],
 ) -> Outcome {
     let group = phase.artifact_group();
+    // A missing logical row is not evidence that collection was absent. Only
+    // an explicit non-captured row can authorize an InsufficientEvidence
+    // coverage finding; otherwise retain the bounded request as a symptom.
     let physical_gap = coverage_for_group(coverage, group)
-        .is_none_or(|row| row.state != SccmCoverageState::Captured);
+        .is_some_and(|row| row.state != SccmCoverageState::Captured);
     Outcome {
         phase,
         state: SccmDeploymentState::InsufficientEvidence,

@@ -1780,6 +1780,185 @@ fn equal_time_transfer_success_and_failure_are_not_a_confirmed_failure() {
 }
 
 #[test]
+fn later_ordered_success_recovers_early_intent_and_requirement_adverse_outcomes() {
+    let cases = [
+        (
+            "intent",
+            format!(
+                "{}{}",
+                record(
+                    &format!("SYNTHETIC FIXTURE deployment explicitly not targeted assignmentId={ASSIGNMENT} ciId={CI} state=notApplicable terminal=true"),
+                    "05:00:00.000+000",
+                    "AppIntentEval",
+                ),
+                record(
+                    &format!("SYNTHETIC FIXTURE deployment targeted assignmentId={ASSIGNMENT} ciId={CI} state=targeted"),
+                    "05:00:01.000+000",
+                    "AppIntentEval",
+                ),
+            ),
+        ),
+        (
+            "requirements",
+            format!(
+                "{}{}{}",
+                intent_record(),
+                record(
+                    &format!("Requirements terminal failure assignmentId={ASSIGNMENT} ciId={CI} requirementId=REQ-RECOVERY terminal=true"),
+                    "05:00:01.000+000",
+                    "AppIntentEval",
+                ),
+                record(
+                    &format!("Requirements satisfied assignmentId={ASSIGNMENT} ciId={CI}"),
+                    "05:00:02.000+000",
+                    "AppIntentEval",
+                ),
+            ),
+        ),
+        (
+            "dependency",
+            format!(
+                "{}{}{}",
+                intent_record(),
+                record(
+                    &format!("Dependency terminal failure assignmentId={ASSIGNMENT} ciId={CI} dependencyCiId={OTHER_CI} terminal=true"),
+                    "05:00:01.000+000",
+                    "AppIntentEval",
+                ),
+                record(
+                    &format!("Requirements satisfied assignmentId={ASSIGNMENT} ciId={CI}"),
+                    "05:00:02.000+000",
+                    "AppIntentEval",
+                ),
+            ),
+        ),
+    ];
+
+    for (label, content) in cases {
+        let analysis = analyze_client_deployment(&bundle_from(vec![(
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            content,
+        )]));
+        let transaction = only_transaction(&analysis);
+        assert_ne!(
+            transaction.state,
+            SccmDeploymentState::NotTargeted,
+            "{label}"
+        );
+        assert_ne!(transaction.state, SccmDeploymentState::Failed, "{label}");
+        assert!(analysis
+            .findings
+            .iter()
+            .all(|finding| finding.finding.class != SccmFindingClass::ConfirmedFailure));
+    }
+}
+
+#[test]
+fn later_ordered_detection_success_recovers_an_earlier_mismatch() {
+    let enforce = record(
+        &format!("SYNTHETIC FIXTURE deployment success enforcement completed assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} exitCode=0 terminal=true"),
+        "05:00:06.000+000",
+        "AppEnforce",
+    );
+    let detection = format!(
+        "{}{}",
+        record(
+            &format!("SYNTHETIC FIXTURE deployment detection false negative assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} detected=false"),
+            "05:00:07.000+000",
+            "AppDiscovery",
+        ),
+        record(
+            &format!("SYNTHETIC FIXTURE deployment success detected assignmentId={ASSIGNMENT} ciId={CI} productCode={PRODUCT} detected=true"),
+            "05:00:08.000+000",
+            "AppDiscovery",
+        ),
+    );
+    let analysis = analyze_client_deployment(&bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            intent_content(),
+        ),
+        (
+            client_artifact("synthetic-content", "CAS.log"),
+            content_content(),
+        ),
+        (
+            client_artifact("synthetic-transfer", "DataTransferService.log"),
+            transfer_content("05:00:03.000+000", "05:00:04.000+000"),
+        ),
+        (
+            client_artifact("synthetic-enforce", "AppEnforce.log"),
+            enforce,
+        ),
+        (
+            client_artifact("synthetic-detect", "AppDiscovery.log"),
+            detection,
+        ),
+    ]));
+    let transaction = only_transaction(&analysis);
+    assert_eq!(transaction.phase, SccmDeploymentPhase::Report);
+    assert_ne!(transaction.state, SccmDeploymentState::DetectionMismatch);
+    assert!(analysis
+        .findings
+        .iter()
+        .all(|finding| finding.finding.finding_id != "sccm.client.deployment.detection-mismatch"));
+}
+
+#[test]
+fn later_ordered_adverse_outcomes_remain_authoritative() {
+    let intent = format!(
+        "{}{}",
+        intent_record(),
+        record(
+            &format!("SYNTHETIC FIXTURE deployment explicitly not targeted assignmentId={ASSIGNMENT} ciId={CI} state=notApplicable terminal=true"),
+            "05:00:01.000+000",
+            "AppIntentEval",
+        ),
+    );
+    let analysis = analyze_client_deployment(&bundle_from(vec![(
+        client_artifact("synthetic-intent", "AppIntentEval.log"),
+        intent,
+    )]));
+    assert_eq!(
+        only_transaction(&analysis).state,
+        SccmDeploymentState::NotTargeted
+    );
+
+    for (label, adverse) in [
+        (
+            "requirements",
+            format!("Requirements terminal failure assignmentId={ASSIGNMENT} ciId={CI} requirementId=REQ-LATEST terminal=true"),
+        ),
+        (
+            "dependency",
+            format!("Dependency terminal failure assignmentId={ASSIGNMENT} ciId={CI} dependencyCiId={OTHER_CI} terminal=true"),
+        ),
+    ] {
+        let content = format!(
+            "{}{}{}",
+            intent_record(),
+            record(
+                &format!("Requirements satisfied assignmentId={ASSIGNMENT} ciId={CI}"),
+                "05:00:01.000+000",
+                "AppIntentEval",
+            ),
+            record(&adverse, "05:00:02.000+000", "AppIntentEval"),
+        );
+        let analysis = analyze_client_deployment(&bundle_from(vec![(
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            content,
+        )]));
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.state, SccmDeploymentState::Failed, "{label}");
+        assert_eq!(
+            transaction.classification,
+            SccmDeploymentClassification::ConfirmedFailure,
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn a_captured_source_missing_a_required_record_is_not_absent_coverage() {
     let intent_only = record(
         &format!(
