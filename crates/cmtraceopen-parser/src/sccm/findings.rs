@@ -38,8 +38,9 @@ const MAX_SCCM_FINDING_SUMMARY_CHARS: usize = 2048;
 // key this validator would reject. Crate-visible rather than public: it is an
 // internal agreement between the producer and the validator, not wire surface.
 pub(crate) const MAX_SCCM_CORRELATION_KEY_VALUE_CHARS: usize = 256;
-// Intentionally empty: no extraction profile is verified as stable enough to
-// authorize key-only High confidence. Adding one requires contract review.
+// The sole registered profile is a closed synthetic-fixture contract. Its
+// registration authorizes exact fixture keys, not any production ConfigMgr
+// version. Adding a production profile requires separate contract review.
 const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] = &["policy-client-5.00.test-v1"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

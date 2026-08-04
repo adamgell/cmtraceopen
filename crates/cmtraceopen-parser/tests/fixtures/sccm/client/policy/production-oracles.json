@@ -22,7 +22,8 @@
     "crossSourceCorrelationPerformed": true,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [],
     "profileGaps": [],
@@ -448,7 +449,8 @@
     "crossSourceCorrelationPerformed": true,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {
@@ -1198,7 +1200,7 @@
           "policyId": "b8b8b8b8-b8b8-b8b8-b8b8-b8b8b8b8b8b8",
           "requestId": "27262626-2626-2626-2626-262626262626"
         },
-        "lastConfirmedPhase": "schedule",
+        "lastConfirmedPhase": "request",
         "nextArtifacts": [
           {
             "logicalId": "ciAgent",
@@ -1342,7 +1344,8 @@
     "crossSourceCorrelationPerformed": false,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {
@@ -1608,7 +1611,8 @@
     "crossSourceCorrelationPerformed": true,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {
@@ -2044,7 +2048,8 @@
     "crossSourceCorrelationPerformed": true,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {
@@ -3010,7 +3015,8 @@
     "crossSourceCorrelationPerformed": false,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {
@@ -3400,7 +3406,8 @@
     ],
     "crossSourceCorrelationPerformed": false,
     "extractionProfile": {
-      "selectionState": "unvalidatedVersion"
+      "selectionState": "unvalidatedVersion",
+      "syntheticFixtureOnly": true
     },
     "findings": [],
     "profileGaps": [
@@ -3480,7 +3487,8 @@
     "crossSourceCorrelationPerformed": true,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [],
     "profileGaps": [],
@@ -3895,7 +3903,8 @@
     "crossSourceCorrelationPerformed": false,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {
@@ -4216,7 +4225,8 @@
     "crossSourceCorrelationPerformed": true,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [],
     "profileGaps": [],
@@ -4689,7 +4699,8 @@
     "crossSourceCorrelationPerformed": true,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {
@@ -5174,7 +5185,8 @@
     "crossSourceCorrelationPerformed": false,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {
@@ -5444,7 +5456,8 @@
     "crossSourceCorrelationPerformed": false,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [],
     "profileGaps": [],
@@ -5509,7 +5522,8 @@
     "crossSourceCorrelationPerformed": false,
     "extractionProfile": {
       "profileId": "policy-client-5.00.test-v1",
-      "selectionState": "selected"
+      "selectionState": "selected",
+      "syntheticFixtureOnly": true
     },
     "findings": [
       {

@@ -130,6 +130,10 @@ pub struct SccmPolicyExtractionProfile {
     pub selection_state: SccmPolicyProfileSelectionState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
+    /// The only validated policy profile is the committed synthetic fixture
+    /// profile. This is not a claim of stability for any production ConfigMgr
+    /// version.
+    pub synthetic_fixture_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -425,6 +429,7 @@ fn reduce_policy(
         SccmPolicyExtractionProfile {
             selection_state: SccmPolicyProfileSelectionState::UnvalidatedVersion,
             profile_id: None,
+            synthetic_fixture_only: true,
         }
     } else if assessment
         .physical_artifacts
@@ -434,11 +439,13 @@ fn reduce_policy(
         SccmPolicyExtractionProfile {
             selection_state: SccmPolicyProfileSelectionState::Selected,
             profile_id: Some(SCCM_POLICY_KEY_PROFILE_ID.to_owned()),
+            synthetic_fixture_only: true,
         }
     } else {
         SccmPolicyExtractionProfile {
             selection_state: SccmPolicyProfileSelectionState::Unavailable,
             profile_id: None,
+            synthetic_fixture_only: true,
         }
     };
 
@@ -554,7 +561,7 @@ fn reduce_transaction(
         representatives.insert(phase, representative.reference.clone());
     }
 
-    let inversion = phase_inversion(&facts);
+    let chronology_conflict = cross_phase_chronology_conflict(&facts);
     let decisive = PHASES.iter().find_map(|phase| {
         resolutions.get(phase).and_then(|resolution| {
             (*resolution != PhaseResolution::Succeeded).then_some((*phase, *resolution))
@@ -562,7 +569,16 @@ fn reduce_transaction(
     });
 
     let (phase, state, classification, condition, last_confirmed_phase, mut confidence) =
-        if let Some((phase, resolution)) = decisive {
+        if let Some((earlier, later)) = chronology_conflict {
+            (
+                later,
+                SccmPolicyState::Contradictory,
+                SccmPolicyClassification::ContradictoryEvidence,
+                Some(SccmPolicyCondition::OrderingUnavailable),
+                Some(earlier),
+                SccmConfidence::Low,
+            )
+        } else if let Some((phase, resolution)) = decisive {
             let last = last_success_before(&resolutions, phase);
             match resolution {
                 PhaseResolution::Failed => {
@@ -632,15 +648,6 @@ fn reduce_transaction(
                 ),
                 PhaseResolution::Succeeded => unreachable!(),
             }
-        } else if let Some((earlier, later)) = inversion {
-            (
-                later,
-                SccmPolicyState::Contradictory,
-                SccmPolicyClassification::ContradictoryEvidence,
-                Some(SccmPolicyCondition::OrderingUnavailable),
-                Some(earlier),
-                SccmConfidence::Low,
-            )
         } else if resolutions.get(&SccmPolicyPhase::Report) == Some(&PhaseResolution::Succeeded) {
             (
                 SccmPolicyPhase::Report,
@@ -852,19 +859,20 @@ fn resolution_for_outcome(outcome: SccmPolicyObservationOutcome) -> PhaseResolut
     }
 }
 
-fn phase_inversion(facts: &[PolicyFact]) -> Option<(SccmPolicyPhase, SccmPolicyPhase)> {
-    let comparable_successes = facts
-        .iter()
-        .filter(|fact| {
-            fact.outcome == SccmPolicyObservationOutcome::Succeeded
-                && fact.timestamp.ordering_state == SccmTimeOrderingState::NormalizedUtc
-        })
-        .collect::<Vec<_>>();
-    for earlier in &comparable_successes {
-        for later in &comparable_successes {
-            if earlier.phase.rank() < later.phase.rank()
-                && earlier.timestamp.utc_millis > later.timestamp.utc_millis
-            {
+fn cross_phase_chronology_conflict(
+    facts: &[PolicyFact],
+) -> Option<(SccmPolicyPhase, SccmPolicyPhase)> {
+    for earlier in facts {
+        for later in facts {
+            if earlier.phase.rank() >= later.phase.rank() {
+                continue;
+            }
+            let comparable = earlier.timestamp.ordering_state
+                == SccmTimeOrderingState::NormalizedUtc
+                && later.timestamp.ordering_state == SccmTimeOrderingState::NormalizedUtc
+                && earlier.timestamp.utc_millis.is_some()
+                && later.timestamp.utc_millis.is_some();
+            if !comparable || earlier.timestamp.utc_millis >= later.timestamp.utc_millis {
                 return Some((earlier.phase, later.phase));
             }
         }

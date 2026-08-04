@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use cmtraceopen_parser::sccm::{
     analyze_client_policy, assess_client_intake, SccmArtifact, SccmClientCapturedPayload,
     SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientIntakeCaptureGap, SccmConfidence,
-    SccmCoverageState, SccmKeyConfidence, SccmPolicyClassification, SccmPolicyCondition,
-    SccmPolicyProfileSelectionState, SccmPolicyState, SccmRole, SccmRotation,
+    SccmCoverageState, SccmFindingClass, SccmKeyConfidence, SccmPolicyClassification,
+    SccmPolicyCondition, SccmPolicyProfileSelectionState, SccmPolicyState, SccmRole, SccmRotation,
     SCCM_POLICY_KEY_PROFILE_ID,
 };
 use serde::Deserialize;
@@ -263,6 +263,11 @@ fn every_policy_fixture_runs_through_production_with_exact_oracles() {
 
 #[test]
 fn policy_acceptance_states_are_distinct_and_conservative() {
+    assert!(
+        analyze_fixture("complete")
+            .extraction_profile
+            .synthetic_fixture_only
+    );
     assert_eq!(
         analyze_fixture("complete").transactions[0].state,
         SccmPolicyState::Succeeded
@@ -467,4 +472,111 @@ fn capped_policy_source_is_an_explicit_transaction_gap() {
         .next_artifacts
         .iter()
         .any(|request| request.logical_id == "policyAgent"));
+}
+
+fn policy_record(message: &str, time: &str, offset: &str, component: &str) -> String {
+    format!(
+        "<![LOG[{message} AssignmentId={{35353535-3535-3535-3535-353535353535}} PolicyId={{c5c5c5c5-c5c5-c5c5-c5c5-c5c5c5c5c5c5}}]LOG]!><time=\"{time}{offset}\" date=\"8-4-2026\" component=\"{component}\" context=\"\" type=\"1\" thread=\"1\" file=\"synthetic.cc:1\">"
+    )
+}
+
+fn analyze_policy_records(
+    artifact_id: &str,
+    records: &[String],
+) -> cmtraceopen_parser::sccm::SccmPolicyAnalysis {
+    let borrowed = records.iter().map(String::as_str).collect::<Vec<_>>();
+    let (bundle, payloads) = single_policy_input(artifact_id, "PolicyAgent.log", &borrowed);
+    let assessment = assess_client_intake(&bundle).expect("canonical chronology input");
+    analyze_client_policy(&bundle, &assessment, &payloads).expect("chronology analysis")
+}
+
+#[test]
+fn cross_phase_chronology_precedes_failure_deferred_and_success_decisions() {
+    let cases = [
+        (
+            "policy-failure",
+            vec![
+                policy_record("Request succeeded", "12:10:00.000", "+000", "PolicyAgent"),
+                policy_record(
+                    "Download failed terminal",
+                    "12:05:00.000",
+                    "+000",
+                    "PolicyAgent",
+                ),
+            ],
+        ),
+        (
+            "policy-deferred",
+            vec![
+                policy_record("Request succeeded", "12:10:00.000", "+000", "PolicyAgent"),
+                policy_record("Schedule deferred", "12:05:00.000", "+000", "Scheduler"),
+            ],
+        ),
+        (
+            "policy-success",
+            vec![
+                policy_record("Request succeeded", "12:10:00.000", "+000", "PolicyAgent"),
+                policy_record("Download succeeded", "12:05:00.000", "+000", "PolicyAgent"),
+            ],
+        ),
+    ];
+
+    for (artifact_id, records) in cases {
+        let analysis = analyze_policy_records(artifact_id, &records);
+        let transaction = &analysis.transactions[0];
+        assert_eq!(
+            transaction.state,
+            SccmPolicyState::Contradictory,
+            "{artifact_id}"
+        );
+        assert_eq!(transaction.confidence, SccmConfidence::Low, "{artifact_id}");
+        assert_eq!(
+            transaction.classification,
+            SccmPolicyClassification::ContradictoryEvidence,
+            "{artifact_id}"
+        );
+        assert_eq!(analysis.findings[0].class, SccmFindingClass::Symptom);
+        assert!(analysis.findings[0].terminal_evidence.is_empty());
+    }
+}
+
+#[test]
+fn equal_and_noncomparable_cross_phase_times_are_ambiguous() {
+    let cases = [
+        (
+            "policy-time",
+            vec![
+                policy_record("Request succeeded", "12:10:00.000", "+000", "PolicyAgent"),
+                policy_record(
+                    "Download failed terminal",
+                    "12:10:00.000",
+                    "+000",
+                    "PolicyAgent",
+                ),
+            ],
+        ),
+        (
+            "policy-offset",
+            vec![
+                policy_record("Request succeeded", "12:10:00.000", "+000", "PolicyAgent"),
+                policy_record(
+                    "Download failed terminal",
+                    "12:11:00.000",
+                    "+9999",
+                    "PolicyAgent",
+                ),
+            ],
+        ),
+    ];
+
+    for (artifact_id, records) in cases {
+        let analysis = analyze_policy_records(artifact_id, &records);
+        assert_eq!(
+            analysis.transactions[0].state,
+            SccmPolicyState::Contradictory
+        );
+        assert_eq!(analysis.transactions[0].confidence, SccmConfidence::Low);
+        assert_eq!(analysis.findings[0].class, SccmFindingClass::Symptom);
+        assert!(analysis.findings[0].terminal_evidence.is_empty());
+    }
 }

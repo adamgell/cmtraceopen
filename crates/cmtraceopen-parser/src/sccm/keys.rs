@@ -11,6 +11,9 @@ use super::models::{
 };
 
 pub const SCCM_EXPERIMENTAL_KEY_PROFILE_ID: &str = "sccm-keys-5.00.9128-experimental-v1";
+/// Exact-key authority for the committed synthetic policy fixtures only.
+/// `Stable` describes this closed test corpus shape; it does not validate a
+/// production ConfigMgr release.
 pub const SCCM_POLICY_KEY_PROFILE_ID: &str = "policy-client-5.00.test-v1";
 const EXPERIMENTAL_VERSION_PREFIX: &str = "5.00.9128.";
 const POLICY_TEST_VERSION: &str = "5.00.TEST.0000";
