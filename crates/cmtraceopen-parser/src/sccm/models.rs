@@ -112,6 +112,8 @@ impl<'de> Deserialize<'de> for SccmRole {
 pub enum SccmFindingClass {
     Symptom,
     ConfirmedFailure,
+    Recovered,
+    ContradictoryEvidence,
     BlockedOrDeferred,
     LikelyContributor,
     InsufficientEvidence,
@@ -122,6 +124,8 @@ impl SccmFindingClass {
         match self {
             Self::Symptom => "symptom",
             Self::ConfirmedFailure => "confirmedFailure",
+            Self::Recovered => "recovered",
+            Self::ContradictoryEvidence => "contradictoryEvidence",
             Self::BlockedOrDeferred => "blockedOrDeferred",
             Self::LikelyContributor => "likelyContributor",
             Self::InsufficientEvidence => "insufficientEvidence",

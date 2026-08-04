@@ -1,19 +1,88 @@
 {
-  "fixtureContractVersion": 1,
-  "workflow": "providerAndAdminService",
-  "scenario": "admin-service-skipped",
-  "expectedCoverage": [
+  "artifactRequests": [
     {
-      "artifactId": "coverage-admin-skipped",
-      "sourceId": "server-admin-service",
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
       "producerRole": "adminService",
-      "state": "skipped"
+      "request": {
+        "logicalId": "adminService",
+        "reason": "Collect the complete AdminService.log file.",
+        "role": "adminService"
+      },
+      "sourceVersion": null,
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
     }
   ],
-  "expectedTransactions": [],
-  "expectedSourceLocalKinds": [],
-  "expectedArtifactRequest": {
-    "logicalId": "adminService",
-    "role": "adminService"
-  }
+  "coverage": [
+    {
+      "artifactId": "coverage-admin-skipped",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerRole": "adminService",
+      "sourceId": "server-admin-service",
+      "sourceVersion": null,
+      "state": "skipped",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "insufficientEvidence",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [
+          {
+            "artifactId": "coverage-admin-skipped",
+            "coverage": "skipped",
+            "role": "adminService"
+          }
+        ],
+        "evidence": [],
+        "findingId": "provider-admin-coverage:coverage-admin-skipped",
+        "nextArtifacts": [
+          {
+            "logicalId": "adminService",
+            "reason": "Collect the complete AdminService.log file.",
+            "role": "adminService"
+          }
+        ],
+        "phase": "providerAndAdminService",
+        "role": "adminService",
+        "severity": "Warning",
+        "summary": "Admin Service cannot be evaluated because its scoped source is not a complete capture.",
+        "terminalEvidence": [],
+        "title": "Admin Service evidence unavailable"
+      },
+      "lastSuccessfulPhase": null,
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "sourceId": "server-admin-service",
+      "sourceVersion": null,
+      "subjectId": "coverage-admin-skipped",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "admin-service-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "adminService"
+        ]
+      },
+      "layer": "adminService",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "unknownVersion"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [],
+  "workflow": "providerAndAdminService"
 }

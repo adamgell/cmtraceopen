@@ -1,26 +1,173 @@
 {
-  "fixtureContractVersion": 1,
-  "workflow": "providerAndAdminService",
-  "scenario": "admin-service-auth-failure",
-  "expectedCoverage": [
+  "artifactRequests": [],
+  "coverage": [
     {
       "artifactId": "admin-auth-current",
-      "sourceId": "server-admin-service",
+      "producerHostHandle": "synthetic:host:admin-service-01",
       "producerRole": "adminService",
-      "state": "captured"
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
     }
   ],
-  "expectedTransactions": [
+  "crossSideCausalClaims": [],
+  "findings": [
     {
-      "state": "failed",
+      "finding": {
+        "class": "confirmedFailure",
+        "confidence": "high",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "admin-auth-current",
+            "entryId": "admin-auth-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "admin-auth-current",
+            "entryId": "admin-auth-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          {
+            "artifactId": "admin-auth-current",
+            "entryId": "admin-auth-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:7048cb42fdd9ce196771736db023d9cb9f8d32d49610156a612bbe7ff8be51cb",
+        "nextArtifacts": [],
+        "phase": "providerAndAdminService",
+        "role": "adminService",
+        "severity": "Error",
+        "summary": "Admin Service recorded an explicit terminal operation failure.",
+        "terminalEvidence": [
+          {
+            "kind": "observedFailure",
+            "reference": {
+              "artifactId": "admin-auth-current",
+              "entryId": "admin-auth-current:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          }
+        ],
+        "title": "Admin Service confirmed failure"
+      },
+      "lastSuccessfulPhase": "receive",
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "adminService:cmtraceopen.request.sha256.v1:aaed0dd34503443365ef8be494a344c589a37d241e8d05370b51a399beee2b59:cmtraceopen.operation.sha256.v1:36819ae35e44be7bafa2ba69cc69e50b53286f81dd0cbce4f2bc4974150fc7c2:synthetic:host:admin-service-01:synthetic:subject:admin-service-01",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "admin-service-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "adminService"
+        ]
+      },
+      "layer": "adminService",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
       "classification": "confirmedFailure",
       "confidence": "high",
-      "timestampOrdering": "usable",
-      "terminalEvidence": true,
+      "confidenceCeiling": "high",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:admin-service-01",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "admin-service-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "adminService"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:36819ae35e44be7bafa2ba69cc69e50b53286f81dd0cbce4f2bc4974150fc7c2",
+        "producerHostHandle": "synthetic:host:admin-service-01",
+        "requestHandle": "cmtraceopen.request.sha256.v1:aaed0dd34503443365ef8be494a344c589a37d241e8d05370b51a399beee2b59"
+      },
+      "lastSuccessfulPhase": "receive",
       "layer": "adminService",
-      "lastSuccessfulPhase": "receive"
+      "nextArtifactRequests": [],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "admin-auth-current",
+              "entryId": "admin-auth-current:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "admin-auth-current:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "failed",
+          "evidence": [
+            {
+              "artifactId": "admin-auth-current",
+              "entryId": "admin-auth-current:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "admin-auth-current:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "failed",
+          "evidence": [
+            {
+              "artifactId": "admin-auth-current",
+              "entryId": "admin-auth-current:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "admin-auth-current:3-3-03",
+          "phase": "recordOutcome",
+          "terminal": true
+        }
+      ],
+      "producerRole": "adminService",
+      "publicSummary": "Admin Service recorded an explicit terminal operation failure.",
+      "sourceVersion": "5.00.TEST",
+      "state": "failed",
+      "terminalEvidence": true,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "adminService:cmtraceopen.request.sha256.v1:aaed0dd34503443365ef8be494a344c589a37d241e8d05370b51a399beee2b59:cmtraceopen.operation.sha256.v1:36819ae35e44be7bafa2ba69cc69e50b53286f81dd0cbce4f2bc4974150fc7c2:synthetic:host:admin-service-01:synthetic:subject:admin-service-01"
     }
   ],
-  "expectedSourceLocalKinds": [],
-  "expectedArtifactRequest": null
+  "workflow": "providerAndAdminService"
 }

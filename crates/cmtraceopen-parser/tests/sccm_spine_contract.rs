@@ -4215,6 +4215,16 @@ fn finding_access_denied_coverage_only_cannot_substantiate_an_outcome_class() {
             "confirmedFailure",
         ),
         (
+            SccmFindingClass::Recovered,
+            SccmConfidence::High,
+            "recovered",
+        ),
+        (
+            SccmFindingClass::ContradictoryEvidence,
+            SccmConfidence::Low,
+            "contradictoryEvidence",
+        ),
+        (
             SccmFindingClass::BlockedOrDeferred,
             SccmConfidence::Low,
             "blockedOrDeferred",

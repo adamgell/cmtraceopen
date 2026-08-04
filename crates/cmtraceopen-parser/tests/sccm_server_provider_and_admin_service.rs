@@ -8,7 +8,7 @@ use cmtraceopen_parser::sccm::server::windows::{
     ProviderAdminServiceSupportState, ProviderAdminServiceTimestampOrdering,
     SccmServerArtifactPayload, SccmServerIntakeAssessment, SccmServerIntakeError,
 };
-use cmtraceopen_parser::sccm::{SccmConfidence, SccmCoverageState, SccmRole};
+use cmtraceopen_parser::sccm::{SccmCoverageState, SccmKeyConfidence, SccmRole};
 use serde_json::{json, Value};
 
 const SCENARIOS: [&str; 20] = [
@@ -80,12 +80,30 @@ fn analyze(scenario: &str) -> ProviderAdminServiceAnalysis {
     analyze_provider_admin_service(&assess(scenario))
 }
 
+fn make_provider_host_two(artifact: &mut Value, artifact_id: &str) {
+    artifact["artifactId"] = json!(artifact_id);
+    artifact["producerHostHandle"] = json!("synthetic:host:provider-02");
+    let basename = artifact["originalBasename"]
+        .as_str()
+        .expect("provider basename");
+    artifact["relativePath"] = json!(format!(
+        "evidence/sccm/server/provider/server-provider/subject-provider/root-aaaaaaaa/current/{basename}"
+    ));
+}
+
 fn expected(scenario: &str) -> Value {
     serde_json::from_str(
         &fs::read_to_string(corpus_root().join(scenario).join("expected.json"))
             .expect("expected fixture contract"),
     )
     .expect("valid expected fixture contract")
+}
+
+fn assert_exact_oracle(scenario: &str, actual: &Value, oracle: &Value) {
+    assert_eq!(
+        actual, oracle,
+        "{scenario}: complete public contract drifted"
+    );
 }
 
 #[test]
@@ -107,64 +125,6 @@ fn all_provider_and_admin_service_fixtures_enter_through_canonical_intake() {
     }
 }
 
-#[derive(Clone, Copy)]
-struct ExpectedTransaction {
-    state: ProviderAdminServiceState,
-    classification: ProviderAdminServiceClassification,
-    confidence: SccmConfidence,
-    ordering: ProviderAdminServiceTimestampOrdering,
-}
-
-fn expected_transactions(scenario: &str) -> &'static [ExpectedTransaction] {
-    use ProviderAdminServiceClassification as Class;
-    use ProviderAdminServiceState as State;
-    use ProviderAdminServiceTimestampOrdering as Ordering;
-    const SUCCESS: ExpectedTransaction = ExpectedTransaction {
-        state: State::Succeeded,
-        classification: Class::Success,
-        confidence: SccmConfidence::High,
-        ordering: Ordering::Usable,
-    };
-    const FAILURE: ExpectedTransaction = ExpectedTransaction {
-        state: State::Failed,
-        classification: Class::ConfirmedFailure,
-        confidence: SccmConfidence::High,
-        ordering: Ordering::Usable,
-    };
-    const BLOCKED: ExpectedTransaction = ExpectedTransaction {
-        state: State::BlockedOrDeferred,
-        classification: Class::BlockedOrDeferred,
-        confidence: SccmConfidence::Moderate,
-        ordering: Ordering::Usable,
-    };
-    const INCOMPLETE: ExpectedTransaction = ExpectedTransaction {
-        state: State::Incomplete,
-        classification: Class::InsufficientEvidence,
-        confidence: SccmConfidence::Low,
-        ordering: Ordering::Usable,
-    };
-    const UNORDERED: ExpectedTransaction = ExpectedTransaction {
-        state: State::Incomplete,
-        classification: Class::InsufficientEvidence,
-        confidence: SccmConfidence::Low,
-        ordering: Ordering::Unusable,
-    };
-    match scenario {
-        "admin-service-auth-failure"
-        | "admin-service-backend-failure"
-        | "provider-authz-denied"
-        | "provider-query-failure" => &[FAILURE],
-        "admin-service-success" | "iis-supplemental" | "provider-retry" | "provider-success" => {
-            &[SUCCESS]
-        }
-        "blocked-deferred" => &[BLOCKED],
-        "contradictory-evidence" | "incomplete" => &[INCOMPLETE],
-        "privacy-redaction" => &[SUCCESS, SUCCESS],
-        "provider-timeout" => &[UNORDERED],
-        _ => &[],
-    }
-}
-
 #[test]
 fn complete_fixture_matrix_runs_through_the_production_analyzer() {
     for scenario in SCENARIOS {
@@ -173,139 +133,72 @@ fn complete_fixture_matrix_runs_through_the_production_analyzer() {
         let public = serde_json::to_value(&analysis).unwrap_or_else(|error| {
             panic!("{scenario}: shared review contract must serialize: {error}")
         });
-        let expected = expected_transactions(scenario);
-        assert_eq!(analysis.transactions.len(), expected.len(), "{scenario}");
-        for (transaction, expected) in analysis.transactions.iter().zip(expected) {
-            assert_eq!(transaction.state, expected.state, "{scenario}");
-            assert_eq!(
-                transaction.classification, expected.classification,
-                "{scenario}"
-            );
-            assert_eq!(transaction.confidence, expected.confidence, "{scenario}");
-            assert_eq!(
-                transaction.confidence_ceiling, expected.confidence,
-                "{scenario}"
-            );
-            assert_eq!(
-                transaction.timestamp_ordering, expected.ordering,
-                "{scenario}"
-            );
-            assert_eq!(transaction.source_version, "5.00.TEST", "{scenario}");
-            assert_eq!(
-                transaction.producer_role,
-                match transaction.layer {
-                    ProviderAdminServiceLayer::Provider => SccmRole::Provider,
-                    ProviderAdminServiceLayer::AdminService => SccmRole::AdminService,
-                },
-                "{scenario}"
-            );
-            assert_eq!(
-                transaction.correlation_eligible,
-                matches!(
-                    transaction.state,
-                    ProviderAdminServiceState::Succeeded | ProviderAdminServiceState::Failed
-                ),
-                "{scenario}"
-            );
-            assert_eq!(
-                transaction.next_artifact_request.is_some(),
-                matches!(
-                    transaction.state,
-                    ProviderAdminServiceState::Incomplete
-                        | ProviderAdminServiceState::BlockedOrDeferred
-                ),
-                "{scenario}"
-            );
-        }
+        assert_exact_oracle(scenario, &public, &expected_contract);
+    }
+}
 
-        let expected_request = matches!(
-            scenario,
-            "admin-service-access-denied"
-                | "admin-service-parse-failed"
-                | "admin-service-skipped"
-                | "blocked-deferred"
-                | "contradictory-evidence"
-                | "incomplete"
-                | "provider-source-absent"
-                | "provider-source-capped"
-                | "provider-source-unsupported"
-                | "provider-timeout"
-                | "rotation-boundary"
-        );
-        assert_eq!(
-            analysis.artifact_requests.len(),
-            usize::from(expected_request),
-            "{scenario}"
-        );
-
-        let actual_coverage = public["coverage"]
-            .as_array()
-            .expect("public coverage")
-            .iter()
-            .map(|coverage| {
-                json!({
-                    "artifactId": coverage["artifactId"],
-                    "sourceId": coverage["sourceId"],
-                    "producerRole": coverage["producerRole"],
-                    "state": coverage["state"],
-                })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            Value::Array(actual_coverage),
-            expected_contract["expectedCoverage"],
-            "{scenario}"
-        );
-
-        let actual_transactions = public["transactions"]
-            .as_array()
-            .expect("public transactions")
-            .iter()
-            .map(|transaction| {
-                json!({
-                    "layer": transaction["layer"],
-                    "state": transaction["state"],
-                    "classification": transaction["classification"],
-                    "confidence": transaction["confidence"],
-                    "timestampOrdering": transaction["timestampOrdering"],
-                    "terminalEvidence": transaction["terminalEvidence"],
-                    "lastSuccessfulPhase": transaction["lastSuccessfulPhase"],
-                })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            Value::Array(actual_transactions),
-            expected_contract["expectedTransactions"],
-            "{scenario}"
-        );
-
-        let actual_local_kinds = public["sourceLocalObservations"]
-            .as_array()
-            .expect("source-local observations")
-            .iter()
-            .map(|observation| observation["kind"].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            Value::Array(actual_local_kinds),
-            expected_contract["expectedSourceLocalKinds"],
-            "{scenario}"
-        );
-
-        let actual_request = public["artifactRequests"]
-            .as_array()
-            .expect("artifact requests")
-            .first()
-            .map(|request| {
-                json!({
-                    "logicalId": request["logicalId"],
-                    "role": request["role"],
-                })
-            })
-            .unwrap_or(Value::Null);
-        assert_eq!(
-            actual_request, expected_contract["expectedArtifactRequest"],
-            "{scenario}"
-        );
+#[test]
+fn exact_oracle_gate_detects_mutation_of_every_material_public_surface() {
+    let mutations = [
+        ("provider-success", "/coverage/0/producerRole"),
+        ("provider-success", "/coverage/0/producerHostHandle"),
+        ("provider-success", "/coverage/0/workflowSubjectHandle"),
+        ("provider-success", "/coverage/0/sourceVersion"),
+        (
+            "provider-success",
+            "/profiles/0/extractionProfile/profileId",
+        ),
+        ("provider-success", "/transactions/0/transactionId"),
+        ("provider-success", "/transactions/0/key/requestHandle"),
+        ("provider-success", "/transactions/0/key/operationHandle"),
+        ("provider-success", "/transactions/0/key/confidence"),
+        (
+            "provider-success",
+            "/transactions/0/key/extractionProfile/profileId",
+        ),
+        (
+            "provider-success",
+            "/transactions/0/observations/0/observationId",
+        ),
+        (
+            "provider-success",
+            "/transactions/0/observations/0/evidence/0/entryId",
+        ),
+        ("blocked-deferred", "/transactions/0/coverageGapArtifactIds"),
+        (
+            "blocked-deferred",
+            "/transactions/0/nextArtifactRequests/0/request/reason",
+        ),
+        (
+            "blocked-deferred",
+            "/transactions/0/nextArtifactRequests/0/producerHostHandle",
+        ),
+        ("blocked-deferred", "/findings/0/finding/class"),
+        ("blocked-deferred", "/findings/0/finding/severity"),
+        ("blocked-deferred", "/findings/0/finding/evidence/0/entryId"),
+        (
+            "provider-source-capped",
+            "/findings/0/finding/coverageGaps/0/artifactId",
+        ),
+        (
+            "provider-source-capped",
+            "/artifactRequests/0/workflowSubjectHandle",
+        ),
+        (
+            "rotation-boundary",
+            "/sourceLocalObservations/0/artifactIds",
+        ),
+    ];
+    for (scenario, pointer) in mutations {
+        let oracle = expected(scenario);
+        let actual = serde_json::to_value(analyze(scenario)).expect("analysis serializes");
+        assert_exact_oracle(scenario, &actual, &oracle);
+        let mut mutated = actual;
+        *mutated
+            .pointer_mut(pointer)
+            .unwrap_or_else(|| panic!("{scenario}: mutation pointer must exist: {pointer}")) =
+            json!("oracle-mutation");
+        assert_ne!(mutated, oracle, "{scenario}: oracle missed {pointer}");
     }
 }
 
@@ -346,12 +239,24 @@ fn phase_reduction_covers_success_failure_deferred_recovery_and_contradiction() 
         retry.transactions[0].last_successful_phase,
         Some(ProviderAdminServicePhase::RecordOutcome)
     );
+    assert_eq!(
+        retry.transactions[0].state,
+        ProviderAdminServiceState::Recovered
+    );
+    assert_eq!(
+        retry.transactions[0].classification,
+        ProviderAdminServiceClassification::Recovered
+    );
 
     let contradiction = analyze("contradictory-evidence");
     assert!(contradiction.transactions[0].terminal_evidence);
     assert_eq!(
         contradiction.transactions[0].state,
-        ProviderAdminServiceState::Incomplete
+        ProviderAdminServiceState::Contradictory
+    );
+    assert_eq!(
+        contradiction.transactions[0].classification,
+        ProviderAdminServiceClassification::ContradictoryEvidence
     );
     assert!(!contradiction.transactions[0].correlation_eligible);
 
@@ -367,7 +272,7 @@ fn phase_reduction_covers_success_failure_deferred_recovery_and_contradiction() 
 }
 
 #[test]
-fn one_artifact_with_two_exact_keys_produces_two_transactions() {
+fn one_artifact_with_two_registered_low_confidence_keys_produces_two_transactions() {
     let (mut manifest, mut payloads) = load_manifest_and_payloads("provider-success");
     let original = String::from_utf8(payloads[0].bytes.clone()).expect("UTF-8 fixture");
     let peer = original
@@ -394,6 +299,9 @@ fn one_artifact_with_two_exact_keys_produces_two_transactions() {
         .transactions
         .iter()
         .all(|transaction| transaction.state == ProviderAdminServiceState::Succeeded));
+    assert!(analysis.transactions.iter().all(|transaction| {
+        transaction.key.confidence == SccmKeyConfidence::Low && !transaction.correlation_eligible
+    }));
 }
 
 #[test]
@@ -461,8 +369,123 @@ fn coverage_gaps_are_scoped_to_the_exact_topology_subject() {
         transaction.coverage_gap_artifact_ids,
         vec!["coverage-provider-capped"]
     );
-    assert!(transaction.next_artifact_request.is_some());
+    assert!(!transaction.next_artifact_requests.is_empty());
     assert!(!transaction.correlation_eligible);
+}
+
+#[test]
+fn coverage_gaps_are_scoped_to_the_producer_host_as_well_as_the_subject() {
+    let (mut manifest, mut payloads) = load_manifest_and_payloads("provider-success");
+    let (gap_manifest, gap_payloads) = load_manifest_and_payloads("provider-source-capped");
+    let mut gap = gap_manifest["artifacts"][0].clone();
+    make_provider_host_two(&mut gap, "coverage-provider-capped");
+    gap["originalBasename"] = json!("Smsprov.lo_");
+    gap["rotation"]["kind"] = json!("lo_");
+    gap["relativePath"] = json!(
+        "evidence/sccm/server/provider/server-provider/subject-provider/root-aaaaaaaa/lo_/Smsprov.lo_"
+    );
+    let gap_id = gap["artifactId"].as_str().expect("gap id").to_owned();
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifact array")
+        .push(gap);
+    payloads.extend(gap_payloads.into_iter().map(|mut payload| {
+        payload.manifest_artifact_id = gap_id.clone();
+        payload
+    }));
+
+    let analysis = analyze_provider_admin_service(
+        &assess_parts(&manifest, &payloads).expect("cross-host coverage intake"),
+    );
+    assert_eq!(analysis.transactions.len(), 1);
+    assert_eq!(
+        analysis.transactions[0].state,
+        ProviderAdminServiceState::Succeeded
+    );
+    assert!(analysis.transactions[0]
+        .coverage_gap_artifact_ids
+        .is_empty());
+    assert!(analysis.transactions[0].next_artifact_requests.is_empty());
+    assert_eq!(analysis.artifact_requests.len(), 1);
+    assert_eq!(
+        analysis.artifact_requests[0].producer_host_handle,
+        "synthetic:host:provider-02"
+    );
+}
+
+#[test]
+fn transaction_identity_includes_producer_host() {
+    let (mut manifest, mut payloads) = load_manifest_and_payloads("provider-success");
+    let mut second = manifest["artifacts"][0].clone();
+    make_provider_host_two(&mut second, "provider-retry-current");
+    let second_id = second["artifactId"].as_str().expect("second id").to_owned();
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifact array")
+        .push(second);
+    let mut second_payload = payloads[0].clone();
+    second_payload.manifest_artifact_id = second_id;
+    payloads.push(second_payload);
+
+    let analysis = analyze_provider_admin_service(
+        &assess_parts(&manifest, &payloads).expect("two-host canonical intake"),
+    );
+    assert_eq!(analysis.transactions.len(), 2);
+    assert_ne!(
+        analysis.transactions[0].transaction_id,
+        analysis.transactions[1].transaction_id
+    );
+    assert_ne!(
+        analysis.transactions[0].key.producer_host_handle,
+        analysis.transactions[1].key.producer_host_handle
+    );
+}
+
+#[test]
+fn independent_provider_and_admin_service_gaps_keep_two_scoped_requests() {
+    let (mut provider, _) = load_manifest_and_payloads("provider-source-absent");
+    let (admin, _) = load_manifest_and_payloads("admin-service-access-denied");
+    provider["topology"]["rolesObserved"] = json!(["provider", "adminService"]);
+    provider["artifacts"]
+        .as_array_mut()
+        .expect("provider artifacts")
+        .push(admin["artifacts"][0].clone());
+
+    let analysis = analyze_provider_admin_service(
+        &assess_parts(&provider, &[]).expect("two-layer coverage intake"),
+    );
+    assert_eq!(analysis.artifact_requests.len(), 2);
+    assert!(analysis.artifact_requests.iter().any(|request| {
+        request.layer == ProviderAdminServiceLayer::Provider
+            && request.producer_role == SccmRole::Provider
+            && request.request.logical_id == "smsprov"
+    }));
+    assert!(analysis.artifact_requests.iter().any(|request| {
+        request.layer == ProviderAdminServiceLayer::AdminService
+            && request.producer_role == SccmRole::AdminService
+            && request.request.logical_id == "adminService"
+    }));
+}
+
+#[test]
+fn forged_or_unregistered_profile_never_creates_a_transaction() {
+    let (mut manifest, mut payloads) = load_manifest_and_payloads("provider-success");
+    let forged = String::from_utf8(payloads[0].bytes.clone())
+        .expect("UTF-8 fixture")
+        .replace(
+            "ProfileId=provider-server-5.00.test-v1",
+            "ProfileId=provider-server-5.00.test-v1-forged",
+        );
+    payloads[0].bytes = forged.into_bytes();
+    manifest["artifacts"][0]["bytesCopied"] = json!(payloads[0].bytes.len());
+    let analysis = analyze_provider_admin_service(
+        &assess_parts(&manifest, &payloads).expect("forged profile remains valid raw intake"),
+    );
+    assert!(analysis.transactions.is_empty());
+    assert!(analysis.findings.is_empty());
+    assert!(!serde_json::to_string(&analysis)
+        .expect("analysis serializes")
+        .contains("\"confidence\":\"exact\""));
 }
 
 #[test]

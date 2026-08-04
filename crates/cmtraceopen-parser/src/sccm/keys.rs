@@ -16,9 +16,12 @@ pub const SCCM_EXPERIMENTAL_KEY_PROFILE_ID: &str = "sccm-keys-5.00.9128-experime
 /// production ConfigMgr release.
 pub const SCCM_POLICY_KEY_PROFILE_ID: &str = "policy-client-5.00.test-v1";
 pub const SCCM_HIERARCHY_KEY_PROFILE_ID: &str = "sccm-hierarchy-5.00.test-stable-v1";
+pub const SCCM_PROVIDER_SYNTHETIC_KEY_PROFILE_ID: &str = "provider-server-5.00.test-v1";
+pub const SCCM_ADMIN_SERVICE_SYNTHETIC_KEY_PROFILE_ID: &str = "admin-service-server-5.00.test-v1";
 const EXPERIMENTAL_VERSION_PREFIX: &str = "5.00.9128.";
 const POLICY_TEST_VERSION: &str = "5.00.TEST.0000";
 const HIERARCHY_SYNTHETIC_VERSION: &str = "5.00.TEST";
+const SYNTHETIC_VERSION: &str = "5.00.TEST";
 
 impl SccmExtractionProfile {
     pub fn for_version(configmgr_version: Option<&str>) -> Self {
@@ -77,6 +80,22 @@ impl SccmExtractionProfile {
                 selected_configmgr_version: Some(HIERARCHY_SYNTHETIC_VERSION.to_owned()),
                 maturity: SccmExtractionProfileMaturity::Stable,
             };
+        }
+        if configmgr_version == Some(SYNTHETIC_VERSION) {
+            let profile_id = match family {
+                SccmArtifactFamily::Provider => SCCM_PROVIDER_SYNTHETIC_KEY_PROFILE_ID,
+                SccmArtifactFamily::AdminService => SCCM_ADMIN_SERVICE_SYNTHETIC_KEY_PROFILE_ID,
+                _ => "",
+            };
+            if !profile_id.is_empty() {
+                return Self {
+                    profile_id: profile_id.to_owned(),
+                    configmgr_version_prefixes: vec![SYNTHETIC_VERSION.to_owned()],
+                    validated_artifact_families: vec![family.clone()],
+                    selected_configmgr_version: Some(SYNTHETIC_VERSION.to_owned()),
+                    maturity: SccmExtractionProfileMaturity::Experimental,
+                };
+            }
         }
         if configmgr_version == Some(POLICY_TEST_VERSION)
             && matches!(family, SccmArtifactFamily::ClientPolicy)
@@ -354,10 +373,23 @@ fn is_builtin_stable_policy(profile: &SccmExtractionProfile) -> bool {
 }
 
 fn is_builtin_experimental(profile: &SccmExtractionProfile) -> bool {
-    is_builtin_experimental_core(profile)
+    (is_builtin_experimental_core(profile)
         // Preserve the generic public `for_version` contract without treating
         // a caller-populated family list as admission authority.
-        && profile.validated_artifact_families.is_empty()
+        && profile.validated_artifact_families.is_empty())
+        || is_registered_synthetic_server_profile(profile)
+}
+
+fn is_registered_synthetic_server_profile(profile: &SccmExtractionProfile) -> bool {
+    let exact_tuple = match profile.profile_id.as_str() {
+        SCCM_PROVIDER_SYNTHETIC_KEY_PROFILE_ID => SccmArtifactFamily::Provider,
+        SCCM_ADMIN_SERVICE_SYNTHETIC_KEY_PROFILE_ID => SccmArtifactFamily::AdminService,
+        _ => return false,
+    };
+    profile.maturity == SccmExtractionProfileMaturity::Experimental
+        && profile.configmgr_version_prefixes == [SYNTHETIC_VERSION]
+        && profile.validated_artifact_families == [exact_tuple]
+        && profile.selected_configmgr_version.as_deref() == Some(SYNTHETIC_VERSION)
 }
 
 fn is_builtin_experimental_core(profile: &SccmExtractionProfile) -> bool {

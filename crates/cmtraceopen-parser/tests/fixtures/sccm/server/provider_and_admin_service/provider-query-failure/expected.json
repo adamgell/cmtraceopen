@@ -1,26 +1,193 @@
 {
-  "fixtureContractVersion": 1,
-  "workflow": "providerAndAdminService",
-  "scenario": "provider-query-failure",
-  "expectedCoverage": [
+  "artifactRequests": [],
+  "coverage": [
     {
       "artifactId": "provider-query-current",
-      "sourceId": "server-provider",
+      "producerHostHandle": "synthetic:host:provider-01",
       "producerRole": "provider",
-      "state": "captured"
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
     }
   ],
-  "expectedTransactions": [
+  "crossSideCausalClaims": [],
+  "findings": [
     {
-      "state": "failed",
+      "finding": {
+        "class": "confirmedFailure",
+        "confidence": "high",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "provider-query-current",
+            "entryId": "provider-query-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "provider-query-current",
+            "entryId": "provider-query-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          {
+            "artifactId": "provider-query-current",
+            "entryId": "provider-query-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          },
+          {
+            "artifactId": "provider-query-current",
+            "entryId": "provider-query-current:4-4",
+            "lineEnd": 4,
+            "lineStart": 4
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:0b4d32911441b1129ffb0ccc83596503ed18bfff0c884b79598a705cc24354d3",
+        "nextArtifacts": [],
+        "phase": "providerAndAdminService",
+        "role": "provider",
+        "severity": "Error",
+        "summary": "Provider recorded an explicit terminal operation failure.",
+        "terminalEvidence": [
+          {
+            "kind": "observedFailure",
+            "reference": {
+              "artifactId": "provider-query-current",
+              "entryId": "provider-query-current:4-4",
+              "lineEnd": 4,
+              "lineStart": 4
+            }
+          }
+        ],
+        "title": "Provider confirmed failure"
+      },
+      "lastSuccessfulPhase": "authenticateOrAuthorize",
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "provider:cmtraceopen.request.sha256.v1:618f1a429a91316d819f7a982e0efa06caa436f9d980f6fd2734650bf92fb8a7:cmtraceopen.operation.sha256.v1:f8531c63ceea45b588fb4ae3eb63e391a4f8bf6655d93cc2d66d4d4adc53935b:synthetic:host:provider-01:synthetic:subject:provider-01",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
       "classification": "confirmedFailure",
       "confidence": "high",
-      "timestampOrdering": "usable",
-      "terminalEvidence": true,
+      "confidenceCeiling": "high",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:provider-01",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "provider-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "provider"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:f8531c63ceea45b588fb4ae3eb63e391a4f8bf6655d93cc2d66d4d4adc53935b",
+        "producerHostHandle": "synthetic:host:provider-01",
+        "requestHandle": "cmtraceopen.request.sha256.v1:618f1a429a91316d819f7a982e0efa06caa436f9d980f6fd2734650bf92fb8a7"
+      },
+      "lastSuccessfulPhase": "authenticateOrAuthorize",
       "layer": "provider",
-      "lastSuccessfulPhase": "authenticateOrAuthorize"
+      "nextArtifactRequests": [],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-query-current",
+              "entryId": "provider-query-current:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "provider-query-current:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-query-current",
+              "entryId": "provider-query-current:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "provider-query-current:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "failed",
+          "evidence": [
+            {
+              "artifactId": "provider-query-current",
+              "entryId": "provider-query-current:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "provider-query-current:3-3-03",
+          "phase": "executeProviderOperation",
+          "terminal": false
+        },
+        {
+          "disposition": "failed",
+          "evidence": [
+            {
+              "artifactId": "provider-query-current",
+              "entryId": "provider-query-current:4-4",
+              "lineEnd": 4,
+              "lineStart": 4
+            }
+          ],
+          "observationId": "provider-query-current:4-4-04",
+          "phase": "recordOutcome",
+          "terminal": true
+        }
+      ],
+      "producerRole": "provider",
+      "publicSummary": "Provider recorded an explicit terminal operation failure.",
+      "sourceVersion": "5.00.TEST",
+      "state": "failed",
+      "terminalEvidence": true,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:618f1a429a91316d819f7a982e0efa06caa436f9d980f6fd2734650bf92fb8a7:cmtraceopen.operation.sha256.v1:f8531c63ceea45b588fb4ae3eb63e391a4f8bf6655d93cc2d66d4d4adc53935b:synthetic:host:provider-01:synthetic:subject:provider-01"
     }
   ],
-  "expectedSourceLocalKinds": [],
-  "expectedArtifactRequest": null
+  "workflow": "providerAndAdminService"
 }

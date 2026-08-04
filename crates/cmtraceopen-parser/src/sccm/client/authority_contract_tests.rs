@@ -9,9 +9,12 @@ use super::{
     SccmClientIntakeCaptureGap,
 };
 use crate::sccm::{
-    extract_keys, SccmArtifact, SccmArtifactFamily, SccmCorrelationKeyKind, SccmCoverageState,
-    SccmExtractionGapKind, SccmExtractionProfile, SccmExtractionProfileMaturity, SccmKeyConfidence,
-    SccmRole, SccmRotation, SCCM_EXPERIMENTAL_KEY_PROFILE_ID, SCCM_POLICY_KEY_PROFILE_ID,
+    extract_keys, normalize_key, SccmArtifact, SccmArtifactFamily, SccmCorrelationKeyKind,
+    SccmCoverageState, SccmEvidence, SccmEvidenceRef, SccmExtractionGapKind, SccmExtractionProfile,
+    SccmExtractionProfileMaturity, SccmKeyConfidence, SccmRole, SccmRotation,
+    SccmTimeOrderingState, SccmTimestamp, SCCM_ADMIN_SERVICE_SYNTHETIC_KEY_PROFILE_ID,
+    SCCM_EXPERIMENTAL_KEY_PROFILE_ID, SCCM_POLICY_KEY_PROFILE_ID,
+    SCCM_PROVIDER_SYNTHETIC_KEY_PROFILE_ID,
 };
 
 fn digest(bytes: &[u8]) -> String {
@@ -803,6 +806,101 @@ fn caller_constructed_stable_policy_profile_does_not_mint_exact_keys() {
         .keys
         .iter()
         .all(|key| key.confidence == SccmKeyConfidence::Exact));
+}
+
+#[test]
+fn synthetic_server_profiles_are_exact_registered_tuples_but_keys_remain_low() {
+    let request_id = "11111111-1111-1111-1111-111111111111";
+    let evidence = SccmEvidence {
+        evidence_id: "synthetic-server-entry".to_owned(),
+        reference: SccmEvidenceRef {
+            artifact_id: "synthetic-server-artifact".to_owned(),
+            entry_id: "synthetic-server-entry".to_owned(),
+            line_start: Some(1),
+            line_end: Some(1),
+        },
+        role: SccmRole::Provider,
+        component: Some("Synthetic".to_owned()),
+        ccm_source_file: Some("synthetic.cc".to_owned()),
+        message: format!("RequestId={request_id}"),
+        timestamp: SccmTimestamp {
+            original_display: Some("synthetic".to_owned()),
+            offset_minutes: Some(0),
+            utc_millis: Some(1),
+            ordering_state: SccmTimeOrderingState::NormalizedUtc,
+        },
+        execution_context: None,
+    };
+
+    for (family, profile_id) in [
+        (
+            SccmArtifactFamily::Provider,
+            SCCM_PROVIDER_SYNTHETIC_KEY_PROFILE_ID,
+        ),
+        (
+            SccmArtifactFamily::AdminService,
+            SCCM_ADMIN_SERVICE_SYNTHETIC_KEY_PROFILE_ID,
+        ),
+    ] {
+        let profile = SccmExtractionProfile::for_artifact_family(Some("5.00.TEST"), &family);
+        assert_eq!(profile.profile_id, profile_id);
+        assert_eq!(profile.configmgr_version_prefixes, ["5.00.TEST"]);
+        assert_eq!(profile.validated_artifact_families, [family]);
+        assert_eq!(
+            profile.selected_configmgr_version.as_deref(),
+            Some("5.00.TEST")
+        );
+        let extraction = extract_keys(&evidence, &profile);
+        assert_eq!(extraction.keys.len(), 1);
+        assert_eq!(extraction.keys[0].confidence, SccmKeyConfidence::Low);
+        assert_eq!(
+            extraction.keys[0].extraction_profile_id.as_deref(),
+            Some(profile_id)
+        );
+        assert!(extraction
+            .gaps
+            .iter()
+            .any(|gap| gap.kind == SccmExtractionGapKind::ExperimentalProfile));
+    }
+    assert_eq!(
+        normalize_key(SccmCorrelationKeyKind::RequestId, request_id).confidence,
+        SccmKeyConfidence::Exact
+    );
+}
+
+#[test]
+fn forged_synthetic_server_profile_cannot_activate_shared_extraction() {
+    let evidence = SccmEvidence {
+        evidence_id: "synthetic-forged-entry".to_owned(),
+        reference: SccmEvidenceRef {
+            artifact_id: "synthetic-forged-artifact".to_owned(),
+            entry_id: "synthetic-forged-entry".to_owned(),
+            line_start: Some(1),
+            line_end: Some(1),
+        },
+        role: SccmRole::Provider,
+        component: None,
+        ccm_source_file: None,
+        message: "RequestId=11111111-1111-1111-1111-111111111111".to_owned(),
+        timestamp: SccmTimestamp {
+            original_display: None,
+            offset_minutes: Some(0),
+            utc_millis: Some(1),
+            ordering_state: SccmTimeOrderingState::NormalizedUtc,
+        },
+        execution_context: None,
+    };
+    let mut forged = SccmExtractionProfile::for_artifact_family(
+        Some("5.00.TEST"),
+        &SccmArtifactFamily::Provider,
+    );
+    forged.profile_id.push_str("-forged");
+    let extraction = extract_keys(&evidence, &forged);
+    assert!(extraction.keys.is_empty());
+    assert!(extraction
+        .gaps
+        .iter()
+        .any(|gap| gap.kind == SccmExtractionGapKind::UnvalidatedProfile));
 }
 
 #[test]

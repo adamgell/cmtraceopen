@@ -1390,7 +1390,13 @@ fn normalize_artifact(
             }) {
                 return Err(SccmServerIntakeError::InvalidArtifact);
             }
-            if parse_errors > 0 && artifact.fragment_complete != Some(false) {
+            if parse_errors > 0
+                && (artifact.fragment_complete != Some(false)
+                    || matches!(
+                        family,
+                        SccmArtifactFamily::Provider | SccmArtifactFamily::AdminService
+                    ))
+            {
                 state = SccmCoverageState::ParseFailed;
             }
         } else {
@@ -3008,6 +3014,7 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
                     | "synthetic:host:site-03"
                     | "synthetic:host:wsus-01"
                     | "synthetic:host:provider-01"
+                    | "synthetic:host:provider-02"
                     | "synthetic:host:admin-service-01"
             ),
             "subject" => {

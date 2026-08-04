@@ -3,9 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::models::log_entry::Severity;
 use crate::sccm::{
-    SccmArtifactFamily, SccmArtifactRequest, SccmConfidence, SccmCoverageState, SccmEvidence,
-    SccmEvidenceRef, SccmFindingClass, SccmKeyConfidence, SccmRole, SccmTimeOrderingState,
+    extract_keys, SccmArtifactFamily, SccmArtifactRequest, SccmConfidence, SccmCorrelationKeyKind,
+    SccmCoverageState, SccmEvidence, SccmEvidenceRef, SccmExtractionProfile, SccmFinding,
+    SccmFindingBuilder, SccmFindingClass, SccmFindingCoverageGap, SccmKeyConfidence, SccmPhase,
+    SccmRole, SccmTerminalEvidence, SccmTimeOrderingState,
 };
 
 use super::{SccmServerArtifactAssessment, SccmServerIntakeAssessment};
@@ -14,8 +17,6 @@ const PROVIDER_SOURCE_ID: &str = "server-provider";
 const ADMIN_SOURCE_ID: &str = "server-admin-service";
 const IIS_SOURCE_ID: &str = "server-admin-service-iis";
 const SYNTHETIC_VERSION: &str = "5.00.TEST";
-const PROVIDER_PROFILE: &str = "provider-server-5.00.test-v1";
-const ADMIN_PROFILE: &str = "admin-service-server-5.00.test-v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,13 +37,6 @@ impl ProviderAdminServiceLayer {
         match self {
             Self::Provider => PROVIDER_SOURCE_ID,
             Self::AdminService => ADMIN_SOURCE_ID,
-        }
-    }
-
-    fn profile_id(self) -> &'static str {
-        match self {
-            Self::Provider => PROVIDER_PROFILE,
-            Self::AdminService => ADMIN_PROFILE,
         }
     }
 
@@ -107,7 +101,9 @@ pub enum ProviderAdminServiceDisposition {
 #[serde(rename_all = "camelCase")]
 pub enum ProviderAdminServiceState {
     Succeeded,
+    Recovered,
     Failed,
+    Contradictory,
     BlockedOrDeferred,
     Incomplete,
 }
@@ -116,7 +112,9 @@ pub enum ProviderAdminServiceState {
 #[serde(rename_all = "camelCase")]
 pub enum ProviderAdminServiceClassification {
     Success,
+    Recovered,
     ConfirmedFailure,
+    ContradictoryEvidence,
     BlockedOrDeferred,
     InsufficientEvidence,
 }
@@ -125,7 +123,9 @@ impl ProviderAdminServiceClassification {
     pub fn shared_finding_class(self) -> Option<SccmFindingClass> {
         match self {
             Self::Success => None,
+            Self::Recovered => Some(SccmFindingClass::Recovered),
             Self::ConfirmedFailure => Some(SccmFindingClass::ConfirmedFailure),
+            Self::ContradictoryEvidence => Some(SccmFindingClass::ContradictoryEvidence),
             Self::BlockedOrDeferred => Some(SccmFindingClass::BlockedOrDeferred),
             Self::InsufficientEvidence => Some(SccmFindingClass::InsufficientEvidence),
         }
@@ -164,8 +164,7 @@ pub enum ProviderAdminServiceSupportState {
 pub struct ProviderAdminServiceProfile {
     pub layer: ProviderAdminServiceLayer,
     pub selection_state: ProviderAdminServiceProfileSelection,
-    pub profile_id: &'static str,
-    pub source_version: &'static str,
+    pub extraction_profile: SccmExtractionProfile,
     pub limitation: &'static str,
 }
 
@@ -175,7 +174,9 @@ pub struct ProviderAdminServiceCoverage {
     pub artifact_id: String,
     pub source_id: String,
     pub producer_role: SccmRole,
-    pub endpoint_handle: Option<String>,
+    pub producer_host_handle: Option<String>,
+    pub workflow_subject_handle: Option<String>,
+    pub source_version: Option<String>,
     pub state: SccmCoverageState,
 }
 
@@ -187,7 +188,31 @@ pub struct ProviderAdminServiceKey {
     pub endpoint_handle: String,
     pub producer_host_handle: String,
     pub confidence: SccmKeyConfidence,
-    pub extraction_profile_id: &'static str,
+    pub extraction_profile: SccmExtractionProfile,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderAdminServiceArtifactRequest {
+    pub layer: ProviderAdminServiceLayer,
+    pub producer_role: SccmRole,
+    pub producer_host_handle: String,
+    pub workflow_subject_handle: String,
+    pub source_version: Option<String>,
+    pub request: SccmArtifactRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderAdminServiceFinding {
+    pub subject_id: String,
+    pub layer: ProviderAdminServiceLayer,
+    pub source_id: String,
+    pub producer_host_handle: String,
+    pub workflow_subject_handle: String,
+    pub source_version: Option<String>,
+    pub last_successful_phase: Option<ProviderAdminServicePhase>,
+    pub finding: SccmFinding,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -218,7 +243,7 @@ pub struct ProviderAdminServiceTransaction {
     pub terminal_evidence: bool,
     pub last_successful_phase: Option<ProviderAdminServicePhase>,
     pub coverage_gap_artifact_ids: Vec<String>,
-    pub next_artifact_request: Option<SccmArtifactRequest>,
+    pub next_artifact_requests: Vec<ProviderAdminServiceArtifactRequest>,
     pub public_summary: String,
     pub observations: Vec<ProviderAdminServiceObservation>,
 }
@@ -248,8 +273,9 @@ pub struct ProviderAdminServiceAnalysis {
     pub profiles: Vec<ProviderAdminServiceProfile>,
     pub coverage: Vec<ProviderAdminServiceCoverage>,
     pub transactions: Vec<ProviderAdminServiceTransaction>,
+    pub findings: Vec<ProviderAdminServiceFinding>,
     pub source_local_observations: Vec<ProviderAdminServiceSourceLocalObservation>,
-    pub artifact_requests: Vec<SccmArtifactRequest>,
+    pub artifact_requests: Vec<ProviderAdminServiceArtifactRequest>,
     pub cross_side_causal_claims: Vec<String>,
 }
 
@@ -260,7 +286,6 @@ struct FactKey {
     operation: String,
     endpoint_handle: String,
     host_handle: String,
-    profile_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -271,6 +296,12 @@ struct Fact {
     terminal: bool,
     evidence: SccmEvidenceRef,
     utc_millis: Option<i64>,
+    extraction_profile: SccmExtractionProfile,
+}
+
+struct ReducedTransaction {
+    transaction: ProviderAdminServiceTransaction,
+    finding: Option<ProviderAdminServiceFinding>,
 }
 
 enum ParsedFact {
@@ -301,7 +332,9 @@ pub fn analyze_provider_admin_service(
             artifact_id: artifact.artifact_id.clone(),
             source_id: artifact.source_id.clone(),
             producer_role: artifact.producer_role.clone(),
-            endpoint_handle: artifact.workflow_subject_handle.clone(),
+            producer_host_handle: artifact.producer_host_handle.clone(),
+            workflow_subject_handle: artifact.workflow_subject_handle.clone(),
+            source_version: artifact.source_version.clone(),
             state: artifact.state.clone(),
         })
         .collect::<Vec<_>>();
@@ -334,13 +367,27 @@ pub fn analyze_provider_admin_service(
         }
     }
 
-    let mut transactions = facts
+    let mut reduced = facts
         .into_iter()
         .filter_map(|(key, group)| {
             reduce_transaction(key.clone(), group, poisoned.contains(&key), &scoped)
         })
         .collect::<Vec<_>>();
-    transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
+    reduced.sort_by(|left, right| {
+        left.transaction
+            .transaction_id
+            .cmp(&right.transaction.transaction_id)
+    });
+    let transactions = reduced
+        .iter()
+        .map(|reduced| reduced.transaction.clone())
+        .collect::<Vec<_>>();
+    let mut findings = reduced
+        .into_iter()
+        .filter_map(|reduced| reduced.finding)
+        .collect::<Vec<_>>();
+    findings.extend(coverage_findings(&scoped));
+    findings.sort_by(|left, right| left.finding.finding_id.cmp(&right.finding.finding_id));
 
     let mut source_local_observations = source_local_observations(&scoped, &intake.evidence);
     source_local_observations.sort_by(|left, right| left.observation_id.cmp(&right.observation_id));
@@ -348,19 +395,26 @@ pub fn analyze_provider_admin_service(
     let mut artifact_requests = global_artifact_requests(&scoped);
     for request in transactions
         .iter()
-        .filter_map(|transaction| transaction.next_artifact_request.clone())
+        .flat_map(|transaction| transaction.next_artifact_requests.clone())
     {
-        if !artifact_requests.iter().any(|existing| {
-            existing.logical_id == request.logical_id && existing.role == request.role
-        }) {
+        if !artifact_requests.contains(&request) {
             artifact_requests.push(request);
         }
     }
     artifact_requests.sort_by(|left, right| {
-        (left.logical_id.as_str(), role_name(&left.role))
-            .cmp(&(right.logical_id.as_str(), role_name(&right.role)))
+        (
+            left.layer,
+            left.producer_host_handle.as_str(),
+            left.workflow_subject_handle.as_str(),
+            left.request.logical_id.as_str(),
+        )
+            .cmp(&(
+                right.layer,
+                right.producer_host_handle.as_str(),
+                right.workflow_subject_handle.as_str(),
+                right.request.logical_id.as_str(),
+            ))
     });
-    artifact_requests.truncate(1);
 
     ProviderAdminServiceAnalysis {
         workflow: "providerAndAdminService",
@@ -368,6 +422,7 @@ pub fn analyze_provider_admin_service(
         profiles: selected_profiles(&scoped),
         coverage,
         transactions,
+        findings,
         source_local_observations,
         artifact_requests,
         cross_side_causal_claims: Vec::new(),
@@ -381,6 +436,7 @@ fn empty_analysis() -> ProviderAdminServiceAnalysis {
         profiles: Vec::new(),
         coverage: Vec::new(),
         transactions: Vec::new(),
+        findings: Vec::new(),
         source_local_observations: Vec::new(),
         artifact_requests: Vec::new(),
         cross_side_causal_claims: Vec::new(),
@@ -400,22 +456,35 @@ fn selected_profiles(
             .iter()
             .any(|artifact| artifact.source_id == layer.source_id())
     })
-    .map(|layer| ProviderAdminServiceProfile {
-        layer,
-        selection_state: if artifacts.iter().any(|artifact| {
+    .filter_map(|layer| {
+        let selected = artifacts.iter().any(|artifact| {
             artifact.source_id == layer.source_id()
                 && artifact.source_version.as_deref() == Some(SYNTHETIC_VERSION)
-        }) {
-            ProviderAdminServiceProfileSelection::SelectedSynthetic
-        } else {
-            ProviderAdminServiceProfileSelection::UnknownVersion
-        },
-        profile_id: layer.profile_id(),
-        source_version: SYNTHETIC_VERSION,
-        limitation:
-            "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+        });
+        let extraction_profile = registered_profile(layer)?;
+        Some(ProviderAdminServiceProfile {
+            layer,
+            selection_state: if selected {
+                ProviderAdminServiceProfileSelection::SelectedSynthetic
+            } else {
+                ProviderAdminServiceProfileSelection::UnknownVersion
+            },
+            extraction_profile,
+            limitation:
+                "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+        })
     })
     .collect()
+}
+
+fn registered_profile(layer: ProviderAdminServiceLayer) -> Option<SccmExtractionProfile> {
+    Some(SccmExtractionProfile::for_artifact_family(
+        Some(SYNTHETIC_VERSION),
+        &match layer {
+            ProviderAdminServiceLayer::Provider => SccmArtifactFamily::Provider,
+            ProviderAdminServiceLayer::AdminService => SccmArtifactFamily::AdminService,
+        },
+    ))
 }
 
 fn transaction_layer(artifact: &SccmServerArtifactAssessment) -> Option<ProviderAdminServiceLayer> {
@@ -467,8 +536,12 @@ fn parse_fact(
         return None;
     }
     let fields = parse_fields(&evidence.message)?;
+    let extraction_profile = SccmExtractionProfile::for_artifact_family(
+        artifact.source_version.as_deref(),
+        &artifact.family,
+    );
     if fields.get("Layer")?.as_str() != layer_name(layer)
-        || fields.get("ProfileId")?.as_str() != layer.profile_id()
+        || fields.get("ProfileId")?.as_str() != extraction_profile.profile_id
         || fields.get("EndpointId")?.as_str() != layer.endpoint_token()
     {
         return None;
@@ -478,13 +551,28 @@ fn parse_fact(
     if !uuid_is_exact(&request_id) || !safe_operation(&operation) {
         return None;
     }
+    let extraction = extract_keys(evidence, &extraction_profile);
+    let shared_request_keys = extraction
+        .keys
+        .iter()
+        .filter(|key| key.kind == SccmCorrelationKeyKind::RequestId)
+        .collect::<Vec<_>>();
+    let [shared_request_key] = shared_request_keys.as_slice() else {
+        return None;
+    };
+    if shared_request_key.normalized != request_id
+        || shared_request_key.confidence != SccmKeyConfidence::Low
+        || shared_request_key.extraction_profile_id.as_deref()
+            != Some(extraction_profile.profile_id.as_str())
+    {
+        return None;
+    }
     let key = FactKey {
         layer,
         request_id,
         operation,
         endpoint_handle: artifact.workflow_subject_handle.clone()?,
         host_handle: artifact.producer_host_handle.clone()?,
-        profile_id: layer.profile_id().to_owned(),
     };
     let phase = parse_phase(fields.get("Phase")?, layer)?;
     let disposition = parse_disposition(fields.get("Disposition")?)?;
@@ -517,6 +605,7 @@ fn parse_fact(
         terminal,
         evidence: evidence.reference.clone(),
         utc_millis,
+        extraction_profile,
     };
     Some(if fact.utc_millis.is_some() {
         ParsedFact::Valid(fact)
@@ -584,7 +673,7 @@ fn reduce_transaction(
     mut facts: Vec<Fact>,
     ordering_poisoned: bool,
     artifacts: &[&SccmServerArtifactAssessment],
-) -> Option<ProviderAdminServiceTransaction> {
+) -> Option<ReducedTransaction> {
     if !ordering_poisoned {
         facts.sort_by_key(|fact| fact.utc_millis);
     }
@@ -621,14 +710,18 @@ fn reduce_transaction(
         .any(|fact| fact.disposition == ProviderAdminServiceDisposition::Pending);
     let phase_valid = phase_chain_is_valid(key.layer, &facts);
     let full_success = full_success_chain(key.layer, &facts);
-    let gaps = artifacts
+    let gap_artifacts = artifacts
         .iter()
         .filter(|artifact| {
             artifact.source_id == key.layer.source_id()
+                && artifact.producer_host_handle.as_deref() == Some(&key.host_handle)
                 && artifact.workflow_subject_handle.as_deref() == Some(&key.endpoint_handle)
                 && (artifact.state != SccmCoverageState::Captured
                     || artifact.fragment_complete == Some(false))
         })
+        .collect::<Vec<_>>();
+    let gaps = gap_artifacts
+        .iter()
         .map(|artifact| artifact.artifact_id.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -643,72 +736,113 @@ fn reduce_transaction(
     } else {
         None
     };
+    let recovered = facts.windows(2).any(|pair| {
+        pair[0].phase == pair[1].phase
+            && pair[0].disposition == ProviderAdminServiceDisposition::RetryableFailure
+            && pair[1].disposition == ProviderAdminServiceDisposition::Succeeded
+    });
     let conclusive = ordering_usable && phase_valid && gaps.is_empty() && !contradictory;
-    let (state, classification, confidence, summary) =
-        if !gaps.is_empty() || contradictory || !phase_valid || !ordering_usable {
-            (
-                ProviderAdminServiceState::Incomplete,
-                ProviderAdminServiceClassification::InsufficientEvidence,
-                SccmConfidence::Low,
-                format!(
-                    "{} evidence is incomplete, contradictory, or not comparably ordered.",
-                    display_layer(key.layer)
-                ),
-            )
-        } else if deferred && !terminal_success && !terminal_failure {
-            (
-                ProviderAdminServiceState::BlockedOrDeferred,
-                ProviderAdminServiceClassification::BlockedOrDeferred,
-                SccmConfidence::Moderate,
-                format!(
-                    "{} evidence records a blocked or deferred request without a terminal outcome.",
-                    display_layer(key.layer)
-                ),
-            )
-        } else if conclusive && terminal_failure && !terminal_success {
-            (
-                ProviderAdminServiceState::Failed,
-                ProviderAdminServiceClassification::ConfirmedFailure,
-                SccmConfidence::High,
-                format!(
-                    "{} recorded an explicit terminal operation failure.",
-                    display_layer(key.layer)
-                ),
-            )
-        } else if conclusive && terminal_success && full_success {
-            (
-                ProviderAdminServiceState::Succeeded,
-                ProviderAdminServiceClassification::Success,
-                SccmConfidence::High,
-                format!(
-                    "{} operation completed with explicit terminal evidence.",
-                    display_layer(key.layer)
-                ),
-            )
-        } else {
-            (
-                ProviderAdminServiceState::Incomplete,
-                ProviderAdminServiceClassification::InsufficientEvidence,
-                SccmConfidence::Low,
-                format!(
-                    "{} evidence stops before a valid explicit terminal outcome.",
-                    display_layer(key.layer)
-                ),
-            )
-        };
-    let request = matches!(
-        state,
-        ProviderAdminServiceState::Incomplete | ProviderAdminServiceState::BlockedOrDeferred
-    )
-    .then(|| artifact_request(key.layer));
+    let (state, classification, confidence, summary) = if contradictory {
+        (
+            ProviderAdminServiceState::Contradictory,
+            ProviderAdminServiceClassification::ContradictoryEvidence,
+            SccmConfidence::Low,
+            format!(
+                "{} records mutually exclusive terminal outcomes.",
+                display_layer(key.layer)
+            ),
+        )
+    } else if !gaps.is_empty() || !phase_valid || !ordering_usable {
+        (
+            ProviderAdminServiceState::Incomplete,
+            ProviderAdminServiceClassification::InsufficientEvidence,
+            SccmConfidence::Low,
+            format!(
+                "{} evidence is incomplete, contradictory, or not comparably ordered.",
+                display_layer(key.layer)
+            ),
+        )
+    } else if deferred && !terminal_success && !terminal_failure {
+        (
+            ProviderAdminServiceState::BlockedOrDeferred,
+            ProviderAdminServiceClassification::BlockedOrDeferred,
+            SccmConfidence::Moderate,
+            format!(
+                "{} evidence records a blocked or deferred request without a terminal outcome.",
+                display_layer(key.layer)
+            ),
+        )
+    } else if conclusive && terminal_failure && !terminal_success {
+        (
+            ProviderAdminServiceState::Failed,
+            ProviderAdminServiceClassification::ConfirmedFailure,
+            SccmConfidence::High,
+            format!(
+                "{} recorded an explicit terminal operation failure.",
+                display_layer(key.layer)
+            ),
+        )
+    } else if conclusive && terminal_success && full_success && recovered {
+        (
+            ProviderAdminServiceState::Recovered,
+            ProviderAdminServiceClassification::Recovered,
+            SccmConfidence::High,
+            format!(
+                "{} operation recovered after an explicit retryable failure.",
+                display_layer(key.layer)
+            ),
+        )
+    } else if conclusive && terminal_success && full_success {
+        (
+            ProviderAdminServiceState::Succeeded,
+            ProviderAdminServiceClassification::Success,
+            SccmConfidence::High,
+            format!(
+                "{} operation completed with explicit terminal evidence.",
+                display_layer(key.layer)
+            ),
+        )
+    } else {
+        (
+            ProviderAdminServiceState::Incomplete,
+            ProviderAdminServiceClassification::InsufficientEvidence,
+            SccmConfidence::Low,
+            format!(
+                "{} evidence stops before a valid explicit terminal outcome.",
+                display_layer(key.layer)
+            ),
+        )
+    };
+    let mut requests = gap_artifacts
+        .iter()
+        .filter_map(|artifact| scoped_artifact_request(artifact, key.layer))
+        .collect::<Vec<_>>();
+    if requests.is_empty()
+        && matches!(
+            state,
+            ProviderAdminServiceState::Incomplete | ProviderAdminServiceState::BlockedOrDeferred
+        )
+    {
+        requests.push(ProviderAdminServiceArtifactRequest {
+            layer: key.layer,
+            producer_role: key.layer.role(),
+            producer_host_handle: key.host_handle.clone(),
+            workflow_subject_handle: key.endpoint_handle.clone(),
+            source_version: Some(SYNTHETIC_VERSION.to_owned()),
+            request: artifact_request(key.layer),
+        });
+    }
+    deduplicate_requests(&mut requests);
     let request_handle = public_handle("request", &key.request_id);
     let operation_handle = public_handle("operation", &key.operation);
     let transaction_id = format!(
-        "{}:{request_handle}:{operation_handle}:{}",
+        "{}:{request_handle}:{operation_handle}:{}:{}",
         layer_name(key.layer),
+        key.host_handle,
         key.endpoint_handle
     );
-    Some(ProviderAdminServiceTransaction {
+    let extraction_profile = facts.first()?.extraction_profile.clone();
+    let transaction = ProviderAdminServiceTransaction {
         transaction_id,
         layer: key.layer,
         producer_role: key.layer.role(),
@@ -718,11 +852,8 @@ fn reduce_transaction(
             operation_handle,
             endpoint_handle: key.endpoint_handle,
             producer_host_handle: key.host_handle,
-            confidence: SccmKeyConfidence::Exact,
-            extraction_profile_id: match key.profile_id.as_str() {
-                PROVIDER_PROFILE => PROVIDER_PROFILE,
-                _ => ADMIN_PROFILE,
-            },
+            confidence: SccmKeyConfidence::Low,
+            extraction_profile,
         },
         topology_compatibility: ProviderAdminServiceTopologyCompatibility::Exact,
         timestamp_ordering: if ordering_usable {
@@ -730,11 +861,7 @@ fn reduce_transaction(
         } else {
             ProviderAdminServiceTimestampOrdering::Unusable
         },
-        correlation_eligible: conclusive
-            && matches!(
-                state,
-                ProviderAdminServiceState::Succeeded | ProviderAdminServiceState::Failed
-            ),
+        correlation_eligible: false,
         state,
         classification,
         confidence,
@@ -742,10 +869,138 @@ fn reduce_transaction(
         terminal_evidence: terminal_success || terminal_failure,
         last_successful_phase,
         coverage_gap_artifact_ids: gaps,
-        next_artifact_request: request,
+        next_artifact_requests: requests,
         public_summary: summary,
         observations,
+    };
+    let finding = transaction_finding(&transaction, &facts, &gap_artifacts);
+    Some(ReducedTransaction {
+        transaction,
+        finding,
     })
+}
+
+fn transaction_finding(
+    transaction: &ProviderAdminServiceTransaction,
+    facts: &[Fact],
+    gap_artifacts: &[&&SccmServerArtifactAssessment],
+) -> Option<ProviderAdminServiceFinding> {
+    let mut class = transaction.classification.shared_finding_class()?;
+    if class == SccmFindingClass::InsufficientEvidence && gap_artifacts.is_empty() {
+        class = SccmFindingClass::Symptom;
+    }
+    let severity = match transaction.classification {
+        ProviderAdminServiceClassification::Success => return None,
+        ProviderAdminServiceClassification::Recovered => Severity::Success,
+        ProviderAdminServiceClassification::ConfirmedFailure => Severity::Error,
+        ProviderAdminServiceClassification::ContradictoryEvidence
+        | ProviderAdminServiceClassification::BlockedOrDeferred
+        | ProviderAdminServiceClassification::InsufficientEvidence => Severity::Warning,
+    };
+    let evidence = facts
+        .iter()
+        .map(|fact| fact.evidence.clone())
+        .collect::<Vec<_>>();
+    let terminal_evidence = facts
+        .iter()
+        .filter(|fact| fact.terminal && fact.disposition == ProviderAdminServiceDisposition::Failed)
+        .map(|fact| SccmTerminalEvidence::observed_failure(fact.evidence.clone()))
+        .collect::<Vec<_>>();
+    let coverage_gaps = gap_artifacts
+        .iter()
+        .map(|artifact| SccmFindingCoverageGap {
+            artifact_id: artifact.artifact_id.clone(),
+            role: artifact.producer_role.clone(),
+            coverage: artifact.state.clone(),
+        })
+        .collect::<Vec<_>>();
+    let finding_id = format!(
+        "provider-admin-finding:{}",
+        public_handle("finding", &transaction.transaction_id)
+    );
+    let finding = SccmFindingBuilder::new(finding_id)
+        .class(class)
+        .phase(SccmPhase::Unknown("providerAndAdminService".to_owned()))
+        .role(transaction.producer_role.clone())
+        .severity(severity)
+        .confidence(transaction.confidence)
+        .title(format!(
+            "{} {}",
+            display_layer(transaction.layer),
+            classification_name(transaction.classification)
+        ))
+        .summary(transaction.public_summary.clone())
+        .evidence(evidence)
+        .terminal_evidence(terminal_evidence)
+        .coverage_gaps(coverage_gaps)
+        .next_artifacts(
+            transaction
+                .next_artifact_requests
+                .iter()
+                .map(|request| request.request.clone())
+                .collect(),
+        )
+        .build()
+        .expect("provider/admin reducer must emit a valid shared finding");
+    Some(ProviderAdminServiceFinding {
+        subject_id: transaction.transaction_id.clone(),
+        layer: transaction.layer,
+        source_id: transaction.layer.source_id().to_owned(),
+        producer_host_handle: transaction.key.producer_host_handle.clone(),
+        workflow_subject_handle: transaction.key.endpoint_handle.clone(),
+        source_version: Some(transaction.source_version.clone()),
+        last_successful_phase: transaction.last_successful_phase,
+        finding,
+    })
+}
+
+fn coverage_findings(
+    artifacts: &[&SccmServerArtifactAssessment],
+) -> Vec<ProviderAdminServiceFinding> {
+    artifacts
+        .iter()
+        .filter_map(|artifact| {
+            let layer = transaction_layer(artifact)?;
+            if artifact.state == SccmCoverageState::Captured
+                && artifact.fragment_complete != Some(false)
+            {
+                return None;
+            }
+            let request = scoped_artifact_request(artifact, layer)?;
+            let finding = SccmFindingBuilder::new(format!(
+                "provider-admin-coverage:{}",
+                artifact.artifact_id
+            ))
+            .class(SccmFindingClass::InsufficientEvidence)
+            .phase(SccmPhase::Unknown("providerAndAdminService".to_owned()))
+            .role(artifact.producer_role.clone())
+            .severity(Severity::Warning)
+            .confidence(SccmConfidence::Low)
+            .title(format!("{} evidence unavailable", display_layer(layer)))
+            .summary(format!(
+                "{} cannot be evaluated because its scoped source is not a complete capture.",
+                display_layer(layer)
+            ))
+            .coverage_gap(SccmFindingCoverageGap {
+                artifact_id: artifact.artifact_id.clone(),
+                role: artifact.producer_role.clone(),
+                coverage: artifact.state.clone(),
+            })
+            .next_artifact(request.request.clone())
+            .build()
+            .expect("provider/admin coverage reducer must emit a valid shared finding");
+            Some(ProviderAdminServiceFinding {
+                subject_id: artifact.artifact_id.clone(),
+                layer,
+                source_id: artifact.source_id.clone(),
+                producer_host_handle: artifact.producer_host_handle.clone()?,
+                workflow_subject_handle: artifact.workflow_subject_handle.clone()?,
+                source_version: artifact.source_version.clone(),
+                last_successful_phase: None,
+                finding,
+            })
+        })
+        .collect()
 }
 
 fn phase_chain_is_valid(layer: ProviderAdminServiceLayer, facts: &[Fact]) -> bool {
@@ -826,21 +1081,52 @@ fn source_local_observations(
 
 fn global_artifact_requests(
     artifacts: &[&SccmServerArtifactAssessment],
-) -> Vec<SccmArtifactRequest> {
-    let mut layers = artifacts
+) -> Vec<ProviderAdminServiceArtifactRequest> {
+    let mut requests = artifacts
         .iter()
         .filter_map(|artifact| {
             let layer = transaction_layer(artifact)?;
             (artifact.state != SccmCoverageState::Captured
                 || artifact.fragment_complete == Some(false))
-            .then_some(layer)
+            .then(|| scoped_artifact_request(artifact, layer))?
         })
-        .collect::<BTreeSet<_>>();
-    layers
-        .pop_first()
-        .map(artifact_request)
-        .into_iter()
-        .collect()
+        .collect::<Vec<_>>();
+    deduplicate_requests(&mut requests);
+    requests
+}
+
+fn scoped_artifact_request(
+    artifact: &SccmServerArtifactAssessment,
+    layer: ProviderAdminServiceLayer,
+) -> Option<ProviderAdminServiceArtifactRequest> {
+    Some(ProviderAdminServiceArtifactRequest {
+        layer,
+        producer_role: artifact.producer_role.clone(),
+        producer_host_handle: artifact.producer_host_handle.clone()?,
+        workflow_subject_handle: artifact.workflow_subject_handle.clone()?,
+        source_version: artifact.source_version.clone(),
+        request: artifact_request(layer),
+    })
+}
+
+fn deduplicate_requests(requests: &mut Vec<ProviderAdminServiceArtifactRequest>) {
+    requests.sort_by(|left, right| {
+        (
+            left.layer,
+            left.producer_host_handle.as_str(),
+            left.workflow_subject_handle.as_str(),
+            left.source_version.as_deref(),
+            left.request.logical_id.as_str(),
+        )
+            .cmp(&(
+                right.layer,
+                right.producer_host_handle.as_str(),
+                right.workflow_subject_handle.as_str(),
+                right.source_version.as_deref(),
+                right.request.logical_id.as_str(),
+            ))
+    });
+    requests.dedup_by(|left, right| left == right);
 }
 
 fn artifact_request(layer: ProviderAdminServiceLayer) -> SccmArtifactRequest {
@@ -909,10 +1195,13 @@ fn display_layer(layer: ProviderAdminServiceLayer) -> &'static str {
     }
 }
 
-fn role_name(role: &SccmRole) -> &'static str {
-    match role {
-        SccmRole::Provider => "provider",
-        SccmRole::AdminService => "adminService",
-        _ => "other",
+fn classification_name(classification: ProviderAdminServiceClassification) -> &'static str {
+    match classification {
+        ProviderAdminServiceClassification::Success => "success",
+        ProviderAdminServiceClassification::Recovered => "recovered",
+        ProviderAdminServiceClassification::ConfirmedFailure => "confirmed failure",
+        ProviderAdminServiceClassification::ContradictoryEvidence => "contradictory evidence",
+        ProviderAdminServiceClassification::BlockedOrDeferred => "blocked or deferred",
+        ProviderAdminServiceClassification::InsufficientEvidence => "insufficient evidence",
     }
 }
