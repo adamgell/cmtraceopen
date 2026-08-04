@@ -79,24 +79,77 @@ const PARSER_SPECIALIZATIONS = new Set([
   "intuneDeviceInventoryAdaptor",
   "intuneDeviceInventoryRotationFailure",
 ]);
+const ENTRY_KINDS = new Set(["Log", "Section", "Iteration", "Header"]);
+const OPTIONAL_NULLABLE_STRING_FIELDS = [
+  "ipAddress",
+  "hostName",
+  "macAddress",
+  "resultCode",
+  "gleCode",
+  "setupPhase",
+  "operationName",
+  "httpMethod",
+  "uriStem",
+  "uriQuery",
+  "clientIp",
+  "serverIp",
+  "userAgent",
+  "username",
+  "queryName",
+  "queryType",
+  "responseCode",
+  "dnsDirection",
+  "dnsProtocol",
+  "sourceIp",
+  "dnsFlags",
+  "zoneName",
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isSafeInteger(value: unknown, minimum: number): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= minimum;
+function isSafeInteger(
+  value: unknown,
+  minimum: number,
+  maximum = Number.MAX_SAFE_INTEGER,
+): value is number {
+  return (
+    Number.isSafeInteger(value) &&
+    (value as number) >= minimum &&
+    (value as number) <= maximum
+  );
 }
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
-function isErrorCodeSpan(value: unknown): value is ErrorCodeSpan {
+function isOptionalNullableString(value: unknown): boolean {
+  return value === undefined || isNullableString(value);
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalInteger(value: unknown, maximum: number): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    isSafeInteger(value, 0, maximum)
+  );
+}
+
+function isErrorCodeSpan(
+  value: unknown,
+  minimumStart = 0,
+  maximumEnd = Number.MAX_SAFE_INTEGER,
+): value is ErrorCodeSpan {
   return (
     isRecord(value) &&
-    isSafeInteger(value.start, 0) &&
-    isSafeInteger(value.end, 1) &&
+    isSafeInteger(value.start, minimumStart, maximumEnd) &&
+    isSafeInteger(value.end, minimumStart + 1, maximumEnd) &&
     value.end > value.start &&
     typeof value.codeHex === "string" &&
     typeof value.codeDecimal === "string" &&
@@ -105,51 +158,99 @@ function isErrorCodeSpan(value: unknown): value is ErrorCodeSpan {
   );
 }
 
+function physicalEndLine(entry: LogEntry): number | null {
+  const endLine = entry.lineNumber + entry.message.split("\n").length - 1;
+  return isSafeInteger(endLine, entry.lineNumber, 4_294_967_295)
+    ? endLine
+    : null;
+}
+
 function isLogEntry(value: unknown): value is LogEntry {
-  return (
-    isRecord(value) &&
+  if (!isRecord(value) || typeof value.message !== "string") {
+    return false;
+  }
+  const message = value.message;
+
+  if (
     isSafeInteger(value.id, 0) &&
-    isSafeInteger(value.lineNumber, 1) &&
-    typeof value.message === "string" &&
+    isSafeInteger(value.lineNumber, 1, 4_294_967_295) &&
     isNullableString(value.component) &&
     (value.timestamp === null ||
       (typeof value.timestamp === "number" && Number.isFinite(value.timestamp))) &&
     isNullableString(value.timestampDisplay) &&
     typeof value.severity === "string" &&
     SEVERITIES.has(value.severity as Severity) &&
-    (value.thread === null || isSafeInteger(value.thread, 0)) &&
+    (value.thread === null || isSafeInteger(value.thread, 0, 4_294_967_295)) &&
     isNullableString(value.threadDisplay) &&
     isNullableString(value.sourceFile) &&
     typeof value.format === "string" &&
     LOG_FORMATS.has(value.format as LogFormat) &&
     typeof value.filePath === "string" &&
     value.filePath.length > 0 &&
-    (value.timezoneOffset === null || Number.isSafeInteger(value.timezoneOffset)) &&
+    (value.timezoneOffset === null ||
+      isSafeInteger(value.timezoneOffset, -2_147_483_648, 2_147_483_647)) &&
     (value.errorCodeSpans === undefined ||
       (Array.isArray(value.errorCodeSpans) &&
-        value.errorCodeSpans.every(isErrorCodeSpan)))
-  );
+        value.errorCodeSpans.every((span) =>
+          isErrorCodeSpan(span, 0, message.length),
+        ))) &&
+    OPTIONAL_NULLABLE_STRING_FIELDS.every((field) =>
+      isOptionalNullableString(value[field]),
+    ) &&
+    isOptionalInteger(value.statusCode, 65_535) &&
+    isOptionalInteger(value.subStatus, 65_535) &&
+    isOptionalInteger(value.timeTakenMs, Number.MAX_SAFE_INTEGER) &&
+    isOptionalInteger(value.serverPort, 65_535) &&
+    isOptionalInteger(value.win32Status, 4_294_967_295) &&
+    isOptionalInteger(value.dnsEventId, 4_294_967_295) &&
+    (value.entryKind === undefined ||
+      (typeof value.entryKind === "string" &&
+        ENTRY_KINDS.has(value.entryKind))) &&
+    (value.whatif === undefined || typeof value.whatif === "boolean") &&
+    isOptionalString(value.sectionName) &&
+    isOptionalString(value.sectionColor) &&
+    isOptionalString(value.iteration) &&
+    (value.tags === undefined ||
+      (Array.isArray(value.tags) &&
+        value.tags.every((tag) => typeof tag === "string")))
+  ) {
+    return physicalEndLine(value as unknown as LogEntry) !== null;
+  }
+
+  return false;
 }
 
 function isTailEntryAmendment(value: unknown): value is TailEntryAmendment {
   if (
     !isRecord(value) ||
     !isSafeInteger(value.entryId, 0) ||
-    !isSafeInteger(value.entryLineNumber, 1) ||
-    !isSafeInteger(value.continuationStartLine, 1) ||
-    !isSafeInteger(value.continuationEndLine, value.continuationStartLine) ||
+    !isSafeInteger(value.entryLineNumber, 1, 4_294_967_295) ||
+    !isSafeInteger(value.continuationStartLine, 1, 4_294_967_295) ||
+    value.continuationStartLine <= value.entryLineNumber ||
+    !isSafeInteger(
+      value.continuationEndLine,
+      value.continuationStartLine,
+      4_294_967_295,
+    ) ||
     !isSafeInteger(value.messageUtf16Start, 0) ||
     typeof value.messageSuffix !== "string" ||
     !value.messageSuffix.startsWith("\n") ||
-    !Array.isArray(value.errorCodeSpans) ||
-    !value.errorCodeSpans.every(isErrorCodeSpan)
+    !Array.isArray(value.errorCodeSpans)
   ) {
     return false;
   }
 
   const physicalLineCount =
     value.continuationEndLine - value.continuationStartLine + 1;
-  return value.messageSuffix.split("\n").length - 1 === physicalLineCount;
+  const messageUtf16Start = value.messageUtf16Start;
+  const messageUtf16End = messageUtf16Start + value.messageSuffix.length;
+  return (
+    Number.isSafeInteger(messageUtf16End) &&
+    value.messageSuffix.split("\n").length - 1 === physicalLineCount &&
+    value.errorCodeSpans.every((span) =>
+      isErrorCodeSpan(span, messageUtf16Start, messageUtf16End),
+    )
+  );
 }
 
 function isParserSelection(value: unknown): value is ParserSelectionInfo {
@@ -194,5 +295,23 @@ export function parseTailPayload(value: unknown): TailPayload | null {
     return null;
   }
 
-  return value as unknown as TailPayload;
+  const payload = value as unknown as TailPayload;
+  const entryEndLines = payload.entries.map(physicalEndLine);
+  if (entryEndLines.some((line) => line === null)) {
+    return null;
+  }
+
+  const observedRanges = [
+    ...(entryEndLines as number[]),
+    ...payload.amendments.map((amendment) => amendment.continuationEndLine),
+  ];
+  if (
+    observedRanges.length > 0 &&
+    (payload.observedThroughLine === null ||
+      payload.observedThroughLine < Math.max(...observedRanges))
+  ) {
+    return null;
+  }
+
+  return payload;
 }

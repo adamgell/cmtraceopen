@@ -315,7 +315,7 @@ describe("useFileWatcher tail start state", () => {
             },
           ],
           filePath: "/logs/untracked.log",
-          observedThroughLine: 99,
+          observedThroughLine: 101,
         },
       }),
     );

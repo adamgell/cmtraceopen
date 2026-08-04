@@ -185,6 +185,54 @@ describe("parseTailPayload", () => {
     expect(parseTailPayload(value)).toEqual(value);
   });
 
+  it("preserves nullable optional LogEntry fields", () => {
+    const nullableFields = Object.fromEntries(
+      [
+        ...Object.keys(validOptionalFields).filter(
+          (field) =>
+            ![
+              "errorCodeSpans",
+              "entryKind",
+              "whatif",
+              "sectionName",
+              "sectionColor",
+              "iteration",
+              "tags",
+            ].includes(field),
+        ),
+      ].map((field) => [field, null]),
+    );
+    const value = payload({
+      entries: [entry(nullableFields)],
+      observedThroughLine: 1,
+    });
+
+    expect(parseTailPayload(value)).toEqual(value);
+  });
+
+  it("validates message spans in JavaScript UTF-16 offsets", () => {
+    const value = payload({
+      entries: [
+        entry({
+          message: "🙂",
+          errorCodeSpans: [
+            {
+              start: 0,
+              end: 2,
+              codeHex: "0x0",
+              codeDecimal: "0",
+              description: "success",
+              category: "Win32",
+            },
+          ],
+        }),
+      ],
+      observedThroughLine: 1,
+    });
+
+    expect(parseTailPayload(value)).toEqual(value);
+  });
+
   it.each(
     Object.keys(validOptionalFields).map((field) => [
       field,
