@@ -28,6 +28,7 @@ pub const SCCM_DISTRIBUTION_POINT_SOURCE_ID: &str = "server-dp-distribution";
 pub const SCCM_DISTRIBUTION_POINT_CONTENT_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 pub const SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID: &str = "dp-server-5.00.test-v1";
 pub const SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_VERSION: u32 = 1;
+const SCCM_DISTRIBUTION_POINT_CONTENT_SOURCE_VERSION: &str = "5.00.TEST.0001";
 const SCCM_DISTRIBUTION_POINT_INTAKE_AUTHORITY_REASON: &str =
     "Canonical server intake authority could not be verified.";
 
@@ -506,6 +507,8 @@ fn parse_healthy_distribution_point_fact(
 
     if disposition != "succeeded"
         || profile_id != SCCM_DISTRIBUTION_POINT_CONTENT_PROFILE_ID
+        || observation.source_version.as_deref()
+            != Some(SCCM_DISTRIBUTION_POINT_CONTENT_SOURCE_VERSION)
         || !safe_package_id(package_id)
         || !safe_content_id(content_id)
         || !safe_site_code(site_code)

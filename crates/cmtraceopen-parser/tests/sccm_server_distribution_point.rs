@@ -492,6 +492,44 @@ fn healthy_package_reduces_a_sealed_role_local_transaction() {
 }
 
 #[test]
+fn newer_intake_valid_source_version_stays_outside_the_exact_semantic_profile() {
+    let assessment = load_distribution_point_assessment_after("healthy-package", |manifest, _| {
+        for artifact in manifest["artifacts"]
+            .as_array_mut()
+            .expect("artifacts are an array")
+        {
+            artifact["sourceVersion"] = json!("5.00.TEST.0002");
+        }
+    });
+    assert!(assessment.artifacts.iter().all(|artifact| {
+        artifact.profile_eligible && artifact.source_version.as_deref() == Some("5.00.TEST.0002")
+    }));
+    assert_eq!(
+        analyze_distribution_point(&assessment)
+            .source_observations
+            .len(),
+        6
+    );
+
+    let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+        .expect("newer source version remains canonical intake");
+
+    assert!(
+        analysis.transactions.is_empty(),
+        "the exact .0001 profile must not claim success for .0002 evidence"
+    );
+    assert_eq!(analysis.coverage_gaps.len(), 2);
+    assert!(analysis
+        .coverage_gaps
+        .iter()
+        .all(|gap| gap.state == Some(SccmCoverageState::Captured)));
+    assert_eq!(
+        artifact_request_contracts(&analysis.artifact_requests),
+        expected_all_dp_profile_artifact_requests()
+    );
+}
+
+#[test]
 fn healthy_package_requires_profile_site_token_to_match_sealed_topology() {
     let mut mutated_records = 0usize;
     let assessment = load_distribution_point_assessment_after("healthy-package", |_, payloads| {
