@@ -1,12 +1,102 @@
 {
-  "contractState": "proposedPending318And319",
-  "scenario": "malformed",
-  "workflow": "health",
-  "workflowDiagnosisExpected": true,
-  "lastSuccessfulPhase": "setup",
-  "findings": [
-    {"findingId":"health-service-malformed","class":"symptom","phase":"service","role":"client","confidence":"low","fixtureEvidence":[],"coverageGapArtifactIds":["health-malformed-evaluation-current"],"nextArtifacts":[{"logicalArtifactId":"client-evaluation","reason":"capture a complete parseable service or evaluation record"}],"mustNotClaim":["service failure","identity failure","management point cause"]}
-  ],
-  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"absent"},{"logicalArtifactId":"client-location","state":"absent"}],
-  "assertions": ["unclosed CCM input is retained only as safe malformed coverage","malformed input does not create a phase transition or terminal finding"]
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [
+      {
+        "class": "insufficientEvidence",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [
+          {
+            "artifactId": "health-malformed-evaluation-current",
+            "coverage": "capped",
+            "role": "client"
+          }
+        ],
+        "evidence": [],
+        "findingId": "client-health-service-stop",
+        "healthPhase": "service",
+        "lastConfirmedSuccessfulPhase": "install",
+        "nextArtifacts": [
+          {
+            "logicalId": "ccmEval",
+            "reason": "Confirm the root cause recorded by CcmEval.",
+            "role": "client"
+          }
+        ],
+        "phase": "service",
+        "role": "client",
+        "severity": "Warning",
+        "summary": "The service phase cannot be evaluated because its exact source coverage is incomplete.",
+        "terminalEvidence": [],
+        "title": "Client health service evidence is incomplete"
+      }
+    ],
+    "hops": [
+      {
+        "evidence": [
+          {
+            "artifactId": "health-malformed-ccmsetup-current",
+            "entryId": "health-malformed-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "install",
+        "state": "succeeded"
+      }
+    ],
+    "lastConfirmedSuccessfulPhase": "install",
+    "lifecyclePhase": "install",
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-malformed-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-malformed-evaluation-current",
+        "coverage": "captured",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-evaluation",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-malformed-identity-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-identity",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-malformed-location-services-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-location",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "malformed"
 }

@@ -1,13 +1,175 @@
 {
-  "contractState": "proposedPending318And319",
-  "scenario": "no-site-or-mp",
-  "workflow": "health",
-  "workflowDiagnosisExpected": true,
-  "lastSuccessfulPhase": "identity",
-  "findings": [
-    {"findingId":"health-site-assignment-insufficient","class":"insufficientEvidence","phase":"siteAssignment","role":"client","confidence":"low","fixtureEvidence":[{"artifactId":"health-no-site-or-mp-location-services-current","entryId":"entry-000001","lineStart":1,"lineEnd":1}],"coverageGapArtifactIds":[],"nextArtifacts":[{"logicalArtifactId":"client-location","reason":"capture a complete site-assignment and MP-response sequence"}],"mustNotClaim":["client is unassigned","management point is unavailable","management point cause"]},
-    {"findingId":"health-unkeyed-transport-symptom","class":"symptom","phase":"transport","role":"client","confidence":"low","fixtureEvidence":[{"artifactId":"health-no-site-or-mp-location-services-current","entryId":"entry-000002","lineStart":2,"lineEnd":2},{"artifactId":"health-no-site-or-mp-location-services-current","entryId":"entry-000003","lineStart":3,"lineEnd":3}],"coverageGapArtifactIds":[],"nextArtifacts":[],"mustNotClaim":["transport failure","management point failure","management point cause"]}
-  ],
-  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"captured"},{"logicalArtifactId":"client-location","state":"captured"}],
-  "assertions": ["same-minute unkeyed network error is a symptom only","hostname-shaped unrelated text is not MP evidence"]
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [
+      {
+        "class": "symptom",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "health-no-site-or-mp-location-services-current",
+            "entryId": "health-no-site-or-mp-location-services-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "findingId": "client-health-assignment-stop",
+        "healthPhase": "assignment",
+        "lastConfirmedSuccessfulPhase": "authentication",
+        "nextArtifacts": [
+          {
+            "logicalId": "locationServices",
+            "reason": "Confirm the root cause recorded by LocationServices.",
+            "role": "client"
+          }
+        ],
+        "phase": "assignment",
+        "role": "client",
+        "severity": "Warning",
+        "summary": "The admitted assignment source does not contain one unambiguous terminal outcome for the exact chain key.",
+        "terminalEvidence": [],
+        "title": "Client health assignment outcome is not confirmed"
+      }
+    ],
+    "hops": [
+      {
+        "evidence": [
+          {
+            "artifactId": "health-no-site-or-mp-ccmsetup-current",
+            "entryId": "health-no-site-or-mp-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "install",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-no-site-or-mp-evaluation-current",
+            "entryId": "health-no-site-or-mp-evaluation-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "service",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-no-site-or-mp-evaluation-current",
+            "entryId": "health-no-site-or-mp-evaluation-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "clientHealth",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-no-site-or-mp-evaluation-current",
+            "entryId": "health-no-site-or-mp-evaluation-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "phase": "reboot",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-no-site-or-mp-identity-current",
+            "entryId": "health-no-site-or-mp-identity-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "identity",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-no-site-or-mp-identity-current",
+            "entryId": "health-no-site-or-mp-identity-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "authentication",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-no-site-or-mp-location-services-current",
+            "entryId": "health-no-site-or-mp-location-services-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "assignment",
+        "state": "pending"
+      }
+    ],
+    "lastConfirmedSuccessfulPhase": "authentication",
+    "lifecyclePhase": "install",
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-no-site-or-mp-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-no-site-or-mp-evaluation-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-evaluation",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-no-site-or-mp-identity-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-identity",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-no-site-or-mp-location-services-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-location",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "no-site-or-mp"
 }

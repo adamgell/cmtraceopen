@@ -194,8 +194,15 @@ impl SccmClientAdmittedEvidence {
             return Err(SccmClientEvidenceAdmissionError::IntegrityViolation);
         };
         let mut extraction_profile = profile.clone();
-        if matches!(artifact_family, SccmArtifactFamily::ClientPolicy)
-            && profile.maturity == SccmExtractionProfileMaturity::Experimental
+        if (matches!(artifact_family, SccmArtifactFamily::ClientPolicy)
+            && profile.maturity == SccmExtractionProfileMaturity::Experimental)
+            || matches!(
+                artifact_family,
+                SccmArtifactFamily::ClientSetup
+                    | SccmArtifactFamily::ClientHealth
+                    | SccmArtifactFamily::ClientIdentity
+                    | SccmArtifactFamily::ClientLocation
+            )
         {
             extraction_profile.validated_artifact_families.clear();
         }

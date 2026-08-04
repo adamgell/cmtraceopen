@@ -5,6 +5,7 @@
 
 pub(crate) mod admission;
 mod deployment;
+mod health;
 mod intake;
 mod inventory;
 mod policy;
@@ -20,6 +21,7 @@ pub use admission::{
     SccmClientEvidenceAdmissionError,
 };
 pub use deployment::*;
+pub use health::*;
 pub use intake::*;
 pub use inventory::{
     analyze_client_extended, SccmClientExtendedAnalysis, SccmClientExtendedArtifactRequest,

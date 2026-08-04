@@ -1,0 +1,2 @@
+<![LOG[SYNTHETIC FIXTURE Family=health Phase=identityRegistration Disposition=succeeded Terminal=true ClientGuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa]LOG]!><time="03:10:04.000+000" date="07-30-2026" component="ClientIDManagerStartup" context="" type="1" thread="1" file="clientid.cc:1">
+<![LOG[Family=health Phase=authentication Disposition=succeeded Terminal=true ClientGuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa]LOG]!><time="03:10:05.000+000" date="07-30-2026" component="ClientIDManagerStartup" context="" type="1" thread="1" file="clientid.cc:2">

@@ -1,11 +1,180 @@
 {
-  "contractState": "proposedPending318And319",
-  "scenario": "success",
-  "workflow": "health",
-  "workflowDiagnosisExpected": false,
-  "lastSuccessfulPhase": "transport",
-  "findings": [
-  ],
-  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"captured"},{"logicalArtifactId":"client-location","state":"captured"}],
-  "assertions": ["all phase transitions require source-local complete records","transport request and response share validated requestId and managementPointHost"]
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [],
+    "hops": [
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-ccmsetup-current",
+            "entryId": "health-success-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "install",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-evaluation-current",
+            "entryId": "health-success-evaluation-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "service",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-evaluation-current",
+            "entryId": "health-success-evaluation-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "clientHealth",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-evaluation-current",
+            "entryId": "health-success-evaluation-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "phase": "reboot",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-identity-current",
+            "entryId": "health-success-identity-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "identity",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-identity-current",
+            "entryId": "health-success-identity-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "authentication",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-location-services-current",
+            "entryId": "health-success-location-services-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "assignment",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-location-services-current",
+            "entryId": "health-success-location-services-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "boundary",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-location-services-current",
+            "entryId": "health-success-location-services-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "phase": "managementPointLocation",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-success-location-services-current",
+            "entryId": "health-success-location-services-current:5-5",
+            "lineEnd": 5,
+            "lineStart": 5
+          }
+        ],
+        "phase": "transport",
+        "state": "succeeded"
+      }
+    ],
+    "lastConfirmedSuccessfulPhase": "transport",
+    "lifecyclePhase": "install",
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-success-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-success-evaluation-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-evaluation",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-success-identity-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-identity",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-success-location-services-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-location",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "success"
 }

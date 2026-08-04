@@ -1,12 +1,161 @@
 {
-  "contractState": "proposedPending318And319",
-  "scenario": "identity-failure",
-  "workflow": "health",
-  "workflowDiagnosisExpected": true,
-  "lastSuccessfulPhase": "service",
-  "findings": [
-    {"findingId":"health-identity-terminal","class":"confirmedFailure","phase":"identity","role":"client","confidence":"high","fixtureEvidence":[{"artifactId":"health-identity-failure-identity-current","entryId":"entry-000001","lineStart":1,"lineEnd":1}],"coverageGapArtifactIds":[],"nextArtifacts":[],"mustNotClaim":["site assignment failure","management point failure","management point cause"]}
-  ],
-  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"captured"},{"logicalArtifactId":"client-identity","state":"captured"},{"logicalArtifactId":"client-location","state":"absent"}],
-  "assertions": ["identity terminal record carries the validated clientGuid","site and MP are not inferred after identity failure"]
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [
+      {
+        "class": "confirmedFailure",
+        "confidence": "high",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "health-identity-failure-identity-current",
+            "entryId": "health-identity-failure-identity-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "findingId": "client-health-identityRegistration-stop",
+        "healthPhase": "identity",
+        "lastConfirmedSuccessfulPhase": "reboot",
+        "nextArtifacts": [
+          {
+            "logicalId": "clientIdManagerStartup",
+            "reason": "Confirm the root cause recorded by ClientIDManagerStartup.",
+            "role": "client"
+          }
+        ],
+        "phase": "identityRegistration",
+        "role": "client",
+        "severity": "Error",
+        "summary": "Admitted client evidence recorded a terminal failure at the identity registration phase.",
+        "terminalEvidence": [
+          {
+            "kind": "observedFailure",
+            "reference": {
+              "artifactId": "health-identity-failure-identity-current",
+              "entryId": "health-identity-failure-identity-current:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          }
+        ],
+        "title": "Client health identity registration recorded a terminal failure"
+      }
+    ],
+    "hops": [
+      {
+        "evidence": [
+          {
+            "artifactId": "health-identity-failure-ccmsetup-current",
+            "entryId": "health-identity-failure-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "install",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-identity-failure-evaluation-current",
+            "entryId": "health-identity-failure-evaluation-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "service",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-identity-failure-evaluation-current",
+            "entryId": "health-identity-failure-evaluation-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "clientHealth",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-identity-failure-evaluation-current",
+            "entryId": "health-identity-failure-evaluation-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "phase": "reboot",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-identity-failure-identity-current",
+            "entryId": "health-identity-failure-identity-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "identity",
+        "state": "failed"
+      }
+    ],
+    "lastConfirmedSuccessfulPhase": "reboot",
+    "lifecyclePhase": "install",
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-identity-failure-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-identity-failure-evaluation-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-evaluation",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-identity-failure-identity-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-identity",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-identity-failure-location-services-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-location",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "identity-failure"
 }

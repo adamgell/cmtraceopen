@@ -1,12 +1,115 @@
 {
-  "contractState": "proposedPending318And319",
-  "scenario": "contradictory",
-  "workflow": "health",
-  "workflowDiagnosisExpected": true,
-  "lastSuccessfulPhase": null,
-  "findings": [
-    {"findingId":"health-setup-contradictory","class":"symptom","phase":"setup","role":"client","confidence":"low","fixtureEvidence":[{"artifactId":"health-contradictory-ccmsetup-current","entryId":"entry-000001","lineStart":1,"lineEnd":1},{"artifactId":"health-contradictory-ccmsetup-current","entryId":"entry-000002","lineStart":2,"lineEnd":2}],"coverageGapArtifactIds":[],"nextArtifacts":[{"logicalArtifactId":"client-ccmsetup","reason":"capture a complete ordered bootstrap sequence for one validated bootstrapId"}],"mustNotClaim":["recovered setup","confirmed setup failure","management point cause"]}
-  ],
-  "coverage": [{"logicalArtifactId":"client-ccmsetup","state":"captured"},{"logicalArtifactId":"client-evaluation","state":"absent"},{"logicalArtifactId":"client-identity","state":"absent"},{"logicalArtifactId":"client-location","state":"absent"}],
-  "assertions": ["later success with bootstrapId BOOT-TEST-B cannot recover terminal BOOT-TEST-A","same-key ordered recovery is a separate focused mutation"]
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [
+      {
+        "class": "symptom",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "health-contradictory-ccmsetup-current",
+            "entryId": "health-contradictory-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "health-contradictory-ccmsetup-current",
+            "entryId": "health-contradictory-ccmsetup-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "findingId": "client-health-install-stop",
+        "healthPhase": "install",
+        "lastConfirmedSuccessfulPhase": null,
+        "nextArtifacts": [
+          {
+            "logicalId": "ccmSetup",
+            "reason": "Confirm the root cause recorded by ccmsetup.",
+            "role": "client"
+          }
+        ],
+        "phase": "install",
+        "role": "client",
+        "severity": "Warning",
+        "summary": "The admitted install source does not contain one unambiguous terminal outcome for the exact chain key.",
+        "terminalEvidence": [],
+        "title": "Client health install outcome is not confirmed"
+      }
+    ],
+    "hops": [
+      {
+        "evidence": [
+          {
+            "artifactId": "health-contradictory-ccmsetup-current",
+            "entryId": "health-contradictory-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "health-contradictory-ccmsetup-current",
+            "entryId": "health-contradictory-ccmsetup-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "install",
+        "state": "contradictory"
+      }
+    ],
+    "lastConfirmedSuccessfulPhase": null,
+    "lifecyclePhase": "install",
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-contradictory-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-contradictory-evaluation-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-evaluation",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-contradictory-identity-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-identity",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-contradictory-location-services-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-location",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "contradictory"
 }

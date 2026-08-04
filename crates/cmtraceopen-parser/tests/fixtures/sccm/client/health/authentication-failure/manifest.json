@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "scenario": "authentication-failure",
+  "syntheticFixture": true,
+  "artifacts": [
+    {"artifactId":"health-authentication-failure-ccmsetup-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ccmsetup.log","pathFingerprint":"synthetic-root-a-health-success-ccmsetup-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T03:00:00Z","bytesCopied":260,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"health-authentication-failure-evaluation-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"CcmEval.log","pathFingerprint":"synthetic-root-a-health-success-evaluation-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T03:00:01Z","bytesCopied":742,"relativePath":"evidence/client-evaluation/current/CcmEval.log"},
+    {"artifactId":"health-authentication-failure-identity-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ClientIDManagerStartup.log","pathFingerprint":"synthetic-root-a-health-success-identity-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T03:00:04Z","bytesCopied":564,"relativePath":"evidence/client-identity/current/ClientIDManagerStartup.log"},
+    {"artifactId":"health-authentication-failure-location-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"LocationServices.log","pathFingerprint":"synthetic-candidate-health-success-location-services-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T03:00:06Z","bytesCopied":0,"relativePath":null}
+  ]
+}
