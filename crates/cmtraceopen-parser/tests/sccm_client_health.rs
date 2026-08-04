@@ -70,6 +70,13 @@ fn rotation(value: &str) -> SccmRotation {
 }
 
 fn admit_fixture(scenario: &str) -> Result<FixtureAdmission, String> {
+    admit_fixture_after(scenario, |_, _| {})
+}
+
+fn admit_fixture_after(
+    scenario: &str,
+    mut mutate_payload: impl FnMut(&str, &mut Vec<u8>),
+) -> Result<FixtureAdmission, String> {
     let root = fixture_directory(scenario);
     let manifest = load_json(&root.join("manifest.json"));
     assert_eq!(
@@ -156,13 +163,17 @@ fn admit_fixture(scenario: &str) -> Result<FixtureAdmission, String> {
             ),
             "{scenario}: exact committed fixture byte count"
         );
-        let payload_bytes = (source_coverage == SccmCoverageState::Captured && fragment_complete)
+        let mut payload_bytes = (source_coverage == SccmCoverageState::Captured
+            && fragment_complete)
             .then(|| {
                 committed_bytes
                     .clone()
                     .ok_or_else(|| "complete capture has no relativePath".to_owned())
             })
             .transpose()?;
+        if let Some(bytes) = &mut payload_bytes {
+            mutate_payload(preparation_id, bytes);
+        }
         artifacts.push(SccmClientIntakeArtifact {
             artifact: SccmArtifact {
                 artifact_id: artifact_id.clone(),
@@ -216,6 +227,29 @@ fn analyze_fixture(scenario: &str) -> SccmClientHealthAnalysis {
         .unwrap_or_else(|error| panic!("{scenario}: fixture admission failed: {error}"));
     analyze_client_health(&fixture.admitted)
         .unwrap_or_else(|error| panic!("{scenario}: health analysis failed: {error}"))
+}
+
+fn analyze_success_regression(name: &str) -> (SccmClientHealthAnalysis, BTreeMap<String, String>) {
+    let fixture = admit_fixture_after("success", |artifact_id, bytes| {
+        let content = std::str::from_utf8(bytes).expect("health fixture is UTF-8");
+        let mutated = match (name, artifact_id) {
+            ("service-before-install", "health-success-evaluation-current") => {
+                content.replace("01:00:01.000+000", "00:59:59.000+000")
+            }
+            ("cross-client-management-point", "health-success-location-services-current") => {
+                content.replace(
+                    "Phase=managementPointLocation Disposition=succeeded Terminal=true SiteCode=LAB",
+                    "Phase=managementPointLocation Disposition=succeeded Terminal=true ClientGuid=22222222-2222-2222-2222-222222222222 SiteCode=LAB",
+                )
+            }
+            _ => return,
+        };
+        *bytes = mutated.into_bytes();
+    })
+    .unwrap_or_else(|error| panic!("{name}: sealed fixture admission failed: {error}"));
+    let analysis = analyze_client_health(&fixture.admitted)
+        .unwrap_or_else(|error| panic!("{name}: health analysis failed: {error}"));
+    (analysis, fixture.artifact_ids)
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -373,6 +407,58 @@ fn success_fixture_confirms_every_post_install_hop() {
             SccmClientHealthPhase::Transport,
         ]
     );
+}
+
+#[test]
+fn post_lifecycle_phases_require_strict_monotonic_time() {
+    let (analysis, _) = analyze_success_regression("service-before-install");
+    assert_eq!(
+        analysis
+            .hops
+            .iter()
+            .map(|hop| hop.phase)
+            .collect::<Vec<_>>(),
+        vec![SccmClientHealthPhase::Install]
+    );
+    assert_eq!(
+        analysis.last_confirmed_successful_phase,
+        Some(SccmClientHealthPhase::Install)
+    );
+    assert_eq!(analysis.findings.len(), 1);
+    assert_eq!(
+        analysis.findings[0].health_phase,
+        SccmClientHealthPhase::Service
+    );
+}
+
+#[test]
+fn management_point_identity_cannot_cross_clients_on_a_shared_site() {
+    let (analysis, _) = analyze_success_regression("cross-client-management-point");
+    assert_eq!(
+        analysis.last_confirmed_successful_phase,
+        Some(SccmClientHealthPhase::Boundary)
+    );
+    assert_eq!(analysis.findings.len(), 1);
+    assert_eq!(
+        analysis.findings[0].health_phase,
+        SccmClientHealthPhase::ManagementPointLocation
+    );
+    assert!(analysis
+        .hops
+        .iter()
+        .all(|hop| hop.phase != SccmClientHealthPhase::ManagementPointLocation));
+}
+
+#[test]
+fn sealed_admission_regressions_match_exact_full_output_oracles() {
+    let oracle_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/sccm/client/health-regression-oracles");
+    for name in ["service-before-install", "cross-client-management-point"] {
+        let (analysis, artifact_ids) = analyze_success_regression(name);
+        let actual = normalized_output(&analysis, &artifact_ids);
+        let path = oracle_root.join(format!("{name}.json"));
+        assert_eq!(actual, load_json(&path), "{name}: exact full output");
+    }
 }
 
 #[test]

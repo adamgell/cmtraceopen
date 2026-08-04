@@ -133,6 +133,7 @@ struct ChainKeys {
     client_guid: Option<String>,
     site_code: Option<String>,
     management_point_host: Option<String>,
+    last_utc_millis: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -175,7 +176,7 @@ pub fn analyze_client_health(
 
     match lifecycle {
         Resolution::Succeeded(fact) => {
-            chain.client_guid = fact.keys.client_guid.clone();
+            advance_chain(&mut chain, fact);
             last_success = Some(fact.phase);
             hops.push(hop(fact.phase, SccmClientHealthHopState::Succeeded, [fact]));
         }
@@ -585,6 +586,12 @@ fn resolve_candidates<'a>(
 }
 
 fn fact_matches_chain(fact: &HealthFact, chain: &ChainKeys) -> bool {
+    if chain
+        .last_utc_millis
+        .is_some_and(|last_utc_millis| fact.utc_millis <= last_utc_millis)
+    {
+        return false;
+    }
     match fact.phase {
         SccmClientHealthPhase::Service
         | SccmClientHealthPhase::ClientHealth
@@ -593,13 +600,23 @@ fn fact_matches_chain(fact: &HealthFact, chain: &ChainKeys) -> bool {
         | SccmClientHealthPhase::Authentication
         | SccmClientHealthPhase::Assignment
         | SccmClientHealthPhase::Boundary => fact.keys.client_guid == chain.client_guid,
-        SccmClientHealthPhase::ManagementPointLocation => fact.keys.site_code == chain.site_code,
+        SccmClientHealthPhase::ManagementPointLocation => {
+            fact.keys.site_code == chain.site_code && optional_client_matches(fact, chain)
+        }
         SccmClientHealthPhase::Transport => {
             fact.keys.management_point_host == chain.management_point_host
+                && optional_client_matches(fact, chain)
         }
         phase if phase.is_lifecycle() => true,
         _ => false,
     }
+}
+
+fn optional_client_matches(fact: &HealthFact, chain: &ChainKeys) -> bool {
+    fact.keys
+        .client_guid
+        .as_ref()
+        .is_none_or(|client_guid| Some(client_guid) == chain.client_guid.as_ref())
 }
 
 fn advance_chain(chain: &mut ChainKeys, fact: &HealthFact) {
@@ -612,6 +629,7 @@ fn advance_chain(chain: &mut ChainKeys, fact: &HealthFact) {
     if fact.keys.management_point_host.is_some() {
         chain.management_point_host = fact.keys.management_point_host.clone();
     }
+    chain.last_utc_millis = Some(fact.utc_millis);
 }
 
 fn required_keys_present(phase: SccmClientHealthPhase, keys: &FactKeys) -> bool {
