@@ -9,6 +9,7 @@ mod health;
 mod intake;
 mod inventory;
 mod policy;
+mod task_sequence;
 mod updates;
 
 #[cfg(test)]
@@ -30,4 +31,5 @@ pub use inventory::{
     SccmClientExtendedTransaction, SccmClientExtendedWorkflow,
 };
 pub use policy::*;
+pub use task_sequence::*;
 pub use updates::*;
