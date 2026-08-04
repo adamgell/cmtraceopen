@@ -6,6 +6,7 @@
 pub(crate) mod admission;
 mod intake;
 mod inventory;
+mod updates;
 
 #[cfg(test)]
 mod admission_tests;
@@ -21,3 +22,4 @@ pub use inventory::{
     analyze_client_extended, SccmClientAnalysis, SccmCoverageGap, SccmPhase, SccmSourceObservation,
     SccmTransaction, SccmTransactionState, SccmWorkflow,
 };
+pub use updates::*;
