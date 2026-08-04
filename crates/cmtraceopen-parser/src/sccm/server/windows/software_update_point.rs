@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::sccm::{SccmCoverageState, SccmEvidence, SccmRole};
+use crate::sccm::{SccmCoverageState, SccmEvidence, SccmRole, SccmTimeOrderingState};
 
 use super::{SccmServerArtifactAssessment, SccmServerIntakeAssessment};
 
@@ -231,6 +231,7 @@ pub struct SccmSoftwareUpdatePointSourceLocalObservation {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmSoftwareUpdatePointArtifactRequest {
+    pub sup_handle: String,
     pub source_id: String,
     pub reason_code: SccmSoftwareUpdatePointRequestReason,
 }
@@ -276,7 +277,7 @@ struct Fact {
     disposition: SccmSoftwareUpdatePointDisposition,
     terminal: bool,
     evidence: SccmSoftwareUpdatePointEvidence,
-    utc_millis: Option<i64>,
+    utc_millis: i64,
 }
 
 pub fn analyze_software_update_point(
@@ -345,7 +346,7 @@ pub fn analyze_software_update_point(
     reject_conflicting_transaction_keys(&mut facts_by_key);
     let mut transactions = facts_by_key
         .into_iter()
-        .filter_map(|(key, facts)| reduce_transaction(key, facts, &gap_artifacts))
+        .filter_map(|(key, facts)| reduce_transaction(key, facts, &scoped_artifacts))
         .collect::<Vec<_>>();
     transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
 
@@ -502,7 +503,11 @@ fn parse_fact(
     };
     let start_line = evidence.reference.line_start?;
     let end_line = evidence.reference.line_end?;
-    if start_line == 0 || end_line < start_line {
+    let utc_millis = evidence.timestamp.utc_millis?;
+    if start_line == 0
+        || end_line < start_line
+        || evidence.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
+    {
         return None;
     }
 
@@ -523,7 +528,7 @@ fn parse_fact(
             start_line,
             end_line,
         },
-        utc_millis: evidence.timestamp.utc_millis,
+        utc_millis,
     })
 }
 
@@ -656,23 +661,10 @@ fn reject_conflicting_transaction_keys(facts_by_key: &mut BTreeMap<FactKey, Vec<
 fn reduce_transaction(
     key: FactKey,
     mut facts: Vec<Fact>,
-    gap_artifacts: &[&SccmServerArtifactAssessment],
+    scoped_artifacts: &[&SccmServerArtifactAssessment],
 ) -> Option<SccmSoftwareUpdatePointTransaction> {
     facts.sort_by(|left, right| {
-        (
-            left.utc_millis.unwrap_or(i64::MAX),
-            left.evidence.artifact_id.as_str(),
-            left.evidence.start_line,
-            left.evidence.end_line,
-            left.phase.rank(),
-        )
-            .cmp(&(
-                right.utc_millis.unwrap_or(i64::MAX),
-                right.evidence.artifact_id.as_str(),
-                right.evidence.start_line,
-                right.evidence.end_line,
-                right.phase.rank(),
-            ))
+        (left.utc_millis, left.phase.rank()).cmp(&(right.utc_millis, right.phase.rank()))
     });
     if facts
         .first()
@@ -713,44 +705,56 @@ fn reduce_transaction(
         })
         .collect::<Vec<_>>();
 
+    let subject_artifacts = scoped_artifacts
+        .iter()
+        .copied()
+        .filter(|artifact| artifact.workflow_subject_handle.as_deref() == Some(&key.sup_handle))
+        .collect::<Vec<_>>();
+    let gap_artifacts = subject_artifacts
+        .iter()
+        .copied()
+        .filter(|artifact| {
+            artifact.state != SccmCoverageState::Captured
+                || artifact.fragment_complete == Some(false)
+        })
+        .collect::<Vec<_>>();
     let mut coverage_gap_artifact_ids = gap_artifacts
         .iter()
         .map(|artifact| artifact.artifact_id.clone())
         .collect::<Vec<_>>();
     coverage_gap_artifact_ids.sort();
     coverage_gap_artifact_ids.dedup();
-    let optional_only_gap = !gap_artifacts.is_empty()
-        && gap_artifacts.iter().all(|artifact| {
-            artifact.source_id == SCCM_SOFTWARE_UPDATE_POINT_WSUS_SOURCE_ID
-                && matches!(
-                    artifact.state,
-                    SccmCoverageState::Skipped
-                        | SccmCoverageState::Unsupported
-                        | SccmCoverageState::Capped
-                )
-        });
+    let required_gap = gap_artifacts
+        .iter()
+        .any(|artifact| artifact.source_id == SCCM_SOFTWARE_UPDATE_POINT_SYNC_SOURCE_ID);
+    // The profile-defined supplement is sealed by intake but has no reviewed
+    // semantic extractor yet. Its mere presence, including a captured payload,
+    // therefore keeps otherwise conclusive output at medium confidence.
+    let optional_supplement_uninterpreted = subject_artifacts
+        .iter()
+        .any(|artifact| artifact.source_id == SCCM_SOFTWARE_UPDATE_POINT_WSUS_SOURCE_ID);
 
-    let (state, classification, confidence) = if terminal_success
-        && !terminal_failure
-        && (coverage_gap_artifact_ids.is_empty() || optional_only_gap)
-    {
+    let (state, classification, confidence) = if required_gap {
+        (
+            SccmSoftwareUpdatePointState::Incomplete,
+            SccmSoftwareUpdatePointClassification::InsufficientEvidence,
+            SccmSoftwareUpdatePointConfidence::Low,
+        )
+    } else if terminal_success && !terminal_failure {
         (
             SccmSoftwareUpdatePointState::Succeeded,
             SccmSoftwareUpdatePointClassification::Success,
-            if optional_only_gap {
+            if optional_supplement_uninterpreted {
                 SccmSoftwareUpdatePointConfidence::Medium
             } else {
                 SccmSoftwareUpdatePointConfidence::High
             },
         )
-    } else if terminal_failure
-        && !terminal_success
-        && (coverage_gap_artifact_ids.is_empty() || optional_only_gap)
-    {
+    } else if terminal_failure && !terminal_success {
         (
             SccmSoftwareUpdatePointState::Failed,
             SccmSoftwareUpdatePointClassification::ConfirmedFailure,
-            if optional_only_gap {
+            if optional_supplement_uninterpreted {
                 SccmSoftwareUpdatePointConfidence::Medium
             } else {
                 SccmSoftwareUpdatePointConfidence::High
@@ -773,6 +777,7 @@ fn reduce_transaction(
         .then(|| {
             gap_artifacts
                 .iter()
+                .filter(|artifact| artifact.source_id == SCCM_SOFTWARE_UPDATE_POINT_SYNC_SOURCE_ID)
                 .map(|artifact| artifact.source_id.as_str())
                 .min()
                 .map(str::to_owned)
@@ -815,11 +820,13 @@ fn reduce_transaction(
 
 fn fact_chain_is_valid(facts: &[Fact]) -> bool {
     let mut previous_phase = None;
+    let mut previous_utc = None;
     let mut terminal_seen = false;
     let mut evidence = BTreeSet::new();
     for fact in facts {
         if terminal_seen
             || previous_phase.is_some_and(|phase| fact.phase.rank() <= phase)
+            || previous_utc.is_some_and(|utc| fact.utc_millis <= utc)
             || !evidence.insert((
                 fact.evidence.artifact_id.as_str(),
                 fact.evidence.start_line,
@@ -834,6 +841,7 @@ fn fact_chain_is_valid(facts: &[Fact]) -> bool {
             }
         }
         previous_phase = Some(fact.phase.rank());
+        previous_utc = Some(fact.utc_millis);
         terminal_seen = fact.terminal;
     }
     true
@@ -844,7 +852,7 @@ fn source_local_observations(
 ) -> Vec<SccmSoftwareUpdatePointSourceLocalObservation> {
     let mut observations = Vec::new();
     let mut ordinal = 1usize;
-    let mut split_groups = BTreeMap::<(String, String), Vec<String>>::new();
+    let mut split_groups = BTreeMap::<(String, String, String, String), Vec<String>>::new();
     for artifact in scoped_artifacts.iter().filter(|artifact| {
         artifact.producer_role != SccmRole::Client
             && artifact.state == SccmCoverageState::Captured
@@ -852,6 +860,8 @@ fn source_local_observations(
     }) {
         split_groups
             .entry((
+                artifact.producer_host_handle.clone().unwrap_or_default(),
+                artifact.workflow_subject_handle.clone().unwrap_or_default(),
                 artifact.source_id.clone(),
                 artifact.rotation_lineage_handle.clone(),
             ))
@@ -870,10 +880,16 @@ fn source_local_observations(
         ordinal += 1;
     }
 
-    for artifact in scoped_artifacts.iter().filter(|artifact| {
-        artifact.producer_role != SccmRole::Client
-            && artifact.state == SccmCoverageState::ParseFailed
-    }) {
+    let mut malformed_artifacts = scoped_artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact.producer_role != SccmRole::Client
+                && artifact.state == SccmCoverageState::ParseFailed
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    malformed_artifacts.sort_by(|left, right| left.artifact_id.cmp(&right.artifact_id));
+    for artifact in malformed_artifacts {
         let prefix = artifact_prefix(&artifact.artifact_id);
         observations.push(source_local_observation(
             format!("{prefix}-{ordinal:02}-malformed"),
@@ -931,13 +947,21 @@ fn artifact_requests(
             | SccmCoverageState::Unsupported => None,
         };
         if let Some(reason_code) = state_reason {
+            let Some(sup_handle) = artifact.workflow_subject_handle.clone() else {
+                continue;
+            };
             requests.insert(SccmSoftwareUpdatePointArtifactRequest {
+                sup_handle,
                 source_id: artifact.source_id.clone(),
                 reason_code,
             });
         }
         if artifact.fragment_complete == Some(false) {
+            let Some(sup_handle) = artifact.workflow_subject_handle.clone() else {
+                continue;
+            };
             requests.insert(SccmSoftwareUpdatePointArtifactRequest {
+                sup_handle,
                 source_id: artifact.source_id.clone(),
                 reason_code: SccmSoftwareUpdatePointRequestReason::CoverageRotationSplit,
             });

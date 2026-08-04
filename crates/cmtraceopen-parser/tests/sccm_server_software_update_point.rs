@@ -52,10 +52,24 @@ fn load_canonical_intake_scenario(scenario: &str) -> SccmServerIntakeAssessment 
 }
 
 fn load_scenario(scenario: &str) -> (SccmServerIntakeAssessment, Value) {
+    let (manifest, payloads) = prepared_scenario(scenario);
+    let expected_json = std::fs::read_to_string(corpus_root().join(scenario).join("expected.json"))
+        .expect("expected output is readable");
+    let expected = serde_json::from_str(&expected_json).expect("expected output is valid JSON");
+    (assess_prepared_manifest(manifest, &payloads), expected)
+}
+
+fn prepared_scenario(scenario: &str) -> (Value, Vec<SccmServerArtifactPayload>) {
+    let (mut manifest, payloads) = raw_scenario(scenario);
+    canonicalize_preparation_manifest(&mut manifest);
+    (manifest, payloads)
+}
+
+fn raw_scenario(scenario: &str) -> (Value, Vec<SccmServerArtifactPayload>) {
     let scenario_root = corpus_root().join(scenario);
     let manifest_json =
         std::fs::read_to_string(scenario_root.join("manifest.json")).expect("manifest is readable");
-    let mut manifest: Value = serde_json::from_str(&manifest_json).expect("manifest is valid JSON");
+    let manifest: Value = serde_json::from_str(&manifest_json).expect("manifest is valid JSON");
     let payloads = manifest["artifacts"]
         .as_array()
         .expect("artifacts are an array")
@@ -75,15 +89,17 @@ fn load_scenario(scenario: &str) -> (SccmServerIntakeAssessment, Value) {
             })
         })
         .collect::<Vec<_>>();
-    let expected_json = std::fs::read_to_string(scenario_root.join("expected.json"))
-        .expect("expected output is readable");
-    let expected = serde_json::from_str(&expected_json).expect("expected output is valid JSON");
-    canonicalize_preparation_manifest(&mut manifest);
+    (manifest, payloads)
+}
+
+fn assess_prepared_manifest(
+    manifest: Value,
+    payloads: &[SccmServerArtifactPayload],
+) -> SccmServerIntakeAssessment {
     let canonical_manifest = serde_json::to_string(&manifest).expect("manifest serializes");
-    let intake = assess_server_intake(&canonical_manifest, &payloads).unwrap_or_else(|error| {
+    assess_server_intake(&canonical_manifest, payloads).unwrap_or_else(|error| {
         panic!("fixture is accepted by canonical server intake: {error:?}\n{canonical_manifest}")
-    });
-    (intake, expected)
+    })
 }
 
 fn canonicalize_preparation_manifest(manifest: &mut Value) {
@@ -194,8 +210,6 @@ fn canonicalize_preparation_manifest(manifest: &mut Value) {
 
         if source_id == "server-sup-wsus" {
             artifact["producerHostHandle"] = Value::String("synthetic:host:wsus-01".to_owned());
-            artifact["workflowSubject"]["instanceHandle"] =
-                Value::String("synthetic:subject:sup-01".to_owned());
             artifact["sourceVersion"] = Value::String("5.00.TEST".to_owned());
             artifact["configuredPathProvenance"]["pathFingerprint"] =
                 Value::String("synthetic:path:sup-wsus-health".to_owned());
@@ -251,6 +265,12 @@ fn production_projection(mut expected: Value) -> Value {
         .as_array_mut()
         .expect("source-local observations are an array")
         .retain(|observation| observation["classification"] != "ignoredClientEvidence");
+    for request in object["artifactRequests"]
+        .as_array_mut()
+        .expect("artifact requests are an array")
+    {
+        request["supHandle"] = Value::String("safe:sup:lab-sup-01".to_owned());
+    }
     expected
 }
 
@@ -315,4 +335,143 @@ fn an_unregistered_source_profile_cannot_emit_transactions() {
     );
     assert!(serialized["extractionProfile"]["profileId"].is_null());
     assert_eq!(serialized["transactions"], serde_json::json!([]));
+}
+
+#[test]
+fn required_coverage_gap_overrides_retry_deferred_classification() {
+    let (mut manifest, payloads) = raw_scenario("sync-retry");
+    let incomplete_manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(corpus_root().join("incomplete/manifest.json"))
+            .expect("incomplete manifest is readable"),
+    )
+    .expect("incomplete manifest is valid JSON");
+    let denied = incomplete_manifest["artifacts"][1].clone();
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .push(denied);
+    canonicalize_preparation_manifest(&mut manifest);
+
+    let serialized = serde_json::to_value(analyze_software_update_point(
+        &assess_prepared_manifest(manifest, &payloads),
+    ))
+    .expect("analysis serializes");
+    let transaction = &serialized["transactions"][0];
+
+    assert_eq!(transaction["state"], "incomplete");
+    assert_eq!(transaction["classification"], "insufficientEvidence");
+    assert_eq!(transaction["confidence"], "low");
+    assert_eq!(
+        transaction["coverageGapArtifactIds"],
+        serde_json::json!(["incomplete-02-wsync-denied"])
+    );
+}
+
+#[test]
+fn coverage_gaps_and_requests_are_scoped_to_the_exact_sup_subject() {
+    let (mut manifest, payloads) = raw_scenario("sync-success");
+    let incomplete_manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(corpus_root().join("incomplete/manifest.json"))
+            .expect("incomplete manifest is readable"),
+    )
+    .expect("incomplete manifest is valid JSON");
+    let mut foreign_gap = incomplete_manifest["artifacts"][1].clone();
+    foreign_gap["workflowSubjectHandle"] = Value::String("synthetic:subject:sup-01".to_owned());
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .push(foreign_gap);
+    canonicalize_preparation_manifest(&mut manifest);
+
+    let serialized = serde_json::to_value(analyze_software_update_point(
+        &assess_prepared_manifest(manifest, &payloads),
+    ))
+    .expect("analysis serializes");
+    let transaction = &serialized["transactions"][0];
+
+    assert_eq!(transaction["state"], "succeeded");
+    assert_eq!(transaction["confidence"], "high");
+    assert_eq!(transaction["coverageGapArtifactIds"], serde_json::json!([]));
+    assert_eq!(
+        serialized["artifactRequests"],
+        serde_json::json!([{
+            "supHandle": "synthetic:subject:sup-01",
+            "sourceId": "server-sup-sync",
+            "reasonCode": "coverageAccessDenied",
+        }])
+    );
+}
+
+#[test]
+fn captured_uninterpreted_wsus_supplement_keeps_the_confidence_ceiling() {
+    let (mut manifest, mut payloads) = prepared_scenario("supplemental-wsus-skipped");
+    let supplemental = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "supplemental-04-wsus-health")
+        .expect("supplemental artifact exists");
+    let supplement_bytes = br#"{}"#.to_vec();
+    supplemental["captureState"] = Value::String("captured".to_owned());
+    supplemental["rotation"] = serde_json::json!({
+        "kind": "current",
+        "lineageId": "sup-wsus-health",
+    });
+    supplemental["encoding"] = Value::String("utf-8".to_owned());
+    supplemental["collectionLimit"] =
+        serde_json::json!({ "byteLimit": 4096, "limitApplied": false });
+    supplemental["bytesCopied"] = Value::from(supplement_bytes.len());
+    supplemental["relativePath"] = Value::String(
+        "evidence/sccm/server/wsus/server-sup-wsus/subject-software-update-point/current/WsusHealth.json"
+            .to_owned(),
+    );
+    payloads.push(SccmServerArtifactPayload {
+        manifest_artifact_id: "supplemental-04-wsus-health".to_owned(),
+        bytes: supplement_bytes,
+    });
+
+    let serialized = serde_json::to_value(analyze_software_update_point(
+        &assess_prepared_manifest(manifest, &payloads),
+    ))
+    .expect("analysis serializes");
+
+    assert_eq!(serialized["transactions"][0]["state"], "succeeded");
+    assert_eq!(serialized["transactions"][0]["confidence"], "medium");
+    assert_eq!(serialized["transactions"][0]["confidenceCeiling"], "medium");
+}
+
+#[test]
+fn tied_or_unusable_timestamps_fail_closed_without_artifact_id_chronology() {
+    let (mut manifest, mut tied_payloads) = prepared_scenario("sync-success");
+    let wsync = tied_payloads
+        .iter_mut()
+        .find(|payload| payload.manifest_artifact_id == "sync-success-02-wsync")
+        .expect("wsync payload exists");
+    let content = String::from_utf8(wsync.bytes.clone()).expect("fixture is UTF-8");
+    wsync.bytes = content
+        .replacen("14:01:00.000+000", "14:00:00.000+000", 1)
+        .into_bytes();
+    let tied =
+        analyze_software_update_point(&assess_prepared_manifest(manifest.clone(), &tied_payloads));
+    assert!(tied.transactions.is_empty());
+
+    let (_, mut unusable_payloads) = prepared_scenario("sync-success");
+    let wcm = unusable_payloads
+        .iter_mut()
+        .find(|payload| payload.manifest_artifact_id == "sync-success-01-wcm")
+        .expect("WCM payload exists");
+    let content = String::from_utf8(wcm.bytes.clone()).expect("fixture is UTF-8");
+    wcm.bytes = content
+        .replacen("14:00:00.000+000", "14:00:00.000+9999", 1)
+        .into_bytes();
+    let wcm_manifest = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .iter_mut()
+        .find(|artifact| artifact["artifactId"] == "sync-success-01-wcm")
+        .expect("WCM manifest artifact exists");
+    wcm_manifest["bytesCopied"] = Value::from(wcm.bytes.len());
+    let unusable =
+        analyze_software_update_point(&assess_prepared_manifest(manifest, &unusable_payloads));
+    assert!(unusable.transactions.is_empty());
 }

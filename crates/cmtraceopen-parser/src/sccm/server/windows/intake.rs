@@ -1099,6 +1099,20 @@ fn normalize_artifact(
                     declared_rotation,
                     true,
                 )
+            } else if spec.source_kind == SccmServerSourceKind::ProfileDefined
+                && is_physical_state(&artifact.capture_state)
+            {
+                let declared_rotation = parse_declared_rotation(&artifact.rotation)?
+                    .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+                if declared_rotation != SccmRotation::Current {
+                    return Err(SccmServerIntakeError::InvalidArtifact);
+                }
+                (
+                    family,
+                    Some(artifact.original_basename.clone()),
+                    Some(declared_rotation),
+                    false,
+                )
             } else {
                 (family, None, None, false)
             }
@@ -2331,17 +2345,25 @@ fn validate_declared_source_tuple(
         return Err(SccmServerIntakeError::InvalidArtifact);
     }
 
-    if synthetic_fixture
-        && (artifact.producer_host_handle.as_deref() != Some("synthetic:host:wsus-01")
-            || subject.instance_handle.as_deref() != Some("synthetic:subject:sup-01")
+    if synthetic_fixture {
+        let rotation_is_bounded = if is_physical_state(&artifact.capture_state) {
+            artifact.rotation.kind == "current"
+        } else {
+            artifact.rotation.kind == "providerDefined"
+        } && artifact.rotation.value.is_none();
+        if artifact.producer_host_handle.as_deref() != Some("synthetic:host:wsus-01")
+            || !matches!(
+                subject.instance_handle.as_deref(),
+                Some("synthetic:subject:sup-01" | "safe:sup:lab-sup-01")
+            )
             || source_version != Some("5.00.TEST")
             || artifact.configured_path_provenance.path_fingerprint
                 != "synthetic:path:sup-wsus-health"
-            || artifact.rotation.kind != "providerDefined"
-            || artifact.rotation.value.is_some()
-            || artifact.rotation.lineage_id != "sup-wsus-health")
-    {
-        return Err(SccmServerIntakeError::InvalidArtifact);
+            || !rotation_is_bounded
+            || artifact.rotation.lineage_id != "sup-wsus-health"
+        {
+            return Err(SccmServerIntakeError::InvalidArtifact);
+        }
     }
 
     Ok(())
