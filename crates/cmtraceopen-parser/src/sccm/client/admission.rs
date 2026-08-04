@@ -417,7 +417,7 @@ pub fn admit_client_evidence(
     let mut unavailable_source_basenames = canonical
         .capture_gaps
         .iter()
-        .filter(|gap| is_supported_raw_ccm_source(&gap.basename))
+        .filter(|gap| is_supported_diagnostic_source(&gap.basename))
         .map(|gap| gap.basename.clone())
         .collect::<BTreeSet<_>>();
     unavailable_source_basenames.extend(
@@ -426,7 +426,9 @@ pub fn admit_client_evidence(
             .iter()
             .flat_map(|group| &group.fragments)
             .filter(|fragment| {
-                is_supported_raw_ccm_fragment(fragment) && !is_bound_complete_capture(fragment)
+                is_supported_diagnostic_source(&fragment.basename)
+                    && (fragment.coverage != SccmCoverageState::Captured
+                        || fragment.fragment_complete != Some(true))
             })
             .map(|fragment| fragment.basename.clone()),
     );
@@ -614,6 +616,10 @@ fn is_supported_raw_ccm_fragment(fragment: &SccmClientIntakeFragment) -> bool {
 fn is_supported_raw_ccm_source(basename: &str) -> bool {
     let classified = classify_artifact_name(basename, SccmRole::Client);
     classified.supported_for_diagnosis && classified.uses_ccm_records
+}
+
+fn is_supported_diagnostic_source(basename: &str) -> bool {
+    classify_artifact_name(basename, SccmRole::Client).supported_for_diagnosis
 }
 
 fn is_bound_complete_capture(fragment: &SccmClientIntakeFragment) -> bool {

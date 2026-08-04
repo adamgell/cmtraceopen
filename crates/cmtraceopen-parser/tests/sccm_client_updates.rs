@@ -71,11 +71,12 @@ fn admitted(
     for record in records {
         let artifact_id = format!("fixture-{}", record.id);
         let path_fingerprint = format!("synthetic-{}", record.id);
+        let time = format!("{}+000", record.time);
         let bytes = format!(
-            "<![LOG[{}]LOG]!><time=\"{}+000\" date=\"7-30-2026\" \
+            "<![LOG[{}]LOG]!><time=\"{}\" date=\"7-30-2026\" \
              component=\"{}\" context=\"\" type=\"1\" thread=\"1\" \
              file=\"synthetic.cc:323\">\n",
-            record.message, record.time, record.component
+            record.message, time, record.component
         )
         .into_bytes();
         artifacts.push(SccmClientIntakeArtifact {
@@ -700,13 +701,35 @@ fn counterpart_rejects_component_spoofing_and_privacy_bearing_handles() {
             .replace("safe:sup:lab", "safe:sup:prod.contoso.com"),
     };
 
-    for record in [spoofed_source, privacy_client, privacy_sup] {
+    let spoofed = analyze_client_updates(&admitted(&[spoofed_source])).expect("update analysis");
+    assert!(spoofed.transactions.is_empty());
+    assert!(spoofed
+        .correlation_handoff
+        .counterpart_ready_facts
+        .is_empty());
+
+    for record in [privacy_client, privacy_sup] {
         let analysis = analyze_client_updates(&admitted(&[record])).expect("update analysis");
         assert!(analysis
             .correlation_handoff
             .counterpart_ready_facts
             .is_empty());
     }
+}
+
+#[test]
+fn non_update_physical_source_cannot_mint_an_update_phase() {
+    let spoofed = Record {
+        id: "update-a",
+        basename: "AppEnforce.log",
+        group: "client-app-enforce",
+        component: "ScanAgent",
+        time: "10:30:00.000",
+        message: keyed(UPDATE_ID, CI_ID, "Scan terminal failure"),
+    };
+
+    let analysis = analyze_client_updates(&admitted(&[spoofed])).expect("update analysis");
+    assert!(analysis.transactions.is_empty());
 }
 
 #[test]
@@ -771,6 +794,21 @@ fn equal_time_opposing_outcomes_are_contradictory() {
 }
 
 #[test]
+fn complete_non_ccm_supplemental_coverage_remains_captured() {
+    let admitted = corpus_admitted("supplemental-conflict").expect("supplemental corpus admission");
+    let analysis = analyze_client_updates(&admitted).expect("supplemental analysis");
+    let supplemental = analysis
+        .coverage
+        .iter()
+        .find(|coverage| coverage.logical_artifact_id == "client-windows-update-supplemental")
+        .expect("supplemental coverage");
+    assert_eq!(
+        serde_json::to_value(supplemental).expect("coverage")["state"],
+        "captured"
+    );
+}
+
+#[test]
 fn public_ids_include_the_full_stable_subject_discriminator() {
     let records = [
         Record {
@@ -785,9 +823,9 @@ fn public_ids_include_the_full_stable_subject_discriminator() {
             id: "update-b",
             basename: "WUAHandler.log",
             group: "client-updates",
-            component: "ScanAgent",
+            component: "WUAHandler",
             time: "13:00:01.000",
-            message: keyed(UPDATE_ID, "323011", "Scan terminal failure"),
+            message: keyed(UPDATE_ID, "323011", "Evaluate terminal failure"),
         },
     ];
 

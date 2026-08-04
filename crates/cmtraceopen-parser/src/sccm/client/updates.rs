@@ -310,32 +310,7 @@ pub fn analyze_client_updates(
                 .iter()
                 .filter(|fact| fact.phase == phase)
                 .collect::<Vec<_>>();
-            let latest_timestamp = phase_facts
-                .iter()
-                .filter_map(|fact| fact.timestamp.utc_millis)
-                .max();
-            let latest = phase_facts
-                .into_iter()
-                .filter(|fact| fact.timestamp.utc_millis == latest_timestamp)
-                .collect::<Vec<_>>();
-            let first_disposition = latest[0].disposition;
-            let has_conflict = latest
-                .iter()
-                .any(|fact| fact.disposition != first_disposition);
-            let mut effective = (*latest
-                .iter()
-                .max_by(|left, right| {
-                    left.evidence
-                        .artifact_id
-                        .cmp(&right.evidence.artifact_id)
-                        .then_with(|| left.evidence.line_start.cmp(&right.evidence.line_start))
-                })
-                .expect("phase has at least one fact"))
-            .clone();
-            if has_conflict {
-                effective.disposition = PhaseDisposition::Contradictory;
-            }
-            effective_by_phase.insert(phase, effective);
+            effective_by_phase.insert(phase, effective_phase_fact(&phase_facts));
         }
         let Some(last) = effective_by_phase.values().next_back() else {
             continue;
@@ -563,6 +538,44 @@ pub fn analyze_client_updates(
     })
 }
 
+fn effective_phase_fact(phase_facts: &[&UpdateFact]) -> UpdateFact {
+    let has_noncomparable = phase_facts.iter().any(|fact| {
+        fact.timestamp.ordering_state != SccmTimeOrderingState::NormalizedUtc
+            || fact.timestamp.utc_millis.is_none()
+    });
+    let latest = if has_noncomparable {
+        phase_facts.to_vec()
+    } else {
+        let latest_timestamp = phase_facts
+            .iter()
+            .filter_map(|fact| fact.timestamp.utc_millis)
+            .max();
+        phase_facts
+            .iter()
+            .copied()
+            .filter(|fact| fact.timestamp.utc_millis == latest_timestamp)
+            .collect::<Vec<_>>()
+    };
+    let first_disposition = latest[0].disposition;
+    let has_conflict = latest
+        .iter()
+        .any(|fact| fact.disposition != first_disposition);
+    let mut effective = (*latest
+        .iter()
+        .max_by(|left, right| {
+            left.evidence
+                .artifact_id
+                .cmp(&right.evidence.artifact_id)
+                .then_with(|| left.evidence.line_start.cmp(&right.evidence.line_start))
+        })
+        .expect("phase has at least one fact"))
+    .clone();
+    if has_conflict {
+        effective.disposition = PhaseDisposition::Contradictory;
+    }
+    effective
+}
+
 fn update_coverage(
     admitted: &SccmClientAdmittedEvidence,
 ) -> Result<Vec<SccmClientUpdateCoverage>, SccmClientEvidenceAdmissionError> {
@@ -598,9 +611,15 @@ fn update_coverage(
         }
         if declared {
             if let Some(state) = admitted.source_coverage(logical_artifact_id)? {
-                let all_complete = admitted
-                    .require_captured_source(logical_artifact_id)
-                    .is_ok();
+                let all_complete = basenames.iter().try_fold(true, |complete, basename| {
+                    if admitted.source_coverage_for_basename(basename)?.is_some() {
+                        admitted
+                            .source_basename_is_complete(basename)
+                            .map(|basename_complete| complete && basename_complete)
+                    } else {
+                        Ok(complete)
+                    }
+                })?;
                 coverage.push(SccmClientUpdateCoverage {
                     logical_artifact_id: logical_artifact_id.to_owned(),
                     state: if *state == SccmCoverageState::Captured && !all_complete {
@@ -683,7 +702,17 @@ fn update_fact(
     let Some((phase, disposition)) = phase_disposition(evidence) else {
         return Ok(None);
     };
-    let sealed_basename = admitted.source_basename_for_artifact(&evidence.reference.artifact_id)?;
+    let Some(sealed_basename) =
+        admitted.source_basename_for_artifact(&evidence.reference.artifact_id)?
+    else {
+        return Ok(None);
+    };
+    let Some(component) = evidence.component.as_deref() else {
+        return Ok(None);
+    };
+    if !source_basename_matches(component, sealed_basename) {
+        return Ok(None);
+    }
     let location_services_group_admitted = admitted
         .require_captured_source("client-location-services-shared")
         .is_ok();
@@ -704,12 +733,29 @@ fn update_fact(
         evidence: evidence.reference.clone(),
         timestamp: evidence.timestamp.clone(),
         location_services_source: location_services_group_admitted
-            && sealed_basename == Some("LocationServices.log")
-            && evidence
-                .component
-                .as_deref()
-                .is_some_and(|component| component.eq_ignore_ascii_case("LocationServices")),
+            && sealed_basename == "LocationServices.log"
+            && component.eq_ignore_ascii_case("LocationServices"),
     }))
+}
+
+fn source_basename_matches(component: &str, basename: &str) -> bool {
+    [
+        ("ScanAgent", "ScanAgent.log"),
+        ("WUAHandler", "WUAHandler.log"),
+        ("LocationServices", "LocationServices.log"),
+        ("DataTransferService", "DataTransferService.log"),
+        ("ContentTransferManager", "ContentTransferManager.log"),
+        ("ServiceWindowManager", "ServiceWindowManager.log"),
+        ("UpdatesDeployment", "UpdatesDeployment.log"),
+        ("UpdatesHandler", "UpdatesHandler.log"),
+        ("UpdatesStore", "UpdatesStore.log"),
+        ("RebootCoordinator", "RebootCoordinator.log"),
+        ("StateMessage", "StateMessage.log"),
+    ]
+    .into_iter()
+    .any(|(expected_component, expected_basename)| {
+        component.eq_ignore_ascii_case(expected_component) && basename == expected_basename
+    })
 }
 
 fn counterpart_ready_fact(fact: &UpdateFact) -> Option<SccmClientUpdateCounterpartReadyFact> {
@@ -1019,5 +1065,65 @@ fn request_for(phase: SccmClientUpdatePhase) -> SccmClientUpdateArtifactRequest 
         reason: format!(
             "Collect the smallest bounded {logical_artifact_id} continuation for this exact update subject."
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fact(
+        artifact_id: &str,
+        disposition: PhaseDisposition,
+        ordering_state: SccmTimeOrderingState,
+        utc_millis: Option<i64>,
+    ) -> UpdateFact {
+        UpdateFact {
+            key: SccmClientUpdateKey {
+                update_id: "32300000-0000-0000-0000-000000000003".to_owned(),
+                ci_id: "323003".to_owned(),
+                content_id: None,
+                update_job_id: None,
+                client_handle: None,
+                site_code: None,
+                sup_host_handle: None,
+                confidence: SccmKeyConfidence::Low,
+                extraction_profile_id: SCCM_EXPERIMENTAL_KEY_PROFILE_ID.to_owned(),
+            },
+            phase: SccmClientUpdatePhase::Install,
+            disposition,
+            evidence: SccmEvidenceRef {
+                artifact_id: artifact_id.to_owned(),
+                entry_id: format!("entry:{artifact_id}"),
+                line_start: Some(1),
+                line_end: Some(1),
+            },
+            timestamp: SccmTimestamp {
+                original_display: None,
+                offset_minutes: None,
+                utc_millis,
+                ordering_state,
+            },
+            location_services_source: false,
+        }
+    }
+
+    #[test]
+    fn opposing_comparable_and_noncomparable_facts_fail_closed_as_contradictory() {
+        let unordered = fact(
+            "fixture-update-a",
+            PhaseDisposition::Failed,
+            SccmTimeOrderingState::OffsetMissing,
+            None,
+        );
+        let ordered = fact(
+            "fixture-update-b",
+            PhaseDisposition::Succeeded,
+            SccmTimeOrderingState::NormalizedUtc,
+            Some(1_000),
+        );
+
+        let effective = effective_phase_fact(&[&unordered, &ordered]);
+        assert_eq!(effective.disposition, PhaseDisposition::Contradictory);
     }
 }
