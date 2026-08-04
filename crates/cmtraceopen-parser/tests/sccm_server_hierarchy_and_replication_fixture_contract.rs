@@ -1573,17 +1573,16 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                     }
                 }
             }
-            Some("absent" | "accessDenied" | "skipped" | "unsupported") => {
+            Some("absent" | "accessDenied" | "skipped" | "unsupported")
                 if artifact.get("relativePath").is_some()
                     || artifact.get("bytesCopied").is_some()
                     || artifact.get("encoding").is_some()
                     || artifact.get("collectionLimit").is_some()
-                    || artifact["rotation"].get("fragmentComplete").is_some()
-                {
-                    failures.push(format!(
-                        "{artifact_id}: nonphysical state invents physical provenance"
-                    ));
-                }
+                    || artifact["rotation"].get("fragmentComplete").is_some() =>
+            {
+                failures.push(format!(
+                    "{artifact_id}: nonphysical state invents physical provenance"
+                ));
             }
             _ => {}
         }
