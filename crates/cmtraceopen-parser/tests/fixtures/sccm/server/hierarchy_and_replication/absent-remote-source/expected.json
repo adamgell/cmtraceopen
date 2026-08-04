@@ -17,7 +17,7 @@
   "sourceLocalObservations": [],
   "artifactRequests": [
     {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"},
-    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["despool.log"],"reasonCode":"coverageAbsent"}
+    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["despool.log"],"reasonCode":"missingTargetReceiveProcessApply"}
   ],
   "crossSideCausalClaims": [],
   "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}

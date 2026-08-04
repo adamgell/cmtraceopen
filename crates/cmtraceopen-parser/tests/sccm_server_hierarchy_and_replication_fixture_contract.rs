@@ -1097,7 +1097,7 @@ fn invalid_offset_request_basis(scenario: &str, manifest: &Value) -> Option<Arti
     })
 }
 
-fn target_source_declared(
+fn target_source_usable(
     manifest: &Value,
     target_site: &str,
     source_id: &str,
@@ -1115,6 +1115,7 @@ fn target_source_declared(
                 && artifact["originalBasename"].as_str() == Some(basename)
                 && artifact["direction"] == "target"
                 && artifact["producerHostHandle"].as_str() == Some(target_host)
+                && artifact["captureState"] == "captured"
         })
 }
 
@@ -1124,9 +1125,7 @@ fn required_target_source_missing(manifest: &Value, target_site: &str) -> bool {
         ("server-hierarchy-transfer", "despool.log"),
     ]
     .into_iter()
-    .any(|(source_id, basename)| {
-        !target_source_declared(manifest, target_site, source_id, basename)
-    })
+    .any(|(source_id, basename)| !target_source_usable(manifest, target_site, source_id, basename))
 }
 
 fn missing_target_source_requests(
@@ -1144,7 +1143,7 @@ fn missing_target_source_requests(
             ("server-hierarchy-control", "rcmctrl.log"),
             ("server-hierarchy-transfer", "despool.log"),
         ] {
-            if target_source_declared(manifest, target_site, source_id, basename) {
+            if target_source_usable(manifest, target_site, source_id, basename) {
                 continue;
             }
             requests.insert(ArtifactRequestContract {
@@ -1178,6 +1177,11 @@ fn derived_artifact_requests(
         }
     }
     let missing_target_requests = missing_target_source_requests(manifest, expected);
+    requests.retain(|request| {
+        !missing_target_requests
+            .iter()
+            .any(|missing| request.basis == missing.basis)
+    });
     if missing_target_requests.is_empty() {
         if let Some(basis) = invalid_offset_request_basis(scenario, manifest) {
             requests.insert(ArtifactRequestContract {
@@ -2814,7 +2818,10 @@ fn hierarchy_gaps_requests_and_source_local_controls_are_bounded() {
             .filter_map(|request| request["reasonCode"].as_str())
             .collect::<Vec<_>>();
         let expected_reasons: &[&str] = match *scenario {
-            "absent-remote-source" => &["missingTargetReceiveProcessApply", "coverageAbsent"],
+            "absent-remote-source" => &[
+                "missingTargetReceiveProcessApply",
+                "missingTargetReceiveProcessApply",
+            ],
             "backlog-retry" => &[
                 "missingTargetReceiveProcessApply",
                 "missingTargetReceiveProcessApply",
@@ -3611,23 +3618,18 @@ fn hierarchy_coderabbit_5ead896_target_topology_requires_present_handles() {
 }
 
 #[test]
-fn hierarchy_coderabbit_878a051_control_requests_include_target_rcmctrl() {
+fn hierarchy_coderabbit_878a051_absent_target_rcmctrl_remains_missing() {
     let mut manifest =
         read_json("absent-remote-source", "manifest.json").expect("absent manifest loads");
-    let mut expected =
+    let expected =
         read_json("absent-remote-source", "expected.json").expect("absent expected loads");
     manifest["artifacts"][1]["sourceId"] = serde_json::json!("server-hierarchy-control");
     manifest["artifacts"][1]["originalBasename"] = serde_json::json!("rcmctrl.log");
-    expected["artifactRequests"][0]["reasonCode"] = serde_json::json!("coverageAbsent");
-    expected["artifactRequests"][1]["sourceId"] = serde_json::json!("server-hierarchy-transfer");
-    expected["artifactRequests"][1]["basenames"] = serde_json::json!(["despool.log"]);
-    expected["artifactRequests"][1]["reasonCode"] =
-        serde_json::json!("missingTargetReceiveProcessApply");
 
     let failures = artifact_request_failures("absent-remote-source", &manifest, &expected);
     assert!(
         failures.is_empty(),
-        "target-side rcmctrl coverage request is exact: {failures:?}"
+        "target-side absent rcmctrl remains an exact missing request: {failures:?}"
     );
 }
 

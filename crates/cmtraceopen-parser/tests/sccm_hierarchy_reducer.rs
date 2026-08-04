@@ -31,7 +31,7 @@ const SCENARIOS: &[&str] = &[
 const FULL_OUTPUT_SHA256: &[(&str, &str)] = &[
     (
         "absent-remote-source",
-        "2ecf2bbce2368a23489ca4f81b772271ceb7ac743343daf668bf2c618c80551a",
+        "d433de24f68f9675b97afb3a65b6fe664f389dd3dafb780d5eaae1284f423153",
     ),
     (
         "backlog-retry",
@@ -547,6 +547,64 @@ fn remove_target_sources(
     payloads.retain(|payload| !target_ids.contains(&payload.manifest_artifact_id));
 }
 
+fn declare_target_source_state(
+    manifest: &mut Value,
+    payloads: &mut Vec<SccmServerArtifactPayload>,
+    basename: &str,
+    state: &str,
+) {
+    let artifact = manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts")
+        .iter_mut()
+        .find(|artifact| required_str(artifact, "originalBasename") == basename)
+        .expect("target artifact");
+    let artifact_id = required_str(artifact, "artifactId").to_owned();
+    artifact["captureState"] = json!(state);
+
+    match state {
+        "capped" => {
+            let payload_len = payloads
+                .iter()
+                .find(|payload| payload.manifest_artifact_id == artifact_id)
+                .expect("capped payload")
+                .bytes
+                .len();
+            artifact["collectionLimit"]["byteLimit"] = json!(payload_len);
+            artifact["collectionLimit"]["limitApplied"] = json!(true);
+            artifact["bytesCopied"] = json!(payload_len);
+            artifact["truncated"] = json!(true);
+            artifact["fragmentComplete"] = json!(false);
+        }
+        "parseFailed" => {}
+        "absent" | "accessDenied" | "skipped" | "unsupported" => {
+            let object = artifact.as_object_mut().expect("artifact object");
+            for field in [
+                "encoding",
+                "collectionLimit",
+                "relativePath",
+                "truncated",
+                "fragmentComplete",
+            ] {
+                object.remove(field);
+            }
+            artifact["bytesCopied"] = json!(0);
+            payloads.retain(|payload| payload.manifest_artifact_id != artifact_id);
+        }
+        value => panic!("unsupported test coverage state {value}"),
+    }
+}
+
+fn tied_healthy_fixture() -> (Value, Vec<SccmServerArtifactPayload>) {
+    let (mut manifest, mut payloads, _) = fixture_parts("healthy-link");
+    let sender = String::from_utf8(payload_mut(&mut payloads, "healthy-02-sender").clone())
+        .expect("utf8")
+        .replace("15:03:02.000+000", "15:03:01.000+000");
+    *payload_mut(&mut payloads, "healthy-02-sender") = sender.into_bytes();
+    sync_payload_length(&mut manifest, &payloads);
+    (manifest, payloads)
+}
+
 fn add_target_sources_from_healthy(
     manifest: &mut Value,
     payloads: &mut Vec<SccmServerArtifactPayload>,
@@ -629,12 +687,7 @@ fn omitted_both_target_sources_emit_both_requests() {
 
 #[test]
 fn missing_target_gate_precedes_cross_artifact_contradiction_and_terminal_success() {
-    let (mut manifest, mut payloads, _) = fixture_parts("healthy-link");
-    let sender = String::from_utf8(payload_mut(&mut payloads, "healthy-02-sender").clone())
-        .expect("utf8")
-        .replace("15:03:02.000+000", "15:03:01.000+000");
-    *payload_mut(&mut payloads, "healthy-02-sender") = sender.into_bytes();
-    sync_payload_length(&mut manifest, &payloads);
+    let (manifest, payloads) = tied_healthy_fixture();
 
     let both_present =
         analyze_hierarchy_replication(&assess(&manifest, &payloads)).expect("sealed control");
@@ -663,6 +716,51 @@ fn missing_target_gate_precedes_cross_artifact_contradiction_and_terminal_succes
             SccmHierarchyTimestampOrdering::Contradictory
         );
         assert_missing_target_gate(&analysis, &missing);
+    }
+}
+
+#[test]
+fn declared_absent_target_sources_gate_equal_time_contradiction() {
+    for (source_id, basename) in [
+        ("server-hierarchy-transfer", "despool.log"),
+        ("server-hierarchy-control", "rcmctrl.log"),
+    ] {
+        let (mut manifest, mut payloads) = tied_healthy_fixture();
+        declare_target_source_state(&mut manifest, &mut payloads, basename, "absent");
+        let analysis = analyze_hierarchy_replication(&assess(&manifest, &payloads))
+            .expect("sealed declared-absent case");
+        assert_eq!(
+            analysis.transactions[0].timestamp_ordering,
+            SccmHierarchyTimestampOrdering::Contradictory
+        );
+        assert_missing_target_gate(&analysis, &[(source_id, basename)]);
+    }
+}
+
+#[test]
+fn every_other_non_usable_target_state_gates_equal_time_contradiction() {
+    for state in [
+        "accessDenied",
+        "capped",
+        "skipped",
+        "unsupported",
+        "parseFailed",
+    ] {
+        for (source_id, basename) in [
+            ("server-hierarchy-transfer", "despool.log"),
+            ("server-hierarchy-control", "rcmctrl.log"),
+        ] {
+            let (mut manifest, mut payloads) = tied_healthy_fixture();
+            declare_target_source_state(&mut manifest, &mut payloads, basename, state);
+            let analysis = analyze_hierarchy_replication(&assess(&manifest, &payloads))
+                .unwrap_or_else(|error| panic!("sealed {state} case: {error:?}"));
+            assert_eq!(
+                analysis.transactions[0].timestamp_ordering,
+                SccmHierarchyTimestampOrdering::Contradictory,
+                "{state}/{basename}"
+            );
+            assert_missing_target_gate(&analysis, &[(source_id, basename)]);
+        }
     }
 }
 

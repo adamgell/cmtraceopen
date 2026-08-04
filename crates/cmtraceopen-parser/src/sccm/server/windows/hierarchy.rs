@@ -635,6 +635,15 @@ pub fn analyze_hierarchy_replication(
                     request
                 })
                 .collect::<Vec<_>>();
+            next_artifacts.retain(|request| {
+                !missing_target_requests.iter().any(|missing| {
+                    request.source_id == missing.source_id
+                        && request.direction == missing.direction
+                        && request.origin_site_code == missing.origin_site_code
+                        && request.target_site_code == missing.target_site_code
+                        && request.basenames == missing.basenames
+                })
+            });
             next_artifacts.extend(missing_target_requests);
             next_artifacts.sort_by(request_order);
             next_artifacts.dedup_by(|left, right| request_order(left, right).is_eq());
@@ -1262,7 +1271,8 @@ fn missing_target_source_requests(
     .into_iter()
     .filter(|(source_id, basename)| {
         !artifacts.iter().any(|artifact| {
-            artifact.source_id == *source_id
+            sealed_profile_artifact(artifact)
+                && artifact.source_id == *source_id
                 && artifact.original_basename.as_deref() == Some(*basename)
                 && artifact_direction(artifact) == Some(SccmHierarchyDirection::Target)
                 && artifact.producer_host_handle.as_deref()
