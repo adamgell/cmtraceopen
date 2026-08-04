@@ -2,7 +2,7 @@ use serde::{Serialize, Serializer};
 
 use super::{
     assess_client_intake, SccmClientIntakeBundle, SccmClientIntakeCoverageGap,
-    SccmClientIntakeError, SccmClientWorkflow,
+    SccmClientIntakeError,
 };
 use crate::sccm::{SccmCoverageState, SccmRole};
 
@@ -13,6 +13,12 @@ const HEALTH_SOURCE_GROUPS: &[&str] = &[
     "client-location",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmClientHealthWorkflow {
+    Health,
+}
+
 /// Coverage-only readiness for the SCCM client health workflow.
 ///
 /// This projection reports only intake coverage. It does not inspect source
@@ -20,7 +26,7 @@ const HEALTH_SOURCE_GROUPS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmClientHealthCoverageReadiness {
-    pub workflow: SccmClientWorkflow,
+    pub workflow: SccmClientHealthWorkflow,
     pub source_groups: Vec<SccmClientHealthCoverageGroup>,
     #[serde(serialize_with = "serialize_coverage_gaps")]
     pub coverage_gaps: Vec<SccmClientIntakeCoverageGap>,
@@ -88,19 +94,24 @@ pub fn assess_client_health_coverage(
             }
         })
         .collect::<Vec<_>>();
-    let next_required_source_group = source_groups
-        .iter()
-        .find(|group| group.coverage != SccmCoverageState::Captured)
-        .map(|group| group.logical_artifact_id.clone());
-    let coverage_complete = next_required_source_group.is_none();
     let coverage_gaps = assessment
         .coverage_gaps
         .into_iter()
         .filter(|gap| HEALTH_SOURCE_GROUPS.contains(&gap.logical_artifact_id.as_str()))
-        .collect();
+        .collect::<Vec<_>>();
+    let next_required_source_group = source_groups
+        .iter()
+        .find(|group| {
+            group.coverage != SccmCoverageState::Captured
+                || coverage_gaps
+                    .iter()
+                    .any(|gap| gap.logical_artifact_id == group.logical_artifact_id)
+        })
+        .map(|group| group.logical_artifact_id.clone());
+    let coverage_complete = next_required_source_group.is_none();
 
     Ok(SccmClientHealthCoverageReadiness {
-        workflow: SccmClientWorkflow::Health,
+        workflow: SccmClientHealthWorkflow::Health,
         source_groups,
         coverage_gaps,
         coverage_complete,

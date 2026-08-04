@@ -1,6 +1,7 @@
 use cmtraceopen_parser::sccm::{
-    assess_client_health_coverage, SccmArtifact, SccmClientIntakeArtifact, SccmClientIntakeBundle,
-    SccmClientIntakeCaptureGap, SccmClientIntakeError, SccmCoverageState, SccmRole, SccmRotation,
+    assess_client_health_coverage, SccmArtifact, SccmClientHealthWorkflow,
+    SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientIntakeCaptureGap,
+    SccmClientIntakeError, SccmCoverageState, SccmRole, SccmRotation,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -79,6 +80,8 @@ fn all_captured_health_coverage_is_complete_without_a_health_verdict() {
 
     let readiness = assess_client_health_coverage(&bundle)
         .expect("four captured health sources form a valid intake bundle");
+    let workflow: SccmClientHealthWorkflow = readiness.workflow;
+    assert_eq!(workflow, SccmClientHealthWorkflow::Health);
 
     assert_eq!(
         serde_json::to_value(readiness).expect("coverage readiness serializes"),
@@ -95,6 +98,36 @@ fn all_captured_health_coverage_is_complete_without_a_health_verdict() {
             "nextRequiredSourceGroup": null
         }),
         "complete coverage must only report the fixed health coverage contract"
+    );
+}
+
+#[test]
+fn captured_incomplete_health_fragment_keeps_readiness_incomplete() {
+    let mut bundle = captured_health_bundle();
+    bundle.artifacts[0].fragment_complete = Some(false);
+
+    let readiness = assess_client_health_coverage(&bundle)
+        .expect("a captured incomplete boundary remains valid intake coverage");
+    let value = serde_json::to_value(readiness).expect("coverage readiness serializes");
+
+    assert_eq!(
+        value["sourceGroups"][0],
+        json!({"logicalArtifactId": "client-ccmsetup", "coverage": "captured"}),
+        "declared captured coverage remains captured"
+    );
+    assert_eq!(value["coverageComplete"], false);
+    assert_eq!(value["nextRequiredSourceGroup"], "client-ccmsetup");
+    assert!(
+        value["coverageGaps"]
+            .as_array()
+            .is_some_and(|gaps| gaps.iter().any(|gap| {
+                gap["logicalArtifactId"] == "client-ccmsetup"
+                    && gap["coverage"] == "captured"
+                    && gap["reason"]
+                        .as_str()
+                        .is_some_and(|reason| reason.contains("incomplete logical-record boundary"))
+            })),
+        "the incomplete captured fragment must remain an explicit coverage gap"
     );
 }
 
@@ -353,7 +386,7 @@ fn health_fixture_manifests_project_the_coverage_matrix_without_reading_evidence
             "malformed",
             ["captured", "captured", "absent", "absent"],
             false,
-            Some("client-identity"),
+            Some("client-evaluation"),
         ),
         (
             "no-site-or-mp",
@@ -365,7 +398,7 @@ fn health_fixture_manifests_project_the_coverage_matrix_without_reading_evidence
             "rotation-boundary",
             ["captured", "absent", "absent", "absent"],
             false,
-            Some("client-evaluation"),
+            Some("client-ccmsetup"),
         ),
         (
             "setup-failure",
