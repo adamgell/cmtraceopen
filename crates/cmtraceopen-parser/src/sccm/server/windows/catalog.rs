@@ -148,6 +148,33 @@ const SERVER_SOURCE_SPECS: &[SccmServerSourceSpec] = &[
         source_kind: SccmServerSourceKind::ProfileDefined,
         supplemental: true,
     },
+    SccmServerSourceSpec {
+        source_id: "server-provider",
+        producer_role: SccmRole::Provider,
+        workflow_subject_role: Some(SccmRole::Provider),
+        logical_names: &["smsprov"],
+        explicit_basename: None,
+        source_kind: SccmServerSourceKind::CcmLog,
+        supplemental: false,
+    },
+    SccmServerSourceSpec {
+        source_id: "server-admin-service",
+        producer_role: SccmRole::AdminService,
+        workflow_subject_role: Some(SccmRole::AdminService),
+        logical_names: &["adminService"],
+        explicit_basename: None,
+        source_kind: SccmServerSourceKind::CcmLog,
+        supplemental: false,
+    },
+    SccmServerSourceSpec {
+        source_id: "server-admin-service-iis",
+        producer_role: SccmRole::AdminService,
+        workflow_subject_role: Some(SccmRole::AdminService),
+        logical_names: &[],
+        explicit_basename: None,
+        source_kind: SccmServerSourceKind::IisW3c,
+        supplemental: true,
+    },
 ];
 
 pub fn declared_server_source_catalog() -> &'static [SccmServerSourceSpec] {
@@ -204,6 +231,8 @@ pub(crate) fn expected_family(source_id: &str) -> Option<SccmArtifactFamily> {
         }
         "server-dp-distribution" | "server-dp-serve" => SccmArtifactFamily::DistributionPoint,
         "server-sup-sync" | "server-sup-wsus" => SccmArtifactFamily::SoftwareUpdatePoint,
+        "server-provider" => SccmArtifactFamily::Provider,
+        "server-admin-service" | "server-admin-service-iis" => SccmArtifactFamily::AdminService,
         _ => return None,
     })
 }

@@ -1,28 +1,19 @@
 {
-  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "fixtureContractVersion": 1,
   "workflow": "providerAndAdminService",
   "scenario": "admin-service-access-denied",
-  "profiles": [
-    {
-      "layer": "adminService",
-      "selectionState": "unknownVersion"
-    }
-  ],
-  "coverage": [
+  "expectedCoverage": [
     {
       "artifactId": "coverage-admin-access-denied",
-      "state": "accessDenied",
       "sourceId": "server-admin-service",
-      "layer": "adminService"
+      "producerRole": "adminService",
+      "state": "accessDenied"
     }
   ],
-  "transactions": [],
-  "sourceLocalObservations": [],
-  "artifactRequests": [
-    {
-      "logicalArtifactId": "server-admin-service",
-      "reason": "Capture bounded Admin Service evidence after access is authorized; access-denied coverage is not an outcome."
-    }
-  ],
-  "crossSideCausalClaims": []
+  "expectedTransactions": [],
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": {
+    "logicalId": "adminService",
+    "role": "adminService"
+  }
 }

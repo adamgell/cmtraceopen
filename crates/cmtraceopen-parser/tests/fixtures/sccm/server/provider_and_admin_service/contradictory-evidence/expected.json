@@ -1,130 +1,29 @@
 {
-  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "fixtureContractVersion": 1,
   "workflow": "providerAndAdminService",
   "scenario": "contradictory-evidence",
-  "profiles": [
-    {
-      "layer": "provider",
-      "selectionState": "selectedSynthetic",
-      "profileId": "provider-server-5.00.test-v1"
-    }
-  ],
-  "coverage": [
+  "expectedCoverage": [
     {
       "artifactId": "contradictory-provider-current",
-      "state": "captured",
       "sourceId": "server-provider",
-      "layer": "provider"
+      "producerRole": "provider",
+      "state": "captured"
     }
   ],
-  "transactions": [
+  "expectedTransactions": [
     {
-      "transactionId": "provider:dddddddd-dddd-dddd-dddd-dddddddddddd:safe-operation-contradictory:provider-local",
-      "layer": "provider",
-      "key": {
-        "requestId": "dddddddd-dddd-dddd-dddd-dddddddddddd",
-        "operationHandle": "safe-operation-contradictory",
-        "endpointId": "provider-local",
-        "confidence": "exact",
-        "extractionProfileId": "provider-server-5.00.test-v1"
-      },
-      "topologyCompatibility": "exact",
-      "timestampOrdering": "usable",
       "state": "incomplete",
       "classification": "insufficientEvidence",
       "confidence": "low",
-      "confidenceCeiling": "low",
+      "timestampOrdering": "usable",
       "terminalEvidence": true,
-      "coverageGapArtifactIds": [],
-      "publicSummary": "Provider evidence contains contradictory terminal outcomes for one exact request key.",
-      "observations": [
-        {
-          "observationId": "contradictory-01-receive",
-          "phase": "receive",
-          "disposition": "succeeded",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "contradictory-provider-current",
-              "startLine": 1,
-              "endLine": 1
-            }
-          ]
-        },
-        {
-          "observationId": "contradictory-02-authorize",
-          "phase": "authenticateOrAuthorize",
-          "disposition": "succeeded",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "contradictory-provider-current",
-              "startLine": 2,
-              "endLine": 2
-            }
-          ]
-        },
-        {
-          "observationId": "contradictory-03-execute",
-          "phase": "executeProviderOperation",
-          "disposition": "succeeded",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "contradictory-provider-current",
-              "startLine": 3,
-              "endLine": 3
-            }
-          ]
-        },
-        {
-          "observationId": "contradictory-04-respond",
-          "phase": "respond",
-          "disposition": "succeeded",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "contradictory-provider-current",
-              "startLine": 4,
-              "endLine": 4
-            }
-          ]
-        },
-        {
-          "observationId": "contradictory-05-success",
-          "phase": "recordOutcome",
-          "disposition": "succeeded",
-          "terminal": true,
-          "evidence": [
-            {
-              "artifactId": "contradictory-provider-current",
-              "startLine": 5,
-              "endLine": 5
-            }
-          ]
-        },
-        {
-          "observationId": "contradictory-06-failure",
-          "phase": "recordOutcome",
-          "disposition": "failed",
-          "terminal": true,
-          "evidence": [
-            {
-              "artifactId": "contradictory-provider-current",
-              "startLine": 6,
-              "endLine": 6
-            }
-          ]
-        }
-      ]
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "provider"
     }
   ],
-  "sourceLocalObservations": [],
-  "artifactRequests": [
-    {
-      "logicalArtifactId": "server-provider",
-      "reason": "Capture the bounded Provider source lineage for the exact request key and reconcile contradictory terminal outcomes."
-    }
-  ],
-  "crossSideCausalClaims": []
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": {
+    "logicalId": "smsprov",
+    "role": "provider"
+  }
 }

@@ -1,33 +1,26 @@
 {
-  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "fixtureContractVersion": 1,
   "workflow": "providerAndAdminService",
   "scenario": "provider-success",
-  "profiles": [{"layer":"provider","selectionState":"selectedSynthetic","profileId":"provider-server-5.00.test-v1"}],
-  "coverage": [{"artifactId":"provider-success-current","state":"captured","sourceId":"server-provider","layer":"provider"}],
-  "transactions": [
+  "expectedCoverage": [
     {
-      "transactionId":"provider:11111111-1111-1111-1111-111111111111:safe-operation-read-device:provider-local",
-      "layer":"provider",
-      "key":{"requestId":"11111111-1111-1111-1111-111111111111","operationHandle":"safe-operation-read-device","endpointId":"provider-local","confidence":"exact","extractionProfileId":"provider-server-5.00.test-v1"},
-      "topologyCompatibility":"exact",
-      "timestampOrdering":"usable",
-      "state":"succeeded",
-      "classification":"success",
-      "confidence":"high",
-      "confidenceCeiling":"high",
-      "terminalEvidence":true,
-      "coverageGapArtifactIds":[],
-      "publicSummary":"Provider operation completed with explicit terminal evidence.",
-      "observations":[
-        {"observationId":"provider-success-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-success-current","startLine":1,"endLine":1}]},
-        {"observationId":"provider-success-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-success-current","startLine":2,"endLine":2}]},
-        {"observationId":"provider-success-03-execute","phase":"executeProviderOperation","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-success-current","startLine":3,"endLine":3}]},
-        {"observationId":"provider-success-04-respond","phase":"respond","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-success-current","startLine":4,"endLine":4}]},
-        {"observationId":"provider-success-05-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"provider-success-current","startLine":5,"endLine":5}]}
-      ]
+      "artifactId": "provider-success-current",
+      "sourceId": "server-provider",
+      "producerRole": "provider",
+      "state": "captured"
     }
   ],
-  "sourceLocalObservations": [],
-  "artifactRequests": [],
-  "crossSideCausalClaims": []
+  "expectedTransactions": [
+    {
+      "state": "succeeded",
+      "classification": "success",
+      "confidence": "high",
+      "timestampOrdering": "usable",
+      "terminalEvidence": true,
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "provider"
+    }
+  ],
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": null
 }

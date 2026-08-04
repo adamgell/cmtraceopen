@@ -1,12 +1,81 @@
 {
-  "sccmManifestVersion":1,
-  "proposalOnly":true,
-  "syntheticFixture":true,
-  "scenario":"rotation-boundary",
-  "bundle":{"bundleRole":"server","workflow":"providerAndAdminService","capturedUtc":"2026-07-30T22:50:00Z"},
-  "topology":{"siteCode":"LAB","rolesObserved":["provider"],"endpoints":[{"endpointId":"provider-local","layer":"provider","hostHandle":"safe:server:lab-provider-01","producerRole":"provider"}]},
-  "artifacts":[
-    {"artifactId":"rotation-01-current","sourceId":"server-provider","producerRole":"provider","layer":"provider","producerHostHandle":"safe:server:lab-provider-01","endpointId":"provider-local","diagnosticUse":"primary","originalBasename":"Smsprov.log","sanitizedSourcePath":"SYNTHETIC://configured-root/LAB/Logs/Smsprov.log","pathFingerprint":"synthetic:rotation-current","rotation":{"kind":"current","lineageId":"provider-rotation","fragmentComplete":false},"captureState":"captured","sourceVersion":"9.99.UNKNOWN","collectedUtc":"2026-07-30T22:50:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":127,"relativePath":"evidence/server-provider/provider-local/current/Smsprov.log"},
-    {"artifactId":"rotation-02-lo","sourceId":"server-provider","producerRole":"provider","layer":"provider","producerHostHandle":"safe:server:lab-provider-01","endpointId":"provider-local","diagnosticUse":"primary","originalBasename":"Smsprov.log","sanitizedSourcePath":"SYNTHETIC://configured-root/LAB/Logs/Smsprov.lo_","pathFingerprint":"synthetic:rotation-lo","rotation":{"kind":"lo_","lineageId":"provider-rotation","fragmentComplete":false},"captureState":"captured","sourceVersion":"9.99.UNKNOWN","collectedUtc":"2026-07-30T22:50:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":295,"relativePath":"evidence/server-provider/provider-local/lo_/Smsprov.lo_"}
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": {
+    "synthetic": true,
+    "rawPaths": "redacted"
+  },
+  "bundleRole": "server",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "siteCode": "LAB",
+    "rolesObserved": [
+      "provider"
+    ]
+  },
+  "artifacts": [
+    {
+      "artifactId": "rotation-01-current",
+      "producerRole": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "workflowSubject": {
+        "role": "provider",
+        "instanceHandle": "synthetic:subject:provider-01"
+      },
+      "sourceId": "server-provider",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED_PROVIDER_ROOT",
+      "originalBasename": "Smsprov.log",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:provider-primary"
+      },
+      "rotation": {
+        "kind": "current",
+        "lineageId": "provider-primary"
+      },
+      "captureState": "captured",
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 127,
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "fragmentComplete": false,
+      "relativePath": "evidence/sccm/server/provider/server-provider/subject-provider/current/Smsprov.log"
+    },
+    {
+      "artifactId": "rotation-02-lo",
+      "producerRole": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "workflowSubject": {
+        "role": "provider",
+        "instanceHandle": "synthetic:subject:provider-01"
+      },
+      "sourceId": "server-provider",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED_PROVIDER_ROOT",
+      "originalBasename": "Smsprov.lo_",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:provider-primary"
+      },
+      "rotation": {
+        "kind": "lo_",
+        "lineageId": "provider-primary"
+      },
+      "captureState": "captured",
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 295,
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "fragmentComplete": false,
+      "relativePath": "evidence/sccm/server/provider/server-provider/subject-provider/lo_/Smsprov.lo_"
+    }
   ]
 }

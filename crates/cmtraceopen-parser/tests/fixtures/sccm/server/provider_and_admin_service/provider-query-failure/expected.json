@@ -1,25 +1,26 @@
 {
-  "contractState":"preparationOnlyReviewedDependenciesAvailable",
-  "workflow":"providerAndAdminService",
-  "scenario":"provider-query-failure",
-  "profiles":[{"layer":"provider","selectionState":"selectedSynthetic","profileId":"provider-server-5.00.test-v1"}],
-  "coverage":[{"artifactId":"provider-query-current","state":"captured","sourceId":"server-provider","layer":"provider"}],
-  "transactions":[
+  "fixtureContractVersion": 1,
+  "workflow": "providerAndAdminService",
+  "scenario": "provider-query-failure",
+  "expectedCoverage": [
     {
-      "transactionId":"provider:33333333-3333-3333-3333-333333333333:safe-operation-query-device:provider-local",
-      "layer":"provider",
-      "key":{"requestId":"33333333-3333-3333-3333-333333333333","operationHandle":"safe-operation-query-device","endpointId":"provider-local","confidence":"exact","extractionProfileId":"provider-server-5.00.test-v1"},
-      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"failed","classification":"confirmedFailure","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
-      "publicSummary":"Provider operation recorded an explicit terminal failure.",
-      "observations":[
-        {"observationId":"provider-query-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-query-current","startLine":1,"endLine":1}]},
-        {"observationId":"provider-query-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"provider-query-current","startLine":2,"endLine":2}]},
-        {"observationId":"provider-query-03-execute","phase":"executeProviderOperation","disposition":"failed","terminal":false,"evidence":[{"artifactId":"provider-query-current","startLine":3,"endLine":3}]},
-        {"observationId":"provider-query-04-outcome","phase":"recordOutcome","disposition":"failed","terminal":true,"evidence":[{"artifactId":"provider-query-current","startLine":4,"endLine":4}]}
-      ]
+      "artifactId": "provider-query-current",
+      "sourceId": "server-provider",
+      "producerRole": "provider",
+      "state": "captured"
     }
   ],
-  "sourceLocalObservations":[],
-  "artifactRequests":[],
-  "crossSideCausalClaims":[]
+  "expectedTransactions": [
+    {
+      "state": "failed",
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "timestampOrdering": "usable",
+      "terminalEvidence": true,
+      "layer": "provider",
+      "lastSuccessfulPhase": "authenticateOrAuthorize"
+    }
+  ],
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": null
 }

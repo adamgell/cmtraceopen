@@ -1,14 +1,28 @@
 {
-  "contractState":"preparationOnlyReviewedDependenciesAvailable",
-  "workflow":"providerAndAdminService",
-  "scenario":"rotation-boundary",
-  "profiles":[{"layer":"provider","selectionState":"unknownVersion"}],
-  "coverage":[
-    {"artifactId":"rotation-01-current","state":"captured","sourceId":"server-provider","layer":"provider"},
-    {"artifactId":"rotation-02-lo","state":"captured","sourceId":"server-provider","layer":"provider"}
+  "fixtureContractVersion": 1,
+  "workflow": "providerAndAdminService",
+  "scenario": "rotation-boundary",
+  "expectedCoverage": [
+    {
+      "artifactId": "rotation-01-current",
+      "sourceId": "server-provider",
+      "producerRole": "provider",
+      "state": "parseFailed"
+    },
+    {
+      "artifactId": "rotation-02-lo",
+      "sourceId": "server-provider",
+      "producerRole": "provider",
+      "state": "parseFailed"
+    }
   ],
-  "transactions":[],
-  "sourceLocalObservations":[{"observationId":"rotation-fragment-01","kind":"rotationFragment","layer":"provider","reason":"Split rotation fragments and an unknown version cannot form an exact request key.","correlationEligible":false,"evidence":[{"artifactId":"rotation-01-current","startLine":1,"endLine":1},{"artifactId":"rotation-02-lo","startLine":1,"endLine":1}]}],
-  "artifactRequests":[{"logicalArtifactId":"server-provider","reason":"Capture one bounded complete Provider rotation with known version provenance."}],
-  "crossSideCausalClaims":[]
+  "expectedTransactions": [],
+  "expectedSourceLocalKinds": [
+    "rotationFragment",
+    "rotationFragment"
+  ],
+  "expectedArtifactRequest": {
+    "logicalId": "smsprov",
+    "role": "provider"
+  }
 }

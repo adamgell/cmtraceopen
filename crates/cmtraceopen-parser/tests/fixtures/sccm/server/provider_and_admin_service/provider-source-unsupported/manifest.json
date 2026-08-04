@@ -1,44 +1,44 @@
 {
   "sccmManifestVersion": 1,
-  "proposalOnly": true,
   "syntheticFixture": true,
-  "scenario": "provider-source-unsupported",
-  "bundle": {
-    "bundleRole": "server",
-    "workflow": "providerAndAdminService",
-    "capturedUtc": "2026-07-31T12:10:00Z"
+  "proposalOnly": true,
+  "privacy": {
+    "synthetic": true,
+    "rawPaths": "redacted"
   },
+  "bundleRole": "server",
   "topology": {
+    "captureHost": "LAB-CM01",
     "siteCode": "LAB",
-    "rolesObserved": ["provider"],
-    "endpoints": [
-      {
-        "endpointId": "provider-local",
-        "layer": "provider",
-        "hostHandle": "safe:server:lab-provider-01",
-        "producerRole": "provider"
-      }
+    "rolesObserved": [
+      "provider"
     ]
   },
   "artifacts": [
     {
       "artifactId": "coverage-provider-unsupported",
-      "sourceId": "server-provider",
       "producerRole": "provider",
-      "layer": "provider",
-      "producerHostHandle": "safe:server:lab-provider-01",
-      "endpointId": "provider-local",
-      "diagnosticUse": "primary",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "workflowSubject": {
+        "role": "provider",
+        "instanceHandle": "synthetic:subject:provider-01"
+      },
+      "sourceId": "server-provider",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED_PROVIDER_ROOT",
       "originalBasename": "Smsprov.log",
-      "sanitizedSourcePath": "SYNTHETIC://configured-root/LAB/Logs/Smsprov.log",
-      "pathFingerprint": "synthetic:provider-unsupported",
+      "configuredPathProvenance": {
+        "state": "defaultCandidate",
+        "pathFingerprint": "synthetic:path:provider-primary"
+      },
       "rotation": {
         "kind": "current",
-        "lineageId": "provider-unsupported"
+        "lineageId": "provider-primary"
       },
       "captureState": "unsupported",
-      "sourceVersion": "5.00.UNKNOWN",
-      "collectedUtc": "2026-07-31T12:10:00Z"
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 0,
+      "unsupportedReason": "no approved server source contract"
     }
   ]
 }

@@ -695,7 +695,7 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "AdminService",
         logical_name: "adminService",
-        role: SccmRole::Provider,
+        role: SccmRole::AdminService,
         family: SccmArtifactFamily::AdminService,
     },
 ];

@@ -1,28 +1,19 @@
 {
-  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "fixtureContractVersion": 1,
   "workflow": "providerAndAdminService",
   "scenario": "provider-source-unsupported",
-  "profiles": [
-    {
-      "layer": "provider",
-      "selectionState": "unknownVersion"
-    }
-  ],
-  "coverage": [
+  "expectedCoverage": [
     {
       "artifactId": "coverage-provider-unsupported",
-      "state": "unsupported",
       "sourceId": "server-provider",
-      "layer": "provider"
+      "producerRole": "provider",
+      "state": "unsupported"
     }
   ],
-  "transactions": [],
-  "sourceLocalObservations": [],
-  "artifactRequests": [
-    {
-      "logicalArtifactId": "server-provider",
-      "reason": "Use a supported versioned Provider source profile before evaluating request outcomes."
-    }
-  ],
-  "crossSideCausalClaims": []
+  "expectedTransactions": [],
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": {
+    "logicalId": "smsprov",
+    "role": "provider"
+  }
 }

@@ -1,27 +1,26 @@
 {
-  "contractState":"preparationOnlyReviewedDependenciesAvailable",
-  "workflow":"providerAndAdminService",
-  "scenario":"admin-service-success",
-  "profiles":[{"layer":"adminService","selectionState":"selectedSynthetic","profileId":"admin-service-server-5.00.test-v1"}],
-  "coverage":[{"artifactId":"admin-success-current","state":"captured","sourceId":"server-admin-service","layer":"adminService"}],
-  "transactions":[
+  "fixtureContractVersion": 1,
+  "workflow": "providerAndAdminService",
+  "scenario": "admin-service-success",
+  "expectedCoverage": [
     {
-      "transactionId":"adminService:55555555-5555-5555-5555-555555555555:safe-operation-admin-read:admin-service-lab",
-      "layer":"adminService",
-      "key":{"requestId":"55555555-5555-5555-5555-555555555555","operationHandle":"safe-operation-admin-read","endpointId":"admin-service-lab","confidence":"exact","extractionProfileId":"admin-service-server-5.00.test-v1"},
-      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"succeeded","classification":"success","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
-      "publicSummary":"Admin Service request completed with explicit terminal evidence.",
-      "observations":[
-        {"observationId":"admin-success-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-success-current","startLine":1,"endLine":1}]},
-        {"observationId":"admin-success-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-success-current","startLine":2,"endLine":2}]},
-        {"observationId":"admin-success-03-route","phase":"route","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-success-current","startLine":3,"endLine":3}]},
-        {"observationId":"admin-success-04-backend","phase":"executeBackendOperation","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-success-current","startLine":4,"endLine":4}]},
-        {"observationId":"admin-success-05-respond","phase":"respond","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"admin-success-current","startLine":5,"endLine":5}]},
-        {"observationId":"admin-success-06-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"admin-success-current","startLine":6,"endLine":6}]}
-      ]
+      "artifactId": "admin-success-current",
+      "sourceId": "server-admin-service",
+      "producerRole": "adminService",
+      "state": "captured"
     }
   ],
-  "sourceLocalObservations":[],
-  "artifactRequests":[],
-  "crossSideCausalClaims":[]
+  "expectedTransactions": [
+    {
+      "state": "succeeded",
+      "classification": "success",
+      "confidence": "high",
+      "timestampOrdering": "usable",
+      "terminalEvidence": true,
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "adminService"
+    }
+  ],
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": null
 }

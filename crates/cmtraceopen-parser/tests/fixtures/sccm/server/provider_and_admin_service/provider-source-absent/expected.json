@@ -1,28 +1,19 @@
 {
-  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "fixtureContractVersion": 1,
   "workflow": "providerAndAdminService",
   "scenario": "provider-source-absent",
-  "profiles": [
-    {
-      "layer": "provider",
-      "selectionState": "unknownVersion"
-    }
-  ],
-  "coverage": [
+  "expectedCoverage": [
     {
       "artifactId": "coverage-provider-absent",
-      "state": "absent",
       "sourceId": "server-provider",
-      "layer": "provider"
+      "producerRole": "provider",
+      "state": "absent"
     }
   ],
-  "transactions": [],
-  "sourceLocalObservations": [],
-  "artifactRequests": [
-    {
-      "logicalArtifactId": "server-provider",
-      "reason": "Capture the bounded Provider source; absent coverage does not establish a workflow outcome."
-    }
-  ],
-  "crossSideCausalClaims": []
+  "expectedTransactions": [],
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": {
+    "logicalId": "smsprov",
+    "role": "provider"
+  }
 }

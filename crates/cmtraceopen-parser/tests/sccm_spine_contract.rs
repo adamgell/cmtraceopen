@@ -7011,7 +7011,7 @@ fn catalog_requires_exact_producer_roles_for_server_workflow_sources() {
         ),
         (
             "AdminService.log",
-            SccmRole::Provider,
+            SccmRole::AdminService,
             SccmArtifactFamily::AdminService,
         ),
     ];
@@ -7586,7 +7586,7 @@ fn expected_catalog_tuples() -> Vec<ExpectedCatalogTuple> {
         ),
         (
             "AdminService.log",
-            SccmRole::Provider,
+            SccmRole::AdminService,
             "adminService",
             SccmArtifactFamily::AdminService,
             true,

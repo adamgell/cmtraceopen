@@ -1242,7 +1242,16 @@ fn normalize_artifact(
                     false,
                 )
             } else {
-                (family, None, None, false)
+                let declared_rotation = parse_declared_rotation(&artifact.rotation)?;
+                if is_physical_state(&artifact.capture_state) && declared_rotation.is_none() {
+                    return Err(SccmServerIntakeError::InvalidArtifact);
+                }
+                (
+                    family,
+                    Some(artifact.original_basename.clone()),
+                    declared_rotation,
+                    false,
+                )
             }
         } else if retained_unknown {
             (
@@ -2559,6 +2568,7 @@ fn validate_artifact_annotations(
     match (artifact.truncated, artifact.fragment_complete) {
         (None, None) => {}
         (Some(false), Some(false)) if artifact.capture_state == SccmCoverageState::Captured => {}
+        (None, Some(false)) if artifact.capture_state == SccmCoverageState::Captured => {}
         (Some(true), Some(false)) if artifact.capture_state == SccmCoverageState::Capped => {}
         _ => return Err(SccmServerIntakeError::InvalidArtifact),
     }
@@ -2665,6 +2675,29 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "sync-success-01-wcm"
                 | "sync-success-02-wsync"
                 | "sync-success-03-wsus"
+                | "admin-auth-current"
+                | "admin-backend-current"
+                | "admin-iis-current"
+                | "admin-success-current"
+                | "blocked-deferred-admin-current"
+                | "contradictory-provider-current"
+                | "coverage-admin-access-denied"
+                | "coverage-admin-parse-failed"
+                | "coverage-admin-skipped"
+                | "coverage-provider-absent"
+                | "coverage-provider-capped"
+                | "coverage-provider-unsupported"
+                | "iis-supplemental-current"
+                | "incomplete-admin-current"
+                | "privacy-admin-current"
+                | "privacy-provider-current"
+                | "provider-authz-current"
+                | "provider-query-current"
+                | "provider-retry-current"
+                | "provider-success-current"
+                | "provider-timeout-current"
+                | "rotation-01-current"
+                | "rotation-02-lo"
                 | "unknown-db-export"
                 | "unrelated-02-wcm"
                 | "unrelated-03-wsync"
@@ -2693,6 +2726,9 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
             | "server-hierarchy-transfer"
             | "server-sup-sync"
             | "server-sup-wsus"
+            | "server-provider"
+            | "server-admin-service"
+            | "server-admin-service-iis"
             | "unknown-db-supplement"
     ) || (allow_unknown
         && !synthetic_fixture
@@ -2773,6 +2809,9 @@ fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "sup-sync-cap"
                 | "sup-sync-lab"
                 | "sup-wsus-health"
+                | "provider-primary"
+                | "admin-service-primary"
+                | "admin-service-iis"
                 | "unknown-db-export"
         ) || SYNTHETIC_HIERARCHY_LINEAGES.contains(&value);
     }
@@ -2833,6 +2872,9 @@ fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
                 | "synthetic:path:site-dp-control"
                 | "synthetic:path:site-sup-control"
                 | "synthetic:path:sup-wsus-health"
+                | "synthetic:path:provider-primary"
+                | "synthetic:path:admin-service-primary"
+                | "synthetic:path:admin-service-iis"
                 | "synthetic:path:unsupported-db"
                 | "synthetic:path:z-site"
         ) || SYNTHETIC_HIERARCHY_PATH_FINGERPRINTS.contains(&value);
@@ -2965,6 +3007,8 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
                     | "synthetic:host:site-02"
                     | "synthetic:host:site-03"
                     | "synthetic:host:wsus-01"
+                    | "synthetic:host:provider-01"
+                    | "synthetic:host:admin-service-01"
             ),
             "subject" => {
                 matches!(
@@ -2973,6 +3017,8 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
                         | "synthetic:subject:dp-02"
                         | "synthetic:subject:sup-01"
                         | "safe:sup:lab-sup-01"
+                        | "synthetic:subject:provider-01"
+                        | "synthetic:subject:admin-service-01"
                 )
             }
             _ => false,

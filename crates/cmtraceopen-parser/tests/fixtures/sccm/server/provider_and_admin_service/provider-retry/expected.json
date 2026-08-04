@@ -1,125 +1,26 @@
 {
-  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "fixtureContractVersion": 1,
   "workflow": "providerAndAdminService",
   "scenario": "provider-retry",
-  "profiles": [
-    {
-      "layer": "provider",
-      "selectionState": "selectedSynthetic",
-      "profileId": "provider-server-5.00.test-v1"
-    }
-  ],
-  "coverage": [
+  "expectedCoverage": [
     {
       "artifactId": "provider-retry-current",
-      "state": "captured",
       "sourceId": "server-provider",
-      "layer": "provider"
+      "producerRole": "provider",
+      "state": "captured"
     }
   ],
-  "transactions": [
+  "expectedTransactions": [
     {
-      "transactionId": "provider:cccccccc-cccc-cccc-cccc-cccccccccccc:safe-operation-provider-retry:provider-local",
-      "layer": "provider",
-      "key": {
-        "requestId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
-        "operationHandle": "safe-operation-provider-retry",
-        "endpointId": "provider-local",
-        "confidence": "exact",
-        "extractionProfileId": "provider-server-5.00.test-v1"
-      },
-      "topologyCompatibility": "exact",
-      "timestampOrdering": "usable",
       "state": "succeeded",
       "classification": "success",
       "confidence": "high",
-      "confidenceCeiling": "high",
+      "timestampOrdering": "usable",
       "terminalEvidence": true,
-      "coverageGapArtifactIds": [],
-      "publicSummary": "Provider retry completed with explicit terminal recovery evidence.",
-      "observations": [
-        {
-          "observationId": "provider-retry-01-receive",
-          "phase": "receive",
-          "disposition": "succeeded",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "provider-retry-current",
-              "startLine": 1,
-              "endLine": 1
-            }
-          ]
-        },
-        {
-          "observationId": "provider-retry-02-authorize",
-          "phase": "authenticateOrAuthorize",
-          "disposition": "succeeded",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "provider-retry-current",
-              "startLine": 2,
-              "endLine": 2
-            }
-          ]
-        },
-        {
-          "observationId": "provider-retry-03-retryable",
-          "phase": "executeProviderOperation",
-          "disposition": "retryableFailure",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "provider-retry-current",
-              "startLine": 3,
-              "endLine": 3
-            }
-          ]
-        },
-        {
-          "observationId": "provider-retry-04-recovered",
-          "phase": "executeProviderOperation",
-          "disposition": "succeeded",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "provider-retry-current",
-              "startLine": 4,
-              "endLine": 4
-            }
-          ]
-        },
-        {
-          "observationId": "provider-retry-05-respond",
-          "phase": "respond",
-          "disposition": "succeeded",
-          "terminal": false,
-          "evidence": [
-            {
-              "artifactId": "provider-retry-current",
-              "startLine": 5,
-              "endLine": 5
-            }
-          ]
-        },
-        {
-          "observationId": "provider-retry-06-outcome",
-          "phase": "recordOutcome",
-          "disposition": "succeeded",
-          "terminal": true,
-          "evidence": [
-            {
-              "artifactId": "provider-retry-current",
-              "startLine": 6,
-              "endLine": 6
-            }
-          ]
-        }
-      ]
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "provider"
     }
   ],
-  "sourceLocalObservations": [],
-  "artifactRequests": [],
-  "crossSideCausalClaims": []
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": null
 }

@@ -1,29 +1,21 @@
 {
-  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "fixtureContractVersion": 1,
   "workflow": "providerAndAdminService",
   "scenario": "provider-source-capped",
-  "profiles": [
-    {
-      "layer": "provider",
-      "selectionState": "selectedSynthetic",
-      "profileId": "provider-server-5.00.test-v1"
-    }
-  ],
-  "coverage": [
+  "expectedCoverage": [
     {
       "artifactId": "coverage-provider-capped",
-      "state": "capped",
       "sourceId": "server-provider",
-      "layer": "provider"
+      "producerRole": "provider",
+      "state": "capped"
     }
   ],
-  "transactions": [],
-  "sourceLocalObservations": [],
-  "artifactRequests": [
-    {
-      "logicalArtifactId": "server-provider",
-      "reason": "Recapture the bounded Provider source without truncating the required transaction evidence."
-    }
+  "expectedTransactions": [],
+  "expectedSourceLocalKinds": [
+    "rotationFragment"
   ],
-  "crossSideCausalClaims": []
+  "expectedArtifactRequest": {
+    "logicalId": "smsprov",
+    "role": "provider"
+  }
 }

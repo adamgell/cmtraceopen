@@ -1,50 +1,44 @@
 {
-  "contractState":"preparationOnlyReviewedDependenciesAvailable",
-  "workflow":"providerAndAdminService",
-  "scenario":"privacy-redaction",
-  "profiles":[
-    {"layer":"adminService","selectionState":"selectedSynthetic","profileId":"admin-service-server-5.00.test-v1"},
-    {"layer":"provider","selectionState":"selectedSynthetic","profileId":"provider-server-5.00.test-v1"}
-  ],
-  "coverage":[
-    {"artifactId":"privacy-admin-current","state":"captured","sourceId":"server-admin-service","layer":"adminService"},
-    {"artifactId":"privacy-provider-current","state":"captured","sourceId":"server-provider","layer":"provider"}
-  ],
-  "transactions":[
+  "fixtureContractVersion": 1,
+  "workflow": "providerAndAdminService",
+  "scenario": "privacy-redaction",
+  "expectedCoverage": [
     {
-      "transactionId":"adminService:99999999-9999-9999-9999-999999999999:safe-operation-admin-privacy:admin-service-lab",
-      "layer":"adminService",
-      "key":{"requestId":"99999999-9999-9999-9999-999999999999","operationHandle":"safe-operation-admin-privacy","endpointId":"admin-service-lab","confidence":"exact","extractionProfileId":"admin-service-server-5.00.test-v1"},
-      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"succeeded","classification":"success","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
-      "publicSummary":"Admin Service privacy fixture completed with redacted public evidence.",
-      "observations":[
-        {"observationId":"privacy-admin-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":1,"endLine":1}]},
-        {"observationId":"privacy-admin-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":2,"endLine":2}]},
-        {"observationId":"privacy-admin-03-route","phase":"route","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":3,"endLine":3}]},
-        {"observationId":"privacy-admin-04-backend","phase":"executeBackendOperation","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":4,"endLine":4}]},
-        {"observationId":"privacy-admin-05-respond","phase":"respond","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":5,"endLine":5}]},
-        {"observationId":"privacy-admin-06-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"privacy-admin-current","startLine":6,"endLine":6}]}
-      ]
+      "artifactId": "privacy-admin-current",
+      "sourceId": "server-admin-service",
+      "producerRole": "adminService",
+      "state": "captured"
     },
     {
-      "transactionId":"provider:99999999-9999-9999-9999-999999999999:safe-operation-provider-privacy:provider-local",
-      "layer":"provider",
-      "key":{"requestId":"99999999-9999-9999-9999-999999999999","operationHandle":"safe-operation-provider-privacy","endpointId":"provider-local","confidence":"exact","extractionProfileId":"provider-server-5.00.test-v1"},
-      "topologyCompatibility":"exact","timestampOrdering":"usable","state":"succeeded","classification":"success","confidence":"high","confidenceCeiling":"high","terminalEvidence":true,"coverageGapArtifactIds":[],
-      "publicSummary":"Provider privacy fixture completed with redacted public evidence.",
-      "observations":[
-        {"observationId":"privacy-provider-01-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":1,"endLine":1}]},
-        {"observationId":"privacy-provider-02-authorize","phase":"authenticateOrAuthorize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":2,"endLine":2}]},
-        {"observationId":"privacy-provider-03-execute","phase":"executeProviderOperation","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":3,"endLine":3}]},
-        {"observationId":"privacy-provider-04-respond","phase":"respond","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":4,"endLine":4}]},
-        {"observationId":"privacy-provider-05-outcome","phase":"recordOutcome","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"privacy-provider-current","startLine":5,"endLine":5}]}
-      ]
+      "artifactId": "privacy-provider-current",
+      "sourceId": "server-provider",
+      "producerRole": "provider",
+      "state": "captured"
     }
   ],
-  "sourceLocalObservations":[
-    {"observationId":"privacy-redaction-admin","kind":"privacyRedacted","layer":"adminService","reason":"Caller and endpoint details remain outside public keys and summaries.","correlationEligible":false,"evidence":[{"artifactId":"privacy-admin-current","startLine":1,"endLine":1}]},
-    {"observationId":"privacy-redaction-provider","kind":"privacyRedacted","layer":"provider","reason":"Caller, authorization, and query details remain outside public keys and summaries.","correlationEligible":false,"evidence":[{"artifactId":"privacy-provider-current","startLine":1,"endLine":1}]}
+  "expectedTransactions": [
+    {
+      "state": "succeeded",
+      "classification": "success",
+      "confidence": "high",
+      "timestampOrdering": "usable",
+      "terminalEvidence": true,
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "adminService"
+    },
+    {
+      "state": "succeeded",
+      "classification": "success",
+      "confidence": "high",
+      "timestampOrdering": "usable",
+      "terminalEvidence": true,
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "provider"
+    }
   ],
-  "artifactRequests":[],
-  "crossSideCausalClaims":[]
+  "expectedSourceLocalKinds": [
+    "privacyRedacted",
+    "privacyRedacted"
+  ],
+  "expectedArtifactRequest": null
 }

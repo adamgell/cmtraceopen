@@ -1,29 +1,19 @@
 {
-  "contractState": "preparationOnlyReviewedDependenciesAvailable",
+  "fixtureContractVersion": 1,
   "workflow": "providerAndAdminService",
   "scenario": "admin-service-parse-failed",
-  "profiles": [
-    {
-      "layer": "adminService",
-      "selectionState": "selectedSynthetic",
-      "profileId": "admin-service-server-5.00.test-v1"
-    }
-  ],
-  "coverage": [
+  "expectedCoverage": [
     {
       "artifactId": "coverage-admin-parse-failed",
-      "state": "parseFailed",
       "sourceId": "server-admin-service",
-      "layer": "adminService"
+      "producerRole": "adminService",
+      "state": "parseFailed"
     }
   ],
-  "transactions": [],
-  "sourceLocalObservations": [],
-  "artifactRequests": [
-    {
-      "logicalArtifactId": "server-admin-service",
-      "reason": "Recapture or repair the bounded Admin Service source; malformed evidence is coverage, not an outcome."
-    }
-  ],
-  "crossSideCausalClaims": []
+  "expectedTransactions": [],
+  "expectedSourceLocalKinds": [],
+  "expectedArtifactRequest": {
+    "logicalId": "adminService",
+    "role": "adminService"
+  }
 }
