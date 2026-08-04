@@ -242,6 +242,18 @@ fn analyze_success_regression(name: &str) -> (SccmClientHealthAnalysis, BTreeMap
                     "Phase=managementPointLocation Disposition=succeeded Terminal=true ClientGuid=22222222-2222-2222-2222-222222222222 SiteCode=LAB",
                 )
             }
+            (
+                "equal-time-clientless-mp-host-conflict",
+                "health-success-location-services-current",
+            ) => format!(
+                "{content}<![LOG[Family=health Phase=managementPointLocation Disposition=succeeded Terminal=true SiteCode=LAB ServerHost=mp-other.contoso.invalid]LOG]!><time=\"01:00:08.000+000\" date=\"07-30-2026\" component=\"LocationServices\" context=\"\" type=\"1\" thread=\"1\" file=\"location.cc:6\">\n"
+            ),
+            (
+                "equal-time-clientless-transport-request-conflict",
+                "health-success-location-services-current",
+            ) => format!(
+                "{content}<![LOG[Family=health Phase=transport Disposition=succeeded Terminal=true RequestId=b2222222-2222-2222-2222-222222222222 ServerHost=mp-lab.contoso.invalid]LOG]!><time=\"01:00:10.000+000\" date=\"07-30-2026\" component=\"CcmMessaging\" context=\"\" type=\"1\" thread=\"1\" file=\"messaging.cc:3\">\n"
+            ),
             ("service-retry-after-success", "health-success-evaluation-current") => format!(
                 "{content}<![LOG[Family=health Phase=service Disposition=started Terminal=false ClientGuid=11111111-1111-1111-1111-111111111111]LOG]!><time=\"01:00:01.500+000\" date=\"07-30-2026\" component=\"CcmEval\" context=\"\" type=\"1\" thread=\"1\" file=\"ccmeval.cc:4\">\n"
             ),
@@ -536,6 +548,60 @@ fn management_point_identity_cannot_cross_clients_on_a_shared_site() {
 }
 
 #[test]
+fn equal_time_management_point_hosts_are_contradictory() {
+    let (analysis, _) = analyze_success_regression("equal-time-clientless-mp-host-conflict");
+    assert_eq!(
+        analysis.last_confirmed_successful_phase,
+        Some(SccmClientHealthPhase::Boundary)
+    );
+    assert_eq!(
+        analysis.hops.last().map(|hop| (hop.phase, hop.state)),
+        Some((
+            SccmClientHealthPhase::ManagementPointLocation,
+            SccmClientHealthHopState::Contradictory
+        ))
+    );
+    assert_eq!(
+        analysis
+            .hops
+            .last()
+            .expect("management point hop")
+            .evidence
+            .len(),
+        2
+    );
+    assert_eq!(
+        analysis.findings[0].health_phase,
+        SccmClientHealthPhase::ManagementPointLocation
+    );
+}
+
+#[test]
+fn equal_time_transport_requests_are_contradictory() {
+    let (analysis, _) =
+        analyze_success_regression("equal-time-clientless-transport-request-conflict");
+    assert_eq!(
+        analysis.last_confirmed_successful_phase,
+        Some(SccmClientHealthPhase::ManagementPointLocation)
+    );
+    assert_eq!(
+        analysis.hops.last().map(|hop| (hop.phase, hop.state)),
+        Some((
+            SccmClientHealthPhase::Transport,
+            SccmClientHealthHopState::Contradictory
+        ))
+    );
+    assert_eq!(
+        analysis.hops.last().expect("transport hop").evidence.len(),
+        2
+    );
+    assert_eq!(
+        analysis.findings[0].health_phase,
+        SccmClientHealthPhase::Transport
+    );
+}
+
+#[test]
 fn sealed_admission_regressions_match_exact_full_output_oracles() {
     let oracle_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/sccm/client/health-regression-oracles");
@@ -550,6 +616,28 @@ fn sealed_admission_regressions_match_exact_full_output_oracles() {
         let actual = normalized_output(&analysis, &artifact_ids);
         let path = oracle_root.join(format!("{name}.json"));
         assert_eq!(actual, load_json(&path), "{name}: exact full output");
+    }
+}
+
+#[test]
+fn equal_time_correlation_regressions_match_exact_full_output_oracles() {
+    for (name, expected_digest) in [
+        (
+            "equal-time-clientless-mp-host-conflict",
+            "6f15ed4df3c1cf2827a453a13828c53ac7aa2d6d667cc69fecc60fcad12645aa",
+        ),
+        (
+            "equal-time-clientless-transport-request-conflict",
+            "88befd8cf5e8cd5d3e0e8af90a2d4ca7c636d4db3c54503e5b4ab8825262609b",
+        ),
+    ] {
+        let (analysis, artifact_ids) = analyze_success_regression(name);
+        let normalized = normalized_output(&analysis, &artifact_ids);
+        assert_eq!(
+            digest(&serde_json::to_vec(&normalized).expect("oracle serializes")),
+            expected_digest,
+            "{name}: exact full output"
+        );
     }
 }
 

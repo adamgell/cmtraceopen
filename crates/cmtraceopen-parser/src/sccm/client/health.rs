@@ -559,6 +559,13 @@ fn resolve_candidates<'a>(
     {
         return Resolution::Contradictory(newest);
     }
+    let newest_phase = phase.unwrap_or(newest[0].phase);
+    if newest
+        .iter()
+        .any(|fact| !same_phase_correlation_tuple(newest[0], fact, newest_phase))
+    {
+        return Resolution::Contradictory(newest);
+    }
     let newest_disposition = newest[0].disposition;
     if newest
         .iter()
@@ -588,6 +595,34 @@ fn resolve_candidates<'a>(
         Disposition::Succeeded => Resolution::Succeeded(last),
         Disposition::Failed => Resolution::Failed(last),
         Disposition::Started | Disposition::Pending => Resolution::Pending(candidates),
+    }
+}
+
+fn same_phase_correlation_tuple(
+    left: &HealthFact,
+    right: &HealthFact,
+    phase: SccmClientHealthPhase,
+) -> bool {
+    match phase {
+        phase if phase.is_lifecycle() => left.keys.client_guid == right.keys.client_guid,
+        SccmClientHealthPhase::Service
+        | SccmClientHealthPhase::ClientHealth
+        | SccmClientHealthPhase::Reboot
+        | SccmClientHealthPhase::Identity
+        | SccmClientHealthPhase::Authentication => left.keys.client_guid == right.keys.client_guid,
+        SccmClientHealthPhase::Assignment | SccmClientHealthPhase::Boundary => {
+            left.keys.client_guid == right.keys.client_guid
+                && left.keys.site_code == right.keys.site_code
+        }
+        SccmClientHealthPhase::ManagementPointLocation => {
+            left.keys.site_code == right.keys.site_code
+                && left.keys.management_point_host == right.keys.management_point_host
+        }
+        SccmClientHealthPhase::Transport => {
+            left.keys.management_point_host == right.keys.management_point_host
+                && left.keys.request_id == right.keys.request_id
+        }
+        _ => false,
     }
 }
 
