@@ -2,7 +2,8 @@ use sha2::{Digest, Sha256};
 
 use super::admission::{
     admit_client_evidence, SccmClientAdmittedEvidence, SccmClientCapturedPayload,
-    SccmClientEvidenceAdmissionError,
+    SccmClientEvidenceAdmissionError, MAX_SCCM_CLIENT_ADMISSION_AGGREGATE_SEAL_BYTES,
+    MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES, MAX_SCCM_CLIENT_ADMISSION_SOURCE_SEAL_BYTES,
 };
 use super::{assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle};
 use crate::parser::ccm::{observe_bounded_scans, CcmBoundedScanObservation};
@@ -13,6 +14,18 @@ fn digest(bytes: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[test]
+fn aggregate_integrity_hashing_has_one_explicit_total_cap() {
+    assert_eq!(
+        MAX_SCCM_CLIENT_ADMISSION_AGGREGATE_SEAL_BYTES,
+        MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES + MAX_SCCM_CLIENT_ADMISSION_SOURCE_SEAL_BYTES
+    );
+    assert_eq!(
+        MAX_SCCM_CLIENT_ADMISSION_AGGREGATE_SEAL_BYTES,
+        4 * 1024 * 1024 + 2 * 1024 * 1024
+    );
 }
 
 fn bundle() -> SccmClientIntakeBundle {
@@ -702,6 +715,11 @@ fn admission_integrity_rejects_test_only_record_profile_and_identity_collisions(
     assert!(profile_mutation
         .extract_keys_for_artifact("fixture-policy-agent")
         .is_err());
+
+    let mut source_mutation =
+        admit_client_evidence(&bundle, &assessment, &[payload()]).expect("admitted evidence");
+    source_mutation.test_only_mutate_first_source_authority();
+    assert!(source_mutation.verify_integrity().is_err());
 
     let mut collision =
         admit_client_evidence(&bundle, &assessment, &[payload()]).expect("admitted evidence");

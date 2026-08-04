@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -7,9 +7,10 @@ use crate::models::log_entry::Severity;
 
 use super::super::{
     normalize_key, SccmCorrelationKey, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence,
-    SccmEvidenceRef, SccmFindingClass, SccmKeyConfidence, SccmRole, SccmTimeOrderingState,
-    SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
+    SccmEvidenceRef, SccmFindingClass, SccmKeyConfidence, SccmRole, SccmRotation,
+    SccmTimeOrderingState, SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
 };
+use super::admission::SccmClientAdmittedSourceArtifact;
 use super::{SccmClientAdmittedEvidence, SccmClientEvidenceAdmissionError};
 
 pub const SCCM_CLIENT_EXTENDED_ANALYSIS_SCHEMA_VERSION: u32 = 1;
@@ -43,6 +44,7 @@ pub enum SccmClientExtendedState {
     Failed,
     Recovered,
     Contradictory,
+    EvaluatedCompliant,
     EvaluatedNonCompliant,
     Remediated,
     BlockedOrDeferred,
@@ -56,6 +58,7 @@ pub struct SccmClientExtendedTransaction {
     pub workflow: SccmClientExtendedWorkflow,
     pub profile_id: String,
     pub phase: SccmClientExtendedPhase,
+    pub source_basename: String,
     pub state: SccmClientExtendedState,
     pub last_successful_phase: Option<SccmClientExtendedPhase>,
     pub keys: Vec<SccmCorrelationKey>,
@@ -63,22 +66,41 @@ pub struct SccmClientExtendedTransaction {
     pub coverage_gap_artifact_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SccmClientExtendedCoverageGap {
+pub struct SccmClientExtendedSourceCitation {
+    pub artifact_id: String,
+    pub source_basename: String,
+    pub rotation: SccmRotation,
+    pub coverage: SccmCoverageState,
+    pub fragment_complete: bool,
+    pub physical: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmClientExtendedCoverage {
     pub workflow: SccmClientExtendedWorkflow,
     pub logical_artifact_id: String,
-    pub state: SccmCoverageState,
+    pub source: SccmClientExtendedSourceCitation,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmClientExtendedObservation {
     pub workflow: SccmClientExtendedWorkflow,
     pub reason: String,
-    pub artifact_ids: Vec<String>,
+    pub sources: Vec<SccmClientExtendedSourceCitation>,
     pub evidence: Vec<SccmEvidenceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmClientExtendedArtifactRequest {
+    pub logical_artifact_id: String,
+    pub source_basename: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,7 +116,7 @@ pub struct SccmClientExtendedFinding {
     pub phase: SccmClientExtendedPhase,
     pub confidence: SccmKeyConfidence,
     pub keys: Vec<SccmCorrelationKey>,
-    pub next_artifact_id: Option<String>,
+    pub next_artifact: Option<SccmClientExtendedArtifactRequest>,
     pub evidence: Vec<SccmEvidenceRef>,
 }
 
@@ -103,7 +125,7 @@ pub struct SccmClientExtendedFinding {
 pub struct SccmClientExtendedAnalysis {
     pub schema_version: u32,
     pub transactions: Vec<SccmClientExtendedTransaction>,
-    pub coverage: Vec<SccmClientExtendedCoverageGap>,
+    pub coverage: Vec<SccmClientExtendedCoverage>,
     pub source_local_observations: Vec<SccmClientExtendedObservation>,
     pub findings: Vec<SccmClientExtendedFinding>,
     pub prohibited_claims: Vec<String>,
@@ -125,6 +147,9 @@ struct Fact {
     keys: Vec<SccmCorrelationKey>,
     tuple: String,
     profile_id: String,
+    result_type_evaluation: bool,
+    disposition_compliant: bool,
+    source_basename: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,7 +186,7 @@ pub fn analyze_client_extended(
                 "An unavailable or malformed source artifact remains coverage and cannot establish a workflow outcome."
             }
             .to_owned(),
-            artifact_ids: vec![artifact_id.clone()],
+            sources: vec![source_citation(artifact_id, source)],
             evidence: Vec::new(),
         });
     }
@@ -171,7 +196,7 @@ pub fn analyze_client_extended(
             continue;
         };
         let profile_id = profile_id(context.workflow);
-        let Some(fact) = parse_fact(context, profile_id, evidence, &mut observations) else {
+        let Some(fact) = parse_fact(&context, profile_id, evidence, &mut observations) else {
             continue;
         };
         facts
@@ -186,7 +211,17 @@ pub fn analyze_client_extended(
     observations.sort_by(|left, right| {
         left.workflow
             .cmp(&right.workflow)
-            .then_with(|| left.artifact_ids.cmp(&right.artifact_ids))
+            .then_with(|| {
+                left.sources
+                    .iter()
+                    .map(|source| source.artifact_id.as_str())
+                    .cmp(
+                        right
+                            .sources
+                            .iter()
+                            .map(|source| source.artifact_id.as_str()),
+                    )
+            })
             .then_with(|| {
                 left.evidence
                     .first()
@@ -218,9 +253,13 @@ pub fn analyze_client_extended(
         transaction.coverage_gap_artifact_ids = coverage
             .iter()
             .filter(|gap| {
-                gap.workflow == transaction.workflow && gap.state != SccmCoverageState::Captured
+                transaction
+                    .evidence
+                    .iter()
+                    .any(|reference| reference.artifact_id == gap.source.artifact_id)
+                    && !source_is_complete(&gap.source)
             })
-            .map(|gap| gap.logical_artifact_id.clone())
+            .map(|gap| gap.source.artifact_id.clone())
             .collect();
         if !transaction.coverage_gap_artifact_ids.is_empty() {
             transaction.state = SccmClientExtendedState::InsufficientEvidence;
@@ -245,42 +284,53 @@ pub fn analyze_client_extended(
     })
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct ArtifactContext {
     workflow: SccmClientExtendedWorkflow,
     source_basename: &'static str,
+    source: SccmClientExtendedSourceCitation,
 }
 
 fn extended_coverage(
     admitted: &SccmClientAdmittedEvidence,
-) -> Result<Vec<SccmClientExtendedCoverageGap>, SccmClientEvidenceAdmissionError> {
+) -> Result<Vec<SccmClientExtendedCoverage>, SccmClientEvidenceAdmissionError> {
     let mut coverage = Vec::new();
-    for (workflow, logical_artifact_id) in [
-        (SccmClientExtendedWorkflow::Inventory, "client-inventory"),
-        (SccmClientExtendedWorkflow::Compliance, "client-compliance"),
-        (
-            SccmClientExtendedWorkflow::Compliance,
-            "client-policy-state",
-        ),
-        (SccmClientExtendedWorkflow::Metering, "client-metering"),
-    ] {
-        let state = admitted
-            .source_coverage(logical_artifact_id)?
-            .cloned()
-            .unwrap_or(SccmCoverageState::Absent);
-        coverage.push(SccmClientExtendedCoverageGap {
+    for (artifact_id, source) in admitted.source_artifacts()? {
+        let Some(workflow) = workflow_for_basename(&source.basename) else {
+            continue;
+        };
+        let citation = source_citation(artifact_id, source);
+        coverage.push(SccmClientExtendedCoverage {
             workflow,
-            logical_artifact_id: logical_artifact_id.to_owned(),
-            reason: if state == SccmCoverageState::Captured {
-                "The bounded workflow source group was captured; transaction claims still require exact record evidence."
+            logical_artifact_id: logical_artifact_for_basename(&source.basename).to_owned(),
+            reason: if source_is_complete(&citation) {
+                "This exact physical source was captured completely; transaction claims still require exact record evidence."
             } else {
-                "The bounded workflow source group is incomplete; coverage cannot become a workflow outcome."
+                "This exact source was not captured completely; its coverage state cannot become a workflow outcome."
             }
             .to_owned(),
-            state,
+            source: citation,
         });
     }
     Ok(coverage)
+}
+
+fn source_citation(
+    artifact_id: &str,
+    source: &SccmClientAdmittedSourceArtifact,
+) -> SccmClientExtendedSourceCitation {
+    SccmClientExtendedSourceCitation {
+        artifact_id: artifact_id.to_owned(),
+        source_basename: source.basename.clone(),
+        rotation: source.rotation.clone(),
+        coverage: source.coverage.clone(),
+        fragment_complete: source.fragment_complete == Some(true),
+        physical: source.physical,
+    }
+}
+
+fn source_is_complete(source: &SccmClientExtendedSourceCitation) -> bool {
+    source.coverage == SccmCoverageState::Captured && source.fragment_complete && source.physical
 }
 
 fn evidence_context(
@@ -308,20 +358,25 @@ fn evidence_context(
         "swmtrreportgen" => (SccmClientExtendedWorkflow::Metering, "SWMTRReportGen.log"),
         _ => return Ok(None),
     };
-    if admitted.source_basename_for_artifact(&evidence.reference.artifact_id)?
-        != Some(source_basename)
-    {
+    let Some(source) = admitted
+        .source_artifacts()?
+        .get(&evidence.reference.artifact_id)
+    else {
+        return Ok(None);
+    };
+    if source.basename != source_basename {
         return Ok(None);
     }
 
     Ok(Some(ArtifactContext {
         workflow,
         source_basename,
+        source: source_citation(&evidence.reference.artifact_id, source),
     }))
 }
 
 fn workflow_for_basename(basename: &str) -> Option<SccmClientExtendedWorkflow> {
-    match basename {
+    match canonical_family_basename(basename).as_ref() {
         "InventoryAgent.log" | "InventoryProvider.log" | "InventoryAgentProvider.log" => {
             Some(SccmClientExtendedWorkflow::Inventory)
         }
@@ -333,21 +388,36 @@ fn workflow_for_basename(basename: &str) -> Option<SccmClientExtendedWorkflow> {
 }
 
 fn parse_fact(
-    context: ArtifactContext,
+    context: &ArtifactContext,
     profile_id: &str,
     evidence: &SccmEvidence,
     observations: &mut Vec<SccmClientExtendedObservation>,
 ) -> Option<Fact> {
-    let phase =
-        field(&evidence.message, "Phase").and_then(|value| parse_phase(context.workflow, &value));
-    let disposition = field(&evidence.message, "Disposition")
-        .map_or(Disposition::Other, |value| parse_disposition(&value));
-    let terminal = field(&evidence.message, "Terminal")
+    let fields = match parse_unique_fields(&evidence.message) {
+        Ok(fields) => fields,
+        Err(()) => {
+            observe(
+                observations,
+                context,
+                evidence,
+                "The record repeats a field label, so its semantics are ambiguous.",
+            );
+            return None;
+        }
+    };
+    let phase = fields
+        .get("phase")
+        .and_then(|value| parse_phase(context.workflow, value));
+    let disposition = fields
+        .get("disposition")
+        .map_or(Disposition::Other, |value| parse_disposition(value));
+    let terminal = fields
+        .get("terminal")
         .is_some_and(|value| value.eq_ignore_ascii_case("true"));
     let Some(phase) = phase else {
         observe(
             observations,
-            context.workflow,
+            context,
             evidence,
             "The record has no admitted phase for this workflow.",
         );
@@ -356,18 +426,19 @@ fn parse_fact(
     if !source_allows_phase(context.source_basename, phase) {
         observe(
             observations,
-            context.workflow,
+            context,
             evidence,
             "The source family cannot establish this phase.",
         );
         return None;
     }
-    if field(&evidence.message, "Family")
+    if fields
+        .get("family")
         .is_some_and(|value| !value.eq_ignore_ascii_case(workflow_name(context.workflow)))
     {
         observe(
             observations,
-            context.workflow,
+            context,
             evidence,
             "The record explicitly names a different workflow family.",
         );
@@ -377,12 +448,12 @@ fn parse_fact(
     let required = required_fields(context.workflow);
     let Some(values) = required
         .iter()
-        .map(|label| field(&evidence.message, label))
+        .map(|label| fields.get(&label.to_ascii_lowercase()).cloned())
         .collect::<Option<Vec<_>>>()
     else {
         observe(
             observations,
-            context.workflow,
+            context,
             evidence,
             "The record lacks the complete exact workflow key tuple.",
         );
@@ -391,7 +462,7 @@ fn parse_fact(
     let Some(keys) = make_keys(context.workflow, &values, profile_id, evidence) else {
         observe(
             observations,
-            context.workflow,
+            context,
             evidence,
             "The workflow key tuple contains an invalid or unbounded value.",
         );
@@ -399,12 +470,13 @@ fn parse_fact(
     };
     if context.workflow == SccmClientExtendedWorkflow::Compliance
         && disposition == Disposition::NonCompliant
-        && !field(&evidence.message, "ResultType")
+        && !fields
+            .get("resulttype")
             .is_some_and(|value| value.eq_ignore_ascii_case("Evaluation"))
     {
         observe(
             observations,
-            context.workflow,
+            context,
             evidence,
             "A noncompliant result is promotable only from an explicit evaluation record.",
         );
@@ -421,6 +493,13 @@ fn parse_fact(
         keys,
         tuple,
         profile_id: profile_id.to_owned(),
+        result_type_evaluation: fields
+            .get("resulttype")
+            .is_some_and(|value| value.eq_ignore_ascii_case("Evaluation")),
+        disposition_compliant: fields
+            .get("disposition")
+            .is_some_and(|value| value.eq_ignore_ascii_case("Compliant")),
+        source_basename: context.source_basename.to_owned(),
     })
 }
 
@@ -513,13 +592,9 @@ fn reduce_group(group: &mut [Fact]) -> SccmClientExtendedTransaction {
         .iter()
         .filter(|fact| fact.disposition == Disposition::Deferred)
         .collect::<Vec<_>>();
-    let compliant = terminal.iter().any(|fact| {
-        fact.disposition == Disposition::Succeeded
-            && field(&fact.evidence.message, "ResultType")
-                .is_some_and(|value| value.eq_ignore_ascii_case("Evaluation"))
-            && field(&fact.evidence.message, "Disposition")
-                .is_some_and(|value| value.eq_ignore_ascii_case("Compliant"))
-    });
+    let compliant = terminal
+        .iter()
+        .any(|fact| fact.disposition_compliant && fact.result_type_evaluation);
     let remediated = first.workflow == SccmClientExtendedWorkflow::Compliance
         && group.iter().any(|fact| {
             fact.phase == SccmClientExtendedPhase::Remediate
@@ -543,6 +618,8 @@ fn reduce_group(group: &mut [Fact]) -> SccmClientExtendedTransaction {
         SccmClientExtendedState::BlockedOrDeferred
     } else if remediated {
         SccmClientExtendedState::Remediated
+    } else if compliant {
+        SccmClientExtendedState::EvaluatedCompliant
     } else if !successes.is_empty() {
         SccmClientExtendedState::Succeeded
     } else {
@@ -569,11 +646,12 @@ fn reduce_group(group: &mut [Fact]) -> SccmClientExtendedTransaction {
             .map(|fact| fact.evidence.reference.clone())
             .collect()
     };
-    let phase = terminal
+    let decisive = terminal
         .iter()
-        .map(|fact| fact.phase)
-        .max()
-        .unwrap_or(first.phase);
+        .copied()
+        .max_by_key(|fact| fact.phase)
+        .unwrap_or_else(|| group.iter().max_by_key(|fact| fact.phase).unwrap_or(first));
+    let phase = decisive.phase;
     let transaction_id = format!(
         "client-extended:{}:{}",
         workflow_name(first.workflow),
@@ -584,6 +662,7 @@ fn reduce_group(group: &mut [Fact]) -> SccmClientExtendedTransaction {
         workflow: first.workflow,
         profile_id: first.profile_id.clone(),
         phase,
+        source_basename: decisive.source_basename.clone(),
         state,
         last_successful_phase,
         keys: first.keys.clone(),
@@ -603,22 +682,20 @@ fn finding_for(transaction: &SccmClientExtendedTransaction) -> Option<SccmClient
         }
         SccmClientExtendedState::InProgress
         | SccmClientExtendedState::Succeeded
+        | SccmClientExtendedState::EvaluatedCompliant
         | SccmClientExtendedState::Remediated
         | SccmClientExtendedState::Recovered => return None,
     };
-    let next_artifact_id = transaction
-        .coverage_gap_artifact_ids
-        .first()
-        .cloned()
-        .or_else(|| {
-            matches!(
-                transaction.state,
-                SccmClientExtendedState::BlockedOrDeferred
-                    | SccmClientExtendedState::Contradictory
-                    | SccmClientExtendedState::InsufficientEvidence
-            )
-            .then(|| workflow_artifact_id(transaction.workflow).to_owned())
-        });
+    let source_basename = transaction.source_basename.as_str();
+    let next_artifact = Some(SccmClientExtendedArtifactRequest {
+        logical_artifact_id: workflow_artifact_id(transaction.workflow).to_owned(),
+        source_basename: source_basename.to_owned(),
+        reason: format!(
+            "Inspect the same exact {} key in this admitted {} source.",
+            workflow_name(transaction.workflow),
+            workflow_name(transaction.workflow)
+        ),
+    });
     Some(SccmClientExtendedFinding {
         finding_id: format!("finding:client-extended:{}", transaction.transaction_id),
         subject_id: transaction.transaction_id.clone(),
@@ -633,6 +710,7 @@ fn finding_for(transaction: &SccmClientExtendedTransaction) -> Option<SccmClient
             | SccmClientExtendedState::InsufficientEvidence => Severity::Warning,
             SccmClientExtendedState::InProgress
             | SccmClientExtendedState::Succeeded
+            | SccmClientExtendedState::EvaluatedCompliant
             | SccmClientExtendedState::Remediated
             | SccmClientExtendedState::Recovered => Severity::Info,
         },
@@ -640,7 +718,7 @@ fn finding_for(transaction: &SccmClientExtendedTransaction) -> Option<SccmClient
         phase: transaction.phase,
         confidence: SccmKeyConfidence::Low,
         keys: transaction.keys.clone(),
-        next_artifact_id,
+        next_artifact,
         evidence: transaction.evidence.clone(),
     })
 }
@@ -650,10 +728,30 @@ fn tuple_discriminator(workflow: SccmClientExtendedWorkflow, tuple: &str) -> Str
     hasher.update(workflow_name(workflow).as_bytes());
     hasher.update([0]);
     hasher.update(tuple.as_bytes());
-    hasher.finalize()[..8]
+    hasher
+        .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn logical_artifact_for_basename(source_basename: &str) -> &'static str {
+    match canonical_family_basename(source_basename).as_ref() {
+        "InventoryAgent.log" | "InventoryProvider.log" | "InventoryAgentProvider.log" => {
+            "client-inventory"
+        }
+        "CIAgent.log" | "StateMessage.log" => "client-policy-state",
+        "CITaskMgr.log" | "DCMAgent.log" | "DCMReporting.log" => "client-compliance",
+        "SWMTRReportGen.log" => "client-metering",
+        _ => unreachable!("extended analysis only calls this for admitted source families"),
+    }
+}
+
+fn canonical_family_basename(basename: &str) -> Cow<'_, str> {
+    basename.strip_suffix(".lo_").map_or_else(
+        || Cow::Borrowed(basename),
+        |stem| Cow::Owned(format!("{stem}.log")),
+    )
 }
 
 fn workflow_artifact_id(workflow: SccmClientExtendedWorkflow) -> &'static str {
@@ -765,11 +863,18 @@ fn parse_disposition(value: &str) -> Disposition {
     }
 }
 
-fn field(message: &str, label: &str) -> Option<String> {
-    message.split_whitespace().find_map(|token| {
-        let (key, value) = token.split_once('=')?;
-        key.eq_ignore_ascii_case(label).then(|| value.to_owned())
-    })
+fn parse_unique_fields(message: &str) -> Result<BTreeMap<String, String>, ()> {
+    let mut fields = BTreeMap::new();
+    for token in message.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
+            continue;
+        };
+        let key = key.to_ascii_lowercase();
+        if fields.insert(key, value.to_owned()).is_some() {
+            return Err(());
+        }
+    }
+    Ok(fields)
 }
 
 fn profile_id(_workflow: SccmClientExtendedWorkflow) -> &'static str {
@@ -786,14 +891,14 @@ fn workflow_name(workflow: SccmClientExtendedWorkflow) -> &'static str {
 
 fn observe(
     observations: &mut Vec<SccmClientExtendedObservation>,
-    workflow: SccmClientExtendedWorkflow,
+    context: &ArtifactContext,
     evidence: &SccmEvidence,
     reason: &str,
 ) {
     observations.push(SccmClientExtendedObservation {
-        workflow,
+        workflow: context.workflow,
         reason: reason.to_owned(),
-        artifact_ids: vec![evidence.reference.artifact_id.clone()],
+        sources: vec![context.source.clone()],
         evidence: vec![evidence.reference.clone()],
     });
 }

@@ -1,8 +1,12 @@
 # SCCM client inventory, compliance, and metering preparation corpus
 
 This issue-#325 corpus is synthetic, sanitized, deterministic, and
-`proposedPending318And319`. It is test preparation only: no fixture claims live
-Windows acceptance or production source-profile support.
+`proposedPending318And319`. The exported production analyzer exercises every
+admissible scenario through sealed intake. Its explicit test adapter maps only
+the reviewed `5.00.TEST.325` fixture version to the experimental production
+profile and records the fixture-to-admitted artifact identity map used by exact
+assertions. Unknown profiles and invalid timestamps are rejected rather than
+rewritten as coverage. No fixture claims live Windows acceptance.
 
 The three top-level directories are independent workflow families:
 
@@ -44,4 +48,6 @@ Validation:
 ```bash
 cargo test --locked -p cmtraceopen-parser \
   --test sccm_client_inventory_compliance_metering_fixture_contract
+cargo test --locked -p cmtraceopen-parser \
+  --test sccm_client_inventory
 ```

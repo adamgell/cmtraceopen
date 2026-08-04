@@ -45,11 +45,14 @@ pub(crate) const MAX_SCCM_CLIENT_ADMISSION_TOTAL_PAYLOAD_BYTES: usize = 16 * 102
 pub(crate) const MAX_SCCM_CLIENT_ADMISSION_LOGICAL_RECORDS: usize = 4_096;
 /// Maximum projected evidence bytes retained for one admitted client bundle.
 pub(crate) const MAX_SCCM_CLIENT_ADMISSION_RETAINED_EVIDENCE_BYTES: usize = 3 * 1024 * 1024;
-/// Maximum bytes streamed into a deterministic client evidence integrity seal.
-/// This is an independent serialization-work cap: JSON escaping may reject a
-/// retained-memory-bounded bundle once its escaped serialization exceeds this
-/// separate hashing-work bound.
+/// Maximum bytes streamed through the evidence/profile projection of the
+/// deterministic client evidence integrity seal.
 pub(crate) const MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES: usize = 4 * 1024 * 1024;
+/// Independent bound for the compact source-authority projection. Together
+/// these two explicit sub-bounds cap aggregate integrity hashing work.
+pub(crate) const MAX_SCCM_CLIENT_ADMISSION_SOURCE_SEAL_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_SCCM_CLIENT_ADMISSION_AGGREGATE_SEAL_BYTES: usize =
+    MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES + MAX_SCCM_CLIENT_ADMISSION_SOURCE_SEAL_BYTES;
 
 /// Raw, already-captured bytes offered to the one-shot client evidence
 /// admission boundary. This is an input only: the successful capability does
@@ -101,6 +104,7 @@ pub(crate) struct SccmClientAdmittedSourceArtifact {
     pub(crate) rotation: SccmRotation,
     pub(crate) coverage: SccmCoverageState,
     pub(crate) fragment_complete: Option<bool>,
+    pub(crate) physical: bool,
 }
 
 /// Artifact-scoped key-extraction results selected only from sealed client
@@ -265,6 +269,16 @@ impl SccmClientAdmittedEvidence {
     }
 
     #[cfg(test)]
+    pub(crate) fn test_only_mutate_first_source_authority(&mut self) {
+        let source = self
+            .source_artifacts
+            .values_mut()
+            .next()
+            .expect("test admission has one source authority");
+        source.physical = !source.physical;
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_only_duplicate_first_evidence(&mut self) {
         self.evidence.push(self.evidence[0].clone());
     }
@@ -384,7 +398,20 @@ pub fn admit_client_evidence(
                 rotation: fragment.rotation.clone(),
                 coverage: fragment.coverage.clone(),
                 fragment_complete: fragment.fragment_complete,
+                physical: fragment.relative_path.is_some(),
             });
+    }
+    for gap in &canonical.capture_gaps {
+        source_artifacts.insert(
+            gap.artifact_id.clone(),
+            SccmClientAdmittedSourceArtifact {
+                basename: gap.basename.clone(),
+                rotation: gap.rotation.clone(),
+                coverage: gap.coverage.clone(),
+                fragment_complete: Some(false),
+                physical: false,
+            },
+        );
     }
     let mut source_basename_by_artifact = BTreeMap::new();
     let mut unavailable_source_basenames = canonical
@@ -816,6 +843,10 @@ fn compute_integrity_seal(
     evidence: &[SccmEvidence],
     authority: IntegrityAuthority<'_>,
 ) -> Result<String, SccmClientEvidenceAdmissionError> {
+    debug_assert_eq!(
+        MAX_SCCM_CLIENT_ADMISSION_AGGREGATE_SEAL_BYTES,
+        MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES + MAX_SCCM_CLIENT_ADMISSION_SOURCE_SEAL_BYTES
+    );
     // Many rotations legitimately select the same profile. Seal the complete
     // profile once and bind each artifact to its deterministic index so the
     // intake artifact ceiling does not multiply identical profile metadata
@@ -840,7 +871,8 @@ fn compute_integrity_seal(
 
     // The complete source projection remains integrity-bound without copying
     // repeated basenames and enum labels into the already bounded outer seal.
-    let mut source_writer = BoundedIntegrityWriter::new(MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES);
+    let mut source_writer =
+        BoundedIntegrityWriter::new(MAX_SCCM_CLIENT_ADMISSION_SOURCE_SEAL_BYTES);
     let serialized_sources = serde_json::to_writer(&mut source_writer, authority.source_artifacts);
     if serialized_sources.is_err() {
         return Err(if source_writer.limit_exceeded {

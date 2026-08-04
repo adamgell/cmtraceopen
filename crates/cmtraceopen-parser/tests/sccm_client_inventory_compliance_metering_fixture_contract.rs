@@ -27,8 +27,9 @@ const COMPLIANCE_SCENARIOS: [&str; 8] = [
     "terminal-failures",
 ];
 
-const METERING_SCENARIOS: [&str; 6] = [
+const METERING_SCENARIOS: [&str; 7] = [
     "coverage-states",
+    "deferred",
     "recovery-contradictory",
     "rotation-boundary",
     "same-minute-collision",
@@ -36,7 +37,7 @@ const METERING_SCENARIOS: [&str; 6] = [
     "terminal-failures",
 ];
 
-const DOCUMENTED_CORPUS_DIGEST: &str = "26c8cf8aee0741a2";
+const DOCUMENTED_CORPUS_DIGEST: &str = "76504021b1fb7e87";
 
 #[derive(Debug, PartialEq, Eq)]
 struct CorpusInventory {
@@ -142,7 +143,7 @@ fn corpus_inventory() -> CorpusInventory {
     digest_rows.sort();
 
     CorpusInventory {
-        scenarios: 20,
+        scenarios: 21,
         artifacts,
         evidence_files,
         evidence_bytes,
@@ -323,7 +324,7 @@ fn validate_cited_record_semantics(
     }
     if !matches!(
         disposition.as_str(),
-        "Succeeded" | "Failed" | "Progress" | "Compliant" | "NonCompliant"
+        "Succeeded" | "Failed" | "Progress" | "Pending" | "Deferred" | "Compliant" | "NonCompliant"
     ) {
         return Err(format!(
             "{context} has unadmitted Disposition={disposition}"
@@ -424,6 +425,7 @@ fn required_scenario_semantics(
         ]),
         ("compliance", "coverage-states" | "malformed-unknown-profile-invalid-offset") => Ok(&[]),
         ("metering", "success") => Ok(&["Report|succeeded|success"]),
+        ("metering", "deferred") => Ok(&["Report|blockedOrDeferred|blockedOrDeferred"]),
         ("metering", "terminal-failures") => Ok(&[
             "Collect|failed|confirmedFailure",
             "Aggregate|failed|confirmedFailure",
@@ -843,7 +845,7 @@ fn expected_next_artifact(
     phase: &str,
     classification: &str,
 ) -> Result<Option<Value>, String> {
-    if classification != "confirmedFailure" {
+    if !matches!(classification, "confirmedFailure" | "blockedOrDeferred") {
         return Ok(None);
     }
 
@@ -2127,6 +2129,16 @@ fn validate_contract(
                     ));
                 }
             }
+            "blockedOrDeferred" => {
+                if state != "blockedOrDeferred"
+                    || confidence != "low"
+                    || !(has_phase_record("Pending", false) || has_phase_record("Deferred", false))
+                {
+                    return Err(format!(
+                        "{transaction_id} blocked/deferred state lacks an explicit non-terminal pending or deferred record"
+                    ));
+                }
+            }
             other => {
                 return Err(format!(
                     "{transaction_id} has unsupported preparation classification {other}"
@@ -2259,15 +2271,15 @@ fn corpus_inventory_is_deterministic_and_documented() {
     assert_eq!(
         corpus_inventory(),
         CorpusInventory {
-            scenarios: 20,
-            artifacts: 54,
-            evidence_files: 42,
-            evidence_bytes: 16_814,
+            scenarios: 21,
+            artifacts: 55,
+            evidence_files: 43,
+            evidence_bytes: 17_136,
             capture_states: BTreeMap::from([
                 ("absent".to_owned(), 3),
                 ("accessDenied".to_owned(), 3),
                 ("capped".to_owned(), 3),
-                ("captured".to_owned(), 35),
+                ("captured".to_owned(), 36),
                 ("parseFailed".to_owned(), 4),
                 ("skipped".to_owned(), 3),
                 ("unsupported".to_owned(), 3),

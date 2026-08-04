@@ -19,8 +19,9 @@ pub use admission::{
 };
 pub use intake::*;
 pub use inventory::{
-    analyze_client_extended, SccmClientExtendedAnalysis, SccmClientExtendedCoverageGap,
-    SccmClientExtendedFinding, SccmClientExtendedObservation, SccmClientExtendedPhase,
-    SccmClientExtendedState, SccmClientExtendedTransaction, SccmClientExtendedWorkflow,
+    analyze_client_extended, SccmClientExtendedAnalysis, SccmClientExtendedArtifactRequest,
+    SccmClientExtendedCoverage, SccmClientExtendedFinding, SccmClientExtendedObservation,
+    SccmClientExtendedPhase, SccmClientExtendedSourceCitation, SccmClientExtendedState,
+    SccmClientExtendedTransaction, SccmClientExtendedWorkflow,
 };
 pub use updates::*;

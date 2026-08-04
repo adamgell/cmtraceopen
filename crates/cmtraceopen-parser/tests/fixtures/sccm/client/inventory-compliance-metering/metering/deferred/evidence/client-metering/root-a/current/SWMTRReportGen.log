@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE Family=metering MeteringCycleId=METER-CYCLE-040 RuleId=RULE-040 ReportId=METER-REPORT-040 ResourceHandle=safe:resource:metering-040 Phase=Report Disposition=Pending Terminal=false]LOG]!><time="03:40:00.000+000" date="7-30-2026" component="SWMTRReportGen" context="" type="1" thread="325" file="">

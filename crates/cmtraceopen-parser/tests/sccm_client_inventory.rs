@@ -1,14 +1,12 @@
-use cmtraceopen_parser::models::log_entry::Severity;
 use cmtraceopen_parser::sccm::client::{
     admit_client_evidence, analyze_client_extended, assess_client_intake,
     SccmClientCapturedPayload, SccmClientExtendedState, SccmClientExtendedWorkflow,
     SccmClientIntakeArtifact, SccmClientIntakeBundle,
 };
-use cmtraceopen_parser::sccm::{
-    SccmArtifact, SccmCoverageState, SccmFindingClass, SccmKeyConfidence, SccmRole, SccmRotation,
-};
+use cmtraceopen_parser::sccm::{SccmArtifact, SccmCoverageState, SccmRole, SccmRotation};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -119,22 +117,28 @@ fn corpus_scenarios() -> Vec<(String, PathBuf)> {
     scenarios
 }
 
-fn corpus_admitted(
-    scenario_dir: &Path,
-) -> Result<cmtraceopen_parser::sccm::client::SccmClientAdmittedEvidence, String> {
+struct CorpusAdmission {
+    admitted: cmtraceopen_parser::sccm::client::SccmClientAdmittedEvidence,
+    artifact_ids: BTreeMap<String, String>,
+    logical_artifact_ids: BTreeMap<String, String>,
+}
+
+fn corpus_admitted(scenario_dir: &Path) -> Result<CorpusAdmission, String> {
     let manifest: serde_json::Value = serde_json::from_slice(
         &fs::read(scenario_dir.join("manifest.json")).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
     let mut artifacts = Vec::new();
     let mut payloads = Vec::new();
+    let mut artifact_ids = BTreeMap::new();
+    let mut logical_artifact_ids = BTreeMap::new();
     for (index, source) in manifest["artifacts"]
         .as_array()
         .ok_or("manifest artifacts missing")?
         .iter()
         .enumerate()
     {
-        let mut coverage = match source["captureState"].as_str().ok_or("capture state")? {
+        let coverage = match source["captureState"].as_str().ok_or("capture state")? {
             "captured" => SccmCoverageState::Captured,
             "absent" => SccmCoverageState::Absent,
             "accessDenied" => SccmCoverageState::AccessDenied,
@@ -171,16 +175,9 @@ fn corpus_admitted(
             .unwrap_or(false);
         let source_version = source["sourceVersion"].as_str();
         let preparation_artifact_id = source["artifactId"].as_str().unwrap_or_default();
-        // The preparation corpus predates sealed admission. Bridge its reviewed
-        // synthetic version to the current experimental profile and keep the
-        // explicitly unknown/invalid-time controls as non-admitted coverage.
-        if coverage == SccmCoverageState::Captured
-            && (source_version == Some("9.99.UNKNOWN")
-                || preparation_artifact_id.ends_with("-invalid-offset"))
-        {
-            coverage = SccmCoverageState::ParseFailed;
-        }
         let artifact_id = format!("fixture-update-numbered-{:02}", index + 1);
+        artifact_ids.insert(preparation_artifact_id.to_owned(), artifact_id.clone());
+        logical_artifact_ids.insert(preparation_artifact_id.to_owned(), group.to_owned());
         let payload_bytes = (coverage == SccmCoverageState::Captured && fragment_complete)
             .then(|| {
                 let relative_path = source["relativePath"]
@@ -217,7 +214,13 @@ fn corpus_admitted(
                 original_path: None,
                 host: None,
                 role: SccmRole::Client,
-                configmgr_version: source_version.map(|_| "5.00.9128.1000".to_owned()),
+                configmgr_version: source_version.map(|version| {
+                    if version == "5.00.TEST.325" {
+                        "5.00.9128.1000".to_owned()
+                    } else {
+                        version.to_owned()
+                    }
+                }),
                 collected_at_utc: source["capturedUtc"].as_str().map(str::to_owned),
                 rotation,
                 coverage,
@@ -256,7 +259,13 @@ fn corpus_admitted(
         .map_err(|error| format!("{}: {error}", artifact.artifact.artifact_id))?;
     }
     let assessment = assess_client_intake(&bundle).map_err(|error| error.to_string())?;
-    admit_client_evidence(&bundle, &assessment, &payloads).map_err(|error| error.to_string())
+    let admitted = admit_client_evidence(&bundle, &assessment, &payloads)
+        .map_err(|error| error.to_string())?;
+    Ok(CorpusAdmission {
+        admitted,
+        artifact_ids,
+        logical_artifact_ids,
+    })
 }
 
 #[test]
@@ -367,22 +376,35 @@ fn keeps_missing_sources_and_keys_as_explicit_gaps() {
 
     let result = analyze_client_extended(&evidence).expect("extended analysis");
     assert!(result.transactions.is_empty());
-    assert_eq!(result.coverage.len(), 4);
+    assert_eq!(result.coverage.len(), 2);
     assert_eq!(
         result
             .coverage
             .iter()
-            .find(|coverage| coverage.workflow == SccmClientExtendedWorkflow::Compliance)
+            .find(|coverage| coverage.source.artifact_id == "fixture-absent")
             .expect("compliance coverage")
-            .state,
+            .source
+            .coverage,
         SccmCoverageState::Absent
     );
     assert_eq!(result.source_local_observations.len(), 2);
     assert!(result.source_local_observations.iter().any(|observation| {
-        observation.artifact_ids == ["fixture-absent"] && observation.evidence.is_empty()
+        observation
+            .sources
+            .iter()
+            .map(|source| source.artifact_id.as_str())
+            .collect::<Vec<_>>()
+            == ["fixture-absent"]
+            && observation.evidence.is_empty()
     }));
     assert!(result.source_local_observations.iter().any(|observation| {
-        observation.artifact_ids == ["fixture-agent-a"] && observation.evidence.len() == 1
+        observation
+            .sources
+            .iter()
+            .map(|source| source.artifact_id.as_str())
+            .collect::<Vec<_>>()
+            == ["fixture-agent-a"]
+            && observation.evidence.len() == 1
     }));
 }
 
@@ -406,7 +428,7 @@ fn all_committed_extended_scenarios_execute_the_exported_analyzer() {
     let scenarios = corpus_scenarios();
     assert_eq!(
         scenarios.len(),
-        20,
+        21,
         "the complete committed corpus executes"
     );
 
@@ -415,200 +437,272 @@ fn all_committed_extended_scenarios_execute_the_exported_analyzer() {
             &fs::read(scenario_dir.join("expected.json")).expect("scenario expected contract"),
         )
         .expect("valid expected contract");
-        let admitted = corpus_admitted(&scenario_dir)
+        if scenario == "compliance/malformed-unknown-profile-invalid-offset" {
+            assert!(
+                corpus_admitted(&scenario_dir).is_err(),
+                "{scenario}: invalid time and unknown profile must be rejected, not rewritten"
+            );
+            continue;
+        }
+        let corpus = corpus_admitted(&scenario_dir)
             .unwrap_or_else(|error| panic!("{scenario}: sealed corpus admission: {error}"));
-        let analysis = analyze_client_extended(&admitted)
+        let analysis = analyze_client_extended(&corpus.admitted)
             .unwrap_or_else(|error| panic!("{scenario}: exported analyzer: {error}"));
         let actual = serde_json::to_value(&analysis).expect("serializable production analysis");
         let repeated = serde_json::to_value(
-            analyze_client_extended(&admitted).expect("repeat production analysis"),
+            analyze_client_extended(&corpus.admitted).expect("repeat production analysis"),
         )
         .expect("serializable repeated analysis");
         assert_eq!(actual, repeated, "{scenario}: full output is deterministic");
         assert_eq!(actual["schemaVersion"], 1, "{scenario}: schema");
+        let expected_transactions = expected["transactions"]
+            .as_array()
+            .expect("expected transactions");
         assert_eq!(
-            actual["transactions"].as_array().map(Vec::len),
-            expected["transactions"].as_array().map(Vec::len),
+            analysis.transactions.len(),
+            expected_transactions.len(),
             "{scenario}: transaction count"
         );
-        let mut actual_outcomes = analysis
-            .transactions
-            .iter()
-            .map(|transaction| {
-                (
-                    format!("{:?}", transaction.workflow).to_ascii_lowercase(),
-                    format!("{:?}", transaction.phase).to_ascii_lowercase(),
-                    format!("{:?}", transaction.state).to_ascii_lowercase(),
-                )
-            })
-            .collect::<Vec<_>>();
-        actual_outcomes.sort();
-        let mut expected_outcomes = expected["transactions"]
-            .as_array()
-            .expect("expected transactions")
-            .iter()
-            .map(|transaction| {
-                (
-                    transaction["workflow"]
-                        .as_str()
-                        .expect("workflow")
-                        .to_ascii_lowercase(),
-                    transaction["phase"]
-                        .as_str()
-                        .expect("phase")
-                        .replace('-', "")
-                        .to_ascii_lowercase(),
-                    transaction["state"]
-                        .as_str()
-                        .expect("state")
-                        .replace('-', "")
-                        .to_ascii_lowercase(),
-                )
-            })
-            .collect::<Vec<_>>();
-        if analysis
-            .transactions
-            .iter()
-            .any(|transaction| !transaction.coverage_gap_artifact_ids.is_empty())
-        {
-            for (_, _, state) in &mut expected_outcomes {
-                *state = "insufficientevidence".to_owned();
-            }
-        }
-        expected_outcomes.sort();
-        assert_eq!(actual_outcomes, expected_outcomes, "{scenario}: outcomes");
 
-        for transaction in &analysis.transactions {
-            assert!(transaction.transaction_id.starts_with("client-extended:"));
+        let mut transaction_ids = std::collections::BTreeSet::new();
+        for expected_transaction in expected_transactions {
+            let workflow = expected_transaction["workflow"].as_str().expect("workflow");
+            let key_labels: &[&str] = match workflow {
+                "inventory" => &["InventoryCycleId", "ResourceHandle", "ReportId"],
+                "compliance" => &["CiId", "BaselineId", "StateId", "ResourceHandle"],
+                "metering" => &["MeteringCycleId", "RuleId", "ReportId", "ResourceHandle"],
+                other => panic!("{scenario}: unknown workflow {other}"),
+            };
+            let expected_values = key_labels
+                .iter()
+                .map(|label| {
+                    expected_transaction["key"][label]
+                        .as_str()
+                        .expect("key value")
+                })
+                .collect::<Vec<_>>();
+            let transaction = analysis
+                .transactions
+                .iter()
+                .find(|transaction| {
+                    transaction
+                        .keys
+                        .iter()
+                        .map(|key| key.normalized.as_str())
+                        .collect::<Vec<_>>()
+                        == expected_values
+                })
+                .unwrap_or_else(|| panic!("{scenario}: exact expected key tuple missing"));
+            let serialized = serde_json::to_value(transaction).expect("serialized transaction");
+            assert_eq!(
+                serialized["workflow"].as_str(),
+                Some(workflow),
+                "{scenario}: workflow"
+            );
+            assert_eq!(
+                serialized["phase"].as_str().map(str::to_ascii_lowercase),
+                expected_transaction["phase"]
+                    .as_str()
+                    .map(str::to_ascii_lowercase),
+                "{scenario}: phase"
+            );
+            assert_eq!(
+                serialized["state"].as_str().map(str::to_ascii_lowercase),
+                expected_transaction["state"]
+                    .as_str()
+                    .map(str::to_ascii_lowercase),
+                "{scenario}: state"
+            );
             assert_eq!(
                 transaction.profile_id,
                 "sccm-keys-5.00.9128-experimental-v1"
             );
-            assert!(!transaction.keys.is_empty(), "{scenario}: exact key tuple");
-            assert!(
-                !transaction.evidence.is_empty(),
-                "{scenario}: cited evidence"
+            let discriminator = transaction
+                .transaction_id
+                .rsplit(':')
+                .next()
+                .expect("digest");
+            assert_eq!(
+                discriminator.len(),
+                64,
+                "{scenario}: full SHA-256 discriminator"
             );
-            if !transaction.coverage_gap_artifact_ids.is_empty() {
-                assert_eq!(
-                    transaction.state,
-                    SccmClientExtendedState::InsufficientEvidence
-                );
-            }
-            let expected_gap_ids = analysis
-                .coverage
+            assert!(discriminator.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            assert!(
+                transaction_ids.insert(transaction.transaction_id.clone()),
+                "{scenario}: unique transaction id"
+            );
+
+            let expected_evidence = expected_transaction["evidence"]
+                .as_array()
+                .expect("expected evidence")
                 .iter()
-                .filter(|gap| {
-                    gap.workflow == transaction.workflow && gap.state != SccmCoverageState::Captured
+                .map(|reference| {
+                    (
+                        corpus.artifact_ids[reference["artifactId"].as_str().expect("artifact id")]
+                            .as_str(),
+                        Some(reference["startLine"].as_u64().expect("start line")),
+                        Some(reference["endLine"].as_u64().expect("end line")),
+                    )
                 })
-                .map(|gap| gap.logical_artifact_id.clone())
+                .collect::<Vec<_>>();
+            let actual_evidence = transaction
+                .evidence
+                .iter()
+                .map(|reference| {
+                    (
+                        reference.artifact_id.as_str(),
+                        reference.line_start.map(u64::from),
+                        reference.line_end.map(u64::from),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_evidence, expected_evidence,
+                "{scenario}: exact evidence citations"
+            );
+
+            let expected_gap_ids = expected_transaction["coverageGapArtifactIds"]
+                .as_array()
+                .expect("expected gaps")
+                .iter()
+                .map(|id| corpus.artifact_ids[id.as_str().expect("gap id")].clone())
                 .collect::<Vec<_>>();
             assert_eq!(
                 transaction.coverage_gap_artifact_ids, expected_gap_ids,
-                "{scenario}: exact workflow coverage gaps"
+                "{scenario}: exact phase-source coverage gaps"
             );
-        }
-        if expected["sourceLocalObservations"]
-            .as_array()
-            .is_some_and(|observations| !observations.is_empty())
-        {
-            assert!(
-                !analysis.source_local_observations.is_empty(),
-                "{scenario}: rotation, malformed, and coverage-only scenarios stay visible"
-            );
-        }
-        for observation in &analysis.source_local_observations {
-            assert!(
-                !observation.artifact_ids.is_empty(),
-                "{scenario}: source-local artifact citation"
-            );
-            assert!(observation
-                .evidence
-                .iter()
-                .all(|reference| observation.artifact_ids.contains(&reference.artifact_id)));
-        }
 
-        let expected_finding_count = analysis
-            .transactions
-            .iter()
-            .filter(|transaction| {
-                !matches!(
-                    transaction.state,
-                    SccmClientExtendedState::InProgress
-                        | SccmClientExtendedState::Succeeded
-                        | SccmClientExtendedState::Remediated
-                        | SccmClientExtendedState::Recovered
+            let abnormal = matches!(
+                expected_transaction["state"].as_str(),
+                Some(
+                    "failed"
+                        | "evaluatedNonCompliant"
+                        | "blockedOrDeferred"
+                        | "contradictory"
+                        | "insufficientEvidence"
                 )
-            })
-            .count();
-        assert_eq!(
-            analysis.findings.len(),
-            expected_finding_count,
-            "{scenario}: one finding per material abnormal transaction"
-        );
-        for finding in &analysis.findings {
-            assert_eq!(finding.role, SccmRole::Client);
-            assert!(!finding.keys.is_empty(), "{scenario}: finding keys");
-            assert!(!finding.evidence.is_empty(), "{scenario}: finding evidence");
-            let transaction = analysis
-                .transactions
-                .iter()
-                .find(|transaction| transaction.transaction_id == finding.subject_id)
-                .expect("finding subject transaction");
-            assert_eq!(
-                finding.finding_id,
-                format!("finding:client-extended:{}", transaction.transaction_id)
             );
-            assert_eq!(finding.workflow, transaction.workflow);
-            assert_eq!(finding.phase, transaction.phase);
-            assert_eq!(finding.state, transaction.state);
-            assert_eq!(finding.keys, transaction.keys);
-            assert_eq!(finding.evidence, transaction.evidence);
-            assert_eq!(finding.confidence, SccmKeyConfidence::Low);
-            let (expected_class, expected_severity) = match transaction.state {
-                SccmClientExtendedState::Failed => (SccmFindingClass::Symptom, Severity::Error),
-                SccmClientExtendedState::EvaluatedNonCompliant => {
-                    (SccmFindingClass::Symptom, Severity::Warning)
+            let finding = analysis
+                .findings
+                .iter()
+                .find(|finding| finding.subject_id == transaction.transaction_id);
+            assert_eq!(
+                finding.is_some(),
+                abnormal,
+                "{scenario}: finding presence follows committed expected state"
+            );
+            if let Some(finding) = finding {
+                let request = finding
+                    .next_artifact
+                    .as_ref()
+                    .expect("abnormal outcome has exact next artifact");
+                assert_eq!(request.source_basename, transaction.source_basename);
+                assert!(!request.logical_artifact_id.is_empty());
+                assert!(!request.reason.is_empty());
+                if expected_transaction["nextArtifact"].is_object() {
+                    assert_eq!(
+                        request.logical_artifact_id,
+                        expected_transaction["nextArtifact"]["logicalArtifactId"]
+                            .as_str()
+                            .unwrap()
+                    );
+                    assert_eq!(
+                        request.source_basename,
+                        expected_transaction["nextArtifact"]["sourceBasename"]
+                            .as_str()
+                            .unwrap()
+                    );
+                    assert_eq!(
+                        request.reason,
+                        expected_transaction["nextArtifact"]["reason"]
+                            .as_str()
+                            .unwrap()
+                    );
                 }
-                SccmClientExtendedState::BlockedOrDeferred => {
-                    (SccmFindingClass::BlockedOrDeferred, Severity::Warning)
-                }
-                SccmClientExtendedState::Contradictory
-                | SccmClientExtendedState::InsufficientEvidence => {
-                    (SccmFindingClass::InsufficientEvidence, Severity::Warning)
-                }
-                _ => panic!("{scenario}: non-material transaction emitted a finding"),
-            };
-            assert_eq!(finding.class, expected_class);
-            assert_eq!(finding.severity, expected_severity);
-            if finding.class == cmtraceopen_parser::sccm::SccmFindingClass::InsufficientEvidence
-                || finding.class == cmtraceopen_parser::sccm::SccmFindingClass::BlockedOrDeferred
-            {
-                assert!(
-                    finding.next_artifact_id.is_some(),
-                    "{scenario}: next source"
-                );
             }
         }
+
+        let mut expected_coverage = expected["coverage"]
+            .as_array()
+            .expect("expected coverage")
+            .iter()
+            .map(|item| {
+                (
+                    corpus.artifact_ids[item["artifactId"].as_str().unwrap()].clone(),
+                    corpus.logical_artifact_ids[item["artifactId"].as_str().unwrap()].clone(),
+                    item["state"].as_str().unwrap().to_ascii_lowercase(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut actual_coverage = analysis
+            .coverage
+            .iter()
+            .map(|item| {
+                (
+                    item.source.artifact_id.clone(),
+                    item.logical_artifact_id.clone(),
+                    if item.source.coverage == SccmCoverageState::Captured
+                        && !item.source.fragment_complete
+                    {
+                        "partial".to_owned()
+                    } else {
+                        serde_json::to_value(item.source.coverage.clone())
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_ascii_lowercase()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        expected_coverage.sort();
+        actual_coverage.sort();
         assert_eq!(
-            analysis.coverage.len(),
-            4,
-            "{scenario}: all workflow coverage"
+            actual_coverage, expected_coverage,
+            "{scenario}: exact artifact-level coverage"
         );
+
+        let mut expected_observation_ids = expected["sourceLocalObservations"]
+            .as_array()
+            .expect("expected observations")
+            .iter()
+            .flat_map(|observation| {
+                observation["artifactIds"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|id| corpus.artifact_ids[id.as_str().unwrap()].clone())
+            })
+            .collect::<Vec<_>>();
+        let mut actual_observation_ids = analysis
+            .source_local_observations
+            .iter()
+            .flat_map(|observation| {
+                observation
+                    .sources
+                    .iter()
+                    .map(|source| source.artifact_id.clone())
+            })
+            .collect::<Vec<_>>();
+        expected_observation_ids.sort();
+        expected_observation_ids.dedup();
+        actual_observation_ids.sort();
+        actual_observation_ids.dedup();
         assert_eq!(
-            analysis
-                .coverage
+            actual_observation_ids, expected_observation_ids,
+            "{scenario}: source-local observations cite exact sources"
+        );
+        for observation in &analysis.source_local_observations {
+            assert!(
+                !observation.sources.is_empty(),
+                "{scenario}: source citation"
+            );
+            assert!(observation.evidence.iter().all(|reference| observation
+                .sources
                 .iter()
-                .map(|gap| gap.logical_artifact_id.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "client-inventory",
-                "client-compliance",
-                "client-policy-state",
-                "client-metering",
-            ],
-            "{scenario}: fixed dependency coverage contract"
-        );
+                .any(|source| source.artifact_id == reference.artifact_id)));
+        }
         assert_eq!(
             analysis.prohibited_claims,
             [
@@ -618,4 +712,30 @@ fn all_committed_extended_scenarios_execute_the_exported_analyzer() {
             ]
         );
     }
+}
+
+#[test]
+fn duplicate_and_case_variant_semantic_labels_are_rejected_as_ambiguous() {
+    let evidence = admitted(vec![Source {
+        id: "update-a",
+        basename: "InventoryAgent.log",
+        component: "InventoryAgent",
+        coverage: SccmCoverageState::Captured,
+        records: vec![(
+            "05:00:00.000",
+            "InventoryCycleId=INV-DUP-001 inventorycycleid=INV-DUP-002 ResourceHandle=safe:resource:dup ReportId=REPORT-DUP Phase=Collect phase=Report Disposition=Succeeded Terminal=true",
+        )],
+    }]);
+
+    let analysis = analyze_client_extended(&evidence).expect("extended analysis");
+    assert!(analysis.transactions.is_empty());
+    assert!(analysis.findings.is_empty());
+    assert_eq!(analysis.source_local_observations.len(), 1);
+    assert!(analysis.source_local_observations[0]
+        .reason
+        .contains("repeats a field label"));
+    assert_eq!(
+        analysis.source_local_observations[0].sources[0].artifact_id,
+        "fixture-update-a"
+    );
 }
