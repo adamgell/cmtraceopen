@@ -5,8 +5,9 @@ use tauri::Manager;
 
 use crate::error::AppError;
 use crate::sccm::collector::{
-    capture_environment, discover_environment_with, NativeDiscoveryProvider, SccmCaptureResult,
-    SccmCollectorError, SccmDiscoveryProvider, SccmEnvironmentDiscovery,
+    capture_discovered_environment, discover_capture_environment, discover_environment_with,
+    NativeDiscoveryProvider, SccmCaptureResult, SccmCollectorError, SccmDiscoveryProvider,
+    SccmEnvironmentDiscovery,
 };
 
 fn collector_error(error: SccmCollectorError) -> AppError {
@@ -24,6 +25,7 @@ pub(crate) fn capture_with_provider(
     provider: &dyn SccmDiscoveryProvider,
     cache_root: &Path,
 ) -> Result<SccmCaptureResult, AppError> {
+    let environment = discover_capture_environment(provider).map_err(collector_error)?;
     let collection_root = cache_root.join("sccm");
     fs::create_dir_all(&collection_root)
         .map_err(|_| collector_error(SccmCollectorError::DestinationUnavailable))?;
@@ -34,7 +36,7 @@ pub(crate) fn capture_with_provider(
             .map_err(|_| collector_error(SccmCollectorError::DestinationUnavailable))?;
     }
     let bundle_root = collection_root.join(uuid::Uuid::new_v4().to_string());
-    capture_environment(provider, &bundle_root).map_err(collector_error)
+    capture_discovered_environment(environment, &bundle_root).map_err(collector_error)
 }
 
 #[tauri::command]
@@ -138,5 +140,37 @@ mod tests {
         let error = capture_with_provider(&provider, &file_cache).unwrap_err();
         assert_eq!(error.to_string(), "Analysis failed: destinationUnavailable");
         assert!(!error.to_string().contains("private-sentinel"));
+    }
+
+    #[test]
+    fn capture_rejects_supported_environment_without_roles_before_writing() {
+        let cache = tempfile::tempdir().expect("temporary cache");
+        let provider = FakeProvider {
+            environment: PrivateSccmEnvironment {
+                supported: true,
+                ..PrivateSccmEnvironment::default()
+            },
+        };
+
+        let error = capture_with_provider(&provider, cache.path()).unwrap_err();
+        assert_eq!(error.to_string(), "Analysis failed: noRolesDetected");
+        assert!(!cache.path().join("sccm").exists());
+        assert_eq!(fs::read_dir(cache.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn capture_rejects_unsupported_environment_before_writing() {
+        let cache = tempfile::tempdir().expect("temporary cache");
+        let provider = FakeProvider {
+            environment: PrivateSccmEnvironment {
+                supported: false,
+                ..PrivateSccmEnvironment::default()
+            },
+        };
+
+        let error = capture_with_provider(&provider, cache.path()).unwrap_err();
+        assert_eq!(error.to_string(), "Analysis failed: noRolesDetected");
+        assert!(!cache.path().join("sccm").exists());
+        assert_eq!(fs::read_dir(cache.path()).unwrap().count(), 0);
     }
 }

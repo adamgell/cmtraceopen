@@ -24,7 +24,7 @@ use super::client_manifest::{
 use super::discovery::normalized_private_environment;
 use super::server_manifest::{
     server_relative_path, write_and_validate_server_manifest, CapturedServerArtifact,
-    ServerCoverageRecord,
+    ServerCoverageLimit, ServerCoverageRecord,
 };
 use super::{
     role_key, sort_sources, SccmCaptureResult, SccmCollectorError, SccmDiscoveryProvider,
@@ -53,8 +53,28 @@ pub fn capture_environment(
     provider: &dyn SccmDiscoveryProvider,
     bundle_root: &Path,
 ) -> Result<SccmCaptureResult, SccmCollectorError> {
+    let environment = discover_capture_environment(provider)?;
+    capture_discovered_environment(environment, bundle_root)
+}
+
+pub(crate) fn discover_capture_environment(
+    provider: &dyn SccmDiscoveryProvider,
+) -> Result<super::PrivateSccmEnvironment, SccmCollectorError> {
     let environment = normalized_private_environment(provider)
         .map_err(|_| SccmCollectorError::DiscoveryFailed)?;
+    if environment.roles.is_empty() {
+        return Err(SccmCollectorError::NoRolesDetected);
+    }
+    Ok(environment)
+}
+
+pub(crate) fn capture_discovered_environment(
+    environment: super::PrivateSccmEnvironment,
+    bundle_root: &Path,
+) -> Result<SccmCaptureResult, SccmCollectorError> {
+    if environment.roles.is_empty() {
+        return Err(SccmCollectorError::NoRolesDetected);
+    }
     prepare_private_bundle_root(bundle_root)?;
     let captured_at_utc = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mut statuses = Vec::new();
@@ -742,7 +762,8 @@ fn record_expected_coverage(
             root_handle: root_handle.to_owned(),
             basename: expected.basename,
             rotation: SccmRotation::Current,
-            state: server_nonphysical_state(state),
+            state: server_coverage_state(state),
+            collection_limit: None,
         });
     }
 }
@@ -774,7 +795,13 @@ fn record_candidate_gap(
             root_handle: candidate.root_handle.clone(),
             basename: candidate.physical_basename.clone(),
             rotation: candidate.rotation.clone(),
-            state: server_nonphysical_state(state),
+            state: server_coverage_state(state),
+            collection_limit: (state == SccmManifestSourceState::Capped).then_some(
+                ServerCoverageLimit {
+                    byte_limit: MAX_BYTES_PER_SOURCE,
+                    file_limit: MAX_FRAGMENTS_PER_SOURCE,
+                },
+            ),
         });
     }
 }
@@ -786,26 +813,26 @@ fn public_coverage(state: SccmManifestSourceState) -> SccmCoverageState {
         SccmManifestSourceState::AccessDenied => SccmCoverageState::AccessDenied,
         SccmManifestSourceState::Capped => SccmCoverageState::Capped,
         SccmManifestSourceState::Skipped => SccmCoverageState::Skipped,
-        SccmManifestSourceState::ParseFailed => SccmCoverageState::ParseFailed,
-        SccmManifestSourceState::Unsupported
-        | SccmManifestSourceState::UnsafePath
-        | SccmManifestSourceState::FailedUnknownDetail => SccmCoverageState::Unsupported,
-    }
-}
-
-fn server_nonphysical_state(state: SccmManifestSourceState) -> SccmCoverageState {
-    match state {
-        SccmManifestSourceState::Absent => SccmCoverageState::Absent,
-        SccmManifestSourceState::AccessDenied | SccmManifestSourceState::FailedUnknownDetail => {
-            SccmCoverageState::AccessDenied
-        }
-        SccmManifestSourceState::Skipped | SccmManifestSourceState::Capped => {
-            SccmCoverageState::Skipped
+        SccmManifestSourceState::ParseFailed | SccmManifestSourceState::FailedUnknownDetail => {
+            SccmCoverageState::ParseFailed
         }
         SccmManifestSourceState::Unsupported | SccmManifestSourceState::UnsafePath => {
             SccmCoverageState::Unsupported
         }
-        SccmManifestSourceState::Captured | SccmManifestSourceState::ParseFailed => {
+    }
+}
+
+fn server_coverage_state(state: SccmManifestSourceState) -> SccmCoverageState {
+    match state {
+        SccmManifestSourceState::Captured => SccmCoverageState::Captured,
+        SccmManifestSourceState::Absent => SccmCoverageState::Absent,
+        SccmManifestSourceState::AccessDenied => SccmCoverageState::AccessDenied,
+        SccmManifestSourceState::Capped => SccmCoverageState::Capped,
+        SccmManifestSourceState::Skipped => SccmCoverageState::Skipped,
+        SccmManifestSourceState::ParseFailed | SccmManifestSourceState::FailedUnknownDetail => {
+            SccmCoverageState::ParseFailed
+        }
+        SccmManifestSourceState::Unsupported | SccmManifestSourceState::UnsafePath => {
             SccmCoverageState::Unsupported
         }
     }

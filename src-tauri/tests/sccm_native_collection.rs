@@ -9,6 +9,9 @@ use app_lib::sccm::collector::{
 use app_lib::sccm::{
     read_sccm_client_intake_bundle, read_sccm_manifest_or_legacy, SccmCoverageState, SccmRole,
 };
+use cmtraceopen_parser::sccm::server::windows::{
+    normalize_server_bundle, SccmServerArtifactPayload, SccmServerIntakeAssessment,
+};
 
 #[derive(Clone)]
 struct FakeProvider {
@@ -138,6 +141,28 @@ fn discovery_preserves_each_explicit_server_role_fact_without_inference() {
             vec![role]
         );
     }
+}
+
+#[test]
+fn capture_rejects_zero_roles_without_creating_the_bundle() {
+    let bundles = tempfile::tempdir().unwrap();
+    for supported in [true, false] {
+        let provider = FakeProvider {
+            environment: PrivateSccmEnvironment {
+                supported,
+                ..PrivateSccmEnvironment::default()
+            },
+        };
+        let bundle = bundles.path().join(if supported {
+            "supported-no-roles"
+        } else {
+            "unsupported-no-roles"
+        });
+        let error = capture_environment(&provider, &bundle).unwrap_err();
+        assert_eq!(error.code(), "noRolesDetected");
+        assert!(!bundle.exists());
+    }
+    assert_eq!(fs::read_dir(bundles.path()).unwrap().count(), 0);
 }
 
 #[test]
@@ -442,6 +467,62 @@ fn capture_parser_validates_each_declared_server_role_manifest() {
         basis: SccmDiscoveryBasis::Registry,
     });
     capture(&wsus, bundles.path(), "bundle");
+}
+
+#[test]
+fn capture_server_file_cap_reopens_as_capped_with_limits() {
+    let logs = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    fs::write(logs.path().join("Smsprov.log"), b"current").unwrap();
+    fs::write(logs.path().join("Smsprov.lo_"), b"lo").unwrap();
+    for number in 1..=8 {
+        fs::write(
+            logs.path().join(format!("Smsprov.log.{number}")),
+            b"rotation",
+        )
+        .unwrap();
+    }
+    let result = capture(
+        &provider(SccmRole::Provider, [logs.path().to_owned()]),
+        bundles.path(),
+        "bundle",
+    );
+    assert!(result
+        .sources
+        .iter()
+        .any(|source| source.state == SccmCoverageState::Capped));
+
+    let assessment = reopen_server_bundle(&bundles.path().join("bundle"));
+    let capped = assessment
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.state == SccmCoverageState::Capped)
+        .expect("omitted server rotation remains capped");
+    let limit = capped
+        .collection_limit
+        .as_ref()
+        .expect("capped coverage retains its collection limits");
+    assert_eq!(limit.byte_limit, MAX_BYTES_PER_SOURCE);
+    assert_eq!(limit.file_limit, Some(MAX_FRAGMENTS_PER_SOURCE as u64));
+    assert!(limit.limit_applied);
+}
+
+fn reopen_server_bundle(bundle_root: &Path) -> SccmServerIntakeAssessment {
+    let manifest = fs::read_to_string(bundle_root.join("sccm-server-manifest.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    let payloads = value["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|artifact| {
+            let relative = artifact["relativePath"].as_str()?;
+            Some(SccmServerArtifactPayload {
+                manifest_artifact_id: artifact["artifactId"].as_str().unwrap().to_owned(),
+                bytes: fs::read(bundle_root.join(relative)).unwrap(),
+            })
+        })
+        .collect::<Vec<_>>();
+    normalize_server_bundle(&manifest, &payloads).expect("reopened server bundle")
 }
 
 fn walkdir_count_files(root: &Path) -> usize {

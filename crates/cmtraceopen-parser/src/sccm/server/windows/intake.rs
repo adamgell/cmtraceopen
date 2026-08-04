@@ -578,6 +578,8 @@ pub struct SccmServerArtifactAssessment {
     pub content_sha256: Option<String>,
     pub truncated: Option<bool>,
     pub fragment_complete: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collection_limit: Option<SccmServerCollectionLimit>,
     pub capture_provenance: Option<SccmServerCaptureProvenance>,
     pub parser_eligible: bool,
     #[serde(
@@ -635,6 +637,15 @@ pub struct SccmServerCaptureProvenance {
     pub schema_version: u32,
     pub encoding: String,
     pub byte_limit: u64,
+    pub file_limit: Option<u64>,
+    pub limit_applied: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmServerCollectionLimit {
+    pub byte_limit: u64,
+    pub file_limit: Option<u64>,
     pub limit_applied: bool,
 }
 
@@ -948,7 +959,13 @@ fn validate_manifest_bounds(
             return Err(SccmServerIntakeError::ManifestLimitExceeded);
         }
         if let Some(limit) = &artifact.collection_limit {
-            if limit.byte_limit > MAX_SCCM_SERVER_ARTIFACT_BYTES {
+            if limit.byte_limit > MAX_SCCM_SERVER_ARTIFACT_BYTES
+                || limit
+                    .file_limit
+                    .is_some_and(|value| {
+                        value == 0 || value > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS as u64
+                    })
+            {
                 return Err(SccmServerIntakeError::ManifestLimitExceeded);
             }
             declared_bytes = declared_bytes
@@ -1168,7 +1185,7 @@ fn normalize_artifact(
             synthetic_fixture,
             "subject",
         )
-        || ((!retained_unknown || is_physical_state(&artifact.capture_state))
+        || ((!retained_unknown || is_physical_artifact(&artifact))
             && artifact.producer_host_handle.is_none())
         || (retained_unknown
             && !safe_public_basename(&artifact.original_basename, synthetic_fixture))
@@ -1228,7 +1245,7 @@ fn normalize_artifact(
                     true,
                 )
             } else if spec.source_kind == SccmServerSourceKind::ProfileDefined
-                && is_physical_state(&artifact.capture_state)
+                && is_physical_artifact(&artifact)
             {
                 let declared_rotation = parse_declared_rotation(&artifact.rotation)?
                     .ok_or(SccmServerIntakeError::InvalidArtifact)?;
@@ -1243,7 +1260,7 @@ fn normalize_artifact(
                 )
             } else {
                 let declared_rotation = parse_declared_rotation(&artifact.rotation)?;
-                if is_physical_state(&artifact.capture_state) && declared_rotation.is_none() {
+                if is_physical_artifact(&artifact) && declared_rotation.is_none() {
                     return Err(SccmServerIntakeError::InvalidArtifact);
                 }
                 (
@@ -1343,6 +1360,13 @@ fn normalize_artifact(
     )?;
     let (bytes, capture_provenance) =
         validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id)?;
+    let collection_limit = artifact.collection_limit.as_ref().map(|limit| {
+        SccmServerCollectionLimit {
+            byte_limit: limit.byte_limit,
+            file_limit: limit.file_limit,
+            limit_applied: limit.limit_applied,
+        }
+    });
     let content_sha256 = bytes.map(payload_sha256);
     let profile_eligible = source_version
         .as_deref()
@@ -1432,6 +1456,7 @@ fn normalize_artifact(
             content_sha256,
             truncated: artifact.truncated,
             fragment_complete: artifact.fragment_complete,
+            collection_limit,
             capture_provenance,
             parser_eligible,
             extensions,
@@ -2082,7 +2107,7 @@ fn validate_payload_contract<'a>(
     payload_by_id: &'a BTreeMap<&str, &'a [u8]>,
 ) -> Result<(Option<&'a [u8]>, Option<SccmServerCaptureProvenance>), SccmServerIntakeError> {
     let payload = payload_by_id.get(artifact.artifact_id.as_str()).copied();
-    if is_physical_state(&artifact.capture_state) {
+    if is_physical_artifact(artifact) {
         let payload = payload.ok_or(SccmServerIntakeError::MissingPayload)?;
         if relative_path.is_none() {
             return Err(SccmServerIntakeError::InvalidArtifact);
@@ -2126,6 +2151,7 @@ fn validate_payload_contract<'a>(
                 schema_version: 1,
                 encoding: encoding.to_owned(),
                 byte_limit: limit.byte_limit,
+                file_limit: limit.file_limit,
                 limit_applied: limit.limit_applied,
             }),
         ));
@@ -2135,9 +2161,33 @@ fn validate_payload_contract<'a>(
         || relative_path.is_some()
         || artifact.bytes_copied != 0
         || artifact.encoding.is_some()
-        || artifact.collection_limit.is_some()
     {
         return Err(SccmServerIntakeError::UnexpectedPayload);
+    }
+    match artifact.capture_state {
+        SccmCoverageState::Captured => {
+            return Err(SccmServerIntakeError::MissingPayload);
+        }
+        SccmCoverageState::Capped => {
+            let limit = artifact
+                .collection_limit
+                .as_ref()
+                .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+            if !limit.limit_applied || limit.byte_limit == 0 {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+        }
+        SccmCoverageState::ParseFailed => {
+            if artifact.collection_limit.as_ref().is_some_and(|limit| {
+                limit.byte_limit == 0 || limit.limit_applied
+            }) {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+        }
+        _ if artifact.collection_limit.is_some() => {
+            return Err(SccmServerIntakeError::UnexpectedPayload);
+        }
+        _ => {}
     }
     Ok((None, None))
 }
@@ -2184,7 +2234,7 @@ fn validate_relative_path(
     rotation: Option<&SccmRotation>,
     relative_paths: &mut BTreeSet<String>,
 ) -> Result<Option<String>, SccmServerIntakeError> {
-    if !is_physical_state(&artifact.capture_state) {
+    if !is_physical_artifact(artifact) {
         if relative_path.is_some() {
             return Err(SccmServerIntakeError::InvalidArtifact);
         }
@@ -2258,11 +2308,10 @@ fn validate_relative_path(
     Ok(Some(relative_path))
 }
 
-fn is_physical_state(state: &SccmCoverageState) -> bool {
-    matches!(
-        state,
-        SccmCoverageState::Captured | SccmCoverageState::Capped | SccmCoverageState::ParseFailed
-    )
+fn is_physical_artifact(artifact: &RawServerArtifact) -> bool {
+    artifact.relative_path.is_some()
+        || artifact.bytes_copied > 0
+        || artifact.encoding.is_some()
 }
 
 fn safe_encoding(encoding: &str) -> bool {
@@ -2489,7 +2538,7 @@ fn validate_declared_source_tuple(
     }
 
     if synthetic_fixture {
-        let rotation_is_bounded = if is_physical_state(&artifact.capture_state) {
+        let rotation_is_bounded = if is_physical_artifact(artifact) {
             artifact.rotation.kind == "current"
         } else {
             artifact.rotation.kind == "providerDefined"
@@ -3473,6 +3522,7 @@ define_raw_server_wire! {
 define_raw_server_wire! {
     struct RawCollectionLimit {
         "byteLimit" => byte_limit: u64,
+        "fileLimit" => file_limit: Option<u64>,
         "limitApplied" => limit_applied: bool,
     }
 }
@@ -3592,7 +3642,7 @@ mod opaque_extension_boundary_tests {
         );
         assert_eq!(
             RawCollectionLimit::KNOWN_FIELDS,
-            ["byteLimit", "limitApplied"]
+            ["byteLimit", "fileLimit", "limitApplied"]
         );
         assert_eq!(
             RawServerArtifact::KNOWN_FIELDS,
@@ -3760,6 +3810,7 @@ mod opaque_extension_boundary_tests {
             content_sha256: None,
             truncated: None,
             fragment_complete: None,
+            collection_limit: None,
             capture_provenance: None,
             parser_eligible: false,
             extensions: (0..MAX_SCCM_SERVER_OPAQUE_EXTENSIONS)

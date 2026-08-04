@@ -39,6 +39,13 @@ pub(super) struct ServerCoverageRecord {
     pub basename: String,
     pub rotation: SccmRotation,
     pub state: cmtraceopen_parser::sccm::SccmCoverageState,
+    pub collection_limit: Option<ServerCoverageLimit>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ServerCoverageLimit {
+    pub byte_limit: u64,
+    pub file_limit: usize,
 }
 
 pub(super) fn server_relative_path(
@@ -144,6 +151,7 @@ pub(super) fn write_and_validate_server_manifest(
             "encoding": "unknown",
             "collectionLimit": {
                 "byteLimit": if artifact.capped { artifact.retained_bytes } else { MAX_BYTES_PER_SOURCE },
+                "fileLimit": super::MAX_FRAGMENTS_PER_SOURCE,
                 "limitApplied": artifact.capped
             },
             "truncated": if artifact.capped { Some(true) } else { None },
@@ -236,7 +244,11 @@ pub(super) fn write_and_validate_server_manifest(
             "skipReason": (record.state == cmtraceopen_parser::sccm::SccmCoverageState::Skipped).then_some(skip),
             "unsupportedReason": (record.state == cmtraceopen_parser::sccm::SccmCoverageState::Unsupported).then_some(unsupported),
             "encoding": Value::Null,
-            "collectionLimit": Value::Null,
+            "collectionLimit": record.collection_limit.map(|limit| json!({
+                "byteLimit": limit.byte_limit,
+                "fileLimit": limit.file_limit,
+                "limitApplied": true
+            })),
             "truncated": Value::Null,
             "fragmentComplete": Value::Null,
             "collectedUtc": collected_at_utc,
@@ -313,5 +325,51 @@ fn rotation_json(rotation: &SccmRotation) -> (&'static str, Value) {
         SccmRotation::Numbered(value) => ("numbered", json!(value)),
         SccmRotation::Timestamped(value) => ("timestamped", json!(value)),
         SccmRotation::Unknown(_) => ("none", Value::Null),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+    use cmtraceopen_parser::sccm::SccmCoverageState;
+
+    #[test]
+    fn generic_read_failure_reopens_as_parse_failed_without_payload() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let bundle = temporary.path().join("bundle");
+        fs::create_dir(&bundle).expect("bundle directory");
+        let collected = "2026-08-04T20:00:00Z";
+        write_and_validate_server_manifest(
+            &bundle,
+            collected,
+            &[SccmRole::Provider],
+            Some("private-host"),
+            Some("private-site"),
+            Vec::new(),
+            vec![ServerCoverageRecord {
+                role: SccmRole::Provider,
+                workflow_subject_role: Some(SccmRole::Provider),
+                source_id: "server-provider".to_owned(),
+                source_kind: "ccmLog",
+                root_handle: format!("root-{}", "1".repeat(64)),
+                basename: "Smsprov.log".to_owned(),
+                rotation: SccmRotation::Current,
+                state: SccmCoverageState::ParseFailed,
+                collection_limit: None,
+            }],
+        )
+        .expect("validated parse-failed coverage manifest");
+
+        let manifest = fs::read_to_string(bundle.join(SCCM_SERVER_MANIFEST_FILE_NAME)).unwrap();
+        let assessment = normalize_server_bundle(&manifest, &[]).expect("reopened manifest");
+        assert_eq!(
+            assessment.artifacts[0].state,
+            SccmCoverageState::ParseFailed
+        );
+        assert_eq!(assessment.coverage[0].state, SccmCoverageState::ParseFailed);
+        assert!(assessment.artifacts[0].relative_path.is_none());
+        assert_eq!(assessment.artifacts[0].bytes_copied, 0);
     }
 }

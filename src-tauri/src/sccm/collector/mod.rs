@@ -13,6 +13,7 @@ use serde::Serialize;
 use super::{SccmCoverageState, SccmRole};
 
 pub use discovery::{discover_environment, discover_environment_with, NativeDiscoveryProvider};
+pub(crate) use engine::{capture_discovered_environment, discover_capture_environment};
 pub use engine::{capture_environment, MAX_BYTES_PER_SOURCE, MAX_FRAGMENTS_PER_SOURCE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -141,6 +142,7 @@ impl std::error::Error for SccmDiscoveryFailure {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SccmCollectorError {
     DiscoveryFailed,
+    NoRolesDetected,
     DestinationUnavailable,
     CaptureFailed,
     ManifestValidationFailed,
@@ -150,6 +152,7 @@ impl SccmCollectorError {
     pub fn code(self) -> &'static str {
         match self {
             Self::DiscoveryFailed => "discoveryFailed",
+            Self::NoRolesDetected => "noRolesDetected",
             Self::DestinationUnavailable => "destinationUnavailable",
             Self::CaptureFailed => "captureFailed",
             Self::ManifestValidationFailed => "manifestValidationFailed",
