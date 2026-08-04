@@ -8,6 +8,7 @@ This folder contains a dependency-light PowerShell collector for building a loca
 - `Invoke-CmtraceEvidenceBootstrap.ps1`: stages the collector and profile locally, accepts a direct SAS URL for upload, and registers a one-time `SYSTEM` scheduled task to run the collector outside the assignment process.
 - `Detect-CmtraceEvidenceBootstrap.ps1`: Intune Remediations detection script that checks the bootstrap throttle state, removes only stale, invalid, or task-orphaned state, and exits `1` when remediation should restage the bootstrap.
 - `Remediate-CmtraceEvidenceBootstrap.ps1`: Intune Remediations entrypoint that mirrors the bootstrap behavior in a self-contained script so the upload does not depend on a sibling file being present on the endpoint.
+- `Collect-DnsDhcpFromDomain.ps1`: auto-discovers domain controllers via Active Directory and pulls DNS debug logs, DNS audit EVTX, and DHCP server logs from each over admin shares, organized by server for the CMTrace Open DNS/DHCP workspace. Must run from a domain-joined machine with credentials that can reach the DCs' `C$` shares.
 - `intune-evidence-profile.json`: curated collection profile consumed by the script.
 
 ## Intended execution model
@@ -25,7 +26,7 @@ This folder contains a dependency-light PowerShell collector for building a loca
 - Parent registry exports intentionally avoid duplicate child archives: `Enrollments` includes `FirstSync`, and `IntuneManagementExtension` includes `Win32Apps`.
 - Collection stays within the curated profile and known high-value locations; it does not perform a deep or unbounded drive scan.
 
-## Pre-requirments
+## Prerequisites
 
 - The detection, bootstrap, and remediation path is compatible with Windows PowerShell 5.1 and can run before PowerShell 7 is installed.
 - The collector still runs through the resolved PowerShell 7.5.4 `pwsh.exe` path after bootstrap.

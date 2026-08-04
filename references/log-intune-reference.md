@@ -208,7 +208,7 @@ WUfB ring policy values are visible in `MDMDiagHtmlReport.html` under Update CSP
 | Source | Path | Format | Purpose |
 |---|---|---|---|
 | CP app logs | `C:\Users\<user>\AppData\Local\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState\Log_<n>.log` | Plain text | Per-user CP events, errors, enrollment state |
-| MDM diagnostic export | `C:\Users\Public\Public Documents\MDMDiagnostics\` | .cab + .html | Exported via Settings > Accounts > Access work or school > Export management log files |
+| MDM diagnostic export | `C:\Users\Public\Documents\MDMDiagnostics\` | .cab + .html | Exported via Settings > Accounts > Access work or school > Export management log files |
 
 Collect diagnostics from the Company Portal app via **Help & support > Upload logs** or navigate directly to the LocalState folder.
 
@@ -636,8 +636,10 @@ During ADE enrollment, `cloudconfigurationd` fetches the activation record from 
 
 | Format | File types | Recommended parser | Platform |
 |---|---|---|---|
-| CMTrace (.log) | All IME logs, Panther setup logs | Regex: `<![LOG[<message>]LOG]!><time="HH:MM:SS.mmm" date="MM-DD-YYYY" component="<comp>" context="" type="<1\|2\|3>" thread="<tid>" file="">` | Windows |
-| Plain text (.log) | CBS.log, DISM.log, ReportingEvents.log, MicrosoftEdgeUpdate.log, DMClient logs, WinGet logs | Line-by-line timestamp parsing | Windows |
+| CMTrace (.log) | All IME logs; ConfigMgr client logs (`C:\Windows\CCM\Logs\`) | Regex: `<![LOG[<message>]LOG]!><time="HH:MM:SS.mmm" date="MM-DD-YYYY" component="<comp>" context="" type="<0\|1\|2\|3>" thread="<tid>" file="">` | Windows |
+| Timestamped CBS/Panther | CBS.log, DISM.log, Panther setupact/setuperr | `YYYY-MM-DD HH:MM:SS, Level Component Message` (dedicated parsers in `cmtraceopen-parser`) | Windows |
+| Tab-delimited | ReportingEvents.log | Split on `\t`; GUID + timestamp fields (see `reporting_events` parser) | Windows |
+| Plain text (.log) | MicrosoftEdgeUpdate.log, DMClient logs, WinGet logs, Company Portal `Log_<n>.log` | Line-by-line timestamp or plain viewing | Windows |
 | EVTX (binary) | All Windows Event Logs | `Get-WinEvent`, Event Viewer, EvtxECmd | Windows |
 | ETL (binary) | WU ETLs, DO ETLs, WaaSMedic, DiagnosticLogCSP collectors | `tracerpt.exe`, WPA, `Get-WinEvent`, PerfView | Windows |
 | HTML | MDMDiagHtmlReport, GPResult | Browser rendering or HTML parser | Windows |

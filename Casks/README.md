@@ -69,7 +69,7 @@ brew uninstall --zap --cask adamgell/casktest/cmtrace-open
 There is no `brew zap` command; zapping is `brew uninstall --zap`.
 
 This round-trip has been run and verified against this cask: a plain `brew uninstall` removes
-the app and leaves user data intact, and `--zap` additionally trashes exactly the four paths
+the app and leaves user data intact, and `--zap` additionally trashes exactly the paths
 in the `zap trash:` stanza, no more and no fewer.
 
 `brew uninstall --zap` deletes the paths in the `zap trash:` stanza, which are the real user data
@@ -109,12 +109,11 @@ silent-until-runtime way if any of them drift:
 | Notarization | stapled | `spctl -a -vvv -t install "<app>"` reports `Notarized Developer ID` |
 | `zap` paths | see stanza | `find ~/Library -maxdepth 2 -iname '*com.cmtrace.open*'` after running the app |
 
-The `zap trash:` list is derived from the verified bundle identifier: Tauri's `app_config_dir`
-and `app_data_dir` both resolve to `~/Library/Application Support/com.cmtrace.open` on macOS
-(window state, markers, recent entries, file-association prefs), `tauri-plugin-log` writes to
-`~/Library/Logs/com.cmtrace.open`, `NSUserDefaults` writes
-`~/Library/Preferences/com.cmtrace.open.plist`, and the Zustand `persist` stores land in
-WKWebView local storage under `~/Library/WebKit/com.cmtrace.open`. All four were confirmed
-present on a machine that had run the release build. `~/Library/WebKit/cmtrace-open` and
+The `zap trash:` list is derived from the verified bundle identifier. Current stanza paths:
+`~/Library/Application Support/com.cmtrace.open` (Tauri app config/data: window state, markers,
+recent entries, prefs), `~/Library/Caches/com.cmtrace.open`, `~/Library/Logs/com.cmtrace.open`
+(`tauri-plugin-log`), `~/Library/Preferences/com.cmtrace.open.plist` (`NSUserDefaults`), and
+`~/Library/WebKit/com.cmtrace.open` (Zustand `persist` / WKWebView local storage). Those paths
+match `Casks/cmtrace-open.rb` and were confirmed present on a machine that had run the release build. `~/Library/WebKit/cmtrace-open` and
 `~/Library/WebKit/cmtrace_open-<hash>` also exist on developer machines; those come from
 `npm run app:dev`, not from the cask, so they are deliberately not zapped.

@@ -1,6 +1,6 @@
 # Windows Log Format Parsing Reference
 
-**Purpose**: Exact line format specifications for building log parsers in IntuneCommander's CMTrace replacement tool. Each entry includes file location, encoding, line structure, regex pattern, rotation behavior, and implementation notes.
+**Purpose**: Exact line format specifications for building log parsers in CMTrace Open. Each entry includes file location, encoding, line structure, regex pattern, rotation behavior, and implementation notes.
 
 ---
 
@@ -28,7 +28,7 @@ YYYY-MM-DD HH:MM:SS, <Level> <Component> <Hex_Sequence_Counter> <Message>
 ### Parsing Notes
 
 - **Timestamp**: `yyyy-MM-dd HH:mm:ss` — 19 characters, always at position 0.
-- **Level**: After the `, ` separator. Right-padded with spaces. Values: `Info`, `Error`, `Warning`, `Perf`.
+- **Level**: After the `, ` separator. Right-padded with spaces. Values commonly include `Info`, `Warning`, `Error`, `Perf`, `Verbose`, `Debug`.
 - **Component**: Variable-width, right-padded. Common: `CBS`, `CSI`, `DPX`, `DISM`, `DIA`, `TI`, `SQM`.
 - **Hex Counter**: CSI lines include `XXXXXXXX` hex counter (e.g., `00000001`); CBS/DPX lines do not.
 - **[SR] Tag**: SFC entries tagged with `[SR]` — use this to filter SFC-specific entries.
@@ -37,7 +37,7 @@ YYYY-MM-DD HH:MM:SS, <Level> <Component> <Hex_Sequence_Counter> <Message>
 ### Regex
 
 ```regex
-^(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}),\s+(Info|Error|Warning|Perf)\s+(CBS|CSI|DPX|DISM|DIA|TI|SQM)\s+(.+)$
+^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}),\s+(Info|Warning|Error|Perf|Verbose|Debug)\s+([A-Za-z][A-Za-z0-9_.-]{1,31})\s+(.+)$
 ```
 
 ---
@@ -721,14 +721,14 @@ Identical to WlanMgr.log above — same parser, different component name.
 
 ### Parsing Notes
 
-- For IntuneCommander (non-ConfigMgr context), Shell/Explorer diagnostics are best accessed via Event Viewer channels, not flat files.
+- For CMTrace Open (non-ConfigMgr context), Shell/Explorer diagnostics are best accessed via Event Viewer channels, not flat files.
 - If ConfigMgr client is present, use the CMTrace parser.
 
 ---
 
 ## Parser Implementation Summary
 
-For IntuneCommander, the 20 logs reduce to **7 distinct parser types**:
+For CMTrace Open, the 20 logs group into these **format families** (runtime selection lives in `crates/cmtraceopen-parser/src/parser/detect.rs`):
 
 | Parser Type | Logs Using It | Detection |
 |---|---|---|
@@ -742,6 +742,8 @@ For IntuneCommander, the 20 logs reduce to **7 distinct parser types**:
 | **Key-Value / Section** (unique formats) | SrtTrail.txt (UTF-16, section-based), PFRO.log (UTF-16, timestamped ops), DirectX.log (US date), WindowsUpdate.log (7-digit precision) | Per-file detection needed |
 
 ### Auto-Detection Algorithm
+
+Illustrative format-family triage for these Windows logs. **CMTrace Open runtime detection** samples path hints and content in `crates/cmtraceopen-parser/src/parser/detect.rs` (CCM/IME, ReportingEvents, CBS, DISM, Panther, MSI, IIS W3C, DNS/DHCP, and others) and does not follow this exact step list.
 
 ```
 1. Read first 512 bytes (handle UTF-16 BOM)
