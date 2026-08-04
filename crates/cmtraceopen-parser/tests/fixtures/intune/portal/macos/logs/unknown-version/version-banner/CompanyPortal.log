@@ -1,0 +1,3 @@
+2026-06-02 09:01:00:010 | CompanyPortal | I | 300110 | AppDelegate | Company Portal version 9.9-preview.1 (build unknown) starting on macOS 26.0
+2026-06-02 09:01:00:512 | CompanyPortal | I | 300110 | SignInViewModel | Sign-in requested for adele.vance@contoso.example
+2026-06-02 09:01:01:330 | CompanyPortal | I | 300111 | FutureFeatureManager | Evaluating experimental workflow surface

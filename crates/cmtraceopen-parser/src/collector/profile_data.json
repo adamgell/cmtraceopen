@@ -253,6 +253,41 @@
             "sourcePattern": "%ProgramData%\\Microsoft\\IntuneManagementExtension\\Logs\\SecureBootCertificateUpdate.log.old",
             "destinationFolder": "logs/secureboot",
             "notes": "Rotated Secure Boot log backup."
+        },
+        {
+            "id": "macos-jamf-log",
+            "family": "macos-jamf",
+            "sourcePattern": "/var/log/jamf.log",
+            "destinationFolder": "logs/macos-jamf",
+            "notes": "JAMF binary log."
+        },
+        {
+            "id": "macos-jamf-app-support-logs",
+            "family": "macos-jamf",
+            "sourcePattern": "/Library/Application Support/JAMF/Logs/*.log",
+            "destinationFolder": "logs/macos-jamf",
+            "notes": "JAMF app-support per-policy logs."
+        },
+        {
+            "id": "macos-jamf-user-logs",
+            "family": "macos-jamf",
+            "sourcePattern": "${HOME}/Library/Logs/JAMF/*.log",
+            "destinationFolder": "logs/macos-jamf-user",
+            "notes": "Per-user JAMF logs (Self Service, debug)."
+        },
+        {
+            "id": "macos-jamf-connect-log",
+            "family": "macos-jamf",
+            "sourcePattern": "/Library/Logs/JAMFConnect.log",
+            "destinationFolder": "logs/macos-jamf-connect",
+            "notes": "JAMF Connect daemon log."
+        },
+        {
+            "id": "macos-jamf-connect-user-logs",
+            "family": "macos-jamf",
+            "sourcePattern": "${HOME}/Library/Logs/JAMF/JAMF Connect/*.log",
+            "destinationFolder": "logs/macos-jamf-connect",
+            "notes": "Per-user JAMF Connect logs."
         }
     ],
     "registry": [
@@ -1299,11 +1334,12 @@
         {
             "id": "appx-info",
             "family": "general",
+            "parseHints": ["json", "package-state"],
             "command": "powershell.exe",
-            "arguments": ["-NoProfile", "-Command", "Get-AppxPackage -AllUsers | Where-Object { $_.Name -match 'CompanyPortal|IntuneCompanyPortal|Authenticator' } | Format-List Name, Version, PackageFullName, Status, SignatureKind"],
-            "fileName": "appx-intune-packages.txt",
+            "arguments": ["-NoProfile", "-Command", "$ErrorActionPreference = 'Stop'; $cc = { param($v) $s = [string]$v; if ($s.Length -gt 0) { $s.Substring(0,1).ToLowerInvariant() + $s.Substring(1) } else { '' } }; $rows = @(); $commandStatus = 'completed'; $coverage = 'complete'; $captureError = $null; try { $rows = @(Get-AppxPackage -AllUsers -ErrorAction Stop | Where-Object { $_.Name -match 'CompanyPortal|IntuneCompanyPortal|Authenticator' }) } catch { $rows = @(); $msg = [string]$_.Exception.Message; if ($_.Exception -is [System.UnauthorizedAccessException] -or ([string]$_.FullyQualifiedErrorId) -match 'UnauthorizedAccess|AccessDenied' -or (($_.Exception.HResult -band 0xFFFFFFFF) -eq 0x80070005) -or $msg -match 'denied|elevated|administrator') { $commandStatus = 'accessDenied'; $coverage = 'denied' } else { $commandStatus = 'failed'; $coverage = 'failed' }; $captureError = [ordered]@{ code = [string]$_.FullyQualifiedErrorId; message = $msg } }; $packages = @(); foreach ($p in $rows) { $states = @($p.PackageUserInformation | Where-Object { $_ -ne $null }); $installState = 'notInstalled'; if ($states | Where-Object { $_.InstallState -eq 'Installed' }) { $installState = 'installed' } elseif ($states | Where-Object { $_.InstallState -eq 'Staged' }) { $installState = 'staged' }; $app = 'other'; if ($p.Name -match 'CompanyPortal') { $app = 'companyPortal' } elseif ($p.Name -match 'Authenticator') { $app = 'authenticator' }; $location = $null; if ($p.InstallLocation) { $location = [ordered]@{ value = [string]$p.InstallLocation; sensitivity = 'sensitive' } }; $packages += [ordered]@{ name = [string]$p.Name; familyName = [string]$p.PackageFamilyName; fullName = [string]$p.PackageFullName; version = [string]$p.Version; architecture = (& $cc $p.Architecture); publisher = [string]$p.Publisher; signatureKind = (& $cc $p.SignatureKind); status = (& $cc $p.Status); installState = $installState; scopes = @('allUsers'); userRegistrationCount = $states.Count; installLocation = $location; app = $app } }; $doc = [ordered]@{ schemaVersion = 1; capture = [ordered]@{ capturedAtUtc = (Get-Date).ToUniversalTime().ToString('o'); adapterVersion = 'cmtraceopen-collector-appx/1'; commandStatus = $commandStatus; windowsBuild = [string][System.Environment]::OSVersion.Version; powerShellVersion = [string]$PSVersionTable.PSVersion; locale = [string](Get-Culture).Name; source = 'json'; scopeCoverage = @([ordered]@{ scope = 'allUsers'; status = $coverage; detail = $null }); error = $captureError }; packages = @($packages) }; $doc | ConvertTo-Json -Depth 6 -Compress"],
+            "fileName": "appx-intune-packages.json",
             "timeoutSecs": 30,
-            "notes": "Company Portal and Authenticator AppX package info."
+            "notes": "Company Portal and Authenticator AppX package state as the versioned JSON capture schema (schemaVersion 1) consumed by intune::portal::windows::company_portal::package_state. Emits commandStatus and per-scope coverage so a denied -AllUsers query is reported as accessDenied/denied instead of an empty success."
         },
         {
             "id": "mdm-diag-tool",
@@ -1370,6 +1406,24 @@
             "fileName": "secureboot-bitlocker.txt",
             "timeoutSecs": 15,
             "notes": "BitLocker status for Secure Boot cert transition impact."
+        },
+        {
+            "id": "macos-jamf-version",
+            "family": "macos-jamf",
+            "command": "/usr/local/bin/jamf",
+            "arguments": ["version"],
+            "fileName": "command-output/jamf-version.txt",
+            "timeoutSecs": 10,
+            "notes": "JAMF binary version (no privilege required)."
+        },
+        {
+            "id": "macos-jamf-check-jss",
+            "family": "macos-jamf",
+            "command": "/usr/local/bin/jamf",
+            "arguments": ["checkJSSConnection"],
+            "fileName": "command-output/jamf-checkjss.txt",
+            "timeoutSecs": 10,
+            "notes": "Test JSS connectivity (no privilege required)."
         }
     ]
 }

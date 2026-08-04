@@ -795,6 +795,15 @@ fn detect_command_output_artifact_intake(
 fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
     match parser_selection.specialization {
         Some(ParserSpecialization::Ime) => "Intune IME log".to_string(),
+        Some(ParserSpecialization::IntuneDeviceInventoryHarvester) => {
+            "Intune Device Inventory Harvester log".to_string()
+        }
+        Some(ParserSpecialization::IntuneDeviceInventoryAdaptor) => {
+            "Intune Device Inventory Adaptor log".to_string()
+        }
+        Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure) => {
+            "Intune Device Inventory rotation failure log".to_string()
+        }
         None => match parser_selection.parser {
             ParserKind::Ccm => "CCM-style log".to_string(),
             ParserKind::Simple => "Simple format log".to_string(),
@@ -808,6 +817,7 @@ fn describe_parser_selection(parser_selection: &ParserSelectionInfo) -> String {
             ParserKind::Msi => "MSI verbose log".to_string(),
             ParserKind::PsadtLegacy => "PSADT Legacy format log".to_string(),
             ParserKind::IntuneMacOs => "Intune macOS MDM log".to_string(),
+            ParserKind::IntuneDeviceInventory => "Intune Device Inventory log".to_string(),
             ParserKind::Dhcp => "Windows DHCP Server log".to_string(),
             ParserKind::Burn => "WiX/Burn bootstrapper log".to_string(),
             ParserKind::PatchMyPcDetection => "PatchMyPC detection script log".to_string(),
@@ -965,7 +975,10 @@ fn json_string_array_at(value: &Value, path: &[&str]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{inspect_evidence_artifact, inspect_evidence_bundle, EvidenceArtifactIntakeKind};
+    use super::{
+        describe_parser_selection, inspect_evidence_artifact, inspect_evidence_bundle,
+        EvidenceArtifactIntakeKind,
+    };
     #[cfg(feature = "collector")]
     use crate::collector::artifacts::{collect_logs, CollectorContext};
     #[cfg(feature = "collector")]
@@ -974,6 +987,10 @@ mod tests {
     use crate::collector::types::{
         ArtifactCounts, ArtifactResult, ArtifactStatus, CollectionProfile, LogCollectionItem,
     };
+    use crate::models::log_entry::{
+        ParseQuality, ParserImplementation, ParserKind, ParserProvenance, ParserSelectionInfo,
+        ParserSpecialization, RecordFraming,
+    };
     use std::fs;
     use std::path::PathBuf;
     #[cfg(feature = "collector")]
@@ -981,6 +998,42 @@ mod tests {
     #[cfg(feature = "collector")]
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn describes_device_inventory_specializations_and_parser_kind_fallback() {
+        let selection = |specialization| ParserSelectionInfo {
+            parser: ParserKind::IntuneDeviceInventory,
+            implementation: ParserImplementation::IntuneDeviceInventory,
+            provenance: ParserProvenance::Dedicated,
+            parse_quality: ParseQuality::Structured,
+            record_framing: RecordFraming::LogicalRecord,
+            date_order: None,
+            specialization,
+        };
+
+        assert_eq!(
+            describe_parser_selection(&selection(Some(
+                ParserSpecialization::IntuneDeviceInventoryHarvester,
+            ))),
+            "Intune Device Inventory Harvester log"
+        );
+        assert_eq!(
+            describe_parser_selection(&selection(Some(
+                ParserSpecialization::IntuneDeviceInventoryAdaptor,
+            ))),
+            "Intune Device Inventory Adaptor log"
+        );
+        assert_eq!(
+            describe_parser_selection(&selection(Some(
+                ParserSpecialization::IntuneDeviceInventoryRotationFailure,
+            ))),
+            "Intune Device Inventory rotation failure log"
+        );
+        assert_eq!(
+            describe_parser_selection(&selection(None)),
+            "Intune Device Inventory log"
+        );
+    }
 
     #[cfg(feature = "collector")]
     #[test]

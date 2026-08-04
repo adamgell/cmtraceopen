@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CMTrace Open",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "identifier": "com.cmtrace.open",
   "build": {
     "frontendDist": "../dist",
@@ -68,6 +68,13 @@
         ],
         "mimeType": "text/plain",
         "description": "CMTrace Open Log File"
+      },
+      {
+        "ext": [
+          "log_"
+        ],
+        "mimeType": "text/plain",
+        "description": "Rotated Log File"
       }
     ],
     "windows": {
@@ -80,7 +87,8 @@
     },
     "macOS": {
       "minimumSystemVersion": "10.15",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "entitlements.plist"
     },
     "linux": {
       "deb": {

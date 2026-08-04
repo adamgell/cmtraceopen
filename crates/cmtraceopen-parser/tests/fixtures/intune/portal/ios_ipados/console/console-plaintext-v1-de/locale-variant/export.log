@@ -1,0 +1,4 @@
+Zeitstempel                     Thread     Typ         Aktivität            PID    TTL
+2024-03-15 12:00:00,123456+0100 0x3001     Default     0x0                  312    0    CompanyPortal: (Enrollment) [com.microsoft.CompanyPortal:Enrollment] Registrierung wird gestartet
+2024-03-15 12:00:01,223456+0100 0x3001     Info        0x0                  312    0    CompanyPortal: (Authentication) [com.microsoft.CompanyPortal:Authentication] Anmeldung erfolgreich
+2024-03-15 12:00:02,323456+0100 0x3aa01    Default     0x0                  98     0    profiled: (ManagedConfiguration) [com.apple.ManagedConfiguration:profiled] Konfigurationsprofil installiert

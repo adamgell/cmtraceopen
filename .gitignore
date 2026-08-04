@@ -20,14 +20,22 @@ crates/**/target/
 .DS_Store
 Thumbs.db
 
-# Internal docs (specs, plans, mockups)
-docs/
-
 # Brainstorming artifacts
 .superpowers/
 
-# Test logs
-Logs/
+# Test logs, at the repository root only.
+#
+# Anchored deliberately. Unanchored, `Logs/` matches at every depth, and macOS
+# and Windows match it case-insensitively, so it also swallowed the `logs` leaf
+# modules of the Intune Company Portal tree (epic #356) and would have swallowed
+# their fixture corpora under tests/fixtures/ too. Those build locally, where the
+# untracked files still exist, and break on a fresh checkout the moment a parent
+# `mod.rs` declares `pub mod logs;`.
+#
+# Anchoring fixes the whole class. Per-path negations do not: they only cover the
+# directories someone remembered, and git cannot re-include a file whose parent
+# directory is still excluded.
+/Logs/
 
 # Playwright artifacts (HTML reports, run results, MCP browser session output)
 playwright-report/
@@ -51,3 +59,9 @@ loginventory/
 .Clairvoyance/editor-session.json
 .Clairvoyance/workspace-session.json
 .Clairvoyance/ui-state.json
+
+# Company Portal macOS app-log parser (issue #368). The generic "Logs/" rule
+# above is case-insensitive on macOS and would otherwise ignore these source
+# and fixture directories, which are named "logs" by contract.
+!crates/cmtraceopen-parser/src/intune/portal/macos/company_portal/logs/
+!crates/cmtraceopen-parser/tests/fixtures/intune/portal/macos/logs/

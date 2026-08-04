@@ -58,6 +58,7 @@ pub enum ParserKind {
     Msi,
     PsadtLegacy,
     IntuneMacOs,
+    IntuneDeviceInventory,
     Dhcp,
     Burn,
     PatchMyPcDetection,
@@ -81,6 +82,7 @@ pub enum ParserImplementation {
     Msi,
     PsadtLegacy,
     IntuneMacOs,
+    IntuneDeviceInventory,
     Dhcp,
     Burn,
     PatchMyPcDetection,
@@ -130,6 +132,9 @@ pub enum DateFieldOrder {
 #[serde(rename_all = "camelCase")]
 pub enum ParserSpecialization {
     Ime,
+    IntuneDeviceInventoryHarvester,
+    IntuneDeviceInventoryAdaptor,
+    IntuneDeviceInventoryRotationFailure,
 }
 
 /// Rich parser selection metadata returned to the frontend.

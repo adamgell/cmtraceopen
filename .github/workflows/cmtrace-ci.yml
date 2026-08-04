@@ -72,6 +72,18 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
+      # Every step above runs with working-directory: src-tauri, which selects
+      # only the cmtrace-open package. The parser crate's own test targets were
+      # therefore never built or run here, and its source was never linted: the
+      # sole parser test in CI was the Windows-only `--test esp_diagnostics` job.
+      # These two steps close that gap once, so each workload leaf added under
+      # epic #356 is gated without touching this workflow.
+      - name: Parser crate tests
+        run: cargo test --locked -p cmtraceopen-parser
+
+      - name: Parser crate clippy
+        run: cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
+
       - name: Install cargo-deny and cargo-audit
         uses: taiki-e/install-action@41049aa56687c35e0afa74eed4f09cec4f9afabf # v2.85.2
         with:

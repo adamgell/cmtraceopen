@@ -14,6 +14,7 @@ import { FindBar } from "./FindBar";
 import { FilterDialog } from "../dialogs/FilterDialog";
 import { ErrorLookupDialog } from "../dialogs/ErrorLookupDialog";
 import { GuidRegistryDialog } from "../dialogs/GuidRegistryDialog";
+import { RestartAsAdministratorDialog } from "../dialogs/RestartAsAdministratorDialog";
 import { AboutDialog } from "../dialogs/AboutDialog";
 import { SettingsDialog } from "../dialogs/SettingsDialog";
 import { EvidenceBundleDialog } from "../dialogs/EvidenceBundleDialog";
@@ -618,6 +619,9 @@ export function AppShell() {
         isOpen={showFileAssociationPrompt}
         onClose={() => setShowFileAssociationPrompt(false)}
       />
+      {/* Reads its own open state from the store: it is opened from the native
+          menu and from source-load failures, not from AppShell. */}
+      <RestartAsAdministratorDialog />
       <CollectDiagnosticsDialog
         isOpen={showCollectDiagnosticsDialog}
         onClose={() => setShowCollectDiagnosticsDialog(false)}

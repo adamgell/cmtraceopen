@@ -14,7 +14,13 @@ import { useFilterStore } from "./filter-store";
 import type { ColumnId } from "../lib/column-config";
 import type { CollectionResult } from "../lib/commands";
 import type { WorkspaceId } from "../types/log";
+import type { ElevationRequest } from "../types/elevation";
 import { getAvailableWorkspaces as getRegistryWorkspaces, getWorkspace } from "../workspaces/registry";
+
+/** A pending administrator-restart confirmation awaiting the user's decision. */
+export interface ElevationPrompt {
+  request: ElevationRequest;
+}
 
 export type { WorkspaceId } from "../types/log";
 
@@ -120,6 +126,14 @@ interface UiState {
   showMergeTabsDialog: boolean;
   showDiffConfigDialog: boolean;
   showFileAssociationPrompt: boolean;
+  /**
+   * The pending "restart as administrator" confirmation, or null when none is
+   * open. Carries the request rather than a bare boolean so the menu action and
+   * the Access Denied recovery prompt can describe different restore targets
+   * through one dialog. Deliberately absent from `partialize`: a restore intent
+   * must never survive a restart and come back as stale, untrusted state.
+   */
+  elevationPrompt: ElevationPrompt | null;
   logListFontSize: number;
   logDetailsFontSize: number;
   fontFamily: string | null;
@@ -173,6 +187,7 @@ interface UiState {
   setShowMergeTabsDialog: (show: boolean) => void;
   setShowDiffConfigDialog: (show: boolean) => void;
   setShowFileAssociationPrompt: (show: boolean) => void;
+  setElevationPrompt: (prompt: ElevationPrompt | null) => void;
   setLogListFontSize: (fontSize: number) => void;
   increaseLogListFontSize: () => void;
   decreaseLogListFontSize: () => void;
@@ -278,6 +293,7 @@ export const useUiStore = create<UiState>()(
       showMergeTabsDialog: false,
       showDiffConfigDialog: false,
       showFileAssociationPrompt: false,
+      elevationPrompt: null,
       logListFontSize: DEFAULT_LOG_LIST_FONT_SIZE,
       logDetailsFontSize: DEFAULT_LOG_DETAILS_FONT_SIZE,
       fontFamily: null,
@@ -398,6 +414,7 @@ export const useUiStore = create<UiState>()(
       setShowMergeTabsDialog: (show) => set({ showMergeTabsDialog: show }),
       setShowDiffConfigDialog: (show) => set({ showDiffConfigDialog: show }),
       setShowFileAssociationPrompt: (show) => set({ showFileAssociationPrompt: show }),
+      setElevationPrompt: (prompt) => set({ elevationPrompt: prompt }),
       setLogListFontSize: (fontSize) =>
         set({ logListFontSize: clampLogListFontSize(fontSize) }),
       increaseLogListFontSize: () =>
@@ -448,7 +465,8 @@ export const useUiStore = create<UiState>()(
           !state.showDiffConfigDialog &&
           !state.showFileAssociationPrompt &&
           !state.showCollectDiagnosticsDialog &&
-          !state.showUpdateDialog
+          !state.showUpdateDialog &&
+          state.elevationPrompt === null
         ) {
           return;
         }
@@ -468,6 +486,9 @@ export const useUiStore = create<UiState>()(
           showFileAssociationPrompt: false,
           showCollectDiagnosticsDialog: false,
           showUpdateDialog: false,
+          // Dismissing the confirmation is the "user cancelled" path: no backend
+          // call was made, so there is nothing to unwind.
+          elevationPrompt: null,
         });
       },
 

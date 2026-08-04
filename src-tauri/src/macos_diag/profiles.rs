@@ -86,11 +86,14 @@ fn extract_iso_date(raw: &str) -> String {
 /// `system_profiler SPConfigurationProfileDataType -xml`
 /// into a list of MDM profiles.
 ///
+/// Public so integration tests can run captured `system_profiler` output
+/// through the exact code path `list_profiles_impl` uses on a live host.
+///
 /// The plist structure is:
 ///   root array → first dict → `_items` array → first dict (section) →
 ///   `_items` array of profile dicts.  Each profile dict may contain a nested
 ///   `_items` array of payload dicts.
-fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
+pub fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
     let root: plist::Value = match plist::from_bytes(data) {
         Ok(v) => v,
         Err(e) => {
@@ -109,21 +112,24 @@ fn parse_system_profiler_plist(data: &[u8]) -> Vec<MacosMdmProfile> {
         None => return Vec::new(),
     };
 
-    // top dict → _items array → first dict (section)
+    // top dict → _items array of sections.
+    //
+    // `system_profiler` emits one section per profile scope: a
+    // "User (<uid>) Configuration Profiles" section and a device-level
+    // `spconfigprofile_section_deviceconfigprofiles` section. Reading only the
+    // first section dropped every device-scoped profile — on a managed Mac
+    // that is the large majority of them (31 of 32 on the reference host).
     let section_items = match top_dict.get("_items").and_then(|v| v.as_array()) {
         Some(a) => a,
         None => return Vec::new(),
     };
-    let section_dict = match section_items.first().and_then(|v| v.as_dictionary()) {
-        Some(d) => d,
-        None => return Vec::new(),
-    };
 
-    // section dict → _items array of profile dicts
-    let profile_items = match section_dict.get("_items").and_then(|v| v.as_array()) {
-        Some(a) => a,
-        None => return Vec::new(),
-    };
+    // Each section dict → _items array of profile dicts.
+    let profile_items = section_items
+        .iter()
+        .filter_map(|s| s.as_dictionary())
+        .filter_map(|s| s.get("_items").and_then(|v| v.as_array()))
+        .flatten();
 
     let mut profiles = Vec::new();
 

@@ -1,0 +1,42 @@
+{
+    "version": "1.5.1",
+    "description": "Lite edition of CMTrace Open: a free, open-source CMTrace replacement for Windows log files with format auto-detection, real-time tailing, find and filter, and Windows error-code lookup.",
+    "homepage": "https://cmtraceopen.com",
+    "license": "MIT",
+    "notes": [
+        "Lite is the core log viewer only. Install 'cmtrace' for the full edition, which adds the Intune, ESP, DSRegCmd, Event Log, Sysmon, Secure Boot, and diagnostic-collection workspaces.",
+        "Startup update checks are disabled by default. Run 'scoop update cmtrace-lite' to upgrade.",
+        "Open a log from the shell with 'cmtrace-lite <path-to-log>'.",
+        "Not affiliated with or endorsed by Microsoft."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.5.1/CMTrace-Open-Lite_1.5.1_x64.exe#/cmtrace-lite.exe",
+            "hash": "e5ae9bf01b2194f19ae7a510b3292d58dbe84dd1eefca8d91beeaead7d42f35e"
+        },
+        "arm64": {
+            "url": "https://github.com/adamgell/cmtraceopen/releases/download/v1.5.1/CMTrace-Open-Lite_1.5.1_arm64.exe#/cmtrace-lite.exe",
+            "hash": "8ab5887479cf79f07a7e0beff7aae6c7cacb045eae581ff08a6415cd5251bacc"
+        }
+    },
+    "bin": "cmtrace-lite.exe",
+    "shortcuts": [
+        [
+            "cmtrace-lite.exe",
+            "CMTrace Open Lite"
+        ]
+    ],
+    "checkver": {
+        "github": "https://github.com/adamgell/cmtraceopen"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/adamgell/cmtraceopen/releases/download/v$version/CMTrace-Open-Lite_$version_x64.exe#/cmtrace-lite.exe"
+            },
+            "arm64": {
+                "url": "https://github.com/adamgell/cmtraceopen/releases/download/v$version/CMTrace-Open-Lite_$version_arm64.exe#/cmtrace-lite.exe"
+            }
+        }
+    }
+}

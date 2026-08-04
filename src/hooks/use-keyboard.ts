@@ -106,6 +106,11 @@ function navigateSelection(key: string): boolean {
  */
 export function useKeyboard() {
   const showFindBarOpen = useUiStore((state) => state.showFindBar);
+  // A boolean, not the prompt itself: only openness matters here, and selecting
+  // the object would re-register the listener on every identity change.
+  const elevationPromptOpen = useUiStore(
+    (state) => state.elevationPrompt !== null,
+  );
   const showFilterDialogOpen = useUiStore((state) => state.showFilterDialog);
   const showErrorLookupDialogOpen = useUiStore(
     (state) => state.showErrorLookupDialog
@@ -140,6 +145,21 @@ export function useKeyboard() {
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
+      // The elevation prompt is a true modal: it traps focus and dims the app
+      // behind it. Unlike the find bar or the filter dialog, which deliberately
+      // leave the surrounding shortcuts live, nothing here may act on content
+      // the user cannot see or reach.
+      if (elevationPromptOpen) {
+        // Cancel the WebView's own Ctrl/Cmd handling too, not just the app's.
+        // Returning without this would suppress our handlers while still
+        // letting find-in-page or zoom fire behind the modal.
+        if (event.ctrlKey || event.metaKey) event.preventDefault();
+        // Plain keys are deliberately left alone: the dialog's focus trap owns
+        // Tab and its own listener owns Escape, and preventDefault here would
+        // break both.
+        return;
+      }
+
       const ctrl = event.ctrlKey || event.metaKey;
       const isInput = isTypingTarget(event.target);
       const isDialogOpen =
@@ -310,6 +330,7 @@ export function useKeyboard() {
     commandState.canAdjustTextSize,
     decreaseLogListTextSize,
     dismissTransientDialogs,
+    elevationPromptOpen,
     findNext,
     findPrevious,
     increaseLogListTextSize,

@@ -1,9 +1,10 @@
 #[cfg(feature = "collector")]
 pub mod collector;
-mod commands;
+pub mod commands;
 mod constants;
 #[cfg(feature = "dsregcmd")]
 pub mod dsregcmd;
+pub mod elevation;
 pub mod error;
 pub use cmtraceopen_parser::error_db;
 #[cfg(feature = "esp-diagnostics")]
@@ -16,6 +17,8 @@ pub mod intune;
 mod ipc_bridge;
 #[cfg(feature = "macos-diag")]
 pub mod macos_diag;
+#[cfg(feature = "macos-diag")]
+pub mod jamf;
 mod menu;
 pub use cmtraceopen_parser::models;
 pub mod parser;
@@ -43,18 +46,25 @@ const ESP_STARTUP_WORKSPACE: &str = "esp-diagnostics";
 struct InitialLaunchArguments {
     file_paths: Vec<String>,
     workspace: Option<String>,
+    elevation_restore: Option<String>,
 }
 
 /// Parses app-owned startup options separately from positional file paths.
 ///
-/// The elevation flow emits an exact workspace option so the replacement
-/// process returns to ESP Diagnostics. Split workspace values are consumed
-/// even when unsupported so they can never be mistaken for file paths.
+/// Four kinds of argument are recognised and they never blend into each other:
+/// positional paths from an OS file association, the legacy ESP workspace
+/// option, the elevation restore ticket, and its closed
+/// `--elevation-workspace` fallback.
+///
+/// An option that fails validation is dropped rather than demoted to a file
+/// path, so a malformed `--elevation-restore=` can never be opened as evidence
+/// and never suppresses a legitimate positional open.
 fn parse_initial_launch_arguments(
     arguments: impl IntoIterator<Item = String>,
 ) -> InitialLaunchArguments {
     let mut launch = InitialLaunchArguments::default();
     let mut arguments = arguments.into_iter();
+    let mut elevation_workspace = None;
 
     while let Some(argument) = arguments.next() {
         if argument.eq_ignore_ascii_case("--workspace") {
@@ -68,6 +78,25 @@ fn parse_initial_launch_arguments(
             continue;
         }
 
+        if argument.starts_with(elevation::relaunch::ELEVATION_RESTORE_FLAG) {
+            // Keep only the first valid ticket; a second one is a tampering
+            // signal, not a queue.
+            if launch.elevation_restore.is_none() {
+                launch.elevation_restore =
+                    elevation::relaunch::parse_restore_argument(std::slice::from_ref(&argument));
+            }
+            continue;
+        }
+
+        if argument.starts_with(elevation::relaunch::ELEVATION_WORKSPACE_FLAG) {
+            if elevation_workspace.is_none() {
+                elevation_workspace =
+                    elevation::relaunch::parse_workspace_argument(std::slice::from_ref(&argument))
+                        .map(|workspace| workspace.as_id().to_string());
+            }
+            continue;
+        }
+
         if cfg!(feature = "esp-diagnostics")
             && (argument.eq_ignore_ascii_case("--workspace=esp-diagnostics")
                 || argument.eq_ignore_ascii_case("--esp-diagnostics"))
@@ -76,6 +105,10 @@ fn parse_initial_launch_arguments(
         } else if !argument.starts_with('-') {
             launch.file_paths.push(argument);
         }
+    }
+
+    if launch.elevation_restore.is_some() && launch.workspace.is_none() {
+        launch.workspace = elevation_workspace;
     }
 
     launch
@@ -139,6 +172,7 @@ pub fn run() {
         .manage(AppState::with_initial_launch(
             initial_launch.file_paths,
             initial_launch.workspace,
+            initial_launch.elevation_restore,
         ))
         .setup(|app| {
             #[cfg(desktop)]
@@ -239,6 +273,9 @@ pub fn run() {
             commands::file_ops::write_text_output_file,
             commands::file_ops::get_initial_file_paths,
             commands::file_ops::get_initial_workspace,
+            commands::elevation::get_app_elevation_state,
+            commands::elevation::restart_as_administrator,
+            commands::elevation::get_initial_elevation_restore,
             commands::file_ops::compute_file_hash,
             commands::bundle_ops::inspect_evidence_bundle,
             commands::bundle_ops::inspect_evidence_artifact,
@@ -286,6 +323,18 @@ pub fn run() {
             commands::macos_diag::macos_query_unified_log,
             #[cfg(feature = "macos-diag")]
             commands::macos_diag::macos_open_system_settings,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_collect_environment,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_parse_policy_log,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_parse_self_service_log,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_parse_connect_log,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_scan_logs,
+            #[cfg(feature = "macos-diag")]
+            commands::jamf::jamf_filter_profiles,
             #[cfg(feature = "collector")]
             commands::collector::collect_diagnostics,
             #[cfg(feature = "event-log")]
@@ -407,6 +456,119 @@ mod tests {
 
         assert_eq!(launch.workspace, None);
         assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[test]
+    fn a_valid_restore_ticket_is_parsed_and_never_opened_as_a_file() {
+        let id = crate::elevation::restore_ticket::new_ticket_id();
+
+        let launch =
+            parse_initial_launch_arguments(strings(&[&format!("--elevation-restore={id}")]));
+
+        assert_eq!(launch.elevation_restore.as_deref(), Some(id.as_str()));
+        assert!(launch.file_paths.is_empty());
+        assert_eq!(launch.workspace, None);
+    }
+
+    #[test]
+    fn elevation_workspace_fallback_is_parsed_without_becoming_a_file_path() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--elevation-restore=1487dc30-3bb0-46bf-98ee-76771bd9953e",
+            "--elevation-workspace=intune",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace.as_deref(), Some("intune"));
+        assert_eq!(
+            launch.elevation_restore.as_deref(),
+            Some("1487dc30-3bb0-46bf-98ee-76771bd9953e"),
+        );
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[test]
+    fn elevation_workspace_fallback_without_a_ticket_is_dropped() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--elevation-workspace=intune",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.elevation_restore, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[test]
+    fn unknown_elevation_workspace_is_dropped_without_becoming_a_file_path() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--elevation-restore=1487dc30-3bb0-46bf-98ee-76771bd9953e",
+            "--elevation-workspace=future-workspace",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.workspace, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[test]
+    fn a_malformed_restore_option_is_dropped_without_becoming_a_file_path() {
+        // The whole point of the option form: a tampered value must not be
+        // demoted to evidence to open.
+        let launch = parse_initial_launch_arguments(strings(&[
+            "--elevation-restore=../../etc/passwd",
+            r"C:\Logs\real.log",
+        ]));
+
+        assert_eq!(launch.elevation_restore, None);
+        assert_eq!(launch.file_paths, [r"C:\Logs\real.log"]);
+    }
+
+    #[test]
+    fn an_empty_restore_option_is_dropped() {
+        let launch = parse_initial_launch_arguments(strings(&["--elevation-restore="]));
+
+        assert_eq!(launch.elevation_restore, None);
+        assert!(launch.file_paths.is_empty());
+    }
+
+    #[test]
+    fn a_file_association_path_keeps_precedence_alongside_a_ticket() {
+        let id = crate::elevation::restore_ticket::new_ticket_id();
+
+        let launch = parse_initial_launch_arguments(strings(&[
+            r"C:\Logs\opened-by-association.log",
+            &format!("--elevation-restore={id}"),
+        ]));
+
+        // Both survive parsing; the frontend applies the documented precedence.
+        assert_eq!(launch.file_paths, [r"C:\Logs\opened-by-association.log"]);
+        assert_eq!(launch.elevation_restore.as_deref(), Some(id.as_str()));
+    }
+
+    #[test]
+    fn only_the_first_restore_ticket_is_kept() {
+        let first = crate::elevation::restore_ticket::new_ticket_id();
+        let second = crate::elevation::restore_ticket::new_ticket_id();
+
+        let launch = parse_initial_launch_arguments(strings(&[
+            &format!("--elevation-restore={first}"),
+            &format!("--elevation-restore={second}"),
+        ]));
+
+        assert_eq!(launch.elevation_restore.as_deref(), Some(first.as_str()));
+    }
+
+    #[test]
+    fn a_path_that_merely_contains_the_option_text_stays_a_path() {
+        let launch = parse_initial_launch_arguments(strings(&[
+            r"C:\Logs\--elevation-restore=not-an-option.log",
+        ]));
+
+        assert_eq!(launch.elevation_restore, None);
+        assert_eq!(
+            launch.file_paths,
+            [r"C:\Logs\--elevation-restore=not-an-option.log"]
+        );
     }
 
     #[cfg(all(feature = "esp-diagnostics", not(target_os = "windows")))]

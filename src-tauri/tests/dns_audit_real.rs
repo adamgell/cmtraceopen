@@ -11,7 +11,7 @@ const FIXTURE_PATH: &str = concat!(
 );
 
 #[test]
-fn test_real_dns_audit_evtx() {
+fn real_dns_audit_evtx_smoke_when_local_fixture_exists() {
     if !Path::new(FIXTURE_PATH).exists() {
         eprintln!(
             "Skipping: real DNS audit EVTX fixture not found at {}",

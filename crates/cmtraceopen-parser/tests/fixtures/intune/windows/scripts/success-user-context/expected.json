@@ -1,0 +1,22 @@
+{
+  "transactions": [
+    {
+      "policyId": "11111111-1111-4111-8111-111111111111",
+      "runId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1",
+      "context": "user",
+      "state": "reportSubmitted",
+      "lastConfirmedPhase": "reported",
+      "attempts": 1,
+      "confidence": "high",
+      "exitDecimal": 0,
+      "exitRaw": "0",
+      "nextEvidenceRequest": null,
+      "bitness": "unknown"
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "coverage": {
+    "missingExpectedSources": [],
+    "unknownVersionObserved": false
+  }
+}

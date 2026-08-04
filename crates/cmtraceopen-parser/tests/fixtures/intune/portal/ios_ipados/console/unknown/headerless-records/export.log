@@ -1,0 +1,3 @@
+2024-03-15 20:00:00.000001-0700 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Enrollment) [com.microsoft.CompanyPortal:Enrollment] Enrollment started
+2024-03-15 20:00:01.000002-0700 0x1a2b3    Info        0x0                  312    0    CompanyPortal: (Sync) [com.microsoft.CompanyPortal:Sync] Sync requested
+2024-03-15 20:00:02.000003-0700 0x99aa1    Info        0x0                  55     0    SpringBoard: (FrontBoard) [com.apple.FrontBoard:Common] Scene activated

@@ -2,28 +2,26 @@ mod common;
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use tempfile::TempDir;
 
 use common::{detect_fixture, parse_fixture, ParsedFixture, SelectionSnapshot};
 
 struct TempLogFixture {
-    dir: PathBuf,
+    /// Held so the directory outlives the fixture; `TempDir` removes it on drop.
+    _dir: TempDir,
     path: PathBuf,
 }
 
 impl TempLogFixture {
     fn new(file_name: &str, content: &str) -> Self {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time before unix epoch")
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("cmtrace-open-parser-regression-{unique}"));
-        fs::create_dir_all(&dir).expect("create temp fixture dir");
+        let dir = TempDir::with_prefix("cmtrace-open-parser-regression-")
+            .expect("create temp fixture dir");
 
-        let path = dir.join(file_name);
+        let path = dir.path().join(file_name);
         fs::write(&path, content).expect("write temp fixture");
 
-        Self { dir, path }
+        Self { _dir: dir, path }
     }
 
     fn detect(&self) -> SelectionSnapshot {
@@ -62,12 +60,6 @@ impl TempLogFixture {
                 })
                 .collect(),
         }
-    }
-}
-
-impl Drop for TempLogFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.dir);
     }
 }
 
@@ -725,4 +717,43 @@ fn test_dns_debug_rcodes_fixture_severity() {
     assert_eq!(parsed.entries[1].severity, "Info"); // NOERROR response
     assert_eq!(parsed.entries[2].severity, "Warning"); // NXDOMAIN
     assert_eq!(parsed.entries[3].severity, "Error"); // SERVFAIL
+}
+
+#[test]
+fn intune_device_inventory_corpus_selects_and_frames_harvester_and_adaptor_records() {
+    let harvester = parse_fixture("intune_device_inventory/clean/IntuneInventoryHarvesterLog.log");
+    assert_parsed_selection(
+        &harvester,
+        "IntuneDeviceInventory",
+        "IntuneDeviceInventory",
+        "Dedicated",
+        "Structured",
+        "LogicalRecord",
+        "Timestamped",
+    );
+    assert_specialization(&harvester.selection, Some("IntuneDeviceInventoryHarvester"));
+    assert_eq!(harvester.total_lines, 3);
+    assert_eq!(harvester.parse_errors, 0);
+    assert_eq!(harvester.entries.len(), 3);
+    assert_eq!(harvester.entries[1].severity, "Warning");
+
+    let adaptor = parse_fixture("intune_device_inventory/clean/InventoryAdaptor.log_");
+    assert_parsed_selection(
+        &adaptor,
+        "IntuneDeviceInventory",
+        "IntuneDeviceInventory",
+        "Dedicated",
+        "Structured",
+        "LogicalRecord",
+        "Timestamped",
+    );
+    assert_specialization(&adaptor.selection, Some("IntuneDeviceInventoryAdaptor"));
+    assert_eq!(adaptor.total_lines, 3);
+    assert_eq!(adaptor.parse_errors, 0);
+    assert_eq!(adaptor.entries.len(), 2);
+    assert_eq!(adaptor.entries[0].line_number, 1);
+    assert_eq!(
+        adaptor.entries[0].message,
+        "Adapter result:\n{\"Status\":200,\"HResult\":\"0x00000000\",\"Data\":{\"Example\":\"value\"}}"
+    );
 }

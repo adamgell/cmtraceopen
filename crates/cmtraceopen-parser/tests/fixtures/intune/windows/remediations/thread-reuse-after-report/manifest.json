@@ -1,0 +1,11 @@
+{
+  "description": "A stray record on a reused thread after a run has reported must not inherit that run's key.",
+  "artifacts": [
+    {
+      "artifactId": "hs",
+      "fileName": "HealthScripts.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\HealthScripts.log",
+      "contentFile": "HealthScripts.log"
+    }
+  ]
+}

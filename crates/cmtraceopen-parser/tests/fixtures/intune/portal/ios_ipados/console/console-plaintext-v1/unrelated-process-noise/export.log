@@ -1,0 +1,6 @@
+Timestamp                       Thread     Type        Activity             PID    TTL
+2024-03-15 11:00:00.100000-0700 0x2001     Default     0x0                  60     0    dasd: (duetactivityscheduler) [com.apple.duetactivityscheduler:default] Evaluating activity com.microsoft.CompanyPortal.refresh submitted for Intune scheduling
+2024-03-15 11:00:00.200000-0700 0x2002     Info        0x0                  98     0    profiled: (ManagedConfiguration) [com.apple.ManagedConfiguration:profiled] Intune MDM payload requested on behalf of CompanyPortal
+2024-03-15 11:00:00.300000-0700 0x2003     Default     0x0                  61     0    itunesstored: (Storefront) [com.apple.itunesstored:default] Downloading CompanyPortal from the Intune app catalog
+2024-03-15 11:00:00.400000-0700 0x2004     Debug       0x0                  77     0    symptomsd: (SymptomEvaluator) [com.apple.symptomsd:default] Network symptom for bundle com.microsoft.CompanyPortal
+2024-03-15 11:00:00.500000-0700 0x1a2b3    Default     0x0                  312    0    CompanyPortal: (Sync) [com.microsoft.CompanyPortal:Sync] Sync completed successfully

@@ -20,6 +20,7 @@ use super::{
     patchmypc_detection, psadt, reporting_events, secureboot_log,
     timestamped::{self, DateOrder},
 };
+use crate::intune::device::windows::inventory::{self, DeviceInventoryLogDialect};
 use crate::models::log_entry::{
     DateFieldOrder, LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
     ParserSelectionInfo, ParserSpecialization, RecordFraming,
@@ -238,6 +239,36 @@ impl ResolvedParser {
         )
     }
 
+    /// All three Device Inventory dialects report `RecordFraming::LogicalRecord`.
+    ///
+    /// Harvester headers usually frame one physical line, but the parser
+    /// attaches a non-header line to the record above it in every dialect, so
+    /// reporting `PhysicalLine` would both misdescribe the parse and let
+    /// tailing emit a continuation as a detached record.
+    pub fn intune_device_inventory(dialect: DeviceInventoryLogDialect) -> Self {
+        let specialization = match dialect {
+            DeviceInventoryLogDialect::Harvester => {
+                ParserSpecialization::IntuneDeviceInventoryHarvester
+            }
+            DeviceInventoryLogDialect::InventoryAdaptor => {
+                ParserSpecialization::IntuneDeviceInventoryAdaptor
+            }
+            DeviceInventoryLogDialect::RotationFailure => {
+                ParserSpecialization::IntuneDeviceInventoryRotationFailure
+            }
+        };
+
+        Self::new(
+            ParserKind::IntuneDeviceInventory,
+            ParserImplementation::IntuneDeviceInventory,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::LogicalRecord,
+            DateOrder::MonthFirst,
+            Some(specialization),
+        )
+    }
+
     pub fn registry() -> Self {
         Self::new(
             ParserKind::Registry,
@@ -332,6 +363,7 @@ impl ResolvedParser {
             ParserImplementation::Msi => LogFormat::Timestamped,
             ParserImplementation::PsadtLegacy => LogFormat::Timestamped,
             ParserImplementation::IntuneMacOs => LogFormat::Timestamped,
+            ParserImplementation::IntuneDeviceInventory => LogFormat::Timestamped,
             ParserImplementation::Dhcp => LogFormat::Timestamped,
             ParserImplementation::Burn => LogFormat::Timestamped,
             ParserImplementation::PatchMyPcDetection => LogFormat::Timestamped,
@@ -414,6 +446,10 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         {
             return ResolvedParser::dhcp();
         }
+    }
+
+    if let Some(dialect) = inventory::detect_dialect(path, content) {
+        return ResolvedParser::intune_device_inventory(dialect);
     }
 
     if content.lines().take(5).any(|line| {

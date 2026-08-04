@@ -2,7 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.5.1] - 2026-08-02
+
+### Added
+
+- **JAMF workspace for macOS (#315)**: Added a dedicated workspace for investigating JAMF-managed Macs, including environment details, configuration profiles, policies, Self Service activity, Jamf Connect, known log sources, and profile drill-downs.
+- **Company Portal macOS app-log parsing (#387)**: Added robust parsing for Company Portal macOS logs, including version-aware detection, UTF-8/UTF-16 support, multiline records, rotated and truncated files, and activity classification.
+- **Expanded Intune evidence models (#386, #388, #395, #400)**: Added parser families and deterministic evidence for Windows Company Portal package state, platform-script execution, and remediations. Remediation analysis now correlates detection, execution, retries, timeouts, retained artifacts, and report failures.
+- **Recent files menu (#311)**: Added a native **Recent** submenu under File for quickly reopening recent sources.
+
+### Changed
+
+- **Parser hardening and format contracts (#310)**: Hardened every supported log parser against malformed input and established explicit format contracts backed by expanded regression corpora.
+- **Intune name resolution performance**: Named-GUID fallback lookup is now opt-in, reuses a single identity scan, and avoids redundant event fallback work.
+- **Published Rust crate metadata (#312)**: Added crates.io-ready metadata and package documentation for `cmtraceopen-parser` and `cmtrace-open`.
+
+### Fixed
+
+- **Intune identity isolation**: Fixed app-name enrichment so AppId values are validated and preferred over generic IDs, names remain scoped to their owning identity across downloads, retries, and events, and malformed or conflicting identities fail closed instead of leaking incorrect names. Canonical GUID suffixes are now required before fallback resolution.
+- **Company Portal diagnostic privacy (#387)**: Redact IP addresses and MAC addresses from parsed Company Portal macOS exports.
+- **Microsoft Graph sign-in window (#309)**: Keep the Windows authentication dialog in front of the main application window.
+- **Parser test isolation (#399)**: Prevent temporary-fixture directory collisions when parser suites run concurrently.
+
+### Build & CI
+
+- **macOS distribution (#316)**: Added Developer ID signing, notarization configuration, entitlements, and a signed-build script.
+- **Package-manager distribution (#313)**: Added and automated repository-owned Scoop manifests, a Homebrew cask, and Winget locale metadata.
+- **Workflow coverage and automation (#383, #412, #421, #427)**: Run CI for SCCM-integration pull requests, automatically label new issues and pull requests, and add CodeRabbit review configuration with hardened review-state handling.
+
+### Dependencies
+
+- **Rust**: Updated `rayon` 1.10.0 → 1.12.0, `evtx` 0.8.5 → 0.12.2, `glob` 0.3.3 → 0.3.4, `plist` 1.8.0 → 1.10.0, and `log` 0.4.29 → 0.4.33.
+- **GitHub Actions**: Updated `taiki-e/install-action` 2.85.0 → 2.85.2.
+
+### Added
+
+- **Intune Device Inventory log support (#354)**: CMTrace Open now discovers and parses the complete Microsoft Device Inventory Agent log family under `C:\Program Files\Microsoft Device Inventory Agent\Logs` instead of falling back to the generic timestamped or plain-text readers. Three wire formats are recognized by content: the **harvester** dialect (`IntuneInventoryHarvesterLog.log` and its timestamped rotations), where the producer's bracketed `[Information]`/`[Warning]`/`[Error]` level is authoritative and is no longer left in the message or overridden by keyword inference; the **Inventory Adaptor** dialect (`InventoryAdaptor.log` and the literal trailing-underscore `InventoryAdaptor.log_` rotation), which now keeps its timestamp and process ID and holds continuation JSON in the record that introduced it; and a **rotation-failure** dialect, where a .NET exception and its stack trace stay in one logical record. The Device Inventory Agent folder is available from the known-sources menu, folder aggregation includes `.log`, timestamped rotations, and `.log_`, and Windows file association covers the producer's literal `.log_` extension. Real-time tailing preserves logical records across appends.
 
 ### Fixed
 

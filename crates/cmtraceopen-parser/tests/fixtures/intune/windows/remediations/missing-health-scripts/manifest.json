@@ -1,0 +1,11 @@
+{
+  "description": "Without the orchestrator log nothing can be staged: an unstaged exit code terminates neither half.",
+  "artifacts": [
+    {
+      "artifactId": "ae",
+      "fileName": "AgentExecutor.log",
+      "filePath": "C:\\ProgramData\\Microsoft\\IntuneManagementExtension\\Logs\\AgentExecutor.log",
+      "contentFile": "AgentExecutor.log"
+    }
+  ]
+}

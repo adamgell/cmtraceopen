@@ -1,0 +1,15 @@
+Company Portal Diagnostic Report
+Report ID: 6b3a1c58-2f77-4c19-9a5c-77f4a2b1c090
+Generated: 2026-05-12T08:20:00Z
+App: Company Portal 5.2504.0
+Platform: macOS 15.4.1
+
+Included files:
+  CompanyPortal.log
+  CompanyPortal-1.log
+  IntuneMdmDaemon.log
+  device-info.plist
+
+Notes:
+  This bundle was produced by the Company Portal "Send diagnostic report" action.
+  CompanyPortal log records are archived inside this bundle and are not inlined here.

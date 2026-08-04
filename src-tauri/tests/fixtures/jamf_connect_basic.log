@@ -1,0 +1,4 @@
+2026-04-29T09:12:03+0000 [INFO] [Login] User adam@example.com authenticated via OIDC (provider=Microsoft)
+2026-04-29T09:12:08+0000 [INFO] [Sync] Password sync completed for user adam@example.com
+2026-04-29T09:14:00+0000 [WARN] [Sync] Password mismatch for user bob@example.com
+2026-04-29T09:14:30+0000 [ERROR] [Login] Authentication failed for user mallory@example.com (reason=invalid_credentials)

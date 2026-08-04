@@ -1,0 +1,197 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+# CodeRabbit configuration for CMTrace Open (Tauri v2 + React/TypeScript + Rust).
+# Docs: https://docs.coderabbit.ai/getting-started/configure-coderabbit
+
+language: en-US
+
+tone_instructions: >-
+  Review as a senior, perfectionist engineer. Be direct and concise: lead with the
+  concrete defect and fix; skip praise and diff restatement. Prefer one evidenced
+  comment to speculative ones. Never use em or en dashes; rewrite the sentence
+  instead.
+
+reviews:
+  profile: assertive
+  # Keep reviews advisory: CI gates (cargo clippy, cargo test, tsc) decide mergeability.
+  request_changes_workflow: false
+  high_level_summary: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  auto_apply_labels: false
+  suggested_reviewers: false
+  poem: false
+  in_progress_fortune: false
+  collapse_walkthrough: true
+  commit_status: true
+  fail_commit_status: false
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - main
+    # Dependency bumps and release automation are machine-generated; skip them.
+    ignore_usernames:
+      - dependabot[bot]
+      - github-actions[bot]
+    ignore_title_keywords:
+      - WIP
+      - DO NOT MERGE
+      - chore(deps)
+      - chore(deps-dev)
+
+  # Exclude generated, vendored, and binary-ish paths from review.
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/target/**"
+    - "!package-lock.json"
+    - "!Cargo.lock"
+    - "!Logs/**"
+    - "!Casks/**"
+    - "!bucket/**"
+    - "!**/*.snap"
+    - "!**/*.png"
+    - "!**/*.ico"
+    - "!**/*.icns"
+    - "!**/*.evtx"
+
+  path_instructions:
+    - path: "src-tauri/src/**/*.rs"
+      instructions: >-
+        Tauri v2 backend. Enforce: no unwrap/expect/panic on user-supplied input or
+        parsed log data (return Result and surface a typed error to the frontend);
+        every new IPC command in commands/ must be registered in lib.rs via
+        invoke_handler; AppState is Mutex-wrapped, so flag any lock held across an
+        await or any path that can poison/deadlock the mutex. Windows-only code must
+        be gated with #[cfg(target_os = "windows")] and must still compile on
+        macOS/Linux. CI runs `cargo clippy -- -D warnings`, so call out anything
+        clippy would reject.
+    - path: "src-tauri/src/parser/**/*.rs"
+      instructions: >-
+        Log-format parsers. Flag positional/index-based slicing of timestamps or
+        message tails: the CCM fractional-second and timezone tail is genuinely
+        ambiguous and must be validated semantically, not by character offset.
+        Parsers must never panic on malformed, truncated, or non-UTF-8 input;
+        encoding falls back UTF-8 to Windows-1252. Any new format or heuristic needs
+        a regression fixture under src-tauri/tests/.
+    - path: "crates/**/*.rs"
+      instructions: >-
+        Published library crate (cmtraceopen-parser). Treat every public item as a
+        semver commitment: flag breaking changes to public types, signatures, or enum
+        variants, and check that new public items are documented.
+    - path: "src/**/*.{ts,tsx}"
+      instructions: >-
+        React 19 + TypeScript frontend with Fluent UI and Zustand. Flag `any`,
+        non-null assertions, and unchecked casts on invoke() results: IPC responses
+        are untrusted and must be typed and validated. Flag state duplicated between
+        a Zustand store and local component state. Virtualized log lists must not
+        take per-row work that is O(total entries). New workspaces must size text via
+        logListFontSize from ui-store and getLogListMetrics rather than hardcoded
+        font sizes.
+    - path: "src/stores/**/*.ts"
+      instructions: >-
+        Zustand stores. Check for selectors that return new object/array identities
+        on every call (causes re-render storms), missing cleanup of tail-event
+        listeners, and state that belongs in another store.
+    - path: "src-tauri/tests/**/*.rs"
+      instructions: >-
+        Regression tests. Verify assertions test real behavior rather than restating
+        the implementation, and that fixtures are synthetic: never real customer log
+        data, device names, serials, SIDs, tenant IDs, or user principal names.
+    - path: "e2e/**/*.ts"
+      instructions: >-
+        Playwright end-to-end tests. Flag arbitrary waitForTimeout calls, selectors
+        bound to styling classes, and tests that depend on Windows-only behavior
+        without platform gating.
+    - path: ".github/workflows/**/*.yml"
+      instructions: >-
+        GitHub Actions. Flag unpinned third-party actions, workflow-level write
+        permissions that could be job-scoped, and any use of pull_request_target that
+        checks out or executes PR-authored code. Secrets must never reach a
+        fork-triggered job.
+    - path: "scripts/**/*.{ps1,psm1}"
+      instructions: >-
+        PowerShell must parse under Windows PowerShell 5.1. Flag any non-ASCII
+        character, including em dashes and smart quotes. Require explicit
+        error handling rather than silent continuation.
+    - path: "**/*.md"
+      instructions: >-
+        Documentation. Verify commands, paths, and flags actually exist in the repo.
+        Flag em dashes and en dashes.
+
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: >-
+        Title must follow Conventional Commits: type(scope): summary, where type is
+        one of feat, fix, docs, refactor, perf, test, build, ci, chore. Scope should
+        name the affected area (for example intune, jamf, parser, dsregcmd, sysmon,
+        ci).
+    description:
+      mode: warning
+    issue_assessment:
+      mode: warning
+    docstrings:
+      # Quoted: bare `off` is a YAML boolean, but the schema wants the string.
+      mode: "off"
+
+  finishing_touches:
+    docstrings:
+      enabled: true
+    unit_tests:
+      enabled: true
+
+  tools:
+    markdownlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 180000
+    languagetool:
+      enabled: true
+      level: default
+    # Not used in this repo; keep the review output free of irrelevant tooling.
+    ruff:
+      enabled: false
+    hadolint:
+      enabled: false
+    phpstan:
+      enabled: false
+    phpmd:
+      enabled: false
+    phpcs:
+      enabled: false
+    swiftlint:
+      enabled: false
+    golangci-lint:
+      enabled: false
+
+chat:
+  auto_reply: true
+  art: false
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: true
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "**/CLAUDE.md"
+      - "CONTRIBUTING.md"
+      - "**/AGENTS.md"
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local

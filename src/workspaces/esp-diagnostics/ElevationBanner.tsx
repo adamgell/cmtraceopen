@@ -4,7 +4,12 @@ import {
   ShieldArrowRightRegular,
   WarningShieldRegular,
 } from "@fluentui/react-icons";
-import { restartEspAsAdministrator } from "../../lib/commands";
+import {
+  describeElevationOutcome,
+  requestElevatedRestart,
+  type ElevationOutcome,
+} from "../../lib/elevation";
+import { buildElevationRequest } from "../../lib/elevation-request";
 import {
   LOG_MONOSPACE_FONT_FAMILY,
   LOG_UI_FONT_FAMILY,
@@ -15,26 +20,69 @@ interface ElevationBannerProps {
   elevation: EspElevationState;
 }
 
+function appendCoverageGap(message: string | null): string {
+  const reason =
+    message?.trim() || "Administrator restart could not be started.";
+  const separator = /[.!?]$/.test(reason) ? " " : ". ";
+  return `${reason}${separator}Coverage remains partial.`;
+}
+
 export function ElevationBanner({ elevation }: ElevationBannerProps) {
   const [actionState, setActionState] = useState<
-    "idle" | "requesting" | "requested" | "cancelled" | "failed"
+    "idle" | "requesting" | "requested" | "busy" | "cancelled" | "failed"
   >("idle");
+  const [failureMessage, setFailureMessage] = useState<string | null>(null);
 
   if (elevation.isElevated) return null;
 
+  // The banner is a coverage recommendation, not a source retry: it restores
+  // the workspace and nothing else. All relaunch behaviour lives in the shared
+  // coordinator, which never throws and collapses concurrent requests.
   const restart = async () => {
     setActionState("requesting");
+    setFailureMessage(null);
+
+    let outcome: ElevationOutcome;
     try {
-      const result = await restartEspAsAdministrator();
-      setActionState(
-        result.launched
-          ? "requested"
-          : result.reason === "elevationCancelled"
-            ? "cancelled"
-            : "failed",
+      outcome = await requestElevatedRestart(
+        buildElevationRequest({
+          reason: "coverageRecommended",
+          workspace: "esp-diagnostics",
+          // A coverage recommendation, not a source retry: workspace only.
+          source: null,
+        }),
       );
-    } catch {
+    } catch (error) {
+      // The coordinator is documented never to throw, but it rethrows if that
+      // contract is ever broken. Without this the banner sticks on "requesting"
+      // for good and the rejection escapes as an unhandled promise.
+      console.error("[elevation] banner restart request threw", { error });
+      setFailureMessage("Administrator restart could not be started.");
       setActionState("failed");
+      return;
+    }
+
+    switch (outcome.status) {
+      case "launched":
+        setActionState("requested");
+        break;
+      case "cancelled":
+        setActionState("cancelled");
+        break;
+      case "alreadyElevated":
+        setActionState("idle");
+        break;
+      // A restart is already in flight, raised by this banner, the global menu,
+      // or the Access Denied prompt. Reporting that as a failure would tell the
+      // user nothing started when something already has.
+      case "busy":
+        setActionState("busy");
+        break;
+      case "failed":
+      case "unsupported":
+        setFailureMessage(describeElevationOutcome(outcome));
+        setActionState("failed");
+        break;
     }
   };
 
@@ -102,11 +150,13 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
         <div aria-live="polite" style={{ marginTop: 2, fontSize: 11 }}>
           {actionState === "requested"
             ? "Administrator restart requested."
-            : actionState === "cancelled"
-              ? "Administrator restart was cancelled; coverage remains partial."
-              : actionState === "failed"
-                ? "Administrator restart could not be started; coverage remains partial."
-                : null}
+            : actionState === "busy"
+              ? "An administrator restart is already in progress."
+              : actionState === "cancelled"
+                ? "Administrator restart was cancelled; coverage remains partial."
+                : actionState === "failed"
+                  ? appendCoverageGap(failureMessage)
+                  : null}
         </div>
       </div>
       {elevation.restartSupported ? (
@@ -114,7 +164,13 @@ export function ElevationBanner({ elevation }: ElevationBannerProps) {
           appearance="primary"
           size="small"
           icon={<ShieldArrowRightRegular />}
-          disabled={actionState === "requesting" || actionState === "requested"}
+          // Deliberately still enabled on "busy": the request in flight belongs
+          // to another entry point, and if it settles as cancelled or failed
+          // nothing would re-enable this button, stranding the user until a
+          // reload. The coordinator collapses the duplicate click anyway.
+          disabled={
+            actionState === "requesting" || actionState === "requested"
+          }
           onClick={restart}
         >
           Restart as administrator

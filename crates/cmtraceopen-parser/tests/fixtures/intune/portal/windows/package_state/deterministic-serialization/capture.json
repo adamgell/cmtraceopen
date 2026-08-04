@@ -1,0 +1,38 @@
+{
+  "packages": [
+    {
+      "status": "ok",
+      "installLocation": {
+        "sensitivity": "sensitive",
+        "value": "C:\\Program Files\\WindowsApps\\Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe"
+      },
+      "app": "companyPortal",
+      "version": "11.2.401.0",
+      "name": "Microsoft.CompanyPortal",
+      "signatureKind": "quantumAttested",
+      "scopes": ["provisioned", "allUsers"],
+      "architecture": "x64",
+      "familyName": "Microsoft.CompanyPortal_8wekyb3d8bbwe",
+      "installState": "installed",
+      "zzzFutureField": { "kind": "sealed" },
+      "aaaFutureField": 42,
+      "publisher": "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+      "fullName": "Microsoft.CompanyPortal_11.2.401.0_x64__8wekyb3d8bbwe",
+      "userRegistrationCount": 3
+    }
+  ],
+  "capture": {
+    "source": "json",
+    "scopeCoverage": [
+      { "status": "complete", "scope": "allUsers", "detail": null }
+    ],
+    "commandStatus": "completed",
+    "locale": "en-US",
+    "adapterVersion": "cmtraceopen-collector-appx/1",
+    "error": null,
+    "capturedAtUtc": "2026-07-14T09:12:44.1230000Z",
+    "powerShellVersion": "5.1.26100.2161",
+    "windowsBuild": "10.0.26100.0"
+  },
+  "schemaVersion": 1
+}

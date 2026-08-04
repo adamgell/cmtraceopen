@@ -61,6 +61,82 @@ pub struct KnownSourceMetadata {
     pub default_file_intent: Option<KnownSourceDefaultFileIntent>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_inventory_known_sources_have_expected_metadata() {
+        let sources = windows_intune_device_inventory_known_sources();
+
+        assert_eq!(sources.len(), 3);
+
+        let folder = sources
+            .iter()
+            .find(|source| source.id == "windows-intune-device-inventory-logs")
+            .expect("Device Inventory folder source");
+        match &folder.source {
+            LogSource::Known {
+                path_kind,
+                default_path,
+                ..
+            } => {
+                assert_eq!(*path_kind, KnownSourcePathKind::Folder);
+                assert_eq!(
+                    default_path,
+                    "C:\\Program Files\\Microsoft Device Inventory Agent\\Logs"
+                );
+            }
+            source => panic!("expected folder known source, got {source:?}"),
+        }
+        assert!(folder
+            .file_patterns
+            .iter()
+            .any(|pattern| pattern == "*.log_"));
+        assert!(folder.default_file_intent.is_none());
+
+        for (id, file_name) in [
+            (
+                "windows-intune-device-inventory-harvester-log",
+                "IntuneInventoryHarvesterLog.log",
+            ),
+            (
+                "windows-intune-device-inventory-adaptor-log",
+                "InventoryAdaptor.log",
+            ),
+        ] {
+            let source = sources
+                .iter()
+                .find(|source| source.id == id)
+                .unwrap_or_else(|| panic!("{id} source"));
+            match &source.source {
+                LogSource::Known {
+                    path_kind,
+                    default_path,
+                    ..
+                } => {
+                    assert_eq!(*path_kind, KnownSourcePathKind::File);
+                    assert_eq!(
+                        default_path.as_str(),
+                        format!(
+                            "C:\\Program Files\\Microsoft Device Inventory Agent\\Logs\\{file_name}"
+                        )
+                        .as_str()
+                    );
+                }
+                source => panic!("expected file known source, got {source:?}"),
+            }
+            assert!(source.default_file_intent.is_none());
+        }
+
+        for source in sources {
+            let grouping = source.grouping.expect("Device Inventory grouping");
+            assert_eq!(grouping.group_id, "intune-device-inventory");
+            assert_eq!(grouping.group_order, 15);
+        }
+    }
+}
+
 // ── Tauri Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -93,7 +169,7 @@ pub fn build_known_log_sources() -> Vec<KnownSourceMetadata> {
 
 // ── Platform-specific builders ──────────────────────────────────────────
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 #[allow(clippy::too_many_arguments)]
 fn windows_known_source(
     id: &str,
@@ -127,9 +203,60 @@ fn windows_known_source(
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn windows_intune_device_inventory_known_sources() -> Vec<KnownSourceMetadata> {
+    let grouping = KnownSourceGroupingMetadata {
+        family_id: "windows-intune".to_string(),
+        family_label: "Windows Intune".to_string(),
+        group_id: "intune-device-inventory".to_string(),
+        group_label: "Device Inventory Agent".to_string(),
+        group_order: 15,
+        source_order: 10,
+    };
+
+    vec![
+        windows_known_source(
+            "windows-intune-device-inventory-logs",
+            "Intune Device Inventory Logs Folder",
+            "Microsoft Device Inventory Agent diagnostics, including harvested inventory and rotation logs.",
+            KnownSourcePathKind::Folder,
+            "C:\\Program Files\\Microsoft Device Inventory Agent\\Logs",
+            &["*.log", "*.log_"],
+            grouping.clone(),
+            None,
+        ),
+        windows_known_source(
+            "windows-intune-device-inventory-harvester-log",
+            "Intune Device Inventory: IntuneInventoryHarvesterLog.log",
+            "Device Inventory harvesting and inventory collection diagnostics.",
+            KnownSourcePathKind::File,
+            "C:\\Program Files\\Microsoft Device Inventory Agent\\Logs\\IntuneInventoryHarvesterLog.log",
+            &["IntuneInventoryHarvesterLog.log", "IntuneInventoryHarvesterLog.log_"],
+            KnownSourceGroupingMetadata {
+                source_order: 20,
+                ..grouping.clone()
+            },
+            None,
+        ),
+        windows_known_source(
+            "windows-intune-device-inventory-adaptor-log",
+            "Intune Device Inventory: InventoryAdaptor.log",
+            "Device Inventory adaptor diagnostics for inventory processing and upload.",
+            KnownSourcePathKind::File,
+            "C:\\Program Files\\Microsoft Device Inventory Agent\\Logs\\InventoryAdaptor.log",
+            &["InventoryAdaptor.log", "InventoryAdaptor.log_"],
+            KnownSourceGroupingMetadata {
+                source_order: 30,
+                ..grouping
+            },
+            None,
+        ),
+    ]
+}
+
 #[cfg(target_os = "windows")]
 fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
-    vec![
+    let mut sources = vec![
         windows_known_source(
             "windows-intune-ime-logs",
             "Intune IME Logs Folder",
@@ -522,7 +649,10 @@ fn windows_known_log_sources() -> Vec<KnownSourceMetadata> {
             },
             None,
         ),
-    ]
+    ];
+
+    sources.extend(windows_intune_device_inventory_known_sources());
+    sources
 }
 
 #[cfg(target_os = "macos")]
@@ -740,6 +870,146 @@ fn macos_known_log_sources() -> Vec<KnownSourceMetadata> {
                     "install.log".to_string(),
                 ],
             }),
+        ),
+        // ── JAMF Pro: main jamf binary log ───────────────────────────────
+        macos_known_source(
+            "macos-jamf-log",
+            "JAMF Log",
+            "Main jamf binary log — policy executions, recurring check-ins, recon, errors.",
+            KnownSourcePathKind::File,
+            "/var/log/jamf.log",
+            &["jamf.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-core".to_string(),
+                group_label: "JAMF Core".to_string(),
+                group_order: 50,
+                source_order: 10,
+            },
+            Some(KnownSourceDefaultFileIntent {
+                selection_behavior:
+                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
+                preferred_file_names: vec!["jamf.log".to_string()],
+            }),
+        ),
+        // ── JAMF Pro: app-support logs ───────────────────────────────────
+        macos_known_source(
+            "macos-jamf-app-support-logs",
+            "JAMF App Support Logs",
+            "Per-policy and helper logs from the JAMF binary.",
+            KnownSourcePathKind::Folder,
+            "/Library/Application Support/JAMF/Logs",
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-core".to_string(),
+                group_label: "JAMF Core".to_string(),
+                group_order: 50,
+                source_order: 20,
+            },
+            None,
+        ),
+        // ── JAMF Pro: receipts ───────────────────────────────────────────
+        macos_known_source(
+            "macos-jamf-receipts",
+            "JAMF Receipts",
+            "Package receipts deployed by JAMF policies.",
+            KnownSourcePathKind::Folder,
+            "/Library/Application Support/JAMF/Receipts",
+            &["*.pkg", "*.plist"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-core".to_string(),
+                group_label: "JAMF Core".to_string(),
+                group_order: 50,
+                source_order: 30,
+            },
+            None,
+        ),
+        // ── JAMF Pro: Self Service log (file) ────────────────────────────
+        macos_known_source(
+            "macos-jamf-self-service-log",
+            "Self Service Log",
+            "Self Service app usage log.",
+            KnownSourcePathKind::File,
+            &format!("{}/Library/Logs/JAMF/selfservice.log", home),
+            &["selfservice.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                group_id: "jamf-self-service".to_string(),
+                group_label: "Self Service".to_string(),
+                group_order: 60,
+                source_order: 10,
+            },
+            Some(KnownSourceDefaultFileIntent {
+                selection_behavior:
+                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
+                preferred_file_names: vec!["selfservice.log".to_string()],
+            }),
+        ),
+        // ── JAMF Pro: JAMF user log directory (folder) ───────────────────
+        macos_known_source(
+            "macos-jamf-user-logs",
+            "JAMF User Logs",
+            "Per-user JAMF logs directory (Self Service, JAMF Connect, debug).",
+            KnownSourcePathKind::Folder,
+            &format!("{}/Library/Logs/JAMF", home),
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf".to_string(),
+                family_label: "macOS JAMF".to_string(),
+                // Neutral group: this folder holds more than Self Service —
+                // JAMF Connect and debug logs land here too.
+                group_id: "jamf-user-logs".to_string(),
+                group_label: "User Logs".to_string(),
+                group_order: 61,
+                source_order: 20,
+            },
+            None,
+        ),
+        // ── JAMF Connect: system log ─────────────────────────────────────
+        macos_known_source(
+            "macos-jamf-connect-log",
+            "JAMF Connect Log",
+            "JAMF Connect daemon log — IdP login, password sync, errors.",
+            KnownSourcePathKind::File,
+            "/Library/Logs/JAMFConnect.log",
+            &["JAMFConnect.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf-connect".to_string(),
+                family_label: "macOS JAMF Connect".to_string(),
+                group_id: "jamf-connect-logs".to_string(),
+                group_label: "JAMF Connect Logs".to_string(),
+                group_order: 70,
+                source_order: 10,
+            },
+            Some(KnownSourceDefaultFileIntent {
+                selection_behavior:
+                    KnownSourceDefaultFileSelectionBehavior::PreferFileNameThenPattern,
+                preferred_file_names: vec!["JAMFConnect.log".to_string()],
+            }),
+        ),
+        // ── JAMF Connect: user logs ──────────────────────────────────────
+        macos_known_source(
+            "macos-jamf-connect-user-logs",
+            "JAMF Connect User Logs",
+            "Per-user JAMF Connect logs (varies by version).",
+            KnownSourcePathKind::Folder,
+            &format!("{}/Library/Logs/JAMF/JAMF Connect", home),
+            &["*.log"],
+            KnownSourceGroupingMetadata {
+                family_id: "macos-jamf-connect".to_string(),
+                family_label: "macOS JAMF Connect".to_string(),
+                group_id: "jamf-connect-logs".to_string(),
+                group_label: "JAMF Connect Logs".to_string(),
+                group_order: 70,
+                source_order: 20,
+            },
+            None,
         ),
     ]
 }
