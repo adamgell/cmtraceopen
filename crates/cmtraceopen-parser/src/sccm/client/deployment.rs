@@ -55,6 +55,8 @@ const REASON_DETECT: &str = "capture the complete client detection outcome for t
 const REASON_REPORT: &str = "capture the complete client deployment state report for this key";
 const REASON_CHRONOLOGY: &str =
     "capture records whose timestamps can be ordered against the earlier phases of this key";
+const REASON_TOPOLOGY_AMBIGUOUS: &str =
+    "capture one exact content topology for this assignment and CI; conflicting content identities cannot support an outcome";
 
 const COUNTERPART_READY_KEY_KINDS: [&str; 5] = [
     "contentId",
@@ -238,6 +240,7 @@ pub struct SccmDeploymentTransaction {
 pub struct SccmDeploymentCoverage {
     pub logical_artifact_id: String,
     pub state: SccmCoverageState,
+    pub capture_complete: bool,
     pub artifact_ids: Vec<String>,
 }
 
@@ -329,8 +332,16 @@ pub fn analyze_client_deployment(
     admitted: &SccmClientAdmittedEvidence,
 ) -> Result<SccmDeploymentAnalysis, SccmClientEvidenceAdmissionError> {
     admitted.verify_integrity()?;
-    let artifacts = admitted
-        .source_artifacts()?
+    let source_artifacts = admitted.source_artifacts()?;
+    let incomplete_artifact_ids = source_artifacts
+        .iter()
+        .filter_map(|(artifact_id, source)| {
+            (source.coverage == SccmCoverageState::Captured
+                && source.fragment_complete != Some(true))
+            .then_some(artifact_id.as_str())
+        })
+        .collect::<BTreeSet<_>>();
+    let artifacts = source_artifacts
         .iter()
         .map(|(artifact_id, source)| SccmArtifact {
             artifact_id: artifact_id.clone(),
@@ -341,17 +352,11 @@ pub fn analyze_client_deployment(
             configmgr_version: None,
             collected_at_utc: None,
             rotation: source.rotation.clone(),
-            coverage: if source.coverage == SccmCoverageState::Captured
-                && source.fragment_complete != Some(true)
-            {
-                SccmCoverageState::Capped
-            } else {
-                source.coverage.clone()
-            },
+            coverage: source.coverage.clone(),
             encoding: None,
         })
         .collect::<Vec<_>>();
-    let coverage = coverage_rows(&artifacts);
+    let coverage = coverage_rows(&artifacts, &incomplete_artifact_ids);
     let artifacts_by_id = artifacts
         .iter()
         .map(|artifact| (artifact.artifact_id.as_str(), artifact))
@@ -361,6 +366,9 @@ pub fn analyze_client_deployment(
     let mut facts = evidence
         .iter()
         .flat_map(|evidence| {
+            if incomplete_artifact_ids.contains(evidence.reference.artifact_id.as_str()) {
+                return Vec::new();
+            }
             artifacts_by_id
                 .get(evidence.reference.artifact_id.as_str())
                 .map(|artifact| parse_deployment_facts(evidence, artifact))
@@ -391,22 +399,30 @@ pub fn analyze_client_deployment(
         }
     }
 
-    let admitted_artifact_ids = facts
+    let fact_artifact_ids = facts
         .iter()
         .map(|fact| fact.reference.artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let evidence_artifact_ids = evidence
+        .iter()
+        .map(|item| item.reference.artifact_id.as_str())
         .collect::<BTreeSet<_>>();
     // A family counts as validated only where the profile actually read a
     // record. Captured bytes it could not read prove collection, not coverage
     // of the workflow.
-    let validated_artifact_families = admitted_artifact_ids
+    let validated_artifact_families = evidence_artifact_ids
         .iter()
         .filter_map(|artifact_id| artifacts_by_id.get(artifact_id))
         .map(|artifact| deployment_group_id(&artifact.display_name))
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let observations =
-        source_local_observations(evidence, &artifacts_by_id, &admitted_artifact_ids);
+    let observations = source_local_observations(
+        evidence,
+        &artifacts_by_id,
+        &fact_artifact_ids,
+        &incomplete_artifact_ids,
+    );
     let findings = build_findings(&seeds, &artifacts_by_id);
 
     Ok(finalize(
@@ -532,7 +548,10 @@ fn extraction_profile(
 // Coverage
 // ---------------------------------------------------------------------------
 
-fn coverage_rows(artifacts: &[SccmArtifact]) -> Vec<SccmDeploymentCoverage> {
+fn coverage_rows(
+    artifacts: &[SccmArtifact],
+    incomplete_artifact_ids: &BTreeSet<&str>,
+) -> Vec<SccmDeploymentCoverage> {
     let mut grouped = BTreeMap::<String, Vec<&SccmArtifact>>::new();
     for artifact in artifacts {
         grouped
@@ -550,15 +569,24 @@ fn coverage_rows(artifacts: &[SccmArtifact]) -> Vec<SccmDeploymentCoverage> {
                 .collect::<Vec<_>>();
             let mut artifact_ids = artifacts
                 .iter()
-                .filter(|artifact| artifact.coverage != SccmCoverageState::Captured)
+                .filter(|artifact| {
+                    artifact.coverage != SccmCoverageState::Captured
+                        || incomplete_artifact_ids.contains(artifact.artifact_id.as_str())
+                })
                 .map(|artifact| artifact.artifact_id.clone())
                 .collect::<Vec<_>>();
             artifact_ids.sort();
             artifact_ids.dedup();
+            let state = combine_coverage(&states);
+            let capture_complete = state == SccmCoverageState::Captured
+                && artifacts.iter().all(|artifact| {
+                    !incomplete_artifact_ids.contains(artifact.artifact_id.as_str())
+                });
 
             SccmDeploymentCoverage {
                 logical_artifact_id,
-                state: combine_coverage(&states),
+                state,
+                capture_complete,
                 artifact_ids,
             }
         })
@@ -1133,7 +1161,6 @@ struct FindingSeed {
     evidence: Vec<SccmEvidenceRef>,
     terminal_evidence: Vec<SccmEvidenceRef>,
     coverage_gap_artifact_ids: Vec<String>,
-    coverage_gap_group: Option<&'static str>,
     request_phase: Option<SccmDeploymentPhase>,
 }
 
@@ -1168,9 +1195,6 @@ fn build_transaction(
         },
         terminal_evidence: outcome.terminal_evidence.clone(),
         coverage_gap_artifact_ids: outcome.coverage_gap_artifact_ids.clone(),
-        coverage_gap_group: (outcome.classification
-            == SccmDeploymentClassification::InsufficientEvidence)
-            .then(|| outcome.phase.artifact_group()),
         request_phase: outcome.next_artifact.as_ref().map(|_| outcome.phase),
     });
 
@@ -1202,7 +1226,24 @@ fn unique_value<T: Ord>(values: impl Iterator<Item = T>) -> Option<T> {
         .flatten()
 }
 
+fn has_ambiguous_content_topology(facts: &[&DeploymentFact]) -> bool {
+    fn multiple<T: Ord>(values: impl Iterator<Item = T>) -> bool {
+        values.collect::<BTreeSet<_>>().len() > 1
+    }
+
+    multiple(facts.iter().filter_map(|fact| fact.package_id.clone()))
+        || multiple(facts.iter().filter_map(|fact| fact.content_id.clone()))
+        || multiple(facts.iter().filter_map(|fact| fact.content_version))
+        || multiple(
+            facts
+                .iter()
+                .filter_map(|fact| fact.distribution_point_host_handle.clone()),
+        )
+        || multiple(facts.iter().filter_map(|fact| fact.request_id.clone()))
+}
+
 fn build_key(assignment_id: &str, ci_id: &str, facts: &[&DeploymentFact]) -> SccmDeploymentKey {
+    let ambiguous_topology = has_ambiguous_content_topology(facts);
     let package_id = unique_value(facts.iter().filter_map(|fact| fact.package_id.clone()));
     let content_id = unique_value(facts.iter().filter_map(|fact| fact.content_id.clone()));
     let content_version = unique_value(facts.iter().filter_map(|fact| fact.content_version));
@@ -1244,7 +1285,11 @@ fn build_key(assignment_id: &str, ci_id: &str, facts: &[&DeploymentFact]) -> Scc
                 })
                 .filter_map(|fact| fact.exit_code.clone()),
         ),
-        confidence: SccmDeploymentKeyConfidence::Exact,
+        confidence: if ambiguous_topology {
+            SccmDeploymentKeyConfidence::Candidate
+        } else {
+            SccmDeploymentKeyConfidence::Exact
+        },
         extraction_profile_id: SCCM_DEPLOYMENT_PROFILE_ID.to_owned(),
     }
 }
@@ -1368,6 +1413,29 @@ fn unrecovered_failures<'a>(
         .collect()
 }
 
+fn opposing_outcomes_are_ambiguous(
+    facts: &[&DeploymentFact],
+    failure_kind: DeploymentFactKind,
+    success_kind: DeploymentFactKind,
+) -> bool {
+    facts
+        .iter()
+        .copied()
+        .filter(|fact| fact.kind == failure_kind)
+        .any(|failure| {
+            facts
+                .iter()
+                .copied()
+                .filter(|fact| fact.kind == success_kind)
+                .any(|success| {
+                    !matches!(
+                        compare_fact_order(failure, success),
+                        Some(Ordering::Less | Ordering::Greater)
+                    )
+                })
+        })
+}
+
 fn facts_of_kind<'a>(
     facts: &[&'a DeploymentFact],
     kind: DeploymentFactKind,
@@ -1470,6 +1538,28 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     let mut chain: Vec<&DeploymentFact> = Vec::new();
     let mut last: Option<SccmDeploymentPhase> = None;
 
+    if has_ambiguous_content_topology(facts) {
+        return uncertain(
+            SccmDeploymentPhase::LocateContent,
+            None,
+            REASON_TOPOLOGY_AMBIGUOUS,
+            FINDING_TOPOLOGY_AMBIGUOUS,
+        );
+    }
+
+    if opposing_outcomes_are_ambiguous(
+        facts,
+        DeploymentFactKind::IntentNotApplicable,
+        DeploymentFactKind::IntentTargeted,
+    ) {
+        return uncertain(
+            SccmDeploymentPhase::Intent,
+            None,
+            REASON_CHRONOLOGY,
+            FINDING_CHRONOLOGY_UNCERTAIN,
+        );
+    }
+
     if let Some(not_applicable) = first_fact(facts, DeploymentFactKind::IntentNotApplicable) {
         return conclude(
             &[not_applicable],
@@ -1487,6 +1577,23 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     };
     chain.push(intent);
     last = Some(SccmDeploymentPhase::Intent);
+
+    if opposing_outcomes_are_ambiguous(
+        facts,
+        DeploymentFactKind::RequirementsFailed,
+        DeploymentFactKind::RequirementsSatisfied,
+    ) || opposing_outcomes_are_ambiguous(
+        facts,
+        DeploymentFactKind::DependencyFailed,
+        DeploymentFactKind::RequirementsSatisfied,
+    ) {
+        return uncertain(
+            SccmDeploymentPhase::Requirements,
+            last,
+            REASON_CHRONOLOGY,
+            FINDING_CHRONOLOGY_UNCERTAIN,
+        );
+    }
 
     let requirement_failures = facts_of_kind(facts, DeploymentFactKind::RequirementsFailed);
     let dependency_failures = facts_of_kind(facts, DeploymentFactKind::DependencyFailed);
@@ -1531,9 +1638,16 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
         let reason = if first_fact(facts, DeploymentFactKind::ContentRequested).is_some() {
             REASON_LOCATION_RESPONSE_MISSING
         } else {
-            match coverage_for_group(coverage, GROUP_CONTENT).map(|row| &row.state) {
-                Some(SccmCoverageState::Capped) => REASON_LOCATION_ROTATION,
-                Some(SccmCoverageState::AccessDenied) => REASON_LOCATION_ACCESS_DENIED,
+            match coverage_for_group(coverage, GROUP_CONTENT) {
+                Some(row) if row.state == SccmCoverageState::AccessDenied => {
+                    REASON_LOCATION_ACCESS_DENIED
+                }
+                Some(row)
+                    if row.state == SccmCoverageState::Capped
+                        || (row.state == SccmCoverageState::Captured && !row.capture_complete) =>
+                {
+                    REASON_LOCATION_ROTATION
+                }
                 _ => REASON_LOCATION_ABSENT,
             }
         };
@@ -1541,6 +1655,19 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     };
     chain.push(located);
     last = Some(SccmDeploymentPhase::LocateContent);
+
+    if opposing_outcomes_are_ambiguous(
+        facts,
+        DeploymentFactKind::TransferFailed,
+        DeploymentFactKind::TransferCompleted,
+    ) {
+        return uncertain(
+            SccmDeploymentPhase::Transfer,
+            last,
+            REASON_CHRONOLOGY,
+            FINDING_CHRONOLOGY_UNCERTAIN,
+        );
+    }
 
     let transfer_failures = unrecovered_failures(
         facts,
@@ -1589,6 +1716,19 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     chain.push(completed);
     last = Some(SccmDeploymentPhase::Transfer);
 
+    if opposing_outcomes_are_ambiguous(
+        facts,
+        DeploymentFactKind::CacheFailed,
+        DeploymentFactKind::CacheCommitted,
+    ) {
+        return uncertain(
+            SccmDeploymentPhase::Cache,
+            last,
+            REASON_CHRONOLOGY,
+            FINDING_CHRONOLOGY_UNCERTAIN,
+        );
+    }
+
     let cache_failures = unrecovered_failures(
         facts,
         DeploymentFactKind::CacheFailed,
@@ -1614,6 +1754,19 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     };
     chain.push(cached);
     last = Some(SccmDeploymentPhase::Cache);
+
+    if opposing_outcomes_are_ambiguous(
+        facts,
+        DeploymentFactKind::EnforceFailed,
+        DeploymentFactKind::EnforceSucceeded,
+    ) {
+        return uncertain(
+            SccmDeploymentPhase::Enforce,
+            last,
+            REASON_CHRONOLOGY,
+            FINDING_CHRONOLOGY_UNCERTAIN,
+        );
+    }
 
     let enforce_failures = unrecovered_failures(
         facts,
@@ -1641,6 +1794,19 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     chain.push(enforced);
     last = Some(SccmDeploymentPhase::Enforce);
 
+    if opposing_outcomes_are_ambiguous(
+        facts,
+        DeploymentFactKind::DetectionMismatch,
+        DeploymentFactKind::Detected,
+    ) {
+        return uncertain(
+            SccmDeploymentPhase::Detect,
+            last,
+            REASON_CHRONOLOGY,
+            FINDING_CHRONOLOGY_UNCERTAIN,
+        );
+    }
+
     if let Some(mismatch) = next_fact_after(
         facts,
         DeploymentFactKind::DetectionMismatch,
@@ -1665,6 +1831,19 @@ fn resolve_outcome(facts: &[&DeploymentFact], coverage: &[SccmDeploymentCoverage
     };
     chain.push(detected);
     last = Some(SccmDeploymentPhase::Detect);
+
+    if opposing_outcomes_are_ambiguous(
+        facts,
+        DeploymentFactKind::ReportFailed,
+        DeploymentFactKind::ReportSucceeded,
+    ) {
+        return uncertain(
+            SccmDeploymentPhase::Report,
+            last,
+            REASON_CHRONOLOGY,
+            FINDING_CHRONOLOGY_UNCERTAIN,
+        );
+    }
 
     let report_failures = unrecovered_failures(
         facts,
@@ -1772,10 +1951,16 @@ fn insufficient(
     coverage: &[SccmDeploymentCoverage],
 ) -> Outcome {
     let group = phase.artifact_group();
+    let physical_gap = coverage_for_group(coverage, group)
+        .is_none_or(|row| row.state != SccmCoverageState::Captured);
     Outcome {
         phase,
         state: SccmDeploymentState::InsufficientEvidence,
-        classification: SccmDeploymentClassification::InsufficientEvidence,
+        classification: if physical_gap {
+            SccmDeploymentClassification::InsufficientEvidence
+        } else {
+            SccmDeploymentClassification::Symptom
+        },
         confidence: SccmDeploymentConfidence::Low,
         last_successful_phase,
         next_artifact: Some(SccmDeploymentArtifactRequest {
@@ -1783,9 +1968,32 @@ fn insufficient(
             reason: reason.to_owned(),
         }),
         coverage_gap_artifact_ids: coverage_for_group(coverage, group)
+            .filter(|_| physical_gap)
             .map(|row| row.artifact_ids.clone())
             .unwrap_or_default(),
         finding_id: Some(coverage_gap_finding_id(phase)),
+        terminal_evidence: Vec::new(),
+    }
+}
+
+fn uncertain(
+    phase: SccmDeploymentPhase,
+    last_successful_phase: Option<SccmDeploymentPhase>,
+    reason: &str,
+    finding_id: &'static str,
+) -> Outcome {
+    Outcome {
+        phase,
+        state: SccmDeploymentState::InsufficientEvidence,
+        classification: SccmDeploymentClassification::Symptom,
+        confidence: SccmDeploymentConfidence::Low,
+        last_successful_phase,
+        next_artifact: Some(SccmDeploymentArtifactRequest {
+            logical_artifact_id: phase.artifact_group().to_owned(),
+            reason: reason.to_owned(),
+        }),
+        coverage_gap_artifact_ids: Vec::new(),
+        finding_id: Some(finding_id),
         terminal_evidence: Vec::new(),
     }
 }
@@ -1803,7 +2011,8 @@ fn insufficient(
 fn source_local_observations(
     evidence: &[SccmEvidence],
     artifacts_by_id: &BTreeMap<&str, &SccmArtifact>,
-    admitted_artifact_ids: &BTreeSet<&str>,
+    fact_artifact_ids: &BTreeSet<&str>,
+    incomplete_artifact_ids: &BTreeSet<&str>,
 ) -> Vec<SccmDeploymentObservation> {
     let mut evidence_by_artifact = BTreeMap::<&str, Vec<&SccmEvidence>>::new();
     for item in evidence.iter().filter(|item| item.role == SccmRole::Client) {
@@ -1821,7 +2030,8 @@ fn source_local_observations(
         .into_iter()
         .filter_map(|(artifact_id, evidence)| {
             let _artifact = artifacts_by_id.get(artifact_id)?;
-            if admitted_artifact_ids.contains(artifact_id) {
+            let incomplete_capture = incomplete_artifact_ids.contains(artifact_id);
+            if fact_artifact_ids.contains(artifact_id) && !incomplete_capture {
                 return None;
             }
             let start = evidence
@@ -1845,9 +2055,13 @@ fn source_local_observations(
                 key_confidence,
                 confidence_ceiling: SccmDeploymentConfidence::Low,
                 correlation_eligible: false,
-                reason:
+                reason: if incomplete_capture {
+                    "incomplete physical capture cannot prove a complete deployment workflow"
+                        .to_owned()
+                } else {
                     "unvalidated complete record cannot override an exact keyed client transaction"
-                        .to_owned(),
+                        .to_owned()
+                },
                 evidence: SccmEvidenceRef {
                     artifact_id: artifact_id.to_owned(),
                     entry_id: format!("{artifact_id}:{start}-{end}"),
@@ -1890,6 +2104,7 @@ const FINDING_ENFORCE_TERMINAL: &str = "deployment-enforce-terminal";
 const FINDING_REPORT_TERMINAL: &str = "deployment-report-terminal";
 const FINDING_DETECTION_MISMATCH: &str = "deployment-detection-mismatch";
 const FINDING_CHRONOLOGY_UNCERTAIN: &str = "deployment-chronology-uncertain";
+const FINDING_TOPOLOGY_AMBIGUOUS: &str = "deployment-content-topology-ambiguous";
 
 /// Most causes can only occur at one phase, so their identity is already
 /// unique. An unusable chronology can occur at any of the eight, so its
@@ -1949,6 +2164,10 @@ fn finding_text(finding_id: &str) -> (&'static str, &'static str) {
         FINDING_CHRONOLOGY_UNCERTAIN => (
             "Deployment chronology is not usable",
             "Records for this key cannot be ordered through the earlier phases, so no outcome is claimed.",
+        ),
+        FINDING_TOPOLOGY_AMBIGUOUS => (
+            "Client content topology is ambiguous",
+            "Conflicting content identities were recorded for this assignment and CI, so no deployment outcome or server handoff is claimed.",
         ),
         "deployment-intent-coverage-gap" => (
             "Client application intent evidence is incomplete",
@@ -2072,18 +2291,6 @@ fn build_findings(
                 .collect::<Vec<_>>();
             coverage_gaps.sort_by(|left, right| left.artifact_id.cmp(&right.artifact_id));
             coverage_gaps.dedup();
-            if coverage_gaps.is_empty() {
-                // An insufficient-evidence finding always names what is
-                // missing. With no incomplete artifact to blame, the gap is the
-                // group itself: bytes exist, the needed record does not.
-                if let Some(group) = first.coverage_gap_group {
-                    coverage_gaps.push(SccmFindingCoverageGap {
-                        artifact_id: group.to_owned(),
-                        role: SccmRole::Client,
-                        coverage: SccmCoverageState::Absent,
-                    });
-                }
-            }
 
             let mut builder = SccmFindingBuilder::new(finding_id)
                 .class(first.class.clone())

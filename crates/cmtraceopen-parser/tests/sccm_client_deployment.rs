@@ -41,51 +41,51 @@ const SCENARIOS: [&str; 12] = [
 const FULL_OUTPUT_SHA256: [(&str, &str); 12] = [
     (
         "bits-transfer-failure",
-        "e86ee7550f6a229086ef08f2aaa8c7c291cfa69872abc946d3e47851ed630ff4",
+        "a39eceeb0450a0e73d6cd5ac65e11d5e63ca2f135e3ea72b998ef52c24d9d7fb",
     ),
     (
         "cache-failure",
-        "7c22725d771fcdd61104093a46aedd8c570a59ee016d9d982165b9a929decc96",
+        "d373bcf0f690f15f810f9a7fb1580b08afab9fcc2a8293aa4d25465c15b4c0b1",
     ),
     (
         "dependency-failure",
-        "411da99d3414192f101873528af2c6fc1173fd0e5b9f2e923b1bc0c3f5121c97",
+        "731432421400d044a28b237f963f2b6845410333279aa0c915e779cd615c5dfa",
     ),
     (
         "detection-false-negative",
-        "ef4b920914e7ea6735995c5ea63b8ff87b02903dc9858d74545c8b0a31edf778",
+        "b9201ff1529ffddd9c4fd506be38b854eeb169d8bd801000165a5ceca8dba0a3",
     ),
     (
         "dp-content-missing",
-        "8869c0fe634ef1cbebd0581d4ee40453459ea464a25a7ea152c37d00f35dc2af",
+        "e377a8a760c6c6012f3507bf49ebcdd27613a655c217c697d0f862b6cac6cd22",
     ),
     (
         "enforcement-exit",
-        "3f7c9ac906522dc9d681d28302135d080e8657024cd8eae7801174583cb77e3c",
+        "43eb2e58152fb36132d4ae47b5a1c5b1d231c6ee63e4c1f9737d44f50048e7fc",
     ),
     (
         "incomplete",
-        "284852fe6062bfdff091d09156771a91d96dc32c67355d912fafc28cf16ec7f4",
+        "cee38f7767a1bf75b6abbb91ecb7c47805f5ae0f7936ef98e9cbce9267d4950c",
     ),
     (
         "location-missing",
-        "b3bd1cbeae6f9b0e66912f59e27e07204a4905a61e47c7fc0c06abf5ed660c81",
+        "e31da1587a1e580cc666f7cfc3812b5c26d75c39b53415fc3648aed4444c52ec",
     ),
     (
         "not-targeted",
-        "a859754fc0938b5b5f1a3bc1f24570c6ce373fb5ceeed631506efc9c58e871ab",
+        "45b6bbbcb4999608779a905e9fb0e7f7b6c9fa8027c5cdea3686ed0b20950c88",
     ),
     (
         "requirements-failure",
-        "03919a838a19f744b3f0dea45d44bb9bd00b2acda9a5a8d83542515a41179577",
+        "bb56df98c42459b874ffde81cdf1dd2425bf4e6783a03daa28f921917fc82a90",
     ),
     (
         "rotation-boundary",
-        "4f9dab01e081ffd7c73704948e0c2961c75035997ad1e0ac05202136d841b987",
+        "c9d74cbe7d336c92fa07d4a00a257725976341b4bc14c36742430de9ba3c1674",
     ),
     (
         "success",
-        "71bf6d496fde8b7576d38718f33809a146e7ad0283562f729228f28fd3598c6f",
+        "b05f48b884152e71d602070a99cec1152c104799e0792d235a2f9a062fd4eba4",
     ),
 ];
 
@@ -1543,16 +1543,14 @@ const OBSERVED_KEY_KIND_SCENARIOS: [&str; 8] = [
     "success",
 ];
 
-/// `rotation-boundary` additionally declares `client-content` as a validated
-/// family even though none of its rotation fragments ever formed a record, so
-/// its family list is not observation derived.
-const OBSERVED_FAMILY_SCENARIOS: [&str; 7] = [
+const OBSERVED_FAMILY_SCENARIOS: [&str; 8] = [
     "bits-transfer-failure",
     "cache-failure",
     "detection-false-negative",
     "dp-content-missing",
     "enforcement-exit",
     "incomplete",
+    "rotation-boundary",
     "success",
 ];
 
@@ -1720,7 +1718,121 @@ fn an_ambiguous_content_request_is_never_published_cross_side() {
             !analysis.correlation_handoff.emitted_counterpart_ready_fact,
             "{label}: correlation handoff flag"
         );
+        assert_eq!(
+            transaction.key.confidence,
+            SccmDeploymentKeyConfidence::Candidate,
+            "{label}: conflicting topology cannot remain exact"
+        );
+        assert_eq!(transaction.state, SccmDeploymentState::InsufficientEvidence);
+        assert_eq!(
+            transaction.classification,
+            SccmDeploymentClassification::Symptom
+        );
+        assert_eq!(transaction.confidence, SccmDeploymentConfidence::Low);
     }
+}
+
+#[test]
+fn equal_time_transfer_success_and_failure_are_not_a_confirmed_failure() {
+    let terminal_failure = record(
+        &format!(
+            "Transfer terminal failure assignmentId={ASSIGNMENT} contentId={CONTENT} bitsJobId={BITS_JOB} errorCode=0x80070020 terminal=true"
+        ),
+        "05:00:04.000+000",
+        "ContentTransferManager",
+    );
+    let bundle = bundle_from(vec![
+        (
+            client_artifact("synthetic-intent", "AppIntentEval.log"),
+            intent_content(),
+        ),
+        (
+            client_artifact("synthetic-content", "CAS.log"),
+            content_content(),
+        ),
+        (
+            client_artifact("synthetic-transfer", "DataTransferService.log"),
+            transfer_content("05:00:03.000+000", "05:00:04.000+000"),
+        ),
+        (
+            rotated_artifact(
+                "synthetic-transfer-rotated",
+                "ContentTransferManager.log.1",
+                SccmRotation::Numbered(1),
+            ),
+            terminal_failure,
+        ),
+    ]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(transaction.phase, SccmDeploymentPhase::Transfer);
+    assert_eq!(transaction.state, SccmDeploymentState::InsufficientEvidence);
+    assert_eq!(
+        transaction.classification,
+        SccmDeploymentClassification::Symptom
+    );
+    assert_eq!(transaction.confidence, SccmDeploymentConfidence::Low);
+    assert!(analysis.findings.iter().all(|finding| {
+        finding.finding.class != SccmFindingClass::ConfirmedFailure
+            && finding.finding.terminal_evidence.is_empty()
+    }));
+}
+
+#[test]
+fn a_captured_source_missing_a_required_record_is_not_absent_coverage() {
+    let intent_only = record(
+        &format!(
+            "SYNTHETIC FIXTURE deployment targeted assignmentId={ASSIGNMENT} ciId={CI} state=targeted"
+        ),
+        "05:00:00.000+000",
+        "AppIntentEval",
+    );
+    let bundle = bundle_from(vec![(
+        client_artifact("synthetic-intent", "AppIntentEval.log"),
+        intent_only,
+    )]);
+
+    let analysis = analyze_client_deployment(&bundle);
+    let transaction = only_transaction(&analysis);
+    assert_eq!(transaction.phase, SccmDeploymentPhase::Requirements);
+    assert_eq!(transaction.state, SccmDeploymentState::InsufficientEvidence);
+    assert!(analysis.coverage.iter().any(|row| {
+        row.logical_artifact_id == "client-app-intent" && row.state == SccmCoverageState::Captured
+    }));
+    assert!(analysis
+        .findings
+        .iter()
+        .flat_map(|finding| finding.finding.coverage_gaps.iter())
+        .all(|gap| {
+            gap.artifact_id != "client-app-intent" && gap.coverage != SccmCoverageState::Absent
+        }));
+}
+
+#[test]
+fn incomplete_captured_rotations_preserve_truthful_capture_provenance() {
+    let analysis = analyze_scenario("rotation-boundary");
+    let coverage = analysis
+        .coverage
+        .iter()
+        .find(|row| row.logical_artifact_id == "client-content")
+        .expect("content coverage");
+    assert_eq!(coverage.state, SccmCoverageState::Captured);
+    assert!(!coverage.capture_complete);
+    assert_eq!(
+        coverage.artifact_ids,
+        [
+            "fixture-deployment-numbered-01".to_owned(),
+            "fixture-deployment-numbered-02".to_owned(),
+        ]
+    );
+    let transaction = only_transaction(&analysis);
+    assert_eq!(transaction.state, SccmDeploymentState::InsufficientEvidence);
+    assert_eq!(
+        transaction.classification,
+        SccmDeploymentClassification::Symptom
+    );
+    assert!(transaction.coverage_gap_artifact_ids.is_empty());
 }
 
 #[test]

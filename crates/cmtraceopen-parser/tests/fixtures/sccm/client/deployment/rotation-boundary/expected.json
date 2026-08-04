@@ -4,9 +4,9 @@
   "scenario":"rotation-boundary",
   "stateChain":["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
   "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","ciId"],"validatedArtifactFamilies":["client-app-intent","client-content"]},
+  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","ciId"],"validatedArtifactFamilies":["client-app-intent"]},
   "reorderedInputDeterministic":true,
-  "coverage":[{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"capped","artifactIds":["deployment-rotation-boundary-content-current","deployment-rotation-boundary-content-lo"]}],
+  "coverage":[{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"captured","artifactIds":["deployment-rotation-boundary-content-current","deployment-rotation-boundary-content-lo"]}],
   "artifactProvenance":[
     {"artifactId":"deployment-rotation-boundary-content-current","bytesCopied":207,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
     {"artifactId":"deployment-rotation-boundary-content-lo","bytesCopied":147,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
@@ -16,7 +16,7 @@
     "transactionId":"deployment:assignment:10000000-0000-0000-0000-000000000011",
     "key":{"keyProfileKind":"assignmentCi","assignmentId":"10000000-0000-0000-0000-000000000011","ciId":"20000000-0000-0000-0000-000000001011","confidence":"exact","extractionProfileId":"deployment-client-5.00.test-v1"},
     "counterpartReadyFact":null,
-    "phase":"locateContent","state":"insufficientEvidence","lastSuccessfulPhase":"requirements","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low","coverageGapArtifactIds":["deployment-rotation-boundary-content-current","deployment-rotation-boundary-content-lo"],"nextArtifact":{"logicalArtifactId":"client-content","reason":"capture a complete logical CCM content record without joining physical rotation fragments"},
+    "phase":"locateContent","state":"insufficientEvidence","lastSuccessfulPhase":"requirements","classification":"symptom","confidence":"low","confidenceCeiling":"low","coverageGapArtifactIds":[],"nextArtifact":{"logicalArtifactId":"client-content","reason":"capture a complete logical CCM content record without joining physical rotation fragments"},
     "evidence":[{"artifactId":"deployment-rotation-boundary-intent-current","startLine":1,"endLine":2}]
   }],
   "sourceLocalObservations":[],

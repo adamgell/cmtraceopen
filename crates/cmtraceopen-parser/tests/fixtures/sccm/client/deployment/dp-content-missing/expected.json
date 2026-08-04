@@ -18,7 +18,7 @@
     "phase": "locateContent",
     "state": "insufficientEvidence",
     "lastSuccessfulPhase": "requirements",
-    "classification": "insufficientEvidence",
+    "classification": "symptom",
     "confidence": "low",
     "confidenceCeiling": "low",
     "coverageGapArtifactIds": [],
