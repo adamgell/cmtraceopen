@@ -138,6 +138,39 @@ fn captured_wsyncmgr_is_an_observation_without_a_health_or_outcome_interpretatio
 }
 
 #[test]
+fn missing_sup_topology_role_projects_one_absent_coverage_gap() {
+    let (mut manifest, mut payloads) = load_manifest_and_payloads("complete-multi-role");
+    manifest["topology"]["rolesObserved"]
+        .as_array_mut()
+        .expect("rolesObserved is an array")
+        .retain(|role| role != "softwareUpdatePoint");
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .retain(|artifact| artifact["artifactId"] != "sup-sync-current");
+    payloads.retain(|payload| payload.manifest_artifact_id != "sup-sync-current");
+
+    let analysis = analyze_software_update_point(&assess_manifest(&manifest, &payloads));
+
+    assert!(analysis.coverage_rows.is_empty());
+    assert!(analysis.next_artifact_requests.is_empty());
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    let gap = &analysis.coverage_gaps[0];
+    assert_eq!(gap.artifact_id, None);
+    assert_eq!(gap.source_id, "server-sup-sync");
+    assert_eq!(gap.producer_role, None);
+    assert_eq!(
+        gap.workflow_subject_role,
+        Some(SccmRole::SoftwareUpdatePoint)
+    );
+    assert_eq!(gap.capture_state, SccmCoverageState::Absent);
+    assert_eq!(
+        gap.reason,
+        "Canonical intake topology does not report a Software Update Point role; no outcome is inferred."
+    );
+}
+
+#[test]
 fn sup_analysis_excludes_an_unrelated_management_point_recapture_request() {
     let (mut manifest, mut payloads) = load_manifest_and_payloads("complete-multi-role");
     let management_point = manifest["artifacts"]

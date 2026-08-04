@@ -1573,6 +1573,9 @@ fn canonical_intake_integrity_with_structure(
 
     let normalized_topology = normalized_topology_or_none(topology)?;
     let mut normalized_requests = requests.to_vec();
+    for request in &mut normalized_requests {
+        request.reason = request.reason.trim().to_owned();
+    }
     normalized_requests.sort_by(|left, right| {
         (
             left.logical_id.as_str(),
@@ -1963,6 +1966,25 @@ mod intake_integrity_tests {
             intake_integrity_work_probe(),
             (0, 0),
             "request aggregate bounds must reject oversized mutations before canonical JSON"
+        );
+    }
+
+    #[test]
+    fn whitespace_equivalent_requests_are_rejected_as_duplicates() {
+        let mut assessment = canonical_assessment();
+        let request = SccmArtifactRequest {
+            logical_id: "wsyncmgr".to_owned(),
+            role: SccmRole::SiteServer,
+            reason: "Collect the complete wsyncmgr.log file.".to_owned(),
+        };
+        let mut whitespace_variant = request.clone();
+        whitespace_variant.reason = format!("  {}  ", whitespace_variant.reason);
+        assessment.next_artifact_requests = vec![request, whitespace_variant];
+
+        assert_eq!(
+            integrity(&assessment),
+            None,
+            "requests with identical canonical wire identities must not evade deduplication"
         );
     }
 
