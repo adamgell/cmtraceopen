@@ -2702,8 +2702,6 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "provider-retry-current"
                 | "provider-success-current"
                 | "provider-timeout-current"
-                | "rotation-01-current"
-                | "rotation-02-lo"
                 | "unknown-db-export"
                 | "unrelated-02-wcm"
                 | "unrelated-03-wsync"

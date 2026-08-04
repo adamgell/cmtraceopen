@@ -73,6 +73,11 @@
         "fragmentArtifactIds": []
       },
       {
+        "logicalArtifactId": "client-task-sequence-smsts",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
         "logicalArtifactId": "client-policy-state",
         "coverage": "absent",
         "fragmentArtifactIds": []
@@ -208,6 +213,13 @@
       },
       {
         "logicalArtifactId": "client-policy-agent",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-task-sequence-smsts",
         "artifactId": null,
         "role": "client",
         "coverage": "absent",

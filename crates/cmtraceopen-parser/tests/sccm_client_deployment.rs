@@ -651,6 +651,8 @@ fn finding_class_name(class: &SccmFindingClass) -> &'static str {
     match class {
         SccmFindingClass::Symptom => "symptom",
         SccmFindingClass::ConfirmedFailure => "confirmedFailure",
+        SccmFindingClass::Recovered => "recovered",
+        SccmFindingClass::ContradictoryEvidence => "contradictoryEvidence",
         SccmFindingClass::BlockedOrDeferred => "blockedOrDeferred",
         SccmFindingClass::LikelyContributor => "likelyContributor",
         SccmFindingClass::InsufficientEvidence => "insufficientEvidence",

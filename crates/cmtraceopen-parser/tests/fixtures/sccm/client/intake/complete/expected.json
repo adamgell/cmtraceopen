@@ -97,6 +97,13 @@
         ]
       },
       {
+        "logicalArtifactId": "client-task-sequence-smsts",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-client-root-a-current"
+        ]
+      },
+      {
         "logicalArtifactId": "client-policy-state",
         "coverage": "captured",
         "fragmentArtifactIds": [
@@ -166,6 +173,20 @@
         "fragmentComplete": true,
         "configmgrVersion": "5.00.TEST.0000",
         "collectedAtUtc": "2026-07-30T00:00:02Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-client-root-a-current",
+        "basename": "smsts.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic-client",
+        "relativePath": "evidence/client-task-sequence-smsts/client/current/smsts.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:08Z",
         "encoding": "utf-8"
       },
       {
@@ -355,6 +376,7 @@
       "fixture-complete-app-enforce-root-a-current",
       "fixture-complete-app-intent-root-a-current",
       "fixture-complete-ccmsetup-root-a-current",
+      "fixture-complete-client-root-a-current",
       "fixture-complete-content-root-a-current",
       "fixture-complete-evaluation-root-a-current",
       "fixture-complete-identity-root-a-current",
@@ -391,6 +413,12 @@
         "byteLimit": 4096,
         "limitApplied": false,
         "bytesCopied": 178
+      },
+      {
+        "artifactId": "fixture-complete-client-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 391
       },
       {
         "artifactId": "fixture-complete-content-root-a-current",

@@ -72,6 +72,11 @@
         ]
       },
       {
+        "logicalArtifactId": "client-task-sequence-smsts",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
         "logicalArtifactId": "client-policy-state",
         "coverage": "captured",
         "fragmentArtifactIds": [
@@ -219,6 +224,13 @@
         "role": "client",
         "coverage": "accessDenied",
         "reason": "Access was denied for client source PolicyAgent.log."
+      },
+      {
+        "logicalArtifactId": "client-task-sequence-smsts",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
       },
       {
         "logicalArtifactId": "client-reboot",
