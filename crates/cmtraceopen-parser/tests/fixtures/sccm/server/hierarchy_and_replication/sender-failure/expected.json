@@ -11,19 +11,24 @@
       "transactionId":"hierarchy:msg-send-chd:LAB:CHD:link-lab-chd",
       "key":{"messageId":"msg-send-chd","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
       "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":true,
-      "state":"failed","classification":"confirmedFailure","confidence":"high","confidenceCeiling":"high","coverageGapArtifactIds":[],
+      "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low","coverageGapArtifactIds":[],
       "observations":[{"observationId":"sender-01-chd-failure","phase":"send","disposition":"failed","terminal":true,"evidence":[{"artifactId":"sender-failure-01-chd","startLine":1,"endLine":1}]}]
     },
     {
       "transactionId":"hierarchy:msg-send-sec:LAB:SEC:link-lab-sec",
       "key":{"messageId":"msg-send-sec","linkId":"link-lab-sec","originSiteCode":"LAB","targetSiteCode":"SEC","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
       "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":true,
-      "state":"failed","classification":"confirmedFailure","confidence":"high","confidenceCeiling":"high","coverageGapArtifactIds":[],
+      "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low","coverageGapArtifactIds":[],
       "observations":[{"observationId":"sender-02-sec-failure","phase":"send","disposition":"failed","terminal":true,"evidence":[{"artifactId":"sender-failure-01-chd","startLine":2,"endLine":2}]}]
     }
   ],
   "sourceLocalObservations": [],
-  "artifactRequests": [],
+  "artifactRequests": [
+    {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["despool.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"SEC","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"SEC","basenames":["despool.log"],"reasonCode":"missingTargetReceiveProcessApply"}
+  ],
   "crossSideCausalClaims": [],
   "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
 }

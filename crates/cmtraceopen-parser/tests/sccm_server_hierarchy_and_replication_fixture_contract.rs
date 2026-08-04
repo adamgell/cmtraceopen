@@ -761,7 +761,7 @@ fn observation_matches_record(
         && record_matches_topology(manifest, artifact, &fields)
 }
 
-fn transaction_semantics_are_coherent(transaction: &Value) -> bool {
+fn transaction_semantics_are_coherent(transaction: &Value, manifest: &Value) -> bool {
     let Some(observations) = transaction["observations"].as_array() else {
         return false;
     };
@@ -787,19 +787,23 @@ fn transaction_semantics_are_coherent(transaction: &Value) -> bool {
         return false;
     }
 
-    let (state, classification) = if transaction["timestampOrdering"] != "usable" {
-        ("incomplete", "insufficientEvidence")
-    } else if terminal_failure {
-        ("failed", "confirmedFailure")
-    } else if terminal_success && retrying {
-        ("recovered", "success")
-    } else if terminal_success {
-        ("succeeded", "success")
-    } else if retrying {
-        ("deferred", "blockedOrDeferred")
-    } else {
-        ("incomplete", "insufficientEvidence")
-    };
+    let target_source_missing = transaction["key"]["targetSiteCode"]
+        .as_str()
+        .is_some_and(|target_site| required_target_source_missing(manifest, target_site));
+    let (state, classification) =
+        if transaction["timestampOrdering"] != "usable" || target_source_missing {
+            ("incomplete", "insufficientEvidence")
+        } else if terminal_failure {
+            ("failed", "confirmedFailure")
+        } else if terminal_success && retrying {
+            ("recovered", "success")
+        } else if terminal_success {
+            ("succeeded", "success")
+        } else if retrying {
+            ("deferred", "blockedOrDeferred")
+        } else {
+            ("incomplete", "insufficientEvidence")
+        };
     transaction["state"] == state && transaction["classification"] == classification
 }
 
@@ -1092,9 +1096,74 @@ fn invalid_offset_request_basis(scenario: &str, manifest: &Value) -> Option<Arti
     })
 }
 
+fn target_source_declared(
+    manifest: &Value,
+    target_site: &str,
+    source_id: &str,
+    basename: &str,
+) -> bool {
+    let Some(target_host) = target_host_for_site(manifest, target_site) else {
+        return false;
+    };
+    manifest["artifacts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|artifact| {
+            artifact["sourceId"].as_str() == Some(source_id)
+                && artifact["originalBasename"].as_str() == Some(basename)
+                && artifact["direction"] == "target"
+                && artifact["producerHostHandle"].as_str() == Some(target_host)
+        })
+}
+
+fn required_target_source_missing(manifest: &Value, target_site: &str) -> bool {
+    [
+        ("server-hierarchy-control", "rcmctrl.log"),
+        ("server-hierarchy-transfer", "despool.log"),
+    ]
+    .into_iter()
+    .any(|(source_id, basename)| {
+        !target_source_declared(manifest, target_site, source_id, basename)
+    })
+}
+
+fn missing_target_source_requests(
+    manifest: &Value,
+    expected: &Value,
+) -> BTreeSet<ArtifactRequestContract> {
+    let mut requests = BTreeSet::new();
+    for target_site in expected["transactions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|transaction| transaction["key"]["targetSiteCode"].as_str())
+    {
+        for (source_id, basename) in [
+            ("server-hierarchy-control", "rcmctrl.log"),
+            ("server-hierarchy-transfer", "despool.log"),
+        ] {
+            if target_source_declared(manifest, target_site, source_id, basename) {
+                continue;
+            }
+            requests.insert(ArtifactRequestContract {
+                basis: ArtifactRequestBasis {
+                    source_id: source_id.to_owned(),
+                    direction: "target".to_owned(),
+                    target_site_code: target_site.to_owned(),
+                    basenames: vec![basename.to_owned()],
+                },
+                reason_code: "missingTargetReceiveProcessApply".to_owned(),
+            });
+        }
+    }
+    requests
+}
+
 fn derived_artifact_requests(
     scenario: &str,
     manifest: &Value,
+    expected: &Value,
 ) -> BTreeSet<ArtifactRequestContract> {
     let mut requests = BTreeSet::new();
     for source_id in ["server-hierarchy-control", "server-hierarchy-transfer"] {
@@ -1113,6 +1182,7 @@ fn derived_artifact_requests(
             reason_code: "invalidOffset".to_owned(),
         });
     }
+    requests.extend(missing_target_source_requests(manifest, expected));
     requests
 }
 
@@ -1143,9 +1213,9 @@ fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value)
         .iter()
         .map(|request| {
             (
+                request["targetSiteCode"].as_str(),
                 request["sourceId"].as_str(),
                 request["direction"].as_str(),
-                request["targetSiteCode"].as_str(),
                 request["reasonCode"].as_str(),
             )
         })
@@ -1217,6 +1287,13 @@ fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value)
                 coverage_request_basis(manifest, source_id.unwrap_or_default(), reason).as_ref()
                     == Some(&actual_basis)
             }
+            Some("missingTargetReceiveProcessApply") => missing_target_source_requests(
+                manifest, expected,
+            )
+            .contains(&ArtifactRequestContract {
+                basis: actual_basis,
+                reason_code: "missingTargetReceiveProcessApply".to_owned(),
+            }),
             _ => false,
         };
         if !backed {
@@ -1231,7 +1308,7 @@ fn artifact_request_failures(scenario: &str, manifest: &Value, expected: &Value)
         .filter_map(declared_artifact_request)
         .collect::<BTreeSet<_>>();
     if declared_requests.len() != requests.len()
-        || declared_requests != derived_artifact_requests(scenario, manifest)
+        || declared_requests != derived_artifact_requests(scenario, manifest, expected)
     {
         failures.push(format!(
             "{scenario}: artifact requests are not the complete derived bounded set"
@@ -1692,7 +1769,7 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
         {
             failures.push("transaction key is outside declared topology".to_owned());
         }
-        if !transaction_semantics_are_coherent(transaction) {
+        if !transaction_semantics_are_coherent(transaction, manifest) {
             failures
                 .push("transaction state/classification is not derived from its facts".to_owned());
         }
@@ -1746,10 +1823,14 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                         .iter()
                         .any(|observation| observation["disposition"] == "retrying")
                 });
+        let target_source_missing = transaction["key"]["targetSiteCode"]
+            .as_str()
+            .is_none_or(|target_site| required_target_source_missing(manifest, target_site));
         let derived_confidence = if transaction["topologyCompatibility"] == "exact"
             && transaction["timestampOrdering"] == "usable"
             && transaction["terminalEvidence"] == true
             && gap_ids.is_empty()
+            && !target_source_missing
         {
             "high"
         } else if transaction["topologyCompatibility"] == "exact"
@@ -1757,6 +1838,7 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
             && transaction["terminalEvidence"] == false
             && gap_ids.is_empty()
             && has_retrying_fact
+            && !target_source_missing
         {
             "medium"
         } else {
@@ -1775,7 +1857,8 @@ fn identity_and_schema_failures(scenario: &str, manifest: &Value, expected: &Val
                 || transaction["topologyCompatibility"] != "exact"
                 || transaction["timestampOrdering"] != "usable"
                 || transaction["terminalEvidence"] != true
-                || !gap_ids.is_empty())
+                || !gap_ids.is_empty()
+                || target_source_missing)
         {
             failures
                 .push("high confidence bypasses topology/time/terminal/coverage gates".to_owned());
@@ -2644,21 +2727,28 @@ fn hierarchy_transactions_require_exact_keys_topology_time_and_citations() {
             })
             .collect::<Vec<_>>();
         let expected_outcome: &[(Option<&str>, Option<&str>, Option<&str>)] = match *scenario {
-            "absent-remote-source" | "clock-offset-unknown" => &[(
+            "absent-remote-source"
+            | "backlog-retry"
+            | "clock-offset-unknown"
+            | "receiver-processing-failure"
+            | "recovery" => &[(
                 Some("incomplete"),
                 Some("insufficientEvidence"),
                 Some("low"),
             )],
-            "backlog-retry" => &[(Some("deferred"), Some("blockedOrDeferred"), Some("medium"))],
             "healthy-link" => &[(Some("succeeded"), Some("success"), Some("high"))],
             "incomplete" | "rotation-boundary" | "topology-mismatch" => &[],
-            "receiver-processing-failure" => {
-                &[(Some("failed"), Some("confirmedFailure"), Some("high"))]
-            }
-            "recovery" => &[(Some("recovered"), Some("success"), Some("high"))],
             "sender-failure" => &[
-                (Some("failed"), Some("confirmedFailure"), Some("high")),
-                (Some("failed"), Some("confirmedFailure"), Some("high")),
+                (
+                    Some("incomplete"),
+                    Some("insufficientEvidence"),
+                    Some("low"),
+                ),
+                (
+                    Some("incomplete"),
+                    Some("insufficientEvidence"),
+                    Some("low"),
+                ),
             ],
             _ => &[],
         };
@@ -2708,10 +2798,21 @@ fn hierarchy_gaps_requests_and_source_local_controls_are_bounded() {
             .filter_map(|request| request["reasonCode"].as_str())
             .collect::<Vec<_>>();
         let expected_reasons: &[&str] = match *scenario {
-            "absent-remote-source" => &["coverageAbsent"],
-            "clock-offset-unknown" => &["invalidOffset"],
+            "absent-remote-source" => &["missingTargetReceiveProcessApply", "coverageAbsent"],
+            "backlog-retry" => &[
+                "missingTargetReceiveProcessApply",
+                "missingTargetReceiveProcessApply",
+            ],
+            "clock-offset-unknown" => &["missingTargetReceiveProcessApply", "invalidOffset"],
             "incomplete" => &["coverageCapped"],
+            "receiver-processing-failure" | "recovery" => &["missingTargetReceiveProcessApply"],
             "rotation-boundary" => &["coverageRotationSplit"],
+            "sender-failure" => &[
+                "missingTargetReceiveProcessApply",
+                "missingTargetReceiveProcessApply",
+                "missingTargetReceiveProcessApply",
+                "missingTargetReceiveProcessApply",
+            ],
             _ => &[],
         };
         if request_reason_codes != expected_reasons {
@@ -2795,9 +2896,10 @@ fn hierarchy_schema_and_identity_mutations_fail_closed() {
             .unwrap_or_else(|error| panic!("{scenario}: {error}"));
         let expected = read_json(scenario, "expected.json")
             .unwrap_or_else(|error| panic!("{scenario}: {error}"));
+        let failures = identity_and_schema_failures(scenario, &manifest, &expected);
         assert!(
-            identity_and_schema_failures(scenario, &manifest, &expected).is_empty(),
-            "{scenario}: committed schema is invalid"
+            failures.is_empty(),
+            "{scenario}: committed schema is invalid: {failures:?}"
         );
     }
 
@@ -3090,7 +3192,7 @@ fn hierarchy_artifact_request_mutations_fail_closed() {
     let mut accepted = Vec::new();
     for (label, field, value) in mutations {
         let mut mutated = expected.clone();
-        mutated["artifactRequests"][0][field] = value;
+        mutated["artifactRequests"][1][field] = value;
         if artifact_request_failures("clock-offset-unknown", &manifest, &mutated).is_empty()
             || identity_and_schema_failures("clock-offset-unknown", &manifest, &mutated).is_empty()
         {
@@ -3496,8 +3598,11 @@ fn hierarchy_coderabbit_878a051_control_requests_include_target_rcmctrl() {
         read_json("absent-remote-source", "expected.json").expect("absent expected loads");
     manifest["artifacts"][1]["sourceId"] = serde_json::json!("server-hierarchy-control");
     manifest["artifacts"][1]["originalBasename"] = serde_json::json!("rcmctrl.log");
-    expected["artifactRequests"][0]["sourceId"] = serde_json::json!("server-hierarchy-control");
-    expected["artifactRequests"][0]["basenames"] = serde_json::json!(["rcmctrl.log"]);
+    expected["artifactRequests"][0]["reasonCode"] = serde_json::json!("coverageAbsent");
+    expected["artifactRequests"][1]["sourceId"] = serde_json::json!("server-hierarchy-transfer");
+    expected["artifactRequests"][1]["basenames"] = serde_json::json!(["despool.log"]);
+    expected["artifactRequests"][1]["reasonCode"] =
+        serde_json::json!("missingTargetReceiveProcessApply");
 
     let failures = artifact_request_failures("absent-remote-source", &manifest, &expected);
     assert!(

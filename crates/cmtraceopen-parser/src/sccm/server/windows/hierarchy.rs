@@ -534,6 +534,10 @@ pub fn analyze_hierarchy_replication(
                 observation.terminal
                     && observation.disposition == SccmHierarchyDisposition::Succeeded
             });
+            let topology = topology_link(intake, &candidate.key)?;
+            let transaction_id = transaction_id(&candidate.key);
+            let missing_target_requests =
+                missing_target_source_requests(&artifacts, topology, &transaction_id);
             let gaps = missing_required_artifacts(intake, &artifacts, &candidate.key);
             if candidate.observations.len() == 1
                 && !terminal_failure
@@ -559,7 +563,7 @@ pub fn analyze_hierarchy_replication(
                     SccmHierarchyState::Contradictory,
                     Some(SccmFindingClass::Symptom),
                 )
-            } else if unusable_time || !gaps.is_empty() {
+            } else if unusable_time || !gaps.is_empty() || !missing_target_requests.is_empty() {
                 (
                     SccmHierarchyState::Incomplete,
                     Some(SccmFindingClass::InsufficientEvidence),
@@ -593,7 +597,6 @@ pub fn analyze_hierarchy_replication(
                     SccmConfidence::Low
                 }
             };
-            let transaction_id = transaction_id(&candidate.key);
             let last_successful_phase = candidate
                 .observations
                 .iter()
@@ -605,13 +608,13 @@ pub fn analyze_hierarchy_replication(
             let remote_causality = if candidate.directions.len() == 2
                 && ordering == SccmHierarchyTimestampOrdering::Usable
                 && gaps.is_empty()
+                && missing_target_requests.is_empty()
                 && !contradictory
             {
                 SccmHierarchyRemoteCausality::EvidenceBound
             } else {
                 SccmHierarchyRemoteCausality::NotEstablished
             };
-            let topology = topology_link(intake, &candidate.key)?;
             let mut next_artifacts = artifact_requests
                 .iter()
                 .filter(|request| {
@@ -624,17 +627,7 @@ pub fn analyze_hierarchy_replication(
                     request
                 })
                 .collect::<Vec<_>>();
-            if state == SccmHierarchyState::Incomplete
-                && last_successful_phase
-                    .as_ref()
-                    .is_some_and(|phase| phase.rank() >= SccmHierarchyPhase::Send.rank())
-            {
-                next_artifacts.extend(missing_target_side_requests(
-                    &artifacts,
-                    topology,
-                    &transaction_id,
-                ));
-            }
+            next_artifacts.extend(missing_target_requests);
             next_artifacts.sort_by(request_order);
             next_artifacts.dedup_by(|left, right| request_order(left, right).is_eq());
             let target_host_handle = Some(topology.target_host_handle.clone());
@@ -1244,25 +1237,25 @@ fn coverage_requests(
     requests
 }
 
-fn missing_target_side_requests(
+fn missing_target_source_requests(
     artifacts: &[&SccmServerArtifactAssessment],
     topology: &SccmServerHierarchyLinkTopology,
     transaction_id: &str,
 ) -> Vec<SccmHierarchyArtifactRequest> {
-    let target_side_declared = artifacts.iter().any(|artifact| {
-        artifact_direction(artifact) == Some(SccmHierarchyDirection::Target)
-            && artifact.producer_host_handle.as_deref()
-                == Some(topology.target_host_handle.as_str())
-    });
-    if target_side_declared {
-        return Vec::new();
-    }
-
     [
         ("server-hierarchy-transfer", "despool.log"),
         ("server-hierarchy-control", "rcmctrl.log"),
     ]
     .into_iter()
+    .filter(|(source_id, basename)| {
+        !artifacts.iter().any(|artifact| {
+            artifact.source_id == *source_id
+                && artifact.original_basename.as_deref() == Some(*basename)
+                && artifact_direction(artifact) == Some(SccmHierarchyDirection::Target)
+                && artifact.producer_host_handle.as_deref()
+                    == Some(topology.target_host_handle.as_str())
+        })
+    })
     .map(|(source_id, basename)| SccmHierarchyArtifactRequest {
         transaction_id: Some(transaction_id.to_owned()),
         source_id: source_id.to_owned(),

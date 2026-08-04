@@ -15,7 +15,10 @@
     "observations":[{"observationId":"absent-01-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"absent-01-sender","startLine":1,"endLine":1}]}]
   }],
   "sourceLocalObservations": [],
-  "artifactRequests": [{"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["despool.log"],"reasonCode":"coverageAbsent"}],
+  "artifactRequests": [
+    {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["despool.log"],"reasonCode":"coverageAbsent"}
+  ],
   "crossSideCausalClaims": [],
   "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
 }

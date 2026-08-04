@@ -18,7 +18,10 @@
     ]
   }],
   "sourceLocalObservations": [],
-  "artifactRequests": [{"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"both","targetSiteCode":"CHD","basenames":["despool.log","sender.log"],"reasonCode":"invalidOffset"}],
+  "artifactRequests": [
+    {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"both","targetSiteCode":"CHD","basenames":["despool.log","sender.log"],"reasonCode":"invalidOffset"}
+  ],
   "crossSideCausalClaims": [],
   "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
 }

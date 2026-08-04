@@ -10,12 +10,15 @@
     "transactionId":"hierarchy:msg-backlog-01:LAB:CHD:link-lab-chd",
     "key":{"messageId":"msg-backlog-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
     "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":false,
-    "state":"deferred","classification":"blockedOrDeferred","confidence":"medium","confidenceCeiling":"medium",
+    "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
     "coverageGapArtifactIds":[],
     "observations":[{"observationId":"backlog-01-queue","phase":"queueOrSerialize","disposition":"retrying","terminal":false,"evidence":[{"artifactId":"backlog-01-replmgr","startLine":1,"endLine":1}]}]
   }],
   "sourceLocalObservations": [],
-  "artifactRequests": [],
+  "artifactRequests": [
+    {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["despool.log"],"reasonCode":"missingTargetReceiveProcessApply"}
+  ],
   "crossSideCausalClaims": [],
   "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
 }

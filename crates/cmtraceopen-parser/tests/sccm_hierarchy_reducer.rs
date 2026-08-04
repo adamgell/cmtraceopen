@@ -31,15 +31,15 @@ const SCENARIOS: &[&str] = &[
 const FULL_OUTPUT_SHA256: &[(&str, &str)] = &[
     (
         "absent-remote-source",
-        "31878579ceeb0d6f46ead20f08195b39f01bb4baeba25618403506fdc9623831",
+        "2ecf2bbce2368a23489ca4f81b772271ceb7ac743343daf668bf2c618c80551a",
     ),
     (
         "backlog-retry",
-        "5f5a7ebbb05dc6c83084c9bd7727bd7309267f3d868e2f9899a9bf8b2934b5bb",
+        "e63b67202b6e5a0aa9179000ad72d3215cae3d5b8bfc894fea2f8c9c7bde36a9",
     ),
     (
         "clock-offset-unknown",
-        "fec2262eb343a34c6c625e8133f2ef6d56b411135b0e41aac1a8dc93fc01c2d6",
+        "0c14d94209cc7765303b429353732990ef775aef69f994c5894796f5cd0a25b8",
     ),
     (
         "generic-site-token",
@@ -55,11 +55,11 @@ const FULL_OUTPUT_SHA256: &[(&str, &str)] = &[
     ),
     (
         "receiver-processing-failure",
-        "0a23e3e09d4bbf60f5c5f0bd20274821600783b229466f22e0fd1b84713c58b8",
+        "5785052b51919023838db1bb0d282e234002f9eb05609dbf8d74e188e0f04fd7",
     ),
     (
         "recovery",
-        "b110daef580952190bc1ed17363cbd2dff19367c7647c9e7425e5bc3bdaeae29",
+        "d2d7035ae31dc35ed07b517bc8ba1f08159460316fba38d8267932067b7969d9",
     ),
     (
         "rotation-boundary",
@@ -67,7 +67,7 @@ const FULL_OUTPUT_SHA256: &[(&str, &str)] = &[
     ),
     (
         "sender-failure",
-        "399ddc00fd0c70e94d3f6b31e5476dbf92a02930d4ce3f5fe8724d683b984686",
+        "87934ae0c81f5bde7d075fc11f75d982f2f81c02dd045df52ff8c24b51bc88c3",
     ),
     (
         "topology-mismatch",
@@ -391,7 +391,7 @@ fn hierarchy_authority_is_private_canonical_intake_and_all_provenance_is_sealed(
 }
 
 #[test]
-fn registered_hierarchy_profile_owns_exact_keys_and_validated_failure_findings() {
+fn registered_hierarchy_profile_bounds_failures_without_required_target_sources() {
     let (intake, _) = load_assessment("sender-failure");
     let analysis = analyze_hierarchy_replication(&intake).expect("sealed intake");
     assert_eq!(analysis.transactions.len(), 2);
@@ -405,12 +405,19 @@ fn registered_hierarchy_profile_owns_exact_keys_and_validated_failure_findings()
             key.kind == SccmCorrelationKeyKind::HierarchyLinkId
                 && key.confidence == SccmKeyConfidence::Exact
         }));
+        assert_eq!(transaction.state, SccmHierarchyState::Incomplete);
+        assert_eq!(transaction.confidence, SccmConfidence::Low);
+        assert_eq!(
+            transaction.remote_causality,
+            SccmHierarchyRemoteCausality::NotEstablished
+        );
+        assert_eq!(transaction.next_artifacts.len(), 2);
     }
     assert_eq!(analysis.findings.len(), 2);
     assert!(analysis.findings.iter().all(|finding| {
-        finding.class == SccmFindingClass::ConfirmedFailure
-            && finding.severity == Severity::Error
-            && !finding.terminal_evidence.is_empty()
+        finding.class == SccmFindingClass::Symptom
+            && finding.severity == Severity::Warning
+            && finding.terminal_evidence.is_empty()
             && finding.validate().is_ok()
     }));
 }
@@ -509,19 +516,17 @@ fn gaps_and_requests_are_transaction_and_exact_topology_scoped() {
     }));
 }
 
-#[test]
-fn omitted_target_side_emits_transaction_scoped_receive_process_apply_requests() {
+fn assert_missing_target_sources(missing: &[(&str, &str)]) {
     let (mut manifest, mut payloads, _) = fixture_parts("healthy-link");
+    let missing_basenames = missing
+        .iter()
+        .map(|(_, basename)| *basename)
+        .collect::<BTreeSet<_>>();
     let target_ids = manifest["artifacts"]
         .as_array()
         .expect("artifacts")
         .iter()
-        .filter(|artifact| {
-            matches!(
-                required_str(artifact, "originalBasename"),
-                "despool.log" | "rcmctrl.log"
-            )
-        })
+        .filter(|artifact| missing_basenames.contains(required_str(artifact, "originalBasename")))
         .map(|artifact| required_str(artifact, "artifactId").to_owned())
         .collect::<BTreeSet<_>>();
     manifest["artifacts"]
@@ -540,7 +545,7 @@ fn omitted_target_side_emits_transaction_scoped_receive_process_apply_requests()
         SccmHierarchyRemoteCausality::NotEstablished
     );
 
-    assert_eq!(transaction.next_artifacts.len(), 2);
+    assert_eq!(transaction.next_artifacts.len(), missing.len());
     assert!(transaction.next_artifacts.iter().all(|request| {
         request.transaction_id.as_deref() == Some(transaction.transaction_id.as_str())
             && request.direction == SccmHierarchyDirection::Target
@@ -548,13 +553,34 @@ fn omitted_target_side_emits_transaction_scoped_receive_process_apply_requests()
             && request.target_site_code == "CHD"
             && request.reason_code == "missingTargetReceiveProcessApply"
     }));
-    let requested = transaction
+    let requested_sources = transaction
         .next_artifacts
         .iter()
-        .flat_map(|request| request.basenames.iter().map(String::as_str))
+        .map(|request| {
+            assert_eq!(request.basenames.len(), 1);
+            (request.source_id.as_str(), request.basenames[0].as_str())
+        })
         .collect::<BTreeSet<_>>();
-    assert_eq!(requested, BTreeSet::from(["despool.log", "rcmctrl.log"]));
+    assert_eq!(requested_sources, missing.iter().copied().collect());
     assert_eq!(analysis.artifact_requests, transaction.next_artifacts);
+}
+
+#[test]
+fn omitted_target_despool_emits_only_transfer_request() {
+    assert_missing_target_sources(&[("server-hierarchy-transfer", "despool.log")]);
+}
+
+#[test]
+fn omitted_target_rcmctrl_emits_only_control_request() {
+    assert_missing_target_sources(&[("server-hierarchy-control", "rcmctrl.log")]);
+}
+
+#[test]
+fn omitted_both_target_sources_emit_both_requests() {
+    assert_missing_target_sources(&[
+        ("server-hierarchy-transfer", "despool.log"),
+        ("server-hierarchy-control", "rcmctrl.log"),
+    ]);
 }
 
 #[test]
