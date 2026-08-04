@@ -290,12 +290,32 @@ fn translate_admitted_artifact_ids(
     }
 }
 
+fn canonicalize_json(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(canonicalize_json).collect())
+        }
+        serde_json::Value::Object(fields) => {
+            let mut entries = fields.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, canonicalize_json(value)))
+                    .collect(),
+            )
+        }
+        scalar => scalar,
+    }
+}
+
 fn production_output_digest(
     analysis: &cmtraceopen_parser::sccm::client::SccmClientExtendedAnalysis,
     artifact_ids: &BTreeMap<String, String>,
 ) -> String {
     let mut normalized = serde_json::to_value(analysis).expect("serializable production analysis");
     translate_admitted_artifact_ids(&mut normalized, artifact_ids);
+    let normalized = canonicalize_json(normalized);
     Sha256::digest(serde_json::to_vec(&normalized).expect("canonical production JSON"))
         .iter()
         .map(|byte| format!("{byte:02x}"))
