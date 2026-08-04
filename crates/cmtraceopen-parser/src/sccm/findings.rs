@@ -2694,6 +2694,14 @@ fn correlation_key_kind_order(kind: &SccmCorrelationKeyKind) -> u8 {
         SccmCorrelationKeyKind::RequestId => 11,
         SccmCorrelationKeyKind::TopicId => 12,
         SccmCorrelationKeyKind::StateMessageId => 13,
+        SccmCorrelationKeyKind::InventoryCycleId => 14,
+        SccmCorrelationKeyKind::ReportId => 15,
+        SccmCorrelationKeyKind::ResourceHandle => 16,
+        SccmCorrelationKeyKind::ComplianceCiId => 17,
+        SccmCorrelationKeyKind::BaselineId => 18,
+        SccmCorrelationKeyKind::ComplianceStateId => 19,
+        SccmCorrelationKeyKind::MeteringCycleId => 20,
+        SccmCorrelationKeyKind::RuleId => 21,
     }
 }
 

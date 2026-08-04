@@ -143,6 +143,9 @@ pub enum SccmClientWorkflow {
     Policy,
     Deployment,
     Updates,
+    Inventory,
+    Compliance,
+    Metering,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -875,6 +878,9 @@ const DEPLOYMENT: &[SccmClientWorkflow] = &[SccmClientWorkflow::Deployment];
 const UPDATES: &[SccmClientWorkflow] = &[SccmClientWorkflow::Updates];
 const DEPLOYMENT_UPDATES: &[SccmClientWorkflow] =
     &[SccmClientWorkflow::Deployment, SccmClientWorkflow::Updates];
+const INVENTORY: &[SccmClientWorkflow] = &[SccmClientWorkflow::Inventory];
+const COMPLIANCE: &[SccmClientWorkflow] = &[SccmClientWorkflow::Compliance];
+const METERING: &[SccmClientWorkflow] = &[SccmClientWorkflow::Metering];
 const HEALTH_DEPLOYMENT: &[SccmClientWorkflow] =
     &[SccmClientWorkflow::Health, SccmClientWorkflow::Deployment];
 
@@ -895,6 +901,11 @@ const CLIENT_SOURCE_GROUPS: &[ClientSourceGroupSpec] = &[
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
+        logical_artifact_id: "client-compliance",
+        workflows: COMPLIANCE,
+        requiredness: SccmClientSourceRequiredness::Required,
+    },
+    ClientSourceGroupSpec {
         logical_artifact_id: "client-content",
         workflows: DEPLOYMENT_UPDATES,
         requiredness: SccmClientSourceRequiredness::Required,
@@ -910,6 +921,11 @@ const CLIENT_SOURCE_GROUPS: &[ClientSourceGroupSpec] = &[
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
+        logical_artifact_id: "client-inventory",
+        workflows: INVENTORY,
+        requiredness: SccmClientSourceRequiredness::Required,
+    },
+    ClientSourceGroupSpec {
         logical_artifact_id: "client-location",
         workflows: HEALTH_DEPLOYMENT,
         requiredness: SccmClientSourceRequiredness::Required,
@@ -922,6 +938,11 @@ const CLIENT_SOURCE_GROUPS: &[ClientSourceGroupSpec] = &[
     ClientSourceGroupSpec {
         logical_artifact_id: "client-maintenance-window",
         workflows: UPDATES,
+        requiredness: SccmClientSourceRequiredness::Required,
+    },
+    ClientSourceGroupSpec {
+        logical_artifact_id: "client-metering",
+        workflows: METERING,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {

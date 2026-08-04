@@ -1484,7 +1484,7 @@ fn complete_client_intake_covers_every_declared_group_without_a_diagnosis() {
     let declared = declared_client_source_groups();
     let intake = assessment("complete");
 
-    assert_eq!(declared.len(), 14);
+    assert_eq!(declared.len(), 17);
     assert_eq!(intake.groups.len(), declared.len());
     assert!(intake
         .groups
@@ -1663,8 +1663,8 @@ fn missing_access_denied_and_capped_sources_remain_exact_coverage_states() {
         .all(|group| group.coverage == SccmCoverageState::Absent));
     assert_eq!(
         missing.coverage_gaps.len(),
-        15,
-        "the shared LocationServices declaration contributes one gap to each consumer group, while maintenance and reboot remain explicit"
+        18,
+        "the shared LocationServices declaration contributes one gap to each consumer group, while maintenance, reboot, and extended workflow groups remain explicit"
     );
     assert_eq!(
         missing

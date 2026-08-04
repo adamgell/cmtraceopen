@@ -25,7 +25,7 @@ use crate::sccm::catalog::classify_artifact_name;
 use crate::sccm::evidence::SccmRawEvidenceSnapshot;
 use crate::sccm::{
     extract_keys, SccmArtifact, SccmArtifactFamily, SccmCoverageState, SccmEvidence,
-    SccmExtractionProfile, SccmKeyExtractionResult, SccmRole, SccmTimeOrderingState,
+    SccmExtractionProfile, SccmKeyExtractionResult, SccmRole, SccmRotation, SccmTimeOrderingState,
 };
 
 use super::{
@@ -88,10 +88,19 @@ pub struct SccmClientAdmittedEvidence {
     source_coverage: BTreeMap<String, SccmCoverageState>,
     source_coverage_by_basename: BTreeMap<String, SccmCoverageState>,
     source_basename_by_artifact: BTreeMap<String, String>,
+    source_artifacts: BTreeMap<String, SccmClientAdmittedSourceArtifact>,
     unavailable_source_basenames: BTreeSet<String>,
     admitted_source_groups: BTreeSet<String>,
     profiles_by_artifact: BTreeMap<String, SccmExtractionProfile>,
     integrity_seal: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SccmClientAdmittedSourceArtifact {
+    pub(crate) basename: String,
+    pub(crate) rotation: SccmRotation,
+    pub(crate) coverage: SccmCoverageState,
+    pub(crate) fragment_complete: Option<bool>,
 }
 
 /// Artifact-scoped key-extraction results selected only from sealed client
@@ -150,6 +159,14 @@ impl SccmClientAdmittedEvidence {
             .map(String::as_str))
     }
 
+    pub(crate) fn source_artifacts(
+        &self,
+    ) -> Result<&BTreeMap<String, SccmClientAdmittedSourceArtifact>, SccmClientEvidenceAdmissionError>
+    {
+        self.verify_integrity()?;
+        Ok(&self.source_artifacts)
+    }
+
     pub(crate) fn source_basename_is_complete(
         &self,
         basename: &str,
@@ -204,12 +221,15 @@ impl SccmClientAdmittedEvidence {
     pub(crate) fn verify_integrity(&self) -> Result<(), SccmClientEvidenceAdmissionError> {
         let recomputed = compute_integrity_seal(
             &self.evidence,
-            &self.source_coverage,
-            &self.source_coverage_by_basename,
-            &self.source_basename_by_artifact,
-            &self.unavailable_source_basenames,
-            &self.admitted_source_groups,
-            &self.profiles_by_artifact,
+            IntegrityAuthority {
+                source_coverage: &self.source_coverage,
+                source_coverage_by_basename: &self.source_coverage_by_basename,
+                source_basename_by_artifact: &self.source_basename_by_artifact,
+                source_artifacts: &self.source_artifacts,
+                unavailable_source_basenames: &self.unavailable_source_basenames,
+                admitted_source_groups: &self.admitted_source_groups,
+                profiles_by_artifact: &self.profiles_by_artifact,
+            },
         )?;
         (recomputed == self.integrity_seal)
             .then_some(())
@@ -352,6 +372,20 @@ pub fn admit_client_evidence(
             .or_insert_with(|| capture_gap.coverage.clone());
     }
     let mut eligible = BTreeMap::new();
+    let mut source_artifacts = BTreeMap::new();
+    for fragment in canonical.groups.iter().flat_map(|group| &group.fragments) {
+        if !is_supported_raw_ccm_source(&fragment.basename) {
+            continue;
+        }
+        source_artifacts
+            .entry(fragment.artifact_id.clone())
+            .or_insert_with(|| SccmClientAdmittedSourceArtifact {
+                basename: fragment.basename.clone(),
+                rotation: fragment.rotation.clone(),
+                coverage: fragment.coverage.clone(),
+                fragment_complete: fragment.fragment_complete,
+            });
+    }
     let mut source_basename_by_artifact = BTreeMap::new();
     let mut unavailable_source_basenames = canonical
         .capture_gaps
@@ -505,18 +539,22 @@ pub fn admit_client_evidence(
     evidence.sort_by(compare_evidence);
     let integrity_seal = compute_integrity_seal(
         &evidence,
-        &source_coverage,
-        &source_coverage_by_basename,
-        &source_basename_by_artifact,
-        &unavailable_source_basenames,
-        &admitted_source_groups,
-        &profiles_by_artifact,
+        IntegrityAuthority {
+            source_coverage: &source_coverage,
+            source_coverage_by_basename: &source_coverage_by_basename,
+            source_basename_by_artifact: &source_basename_by_artifact,
+            source_artifacts: &source_artifacts,
+            unavailable_source_basenames: &unavailable_source_basenames,
+            admitted_source_groups: &admitted_source_groups,
+            profiles_by_artifact: &profiles_by_artifact,
+        },
     )?;
     Ok(SccmClientAdmittedEvidence {
         evidence,
         source_coverage,
         source_coverage_by_basename,
         source_basename_by_artifact,
+        source_artifacts,
         unavailable_source_basenames,
         admitted_source_groups,
         profiles_by_artifact,
@@ -711,6 +749,7 @@ struct IntegrityProjection<'a> {
     source_coverage: &'a BTreeMap<String, SccmCoverageState>,
     source_coverage_by_basename: &'a BTreeMap<String, SccmCoverageState>,
     source_basename_by_artifact: &'a BTreeMap<String, String>,
+    source_artifacts_digest: &'a str,
     unavailable_source_basenames: &'a BTreeSet<String>,
     admitted_source_groups: &'a BTreeSet<String>,
     profile_assignments: &'a BTreeMap<&'a str, usize>,
@@ -763,14 +802,19 @@ impl Write for BoundedIntegrityWriter {
     }
 }
 
+struct IntegrityAuthority<'a> {
+    source_coverage: &'a BTreeMap<String, SccmCoverageState>,
+    source_coverage_by_basename: &'a BTreeMap<String, SccmCoverageState>,
+    source_basename_by_artifact: &'a BTreeMap<String, String>,
+    source_artifacts: &'a BTreeMap<String, SccmClientAdmittedSourceArtifact>,
+    unavailable_source_basenames: &'a BTreeSet<String>,
+    admitted_source_groups: &'a BTreeSet<String>,
+    profiles_by_artifact: &'a BTreeMap<String, SccmExtractionProfile>,
+}
+
 fn compute_integrity_seal(
     evidence: &[SccmEvidence],
-    source_coverage: &BTreeMap<String, SccmCoverageState>,
-    source_coverage_by_basename: &BTreeMap<String, SccmCoverageState>,
-    source_basename_by_artifact: &BTreeMap<String, String>,
-    unavailable_source_basenames: &BTreeSet<String>,
-    admitted_source_groups: &BTreeSet<String>,
-    profiles_by_artifact: &BTreeMap<String, SccmExtractionProfile>,
+    authority: IntegrityAuthority<'_>,
 ) -> Result<String, SccmClientEvidenceAdmissionError> {
     // Many rotations legitimately select the same profile. Seal the complete
     // profile once and bind each artifact to its deterministic index so the
@@ -779,7 +823,7 @@ fn compute_integrity_seal(
     let mut profile_indices = BTreeMap::<String, usize>::new();
     let mut unique_profiles = Vec::new();
     let mut profile_assignments = BTreeMap::new();
-    for (artifact_id, profile) in profiles_by_artifact {
+    for (artifact_id, profile) in authority.profiles_by_artifact {
         let canonical_profile = serde_json::to_string(profile)
             .map_err(|_| SccmClientEvidenceAdmissionError::IntegrityViolation)?;
         let profile_index = match profile_indices.get(&canonical_profile) {
@@ -794,16 +838,30 @@ fn compute_integrity_seal(
         profile_assignments.insert(artifact_id.as_str(), profile_index);
     }
 
+    // The complete source projection remains integrity-bound without copying
+    // repeated basenames and enum labels into the already bounded outer seal.
+    let mut source_writer = BoundedIntegrityWriter::new(MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES);
+    let serialized_sources = serde_json::to_writer(&mut source_writer, authority.source_artifacts);
+    if serialized_sources.is_err() {
+        return Err(if source_writer.limit_exceeded {
+            SccmClientEvidenceAdmissionError::IntegritySealLimitExceeded
+        } else {
+            SccmClientEvidenceAdmissionError::IntegrityViolation
+        });
+    }
+    let source_artifacts_digest = source_writer.finish();
+
     let mut writer = BoundedIntegrityWriter::new(MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES);
     let serialized = serde_json::to_writer(
         &mut writer,
         &IntegrityProjection {
             evidence,
-            source_coverage,
-            source_coverage_by_basename,
-            source_basename_by_artifact,
-            unavailable_source_basenames,
-            admitted_source_groups,
+            source_coverage: authority.source_coverage,
+            source_coverage_by_basename: authority.source_coverage_by_basename,
+            source_basename_by_artifact: authority.source_basename_by_artifact,
+            source_artifacts_digest: &source_artifacts_digest,
+            unavailable_source_basenames: authority.unavailable_source_basenames,
+            admitted_source_groups: authority.admitted_source_groups,
             profile_assignments: &profile_assignments,
             profiles: &unique_profiles,
         },

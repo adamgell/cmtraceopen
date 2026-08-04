@@ -26,6 +26,13 @@
         ]
       },
       {
+        "logicalArtifactId": "client-compliance",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-report-root-a-numbered-04"
+        ]
+      },
+      {
         "logicalArtifactId": "client-content",
         "coverage": "captured",
         "fragmentArtifactIds": [
@@ -48,6 +55,13 @@
         ]
       },
       {
+        "logicalArtifactId": "client-inventory",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-report-root-a-numbered-03"
+        ]
+      },
+      {
         "logicalArtifactId": "client-location",
         "coverage": "captured",
         "fragmentArtifactIds": [
@@ -66,6 +80,13 @@
         "coverage": "captured",
         "fragmentArtifactIds": [
           "fixture-complete-updates-root-a-numbered-01"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-metering",
+        "coverage": "captured",
+        "fragmentArtifactIds": [
+          "fixture-complete-report-root-a-numbered-05"
         ]
       },
       {
@@ -232,6 +253,48 @@
         "encoding": "utf-8"
       },
       {
+        "artifactId": "fixture-complete-report-root-a-numbered-03",
+        "basename": "InventoryAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic:report-numbered-03",
+        "relativePath": "evidence/client-inventory/current/InventoryAgent.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:11Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-report-root-a-numbered-04",
+        "basename": "DCMReporting.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic:report-numbered-04",
+        "relativePath": "evidence/client-compliance/current/DCMReporting.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:12Z",
+        "encoding": "utf-8"
+      },
+      {
+        "artifactId": "fixture-complete-report-root-a-numbered-05",
+        "basename": "SWMTRReportGen.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "captured",
+        "pathFingerprint": "synthetic:report-numbered-05",
+        "relativePath": "evidence/client-metering/current/SWMTRReportGen.log",
+        "fragmentComplete": true,
+        "configmgrVersion": "5.00.TEST.0000",
+        "collectedAtUtc": "2026-07-30T00:00:13Z",
+        "encoding": "utf-8"
+      },
+      {
         "artifactId": "fixture-complete-update-supplemental-root-a-current",
         "basename": "ReportingEvents.log",
         "rotation": {
@@ -300,6 +363,9 @@
       "fixture-complete-policy-state-root-a-current",
       "fixture-complete-update-supplemental-root-a-current",
       "fixture-complete-updates-root-a-current",
+      "fixture-complete-report-root-a-numbered-03",
+      "fixture-complete-report-root-a-numbered-04",
+      "fixture-complete-report-root-a-numbered-05",
       "fixture-complete-updates-root-a-numbered-01",
       "fixture-complete-updates-root-a-numbered-02"
     ],
@@ -358,6 +424,24 @@
       },
       {
         "artifactId": "fixture-complete-policy-state-root-a-current",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 177
+      },
+      {
+        "artifactId": "fixture-complete-report-root-a-numbered-03",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 178
+      },
+      {
+        "artifactId": "fixture-complete-report-root-a-numbered-04",
+        "byteLimit": 4096,
+        "limitApplied": false,
+        "bytesCopied": 177
+      },
+      {
+        "artifactId": "fixture-complete-report-root-a-numbered-05",
         "byteLimit": 4096,
         "limitApplied": false,
         "bytesCopied": 177

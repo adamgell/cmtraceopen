@@ -1,18 +1,22 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::models::log_entry::Severity;
 
 use super::super::{
-    classify_artifact_name, normalize_key, SccmArtifact, SccmArtifactFamily, SccmCorrelationKey,
-    SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence, SccmEvidenceRef,
-    SccmTimeOrderingState,
+    normalize_key, SccmCorrelationKey, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidence,
+    SccmEvidenceRef, SccmFindingClass, SccmKeyConfidence, SccmRole, SccmTimeOrderingState,
+    SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
 };
+use super::{SccmClientAdmittedEvidence, SccmClientEvidenceAdmissionError};
 
-const OBSERVED_VERSION_PREFIX: &str = "5.00.TEST.";
+pub const SCCM_CLIENT_EXTENDED_ANALYSIS_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SccmWorkflow {
+pub enum SccmClientExtendedWorkflow {
     Inventory,
     Compliance,
     Metering,
@@ -20,7 +24,7 @@ pub enum SccmWorkflow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SccmPhase {
+pub enum SccmClientExtendedPhase {
     Collect,
     Provider,
     Serialize,
@@ -33,26 +37,27 @@ pub enum SccmPhase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SccmTransactionState {
+pub enum SccmClientExtendedState {
     InProgress,
     Succeeded,
     Failed,
     Recovered,
     Contradictory,
     EvaluatedNonCompliant,
+    Remediated,
+    BlockedOrDeferred,
     InsufficientEvidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SccmTransaction {
+pub struct SccmClientExtendedTransaction {
     pub transaction_id: String,
-    pub workflow: SccmWorkflow,
+    pub workflow: SccmClientExtendedWorkflow,
     pub profile_id: String,
-    pub configmgr_version: String,
-    pub phase: SccmPhase,
-    pub state: SccmTransactionState,
-    pub last_successful_phase: Option<SccmPhase>,
+    pub phase: SccmClientExtendedPhase,
+    pub state: SccmClientExtendedState,
+    pub last_successful_phase: Option<SccmClientExtendedPhase>,
     pub keys: Vec<SccmCorrelationKey>,
     pub evidence: Vec<SccmEvidenceRef>,
     pub coverage_gap_artifact_ids: Vec<String>,
@@ -60,48 +65,66 @@ pub struct SccmTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SccmCoverageGap {
-    pub workflow: SccmWorkflow,
-    pub artifact_id: String,
-    pub source_basename: String,
+pub struct SccmClientExtendedCoverageGap {
+    pub workflow: SccmClientExtendedWorkflow,
+    pub logical_artifact_id: String,
     pub state: SccmCoverageState,
     pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SccmSourceObservation {
-    pub workflow: SccmWorkflow,
-    pub artifact_id: String,
-    pub evidence_id: String,
+pub struct SccmClientExtendedObservation {
+    pub workflow: SccmClientExtendedWorkflow,
     pub reason: String,
+    pub artifact_ids: Vec<String>,
+    pub evidence: Vec<SccmEvidenceRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SccmClientAnalysis {
-    pub transactions: Vec<SccmTransaction>,
-    pub coverage: Vec<SccmCoverageGap>,
-    pub source_local_observations: Vec<SccmSourceObservation>,
+pub struct SccmClientExtendedFinding {
+    pub finding_id: String,
+    pub subject_id: String,
+    pub workflow: SccmClientExtendedWorkflow,
+    pub role: SccmRole,
+    pub class: SccmFindingClass,
+    pub severity: Severity,
+    pub state: SccmClientExtendedState,
+    pub phase: SccmClientExtendedPhase,
+    pub confidence: SccmKeyConfidence,
+    pub keys: Vec<SccmCorrelationKey>,
+    pub next_artifact_id: Option<String>,
+    pub evidence: Vec<SccmEvidenceRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmClientExtendedAnalysis {
+    pub schema_version: u32,
+    pub transactions: Vec<SccmClientExtendedTransaction>,
+    pub coverage: Vec<SccmClientExtendedCoverageGap>,
+    pub source_local_observations: Vec<SccmClientExtendedObservation>,
+    pub findings: Vec<SccmClientExtendedFinding>,
+    pub prohibited_claims: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct TransactionKey {
-    workflow: SccmWorkflow,
+    workflow: SccmClientExtendedWorkflow,
     tuple: String,
 }
 
 #[derive(Debug, Clone)]
 struct Fact {
-    workflow: SccmWorkflow,
-    phase: SccmPhase,
+    workflow: SccmClientExtendedWorkflow,
+    phase: SccmClientExtendedPhase,
     disposition: Disposition,
     terminal: bool,
     evidence: SccmEvidence,
     keys: Vec<SccmCorrelationKey>,
     tuple: String,
     profile_id: String,
-    configmgr_version: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,164 +136,207 @@ enum Disposition {
     Other,
 }
 
-/// Analyze only the three client-extended workflows represented by the observed
-/// #325 source catalog. The function accepts normalized evidence and metadata;
-/// it never reads files, infers paths, or reparses CCM records.
+/// Analyze inventory, compliance, and metering only through sealed client
+/// evidence. The reducer never accepts caller-assembled artifacts or records.
 pub fn analyze_client_extended(
-    artifacts: &[SccmArtifact],
-    evidence: &[SccmEvidence],
-) -> SccmClientAnalysis {
-    let mut coverage = Vec::new();
+    admitted: &SccmClientAdmittedEvidence,
+) -> Result<SccmClientExtendedAnalysis, SccmClientEvidenceAdmissionError> {
+    let coverage = extended_coverage(admitted)?;
     let mut observations = Vec::new();
     let mut facts = BTreeMap::<TransactionKey, Vec<Fact>>::new();
 
-    for artifact in artifacts {
-        let Some(context) = artifact_context(artifact) else {
+    for (artifact_id, source) in admitted.source_artifacts()? {
+        let Some(workflow) = workflow_for_basename(&source.basename) else {
             continue;
         };
-
-        if artifact.coverage != SccmCoverageState::Captured {
-            coverage.push(SccmCoverageGap {
-                workflow: context.workflow,
-                artifact_id: artifact.artifact_id.clone(),
-                source_basename: context.source_basename.to_owned(),
-                state: artifact.coverage.clone(),
-                reason: "The admitted source was not captured; this is a coverage gap, not a workflow outcome.".to_owned(),
-            });
-            continue;
-        }
-
-        let Some(version) = artifact.configmgr_version.as_deref() else {
-            coverage.push(version_gap(context, artifact));
-            continue;
-        };
-        if !version.starts_with(OBSERVED_VERSION_PREFIX) {
-            coverage.push(version_gap(context, artifact));
-            continue;
-        }
-
-        let profile_id = profile_id(context.workflow);
-        for item in evidence
-            .iter()
-            .filter(|item| item.reference.artifact_id == artifact.artifact_id)
+        if source.coverage == SccmCoverageState::Captured && source.fragment_complete == Some(true)
         {
-            let Some(fact) = parse_fact(
-                context,
-                profile_id,
-                version,
-                artifact,
-                item,
-                &mut observations,
-            ) else {
-                continue;
-            };
-            facts
-                .entry(TransactionKey {
-                    workflow: fact.workflow,
-                    tuple: fact.tuple.clone(),
-                })
-                .or_default()
-                .push(fact);
+            continue;
         }
+        observations.push(SccmClientExtendedObservation {
+            workflow,
+            reason: if source.coverage == SccmCoverageState::Captured {
+                "An incomplete rotation fragment remains source-local coverage and cannot establish a workflow outcome."
+            } else {
+                "An unavailable or malformed source artifact remains coverage and cannot establish a workflow outcome."
+            }
+            .to_owned(),
+            artifact_ids: vec![artifact_id.clone()],
+            evidence: Vec::new(),
+        });
     }
 
-    coverage.sort_by(|left, right| {
-        (
-            left.workflow,
-            &left.artifact_id,
-            &left.source_basename,
-            &left.reason,
-        )
-            .cmp(&(
-                right.workflow,
-                &right.artifact_id,
-                &right.source_basename,
-                &right.reason,
-            ))
-    });
+    for evidence in admitted.evidence()? {
+        let Some(context) = evidence_context(admitted, evidence)? else {
+            continue;
+        };
+        let profile_id = profile_id(context.workflow);
+        let Some(fact) = parse_fact(context, profile_id, evidence, &mut observations) else {
+            continue;
+        };
+        facts
+            .entry(TransactionKey {
+                workflow: fact.workflow,
+                tuple: fact.tuple.clone(),
+            })
+            .or_default()
+            .push(fact);
+    }
+
     observations.sort_by(|left, right| {
-        (
-            left.workflow,
-            &left.artifact_id,
-            &left.evidence_id,
-            &left.reason,
-        )
-            .cmp(&(
-                right.workflow,
-                &right.artifact_id,
-                &right.evidence_id,
-                &right.reason,
-            ))
+        left.workflow
+            .cmp(&right.workflow)
+            .then_with(|| left.artifact_ids.cmp(&right.artifact_ids))
+            .then_with(|| {
+                left.evidence
+                    .first()
+                    .map(|reference| {
+                        (
+                            reference.artifact_id.as_str(),
+                            reference.line_start,
+                            reference.line_end,
+                            reference.entry_id.as_str(),
+                        )
+                    })
+                    .cmp(&right.evidence.first().map(|reference| {
+                        (
+                            reference.artifact_id.as_str(),
+                            reference.line_start,
+                            reference.line_end,
+                            reference.entry_id.as_str(),
+                        )
+                    }))
+            })
+            .then_with(|| left.reason.cmp(&right.reason))
     });
 
-    let transactions = facts
+    let mut transactions = facts
         .into_values()
         .map(|mut group| reduce_group(&mut group))
-        .collect();
+        .collect::<Vec<_>>();
+    for transaction in &mut transactions {
+        transaction.coverage_gap_artifact_ids = coverage
+            .iter()
+            .filter(|gap| {
+                gap.workflow == transaction.workflow && gap.state != SccmCoverageState::Captured
+            })
+            .map(|gap| gap.logical_artifact_id.clone())
+            .collect();
+        if !transaction.coverage_gap_artifact_ids.is_empty() {
+            transaction.state = SccmClientExtendedState::InsufficientEvidence;
+        }
+    }
+    let findings = transactions
+        .iter()
+        .filter_map(finding_for)
+        .collect::<Vec<_>>();
 
-    SccmClientAnalysis {
+    Ok(SccmClientExtendedAnalysis {
+        schema_version: SCCM_CLIENT_EXTENDED_ANALYSIS_SCHEMA_VERSION,
         transactions,
         coverage,
         source_local_observations: observations,
-    }
+        findings,
+        prohibited_claims: vec![
+            "server root cause".to_owned(),
+            "time-only cross-artifact causality".to_owned(),
+            "native Windows acceptance".to_owned(),
+        ],
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ArtifactContext {
-    workflow: SccmWorkflow,
+    workflow: SccmClientExtendedWorkflow,
     source_basename: &'static str,
 }
 
-fn artifact_context(artifact: &SccmArtifact) -> Option<ArtifactContext> {
-    let catalog = classify_artifact_name(&artifact.display_name, artifact.role.clone());
-    let (workflow, source_basename) = match &catalog.family {
-        SccmArtifactFamily::ClientInventory => (SccmWorkflow::Inventory, catalog.logical_name),
-        SccmArtifactFamily::ClientCompliance => (SccmWorkflow::Compliance, catalog.logical_name),
-        SccmArtifactFamily::ClientMetering => (SccmWorkflow::Metering, catalog.logical_name),
-        _ => return None,
-    };
-
-    let source_basename = match workflow {
-        SccmWorkflow::Inventory => match source_basename.as_str() {
-            "inventoryAgent" => "InventoryAgent.log",
-            "inventoryProvider" => "InventoryProvider.log",
-            "inventoryAgentProvider" => "InventoryAgentProvider.log",
-            _ => return None,
-        },
-        SccmWorkflow::Compliance => match source_basename.as_str() {
-            "ciAgent" => "CIAgent.log",
-            "ciTaskMgr" => "CITaskMgr.log",
-            "dcmAgent" => "DCMAgent.log",
-            "dcmReporting" => "DCMReporting.log",
-            "stateMessage" => "StateMessage.log",
-            _ => return None,
-        },
-        SccmWorkflow::Metering => "SWMTRReportGen.log",
-    };
-
-    Some(ArtifactContext {
-        workflow,
-        source_basename,
-    })
+fn extended_coverage(
+    admitted: &SccmClientAdmittedEvidence,
+) -> Result<Vec<SccmClientExtendedCoverageGap>, SccmClientEvidenceAdmissionError> {
+    let mut coverage = Vec::new();
+    for (workflow, logical_artifact_id) in [
+        (SccmClientExtendedWorkflow::Inventory, "client-inventory"),
+        (SccmClientExtendedWorkflow::Compliance, "client-compliance"),
+        (
+            SccmClientExtendedWorkflow::Compliance,
+            "client-policy-state",
+        ),
+        (SccmClientExtendedWorkflow::Metering, "client-metering"),
+    ] {
+        let state = admitted
+            .source_coverage(logical_artifact_id)?
+            .cloned()
+            .unwrap_or(SccmCoverageState::Absent);
+        coverage.push(SccmClientExtendedCoverageGap {
+            workflow,
+            logical_artifact_id: logical_artifact_id.to_owned(),
+            reason: if state == SccmCoverageState::Captured {
+                "The bounded workflow source group was captured; transaction claims still require exact record evidence."
+            } else {
+                "The bounded workflow source group is incomplete; coverage cannot become a workflow outcome."
+            }
+            .to_owned(),
+            state,
+        });
+    }
+    Ok(coverage)
 }
 
-fn version_gap(context: ArtifactContext, artifact: &SccmArtifact) -> SccmCoverageGap {
-    SccmCoverageGap {
-        workflow: context.workflow,
-        artifact_id: artifact.artifact_id.clone(),
-        source_basename: context.source_basename.to_owned(),
-        state: artifact.coverage.clone(),
-        reason: "The source version is absent or outside the observed profile; no state claim was promoted.".to_owned(),
+fn evidence_context(
+    admitted: &SccmClientAdmittedEvidence,
+    evidence: &SccmEvidence,
+) -> Result<Option<ArtifactContext>, SccmClientEvidenceAdmissionError> {
+    let Some(component) = evidence.component.as_deref() else {
+        return Ok(None);
+    };
+    let (workflow, source_basename) = match component.to_ascii_lowercase().as_str() {
+        "inventoryagent" => (SccmClientExtendedWorkflow::Inventory, "InventoryAgent.log"),
+        "inventoryprovider" => (
+            SccmClientExtendedWorkflow::Inventory,
+            "InventoryProvider.log",
+        ),
+        "inventoryagentprovider" => (
+            SccmClientExtendedWorkflow::Inventory,
+            "InventoryAgentProvider.log",
+        ),
+        "ciagent" => (SccmClientExtendedWorkflow::Compliance, "CIAgent.log"),
+        "citaskmgr" => (SccmClientExtendedWorkflow::Compliance, "CITaskMgr.log"),
+        "dcmagent" => (SccmClientExtendedWorkflow::Compliance, "DCMAgent.log"),
+        "dcmreporting" => (SccmClientExtendedWorkflow::Compliance, "DCMReporting.log"),
+        "statemessage" => (SccmClientExtendedWorkflow::Compliance, "StateMessage.log"),
+        "swmtrreportgen" => (SccmClientExtendedWorkflow::Metering, "SWMTRReportGen.log"),
+        _ => return Ok(None),
+    };
+    if admitted.source_basename_for_artifact(&evidence.reference.artifact_id)?
+        != Some(source_basename)
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(ArtifactContext {
+        workflow,
+        source_basename,
+    }))
+}
+
+fn workflow_for_basename(basename: &str) -> Option<SccmClientExtendedWorkflow> {
+    match basename {
+        "InventoryAgent.log" | "InventoryProvider.log" | "InventoryAgentProvider.log" => {
+            Some(SccmClientExtendedWorkflow::Inventory)
+        }
+        "CIAgent.log" | "CITaskMgr.log" | "DCMAgent.log" | "DCMReporting.log"
+        | "StateMessage.log" => Some(SccmClientExtendedWorkflow::Compliance),
+        "SWMTRReportGen.log" => Some(SccmClientExtendedWorkflow::Metering),
+        _ => None,
     }
 }
 
 fn parse_fact(
     context: ArtifactContext,
     profile_id: &str,
-    version: &str,
-    artifact: &SccmArtifact,
     evidence: &SccmEvidence,
-    observations: &mut Vec<SccmSourceObservation>,
+    observations: &mut Vec<SccmClientExtendedObservation>,
 ) -> Option<Fact> {
     let phase =
         field(&evidence.message, "Phase").and_then(|value| parse_phase(context.workflow, &value));
@@ -282,7 +348,6 @@ fn parse_fact(
         observe(
             observations,
             context.workflow,
-            artifact,
             evidence,
             "The record has no admitted phase for this workflow.",
         );
@@ -292,7 +357,6 @@ fn parse_fact(
         observe(
             observations,
             context.workflow,
-            artifact,
             evidence,
             "The source family cannot establish this phase.",
         );
@@ -304,7 +368,6 @@ fn parse_fact(
         observe(
             observations,
             context.workflow,
-            artifact,
             evidence,
             "The record explicitly names a different workflow family.",
         );
@@ -320,7 +383,6 @@ fn parse_fact(
         observe(
             observations,
             context.workflow,
-            artifact,
             evidence,
             "The record lacks the complete exact workflow key tuple.",
         );
@@ -330,13 +392,12 @@ fn parse_fact(
         observe(
             observations,
             context.workflow,
-            artifact,
             evidence,
             "The workflow key tuple contains an invalid or unbounded value.",
         );
         return None;
     };
-    if context.workflow == SccmWorkflow::Compliance
+    if context.workflow == SccmClientExtendedWorkflow::Compliance
         && disposition == Disposition::NonCompliant
         && !field(&evidence.message, "ResultType")
             .is_some_and(|value| value.eq_ignore_ascii_case("Evaluation"))
@@ -344,7 +405,6 @@ fn parse_fact(
         observe(
             observations,
             context.workflow,
-            artifact,
             evidence,
             "A noncompliant result is promotable only from an explicit evaluation record.",
         );
@@ -361,37 +421,42 @@ fn parse_fact(
         keys,
         tuple,
         profile_id: profile_id.to_owned(),
-        configmgr_version: version.to_owned(),
     })
 }
 
-fn required_fields(workflow: SccmWorkflow) -> &'static [&'static str] {
+fn required_fields(workflow: SccmClientExtendedWorkflow) -> &'static [&'static str] {
     match workflow {
-        SccmWorkflow::Inventory => &["InventoryCycleId", "ResourceHandle", "ReportId"],
-        SccmWorkflow::Compliance => &["CiId", "BaselineId", "StateId", "ResourceHandle"],
-        SccmWorkflow::Metering => &["MeteringCycleId", "RuleId", "ReportId", "ResourceHandle"],
+        SccmClientExtendedWorkflow::Inventory => {
+            &["InventoryCycleId", "ResourceHandle", "ReportId"]
+        }
+        SccmClientExtendedWorkflow::Compliance => {
+            &["CiId", "BaselineId", "StateId", "ResourceHandle"]
+        }
+        SccmClientExtendedWorkflow::Metering => {
+            &["MeteringCycleId", "RuleId", "ReportId", "ResourceHandle"]
+        }
     }
 }
 
 fn make_keys(
-    workflow: SccmWorkflow,
+    workflow: SccmClientExtendedWorkflow,
     values: &[String],
     profile_id: &str,
     evidence: &SccmEvidence,
 ) -> Option<Vec<SccmCorrelationKey>> {
     let kinds = match workflow {
-        SccmWorkflow::Inventory => vec![
+        SccmClientExtendedWorkflow::Inventory => vec![
             SccmCorrelationKeyKind::InventoryCycleId,
             SccmCorrelationKeyKind::ResourceHandle,
             SccmCorrelationKeyKind::ReportId,
         ],
-        SccmWorkflow::Compliance => vec![
+        SccmClientExtendedWorkflow::Compliance => vec![
             SccmCorrelationKeyKind::ComplianceCiId,
             SccmCorrelationKeyKind::BaselineId,
             SccmCorrelationKeyKind::ComplianceStateId,
             SccmCorrelationKeyKind::ResourceHandle,
         ],
-        SccmWorkflow::Metering => vec![
+        SccmClientExtendedWorkflow::Metering => vec![
             SccmCorrelationKeyKind::MeteringCycleId,
             SccmCorrelationKeyKind::RuleId,
             SccmCorrelationKeyKind::ReportId,
@@ -404,6 +469,7 @@ fn make_keys(
         .map(|(value, kind)| {
             let mut key = normalize_key(kind, value);
             (key.confidence == super::super::SccmKeyConfidence::Exact).then(|| {
+                key.confidence = SccmKeyConfidence::Low;
                 key.extraction_profile_id = Some(profile_id.to_owned());
                 key.evidence = Some(evidence.reference.clone());
                 key
@@ -412,7 +478,7 @@ fn make_keys(
         .collect()
 }
 
-fn reduce_group(group: &mut [Fact]) -> SccmTransaction {
+fn reduce_group(group: &mut [Fact]) -> SccmClientExtendedTransaction {
     group.sort_by(|left, right| {
         (
             left.evidence.timestamp.utc_millis,
@@ -443,6 +509,10 @@ fn reduce_group(group: &mut [Fact]) -> SccmTransaction {
         .filter(|fact| fact.disposition == Disposition::NonCompliant)
         .copied()
         .collect::<Vec<_>>();
+    let deferred = group
+        .iter()
+        .filter(|fact| fact.disposition == Disposition::Deferred)
+        .collect::<Vec<_>>();
     let compliant = terminal.iter().any(|fact| {
         fact.disposition == Disposition::Succeeded
             && field(&fact.evidence.message, "ResultType")
@@ -450,30 +520,40 @@ fn reduce_group(group: &mut [Fact]) -> SccmTransaction {
             && field(&fact.evidence.message, "Disposition")
                 .is_some_and(|value| value.eq_ignore_ascii_case("Compliant"))
     });
+    let remediated = first.workflow == SccmClientExtendedWorkflow::Compliance
+        && group.iter().any(|fact| {
+            fact.phase == SccmClientExtendedPhase::Remediate
+                && fact.disposition == Disposition::Succeeded
+        })
+        && !successes.is_empty();
 
     let state = if !failures.is_empty() && !successes.is_empty() {
         if ordered_recovery(&failures, &successes) {
-            SccmTransactionState::Recovered
+            SccmClientExtendedState::Recovered
         } else {
-            SccmTransactionState::Contradictory
+            SccmClientExtendedState::Contradictory
         }
     } else if !failures.is_empty() {
-        SccmTransactionState::Failed
+        SccmClientExtendedState::Failed
     } else if !noncompliant.is_empty() && compliant {
-        SccmTransactionState::Contradictory
+        SccmClientExtendedState::Contradictory
     } else if !noncompliant.is_empty() {
-        SccmTransactionState::EvaluatedNonCompliant
+        SccmClientExtendedState::EvaluatedNonCompliant
+    } else if !deferred.is_empty() {
+        SccmClientExtendedState::BlockedOrDeferred
+    } else if remediated {
+        SccmClientExtendedState::Remediated
     } else if !successes.is_empty() {
-        SccmTransactionState::Succeeded
+        SccmClientExtendedState::Succeeded
     } else {
-        SccmTransactionState::InProgress
+        SccmClientExtendedState::InProgress
     };
 
     let last_successful_phase = group
         .iter()
         .filter(|fact| {
             fact.disposition == Disposition::Succeeded
-                || (fact.workflow == SccmWorkflow::Compliance
+                || (fact.workflow == SccmClientExtendedWorkflow::Compliance
                     && fact.disposition == Disposition::NonCompliant)
         })
         .map(|fact| fact.phase)
@@ -495,21 +575,92 @@ fn reduce_group(group: &mut [Fact]) -> SccmTransaction {
         .max()
         .unwrap_or(first.phase);
     let transaction_id = format!(
-        "{}:{}",
+        "client-extended:{}:{}",
         workflow_name(first.workflow),
-        first.tuple.to_ascii_lowercase()
+        tuple_discriminator(first.workflow, &first.tuple)
     );
-    SccmTransaction {
+    SccmClientExtendedTransaction {
         transaction_id,
         workflow: first.workflow,
         profile_id: first.profile_id.clone(),
-        configmgr_version: first.configmgr_version.clone(),
         phase,
         state,
         last_successful_phase,
         keys: first.keys.clone(),
         evidence,
         coverage_gap_artifact_ids: Vec::new(),
+    }
+}
+
+fn finding_for(transaction: &SccmClientExtendedTransaction) -> Option<SccmClientExtendedFinding> {
+    let class = match transaction.state {
+        SccmClientExtendedState::Failed | SccmClientExtendedState::EvaluatedNonCompliant => {
+            SccmFindingClass::Symptom
+        }
+        SccmClientExtendedState::BlockedOrDeferred => SccmFindingClass::BlockedOrDeferred,
+        SccmClientExtendedState::Contradictory | SccmClientExtendedState::InsufficientEvidence => {
+            SccmFindingClass::InsufficientEvidence
+        }
+        SccmClientExtendedState::InProgress
+        | SccmClientExtendedState::Succeeded
+        | SccmClientExtendedState::Remediated
+        | SccmClientExtendedState::Recovered => return None,
+    };
+    let next_artifact_id = transaction
+        .coverage_gap_artifact_ids
+        .first()
+        .cloned()
+        .or_else(|| {
+            matches!(
+                transaction.state,
+                SccmClientExtendedState::BlockedOrDeferred
+                    | SccmClientExtendedState::Contradictory
+                    | SccmClientExtendedState::InsufficientEvidence
+            )
+            .then(|| workflow_artifact_id(transaction.workflow).to_owned())
+        });
+    Some(SccmClientExtendedFinding {
+        finding_id: format!("finding:client-extended:{}", transaction.transaction_id),
+        subject_id: transaction.transaction_id.clone(),
+        workflow: transaction.workflow,
+        role: SccmRole::Client,
+        class,
+        severity: match transaction.state {
+            SccmClientExtendedState::Failed => Severity::Error,
+            SccmClientExtendedState::EvaluatedNonCompliant
+            | SccmClientExtendedState::BlockedOrDeferred
+            | SccmClientExtendedState::Contradictory
+            | SccmClientExtendedState::InsufficientEvidence => Severity::Warning,
+            SccmClientExtendedState::InProgress
+            | SccmClientExtendedState::Succeeded
+            | SccmClientExtendedState::Remediated
+            | SccmClientExtendedState::Recovered => Severity::Info,
+        },
+        state: transaction.state,
+        phase: transaction.phase,
+        confidence: SccmKeyConfidence::Low,
+        keys: transaction.keys.clone(),
+        next_artifact_id,
+        evidence: transaction.evidence.clone(),
+    })
+}
+
+fn tuple_discriminator(workflow: SccmClientExtendedWorkflow, tuple: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(workflow_name(workflow).as_bytes());
+    hasher.update([0]);
+    hasher.update(tuple.as_bytes());
+    hasher.finalize()[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn workflow_artifact_id(workflow: SccmClientExtendedWorkflow) -> &'static str {
+    match workflow {
+        SccmClientExtendedWorkflow::Inventory => "client-inventory",
+        SccmClientExtendedWorkflow::Compliance => "client-compliance",
+        SccmClientExtendedWorkflow::Metering => "client-metering",
     }
 }
 
@@ -528,55 +679,77 @@ fn ordered_recovery(failures: &[&Fact], successes: &[&Fact]) -> bool {
         && failure.evidence.timestamp.utc_millis < success.evidence.timestamp.utc_millis
 }
 
-fn parse_phase(workflow: SccmWorkflow, value: &str) -> Option<SccmPhase> {
+fn parse_phase(
+    workflow: SccmClientExtendedWorkflow,
+    value: &str,
+) -> Option<SccmClientExtendedPhase> {
     let phase = match value.to_ascii_lowercase().as_str() {
-        "collect" => SccmPhase::Collect,
-        "provider" => SccmPhase::Provider,
-        "serialize" => SccmPhase::Serialize,
-        "queue" => SccmPhase::Queue,
-        "evaluate" => SccmPhase::Evaluate,
-        "remediate" => SccmPhase::Remediate,
-        "aggregate" => SccmPhase::Aggregate,
-        "report" => SccmPhase::Report,
+        "collect" => SccmClientExtendedPhase::Collect,
+        "provider" => SccmClientExtendedPhase::Provider,
+        "serialize" => SccmClientExtendedPhase::Serialize,
+        "queue" => SccmClientExtendedPhase::Queue,
+        "evaluate" => SccmClientExtendedPhase::Evaluate,
+        "remediate" => SccmClientExtendedPhase::Remediate,
+        "aggregate" => SccmClientExtendedPhase::Aggregate,
+        "report" => SccmClientExtendedPhase::Report,
         _ => return None,
     };
     let valid = match workflow {
-        SccmWorkflow::Inventory => matches!(
+        SccmClientExtendedWorkflow::Inventory => matches!(
             phase,
-            SccmPhase::Collect
-                | SccmPhase::Provider
-                | SccmPhase::Serialize
-                | SccmPhase::Queue
-                | SccmPhase::Report
+            SccmClientExtendedPhase::Collect
+                | SccmClientExtendedPhase::Provider
+                | SccmClientExtendedPhase::Serialize
+                | SccmClientExtendedPhase::Queue
+                | SccmClientExtendedPhase::Report
         ),
-        SccmWorkflow::Compliance => {
+        SccmClientExtendedWorkflow::Compliance => {
             matches!(
                 phase,
-                SccmPhase::Evaluate | SccmPhase::Remediate | SccmPhase::Report
+                SccmClientExtendedPhase::Evaluate
+                    | SccmClientExtendedPhase::Remediate
+                    | SccmClientExtendedPhase::Report
             )
         }
-        SccmWorkflow::Metering => {
+        SccmClientExtendedWorkflow::Metering => {
             matches!(
                 phase,
-                SccmPhase::Collect | SccmPhase::Aggregate | SccmPhase::Report
+                SccmClientExtendedPhase::Collect
+                    | SccmClientExtendedPhase::Aggregate
+                    | SccmClientExtendedPhase::Report
             )
         }
     };
     valid.then_some(phase)
 }
 
-fn source_allows_phase(source: &str, phase: SccmPhase) -> bool {
+fn source_allows_phase(source: &str, phase: SccmClientExtendedPhase) -> bool {
     match source {
-        "InventoryAgent.log" => phase == SccmPhase::Collect,
-        "InventoryProvider.log" => matches!(phase, SccmPhase::Provider | SccmPhase::Serialize),
-        "InventoryAgentProvider.log" => matches!(phase, SccmPhase::Queue | SccmPhase::Report),
-        "CIAgent.log" => phase == SccmPhase::Evaluate,
-        "CITaskMgr.log" => matches!(phase, SccmPhase::Evaluate | SccmPhase::Remediate),
-        "DCMAgent.log" => phase == SccmPhase::Remediate,
-        "DCMReporting.log" | "StateMessage.log" => phase == SccmPhase::Report,
+        "InventoryAgent.log" => phase == SccmClientExtendedPhase::Collect,
+        "InventoryProvider.log" => matches!(
+            phase,
+            SccmClientExtendedPhase::Provider | SccmClientExtendedPhase::Serialize
+        ),
+        "InventoryAgentProvider.log" => matches!(
+            phase,
+            SccmClientExtendedPhase::Queue | SccmClientExtendedPhase::Report
+        ),
+        "CIAgent.log" => phase == SccmClientExtendedPhase::Evaluate,
+        "CITaskMgr.log" => matches!(
+            phase,
+            SccmClientExtendedPhase::Evaluate | SccmClientExtendedPhase::Remediate
+        ),
+        "DCMAgent.log" => phase == SccmClientExtendedPhase::Remediate,
+        "DCMReporting.log" => matches!(
+            phase,
+            SccmClientExtendedPhase::Evaluate | SccmClientExtendedPhase::Report
+        ),
+        "StateMessage.log" => phase == SccmClientExtendedPhase::Report,
         "SWMTRReportGen.log" => matches!(
             phase,
-            SccmPhase::Collect | SccmPhase::Aggregate | SccmPhase::Report
+            SccmClientExtendedPhase::Collect
+                | SccmClientExtendedPhase::Aggregate
+                | SccmClientExtendedPhase::Report
         ),
         _ => false,
     }
@@ -599,33 +772,28 @@ fn field(message: &str, label: &str) -> Option<String> {
     })
 }
 
-fn profile_id(workflow: SccmWorkflow) -> &'static str {
-    match workflow {
-        SccmWorkflow::Inventory => "sccm-client-inventory-5.00.test-v1",
-        SccmWorkflow::Compliance => "sccm-client-compliance-5.00.test-v1",
-        SccmWorkflow::Metering => "sccm-client-metering-5.00.test-v1",
-    }
+fn profile_id(_workflow: SccmClientExtendedWorkflow) -> &'static str {
+    SCCM_EXPERIMENTAL_KEY_PROFILE_ID
 }
 
-fn workflow_name(workflow: SccmWorkflow) -> &'static str {
+fn workflow_name(workflow: SccmClientExtendedWorkflow) -> &'static str {
     match workflow {
-        SccmWorkflow::Inventory => "inventory",
-        SccmWorkflow::Compliance => "compliance",
-        SccmWorkflow::Metering => "metering",
+        SccmClientExtendedWorkflow::Inventory => "inventory",
+        SccmClientExtendedWorkflow::Compliance => "compliance",
+        SccmClientExtendedWorkflow::Metering => "metering",
     }
 }
 
 fn observe(
-    observations: &mut Vec<SccmSourceObservation>,
-    workflow: SccmWorkflow,
-    artifact: &SccmArtifact,
+    observations: &mut Vec<SccmClientExtendedObservation>,
+    workflow: SccmClientExtendedWorkflow,
     evidence: &SccmEvidence,
     reason: &str,
 ) {
-    observations.push(SccmSourceObservation {
+    observations.push(SccmClientExtendedObservation {
         workflow,
-        artifact_id: artifact.artifact_id.clone(),
-        evidence_id: evidence.evidence_id.clone(),
         reason: reason.to_owned(),
+        artifact_ids: vec![evidence.reference.artifact_id.clone()],
+        evidence: vec![evidence.reference.clone()],
     });
 }

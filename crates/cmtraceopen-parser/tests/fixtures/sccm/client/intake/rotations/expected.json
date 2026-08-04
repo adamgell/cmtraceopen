@@ -24,6 +24,11 @@
         "fragmentArtifactIds": []
       },
       {
+        "logicalArtifactId": "client-compliance",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
         "logicalArtifactId": "client-content",
         "coverage": "absent",
         "fragmentArtifactIds": []
@@ -39,6 +44,11 @@
         "fragmentArtifactIds": []
       },
       {
+        "logicalArtifactId": "client-inventory",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
         "logicalArtifactId": "client-location",
         "coverage": "absent",
         "fragmentArtifactIds": []
@@ -50,6 +60,11 @@
       },
       {
         "logicalArtifactId": "client-maintenance-window",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-metering",
         "coverage": "absent",
         "fragmentArtifactIds": []
       },
@@ -149,6 +164,13 @@
         "reason": "No artifact for this bounded client source group was supplied."
       },
       {
+        "logicalArtifactId": "client-compliance",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
         "logicalArtifactId": "client-content",
         "artifactId": null,
         "role": "client",
@@ -170,6 +192,13 @@
         "reason": "No artifact for this bounded client source group was supplied."
       },
       {
+        "logicalArtifactId": "client-inventory",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
         "logicalArtifactId": "client-location",
         "artifactId": null,
         "role": "client",
@@ -185,6 +214,13 @@
       },
       {
         "logicalArtifactId": "client-maintenance-window",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-metering",
         "artifactId": null,
         "role": "client",
         "coverage": "absent",

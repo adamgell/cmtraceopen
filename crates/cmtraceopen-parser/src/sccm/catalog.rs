@@ -263,6 +263,34 @@ const CLIENT_SOURCE_MEMBERSHIPS: &[SccmClientSourceMembership] = &[
         basename: "ReportingEvents.log",
         logical_artifact_ids: &["client-windows-update-supplemental"],
     },
+    SccmClientSourceMembership {
+        basename: "InventoryAgent.log",
+        logical_artifact_ids: &["client-inventory"],
+    },
+    SccmClientSourceMembership {
+        basename: "InventoryProvider.log",
+        logical_artifact_ids: &["client-inventory"],
+    },
+    SccmClientSourceMembership {
+        basename: "InventoryAgentProvider.log",
+        logical_artifact_ids: &["client-inventory"],
+    },
+    SccmClientSourceMembership {
+        basename: "CITaskMgr.log",
+        logical_artifact_ids: &["client-compliance"],
+    },
+    SccmClientSourceMembership {
+        basename: "DCMAgent.log",
+        logical_artifact_ids: &["client-compliance"],
+    },
+    SccmClientSourceMembership {
+        basename: "DCMReporting.log",
+        logical_artifact_ids: &["client-compliance"],
+    },
+    SccmClientSourceMembership {
+        basename: "SWMTRReportGen.log",
+        logical_artifact_ids: &["client-metering"],
+    },
 ];
 
 pub(crate) fn declared_client_source_memberships() -> &'static [SccmClientSourceMembership] {
@@ -493,12 +521,6 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
         family: SccmArtifactFamily::ClientInventory,
     },
     CatalogSpec {
-        basename: "CIAgent",
-        logical_name: "ciAgent",
-        role: SccmRole::Client,
-        family: SccmArtifactFamily::ClientCompliance,
-    },
-    CatalogSpec {
         basename: "CITaskMgr",
         logical_name: "ciTaskMgr",
         role: SccmRole::Client,
@@ -513,12 +535,6 @@ const SOURCE_CATALOG: &[CatalogSpec] = &[
     CatalogSpec {
         basename: "DCMReporting",
         logical_name: "dcmReporting",
-        role: SccmRole::Client,
-        family: SccmArtifactFamily::ClientCompliance,
-    },
-    CatalogSpec {
-        basename: "StateMessage",
-        logical_name: "stateMessage",
         role: SccmRole::Client,
         family: SccmArtifactFamily::ClientCompliance,
     },
