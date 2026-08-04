@@ -142,10 +142,22 @@ pub enum SccmClientWorkflow {
     Health,
     Policy,
     Deployment,
+    TaskSequence,
     Updates,
     Inventory,
     Compliance,
     Metering,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmTaskSequencePathClass {
+    #[serde(rename = "winpe")]
+    WinPe,
+    Setup,
+    FullOs,
+    Client,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,15 +200,16 @@ pub struct SccmClientIntakeArtifact {
     /// `ParseFailed` fragment may be complete when all bytes were copied but
     /// their contents could not be normalized as CCM evidence.
     pub fragment_complete: Option<bool>,
-    /// Byte length declared by the capture authority for a recognized,
-    /// complete `Captured` fragment. This is optional so legacy intake stays
-    /// assessment-compatible, but admission requires it together with
-    /// `content_sha256` before caller-supplied bytes can become evidence.
+    /// Byte length declared by the capture authority for a recognized
+    /// `Captured` fragment. Admission requires it together with
+    /// `content_sha256` before caller-supplied bytes can become evidence. Task
+    /// Sequence rotation fragments may bind incomplete physical bytes for a
+    /// source-local citation; other source families require complete framing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared_byte_length: Option<u64>,
     /// Lowercase SHA-256 declared by the capture authority. It is a pair with
-    /// `declared_byte_length` and is forbidden on noncaptured, incomplete, or
-    /// unsupported declarations.
+    /// `declared_byte_length` and is forbidden on noncaptured or unsupported
+    /// declarations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_sha256: Option<String>,
 }
@@ -875,6 +888,7 @@ struct ClientSourceGroupSpec {
 const HEALTH: &[SccmClientWorkflow] = &[SccmClientWorkflow::Health];
 const POLICY: &[SccmClientWorkflow] = &[SccmClientWorkflow::Policy];
 const DEPLOYMENT: &[SccmClientWorkflow] = &[SccmClientWorkflow::Deployment];
+const TASK_SEQUENCE: &[SccmClientWorkflow] = &[SccmClientWorkflow::TaskSequence];
 const UPDATES: &[SccmClientWorkflow] = &[SccmClientWorkflow::Updates];
 const DEPLOYMENT_UPDATES: &[SccmClientWorkflow] =
     &[SccmClientWorkflow::Deployment, SccmClientWorkflow::Updates];
@@ -948,6 +962,11 @@ const CLIENT_SOURCE_GROUPS: &[ClientSourceGroupSpec] = &[
     ClientSourceGroupSpec {
         logical_artifact_id: "client-policy-agent",
         workflows: POLICY,
+        requiredness: SccmClientSourceRequiredness::Required,
+    },
+    ClientSourceGroupSpec {
+        logical_artifact_id: "client-task-sequence-smsts",
+        workflows: TASK_SEQUENCE,
         requiredness: SccmClientSourceRequiredness::Required,
     },
     ClientSourceGroupSpec {
@@ -1578,9 +1597,16 @@ fn validate_content_binding(
         _ => return Err(SccmClientIntakeError::InvalidContentBinding),
     };
 
+    let is_recognized_task_sequence_fragment = source.artifact.coverage
+        == SccmCoverageState::Captured
+        && source_matches_group(
+            &source.artifact.display_name,
+            &source.artifact.rotation,
+            "client-task-sequence-smsts",
+        );
     if has_binding
         && (source.artifact.coverage != SccmCoverageState::Captured
-            || !fragment_complete
+            || !(fragment_complete || is_recognized_task_sequence_fragment)
             || matching_groups(&source.artifact.display_name, &source.artifact.rotation).is_empty())
     {
         return Err(SccmClientIntakeError::InvalidContentBinding);
@@ -1924,6 +1950,10 @@ fn is_safe_relative_path(value: &str, display_name: &str, rotation: &SccmRotatio
         return false;
     };
 
+    if body.first() == Some(&"client-task-sequence-smsts") {
+        return is_safe_task_sequence_relative_path(body, display_name, rotation);
+    }
+
     let (group, rotation_segment, basename, root_is_safe) = match body {
         [group, basename] => (*group, None, *basename, true),
         [group, rotation, basename] => (*group, Some(*rotation), *basename, true),
@@ -1942,6 +1972,58 @@ fn is_safe_relative_path(value: &str, display_name: &str, rotation: &SccmRotatio
         && basename == display_name
         && is_safe_path_segment(basename)
         && is_expected_rotation_path_segment(rotation_segment, rotation)
+}
+
+fn is_safe_task_sequence_relative_path(
+    body: &[&str],
+    display_name: &str,
+    rotation: &SccmRotation,
+) -> bool {
+    let (path_class, root, rotation_segment, basename) = match body {
+        [_, path_class, basename] => (*path_class, None, None, *basename),
+        [_, path_class, rotation_segment, basename] => {
+            (*path_class, None, Some(*rotation_segment), *basename)
+        }
+        [_, path_class, root, rotation_segment, basename] => {
+            (*path_class, Some(*root), Some(*rotation_segment), *basename)
+        }
+        _ => return false,
+    };
+
+    task_sequence_path_class(path_class).is_some()
+        && root.is_none_or(is_safe_root_path_segment)
+        && is_expected_client_bundle_group("client-task-sequence-smsts", display_name, rotation)
+        && basename == display_name
+        && is_safe_path_segment(basename)
+        && is_expected_rotation_path_segment(rotation_segment, rotation)
+}
+
+pub(super) fn task_sequence_path_class_for_relative_path(
+    value: &str,
+) -> Option<SccmTaskSequencePathClass> {
+    let segments = value.split('/').collect::<Vec<_>>();
+    let body = if segments.starts_with(&["evidence", "sccm", "client"]) {
+        &segments[3..]
+    } else if segments.starts_with(&["evidence"]) {
+        &segments[1..]
+    } else {
+        return None;
+    };
+    match body {
+        ["client-task-sequence-smsts", path_class, ..] => task_sequence_path_class(path_class),
+        _ => None,
+    }
+}
+
+fn task_sequence_path_class(value: &str) -> Option<SccmTaskSequencePathClass> {
+    match value {
+        "winpe" => Some(SccmTaskSequencePathClass::WinPe),
+        "setup" => Some(SccmTaskSequencePathClass::Setup),
+        "full-os" => Some(SccmTaskSequencePathClass::FullOs),
+        "client" => Some(SccmTaskSequencePathClass::Client),
+        "unknown" => Some(SccmTaskSequencePathClass::Unknown),
+        _ => None,
+    }
 }
 
 fn is_expected_client_bundle_group(

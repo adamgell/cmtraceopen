@@ -264,6 +264,10 @@ const CLIENT_SOURCE_MEMBERSHIPS: &[SccmClientSourceMembership] = &[
         logical_artifact_ids: &["client-windows-update-supplemental"],
     },
     SccmClientSourceMembership {
+        basename: "smsts.log",
+        logical_artifact_ids: &["client-task-sequence-smsts"],
+    },
+    SccmClientSourceMembership {
         basename: "InventoryAgent.log",
         logical_artifact_ids: &["client-inventory"],
     },

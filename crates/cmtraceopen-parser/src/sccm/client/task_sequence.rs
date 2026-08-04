@@ -10,6 +10,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::sccm::{
     SccmArtifactFamily, SccmCoverageState, SccmEvidence, SccmEvidenceRef, SccmExtractionProfile,
@@ -140,15 +141,48 @@ pub struct SccmTaskSequenceFinding {
     pub classification: SccmTaskSequenceClassification,
     pub phase: Option<SccmTaskSequencePhase>,
     pub confidence: SccmTaskSequenceConfidence,
-    pub evidence: Vec<SccmEvidenceRef>,
+    pub evidence: Vec<SccmTaskSequenceEvidenceCitation>,
     pub coverage_gaps: Vec<SccmTaskSequenceCoverageGap>,
     pub next_evidence: Option<SccmTaskSequenceNextEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmTaskSequenceEvidenceCitation {
+    pub artifact_id: String,
+    pub line_start: u32,
+    pub line_end: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmTaskSequenceKeyConfidence {
+    None,
+    Candidate,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmTaskSequenceSourceLocalObservation {
+    pub observation_id: String,
+    pub artifact_id: String,
+    pub key_confidence: SccmTaskSequenceKeyConfidence,
+    pub confidence: SccmTaskSequenceConfidence,
+    pub correlation_eligible: bool,
+    pub phase_hint: Option<SccmTaskSequencePhase>,
+    pub state_hint: Option<SccmTaskSequenceState>,
+    pub evidence: Option<SccmTaskSequenceEvidenceCitation>,
+    pub path_class: SccmTaskSequencePathClass,
+    pub rotation: SccmRotation,
+    pub coverage: SccmCoverageState,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmTaskSequenceAnalysis {
     pub transactions: Vec<SccmTaskSequenceTransaction>,
+    pub source_local_observations: Vec<SccmTaskSequenceSourceLocalObservation>,
     pub findings: Vec<SccmTaskSequenceFinding>,
     pub coverage_gaps: Vec<SccmTaskSequenceCoverageGap>,
 }
@@ -178,6 +212,11 @@ struct Observation {
 struct UnlinkedObservation {
     evidence: SccmEvidenceRef,
     path_class: SccmTaskSequencePathClass,
+    rotation: SccmRotation,
+    key_confidence: SccmTaskSequenceKeyConfidence,
+    phase_hint: Option<SccmTaskSequencePhase>,
+    state_hint: Option<SccmTaskSequenceState>,
+    reason: &'static str,
 }
 
 pub fn analyze_client_task_sequence(
@@ -198,16 +237,32 @@ pub fn analyze_client_task_sequence(
             unlinked.push(UnlinkedObservation {
                 evidence: record.reference.clone(),
                 path_class: source.path_class,
+                rotation: source.rotation.clone(),
+                key_confidence: SccmTaskSequenceKeyConfidence::None,
+                phase_hint: None,
+                state_hint: None,
+                reason: "No sealed extraction profile owns this physical source.",
             });
             continue;
         };
+        if !is_reviewed_profile(profile) {
+            unlinked.push(unlinked_observation(
+                record,
+                source.path_class,
+                &source.rotation,
+                "Key-looking fields from an unrecognized source version cannot be promoted by an unverified extraction profile.",
+            ));
+            continue;
+        }
         let Some(observation) =
             extract_observation(record, source.path_class, &source.rotation, profile)
         else {
-            unlinked.push(UnlinkedObservation {
-                evidence: record.reference.clone(),
-                path_class: source.path_class,
-            });
+            unlinked.push(unlinked_observation(
+                record,
+                source.path_class,
+                &source.rotation,
+                "A path, timestamp, display name, or partial key cannot substitute for the complete record-local execution key.",
+            ));
             continue;
         };
 
@@ -228,15 +283,16 @@ pub fn analyze_client_task_sequence(
             unlinked.push(UnlinkedObservation {
                 evidence: observation.evidence,
                 path_class: observation.path_class,
+                rotation: observation.rotation,
+                key_confidence: SccmTaskSequenceKeyConfidence::Candidate,
+                phase_hint: Some(observation.phase),
+                state_hint: Some(observation.state),
+                reason: "A rotated record without a current record for the same exact execution remains source-local.",
             });
         }
     }
 
-    let mut transactions = groups
-        .into_values()
-        .enumerate()
-        .map(|(index, observations)| reduce_group(index + 1, observations))
-        .collect::<Vec<_>>();
+    let mut transactions = groups.into_values().map(reduce_group).collect::<Vec<_>>();
     transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
 
     let mut coverage_gaps = sources
@@ -264,25 +320,47 @@ pub fn analyze_client_task_sequence(
     }
     coverage_gaps.sort_by(|left, right| left.artifact_id.cmp(&right.artifact_id));
 
+    unlinked.sort_by(|left, right| compare_evidence_refs(&left.evidence, &right.evidence));
+    let mut source_local_observations = unlinked
+        .into_iter()
+        .map(source_local_observation)
+        .collect::<Vec<_>>();
+    source_local_observations.extend(sources.iter().filter_map(|(artifact_id, source)| {
+        let physical = source.physical_evidence.as_ref()?;
+        (source.coverage == SccmCoverageState::Captured && source.fragment_complete != Some(true))
+            .then(|| source_local_fragment_observation(artifact_id, source, physical))
+    }));
+    source_local_observations.sort_by(|left, right| left.observation_id.cmp(&right.observation_id));
+
     let mut findings = transactions
         .iter()
         .filter(|transaction| transaction.classification != SccmTaskSequenceClassification::Success)
         .map(finding_for_transaction)
         .collect::<Vec<_>>();
-    unlinked.sort_by(|left, right| compare_evidence_refs(&left.evidence, &right.evidence));
+    let uncovered_source_observations = source_local_observations
+        .iter()
+        .filter(|observation| {
+            !coverage_gaps
+                .iter()
+                .any(|gap| gap.artifact_id == observation.artifact_id)
+        })
+        .collect::<Vec<_>>();
     findings.extend(
-        unlinked
-            .into_iter()
-            .enumerate()
-            .map(|(index, observation)| finding_for_unlinked(index + 1, observation)),
+        uncovered_source_observations
+            .iter()
+            .map(|observation| finding_for_source_locals(&[*observation])),
     );
     if !coverage_gaps.is_empty() {
-        findings.push(finding_for_coverage(&coverage_gaps));
+        findings.push(finding_for_coverage(
+            &coverage_gaps,
+            &source_local_observations,
+        ));
     }
     findings.sort_by(|left, right| left.finding_id.cmp(&right.finding_id));
 
     Ok(SccmTaskSequenceAnalysis {
         transactions,
+        source_local_observations,
         findings,
         coverage_gaps,
     })
@@ -358,6 +436,115 @@ fn extract_observation(
     })
 }
 
+fn unlinked_observation(
+    evidence: &SccmEvidence,
+    path_class: SccmTaskSequencePathClass,
+    rotation: &SccmRotation,
+    reason: &'static str,
+) -> UnlinkedObservation {
+    let has_candidate_key = [
+        "executionId",
+        "taskSequencePackageId",
+        "advertisementId",
+        "runContext",
+    ]
+    .iter()
+    .all(|label| capture_field(&evidence.message, label).is_some());
+    UnlinkedObservation {
+        evidence: evidence.reference.clone(),
+        path_class,
+        rotation: rotation.clone(),
+        key_confidence: if has_candidate_key {
+            SccmTaskSequenceKeyConfidence::Candidate
+        } else {
+            SccmTaskSequenceKeyConfidence::None
+        },
+        phase_hint: capture_field(&evidence.message, "phase").and_then(parse_phase),
+        state_hint: capture_field(&evidence.message, "state").and_then(parse_state),
+        reason,
+    }
+}
+
+fn source_local_observation(
+    observation: UnlinkedObservation,
+) -> SccmTaskSequenceSourceLocalObservation {
+    let citation = evidence_citation(&observation.evidence);
+    let observation_id = stable_opaque_id(
+        "cmtraceopen.task-sequence.observation.sha256.v1:",
+        &[
+            citation.artifact_id.as_str(),
+            &citation.line_start.to_string(),
+            &citation.line_end.to_string(),
+        ],
+    );
+    SccmTaskSequenceSourceLocalObservation {
+        observation_id,
+        artifact_id: citation.artifact_id.clone(),
+        key_confidence: observation.key_confidence,
+        confidence: SccmTaskSequenceConfidence::Low,
+        correlation_eligible: false,
+        phase_hint: observation.phase_hint,
+        state_hint: observation.state_hint,
+        evidence: Some(citation),
+        path_class: observation.path_class,
+        rotation: observation.rotation,
+        coverage: SccmCoverageState::Captured,
+        reason: observation.reason.to_owned(),
+    }
+}
+
+fn source_local_fragment_observation(
+    artifact_id: &str,
+    source: &super::admission::SccmClientAdmittedTaskSequenceSource,
+    physical: &super::admission::SccmClientAdmittedTaskSequencePhysicalEvidence,
+) -> SccmTaskSequenceSourceLocalObservation {
+    let citation = SccmTaskSequenceEvidenceCitation {
+        artifact_id: artifact_id.to_owned(),
+        line_start: physical.line_start,
+        line_end: physical.line_end,
+    };
+    SccmTaskSequenceSourceLocalObservation {
+        observation_id: stable_opaque_id(
+            "cmtraceopen.task-sequence.observation.sha256.v1:",
+            &[
+                artifact_id,
+                &physical.line_start.to_string(),
+                &physical.line_end.to_string(),
+                "physical-fragment",
+            ],
+        ),
+        artifact_id: artifact_id.to_owned(),
+        key_confidence: if physical.key_candidate {
+            SccmTaskSequenceKeyConfidence::Candidate
+        } else {
+            SccmTaskSequenceKeyConfidence::None
+        },
+        confidence: SccmTaskSequenceConfidence::Low,
+        correlation_eligible: false,
+        phase_hint: None,
+        state_hint: None,
+        evidence: Some(citation),
+        path_class: source.path_class,
+        rotation: source.rotation.clone(),
+        coverage: source.coverage.clone(),
+        reason:
+            "An incomplete physical rotation fragment is not independently a logical CCM record."
+                .to_owned(),
+    }
+}
+
+fn evidence_citation(reference: &SccmEvidenceRef) -> SccmTaskSequenceEvidenceCitation {
+    SccmTaskSequenceEvidenceCitation {
+        artifact_id: reference.artifact_id.clone(),
+        line_start: reference
+            .line_start
+            .expect("admission requires a physical start line"),
+        line_end: reference
+            .line_end
+            .expect("admission requires a physical end line"),
+    }
+}
+
 fn is_reviewed_profile(profile: &SccmExtractionProfile) -> bool {
     profile.profile_id == TASK_SEQUENCE_TEST_PROFILE_ID
         && profile.selected_configmgr_version.as_deref() == Some(TASK_SEQUENCE_TEST_VERSION)
@@ -366,13 +553,12 @@ fn is_reviewed_profile(profile: &SccmExtractionProfile) -> bool {
 }
 
 fn capture_field<'a>(message: &'a str, label: &str) -> Option<&'a str> {
-    message.split_ascii_whitespace().find_map(|token| {
+    let mut values = message.split_ascii_whitespace().filter_map(|token| {
         let (candidate_label, value) = token.split_once('=')?;
-        candidate_label
-            .eq_ignore_ascii_case(label)
-            .then_some(value)
-            .filter(|value| !value.is_empty())
-    })
+        (candidate_label.eq_ignore_ascii_case(label) && !value.is_empty()).then_some(value)
+    });
+    let value = values.next()?;
+    values.next().is_none().then_some(value)
 }
 
 fn parse_phase(value: &str) -> Option<SccmTaskSequencePhase> {
@@ -443,8 +629,12 @@ fn is_opaque_token(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
 }
 
-fn reduce_group(index: usize, mut observations: Vec<Observation>) -> SccmTaskSequenceTransaction {
-    observations.sort_by(compare_observations);
+fn reduce_group(mut observations: Vec<Observation>) -> SccmTaskSequenceTransaction {
+    let identity = observations
+        .first()
+        .expect("an execution group contains at least one observation")
+        .identity
+        .clone();
     let ordering_is_normalized = observations.iter().all(|observation| {
         observation.ordering_state == SccmTimeOrderingState::NormalizedUtc
             && observation.utc_millis.is_some()
@@ -455,24 +645,65 @@ fn reduce_group(index: usize, mut observations: Vec<Observation>) -> SccmTaskSeq
         .collect::<BTreeSet<_>>()
         .len()
         == observations.len();
+    if ordering_is_normalized && timestamps_are_unique {
+        observations.sort_by(compare_observations);
+    } else {
+        observations.sort_by(|left, right| compare_evidence_refs(&left.evidence, &right.evidence));
+    }
     let phases_are_monotonic = observations
         .windows(2)
         .all(|pair| pair[0].phase <= pair[1].phase);
-    let ordering_is_safe = ordering_is_normalized && timestamps_are_unique && phases_are_monotonic;
-    let final_observation = observations
-        .last()
-        .expect("an execution group contains at least one observation");
-    let (classification, confidence) = classify_transaction(final_observation, ordering_is_safe);
+    // The reviewed four-field key has no attempt discriminator or recovery
+    // marker. A record after any terminal record therefore cannot be called a
+    // retry or continuation; keep the whole execution ambiguous until a future
+    // profile supplies explicit record-local attempt authority.
+    let terminal_is_final = observations
+        .iter()
+        .enumerate()
+        .all(|(index, observation)| !observation.terminal || index + 1 == observations.len());
+    let ordering_is_safe = ordering_is_normalized
+        && timestamps_are_unique
+        && phases_are_monotonic
+        && terminal_is_final;
+    let representative = if ordering_is_safe {
+        observations
+            .last()
+            .expect("an execution group contains at least one observation")
+    } else {
+        observations
+            .iter()
+            .max_by(|left, right| {
+                left.phase
+                    .cmp(&right.phase)
+                    .then_with(|| compare_evidence_refs(&left.evidence, &right.evidence))
+            })
+            .expect("an execution group contains at least one observation")
+    };
+    let (classification, confidence) = classify_transaction(representative, ordering_is_safe);
     let evidence = observations
         .iter()
         .map(|observation| observation.evidence.clone())
         .collect::<Vec<_>>();
-    let terminal_evidence = final_observation
-        .terminal
-        .then(|| final_observation.evidence.clone());
+    let terminal_evidence =
+        (ordering_is_safe && representative.terminal).then(|| representative.evidence.clone());
+    let ordering_state = if ordering_is_safe {
+        SccmTaskSequenceOrderingState::NormalizedUtc
+    } else if observations.len() > 1 {
+        SccmTaskSequenceOrderingState::Ambiguous
+    } else {
+        task_sequence_ordering_state(&representative.ordering_state)
+    };
 
     SccmTaskSequenceTransaction {
-        transaction_id: format!("task-sequence-{index:04}"),
+        transaction_id: stable_opaque_id(
+            "cmtraceopen.task-sequence.transaction.sha256.v1:",
+            &[
+                &identity.execution_id,
+                &identity.package_id,
+                &identity.advertisement_id,
+                &identity.run_context,
+            ],
+        ),
         identity_proof: SccmTaskSequenceIdentityProof {
             extraction_profile_id: TASK_SEQUENCE_TEST_PROFILE_ID.to_owned(),
             evidence: evidence.clone(),
@@ -486,20 +717,14 @@ fn reduce_group(index: usize, mut observations: Vec<Observation>) -> SccmTaskSeq
                 rotation: observation.rotation.clone(),
             })
             .collect(),
-        phase: final_observation.phase,
-        state: final_observation.state,
-        last_successful_phase: last_successful_phase(final_observation),
+        phase: representative.phase,
+        state: representative.state,
+        last_successful_phase: last_successful_phase(representative),
         classification,
         confidence,
-        ordering_state: if ordering_is_safe {
-            SccmTaskSequenceOrderingState::NormalizedUtc
-        } else if ordering_is_normalized {
-            SccmTaskSequenceOrderingState::Ambiguous
-        } else {
-            task_sequence_ordering_state(&final_observation.ordering_state)
-        },
+        ordering_state,
         terminal_evidence,
-        next_evidence: next_evidence(final_observation.phase, classification),
+        next_evidence: next_evidence(representative, classification),
     }
 }
 
@@ -517,7 +742,6 @@ fn task_sequence_ordering_state(
 fn compare_observations(left: &Observation, right: &Observation) -> Ordering {
     left.utc_millis
         .cmp(&right.utc_millis)
-        .then_with(|| left.phase.cmp(&right.phase))
         .then_with(|| compare_evidence_refs(&left.evidence, &right.evidence))
 }
 
@@ -588,7 +812,7 @@ fn last_successful_phase(observation: &Observation) -> SccmTaskSequencePhase {
 }
 
 fn next_evidence(
-    phase: SccmTaskSequencePhase,
+    observation: &Observation,
     classification: SccmTaskSequenceClassification,
 ) -> Option<SccmTaskSequenceNextEvidence> {
     if matches!(
@@ -597,7 +821,15 @@ fn next_evidence(
     ) {
         return None;
     }
-    let (path_class, reason) = match phase {
+    let (path_class, reason) = match observation.phase {
+        SccmTaskSequencePhase::Start | SccmTaskSequencePhase::Preflight
+            if observation.path_class == SccmTaskSequencePathClass::Client =>
+        {
+            (
+                SccmTaskSequencePathClass::Client,
+                "Collect the next complete client Task Sequence record.",
+            )
+        }
         SccmTaskSequencePhase::Start | SccmTaskSequencePhase::Preflight => (
             SccmTaskSequencePathClass::Setup,
             "Collect the post-format Task Sequence continuation.",
@@ -624,47 +856,96 @@ fn next_evidence(
 
 fn finding_for_transaction(transaction: &SccmTaskSequenceTransaction) -> SccmTaskSequenceFinding {
     SccmTaskSequenceFinding {
-        finding_id: format!("{}-finding", transaction.transaction_id),
+        finding_id: stable_opaque_id(
+            "cmtraceopen.task-sequence.finding.sha256.v1:",
+            &[&transaction.transaction_id, "transaction"],
+        ),
         transaction_id: Some(transaction.transaction_id.clone()),
         classification: transaction.classification,
         phase: Some(transaction.phase),
         confidence: transaction.confidence,
-        evidence: transaction.evidence.clone(),
+        evidence: transaction.evidence.iter().map(evidence_citation).collect(),
         coverage_gaps: Vec::new(),
-        next_evidence: transaction.next_evidence.clone(),
+        next_evidence: None,
     }
 }
 
-fn finding_for_unlinked(index: usize, observation: UnlinkedObservation) -> SccmTaskSequenceFinding {
+fn finding_for_source_locals(
+    observations: &[&SccmTaskSequenceSourceLocalObservation],
+) -> SccmTaskSequenceFinding {
+    let mut identity_parts = vec!["source-local"];
+    identity_parts.extend(
+        observations
+            .iter()
+            .map(|observation| observation.observation_id.as_str()),
+    );
+    let evidence = observations
+        .iter()
+        .filter_map(|observation| observation.evidence.clone())
+        .collect::<Vec<_>>();
+    let path_class = observations
+        .first()
+        .map(|observation| observation.path_class)
+        .unwrap_or(SccmTaskSequencePathClass::Unknown);
     SccmTaskSequenceFinding {
-        finding_id: format!("task-sequence-unlinked-{index:04}"),
+        finding_id: stable_opaque_id(
+            "cmtraceopen.task-sequence.finding.sha256.v1:",
+            &identity_parts,
+        ),
         transaction_id: None,
         classification: SccmTaskSequenceClassification::InsufficientEvidence,
         phase: None,
         confidence: SccmTaskSequenceConfidence::Low,
-        evidence: vec![observation.evidence],
+        evidence,
         coverage_gaps: Vec::new(),
-        next_evidence: Some(SccmTaskSequenceNextEvidence {
-            logical_artifact_id: TASK_SEQUENCE_LOGICAL_ARTIFACT_ID.to_owned(),
-            path_class: observation.path_class,
-            reason: "Collect a complete record under a reviewed Task Sequence profile.".to_owned(),
-        }),
+        next_evidence: observations
+            .iter()
+            .any(|observation| {
+                observation.key_confidence == SccmTaskSequenceKeyConfidence::Candidate
+            })
+            .then(|| SccmTaskSequenceNextEvidence {
+                logical_artifact_id: TASK_SEQUENCE_LOGICAL_ARTIFACT_ID.to_owned(),
+                path_class,
+                reason: "Add or apply a reviewed extraction profile before correlation.".to_owned(),
+            }),
     }
 }
 
-fn finding_for_coverage(coverage_gaps: &[SccmTaskSequenceCoverageGap]) -> SccmTaskSequenceFinding {
+fn finding_for_coverage(
+    coverage_gaps: &[SccmTaskSequenceCoverageGap],
+    observations: &[SccmTaskSequenceSourceLocalObservation],
+) -> SccmTaskSequenceFinding {
     let path_class = coverage_gaps
         .first()
         .map(|gap| gap.path_class)
         .unwrap_or(SccmTaskSequencePathClass::Unknown);
+    let mut identity_parts = vec!["coverage"];
+    identity_parts.extend(coverage_gaps.iter().map(|gap| gap.artifact_id.as_str()));
+    let evidence = observations
+        .iter()
+        .filter(|observation| {
+            coverage_gaps
+                .iter()
+                .any(|gap| gap.artifact_id == observation.artifact_id)
+        })
+        .filter_map(|observation| observation.evidence.clone())
+        .collect::<Vec<_>>();
+    let finding_coverage_gaps = if evidence.is_empty() {
+        coverage_gaps.to_vec()
+    } else {
+        Vec::new()
+    };
     SccmTaskSequenceFinding {
-        finding_id: "task-sequence-coverage-0001".to_owned(),
+        finding_id: stable_opaque_id(
+            "cmtraceopen.task-sequence.finding.sha256.v1:",
+            &identity_parts,
+        ),
         transaction_id: None,
         classification: SccmTaskSequenceClassification::InsufficientEvidence,
         phase: None,
         confidence: SccmTaskSequenceConfidence::Low,
-        evidence: Vec::new(),
-        coverage_gaps: coverage_gaps.to_vec(),
+        evidence,
+        coverage_gaps: finding_coverage_gaps,
         next_evidence: Some(SccmTaskSequenceNextEvidence {
             logical_artifact_id: TASK_SEQUENCE_LOGICAL_ARTIFACT_ID.to_owned(),
             path_class,
@@ -672,4 +953,22 @@ fn finding_for_coverage(coverage_gaps: &[SccmTaskSequenceCoverageGap]) -> SccmTa
                 .to_owned(),
         }),
     }
+}
+
+fn stable_opaque_id(prefix: &str, parts: &[&str]) -> String {
+    const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut digest = Sha256::new();
+    for part in parts {
+        digest.update((part.len() as u64).to_be_bytes());
+        digest.update(part.as_bytes());
+    }
+    let digest = digest.finalize();
+    let mut encoded = String::with_capacity(prefix.len() + digest.len() * 2);
+    encoded.push_str(prefix);
+    for byte in digest {
+        encoded.push(char::from(LOWER_HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(LOWER_HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }

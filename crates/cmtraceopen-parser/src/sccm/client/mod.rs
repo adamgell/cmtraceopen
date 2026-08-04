@@ -3,6 +3,9 @@
 //! This module accepts already-supplied metadata. Native discovery and capture
 //! remain outside `cmtraceopen-parser`.
 
+pub(crate) const TASK_SEQUENCE_TEST_PROFILE_ID: &str = "task-sequence-client-5.00.test-v1";
+pub(crate) const TASK_SEQUENCE_TEST_VERSION: &str = "5.00.TEST.0000";
+
 pub(crate) mod admission;
 mod deployment;
 mod health;

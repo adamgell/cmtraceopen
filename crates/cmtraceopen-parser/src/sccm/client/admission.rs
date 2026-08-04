@@ -31,9 +31,13 @@ use crate::sccm::{
 
 use super::{
     assess_client_intake,
-    intake::{is_safe_artifact_id, is_supported_encoding, source_matches_group},
+    intake::{
+        is_safe_artifact_id, is_supported_encoding, source_matches_group,
+        task_sequence_path_class_for_relative_path,
+    },
     SccmClientIntakeAssessment, SccmClientIntakeBundle, SccmClientIntakeError,
-    SccmClientIntakeFragment, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    SccmClientIntakeFragment, SccmTaskSequencePathClass, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    TASK_SEQUENCE_TEST_PROFILE_ID, TASK_SEQUENCE_TEST_VERSION,
 };
 
 /// Maximum raw bytes decoded from one client payload at the parser admission
@@ -96,6 +100,7 @@ pub struct SccmClientAdmittedEvidence {
     unavailable_source_basenames: BTreeSet<String>,
     admitted_source_groups: BTreeSet<String>,
     profiles_by_artifact: BTreeMap<String, SccmExtractionProfile>,
+    task_sequence_sources: BTreeMap<String, SccmClientAdmittedTaskSequenceSource>,
     integrity_seal: String,
 }
 
@@ -106,6 +111,29 @@ pub(crate) struct SccmClientAdmittedSourceArtifact {
     pub(crate) coverage: SccmCoverageState,
     pub(crate) fragment_complete: Option<bool>,
     pub(crate) physical: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SccmClientAdmittedTaskSequenceSource {
+    pub(crate) path_class: SccmTaskSequencePathClass,
+    pub(crate) rotation: SccmRotation,
+    pub(crate) coverage: SccmCoverageState,
+    pub(crate) fragment_complete: Option<bool>,
+    pub(crate) physical_evidence: Option<SccmClientAdmittedTaskSequencePhysicalEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SccmClientAdmittedTaskSequencePhysicalEvidence {
+    pub(crate) line_start: u32,
+    pub(crate) line_end: u32,
+    pub(crate) key_candidate: bool,
+}
+
+pub(crate) struct SccmClientAdmittedTaskSequenceEvidence<'a> {
+    pub(crate) evidence: &'a [SccmEvidence],
+    pub(crate) sources: &'a BTreeMap<String, SccmClientAdmittedTaskSequenceSource>,
+    pub(crate) profiles: &'a BTreeMap<String, SccmExtractionProfile>,
+    pub(crate) coverage: Option<&'a SccmCoverageState>,
 }
 
 /// Artifact-scoped key-extraction results selected only from sealed client
@@ -151,6 +179,18 @@ impl SccmClientAdmittedEvidence {
     ) -> Result<Option<&SccmCoverageState>, SccmClientEvidenceAdmissionError> {
         self.verify_integrity()?;
         Ok(self.source_coverage_by_basename.get(basename))
+    }
+
+    pub(crate) fn task_sequence_evidence(
+        &self,
+    ) -> Result<SccmClientAdmittedTaskSequenceEvidence<'_>, SccmClientEvidenceAdmissionError> {
+        self.verify_integrity()?;
+        Ok(SccmClientAdmittedTaskSequenceEvidence {
+            evidence: &self.evidence,
+            sources: &self.task_sequence_sources,
+            profiles: &self.profiles_by_artifact,
+            coverage: self.source_coverage.get("client-task-sequence-smsts"),
+        })
     }
 
     pub(crate) fn source_basename_for_artifact(
@@ -238,6 +278,7 @@ impl SccmClientAdmittedEvidence {
                 unavailable_source_basenames: &self.unavailable_source_basenames,
                 admitted_source_groups: &self.admitted_source_groups,
                 profiles_by_artifact: &self.profiles_by_artifact,
+                task_sequence_sources: &self.task_sequence_sources,
             },
         )?;
         (recomputed == self.integrity_seal)
@@ -445,10 +486,19 @@ pub fn admit_client_evidence(
         if !classified.supported_for_diagnosis || !classified.uses_ccm_records {
             continue;
         }
-        if fragment.coverage != SccmCoverageState::Captured
-            || fragment.fragment_complete != Some(true)
-        {
+        if fragment.coverage != SccmCoverageState::Captured {
             unavailable_source_basenames.insert(classified.basename.clone());
+            continue;
+        }
+        if fragment.fragment_complete != Some(true) {
+            unavailable_source_basenames.insert(classified.basename.clone());
+            if matches!(classified.family, SccmArtifactFamily::ClientTaskSequence)
+                && fragment.declared_byte_length.is_some()
+                && fragment.content_sha256.is_some()
+                && has_supported_payload_encoding(fragment)
+            {
+                eligible.insert(fragment.artifact_id.clone(), (fragment, classified.family));
+            }
             continue;
         }
         if fragment.declared_byte_length.is_none() || fragment.content_sha256.is_none() {
@@ -484,6 +534,30 @@ pub fn admit_client_evidence(
         })
         .map(|group| group.logical_artifact_id.clone())
         .collect::<BTreeSet<_>>();
+    let mut task_sequence_sources = canonical
+        .groups
+        .iter()
+        .find(|group| group.logical_artifact_id == "client-task-sequence-smsts")
+        .into_iter()
+        .flat_map(|group| &group.fragments)
+        .map(|fragment| {
+            let path_class = fragment
+                .relative_path
+                .as_deref()
+                .and_then(task_sequence_path_class_for_relative_path)
+                .unwrap_or(SccmTaskSequencePathClass::Unknown);
+            (
+                fragment.artifact_id.clone(),
+                SccmClientAdmittedTaskSequenceSource {
+                    path_class,
+                    rotation: fragment.rotation.clone(),
+                    coverage: fragment.coverage.clone(),
+                    fragment_complete: fragment.fragment_complete,
+                    physical_evidence: None,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     if payloads
         .iter()
         .any(|payload| unbound_complete_captures.contains(payload.artifact_id.as_str()))
@@ -517,11 +591,26 @@ pub fn admit_client_evidence(
         let fragment = *fragment;
         validate_payload(payload, fragment)?;
 
-        let profile = SccmExtractionProfile::for_artifact_family(
-            fragment.configmgr_version.as_deref(),
-            family,
-        );
+        let profile = admission_profile(fragment.configmgr_version.as_deref(), family);
         let content = decode_payload(payload, fragment.encoding.as_deref())?;
+        if fragment.fragment_complete != Some(true) {
+            let line_count = content.lines().count();
+            if line_count == 0 {
+                return Err(SccmClientEvidenceAdmissionError::MalformedCcm);
+            }
+            let line_end = u32::try_from(line_count)
+                .map_err(|_| SccmClientEvidenceAdmissionError::LogicalRecordLimitExceeded)?;
+            let source = task_sequence_sources
+                .get_mut(&fragment.artifact_id)
+                .ok_or(SccmClientEvidenceAdmissionError::IntegrityViolation)?;
+            source.physical_evidence = Some(SccmClientAdmittedTaskSequencePhysicalEvidence {
+                line_start: 1,
+                line_end,
+                key_candidate: task_sequence_key_candidate(&content),
+            });
+            profiles_by_artifact.insert(fragment.artifact_id.clone(), profile);
+            continue;
+        }
         let artifact = artifact_for_fragment(fragment);
         let scan =
             scan_logical_records_bounded(&content, &fragment.basename, remaining_logical_records);
@@ -580,6 +669,7 @@ pub fn admit_client_evidence(
             unavailable_source_basenames: &unavailable_source_basenames,
             admitted_source_groups: &admitted_source_groups,
             profiles_by_artifact: &profiles_by_artifact,
+            task_sequence_sources: &task_sequence_sources,
         },
     )?;
     Ok(SccmClientAdmittedEvidence {
@@ -591,6 +681,7 @@ pub fn admit_client_evidence(
         unavailable_source_basenames,
         admitted_source_groups,
         profiles_by_artifact,
+        task_sequence_sources,
         integrity_seal,
     })
 }
@@ -609,6 +700,41 @@ fn has_consistent_timestamp_provenance(evidence: &SccmEvidence) -> bool {
             evidence.timestamp.utc_millis.is_none() && evidence.timestamp.offset_minutes.is_none()
         }
     }
+}
+
+fn task_sequence_key_candidate(content: &str) -> bool {
+    [
+        "executionId",
+        "taskSequencePackageId",
+        "advertisementId",
+        "runContext",
+    ]
+    .iter()
+    .all(|label| {
+        content.split_ascii_whitespace().any(|token| {
+            token.split_once('=').is_some_and(|(candidate, value)| {
+                candidate.eq_ignore_ascii_case(label) && !value.is_empty()
+            })
+        })
+    })
+}
+
+fn admission_profile(
+    configmgr_version: Option<&str>,
+    family: &SccmArtifactFamily,
+) -> SccmExtractionProfile {
+    if !matches!(family, SccmArtifactFamily::ClientTaskSequence) {
+        return SccmExtractionProfile::for_artifact_family(configmgr_version, family);
+    }
+
+    let mut profile = SccmExtractionProfile::for_version(configmgr_version);
+    profile.validated_artifact_families = vec![family.clone()];
+    if configmgr_version == Some(TASK_SEQUENCE_TEST_VERSION) {
+        profile.profile_id = TASK_SEQUENCE_TEST_PROFILE_ID.to_owned();
+        profile.configmgr_version_prefixes = vec![TASK_SEQUENCE_TEST_VERSION.to_owned()];
+        profile.maturity = SccmExtractionProfileMaturity::Experimental;
+    }
+    profile
 }
 
 fn validate_payload_budget(
@@ -807,6 +933,7 @@ struct IntegrityProjection<'a> {
     admitted_source_groups: &'a BTreeSet<String>,
     profile_assignments: &'a BTreeMap<&'a str, usize>,
     profiles: &'a [&'a SccmExtractionProfile],
+    task_sequence_sources: &'a BTreeMap<String, SccmClientAdmittedTaskSequenceSource>,
 }
 
 struct BoundedIntegrityWriter {
@@ -863,6 +990,7 @@ struct IntegrityAuthority<'a> {
     unavailable_source_basenames: &'a BTreeSet<String>,
     admitted_source_groups: &'a BTreeSet<String>,
     profiles_by_artifact: &'a BTreeMap<String, SccmExtractionProfile>,
+    task_sequence_sources: &'a BTreeMap<String, SccmClientAdmittedTaskSequenceSource>,
 }
 
 fn compute_integrity_seal(
@@ -922,6 +1050,7 @@ fn compute_integrity_seal(
             admitted_source_groups: authority.admitted_source_groups,
             profile_assignments: &profile_assignments,
             profiles: &unique_profiles,
+            task_sequence_sources: authority.task_sequence_sources,
         },
     );
     if serialized.is_err() {
