@@ -573,7 +573,7 @@ CMTrace Open 0.3.0 expands the app from a log viewer with Intune diagnostics int
 - Added registry-backed Windows Hello for Business evidence loading using PolicyManager exports and Windows policy hives.
 - Added support for Microsoft policy hive correlation under PassportForWork locations such as `HKLM\SOFTWARE\Microsoft\Policies\PassportForWork` and `HKCU\SOFTWARE\Microsoft\Policies\PassportForWork`.
 - Added richer DSRegCmd diagnostics including join posture interpretation, failure phase detection, capture confidence, PRT state, MDM signal evaluation, certificate checks, and NGC/Windows Hello context.
-- Added a DSRegCmd troubleshooting guide in [DSREGCMD_TROUBLESHOOTING.md](DSREGCMD_TROUBLESHOOTING.md) with walkthroughs and screenshots for the new workspace.
+- Added a DSRegCmd troubleshooting guide in [DSRegCmd Workspace wiki page](https://github.com/adamgell/CMTraceOpen/wiki/DSRegCmd-Workspace) with walkthroughs and screenshots for the new workspace.
 - Added Windows runtime file association handling for `.log` and `.lo_` files.
 - Added a standalone prompt flow that can offer to associate log files with CMTrace Open.
 - Added startup file-path handoff so the app can consume an associated file path once on launch and route it through the normal open flow.

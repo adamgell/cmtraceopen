@@ -8,7 +8,7 @@ This folder contains a dependency-light PowerShell collector for building a loca
 - `Invoke-CmtraceEvidenceBootstrap.ps1`: stages the collector and profile locally, accepts a direct SAS URL for upload, and registers a one-time `SYSTEM` scheduled task to run the collector outside the assignment process.
 - `Detect-CmtraceEvidenceBootstrap.ps1`: Intune Remediations detection script that checks the bootstrap throttle state, removes only stale, invalid, or task-orphaned state, and exits `1` when remediation should restage the bootstrap.
 - `Remediate-CmtraceEvidenceBootstrap.ps1`: Intune Remediations entrypoint that mirrors the bootstrap behavior in a self-contained script so the upload does not depend on a sibling file being present on the endpoint.
-- `Collect-DnsDhcpFromDomain.ps1`: auto-discovers domain controllers via Active Directory and pulls DNS debug logs, DNS audit EVTX, and DHCP server logs from each over admin shares, organized by server for the CMTrace Open DNS/DHCP workspace. Must run from a domain-joined machine with credentials that can reach the DCs' `C$` shares.
+- `Collect-DnsDhcpFromDomain.ps1` (ships only under `scripts/collection/`; not mirrored in `references/collection/`): auto-discovers domain controllers via Active Directory and pulls DNS debug logs, DNS audit EVTX, and DHCP server logs from each over admin shares, organized by server for the CMTrace Open DNS/DHCP workspace. Must run from a domain-joined machine with credentials that can reach the DCs' `C$` shares.
 - `intune-evidence-profile.json`: curated collection profile consumed by the script.
 
 ## Intended execution model
@@ -67,7 +67,7 @@ pwsh.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CmtraceEvidenceCollec
 Bootstrap a one-time scheduled collection using explicit HTTPS payload URLs and a direct upload SAS URL:
 
 ```powershell
-pwsh.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CmtraceEvidenceBootstrap.ps1 -CollectorScriptUrl 'https://raw.githubusercontent.com/<owner>/<repo>/<ref>/cmtrace-open/scripts/collection/Invoke-CmtraceEvidenceCollection.ps1' -CollectorProfileUrl 'https://raw.githubusercontent.com/<owner>/<repo>/<ref>/cmtrace-open/scripts/collection/intune-evidence-profile.json' -SasUrl 'https://account.blob.core.windows.net/evidence/container-or-blob?<sas>'
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -File .\Invoke-CmtraceEvidenceBootstrap.ps1 -CollectorScriptUrl 'https://raw.githubusercontent.com/<owner>/<repo>/<ref>/scripts/collection/Invoke-CmtraceEvidenceCollection.ps1' -CollectorProfileUrl 'https://raw.githubusercontent.com/<owner>/<repo>/<ref>/scripts/collection/intune-evidence-profile.json' -SasUrl 'https://account.blob.core.windows.net/evidence/container-or-blob?<sas>'
 ```
 
 For Intune Remediations, upload `Detect-CmtraceEvidenceBootstrap.ps1` as the detection script and `Remediate-CmtraceEvidenceBootstrap.ps1` as the remediation script.

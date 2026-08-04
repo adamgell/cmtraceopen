@@ -28,7 +28,7 @@ The bump itself is `.github/scripts/Update-ScoopManifest.ps1`, which can be run
 by hand from a clone:
 
 ```powershell
-./.github/scripts/Update-ScoopManifest.ps1 -Version 1.5.0
+./.github/scripts/Update-ScoopManifest.ps1 -Version 1.5.1
 ```
 
 It derives every URL from the manifests' own `autoupdate` templates and takes
@@ -37,7 +37,7 @@ the asset. If a release ever renames an asset, only the `autoupdate` template
 needs editing. To check a hash independently:
 
 ```powershell
-(Get-FileHash .\CMTrace-Open_1.5.0_x64.exe -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\CMTrace-Open_1.5.1_x64.exe -Algorithm SHA256).Hash.ToLower()
 ```
 
 ## Submitting to ScoopInstaller/Extras
@@ -62,7 +62,7 @@ requires an issue before the pull request:
    `.\bin\checkver.ps1 -App <path>\bucket\cmtrace.json -ForceUpdate`. Use
    `-ForceUpdate` rather than `-Update`, which is a no-op while the manifest is
    already at the latest version and so proves nothing.
-6. Open the pull request titled `cmtrace: Add version 1.5.0`, then comment
+6. Open the pull request titled `cmtrace: Add version 1.5.1`, then comment
    `/verify` on it to trigger the manifest verifier.
 
 Extras is a copy, not a mirror. After it lands, this bucket and the Extras copy
