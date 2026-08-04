@@ -1422,8 +1422,7 @@ fn redact_text_for_context(value: &str, context: TextRedactionContext) -> String
     // the MAC matcher could pick up decimal sub-authority pairs inside it, and
     // IPv4 runs before IPv6 so an IPv4-mapped IPv6 address cannot leak its dotted
     // tail.
-    let redacted =
-        azure_storage_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
+    let redacted = azure_storage_credential_pattern().replace_all(&redacted, "${prefix}[redacted]");
     let redacted = ipv4_address_pattern().replace_all(&redacted, REDACTED);
     let redacted = mac_address_pattern().replace_all(&redacted, REDACTED);
     let redacted = redact_ipv6_addresses(&redacted);
