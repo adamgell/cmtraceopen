@@ -15,8 +15,10 @@ pub const SCCM_EXPERIMENTAL_KEY_PROFILE_ID: &str = "sccm-keys-5.00.9128-experime
 /// `Stable` describes this closed test corpus shape; it does not validate a
 /// production ConfigMgr release.
 pub const SCCM_POLICY_KEY_PROFILE_ID: &str = "policy-client-5.00.test-v1";
+pub const SCCM_HIERARCHY_KEY_PROFILE_ID: &str = "sccm-hierarchy-5.00.test-stable-v1";
 const EXPERIMENTAL_VERSION_PREFIX: &str = "5.00.9128.";
 const POLICY_TEST_VERSION: &str = "5.00.TEST.0000";
+const HIERARCHY_SYNTHETIC_VERSION: &str = "5.00.TEST";
 
 impl SccmExtractionProfile {
     pub fn for_version(configmgr_version: Option<&str>) -> Self {
@@ -65,6 +67,17 @@ impl SccmExtractionProfile {
         configmgr_version: Option<&str>,
         family: &SccmArtifactFamily,
     ) -> Self {
+        if family == &SccmArtifactFamily::Hierarchy
+            && configmgr_version.map(str::trim) == Some(HIERARCHY_SYNTHETIC_VERSION)
+        {
+            return Self {
+                profile_id: SCCM_HIERARCHY_KEY_PROFILE_ID.to_owned(),
+                configmgr_version_prefixes: vec![HIERARCHY_SYNTHETIC_VERSION.to_owned()],
+                validated_artifact_families: vec![SccmArtifactFamily::Hierarchy],
+                selected_configmgr_version: Some(HIERARCHY_SYNTHETIC_VERSION.to_owned()),
+                maturity: SccmExtractionProfileMaturity::Stable,
+            };
+        }
         if configmgr_version == Some(POLICY_TEST_VERSION)
             && matches!(family, SccmArtifactFamily::ClientPolicy)
         {
@@ -169,6 +182,32 @@ fn key_patterns() -> &'static [KeyPattern] {
     })
 }
 
+fn hierarchy_key_patterns() -> &'static [KeyPattern] {
+    static CELL: OnceLock<Vec<KeyPattern>> = OnceLock::new();
+    CELL.get_or_init(|| {
+        [
+            (
+                SccmCorrelationKeyKind::HierarchyMessageId,
+                r"(?i:\bmessage[ \t]*id)[ \t]*=[ \t]*(?P<value>msg-[A-Za-z0-9][A-Za-z0-9_.-]*)",
+            ),
+            (
+                SccmCorrelationKeyKind::HierarchyLinkId,
+                r"(?i:\blink[ \t]*id)[ \t]*=[ \t]*(?P<value>link-[A-Za-z0-9][A-Za-z0-9_.-]*)",
+            ),
+            (
+                SccmCorrelationKeyKind::SiteCode,
+                r"(?i:\b(?:origin|target)[ \t]*site)[ \t]*=[ \t]*(?P<value>[A-Z]{3})",
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, pattern)| KeyPattern {
+            kind,
+            regex: Regex::new(pattern).expect("SCCM hierarchy key regex must compile"),
+        })
+        .collect()
+    })
+}
+
 pub fn normalize_key(kind: SccmCorrelationKeyKind, raw: &str) -> SccmCorrelationKey {
     let (normalized, confidence) = normalize_value(&kind, raw);
     SccmCorrelationKey {
@@ -202,7 +241,7 @@ fn extract_keys_with_authority(
     profile: &SccmExtractionProfile,
     admitted_profile_authority: bool,
 ) -> SccmKeyExtractionResult {
-    let candidates = find_candidates(&evidence.message);
+    let candidates = find_candidates(&evidence.message, profile);
     let mut result = SccmKeyExtractionResult {
         profile_id: profile.profile_id.clone(),
         keys: Vec::new(),
@@ -223,7 +262,8 @@ fn extract_keys_with_authority(
     }
 
     let stable_policy = admitted_profile_authority && is_builtin_stable_policy(profile);
-    if !stable_policy {
+    let stable_hierarchy = is_builtin_stable_hierarchy(profile);
+    if !stable_policy && !stable_hierarchy {
         result.gaps.push(gap_for(
             SccmExtractionGapKind::ExperimentalProfile,
             profile,
@@ -249,7 +289,7 @@ fn extract_keys_with_authority(
             continue;
         }
 
-        key.confidence = if stable_policy {
+        key.confidence = if stable_policy || stable_hierarchy {
             SccmKeyConfidence::Exact
         } else {
             SccmKeyConfidence::Low
@@ -290,10 +330,19 @@ fn profile_gap_kind(
         {
             None
         }
+        SccmExtractionProfileMaturity::Stable if is_builtin_stable_hierarchy(profile) => None,
         SccmExtractionProfileMaturity::Experimental | SccmExtractionProfileMaturity::Stable => {
             Some(SccmExtractionGapKind::UnvalidatedProfile)
         }
     }
+}
+
+fn is_builtin_stable_hierarchy(profile: &SccmExtractionProfile) -> bool {
+    profile.profile_id == SCCM_HIERARCHY_KEY_PROFILE_ID
+        && profile.maturity == SccmExtractionProfileMaturity::Stable
+        && profile.configmgr_version_prefixes == [HIERARCHY_SYNTHETIC_VERSION]
+        && profile.validated_artifact_families == [SccmArtifactFamily::Hierarchy]
+        && profile.selected_configmgr_version.as_deref() == Some(HIERARCHY_SYNTHETIC_VERSION)
 }
 
 fn is_builtin_stable_policy(profile: &SccmExtractionProfile) -> bool {
@@ -335,8 +384,13 @@ fn is_canonical_configmgr_version(version: &str) -> bool {
     component_count == 4
 }
 
-fn find_candidates(message: &str) -> Vec<KeyCandidate<'_>> {
-    let mut candidates = key_patterns()
+fn find_candidates<'a>(message: &'a str, profile: &SccmExtractionProfile) -> Vec<KeyCandidate<'a>> {
+    let patterns = if is_builtin_stable_hierarchy(profile) {
+        hierarchy_key_patterns()
+    } else {
+        key_patterns()
+    };
+    let mut candidates = patterns
         .iter()
         .flat_map(|pattern| {
             pattern.regex.captures_iter(message).filter_map(|captures| {
@@ -436,6 +490,8 @@ fn normalize_value(kind: &SccmCorrelationKeyKind, raw: &str) -> (String, SccmKey
             normalize_decimal(trimmed)
         }
         SccmCorrelationKeyKind::KbId => normalize_kb_id(trimmed),
+        SccmCorrelationKeyKind::HierarchyMessageId => normalize_prefixed_opaque_id(trimmed, "msg-"),
+        SccmCorrelationKeyKind::HierarchyLinkId => normalize_prefixed_opaque_id(trimmed, "link-"),
         SccmCorrelationKeyKind::InventoryCycleId
         | SccmCorrelationKeyKind::ReportId
         | SccmCorrelationKeyKind::ComplianceCiId
@@ -450,6 +506,16 @@ fn normalize_value(kind: &SccmCorrelationKeyKind, raw: &str) -> (String, SccmKey
         || (trimmed.to_ascii_lowercase(), SccmKeyConfidence::Low),
         |normalized| (normalized, SccmKeyConfidence::Exact),
     )
+}
+
+fn normalize_prefixed_opaque_id(value: &str, prefix: &str) -> Option<String> {
+    value.strip_prefix(prefix).and_then(|suffix| {
+        (!suffix.is_empty()
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
+        .then(|| value.to_owned())
+    })
 }
 
 fn normalize_guid(raw: &str) -> Option<String> {
@@ -562,13 +628,15 @@ fn key_kind_order(kind: &SccmCorrelationKeyKind) -> u8 {
         SccmCorrelationKeyKind::RequestId => 12,
         SccmCorrelationKeyKind::TopicId => 13,
         SccmCorrelationKeyKind::StateMessageId => 14,
-        SccmCorrelationKeyKind::InventoryCycleId => 15,
-        SccmCorrelationKeyKind::ReportId => 16,
-        SccmCorrelationKeyKind::ResourceHandle => 17,
-        SccmCorrelationKeyKind::ComplianceCiId => 18,
-        SccmCorrelationKeyKind::BaselineId => 19,
-        SccmCorrelationKeyKind::ComplianceStateId => 20,
-        SccmCorrelationKeyKind::MeteringCycleId => 21,
-        SccmCorrelationKeyKind::RuleId => 22,
+        SccmCorrelationKeyKind::HierarchyMessageId => 15,
+        SccmCorrelationKeyKind::HierarchyLinkId => 16,
+        SccmCorrelationKeyKind::InventoryCycleId => 17,
+        SccmCorrelationKeyKind::ReportId => 18,
+        SccmCorrelationKeyKind::ResourceHandle => 19,
+        SccmCorrelationKeyKind::ComplianceCiId => 20,
+        SccmCorrelationKeyKind::BaselineId => 21,
+        SccmCorrelationKeyKind::ComplianceStateId => 22,
+        SccmCorrelationKeyKind::MeteringCycleId => 23,
+        SccmCorrelationKeyKind::RuleId => 24,
     }
 }

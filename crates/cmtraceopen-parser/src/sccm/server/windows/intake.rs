@@ -31,6 +31,75 @@ const MAX_SCCM_SERVER_OPAQUE_EXTENSION_BYTES_PER_SCOPE: usize = 8 * 1024;
 const MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSIONS: usize = 1_024;
 const MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSION_BYTES: usize = 256 * 1024;
 
+// Closed synthetic hierarchy vocabulary from the reviewed #331 corpus. These
+// values are intake fixtures, not a prefix admission rule: adding one requires
+// changing this registry and therefore the canonical intake integrity surface.
+const SYNTHETIC_HIERARCHY_ARTIFACT_IDS: &[&str] = &[
+    "absent-01-sender",
+    "absent-02-despool",
+    "backlog-01-replmgr",
+    "clock-01-sender",
+    "clock-02-despool",
+    "generic-01-sender",
+    "healthy-01-replmgr",
+    "healthy-02-sender",
+    "healthy-03-despool",
+    "healthy-04-rcmctrl",
+    "incomplete-01-replmgr",
+    "mismatch-01-sender",
+    "mismatch-02-despool",
+    "receiver-01-sender",
+    "receiver-02-despool",
+    "recovery-01-sender",
+    "recovery-02-despool",
+    "rotation-01-current",
+    "rotation-02-lo",
+    "sender-failure-01-chd",
+];
+const SYNTHETIC_HIERARCHY_LINEAGES: &[&str] = &[
+    "absent-despool",
+    "absent-sender",
+    "backlog-replmgr",
+    "clock-despool",
+    "clock-sender",
+    "generic-site-token-sender",
+    "healthy-despool",
+    "healthy-rcmctrl",
+    "healthy-replmgr",
+    "healthy-sender",
+    "incomplete-replmgr",
+    "mismatch-despool",
+    "mismatch-sender",
+    "receiver-despool",
+    "receiver-sender",
+    "recovery-despool",
+    "recovery-sender",
+    "rotation-sender",
+    "sender-failure",
+];
+const SYNTHETIC_HIERARCHY_PATH_FINGERPRINTS: &[&str] = &[
+    "synthetic:absent-despool",
+    "synthetic:absent-sender",
+    "synthetic:backlog-replmgr",
+    "synthetic:clock-despool",
+    "synthetic:clock-sender",
+    "synthetic:generic-site-token-sender",
+    "synthetic:healthy-despool",
+    "synthetic:healthy-rcmctrl",
+    "synthetic:healthy-replmgr",
+    "synthetic:healthy-sender",
+    "synthetic:incomplete-replmgr",
+    "synthetic:mismatch-despool",
+    "synthetic:mismatch-sender",
+    "synthetic:receiver-despool",
+    "synthetic:receiver-sender",
+    "synthetic:recovery-despool",
+    "synthetic:recovery-sender",
+    "synthetic:rotation-current",
+    "synthetic:rotation-lo",
+    "synthetic:sender-failure-current",
+];
+
 type PathFingerprintKey = (
     String,
     Option<String>,
@@ -252,6 +321,14 @@ fn normalized_topology_or_none(
     {
         return None;
     }
+    normalized.hierarchy_links.sort();
+    if normalized
+        .hierarchy_links
+        .windows(2)
+        .any(|links| links[0] == links[1])
+    {
+        return None;
+    }
     Some(normalized)
 }
 
@@ -451,11 +528,22 @@ pub struct SccmServerTopologyAssessment {
     pub capture_host_handle: String,
     pub site_handle: String,
     pub roles_observed: Vec<SccmRole>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hierarchy_links: Vec<SccmServerHierarchyLinkTopology>,
     #[serde(
         skip_serializing_if = "Vec::is_empty",
         serialize_with = "serialize_opaque_extensions"
     )]
     extensions: Vec<SccmServerOpaqueExtension>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmServerHierarchyLinkTopology {
+    pub origin_site_code: String,
+    pub target_site_code: String,
+    pub origin_host_handle: String,
+    pub target_host_handle: String,
 }
 
 impl SccmServerTopologyAssessment {
@@ -964,14 +1052,54 @@ fn normalize_topology(
         return Err(SccmServerIntakeError::InvalidTopology);
     }
 
+    let mut hierarchy_links = manifest
+        .topology
+        .hierarchy_links
+        .iter()
+        .map(|link| normalize_hierarchy_link(link, manifest.synthetic_fixture))
+        .collect::<Result<Vec<_>, _>>()?;
+    hierarchy_links.sort();
+    if hierarchy_links.windows(2).any(|links| links[0] == links[1]) {
+        return Err(SccmServerIntakeError::InvalidTopology);
+    }
+
     Ok(SccmServerTopologyAssessment {
         capture_host_handle,
         site_handle,
         roles_observed,
+        hierarchy_links,
         extensions: normalize_opaque_extensions(
             &manifest.topology.extensions,
             SccmServerIntakeError::InvalidTopology,
         )?,
+    })
+}
+
+fn normalize_hierarchy_link(
+    link: &RawServerHierarchyLink,
+    synthetic_fixture: bool,
+) -> Result<SccmServerHierarchyLinkTopology, SccmServerIntakeError> {
+    let _ = RawServerHierarchyLink::KNOWN_FIELDS;
+    if !synthetic_fixture || !link.extensions.is_empty() {
+        return Err(SccmServerIntakeError::InvalidTopology);
+    }
+    let valid = link.origin_site_code == "LAB"
+        && link.origin_host_handle == "synthetic:host:site-01"
+        && matches!(
+            (
+                link.target_site_code.as_str(),
+                link.target_host_handle.as_str()
+            ),
+            ("CHD", "synthetic:host:site-02") | ("SEC", "synthetic:host:site-03")
+        );
+    if !valid {
+        return Err(SccmServerIntakeError::InvalidTopology);
+    }
+    Ok(SccmServerHierarchyLinkTopology {
+        origin_site_code: link.origin_site_code.clone(),
+        target_site_code: link.target_site_code.clone(),
+        origin_host_handle: link.origin_host_handle.clone(),
+        target_host_handle: link.target_host_handle.clone(),
     })
 }
 
@@ -2546,7 +2674,7 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "wsus-failure-02-wsync"
                 | "wsus-failure-03-wsus"
                 | "z-site-status"
-        );
+        ) || SYNTHETIC_HIERARCHY_ARTIFACT_IDS.contains(&value);
     }
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
 }
@@ -2561,6 +2689,8 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
             | "server-mp-iis"
             | "server-dp-distribution"
             | "server-dp-serve"
+            | "server-hierarchy-control"
+            | "server-hierarchy-transfer"
             | "server-sup-sync"
             | "server-sup-wsus"
             | "unknown-db-supplement"
@@ -2644,7 +2774,7 @@ fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "sup-sync-lab"
                 | "sup-wsus-health"
                 | "unknown-db-export"
-        );
+        ) || SYNTHETIC_HIERARCHY_LINEAGES.contains(&value);
     }
     opaque_sha256_handle(value, "cmtraceopen.lineage.sha256.v1:")
 }
@@ -2705,7 +2835,7 @@ fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
                 | "synthetic:path:sup-wsus-health"
                 | "synthetic:path:unsupported-db"
                 | "synthetic:path:z-site"
-        );
+        ) || SYNTHETIC_HIERARCHY_PATH_FINGERPRINTS.contains(&value);
     }
     opaque_sha256_handle(value, "cmtraceopen.path.sha256.v1:")
 }
@@ -2830,7 +2960,11 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
         return match domain {
             "host" => matches!(
                 value,
-                "synthetic:host:mp-01" | "synthetic:host:site-01" | "synthetic:host:wsus-01"
+                "synthetic:host:mp-01"
+                    | "synthetic:host:site-01"
+                    | "synthetic:host:site-02"
+                    | "synthetic:host:site-03"
+                    | "synthetic:host:wsus-01"
             ),
             "subject" => {
                 matches!(
@@ -3219,6 +3353,17 @@ define_raw_server_wire! {
         "captureHost" => capture_host: String,
         "siteCode" => site_code: String,
         "rolesObserved" => roles_observed: Vec<SccmRole>,
+        #[serde(default)]
+        "hierarchyLinks" => hierarchy_links: Vec<RawServerHierarchyLink>,
+    }
+}
+
+define_raw_server_wire! {
+    struct RawServerHierarchyLink {
+        "originSiteCode" => origin_site_code: String,
+        "targetSiteCode" => target_site_code: String,
+        "originHostHandle" => origin_host_handle: String,
+        "targetHostHandle" => target_host_handle: String,
     }
 }
 
@@ -3371,7 +3516,16 @@ mod opaque_extension_boundary_tests {
         assert_eq!(RawServerPrivacy::KNOWN_FIELDS, ["synthetic", "rawPaths"]);
         assert_eq!(
             RawServerTopology::KNOWN_FIELDS,
-            ["captureHost", "siteCode", "rolesObserved"]
+            ["captureHost", "siteCode", "rolesObserved", "hierarchyLinks"]
+        );
+        assert_eq!(
+            RawServerHierarchyLink::KNOWN_FIELDS,
+            [
+                "originSiteCode",
+                "targetSiteCode",
+                "originHostHandle",
+                "targetHostHandle"
+            ]
         );
         assert_eq!(
             RawWorkflowSubject::KNOWN_FIELDS,

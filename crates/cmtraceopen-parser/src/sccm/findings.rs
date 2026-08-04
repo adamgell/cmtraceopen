@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::models::log_entry::Severity;
 
 use super::catalog::declared_source_catalog;
-use super::keys::normalize_key;
+use super::keys::{normalize_key, SCCM_HIERARCHY_KEY_PROFILE_ID};
 use super::models::{
     SccmCorrelationKey, SccmCorrelationKeyKind, SccmCoverageState, SccmEvidenceRef,
     SccmFindingClass, SccmKeyConfidence, SccmRole,
@@ -41,7 +41,8 @@ pub(crate) const MAX_SCCM_CORRELATION_KEY_VALUE_CHARS: usize = 256;
 // The sole registered profile is a closed synthetic-fixture contract. Its
 // registration authorizes exact fixture keys, not any production ConfigMgr
 // version. Adding a production profile requires separate contract review.
-const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] = &["policy-client-5.00.test-v1"];
+const REGISTERED_STABLE_CORRELATION_PROFILE_IDS: &[&str] =
+    &["policy-client-5.00.test-v1", SCCM_HIERARCHY_KEY_PROFILE_ID];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2696,14 +2697,16 @@ fn correlation_key_kind_order(kind: &SccmCorrelationKeyKind) -> u8 {
         SccmCorrelationKeyKind::RequestId => 12,
         SccmCorrelationKeyKind::TopicId => 13,
         SccmCorrelationKeyKind::StateMessageId => 14,
-        SccmCorrelationKeyKind::InventoryCycleId => 15,
-        SccmCorrelationKeyKind::ReportId => 16,
-        SccmCorrelationKeyKind::ResourceHandle => 17,
-        SccmCorrelationKeyKind::ComplianceCiId => 18,
-        SccmCorrelationKeyKind::BaselineId => 19,
-        SccmCorrelationKeyKind::ComplianceStateId => 20,
-        SccmCorrelationKeyKind::MeteringCycleId => 21,
-        SccmCorrelationKeyKind::RuleId => 22,
+        SccmCorrelationKeyKind::HierarchyMessageId => 15,
+        SccmCorrelationKeyKind::HierarchyLinkId => 16,
+        SccmCorrelationKeyKind::InventoryCycleId => 17,
+        SccmCorrelationKeyKind::ReportId => 18,
+        SccmCorrelationKeyKind::ResourceHandle => 19,
+        SccmCorrelationKeyKind::ComplianceCiId => 20,
+        SccmCorrelationKeyKind::BaselineId => 21,
+        SccmCorrelationKeyKind::ComplianceStateId => 22,
+        SccmCorrelationKeyKind::MeteringCycleId => 23,
+        SccmCorrelationKeyKind::RuleId => 24,
     }
 }
 

@@ -197,6 +197,8 @@ pub enum SccmCorrelationKeyKind {
     RequestId,
     TopicId,
     StateMessageId,
+    HierarchyMessageId,
+    HierarchyLinkId,
     InventoryCycleId,
     ReportId,
     ResourceHandle,
