@@ -29,6 +29,9 @@ export function useFileWatcher() {
   const resetAggregateEntries = useLogStore((s) => s.resetAggregateEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
   const setTotalLines = useLogStore((s) => s.setTotalLines);
+  const aggregateTailKey = JSON.stringify(
+    aggregateFiles.map(({ filePath, byteOffset }) => [filePath, byteOffset]),
+  );
 
   // Start/stop tailing when file changes
   useEffect(() => {
@@ -74,7 +77,7 @@ export function useFileWatcher() {
         console.error("Failed to stop tail:", err)
       );
     };
-  }, [aggregateFiles, formatDetected, openFilePath, sourceOpenMode]);
+  }, [aggregateTailKey, formatDetected, openFilePath, sourceOpenMode]);
 
   // Handle pause/resume
   useEffect(() => {

@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { startTail } from "../lib/commands";
+import { startTail, stopTail } from "../lib/commands";
 import { useLogStore } from "../stores/log-store";
 import type { LogEntry, TailPayload } from "../types/log";
 import { useFileWatcher } from "./use-file-watcher";
@@ -31,6 +31,7 @@ vi.mock("../lib/commands", () => ({
 }));
 
 const startTailMock = vi.mocked(startTail);
+const stopTailMock = vi.mocked(stopTail);
 
 function multilineEntry(): LogEntry {
   return {
@@ -322,6 +323,46 @@ describe("useFileWatcher tail start state", () => {
 
     expect(useLogStore.getState().entries).toEqual(beforeUntracked);
     expect(useLogStore.getState().totalLines).toBe(4);
+  });
+
+  it("keeps aggregate tails running when batch accounting changes", async () => {
+    useLogStore.setState({
+      sourceOpenMode: "aggregate-folder",
+      formatDetected: "Timestamped",
+      totalLines: 1,
+      aggregateFiles: [
+        {
+          filePath: "/logs/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 512,
+          byteOffset: 512,
+        },
+      ],
+      entries: [
+        {
+          ...multilineEntry(),
+          filePath: "/logs/a.log",
+          message: "[Sync] started",
+        },
+      ],
+    });
+
+    renderHook(() => useFileWatcher());
+    await waitFor(() => expect(eventMocks.tailListener).not.toBeNull());
+    expect(startTailMock).toHaveBeenCalledOnce();
+
+    act(() =>
+      eventMocks.tailListener?.({
+        payload: emptyTailPayload({
+          filePath: "/logs/a.log",
+          observedThroughLine: 2,
+        }),
+      }),
+    );
+
+    expect(startTailMock).toHaveBeenCalledOnce();
+    expect(stopTailMock).not.toHaveBeenCalled();
   });
 
   it("retains aggregate parse gaps and empty-reset physical coverage", async () => {
