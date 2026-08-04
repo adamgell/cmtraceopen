@@ -625,6 +625,62 @@ fn selected_content_profile_site_code(topology_site_handle: &str) -> Option<&'st
     }
 }
 
+fn decisive_fact_order(
+    fact: &DistributionPointFact,
+) -> (i64, SccmDistributionPointContentPhase, &str, &str) {
+    (
+        fact.timestamp
+            .utc_millis
+            .expect("admitted DP facts carry normalized UTC"),
+        fact.phase,
+        fact.reference.artifact_id.as_str(),
+        fact.reference.entry_id.as_str(),
+    )
+}
+
+fn decisive_missing_phase_fact(
+    facts: &[DistributionPointFact],
+    phase: SccmDistributionPointContentPhase,
+    previous_timestamp: Option<i64>,
+) -> Option<&DistributionPointFact> {
+    previous_timestamp
+        .and_then(|previous| {
+            facts
+                .iter()
+                .filter(|fact| {
+                    fact.phase == phase
+                        && fact
+                            .timestamp
+                            .utc_millis
+                            .is_some_and(|timestamp| timestamp <= previous)
+                })
+                .max_by(|left, right| decisive_fact_order(left).cmp(&decisive_fact_order(right)))
+        })
+        .or_else(|| {
+            facts
+                .iter()
+                .filter(|fact| fact.phase > phase)
+                .min_by(|left, right| decisive_fact_order(left).cmp(&decisive_fact_order(right)))
+        })
+}
+
+fn decisive_downstream_fact(
+    facts: &[DistributionPointFact],
+    phase: SccmDistributionPointContentPhase,
+    current_timestamp: i64,
+) -> Option<&DistributionPointFact> {
+    facts
+        .iter()
+        .filter(|fact| {
+            fact.phase > phase
+                && fact
+                    .timestamp
+                    .utc_millis
+                    .is_some_and(|timestamp| timestamp > current_timestamp)
+        })
+        .min_by(|left, right| decisive_fact_order(left).cmp(&decisive_fact_order(right)))
+}
+
 fn reduce_transaction(
     mut envelope: DistributionPointTransactionEnvelope,
 ) -> SccmDistributionPointContentTransaction {
@@ -670,16 +726,18 @@ fn reduce_transaction(
             .collect::<Vec<_>>();
 
         if phase_facts.is_empty() {
+            let decisive =
+                decisive_missing_phase_fact(&envelope.facts, phase, previous_timestamp).cloned();
             if phase == SccmDistributionPointContentPhase::ServeOrReport {
-                outcome = Some(if envelope.facts.iter().any(|fact| fact.phase == phase) {
+                outcome = Some(if let Some(fact) = decisive {
+                    selected.push(fact);
                     SccmDistributionPointContentState::Contradictory
                 } else {
                     SccmDistributionPointContentState::Succeeded
                 });
             } else {
-                let has_non_monotonic_or_downstream =
-                    envelope.facts.iter().any(|fact| fact.phase >= phase);
-                outcome = Some(if has_non_monotonic_or_downstream {
+                outcome = Some(if let Some(fact) = decisive {
+                    selected.push(fact);
                     SccmDistributionPointContentState::Contradictory
                 } else {
                     SccmDistributionPointContentState::Incomplete
@@ -721,14 +779,10 @@ fn reduce_transaction(
             continue;
         }
 
-        let has_downstream = envelope.facts.iter().any(|fact| {
-            fact.phase > phase
-                && fact
-                    .timestamp
-                    .utc_millis
-                    .is_some_and(|timestamp| timestamp > latest_timestamp)
-        });
-        outcome = Some(if has_downstream {
+        let decisive_downstream =
+            decisive_downstream_fact(&envelope.facts, phase, latest_timestamp).cloned();
+        outcome = Some(if let Some(fact) = decisive_downstream {
+            selected.push(fact);
             SccmDistributionPointContentState::Contradictory
         } else {
             match disposition {

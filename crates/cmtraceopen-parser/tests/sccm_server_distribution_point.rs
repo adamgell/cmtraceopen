@@ -4,9 +4,9 @@ use cmtraceopen_parser::sccm::server::windows::{
     analyze_distribution_point, analyze_distribution_point_content_from_server_intake,
     assess_server_intake, SccmDistributionPointContentConfidence,
     SccmDistributionPointContentPhase, SccmDistributionPointContentState,
-    SccmServerArtifactPayload, SccmServerIntakeAssessment, SccmServerIntakeError,
-    SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION, SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID,
-    SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION,
+    SccmDistributionPointContentTransaction, SccmServerArtifactPayload, SccmServerIntakeAssessment,
+    SccmServerIntakeError, SCCM_DISTRIBUTION_POINT_ANALYSIS_SCHEMA_VERSION,
+    SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_ID, SCCM_DISTRIBUTION_POINT_INTAKE_PROFILE_VERSION,
 };
 use cmtraceopen_parser::sccm::{
     SccmArtifactRequest, SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState,
@@ -21,6 +21,22 @@ fn artifact_request_contracts(requests: &[SccmArtifactRequest]) -> Vec<(&str, Sc
                 request.logical_id.as_str(),
                 request.role.clone(),
                 request.reason.as_str(),
+            )
+        })
+        .collect()
+}
+
+fn observation_citations(
+    transaction: &SccmDistributionPointContentTransaction,
+) -> Vec<(SccmDistributionPointContentPhase, &str, Option<u32>)> {
+    transaction
+        .observations
+        .iter()
+        .map(|observation| {
+            (
+                observation.phase,
+                observation.evidence.artifact_id.as_str(),
+                observation.evidence.line_start,
             )
         })
         .collect()
@@ -177,6 +193,218 @@ fn unresolved_same_timestamp_outcomes_are_contradictory_and_request_one_source()
             .as_ref()
             .map(|request| request.logical_id.as_str()),
         Some("pkgXferMgr")
+    );
+}
+
+#[test]
+fn downstream_after_terminal_phase_is_cited_as_decisive_contradiction_evidence() {
+    let assessment = load_distribution_point_assessment_after("healthy-package", |_, payloads| {
+        let transfer = payloads
+            .iter_mut()
+            .find(|payload| payload.manifest_artifact_id == "dp-healthy-02-pkgxfer")
+            .expect("healthy fixture has transfer evidence");
+        let content = std::str::from_utf8(&transfer.bytes).expect("fixture is UTF-8");
+        transfer.bytes = content
+            .replace(
+                "Disposition=succeeded; Terminal=false",
+                "Disposition=failed; Terminal=true",
+            )
+            .into_bytes();
+    });
+
+    let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+        .expect("downstream evidence remains analyzable");
+    let transaction = &analysis.transactions[0];
+    assert_eq!(
+        transaction.state,
+        SccmDistributionPointContentState::Contradictory
+    );
+    assert_eq!(transaction.evidence.len(), 4);
+    assert_eq!(
+        observation_citations(transaction),
+        vec![
+            (
+                SccmDistributionPointContentPhase::ReceiveContent,
+                "dp-healthy-01-distmgr",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::Distribute,
+                "dp-healthy-01-distmgr",
+                Some(2),
+            ),
+            (
+                SccmDistributionPointContentPhase::Transfer,
+                "dp-healthy-02-pkgxfer",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::Validate,
+                "dp-healthy-03-provider",
+                Some(1),
+            ),
+        ]
+    );
+    let serialized = serde_json::to_string(&analysis).expect("analysis serializes");
+    for private in ["SYNTHETIC FIXTURE", ".cpp:", "LAB-CM01", "safe:server:"] {
+        assert!(!serialized.contains(private), "output leaks {private}");
+    }
+}
+
+#[test]
+fn missing_phase_cites_only_the_first_decisive_downstream_fact() {
+    let assessment = load_distribution_point_assessment_after("healthy-package", |_, payloads| {
+        let provider = payloads
+            .iter_mut()
+            .find(|payload| payload.manifest_artifact_id == "dp-healthy-03-provider")
+            .expect("healthy fixture has provider evidence");
+        let content = std::str::from_utf8(&provider.bytes).expect("fixture is UTF-8");
+        provider.bytes = content
+            .lines()
+            .filter(|line| !line.contains("Phase=validate"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into_bytes();
+    });
+
+    let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+        .expect("missing phase remains analyzable");
+    let transaction = &analysis.transactions[0];
+    assert_eq!(
+        transaction.state,
+        SccmDistributionPointContentState::Contradictory
+    );
+    assert_eq!(transaction.evidence.len(), 4);
+    assert_eq!(
+        observation_citations(transaction),
+        vec![
+            (
+                SccmDistributionPointContentPhase::ReceiveContent,
+                "dp-healthy-01-distmgr",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::Distribute,
+                "dp-healthy-01-distmgr",
+                Some(2),
+            ),
+            (
+                SccmDistributionPointContentPhase::Transfer,
+                "dp-healthy-02-pkgxfer",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::MakeAvailable,
+                "dp-healthy-03-provider",
+                Some(1),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn non_monotonic_phase_cites_the_exact_out_of_order_fact() {
+    let assessment = load_distribution_point_assessment_after("healthy-package", |_, payloads| {
+        let provider = payloads
+            .iter_mut()
+            .find(|payload| payload.manifest_artifact_id == "dp-healthy-03-provider")
+            .expect("healthy fixture has provider evidence");
+        let content = std::str::from_utf8(&provider.bytes).expect("fixture is UTF-8");
+        provider.bytes = content
+            .replace("12:00:03.000+000", "12:00:01.500+000")
+            .into_bytes();
+    });
+
+    let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+        .expect("non-monotonic phase remains analyzable");
+    let transaction = &analysis.transactions[0];
+    assert_eq!(
+        transaction.state,
+        SccmDistributionPointContentState::Contradictory
+    );
+    assert_eq!(transaction.evidence.len(), 4);
+    assert_eq!(
+        observation_citations(transaction),
+        vec![
+            (
+                SccmDistributionPointContentPhase::ReceiveContent,
+                "dp-healthy-01-distmgr",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::Distribute,
+                "dp-healthy-01-distmgr",
+                Some(2),
+            ),
+            (
+                SccmDistributionPointContentPhase::Transfer,
+                "dp-healthy-02-pkgxfer",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::Validate,
+                "dp-healthy-03-provider",
+                Some(1),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn non_monotonic_optional_report_is_cited_without_unrelated_evidence() {
+    let assessment = load_distribution_point_assessment_after("serve-observed", |_, payloads| {
+        let status = payloads
+            .iter_mut()
+            .find(|payload| payload.manifest_artifact_id == "dp-serve-04-status")
+            .expect("serve fixture has status evidence");
+        let content = std::str::from_utf8(&status.bytes).expect("fixture is UTF-8");
+        status.bytes = content
+            .replace("12:06:05.000+000", "12:06:03.500+000")
+            .into_bytes();
+    });
+
+    let analysis = analyze_distribution_point_content_from_server_intake(&assessment)
+        .expect("non-monotonic optional report remains analyzable");
+    let transaction = &analysis.transactions[0];
+    assert_eq!(
+        transaction.state,
+        SccmDistributionPointContentState::Contradictory
+    );
+    assert_eq!(transaction.evidence.len(), 6);
+    assert_eq!(
+        observation_citations(transaction),
+        vec![
+            (
+                SccmDistributionPointContentPhase::ReceiveContent,
+                "dp-serve-01-distmgr",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::Distribute,
+                "dp-serve-01-distmgr",
+                Some(2),
+            ),
+            (
+                SccmDistributionPointContentPhase::Transfer,
+                "dp-serve-02-pkgxfer",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::Validate,
+                "dp-serve-03-provider",
+                Some(1),
+            ),
+            (
+                SccmDistributionPointContentPhase::MakeAvailable,
+                "dp-serve-03-provider",
+                Some(2),
+            ),
+            (
+                SccmDistributionPointContentPhase::ServeOrReport,
+                "dp-serve-04-status",
+                Some(1),
+            ),
+        ]
     );
 }
 
