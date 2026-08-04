@@ -125,6 +125,7 @@ pub struct SccmClientUpdatesAnalysis {
 enum PhaseDisposition {
     Succeeded,
     Failed,
+    Deferred,
 }
 
 #[derive(Debug, Clone)]
@@ -165,14 +166,22 @@ pub fn analyze_client_updates(
             .iter()
             .filter(|fact| fact.disposition == PhaseDisposition::Failed)
             .min_by_key(|fact| fact.phase);
-        let decisive = failed.unwrap_or(last);
+        let deferred = facts
+            .iter()
+            .filter(|fact| fact.disposition == PhaseDisposition::Deferred)
+            .max_by_key(|fact| fact.phase);
+        let decisive = failed.or(deferred).unwrap_or(last);
         let state = if failed.is_some() {
             SccmClientUpdateState::Failed
+        } else if deferred.is_some() {
+            SccmClientUpdateState::BlockedOrDeferred
         } else {
             SccmClientUpdateState::Succeeded
         };
         let classification = if failed.is_some() {
             SccmClientUpdateClassification::ConfirmedFailure
+        } else if deferred.is_some() {
+            SccmClientUpdateClassification::BlockedOrDeferred
         } else {
             SccmClientUpdateClassification::Success
         };
@@ -209,11 +218,23 @@ pub fn analyze_client_updates(
             next_artifact: None,
             evidence: evidence.clone(),
         };
-        if failed.is_some() {
+        if failed.is_some() || deferred.is_some() {
             findings.push(SccmClientUpdateFinding {
-                finding_id: format!("finding:updates:{}-failure", phase_name(decisive.phase)),
+                finding_id: format!(
+                    "finding:updates:{}-{}",
+                    phase_name(decisive.phase),
+                    if failed.is_some() {
+                        "failure"
+                    } else {
+                        "deferred"
+                    }
+                ),
                 subject_id: transaction_id,
-                class: SccmFindingClass::ConfirmedFailure,
+                class: if failed.is_some() {
+                    SccmFindingClass::ConfirmedFailure
+                } else {
+                    SccmFindingClass::BlockedOrDeferred
+                },
                 phase: decisive.phase,
                 last_successful_phase,
                 confidence: SccmConfidence::Low,
@@ -264,24 +285,130 @@ fn update_fact(evidence: &SccmEvidence) -> Option<UpdateFact> {
 }
 
 fn phase_disposition(evidence: &SccmEvidence) -> Option<(SccmClientUpdatePhase, PhaseDisposition)> {
-    if !evidence
-        .component
-        .as_deref()
-        .is_some_and(|component| component.eq_ignore_ascii_case("ScanAgent"))
-    {
-        return None;
-    }
+    let component = evidence.component.as_deref()?;
     let message = evidence.message.to_ascii_lowercase();
-    if message.contains("scanresult=failed")
-        || message.contains("scan terminal failure")
-        || message.contains("scan failed")
+    let fact = if source_is(component, &["ScanAgent"])
+        && (message.contains("scanresult=failed")
+            || message.contains("scan terminal failure")
+            || message.contains("scan failed"))
     {
-        Some((SccmClientUpdatePhase::Scan, PhaseDisposition::Failed))
-    } else if message.contains("scanresult=success") || message.contains("scan succeeded") {
-        Some((SccmClientUpdatePhase::Scan, PhaseDisposition::Succeeded))
+        (SccmClientUpdatePhase::Scan, PhaseDisposition::Failed)
+    } else if source_is(component, &["ScanAgent"])
+        && (message.contains("scanresult=success") || message.contains("scan succeeded"))
+    {
+        (SccmClientUpdatePhase::Scan, PhaseDisposition::Succeeded)
+    } else if source_is(
+        component,
+        &[
+            "ScanAgent",
+            "WUAHandler",
+            "UpdatesDeployment",
+            "UpdatesStore",
+        ],
+    ) && message.contains("evaluate terminal failure")
+    {
+        (SccmClientUpdatePhase::Evaluate, PhaseDisposition::Failed)
+    } else if source_is(
+        component,
+        &[
+            "ScanAgent",
+            "WUAHandler",
+            "UpdatesDeployment",
+            "UpdatesStore",
+        ],
+    ) && (message.contains("evaluate applicable")
+        || message.contains("evaluate succeeded"))
+    {
+        (SccmClientUpdatePhase::Evaluate, PhaseDisposition::Succeeded)
+    } else if source_is(component, &["LocationServices", "UpdatesDeployment"])
+        && message.contains("locatesup selected")
+    {
+        (
+            SccmClientUpdatePhase::LocateSup,
+            PhaseDisposition::Succeeded,
+        )
+    } else if source_is(
+        component,
+        &[
+            "DataTransferService",
+            "ContentTransferManager",
+            "UpdatesDeployment",
+        ],
+    ) && message.contains("download terminal failure")
+    {
+        (SccmClientUpdatePhase::Download, PhaseDisposition::Failed)
+    } else if source_is(
+        component,
+        &[
+            "DataTransferService",
+            "ContentTransferManager",
+            "UpdatesDeployment",
+        ],
+    ) && message.contains("download succeeded")
+    {
+        (SccmClientUpdatePhase::Download, PhaseDisposition::Succeeded)
+    } else if source_is(
+        component,
+        &[
+            "ServiceWindowManager",
+            "UpdatesDeployment",
+            "UpdatesHandler",
+            "UpdatesStore",
+        ],
+    ) && message.contains("maintenancewindow deferred")
+    {
+        (
+            SccmClientUpdatePhase::MaintenanceWindow,
+            PhaseDisposition::Deferred,
+        )
+    } else if source_is(
+        component,
+        &[
+            "ServiceWindowManager",
+            "UpdatesDeployment",
+            "UpdatesHandler",
+            "UpdatesStore",
+        ],
+    ) && message.contains("maintenancewindow open")
+    {
+        (
+            SccmClientUpdatePhase::MaintenanceWindow,
+            PhaseDisposition::Succeeded,
+        )
+    } else if source_is(component, &["UpdatesHandler", "UpdatesDeployment"])
+        && message.contains("install terminal failure")
+    {
+        (SccmClientUpdatePhase::Install, PhaseDisposition::Failed)
+    } else if source_is(component, &["UpdatesHandler", "UpdatesDeployment"])
+        && message.contains("install succeeded")
+    {
+        (SccmClientUpdatePhase::Install, PhaseDisposition::Succeeded)
+    } else if source_is(component, &["RebootCoordinator", "UpdatesDeployment"])
+        && message.contains("reboot pending")
+    {
+        (SccmClientUpdatePhase::Reboot, PhaseDisposition::Deferred)
+    } else if source_is(component, &["RebootCoordinator", "UpdatesDeployment"])
+        && message.contains("reboot complete")
+    {
+        (SccmClientUpdatePhase::Reboot, PhaseDisposition::Succeeded)
+    } else if source_is(component, &["StateMessage", "UpdatesHandler"])
+        && message.contains("report terminal failure")
+    {
+        (SccmClientUpdatePhase::Report, PhaseDisposition::Failed)
+    } else if source_is(component, &["StateMessage", "UpdatesHandler"])
+        && message.contains("report succeeded")
+    {
+        (SccmClientUpdatePhase::Report, PhaseDisposition::Succeeded)
     } else {
-        None
-    }
+        return None;
+    };
+    Some(fact)
+}
+
+fn source_is(component: &str, accepted: &[&str]) -> bool {
+    accepted
+        .iter()
+        .any(|candidate| component.eq_ignore_ascii_case(candidate))
 }
 
 fn message_field<'a>(message: &'a str, label: &str) -> Option<&'a str> {
