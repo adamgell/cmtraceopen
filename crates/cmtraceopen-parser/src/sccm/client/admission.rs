@@ -87,6 +87,8 @@ pub struct SccmClientAdmittedEvidence {
     evidence: Vec<SccmEvidence>,
     source_coverage: BTreeMap<String, SccmCoverageState>,
     source_coverage_by_basename: BTreeMap<String, SccmCoverageState>,
+    source_basename_by_artifact: BTreeMap<String, String>,
+    unavailable_source_basenames: BTreeSet<String>,
     admitted_source_groups: BTreeSet<String>,
     profiles_by_artifact: BTreeMap<String, SccmExtractionProfile>,
     integrity_seal: String,
@@ -137,6 +139,26 @@ impl SccmClientAdmittedEvidence {
         Ok(self.source_coverage_by_basename.get(basename))
     }
 
+    pub(crate) fn source_basename_for_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<Option<&str>, SccmClientEvidenceAdmissionError> {
+        self.verify_integrity()?;
+        Ok(self
+            .source_basename_by_artifact
+            .get(artifact_id)
+            .map(String::as_str))
+    }
+
+    pub(crate) fn source_basename_is_complete(
+        &self,
+        basename: &str,
+    ) -> Result<bool, SccmClientEvidenceAdmissionError> {
+        self.verify_integrity()?;
+        Ok(self.source_coverage_by_basename.contains_key(basename)
+            && !self.unavailable_source_basenames.contains(basename))
+    }
+
     pub(crate) fn extract_keys_for_artifact(
         &self,
         artifact_id: &str,
@@ -184,6 +206,8 @@ impl SccmClientAdmittedEvidence {
             &self.evidence,
             &self.source_coverage,
             &self.source_coverage_by_basename,
+            &self.source_basename_by_artifact,
+            &self.unavailable_source_basenames,
             &self.admitted_source_groups,
             &self.profiles_by_artifact,
         )?;
@@ -315,7 +339,36 @@ pub fn admit_client_evidence(
             })
             .or_insert_with(|| fragment.coverage.clone());
     }
+    for capture_gap in &canonical.capture_gaps {
+        source_coverage_by_basename
+            .entry(capture_gap.basename.clone())
+            .and_modify(|coverage| {
+                if source_coverage_priority(&capture_gap.coverage)
+                    > source_coverage_priority(coverage)
+                {
+                    *coverage = capture_gap.coverage.clone();
+                }
+            })
+            .or_insert_with(|| capture_gap.coverage.clone());
+    }
     let mut eligible = BTreeMap::new();
+    let mut source_basename_by_artifact = BTreeMap::new();
+    let mut unavailable_source_basenames = canonical
+        .capture_gaps
+        .iter()
+        .filter(|gap| is_supported_raw_ccm_source(&gap.basename))
+        .map(|gap| gap.basename.clone())
+        .collect::<BTreeSet<_>>();
+    unavailable_source_basenames.extend(
+        canonical
+            .groups
+            .iter()
+            .flat_map(|group| &group.fragments)
+            .filter(|fragment| {
+                is_supported_raw_ccm_fragment(fragment) && !is_bound_complete_capture(fragment)
+            })
+            .map(|fragment| fragment.basename.clone()),
+    );
     let mut unbound_complete_captures = BTreeSet::new();
     for fragment in &canonical.physical_artifacts {
         let classified = classify_artifact_name(&fragment.basename, SccmRole::Client);
@@ -325,15 +378,19 @@ pub fn admit_client_evidence(
         if fragment.coverage != SccmCoverageState::Captured
             || fragment.fragment_complete != Some(true)
         {
+            unavailable_source_basenames.insert(fragment.basename.clone());
             continue;
         }
         if fragment.declared_byte_length.is_none() || fragment.content_sha256.is_none() {
             unbound_complete_captures.insert(fragment.artifact_id.as_str());
+            unavailable_source_basenames.insert(fragment.basename.clone());
             continue;
         }
         if !has_supported_payload_encoding(fragment) {
+            unavailable_source_basenames.insert(fragment.basename.clone());
             continue;
         }
+        source_basename_by_artifact.insert(fragment.artifact_id.clone(), fragment.basename.clone());
         eligible.insert(fragment.artifact_id.clone(), (fragment, classified.family));
     }
     let admitted_source_groups = canonical
@@ -450,6 +507,8 @@ pub fn admit_client_evidence(
         &evidence,
         &source_coverage,
         &source_coverage_by_basename,
+        &source_basename_by_artifact,
+        &unavailable_source_basenames,
         &admitted_source_groups,
         &profiles_by_artifact,
     )?;
@@ -457,6 +516,8 @@ pub fn admit_client_evidence(
         evidence,
         source_coverage,
         source_coverage_by_basename,
+        source_basename_by_artifact,
+        unavailable_source_basenames,
         admitted_source_groups,
         profiles_by_artifact,
         integrity_seal,
@@ -649,6 +710,8 @@ struct IntegrityProjection<'a> {
     evidence: &'a [SccmEvidence],
     source_coverage: &'a BTreeMap<String, SccmCoverageState>,
     source_coverage_by_basename: &'a BTreeMap<String, SccmCoverageState>,
+    source_basename_by_artifact: &'a BTreeMap<String, String>,
+    unavailable_source_basenames: &'a BTreeSet<String>,
     admitted_source_groups: &'a BTreeSet<String>,
     profile_assignments: &'a BTreeMap<&'a str, usize>,
     profiles: &'a [&'a SccmExtractionProfile],
@@ -704,6 +767,8 @@ fn compute_integrity_seal(
     evidence: &[SccmEvidence],
     source_coverage: &BTreeMap<String, SccmCoverageState>,
     source_coverage_by_basename: &BTreeMap<String, SccmCoverageState>,
+    source_basename_by_artifact: &BTreeMap<String, String>,
+    unavailable_source_basenames: &BTreeSet<String>,
     admitted_source_groups: &BTreeSet<String>,
     profiles_by_artifact: &BTreeMap<String, SccmExtractionProfile>,
 ) -> Result<String, SccmClientEvidenceAdmissionError> {
@@ -736,6 +801,8 @@ fn compute_integrity_seal(
             evidence,
             source_coverage,
             source_coverage_by_basename,
+            source_basename_by_artifact,
+            unavailable_source_basenames,
             admitted_source_groups,
             profile_assignments: &profile_assignments,
             profiles: &unique_profiles,

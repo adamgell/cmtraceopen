@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::sccm::{
     SccmConfidence, SccmCoverageState, SccmEvidence, SccmEvidenceRef, SccmFindingClass,
@@ -114,7 +115,20 @@ pub struct SccmClientUpdateObservation {
 #[serde(rename_all = "camelCase")]
 pub struct SccmClientUpdateCoverage {
     pub logical_artifact_id: String,
-    pub state: SccmCoverageState,
+    pub state: SccmClientUpdateCoverageState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmClientUpdateCoverageState {
+    Captured,
+    Partial,
+    Absent,
+    Skipped,
+    Unsupported,
+    ParseFailed,
+    Capped,
+    AccessDenied,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -209,17 +223,27 @@ struct UpdateFact {
     location_services_source: bool,
 }
 
+type UpdateSubjectKey = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 /// Reduces sealed, intake-bound client evidence into update transactions.
 pub fn analyze_client_updates(
     admitted: &SccmClientAdmittedEvidence,
 ) -> Result<SccmClientUpdatesAnalysis, SccmClientEvidenceAdmissionError> {
     let declared_gap_phases = declared_gap_phases(admitted)?;
-    let mut facts_by_key = BTreeMap::<(String, String), Vec<UpdateFact>>::new();
+    let mut facts_by_key = BTreeMap::<UpdateSubjectKey, Vec<UpdateFact>>::new();
     let mut observations = Vec::new();
     for evidence in admitted.evidence()? {
-        if let Some(fact) = update_fact(evidence) {
+        if let Some(fact) = update_fact(admitted, evidence)? {
             facts_by_key
-                .entry((fact.key.update_id.clone(), fact.key.ci_id.clone()))
+                .entry(subject_key(&fact.key))
                 .or_default()
                 .push(fact);
         } else if is_update_source(evidence.component.as_deref()) {
@@ -277,11 +301,43 @@ pub fn analyze_client_updates(
                 .then_with(|| left.evidence.artifact_id.cmp(&right.evidence.artifact_id))
                 .then_with(|| left.evidence.line_start.cmp(&right.evidence.line_start))
         });
-        let mut effective_by_phase = BTreeMap::new();
-        for fact in &facts {
-            effective_by_phase.insert(fact.phase, fact);
+        let mut effective_by_phase = BTreeMap::<SccmClientUpdatePhase, UpdateFact>::new();
+        for phase in facts.iter().map(|fact| fact.phase) {
+            if effective_by_phase.contains_key(&phase) {
+                continue;
+            }
+            let phase_facts = facts
+                .iter()
+                .filter(|fact| fact.phase == phase)
+                .collect::<Vec<_>>();
+            let latest_timestamp = phase_facts
+                .iter()
+                .filter_map(|fact| fact.timestamp.utc_millis)
+                .max();
+            let latest = phase_facts
+                .into_iter()
+                .filter(|fact| fact.timestamp.utc_millis == latest_timestamp)
+                .collect::<Vec<_>>();
+            let first_disposition = latest[0].disposition;
+            let has_conflict = latest
+                .iter()
+                .any(|fact| fact.disposition != first_disposition);
+            let mut effective = (*latest
+                .iter()
+                .max_by(|left, right| {
+                    left.evidence
+                        .artifact_id
+                        .cmp(&right.evidence.artifact_id)
+                        .then_with(|| left.evidence.line_start.cmp(&right.evidence.line_start))
+                })
+                .expect("phase has at least one fact"))
+            .clone();
+            if has_conflict {
+                effective.disposition = PhaseDisposition::Contradictory;
+            }
+            effective_by_phase.insert(phase, effective);
         }
-        let Some(last) = effective_by_phase.values().next_back().copied() else {
+        let Some(last) = effective_by_phase.values().next_back() else {
             continue;
         };
         if let Some(counterpart) = facts.iter().find_map(counterpart_ready_fact) {
@@ -289,17 +345,14 @@ pub fn analyze_client_updates(
         }
         let failed = effective_by_phase
             .values()
-            .copied()
             .filter(|fact| fact.disposition == PhaseDisposition::Failed)
             .min_by_key(|fact| fact.phase);
         let deferred = effective_by_phase
             .values()
-            .copied()
             .filter(|fact| fact.disposition == PhaseDisposition::Deferred)
             .max_by_key(|fact| fact.phase);
         let contradictory = effective_by_phase
             .values()
-            .copied()
             .filter(|fact| fact.disposition == PhaseDisposition::Contradictory)
             .min_by_key(|fact| fact.phase);
         let decisive = failed.or(deferred).or(contradictory).unwrap_or(last);
@@ -335,7 +388,6 @@ pub fn analyze_client_updates(
         let decisive_is_success = failed.is_none() && deferred.is_none() && contradictory.is_none();
         let last_successful_phase = effective_by_phase
             .values()
-            .copied()
             .filter(|fact| {
                 fact.disposition == PhaseDisposition::Succeeded
                     && (fact.phase < decisive.phase
@@ -365,7 +417,11 @@ pub fn analyze_client_updates(
             .as_ref()
             .map(|request| vec![request.logical_artifact_id.clone()])
             .unwrap_or_default();
-        let transaction_id = format!("updates:update:{}", decisive.key.update_id);
+        let subject_discriminator = subject_discriminator(&decisive.key);
+        let transaction_id = format!(
+            "updates:update:{}:{}:{subject_discriminator}",
+            decisive.key.update_id, decisive.key.ci_id
+        );
         let transaction = SccmClientUpdateTransaction {
             transaction_id: transaction_id.clone(),
             key: decisive.key.clone(),
@@ -386,8 +442,10 @@ pub fn analyze_client_updates(
         {
             findings.push(SccmClientUpdateFinding {
                 finding_id: format!(
-                    "finding:updates:{}:{}-{}",
+                    "finding:updates:{}:{}:{}:{}-{}",
                     decisive.key.update_id,
+                    decisive.key.ci_id,
+                    subject_discriminator,
                     phase_name(output_phase),
                     if failed.is_some() {
                         "failure"
@@ -540,9 +598,16 @@ fn update_coverage(
         }
         if declared {
             if let Some(state) = admitted.source_coverage(logical_artifact_id)? {
+                let all_complete = admitted
+                    .require_captured_source(logical_artifact_id)
+                    .is_ok();
                 coverage.push(SccmClientUpdateCoverage {
                     logical_artifact_id: logical_artifact_id.to_owned(),
-                    state: state.clone(),
+                    state: if *state == SccmCoverageState::Captured && !all_complete {
+                        SccmClientUpdateCoverageState::Partial
+                    } else {
+                        update_coverage_state(state)
+                    },
                 });
             }
         }
@@ -593,9 +658,8 @@ fn declared_gap_phases(
         ("RebootCoordinator.log", SccmClientUpdatePhase::Reboot),
         ("StateMessage.log", SccmClientUpdatePhase::Report),
     ] {
-        if admitted
-            .source_coverage_for_basename(basename)?
-            .is_some_and(|coverage| *coverage != SccmCoverageState::Captured)
+        if admitted.source_coverage_for_basename(basename)?.is_some()
+            && !admitted.source_basename_is_complete(basename)?
             && !phases.contains(&phase)
         {
             phases.push(phase);
@@ -604,19 +668,34 @@ fn declared_gap_phases(
     Ok(phases)
 }
 
-fn update_fact(evidence: &SccmEvidence) -> Option<UpdateFact> {
-    let update_id = normalize_update_id(message_field(&evidence.message, "UpdateId")?)?;
-    let ci_id = safe_value(message_field(&evidence.message, "CIId")?)?;
-    let (phase, disposition) = phase_disposition(evidence)?;
-    Some(UpdateFact {
+fn update_fact(
+    admitted: &SccmClientAdmittedEvidence,
+    evidence: &SccmEvidence,
+) -> Result<Option<UpdateFact>, SccmClientEvidenceAdmissionError> {
+    let Some(update_id) =
+        message_field(&evidence.message, "UpdateId").and_then(normalize_update_id)
+    else {
+        return Ok(None);
+    };
+    let Some(ci_id) = message_field(&evidence.message, "CIId").and_then(safe_value) else {
+        return Ok(None);
+    };
+    let Some((phase, disposition)) = phase_disposition(evidence) else {
+        return Ok(None);
+    };
+    let sealed_basename = admitted.source_basename_for_artifact(&evidence.reference.artifact_id)?;
+    let location_services_group_admitted = admitted
+        .require_captured_source("client-location-services-shared")
+        .is_ok();
+    Ok(Some(UpdateFact {
         key: SccmClientUpdateKey {
             update_id,
             ci_id,
             content_id: optional_safe_field(&evidence.message, "ContentId"),
             update_job_id: optional_safe_field(&evidence.message, "UpdateJobId"),
-            client_handle: optional_safe_handle(&evidence.message, "ClientHandle"),
+            client_handle: optional_safe_handle(&evidence.message, "ClientHandle", "safe:client:"),
             site_code: optional_safe_field(&evidence.message, "SiteCode"),
-            sup_host_handle: optional_safe_handle(&evidence.message, "SupHostHandle"),
+            sup_host_handle: optional_safe_handle(&evidence.message, "SupHostHandle", "safe:sup:"),
             confidence: SccmKeyConfidence::Low,
             extraction_profile_id: SCCM_EXPERIMENTAL_KEY_PROFILE_ID.to_owned(),
         },
@@ -624,11 +703,13 @@ fn update_fact(evidence: &SccmEvidence) -> Option<UpdateFact> {
         disposition,
         evidence: evidence.reference.clone(),
         timestamp: evidence.timestamp.clone(),
-        location_services_source: evidence
-            .component
-            .as_deref()
-            .is_some_and(|component| component.eq_ignore_ascii_case("LocationServices")),
-    })
+        location_services_source: location_services_group_admitted
+            && sealed_basename == Some("LocationServices.log")
+            && evidence
+                .component
+                .as_deref()
+                .is_some_and(|component| component.eq_ignore_ascii_case("LocationServices")),
+    }))
 }
 
 fn counterpart_ready_fact(fact: &UpdateFact) -> Option<SccmClientUpdateCounterpartReadyFact> {
@@ -822,8 +903,65 @@ fn optional_safe_field(message: &str, label: &str) -> Option<String> {
     safe_value(message_field(message, label)?)
 }
 
-fn optional_safe_handle(message: &str, label: &str) -> Option<String> {
-    safe_value(message_field(message, label)?).filter(|value| value.starts_with("safe:"))
+fn optional_safe_handle(message: &str, label: &str, prefix: &str) -> Option<String> {
+    let value = safe_value(message_field(message, label)?)?;
+    let opaque = value.strip_prefix(prefix)?;
+    (!opaque.is_empty()
+        && opaque.len() <= 64
+        && opaque
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
+    .then_some(value)
+}
+
+fn subject_key(key: &SccmClientUpdateKey) -> UpdateSubjectKey {
+    (
+        key.update_id.clone(),
+        key.ci_id.clone(),
+        key.content_id.clone(),
+        key.update_job_id.clone(),
+        key.client_handle.clone(),
+        key.site_code.clone(),
+        key.sup_host_handle.clone(),
+    )
+}
+
+fn subject_discriminator(key: &SccmClientUpdateKey) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        Some(key.update_id.as_str()),
+        Some(key.ci_id.as_str()),
+        key.content_id.as_deref(),
+        key.update_job_id.as_deref(),
+        key.client_handle.as_deref(),
+        key.site_code.as_deref(),
+        key.sup_host_handle.as_deref(),
+    ] {
+        match value {
+            Some(value) => {
+                hasher.update([1]);
+                hasher.update((value.len() as u64).to_be_bytes());
+                hasher.update(value.as_bytes());
+            }
+            None => hasher.update([0]),
+        }
+    }
+    hasher.finalize()[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn update_coverage_state(state: &SccmCoverageState) -> SccmClientUpdateCoverageState {
+    match state {
+        SccmCoverageState::Captured => SccmClientUpdateCoverageState::Captured,
+        SccmCoverageState::Absent => SccmClientUpdateCoverageState::Absent,
+        SccmCoverageState::Skipped => SccmClientUpdateCoverageState::Skipped,
+        SccmCoverageState::Unsupported => SccmClientUpdateCoverageState::Unsupported,
+        SccmCoverageState::ParseFailed => SccmClientUpdateCoverageState::ParseFailed,
+        SccmCoverageState::Capped => SccmClientUpdateCoverageState::Capped,
+        SccmCoverageState::AccessDenied => SccmClientUpdateCoverageState::AccessDenied,
+    }
 }
 
 fn safe_value(value: &str) -> Option<String> {

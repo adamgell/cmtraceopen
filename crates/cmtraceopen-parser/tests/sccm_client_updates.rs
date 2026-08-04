@@ -1,6 +1,7 @@
 use cmtraceopen_parser::sccm::client::{
     admit_client_evidence, analyze_client_updates, assess_client_intake, SccmClientCapturedPayload,
-    SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientUpdatePhase, SccmClientUpdateState,
+    SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientIntakeCaptureGap,
+    SccmClientUpdatePhase, SccmClientUpdateState,
 };
 use cmtraceopen_parser::sccm::{
     classify_artifact_name, SccmArtifact, SccmCoverageState, SccmRole, SccmRotation,
@@ -587,6 +588,220 @@ fn later_same_phase_success_recovers_an_earlier_terminal_marker() {
         Some(SccmClientUpdatePhase::Install)
     );
     assert!(analysis.findings.is_empty());
+}
+
+#[test]
+fn canonical_capture_gap_keeps_the_transaction_incomplete() {
+    let record = Record {
+        id: "update-a",
+        basename: "ScanAgent.log",
+        group: "client-updates",
+        component: "ScanAgent",
+        time: "09:00:00.000",
+        message: keyed(UPDATE_ID, CI_ID, "Scan succeeded"),
+    };
+    let artifact_id = format!("fixture-{}", record.id);
+    let bytes = format!(
+        "<![LOG[{}]LOG]!><time=\"{}+000\" date=\"7-30-2026\" component=\"{}\" context=\"\" type=\"1\" thread=\"1\" file=\"synthetic.cc:323\">\n",
+        record.message, record.time, record.component
+    )
+    .into_bytes();
+    let bundle = SccmClientIntakeBundle {
+        artifacts: vec![SccmClientIntakeArtifact {
+            artifact: SccmArtifact {
+                artifact_id: artifact_id.clone(),
+                display_name: record.basename.to_owned(),
+                original_path: None,
+                host: None,
+                role: SccmRole::Client,
+                configmgr_version: Some("5.00.9128.1000".to_owned()),
+                collected_at_utc: Some("2026-07-30T23:59:59Z".to_owned()),
+                rotation: SccmRotation::Current,
+                coverage: SccmCoverageState::Captured,
+                encoding: Some("utf-8".to_owned()),
+            },
+            path_fingerprint: Some("synthetic-update-a".to_owned()),
+            rotation_lineage: None,
+            relative_path: Some("evidence/client-updates/current/ScanAgent.log".to_owned()),
+            fragment_complete: Some(true),
+            declared_byte_length: Some(bytes.len() as u64),
+            content_sha256: Some(sha256(&bytes)),
+        }],
+        capture_gaps: vec![SccmClientIntakeCaptureGap {
+            artifact_id: "fixture-capped-rotation".to_owned(),
+            basename: "UpdatesHandler.log".to_owned(),
+            rotation: SccmRotation::Current,
+            coverage: SccmCoverageState::Capped,
+            path_fingerprint: "synthetic:capped-rotation".to_owned(),
+            rotation_lineage: "synthetic:capped-rotation".to_owned(),
+        }],
+    };
+    let assessment = assess_client_intake(&bundle).expect("canonical gap intake");
+    let admitted = admit_client_evidence(
+        &bundle,
+        &assessment,
+        &[SccmClientCapturedPayload::new(artifact_id, bytes).expect("bounded payload")],
+    )
+    .expect("sealed evidence with canonical gap");
+
+    let analysis = analyze_client_updates(&admitted).expect("update analysis");
+    assert_eq!(
+        analysis.transactions[0].state,
+        SccmClientUpdateState::Incomplete
+    );
+    assert_eq!(
+        analysis.transactions[0].phase,
+        SccmClientUpdatePhase::Install
+    );
+    assert_eq!(analysis.findings.len(), 1);
+}
+
+#[test]
+fn partial_rotation_is_reported_as_partial_coverage() {
+    let admitted = corpus_admitted("rotation-boundary").expect("rotation corpus admission");
+    let analysis = analyze_client_updates(&admitted).expect("rotation analysis");
+    let updates = analysis
+        .coverage
+        .iter()
+        .find(|coverage| coverage.logical_artifact_id == "client-updates")
+        .expect("updates coverage");
+    assert_eq!(
+        serde_json::to_value(updates).expect("coverage")["state"],
+        "partial"
+    );
+}
+
+#[test]
+fn counterpart_rejects_component_spoofing_and_privacy_bearing_handles() {
+    let spoofed_source = Record {
+        id: "update-a",
+        basename: "UpdatesDeployment.log",
+        group: "client-updates",
+        component: "LocationServices",
+        time: "10:00:00.000",
+        message: keyed(UPDATE_ID, CI_ID, "LocateSup selected"),
+    };
+    let privacy_client = Record {
+        id: "update-b",
+        basename: "LocationServices.log",
+        group: "client-location-services-shared",
+        component: "LocationServices",
+        time: "10:00:01.000",
+        message: keyed(UPDATE_ID, CI_ID, "LocateSup selected")
+            .replace(&format!("safe:client:{CI_ID}"), "safe:Adam.Gell"),
+    };
+    let privacy_sup = Record {
+        id: "update-c",
+        basename: "LocationServices.log",
+        group: "client-location-services-shared",
+        component: "LocationServices",
+        time: "10:00:02.000",
+        message: keyed(UPDATE_ID, CI_ID, "LocateSup selected")
+            .replace("safe:sup:lab", "safe:sup:prod.contoso.com"),
+    };
+
+    for record in [spoofed_source, privacy_client, privacy_sup] {
+        let analysis = analyze_client_updates(&admitted(&[record])).expect("update analysis");
+        assert!(analysis
+            .correlation_handoff
+            .counterpart_ready_facts
+            .is_empty());
+    }
+}
+
+#[test]
+fn full_subject_tuple_prevents_false_phase_merges() {
+    let mut scan = keyed(UPDATE_ID, CI_ID, "Scan succeeded");
+    scan = scan.replace(&format!("JOB-{CI_ID}"), "JOB-A");
+    let mut evaluate = keyed(UPDATE_ID, CI_ID, "Evaluate applicable");
+    evaluate = evaluate.replace(&format!("JOB-{CI_ID}"), "JOB-B");
+    let records = [
+        Record {
+            id: "update-a",
+            basename: "ScanAgent.log",
+            group: "client-updates",
+            component: "ScanAgent",
+            time: "11:00:00.000",
+            message: scan,
+        },
+        Record {
+            id: "update-b",
+            basename: "WUAHandler.log",
+            group: "client-updates",
+            component: "WUAHandler",
+            time: "11:00:01.000",
+            message: evaluate,
+        },
+    ];
+
+    let analysis = analyze_client_updates(&admitted(&records)).expect("update analysis");
+    assert_eq!(analysis.transactions.len(), 2);
+    assert!(analysis.transactions.iter().all(|transaction| {
+        transaction.phase == SccmClientUpdatePhase::Scan
+            || transaction.phase == SccmClientUpdatePhase::Evaluate
+    }));
+}
+
+#[test]
+fn equal_time_opposing_outcomes_are_contradictory() {
+    let records = [
+        Record {
+            id: "update-a",
+            basename: "UpdatesHandler.log",
+            group: "client-updates",
+            component: "UpdatesHandler",
+            time: "12:30:00.000",
+            message: keyed(UPDATE_ID, CI_ID, "Install terminal failure"),
+        },
+        Record {
+            id: "update-b",
+            basename: "UpdatesDeployment.log",
+            group: "client-updates",
+            component: "UpdatesDeployment",
+            time: "12:30:00.000",
+            message: keyed(UPDATE_ID, CI_ID, "Install succeeded"),
+        },
+    ];
+
+    let analysis = analyze_client_updates(&admitted(&records)).expect("update analysis");
+    assert_eq!(
+        analysis.transactions[0].state,
+        SccmClientUpdateState::Contradictory
+    );
+}
+
+#[test]
+fn public_ids_include_the_full_stable_subject_discriminator() {
+    let records = [
+        Record {
+            id: "update-a",
+            basename: "ScanAgent.log",
+            group: "client-updates",
+            component: "ScanAgent",
+            time: "13:00:00.000",
+            message: keyed(UPDATE_ID, "323010", "Scan terminal failure"),
+        },
+        Record {
+            id: "update-b",
+            basename: "WUAHandler.log",
+            group: "client-updates",
+            component: "ScanAgent",
+            time: "13:00:01.000",
+            message: keyed(UPDATE_ID, "323011", "Scan terminal failure"),
+        },
+    ];
+
+    let analysis = analyze_client_updates(&admitted(&records)).expect("update analysis");
+    assert_eq!(analysis.transactions.len(), 2);
+    assert_ne!(
+        analysis.transactions[0].transaction_id,
+        analysis.transactions[1].transaction_id
+    );
+    assert_eq!(analysis.findings.len(), 2);
+    assert_ne!(
+        analysis.findings[0].finding_id,
+        analysis.findings[1].finding_id
+    );
 }
 
 #[test]
