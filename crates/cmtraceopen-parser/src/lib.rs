@@ -15,4 +15,3 @@ pub mod intune;
 pub mod models;
 pub mod parser;
 pub mod sccm;
-pub(crate) mod wire;
