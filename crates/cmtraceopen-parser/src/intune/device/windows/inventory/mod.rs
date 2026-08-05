@@ -323,11 +323,18 @@ fn count_headers(content: &str, regex: &Regex) -> usize {
 /// happens to contain a generic keyword, so this does not match a bare "error".
 fn rotation_header_states_failure(message: &str) -> bool {
     let lowered = message.trim().to_ascii_lowercase();
-    lowered.contains("failed to rotate")
-        || lowered.contains("rotation failed")
-        || lowered.contains("failed to roll")
-        || lowered.starts_with("failed ")
-        || lowered.starts_with("unhandled ")
+    ["failed to rotate", "rotation failed", "failed to roll"]
+        .iter()
+        .any(|phrase| contains_with_trailing_token_boundary(&lowered, phrase))
+}
+
+fn contains_with_trailing_token_boundary(message: &str, phrase: &str) -> bool {
+    message.match_indices(phrase).any(|(start, matched)| {
+        message[start + matched.len()..]
+            .chars()
+            .next()
+            .is_none_or(|next| !next.is_alphanumeric() && next != '_')
+    })
 }
 
 /// Whether a continuation line is .NET exception evidence: either a namespaced
