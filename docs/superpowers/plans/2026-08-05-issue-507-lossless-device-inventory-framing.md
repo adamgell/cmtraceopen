@@ -411,6 +411,62 @@ Expected: PASS. Browser E2E remains out of scope because framing does not change
 
 Validated after rebasing onto `origin/main` at `e59aed306b4f8f5ee1b862970169a26b24886f4d`: both full Rust suites passed, both all-target Clippy runs passed with warnings denied, Vitest passed 638 tests across 51 files, and `npx tsc --noEmit` passed.
 
-- [ ] **Step 4: Commit, push, and refresh the frozen evidence pack**
+- [x] **Step 4: Commit, push, and refresh the frozen evidence pack**
 
 Commit the rework, push `codex/issue-507-lossless-device-inventory-framing`, and edit PR #511 so its head SHA, validation results, viewing conditions, claims, and reproduction commands describe the critic fixes. Confirm the PR remains open and unmerged.
+
+### Task 10: Surface terminal incomplete UTF-8 as a parse error
+
+**Files:**
+- Modify: `src-tauri/src/watcher/tail.rs`
+- Modify: `docs/superpowers/plans/2026-08-05-issue-507-lossless-device-inventory-framing.md`
+
+- [x] **Step 1: Add red finalization tests for every UTF-8 scalar width**
+
+After a valid Device Inventory header, append `[0xC2]`, `[0xE2, 0x82]`, and `[0xF0, 0x9F, 0xA7]` in separate cases. Read each prefix so it enters `pending_utf8_bytes`, then explicitly finalize. Assert the final batch contains the valid header entry, reports exactly one parse error, emits no replacement character or Windows-1252 text, clears the carry, and reports no second error when finalization is repeated. Add `[0xEF, 0xBB]` to prove a partial UTF-8 BOM has the same terminal result.
+
+- [x] **Step 2: Add red tests for parser-change and truncation boundaries**
+
+For parser change, buffer a valid header and incomplete scalar under the Device Inventory selection, switch to plain text, call `read_new_entries` without appending bytes, and assert the old record is emitted with exactly one parse error. For truncation, buffer the same state, truncate the file to zero, call `read_new_entries`, and assert `reset == true`, exactly one parse error, cleared carry/framing state, and no decoded replacement data.
+
+- [x] **Step 3: Add one common stop/disconnect emission test**
+
+Extract the terminal callback emission into one helper used by both watcher-loop exit branches. Drive that helper with a reader containing valid framed text plus an incomplete UTF-8 suffix and assert the callback receives one reportable batch with the valid entry and exactly one parse error. The shared helper makes stop and channel disconnect mechanically identical rather than duplicating terminal semantics.
+
+- [x] **Step 4: Run focused tests and confirm silent-loss failures**
+
+Run:
+
+```bash
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path src-tauri/Cargo.toml --lib watcher::tail
+```
+
+Expected before implementation: the explicit, parser-change, truncation, and shared watcher-finalization assertions observe zero parse errors because the carry is silently discarded or retained.
+
+### Task 11: Implement one fail-closed terminal finalizer and revalidate
+
+**Files:**
+- Modify: `src-tauri/src/watcher/tail.rs`
+- Modify: `docs/superpowers/plans/2026-08-05-issue-507-lossless-device-inventory-framing.md`
+
+- [x] **Step 1: Track ownership of an incomplete UTF-8 suffix**
+
+Add `pending_utf8_selection: Option<ResolvedParser>`. Set it whenever `decode_tail_bytes` retains an incomplete suffix, clear it when the suffix completes, and restore it with the bytes when an invalid continuation makes the read transactional. Include it in parser-selection boundary detection.
+
+- [x] **Step 2: Add a single consuming terminal-input finalizer**
+
+Rename the semantic boundary operation to `finalize_pending_input`. It first flushes valid logical text, then consumes `pending_utf8_bytes` without decoding and increments `TailBatch.parse_errors` exactly once when the carry was non-empty. Clear the carry owner with it. Repeated finalization must be idempotent.
+
+- [x] **Step 3: Route every terminal boundary through the finalizer**
+
+Use `finalize_pending_input` for explicit end-of-input, parser-selection change, file truncation/rotation, watcher stop, and watcher-channel disconnect. Keep ordinary no-data polling non-terminal so delayed valid continuations still work. Both watcher-loop exits call the same callback-emission helper.
+
+- [x] **Step 4: Run all validation gates on current main**
+
+Run changed-file `rustfmt --check`, `git diff --check`, the focused watcher suite, both full Rust suites, both all-target Clippy commands with `-D warnings`, `npm test -- --run`, and `npx tsc --noEmit`. Rebase on current `origin/main` first if it advances.
+
+Validated on `origin/main` at `e59aed306b4f8f5ee1b862970169a26b24886f4d`: 29 focused watcher tests passed; the full parser and app suites passed, including 658 parser library tests and 572 app library tests; both strict Clippy runs passed; Vitest passed 638 tests across 51 files; TypeScript, changed-file formatting, and diff checks passed.
+
+- [ ] **Step 5: Push a new frozen revision and refresh PR #511**
+
+Commit and push the existing branch, update the PR evidence pack with the new base/head SHAs and terminal-prefix cases, then confirm the PR remains open and unmerged.

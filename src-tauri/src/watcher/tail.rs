@@ -84,6 +84,8 @@ pub struct TailReader {
     pending_byte: Option<u8>,
     /// Incomplete UTF-8 scalar suffix retained across append boundaries.
     pending_utf8_bytes: Vec<u8>,
+    /// Parser selection that owns the incomplete UTF-8 scalar suffix.
+    pending_utf8_selection: Option<ResolvedParser>,
     #[cfg(test)]
     max_pending_bytes_observed: usize,
 }
@@ -115,6 +117,7 @@ impl TailReader {
             encoding,
             pending_byte: None,
             pending_utf8_bytes: Vec::new(),
+            pending_utf8_selection: None,
             #[cfg(test)]
             max_pending_bytes_observed: 0,
         }
@@ -131,8 +134,11 @@ impl TailReader {
         // signal a reset so the frontend replaces (not appends) its stale view.
         // Line numbers restart at 1 to match the new file generation; ids stay
         // monotonic so they remain unique across the reset.
+        let mut batch = TailBatch::empty(false);
         let mut reset = false;
         if file_size < self.byte_offset {
+            let finalized = self.finalize_pending_input();
+            batch.parse_errors = finalized.parse_errors;
             self.byte_offset = 0;
             self.pending_fragment.clear();
             self.pending_fragment_selection = None;
@@ -140,17 +146,19 @@ impl TailReader {
             self.pending_logical_record = None;
             self.pending_byte = None;
             self.pending_utf8_bytes.clear();
+            self.pending_utf8_selection = None;
             self.next_line = 1;
+            batch.reset = true;
             reset = true;
         }
 
-        let mut batch = TailBatch::empty(reset);
+        if !reset && self.pending_parser_selection_changed() {
+            batch.append(self.finalize_pending_input());
+            return Ok(batch);
+        }
 
         // No new data
         if file_size == self.byte_offset {
-            if !reset && self.pending_parser_selection_changed() {
-                batch.append(self.flush_pending_logical_record());
-            }
             return Ok(batch);
         }
 
@@ -165,12 +173,6 @@ impl TailReader {
 
         let new_text = self.decode_tail_bytes(buffer)?;
         let received_text = !new_text.is_empty();
-
-        // Parser changes are semantic boundaries, but invalid bytes above fail
-        // before any pending state is flushed or otherwise mutated.
-        if self.pending_parser_selection_changed() {
-            batch.append(self.flush_pending_logical_record());
-        }
 
         let inventory_dialect = inventory_logical_dialect(&self.parser_selection);
         if let Some(dialect) = inventory_dialect {
@@ -258,6 +260,7 @@ impl TailReader {
         }
 
         let previous_carry = std::mem::take(&mut self.pending_utf8_bytes);
+        let previous_carry_selection = self.pending_utf8_selection.take();
         let decoded_start_offset = self.byte_offset.saturating_sub(previous_carry.len() as u64);
         let mut decode_buffer = if previous_carry.is_empty() {
             buffer
@@ -279,6 +282,7 @@ impl TailReader {
                 let utf8_error = error.utf8_error();
                 if utf8_error.error_len().is_some() {
                     self.pending_utf8_bytes = previous_carry;
+                    self.pending_utf8_selection = previous_carry_selection;
                     return Err(crate::error::AppError::Internal(
                         "Failed to decode tailed bytes: invalid UTF-8".to_string(),
                     ));
@@ -289,11 +293,14 @@ impl TailReader {
                 let incomplete = bytes.split_off(valid_up_to);
                 if incomplete.len() > 3 {
                     self.pending_utf8_bytes = previous_carry;
+                    self.pending_utf8_selection = previous_carry_selection;
                     return Err(crate::error::AppError::Internal(
                         "Failed to decode tailed bytes: invalid UTF-8".to_string(),
                     ));
                 }
                 self.pending_utf8_bytes = incomplete;
+                self.pending_utf8_selection =
+                    previous_carry_selection.or_else(|| Some(self.parser_selection.clone()));
                 String::from_utf8(bytes).map_err(|_| {
                     crate::error::AppError::Internal(
                         "Failed to decode tailed bytes: invalid UTF-8".to_string(),
@@ -309,6 +316,10 @@ impl TailReader {
             .is_some_and(|pending| pending.parser_selection != self.parser_selection)
             || self
                 .pending_fragment_selection
+                .as_ref()
+                .is_some_and(|selection| selection != &self.parser_selection)
+            || self
+                .pending_utf8_selection
                 .as_ref()
                 .is_some_and(|selection| selection != &self.parser_selection)
     }
@@ -474,7 +485,7 @@ impl TailReader {
         }
     }
 
-    fn flush_pending_logical_record(&mut self) -> TailBatch {
+    fn flush_pending_text(&mut self) -> TailBatch {
         let pending = self.pending_logical_record.take();
         let fragment = std::mem::take(&mut self.pending_fragment);
         let fragment_selection = self.pending_fragment_selection.take();
@@ -514,6 +525,20 @@ impl TailReader {
         // the record here would drop the line it accounts for and shift every
         // later line number down by one.
         self.parse_logical_records(completed_records, dialect, overflow_count)
+    }
+
+    /// Complete all input that can still produce text at a real terminal boundary.
+    ///
+    /// An incomplete UTF-8 suffix is not decoded lossily: once no later bytes can
+    /// complete it, consuming it contributes exactly one surfaced parse error.
+    fn finalize_pending_input(&mut self) -> TailBatch {
+        let mut batch = self.flush_pending_text();
+        let incomplete_utf8 = !std::mem::take(&mut self.pending_utf8_bytes).is_empty();
+        self.pending_utf8_selection = None;
+        if incomplete_utf8 {
+            batch.parse_errors = batch.parse_errors.saturating_add(1);
+        }
+        batch
     }
 
     fn parse_logical_records(
@@ -658,6 +683,16 @@ fn complete_unmatched_tail_len(text: &str) -> usize {
     text.rfind('\n').map(|index| index + 1).unwrap_or(0)
 }
 
+fn emit_final_tail_batch<F>(tail_reader: &mut TailReader, on_new_entries: F)
+where
+    F: FnOnce(TailBatch),
+{
+    let batch = tail_reader.finalize_pending_input();
+    if batch.is_reportable() {
+        on_new_entries(batch);
+    }
+}
+
 /// Represents an active tail-watching session
 pub struct TailSession {
     /// Flag to signal the watcher thread to stop
@@ -728,10 +763,7 @@ where
 
         loop {
             if stop_flag_clone.load(Ordering::Relaxed) {
-                let batch = tail_reader.flush_pending_logical_record();
-                if batch.is_reportable() {
-                    on_new_entries(batch);
-                }
+                emit_final_tail_batch(&mut tail_reader, &on_new_entries);
                 log::info!("Tail watcher stopped for {}", watch_path.display());
                 break;
             }
@@ -768,10 +800,7 @@ where
                     }
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    let batch = tail_reader.flush_pending_logical_record();
-                    if batch.is_reportable() {
-                        on_new_entries(batch);
-                    }
+                    emit_final_tail_batch(&mut tail_reader, &on_new_entries);
                     log::info!("Watcher channel disconnected");
                     break;
                 }
@@ -905,7 +934,7 @@ mod tests {
             assert!(retained_bytes <= MAX_LOGICAL_RECORD_BYTES);
         }
 
-        let flushed = reader.flush_pending_logical_record();
+        let flushed = reader.finalize_pending_input();
         tailed_entries.extend(flushed.entries);
         tail_errors = tail_errors.saturating_add(flushed.parse_errors);
 
@@ -945,6 +974,30 @@ mod tests {
             .expect("should reopen tail fixture");
         file.write_all(bytes)
             .expect("should append raw fixture bytes");
+    }
+
+    fn reader_with_terminal_utf8_prefix(name: &str, prefix: &[u8]) -> (PathBuf, TailReader) {
+        let path = unique_test_path(name);
+        fs::write(&path, []).expect("should create terminal UTF-8 fixture");
+        let mut reader = TailReader::new(
+            path.clone(),
+            0,
+            ResolvedParser::intune_device_inventory(DeviceInventoryLogDialect::Harvester),
+            0,
+            1,
+        );
+        append_bytes(
+            &path,
+            b"7/30/2026 6:00:54 AM [Information] TERMINAL-CONTENT",
+        );
+        append_bytes(&path, prefix);
+        let batch = reader
+            .read_new_entries()
+            .expect("an incomplete terminal scalar should remain pending");
+        assert!(batch.entries.is_empty());
+        assert_eq!(batch.parse_errors, 0);
+        assert_eq!(reader.pending_utf8_bytes, prefix);
+        (path, reader)
     }
 
     #[test]
@@ -992,7 +1045,7 @@ mod tests {
             let mut tailed = reader
                 .read_new_entries()
                 .expect("delayed continuation read should succeed");
-            tailed.append(reader.flush_pending_logical_record());
+            tailed.append(reader.finalize_pending_input());
 
             let content = format!("{header}\n{continuation}\n{next_header}\n");
             let (opened, opened_errors) =
@@ -1038,7 +1091,7 @@ mod tests {
                 let mut tailed = reader
                     .read_new_entries()
                     .expect("completed scalar read should succeed");
-                tailed.append(reader.flush_pending_logical_record());
+                tailed.append(reader.finalize_pending_input());
 
                 let content = format!("{prefix}{scalar}{suffix}");
                 let (opened, opened_errors) =
@@ -1085,7 +1138,7 @@ mod tests {
         let mut tailed = reader
             .read_new_entries()
             .expect("completed BOM should decode");
-        tailed.append(reader.flush_pending_logical_record());
+        tailed.append(reader.finalize_pending_input());
 
         let (opened, opened_errors) =
             inventory::parse_content(&path.to_string_lossy(), content, dialect);
@@ -1096,6 +1149,135 @@ mod tests {
         );
 
         fs::remove_file(path).expect("should clean up BOM fixture");
+    }
+
+    #[test]
+    fn test_terminal_utf8_prefixes_fail_closed_exactly_once() {
+        for (label, prefix) in [
+            ("two-byte", &[0xC2][..]),
+            ("three-byte", &[0xE2, 0x82][..]),
+            ("four-byte", &[0xF0, 0x9F, 0xA7][..]),
+        ] {
+            let (path, mut reader) =
+                reader_with_terminal_utf8_prefix(&format!("terminal-{label}"), prefix);
+
+            let finalized = reader.finalize_pending_input();
+            assert_eq!(finalized.parse_errors, 1, "{label}");
+            assert_eq!(finalized.entries.len(), 1, "{label}");
+            assert_eq!(finalized.entries[0].message, "TERMINAL-CONTENT", "{label}");
+            assert!(!finalized.entries[0].message.contains('�'), "{label}");
+            assert!(reader.pending_utf8_bytes.is_empty(), "{label}");
+
+            let repeated = reader.finalize_pending_input();
+            assert_eq!(repeated.parse_errors, 0, "{label}");
+            assert!(repeated.entries.is_empty(), "{label}");
+
+            fs::remove_file(path).expect("should clean up terminal UTF-8 fixture");
+        }
+    }
+
+    #[test]
+    fn test_terminal_partial_utf8_bom_fails_closed() {
+        let path = unique_test_path("terminal-partial-bom");
+        fs::write(&path, []).expect("should create terminal BOM fixture");
+        let mut reader = TailReader::new(
+            path.clone(),
+            0,
+            ResolvedParser::intune_device_inventory(DeviceInventoryLogDialect::Harvester),
+            0,
+            1,
+        );
+        append_bytes(&path, &[0xEF, 0xBB]);
+        reader
+            .read_new_entries()
+            .expect("a partial BOM should remain pending");
+
+        let finalized = reader.finalize_pending_input();
+        assert_eq!(finalized.parse_errors, 1);
+        assert!(finalized.entries.is_empty());
+        assert!(reader.pending_utf8_bytes.is_empty());
+
+        fs::remove_file(path).expect("should clean up terminal BOM fixture");
+    }
+
+    #[test]
+    fn test_terminal_utf8_prefix_fails_closed_on_parser_change() {
+        let (path, mut reader) =
+            reader_with_terminal_utf8_prefix("terminal-parser-change", &[0xE2, 0x82]);
+        reader.parser_selection = ResolvedParser::plain_text();
+
+        let finalized = reader
+            .read_new_entries()
+            .expect("parser change should finalize old decoder state");
+        assert_eq!(finalized.parse_errors, 1);
+        assert_eq!(finalized.entries.len(), 1);
+        assert_eq!(finalized.entries[0].message, "TERMINAL-CONTENT");
+        assert!(reader.pending_utf8_bytes.is_empty());
+
+        fs::remove_file(path).expect("should clean up parser-change fixture");
+    }
+
+    #[test]
+    fn test_parser_change_finalizes_utf8_carry_without_pending_text() {
+        let path = unique_test_path("terminal-carry-only-parser-change");
+        fs::write(&path, []).expect("should create carry-only fixture");
+        let mut reader = TailReader::new(path.clone(), 0, ResolvedParser::plain_text(), 0, 1);
+        append_bytes(&path, b"valid content\n");
+        let valid = reader
+            .read_new_entries()
+            .expect("valid content should parse before the terminal prefix");
+        assert_eq!(valid.entries.len(), 1);
+
+        append_bytes(&path, &[0xE2, 0x82]);
+        reader
+            .read_new_entries()
+            .expect("incomplete scalar should remain pending");
+        assert!(reader.pending_fragment.is_empty());
+        reader.parser_selection = ResolvedParser::generic_timestamped(DateOrder::MonthFirst);
+
+        let finalized = reader
+            .read_new_entries()
+            .expect("parser change should finalize carry-only decoder state");
+        assert_eq!(finalized.parse_errors, 1);
+        assert!(finalized.entries.is_empty());
+        assert!(reader.pending_utf8_bytes.is_empty());
+
+        fs::remove_file(path).expect("should clean up carry-only fixture");
+    }
+
+    #[test]
+    fn test_terminal_utf8_prefix_fails_closed_on_truncation() {
+        let (path, mut reader) =
+            reader_with_terminal_utf8_prefix("terminal-truncation", &[0xF0, 0x9F, 0xA7]);
+        fs::write(&path, []).expect("should truncate terminal UTF-8 fixture");
+
+        let finalized = reader
+            .read_new_entries()
+            .expect("truncation should finalize old decoder state");
+        assert!(finalized.reset);
+        assert_eq!(finalized.parse_errors, 1);
+        assert!(finalized.entries.is_empty());
+        assert!(reader.pending_utf8_bytes.is_empty());
+        assert!(reader.pending_fragment.is_empty());
+        assert!(reader.pending_logical_record.is_none());
+
+        fs::remove_file(path).expect("should clean up truncation fixture");
+    }
+
+    #[test]
+    fn test_watcher_terminal_emission_surfaces_incomplete_utf8() {
+        let (path, mut reader) = reader_with_terminal_utf8_prefix("terminal-watcher-exit", &[0xC2]);
+        let mut emitted = None;
+
+        emit_final_tail_batch(&mut reader, |batch| emitted = Some(batch));
+
+        let emitted = emitted.expect("terminal parse error must reach the watcher callback");
+        assert_eq!(emitted.parse_errors, 1);
+        assert_eq!(emitted.entries.len(), 1);
+        assert_eq!(emitted.entries[0].message, "TERMINAL-CONTENT");
+        assert!(reader.pending_utf8_bytes.is_empty());
+
+        fs::remove_file(path).expect("should clean up watcher-exit fixture");
     }
 
     #[test]
@@ -1150,6 +1332,10 @@ mod tests {
         assert!(error.to_string().contains("invalid UTF-8"));
         assert_eq!(reader.byte_offset, 1);
         assert_eq!(reader.pending_utf8_bytes, vec![0xE2]);
+        assert!(reader
+            .pending_utf8_selection
+            .as_ref()
+            .is_some_and(|selection| selection == &reader.parser_selection));
         assert!(reader.pending_fragment.is_empty());
         assert!(reader.pending_logical_record.is_none());
         assert_eq!(reader.next_id, 0);
@@ -1482,7 +1668,7 @@ mod tests {
             "a continuation must extend the pending record"
         );
 
-        let flushed = reader.flush_pending_logical_record();
+        let flushed = reader.finalize_pending_input();
 
         assert_eq!(flushed.entries.len(), 1);
         assert_eq!(
@@ -1539,7 +1725,7 @@ mod tests {
             .expect("continuation tail read should succeed");
         assert!(continuation_batch.entries.is_empty());
 
-        let flushed = reader.flush_pending_logical_record();
+        let flushed = reader.finalize_pending_input();
 
         assert_eq!(flushed.entries.len(), 1);
         assert_eq!(
@@ -1624,7 +1810,7 @@ mod tests {
             .expect("blank-line tail read should succeed");
         assert!(blank.entries.is_empty(), "a blank line yields no entry");
 
-        let flushed = reader.flush_pending_logical_record();
+        let flushed = reader.finalize_pending_input();
         assert!(flushed.entries.is_empty());
 
         let mut file = OpenOptions::new()
@@ -1643,7 +1829,7 @@ mod tests {
             "the newest record stays pending until a real boundary"
         );
 
-        let after = reader.flush_pending_logical_record();
+        let after = reader.finalize_pending_input();
         assert_eq!(after.entries.len(), 1);
         assert_eq!(
             after.entries[0].line_number, 2,
@@ -1688,7 +1874,7 @@ mod tests {
             "the newest record stays pending until a real boundary"
         );
 
-        let flushed = reader.flush_pending_logical_record();
+        let flushed = reader.finalize_pending_input();
         assert_eq!(flushed.entries.len(), 1);
 
         let tailed_lines: Vec<u32> = batch
@@ -1830,7 +2016,7 @@ mod tests {
         );
         assert_eq!(continuation_batch.entries[0].severity, Severity::Info);
 
-        let flushed = reader.flush_pending_logical_record();
+        let flushed = reader.finalize_pending_input();
         assert_eq!(flushed.entries.len(), 1);
         assert_eq!(flushed.entries[0].message, "Second record.");
         assert_eq!(flushed.entries[0].severity, Severity::Warning);
@@ -1877,7 +2063,7 @@ mod tests {
             .entries
             .is_empty());
 
-        let flushed = reader.flush_pending_logical_record();
+        let flushed = reader.finalize_pending_input();
         assert_eq!(flushed.entries.len(), 1);
         assert_eq!(flushed.entries[0].message, "Final action.");
         assert_eq!(flushed.parse_errors, 0);
