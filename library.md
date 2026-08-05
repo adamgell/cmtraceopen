@@ -7,3 +7,4 @@
 - IF integrating SCCM Epic #317 with current main for PR #490 → read [[docs/superpowers/plans/2026-08-04-sccm-317-main-integration.md]]
 - IF repairing PR #490 native SCCM discovery/capture or workspace product path → read [[docs/superpowers/plans/2026-08-04-sccm-native-product-path-rework.md]]
 - IF implementing or reviewing signless CCM/CmtLog timestamp repairs (#410, #414) → read [[docs/superpowers/plans/2026-08-05-signless-ccm-timestamps.md]]
+- IF implementing or reviewing GitHub issue #506 Device Inventory rotation detection narrowing → read [[docs/superpowers/plans/2026-08-05-issue-506-rotation-detection-narrowing.md]]
