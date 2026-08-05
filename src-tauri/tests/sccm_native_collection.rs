@@ -204,6 +204,168 @@ fn capture_collects_all_supported_client_rotations_and_validates_manifest() {
 }
 
 #[test]
+fn derived_client_root_emits_absent_rows_for_all_required_sources() {
+    let parent = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    let root = parent.path().join("SMS_CCM").join("Logs");
+    let required = [
+        "InventoryAgent.log",
+        "InventoryProvider.log",
+        "InventoryAgentProvider.log",
+        "CIAgent.log",
+        "CITaskMgr.log",
+        "DCMAgent.log",
+        "DCMReporting.log",
+        "StateMessage.log",
+        "SWMTRReportGen.log",
+    ];
+
+    capture(
+        &provider(SccmRole::Client, [root.clone()]),
+        bundles.path(),
+        "absent-derived-root",
+    );
+    let manifest =
+        read_sccm_manifest_or_legacy(&bundles.path().join("absent-derived-root")).unwrap();
+    for basename in required {
+        assert!(manifest.artifacts.iter().any(|artifact| {
+            artifact.basename == basename
+                && artifact.state == app_lib::sccm::SccmManifestSourceState::Absent
+        }));
+    }
+    let serialized = fs::read_to_string(
+        bundles
+            .path()
+            .join("absent-derived-root/sccm-manifest.json"),
+    )
+    .unwrap();
+    assert!(!serialized.contains(root.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn client_capture_accepts_only_required_exact_basenames_and_rotations() {
+    let logs = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    let required = [
+        "InventoryAgent.log",
+        "InventoryProvider.log",
+        "InventoryAgentProvider.log",
+        "CIAgent.log",
+        "CITaskMgr.log",
+        "DCMAgent.log",
+        "DCMReporting.log",
+        "StateMessage.log",
+        "SWMTRReportGen.log",
+    ];
+    for basename in required {
+        fs::write(logs.path().join(basename), basename.as_bytes()).unwrap();
+    }
+    fs::write(logs.path().join("InventoryAgent.log.1"), b"numbered").unwrap();
+    fs::write(logs.path().join("InventoryAgent.lo_"), b"lo").unwrap();
+    fs::write(logs.path().join("not-an-sccm-log.tmp"), b"temporary").unwrap();
+    fs::write(logs.path().join("mtrmgr.log"), b"not admitted").unwrap();
+
+    let result = capture(
+        &provider(SccmRole::Client, [logs.path().to_owned()]),
+        bundles.path(),
+        "exact-client-sources",
+    );
+    let manifest =
+        read_sccm_manifest_or_legacy(&bundles.path().join("exact-client-sources")).unwrap();
+    for basename in required {
+        assert!(manifest.artifacts.iter().any(|artifact| {
+            artifact.basename == basename
+                && artifact.state == app_lib::sccm::SccmManifestSourceState::Captured
+        }));
+    }
+    assert_eq!(
+        manifest
+            .artifacts
+            .iter()
+            .filter(|artifact| {
+                matches!(
+                    artifact.basename.as_str(),
+                    "InventoryAgent.log" | "InventoryAgent.log.1" | "InventoryAgent.lo_"
+                )
+            })
+            .filter(|artifact| artifact.state == app_lib::sccm::SccmManifestSourceState::Captured)
+            .count(),
+        3
+    );
+    assert!(!result.sources.iter().any(|source| {
+        source.source_id.eq_ignore_ascii_case("mtrmgr")
+            && source.state == SccmCoverageState::Captured
+    }));
+    let evidence = bundles
+        .path()
+        .join("exact-client-sources/evidence/sccm/client");
+    assert!(!evidence.join("mtrmgr.log").exists());
+    assert!(!evidence.join("not-an-sccm-log.tmp").exists());
+}
+
+#[test]
+fn mtrmgr_is_not_admitted_without_catalog_evidence() {
+    let logs = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    fs::write(logs.path().join("mtrmgr.log"), b"not admitted").unwrap();
+
+    let result = capture(
+        &provider(SccmRole::Client, [logs.path().to_owned()]),
+        bundles.path(),
+        "mtrmgr-not-admitted",
+    );
+    assert!(!result.sources.iter().any(|source| {
+        source.source_id.eq_ignore_ascii_case("mtrmgr")
+            && source.state == SccmCoverageState::Captured
+    }));
+    let manifest = fs::read_to_string(
+        bundles
+            .path()
+            .join("mtrmgr-not-admitted/sccm-manifest.json"),
+    )
+    .unwrap();
+    assert!(!manifest.contains("mtrmgr.log"));
+}
+
+#[test]
+fn client_manifest_contains_hashes_caps_and_opaque_provenance() {
+    let logs = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    let content = b"CIAgent evidence";
+    fs::write(logs.path().join("CIAgent.log"), content).unwrap();
+
+    capture(
+        &provider(SccmRole::Client, [logs.path().to_owned()]),
+        bundles.path(),
+        "manifest-contract",
+    );
+    let bundle_root = bundles.path().join("manifest-contract");
+    let manifest = read_sccm_manifest_or_legacy(&bundle_root).unwrap();
+    let artifact = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| {
+            artifact.basename == "CIAgent.log"
+                && artifact.state == app_lib::sccm::SccmManifestSourceState::Captured
+        })
+        .expect("captured CIAgent artifact");
+    assert_eq!(artifact.bytes_copied, content.len() as u64);
+    assert!(artifact.content_sha256.is_some());
+    assert!(artifact.source_handle.is_some());
+    assert!(artifact.root_handle.is_some());
+    assert!(artifact.path_fingerprint.is_some());
+    assert!(artifact.rotation_lineage.is_some());
+    assert!(artifact
+        .relative_path
+        .as_deref()
+        .is_some_and(|path| !path.contains(logs.path().to_string_lossy().as_ref())));
+    let serialized = fs::read_to_string(bundle_root.join("sccm-manifest.json")).unwrap();
+    assert!(!serialized.contains(logs.path().to_string_lossy().as_ref()));
+    assert_eq!(manifest.max_files_per_source, MAX_FRAGMENTS_PER_SOURCE);
+    assert_eq!(manifest.max_bytes_per_source, MAX_BYTES_PER_SOURCE);
+}
+
+#[test]
 fn capture_reports_malformed_rotation_without_copying_it() {
     let logs = tempfile::tempdir().unwrap();
     let bundles = tempfile::tempdir().unwrap();
