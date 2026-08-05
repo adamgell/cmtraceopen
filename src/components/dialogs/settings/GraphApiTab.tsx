@@ -65,6 +65,7 @@ interface SharedGraphAction {
   generation: number;
   requestId: string | null;
   statusAtStart: GraphAuthStatus | null;
+  retired: boolean;
 }
 
 let graphActionGeneration = 0;
@@ -100,6 +101,7 @@ function beginSharedGraphAction(
         ? globalThis.crypto.randomUUID()
         : null,
     statusAtStart,
+    retired: false,
   };
   notifyGraphActionSubscribers();
   return graphActionGeneration;
@@ -110,6 +112,19 @@ function isCurrentSharedGraphAction(generation: number) {
     sharedGraphAction?.generation === generation &&
     graphActionGeneration === generation
   );
+}
+
+function canApplySharedGraphAction(generation: number) {
+  return (
+    isCurrentSharedGraphAction(generation) &&
+    sharedGraphAction?.retired === false
+  );
+}
+
+function retireSharedGraphAction(generation: number) {
+  if (sharedGraphAction?.generation !== generation) return;
+  sharedGraphAction = { ...sharedGraphAction, retired: true };
+  notifyGraphActionSubscribers();
 }
 
 function finishSharedGraphAction(action: GraphAction, generation: number) {
@@ -249,7 +264,7 @@ export function GraphApiTab() {
   const graphActionBusy = activeAction !== null;
 
   const isCurrentMountedGraphAction = useCallback((generation: number) => {
-    return mountedRef.current && isCurrentSharedGraphAction(generation);
+    return mountedRef.current && canApplySharedGraphAction(generation);
   }, []);
 
   useEffect(() => {
@@ -309,6 +324,7 @@ export function GraphApiTab() {
           ? sharedGraphAction
           : null;
       if (interactiveAction?.requestId) {
+        retireSharedGraphAction(interactiveAction.generation);
         void graphCancelAuthentication(interactiveAction.requestId).catch(
           () => false,
         );
@@ -345,7 +361,7 @@ export function GraphApiTab() {
   };
 
   const finishGraphAction = (action: GraphAction, generation: number) => {
-    if (mountedRef.current && isCurrentSharedGraphAction(generation)) {
+    if (mountedRef.current && canApplySharedGraphAction(generation)) {
       skipNextSettledActionRefresh.current = true;
     }
     finishSharedGraphAction(action, generation);
@@ -363,23 +379,37 @@ export function GraphApiTab() {
     useUiStore.getState().setGraphApiStatus("signingIn");
     try {
       const result = await graphAuthenticate(requestId);
-      if (!isCurrentSharedGraphAction(generation)) return;
+      if (!canApplySharedGraphAction(generation)) return;
       if (useUiStore.getState().graphApiEnabled) {
-        useUiStore.getState().setGraphApiCapability(result.capability);
         useUiStore.getState().setGraphApiLastAttempt({
           outcome: result.outcome,
           message: result.message,
         });
-        useUiStore.getState().setGraphApiStatus(graphApiPhaseFromAttempt(result));
+        if (result.outcome === "stale") {
+          const statusAtStart = sharedGraphAction?.statusAtStart;
+          useUiStore
+            .getState()
+            .setGraphApiStatus(
+              statusAtStart
+                ? graphApiPhaseFromStatus(statusAtStart)
+                : "disconnected",
+            );
+        } else {
+          useUiStore.getState().setGraphApiCapability(result.capability);
+          useUiStore
+            .getState()
+            .setGraphApiStatus(graphApiPhaseFromAttempt(result));
+        }
       }
       if (
+        result.outcome !== "stale" &&
         isCurrentMountedGraphAction(generation) &&
         useUiStore.getState().graphApiEnabled
       ) {
         setAuthStatus(result.status);
       }
     } catch {
-      if (!isCurrentSharedGraphAction(generation)) return;
+      if (!canApplySharedGraphAction(generation)) return;
       if (useUiStore.getState().graphApiEnabled) {
         useUiStore.getState().setGraphApiLastAttempt({
           outcome: "failed",
@@ -423,7 +453,7 @@ export function GraphApiTab() {
     setPermissionNotice(null);
     try {
       const result = await graphRequestMissingPermissions(requestId);
-      if (!isCurrentSharedGraphAction(generation)) return;
+      if (!canApplySharedGraphAction(generation)) return;
       if (useUiStore.getState().graphApiEnabled) {
         useUiStore
           .getState()
@@ -437,10 +467,10 @@ export function GraphApiTab() {
         setPermissionNotice(buildPermissionNotice(result));
       }
     } catch {
-      if (!isCurrentSharedGraphAction(generation)) return;
+      if (!canApplySharedGraphAction(generation)) return;
       try {
         const status = await graphGetAuthStatus();
-        if (!isCurrentSharedGraphAction(generation)) return;
+        if (!canApplySharedGraphAction(generation)) return;
         if (useUiStore.getState().graphApiEnabled) {
           useUiStore
             .getState()

@@ -191,7 +191,7 @@ fn graph_permission_upgrade_command_runs_owned_wam_on_a_blocking_worker() {
     let graph_source = include_str!("../src/graph_api.rs");
     let permission_entry = source_section(
         graph_source,
-        "pub fn request_missing_permissions(",
+        "pub(crate) fn request_missing_permissions(",
         "/// Get current auth status",
     );
     assert!(permission_entry
@@ -278,8 +278,8 @@ fn graph_permission_upgrade_command_runs_owned_wam_on_a_blocking_worker() {
 
     let authenticate = source_section(
         graph_source,
-        "pub fn authenticate(",
-        "pub fn request_missing_permissions(",
+        "pub(crate) fn authenticate(",
+        "pub(crate) fn request_missing_permissions(",
     );
     assert!(authenticate.contains("match wam::acquire_token(hwnd_raw, deadline, lease)"));
     assert!(authenticate.contains("probe_host_capability_for_authentication(deadline, lease)"));

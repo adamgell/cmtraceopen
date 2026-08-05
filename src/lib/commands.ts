@@ -741,12 +741,7 @@ export interface GraphHostCapability {
 }
 
 export type GraphAuthAttemptOutcome =
-  | "connected"
-  | "cancelled"
-  | "timedOut"
-  | "unavailable"
-  | "failed"
-  | "stale";
+  "connected" | "cancelled" | "timedOut" | "unavailable" | "failed" | "stale";
 
 export interface GraphAuthAttemptResult {
   outcome: GraphAuthAttemptOutcome;
@@ -770,6 +765,132 @@ export interface GraphPermissionUpgradeResult {
   message: string | null;
 }
 
+function isGraphRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isGraphAuthStatus(value: unknown): value is GraphAuthStatus {
+  if (!isGraphRecord(value) || !isGraphRecord(value.capabilities)) return false;
+  const capabilities = value.capabilities;
+  return (
+    typeof value.isAuthenticated === "boolean" &&
+    isNullableString(value.userPrincipalName) &&
+    isNullableString(value.objectId) &&
+    isNullableString(value.tenantId) &&
+    isStringArray(value.grantedScopes) &&
+    isStringArray(value.missingScopes) &&
+    (value.expiresAt === null ||
+      (typeof value.expiresAt === "number" &&
+        Number.isFinite(value.expiresAt))) &&
+    typeof capabilities.managedDevices === "boolean" &&
+    typeof capabilities.serviceConfig === "boolean" &&
+    typeof capabilities.apps === "boolean" &&
+    typeof capabilities.configuration === "boolean" &&
+    typeof capabilities.scripts === "boolean"
+  );
+}
+
+const GRAPH_HOST_CAPABILITY_KINDS = new Set<GraphHostCapabilityKind>([
+  "available",
+  "personalAccountOnly",
+  "noOrganizationalAccount",
+  "providerUnavailable",
+  "unknown",
+]);
+
+const GRAPH_AUTH_ATTEMPT_OUTCOMES = new Set<GraphAuthAttemptOutcome>([
+  "connected",
+  "cancelled",
+  "timedOut",
+  "unavailable",
+  "failed",
+  "stale",
+]);
+
+const GRAPH_PERMISSION_UPGRADE_OUTCOMES =
+  new Set<GraphPermissionUpgradeOutcome>([
+    "upgraded",
+    "unchanged",
+    "cancelled",
+    "timedOut",
+    "denied",
+    "failed",
+    "stale",
+  ]);
+
+function invalidGraphResponse(commandName: string): never {
+  throw new Error(`Command '${commandName}' returned an invalid response.`);
+}
+
+function decodeGraphHostCapability(
+  value: unknown,
+  commandName: string,
+): GraphHostCapability {
+  if (
+    !isGraphRecord(value) ||
+    typeof value.kind !== "string" ||
+    !GRAPH_HOST_CAPABILITY_KINDS.has(value.kind as GraphHostCapabilityKind)
+  ) {
+    return invalidGraphResponse(commandName);
+  }
+  return value as unknown as GraphHostCapability;
+}
+
+function decodeGraphAuthStatus(
+  value: unknown,
+  commandName: string,
+): GraphAuthStatus {
+  if (!isGraphAuthStatus(value)) return invalidGraphResponse(commandName);
+  return value;
+}
+
+function decodeGraphAuthAttemptResult(
+  value: unknown,
+  commandName: string,
+): GraphAuthAttemptResult {
+  if (
+    !isGraphRecord(value) ||
+    typeof value.outcome !== "string" ||
+    !GRAPH_AUTH_ATTEMPT_OUTCOMES.has(
+      value.outcome as GraphAuthAttemptOutcome,
+    ) ||
+    !isGraphAuthStatus(value.status) ||
+    !isNullableString(value.message)
+  ) {
+    return invalidGraphResponse(commandName);
+  }
+  decodeGraphHostCapability(value.capability, commandName);
+  return value as unknown as GraphAuthAttemptResult;
+}
+
+function decodeGraphPermissionUpgradeResult(
+  value: unknown,
+  commandName: string,
+): GraphPermissionUpgradeResult {
+  if (
+    !isGraphRecord(value) ||
+    typeof value.outcome !== "string" ||
+    !GRAPH_PERMISSION_UPGRADE_OUTCOMES.has(
+      value.outcome as GraphPermissionUpgradeOutcome,
+    ) ||
+    !isGraphAuthStatus(value.status) ||
+    !isNullableString(value.message)
+  ) {
+    return invalidGraphResponse(commandName);
+  }
+  return value as unknown as GraphPermissionUpgradeResult;
+}
+
 export interface GraphAppInfo {
   id: string;
   displayName: string;
@@ -784,34 +905,49 @@ export interface GraphResolutionResult {
 }
 
 export async function graphProbeCapability(): Promise<GraphHostCapability> {
-  return invokeCommand<GraphHostCapability>("graph_probe_capability");
+  const commandName = "graph_probe_capability";
+  return decodeGraphHostCapability(
+    await invokeCommand<unknown>(commandName),
+    commandName,
+  );
 }
 
 export async function graphAuthenticate(
   requestId: string,
 ): Promise<GraphAuthAttemptResult> {
-  return invokeCommand<GraphAuthAttemptResult>("graph_authenticate", {
-    requestId,
-  });
+  const commandName = "graph_authenticate";
+  return decodeGraphAuthAttemptResult(
+    await invokeCommand<unknown>(commandName, { requestId }),
+    commandName,
+  );
 }
 
 export async function graphCancelAuthentication(
   requestId: string,
 ): Promise<boolean> {
-  return invokeCommand<boolean>("graph_cancel_authentication", { requestId });
+  const commandName = "graph_cancel_authentication";
+  const result = await invokeCommand<unknown>(commandName, { requestId });
+  return typeof result === "boolean"
+    ? result
+    : invalidGraphResponse(commandName);
 }
 
 export async function graphRequestMissingPermissions(
   requestId: string,
 ): Promise<GraphPermissionUpgradeResult> {
-  return invokeCommand<GraphPermissionUpgradeResult>(
-    "graph_request_missing_permissions",
-    { requestId },
+  const commandName = "graph_request_missing_permissions";
+  return decodeGraphPermissionUpgradeResult(
+    await invokeCommand<unknown>(commandName, { requestId }),
+    commandName,
   );
 }
 
 export async function graphGetAuthStatus(): Promise<GraphAuthStatus> {
-  return invokeCommand<GraphAuthStatus>("graph_get_auth_status");
+  const commandName = "graph_get_auth_status";
+  return decodeGraphAuthStatus(
+    await invokeCommand<unknown>(commandName),
+    commandName,
+  );
 }
 
 export async function graphSignOut(): Promise<void> {

@@ -77,6 +77,25 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
 });
 
+function validGraphStatus() {
+  return {
+    isAuthenticated: true,
+    userPrincipalName: "admin@contoso.com",
+    objectId: "00000000-0000-0000-0000-0000000000a1",
+    tenantId: "tenant-1",
+    grantedScopes: ["DeviceManagementManagedDevices.Read.All"],
+    missingScopes: [],
+    expiresAt: 1_800_000_000,
+    capabilities: {
+      managedDevices: true,
+      serviceConfig: false,
+      apps: false,
+      configuration: false,
+      scripts: false,
+    },
+  };
+}
+
 describe("SCCM product-path IPC boundary", () => {
   it("invokes discovery and capture without accepting frontend inputs", async () => {
     const discovery = { supported: true, roles: [], sources: [], issues: [] };
@@ -95,7 +114,9 @@ describe("SCCM product-path IPC boundary", () => {
 
     await expect(discoverSccmEnvironment()).resolves.toBe(discovery);
     await expect(captureSccmDiagnostics()).resolves.toBe(capture);
-    await expect(revealInFileManager(capture.bundleRoot)).resolves.toBeUndefined();
+    await expect(
+      revealInFileManager(capture.bundleRoot),
+    ).resolves.toBeUndefined();
 
     expect(invoke).toHaveBeenNthCalledWith(
       1,
@@ -117,22 +138,7 @@ describe("Graph permission upgrade IPC boundary", () => {
   it("invokes the zero-argument native permission upgrade command", async () => {
     const result = {
       outcome: "upgraded",
-      status: {
-        isAuthenticated: true,
-        userPrincipalName: "admin@contoso.com",
-        objectId: "00000000-0000-0000-0000-0000000000a1",
-        tenantId: "tenant-1",
-        grantedScopes: ["DeviceManagementManagedDevices.Read.All"],
-        missingScopes: [],
-        expiresAt: 1_800_000_000,
-        capabilities: {
-          managedDevices: true,
-          serviceConfig: false,
-          apps: false,
-          configuration: false,
-          scripts: false,
-        },
-      },
+      status: validGraphStatus(),
       message: null,
     };
     vi.mocked(invoke).mockResolvedValueOnce(result);
@@ -152,17 +158,30 @@ describe("Graph permission upgrade IPC boundary", () => {
 
 describe("Graph authentication IPC boundary", () => {
   it("passes request ownership through authenticate and cancellation", async () => {
-    const result = { outcome: "cancelled" };
+    const result = {
+      outcome: "cancelled",
+      status: validGraphStatus(),
+      capability: { kind: "available" },
+      message: "Microsoft Graph sign-in was cancelled.",
+    };
     vi.mocked(invoke)
       .mockResolvedValueOnce({ kind: "available" })
       .mockResolvedValueOnce(result)
       .mockResolvedValueOnce(true);
 
-    await expect(graphProbeCapability()).resolves.toEqual({ kind: "available" });
+    await expect(graphProbeCapability()).resolves.toEqual({
+      kind: "available",
+    });
     await expect(graphAuthenticate("auth-request-1")).resolves.toBe(result);
-    await expect(graphCancelAuthentication("auth-request-1")).resolves.toBe(true);
+    await expect(graphCancelAuthentication("auth-request-1")).resolves.toBe(
+      true,
+    );
 
-    expect(invoke).toHaveBeenNthCalledWith(1, "graph_probe_capability", undefined);
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      "graph_probe_capability",
+      undefined,
+    );
     expect(invoke).toHaveBeenNthCalledWith(2, "graph_authenticate", {
       requestId: "auth-request-1",
     });
@@ -170,6 +189,54 @@ describe("Graph authentication IPC boundary", () => {
       requestId: "auth-request-1",
     });
   });
+
+  it.each([
+    ["graph_probe_capability", () => graphProbeCapability(), { kind: "other" }],
+    ["graph_authenticate", () => graphAuthenticate("auth-request-1"), null],
+    [
+      "graph_authenticate",
+      () => graphAuthenticate("auth-request-1"),
+      {
+        outcome: "connected",
+        status: { ...validGraphStatus(), capabilities: {} },
+        capability: { kind: "available" },
+        message: null,
+      },
+    ],
+    [
+      "graph_authenticate",
+      () => graphAuthenticate("auth-request-1"),
+      {
+        outcome: "other",
+        status: validGraphStatus(),
+        capability: { kind: "available" },
+        message: null,
+      },
+    ],
+    [
+      "graph_cancel_authentication",
+      () => graphCancelAuthentication("auth-request-1"),
+      "true",
+    ],
+    [
+      "graph_request_missing_permissions",
+      () => graphRequestMissingPermissions("permission-request-1"),
+      {
+        outcome: "other",
+        status: validGraphStatus(),
+        message: null,
+      },
+    ],
+  ] as const)(
+    "rejects malformed %s responses",
+    async (commandName, call, malformedResponse) => {
+      vi.mocked(invoke).mockResolvedValueOnce(malformedResponse);
+
+      await expect(call()).rejects.toThrow(
+        `Command '${commandName}' returned an invalid response.`,
+      );
+    },
+  );
 });
 
 describe("command rejection sanitization", () => {
@@ -401,7 +468,11 @@ describe("getSafeErrorMessage", () => {
   it("surfaces the message from a plain-data-object rejection", () => {
     expect(
       getSafeErrorMessage(
-        { kind: "sourceNotFound", path: "C:\\bundle", message: "manifest missing" },
+        {
+          kind: "sourceNotFound",
+          path: "C:\\bundle",
+          message: "manifest missing",
+        },
         "safe fallback",
       ),
     ).toBe("manifest missing");
@@ -464,7 +535,9 @@ describe("Access Denied classification", () => {
   it("records a well-formed verdict on the normalized error", async () => {
     invokeMock.mockRejectedValue(accessDeniedPayload());
 
-    const error = await captureRejection(openLogFile("C:\\Windows\\Logs\\CBS.log"));
+    const error = await captureRejection(
+      openLogFile("C:\\Windows\\Logs\\CBS.log"),
+    );
 
     expect(readAccessDenied(error)).toEqual({
       kind: "accessDenied",

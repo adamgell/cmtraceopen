@@ -27,6 +27,7 @@
 ### Task 1: Define typed capability and authentication-attempt contracts
 
 **Files:**
+
 - Modify: `src-tauri/src/graph_api/models.rs`
 - Modify: `src/lib/commands.ts`
 - Test: `src-tauri/src/graph_api/models.rs`
@@ -73,7 +74,7 @@ Verify that `GraphAuthStatus` contains connection and delegated-capability data 
 Run from `src-tauri/`:
 
 ```bash
-cargo +1.88 test --locked graph_auth_attempt_contract -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_auth_attempt_contract -- --nocapture
 ```
 
 Expected: compilation or assertion failure because the new types do not exist yet.
@@ -87,7 +88,7 @@ Mirror the Rust shapes exactly in `src/lib/commands.ts`; do not add permissive o
 Run:
 
 ```bash
-cargo +1.88 test --locked graph_auth -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_auth -- --nocapture
 npx vitest run src/components/dialogs/settings/GraphApiTab.test.tsx
 ```
 
@@ -103,6 +104,7 @@ git commit -m "refactor(graph): type authentication attempts"
 ### Task 2: Add native capability probing, ownership, cancellation, and deadline safety
 
 **Files:**
+
 - Modify: `src-tauri/src/graph_api.rs`
 
 - [ ] **Step 1: Write failing platform-neutral operation tests**
@@ -133,8 +135,8 @@ Cover organizational account available, personal-only, no accounts, provider una
 - [ ] **Step 3: Run the focused tests and confirm failure**
 
 ```bash
-cargo +1.88 test --locked graph_interactive_operation -- --nocapture
-cargo +1.88 test --locked graph_host_capability -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_interactive_operation -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_host_capability -- --nocapture
 ```
 
 - [ ] **Step 4: Implement the single-owner operation lease**
@@ -160,9 +162,9 @@ Pass a request-scoped lease to the existing permission-upgrade WAM operation. Pr
 - [ ] **Step 9: Run native unit tests and commit**
 
 ```bash
-cargo +1.88 test --locked graph_interactive_operation -- --nocapture
-cargo +1.88 test --locked graph_host_capability -- --nocapture
-cargo +1.88 test --locked graph_permission_upgrade -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_interactive_operation -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_host_capability -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_permission_upgrade -- --nocapture
 git add src-tauri/src/graph_api.rs
 git commit -m "fix(graph): own and cancel WAM operations"
 ```
@@ -170,6 +172,7 @@ git commit -m "fix(graph): own and cancel WAM operations"
 ### Task 3: Move Graph authentication behind async Tauri commands
 
 **Files:**
+
 - Modify: `src-tauri/src/commands/graph_api.rs`
 - Modify: `src-tauri/src/lib.rs`
 
@@ -192,8 +195,8 @@ Change the permission command signature rather than adding a compatibility overl
 - [ ] **Step 5: Run Rust checks and commit**
 
 ```bash
-cargo +1.88 check --locked
-cargo +1.88 test --locked graph_auth -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml check --locked
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_auth -- --nocapture
 git add src-tauri/src/commands/graph_api.rs src-tauri/src/lib.rs
 git commit -m "fix(graph): run WAM authentication off thread"
 ```
@@ -201,6 +204,7 @@ git commit -m "fix(graph): run WAM authentication off thread"
 ### Task 4: Implement deterministic frontend states and cancellation UX
 
 **Files:**
+
 - Modify: `src/stores/ui-store.ts`
 - Modify: `src/stores/ui-store.test.ts`
 - Modify: `src/components/dialogs/settings/GraphApiTab.tsx`
@@ -255,6 +259,7 @@ git commit -m "fix(graph): make sign-in cancellable and deterministic"
 ### Task 5: Integration verification and evidence handoff
 
 **Files:**
+
 - Create: `e2e/graph-api-settings.spec.ts`
 - Modify: `docs/superpowers/plans/2026-08-05-graph-auth-nonblocking.md`
 
@@ -262,8 +267,8 @@ git commit -m "fix(graph): make sign-in cancellable and deterministic"
 
 ```bash
 npx vitest run src/components/dialogs/settings/GraphApiTab.test.tsx src/stores/ui-store.test.ts
-cargo +1.88 test --locked graph_auth -- --nocapture
-cargo +1.88 test --locked graph_permission_upgrade -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_auth -- --nocapture
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked graph_permission_upgrade -- --nocapture
 ```
 
 - [ ] **Step 2: Run full repository gates**
@@ -272,8 +277,8 @@ cargo +1.88 test --locked graph_permission_upgrade -- --nocapture
 npx tsc --noEmit
 npm test -- --run
 npm run frontend:build
-cargo +1.88 test --locked --workspace
-cargo +1.88 clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo +1.88 --manifest-path src-tauri/Cargo.toml test --locked --workspace
+cargo +1.88 --manifest-path src-tauri/Cargo.toml clippy --locked --workspace --all-targets --all-features -- -D warnings
 ```
 
 - [ ] **Step 3: Run available platform checks**

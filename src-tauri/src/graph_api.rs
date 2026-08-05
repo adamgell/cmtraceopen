@@ -371,6 +371,7 @@ mod windows_impl {
         status: GraphAuthStatus,
     }
 
+    #[derive(Debug)]
     enum WamAcquisitionFailure {
         Cancelled,
         TimedOut,
@@ -666,7 +667,12 @@ mod windows_impl {
                     &HSTRING::from(authority),
                 ) {
                     Ok(operation) => operation,
-                    Err(_) => return Ok(GraphAccountEnumeration::ProviderUnavailable),
+                    Err(error) => {
+                        log::debug!(
+                            "event=graph_capability_provider_lookup_failed authority={authority} error={error}"
+                        );
+                        return Ok(GraphAccountEnumeration::ProviderUnavailable);
+                    }
                 };
             let provider = match wait_for_operation(&provider_operation, deadline, cancelled) {
                 Ok(provider) => provider,
@@ -676,16 +682,25 @@ mod windows_impl {
                 Err(WamAcquisitionFailure::TimedOut) => {
                     return Err(WamAcquisitionFailure::TimedOut)
                 }
-                Err(WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed) => {
-                    return Ok(GraphAccountEnumeration::ProviderUnavailable)
+                Err(failure @ (WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed)) => {
+                    log::debug!(
+                        "event=graph_capability_provider_lookup_wait_failed authority={authority} failure={failure:?}"
+                    );
+                    return Ok(GraphAccountEnumeration::ProviderUnavailable);
                 }
             };
 
-            let accounts_operation =
-                match WebAuthenticationCoreManager::FindAllAccountsAsync(&provider) {
-                    Ok(operation) => operation,
-                    Err(_) => return Ok(GraphAccountEnumeration::Unknown),
-                };
+            let accounts_operation = match WebAuthenticationCoreManager::FindAllAccountsAsync(
+                &provider,
+            ) {
+                Ok(operation) => operation,
+                Err(error) => {
+                    log::debug!(
+                            "event=graph_capability_account_discovery_failed authority={authority} error={error}"
+                        );
+                    return Ok(GraphAccountEnumeration::Unknown);
+                }
+            };
             let result = match wait_for_operation(&accounts_operation, deadline, cancelled) {
                 Ok(result) => result,
                 Err(WamAcquisitionFailure::Cancelled) => {
@@ -694,8 +709,11 @@ mod windows_impl {
                 Err(WamAcquisitionFailure::TimedOut) => {
                     return Err(WamAcquisitionFailure::TimedOut)
                 }
-                Err(WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed) => {
-                    return Ok(GraphAccountEnumeration::Unknown)
+                Err(failure @ (WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed)) => {
+                    log::debug!(
+                        "event=graph_capability_account_discovery_wait_failed authority={authority} failure={failure:?}"
+                    );
+                    return Ok(GraphAccountEnumeration::Unknown);
                 }
             };
 
@@ -1213,7 +1231,7 @@ mod windows_impl {
 
     fn request_missing_permissions_with<F>(
         state: &GraphAuthState,
-        lease: Option<&GraphInteractiveOperationLease>,
+        lease: &GraphInteractiveOperationLease,
         acquire: F,
     ) -> Result<GraphPermissionUpgradeResult, AppError>
     where
@@ -1267,11 +1285,8 @@ mod windows_impl {
         match classify_graph_permission_candidate(&current.status, &candidate.status) {
             GraphPermissionCandidateDecision::Upgrade => {
                 let status = candidate.status.clone();
-                let published = match lease {
-                    Some(lease) => lease
-                        .publish_if_active(|| state.set_token_if_generation(generation, candidate)),
-                    None => Some(state.set_token_if_generation(generation, candidate)),
-                };
+                let published = lease
+                    .publish_if_active(|| state.set_token_if_generation(generation, candidate));
                 if published == Some(true) {
                     Ok(GraphPermissionUpgradeResult {
                         outcome: GraphPermissionUpgradeOutcome::Upgraded,
@@ -1480,7 +1495,7 @@ mod windows_impl {
         lease: &GraphInteractiveOperationLease,
     ) -> Result<GraphPermissionUpgradeResult, AppError> {
         let deadline = wam::authentication_deadline();
-        request_missing_permissions_with(state, Some(lease), || {
+        request_missing_permissions_with(state, lease, || {
             wam::acquire_permission_consent_token(hwnd_raw, deadline, lease)
         })
     }
@@ -1821,6 +1836,20 @@ mod windows_impl {
             state
         }
 
+        fn request_missing_permissions_for_test<F>(
+            state: &GraphAuthState,
+            acquire: F,
+        ) -> Result<GraphPermissionUpgradeResult, AppError>
+        where
+            F: FnOnce() -> Result<CachedToken, WamAcquisitionFailure>,
+        {
+            let registry = Arc::new(GraphInteractiveOperationRegistry::default());
+            let lease = registry
+                .begin("permission-test-request".to_string())
+                .expect("test operation lease");
+            request_missing_permissions_with(state, &lease, acquire)
+        }
+
         fn stored_token_and_generation(state: &GraphAuthState) -> (String, u64) {
             let guard = state.inner.access_token.lock().unwrap();
             let cached = guard.value.as_ref().expect("cached token");
@@ -1831,7 +1860,7 @@ mod windows_impl {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
-            let result = request_missing_permissions_with(&state, None, || Ok(candidate))
+            let result = request_missing_permissions_for_test(&state, || Ok(candidate))
                 .expect("candidate rejection is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
@@ -1849,7 +1878,7 @@ mod windows_impl {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
-            let result = request_missing_permissions_with(&state, None, || Err(failure))
+            let result = request_missing_permissions_for_test(&state, || Err(failure))
                 .expect("acquisition failure is a structured outcome");
 
             assert_eq!(result.outcome, expected_outcome);
@@ -1863,7 +1892,7 @@ mod windows_impl {
             let state = GraphAuthState::new();
             let calls = Cell::new(0);
 
-            let result = request_missing_permissions_with(&state, None, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 calls.set(calls.get() + 1);
                 unreachable!("disconnected precondition must stop before WAM")
             });
@@ -1886,7 +1915,7 @@ mod windows_impl {
             ));
             let calls = Cell::new(0);
 
-            let result = request_missing_permissions_with(&state, None, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 calls.set(calls.get() + 1);
                 unreachable!("complete precondition must stop before WAM")
             });
@@ -1912,7 +1941,7 @@ mod windows_impl {
             let expected_status = candidate.status.clone();
             let calls = Cell::new(0);
 
-            let result = request_missing_permissions_with(&state, None, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 calls.set(calls.get() + 1);
                 Ok(candidate)
             })
@@ -1936,6 +1965,31 @@ mod windows_impl {
         }
 
         #[test]
+        fn graph_permission_upgrade_cancelled_lease_blocks_candidate_publication() {
+            let state = seed_partial_state();
+            let before = stored_token_and_generation(&state);
+            let registry = Arc::new(GraphInteractiveOperationRegistry::default());
+            let request_id = "cancelled-permission-request";
+            let lease = registry
+                .begin(request_id.to_string())
+                .expect("test operation lease");
+            assert!(registry.cancel(request_id));
+            let candidate = token(
+                CANDIDATE_TOKEN,
+                "user@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+            );
+
+            let result = request_missing_permissions_with(&state, &lease, || Ok(candidate))
+                .expect("cancelled publication is a structured outcome");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Cancelled);
+            assert_eq!(result.status, current_auth_status(&state));
+            assert_eq!(stored_token_and_generation(&state), before);
+        }
+
+        #[test]
         fn graph_permission_upgrade_equal_scopes_retain_original_token_and_generation() {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
@@ -1946,7 +2000,7 @@ mod windows_impl {
                 &[GRAPH_DELEGATED_SCOPES[0]],
             );
 
-            let result = request_missing_permissions_with(&state, None, || Ok(candidate))
+            let result = request_missing_permissions_for_test(&state, || Ok(candidate))
                 .expect("equal scopes are unchanged");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Unchanged);
@@ -1975,7 +2029,7 @@ mod windows_impl {
                 &[GRAPH_DELEGATED_SCOPES[0]],
             );
 
-            let result = request_missing_permissions_with(&state, None, || Ok(candidate))
+            let result = request_missing_permissions_for_test(&state, || Ok(candidate))
                 .expect("scope regression is a structured failure");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
@@ -2039,10 +2093,9 @@ mod windows_impl {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
-            let result = request_missing_permissions_with(&state, None, || {
-                Err(WamAcquisitionFailure::Denied)
-            })
-            .expect("provider denial is a structured outcome");
+            let result =
+                request_missing_permissions_for_test(&state, || Err(WamAcquisitionFailure::Denied))
+                    .expect("provider denial is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Denied);
             assert!(result.message.is_some());
@@ -2055,10 +2108,9 @@ mod windows_impl {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
-            let result = request_missing_permissions_with(&state, None, || {
-                Err(WamAcquisitionFailure::Failed)
-            })
-            .expect("provider failure is a structured outcome");
+            let result =
+                request_missing_permissions_for_test(&state, || Err(WamAcquisitionFailure::Failed))
+                    .expect("provider failure is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
             assert!(result.message.is_some());
@@ -2093,7 +2145,7 @@ mod windows_impl {
                 &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
             );
 
-            let result = request_missing_permissions_with(&state, None, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 state.clear_token();
                 Ok(candidate)
             })
@@ -2124,7 +2176,7 @@ mod windows_impl {
             );
             let newer_status = newer.status.clone();
 
-            let result = request_missing_permissions_with(&state, None, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 assert!(state.set_token_if_generation(1, newer));
                 Ok(candidate)
             })
@@ -2149,7 +2201,7 @@ mod windows_impl {
             );
             let newer_status = newer.status.clone();
 
-            let result = request_missing_permissions_with(&state, None, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 assert!(state.set_token_if_generation(1, newer));
                 Err(WamAcquisitionFailure::Failed)
             })
@@ -2183,7 +2235,7 @@ mod windows_impl {
                 .expect("ESP operation");
             assert!(!operation.is_cancelled());
 
-            let result = request_missing_permissions_with(&state, None, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 Ok(token(
                     CANDIDATE_TOKEN,
                     "user@contoso.example",
