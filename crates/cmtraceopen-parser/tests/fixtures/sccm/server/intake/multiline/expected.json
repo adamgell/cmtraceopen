@@ -1,7 +1,7 @@
 {
   "pre318ExpectedVersion": 1,
-  "evidence": [{ "artifactId": "mp-policy-multiline", "lineRange": { "start": 1, "end": 2 }, "logicalRecordCount": 1 }],
+  "evidence": [{ "artifactId": "synthetic:artifact:sha256.v1:fab8972d821bbc3016ad15e49e13aeaf0559c7ef385bda8bc2b1158f085fb338", "lineRange": { "start": 1, "end": 2 }, "logicalRecordCount": 1 }],
   "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" }],
-  "artifactProvenance": [{ "artifactId": "mp-policy-multiline", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 207 }],
+  "artifactProvenance": [{ "artifactId": "synthetic:artifact:sha256.v1:fab8972d821bbc3016ad15e49e13aeaf0559c7ef385bda8bc2b1158f085fb338", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 207 }],
   "partialPhysicalFragmentCreatesTerminalResult": false
 }

@@ -23,7 +23,7 @@
   },
   "coverage": [
     {
-      "artifactId": "generic-01-sender",
+      "artifactId": "synthetic:artifact:sha256.v1:a12a03bf09588a996e01b7abd27c15856c880d4995c32f2962e8585255bd6104",
       "state": "captured"
     }
   ],

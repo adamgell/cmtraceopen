@@ -21,9 +21,10 @@ use crate::sccm::{
 
 use super::catalog::{
     classify_declared_hierarchy_source, classify_declared_server_source,
-    declared_hierarchy_source_contracts, expected_family, SccmServerHierarchyDirection,
-    SccmServerHierarchySourceContract, SccmServerSourceKind, SccmServerSourceSpec,
-    SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION, SCCM_SERVER_SITE_DATABASE_SCHEMA_VERSION,
+    declared_hierarchy_source_contracts, expected_family, is_declared_server_source_id,
+    SccmServerHierarchyDirection, SccmServerHierarchySourceContract, SccmServerSourceKind,
+    SccmServerSourceSpec, SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION,
+    SCCM_SERVER_SITE_DATABASE_SCHEMA_VERSION,
 };
 
 /// Keep parser-side work bounded even when the manifest did not come from the
@@ -36,75 +37,6 @@ const MAX_SCCM_SERVER_OPAQUE_EXTENSIONS: usize = 32;
 const MAX_SCCM_SERVER_OPAQUE_EXTENSION_BYTES_PER_SCOPE: usize = 8 * 1024;
 const MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSIONS: usize = 1_024;
 const MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSION_BYTES: usize = 256 * 1024;
-
-// Closed synthetic hierarchy vocabulary from the reviewed #331 corpus. These
-// values are intake fixtures, not a prefix admission rule: adding one requires
-// changing this registry and therefore the canonical intake integrity surface.
-const SYNTHETIC_HIERARCHY_ARTIFACT_IDS: &[&str] = &[
-    "absent-01-sender",
-    "absent-02-despool",
-    "backlog-01-replmgr",
-    "clock-01-sender",
-    "clock-02-despool",
-    "generic-01-sender",
-    "healthy-01-replmgr",
-    "healthy-02-sender",
-    "healthy-03-despool",
-    "healthy-04-rcmctrl",
-    "incomplete-01-replmgr",
-    "mismatch-01-sender",
-    "mismatch-02-despool",
-    "receiver-01-sender",
-    "receiver-02-despool",
-    "recovery-01-sender",
-    "recovery-02-despool",
-    "rotation-01-current",
-    "rotation-02-lo",
-    "sender-failure-01-chd",
-];
-const SYNTHETIC_HIERARCHY_LINEAGES: &[&str] = &[
-    "absent-despool",
-    "absent-sender",
-    "backlog-replmgr",
-    "clock-despool",
-    "clock-sender",
-    "generic-site-token-sender",
-    "healthy-despool",
-    "healthy-rcmctrl",
-    "healthy-replmgr",
-    "healthy-sender",
-    "incomplete-replmgr",
-    "mismatch-despool",
-    "mismatch-sender",
-    "receiver-despool",
-    "receiver-sender",
-    "recovery-despool",
-    "recovery-sender",
-    "rotation-sender",
-    "sender-failure",
-];
-const SYNTHETIC_HIERARCHY_PATH_FINGERPRINTS: &[&str] = &[
-    "synthetic:absent-despool",
-    "synthetic:absent-sender",
-    "synthetic:backlog-replmgr",
-    "synthetic:clock-despool",
-    "synthetic:clock-sender",
-    "synthetic:generic-site-token-sender",
-    "synthetic:healthy-despool",
-    "synthetic:healthy-rcmctrl",
-    "synthetic:healthy-replmgr",
-    "synthetic:healthy-sender",
-    "synthetic:incomplete-replmgr",
-    "synthetic:mismatch-despool",
-    "synthetic:mismatch-sender",
-    "synthetic:receiver-despool",
-    "synthetic:receiver-sender",
-    "synthetic:recovery-despool",
-    "synthetic:recovery-sender",
-    "synthetic:rotation-current",
-    "synthetic:rotation-lo",
-    "synthetic:sender-failure-current",
-];
 
 type PathFingerprintKey = (
     String,
@@ -1099,17 +1031,18 @@ fn normalize_topology(
     manifest: &RawServerManifest,
 ) -> Result<SccmServerTopologyAssessment, SccmServerIntakeError> {
     let site_handle = if manifest.synthetic_fixture {
-        // Manifest v1 synthetic fixtures use a closed, committed topology vocabulary.
-        // Expanding it requires an explicit fixture/profile review, not a caller-chosen label.
-        if manifest.topology.site_code != "LAB"
-            || !matches!(
-                manifest.topology.capture_host.as_str(),
-                "LAB-CM01" | "LAB-MP01"
+        if !synthetic_site_code(&manifest.topology.site_code)
+            || !synthetic_capture_host(
+                &manifest.topology.capture_host,
+                &manifest.topology.site_code,
             )
         {
             return Err(SccmServerIntakeError::InvalidTopology);
         }
-        "synthetic:site:lab".to_owned()
+        format!(
+            "synthetic:site:{}",
+            manifest.topology.site_code.to_ascii_lowercase()
+        )
     } else if opaque_sha256_handle(&manifest.topology.site_code, "cmtraceopen.site.sha256.v1:") {
         manifest.topology.site_code.clone()
     } else {
@@ -1176,15 +1109,12 @@ fn normalize_hierarchy_link(
         return Err(SccmServerIntakeError::InvalidTopology);
     }
     let valid = if synthetic_fixture {
-        link.origin_site_code == "LAB"
-            && link.origin_host_handle == "synthetic:host:site-01"
-            && matches!(
-                (
-                    link.target_site_code.as_str(),
-                    link.target_host_handle.as_str()
-                ),
-                ("CHD", "synthetic:host:site-02") | ("SEC", "synthetic:host:site-03")
-            )
+        link.origin_site_code != link.target_site_code
+            && link.origin_host_handle != link.target_host_handle
+            && synthetic_site_code(&link.origin_site_code)
+            && synthetic_site_code(&link.target_site_code)
+            && synthetic_identity(&link.origin_host_handle, "host")
+            && synthetic_identity(&link.target_host_handle, "host")
     } else {
         link.origin_site_code != link.target_site_code
             && link.origin_host_handle != link.target_host_handle
@@ -3006,17 +2936,7 @@ fn validate_declared_source_tuple(
         } else {
             artifact.rotation.kind == "providerDefined"
         } && artifact.rotation.value.is_none();
-        if artifact.producer_host_handle.as_deref() != Some("synthetic:host:wsus-01")
-            || !matches!(
-                subject.instance_handle.as_deref(),
-                Some("synthetic:subject:sup-01" | "safe:sup:lab-sup-01")
-            )
-            || source_version != Some("5.00.TEST")
-            || artifact.configured_path_provenance.path_fingerprint
-                != "synthetic:path:sup-wsus-health"
-            || !rotation_is_bounded
-            || artifact.rotation.lineage_id != "sup-wsus-health"
-        {
+        if source_version != Some("5.00.TEST") || !rotation_is_bounded {
             return Err(SccmServerIntakeError::InvalidArtifact);
         }
     }
@@ -3117,138 +3037,16 @@ fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> b
 
 fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        // The top-level manifest version gate makes this the v1 synthetic-fixture vocabulary.
-        // These public identities must never become free-form based on the manifest flag alone.
-        return matches!(
-            value,
-            "a-mp-policy"
-                | "b-sitecomp"
-                | "dp-dist-current"
-                | "dp-distribution-absent-candidate"
-                | "dp-absent-01-distmgr"
-                | "dp-absent-02-provider"
-                | "dp-distribution-failure-01-distmgr"
-                | "dp-healthy-01-distmgr"
-                | "dp-healthy-02-pkgxfer"
-                | "dp-healthy-03-provider"
-                | "dp-incomplete-01-distmgr"
-                | "dp-incomplete-02-pkgxfer-denied"
-                | "dp-incomplete-03-provider-absent"
-                | "dp-malformed-01-provider"
-                | "dp-rotation-01-current-fragment"
-                | "dp-rotation-02-lo-fragment"
-                | "dp-rotation-03-malformed"
-                | "dp-serve-01-distmgr"
-                | "dp-serve-02-pkgxfer"
-                | "dp-serve-03-provider"
-                | "dp-serve-04-status"
-                | "dp-transfer-retry-01-distmgr"
-                | "dp-transfer-retry-02-pkgxfer"
-                | "dp-transfer-failure-01-distmgr"
-                | "dp-transfer-failure-02-pkgxfer"
-                | "dp-backlog-blocked-01-distmgr"
-                | "dp-backlog-blocked-02-pkgxfer"
-                | "dp-transfer-deferred-01-distmgr"
-                | "dp-transfer-deferred-02-pkgxfer"
-                | "dp-recovery-01-distmgr"
-                | "dp-recovery-02-pkgxfer"
-                | "dp-recovery-03-provider"
-                | "dp-validation-failure-01-distmgr"
-                | "dp-validation-failure-02-pkgxfer"
-                | "dp-validation-failure-03-provider"
-                | "dp-version-01-distmgr"
-                | "dp-version-02-pkgxfer"
-                | "dp-version-03-provider"
-                | "dp-version-04-provider-dp02"
-                | "dp-version-05-distmgr-dp02"
-                | "dp-version-06-pkgxfer-dp02"
-                | "mp-iis-skipped"
-                | "mp-policy-access-denied"
-                | "mp-policy-configured"
-                | "mp-policy-current"
-                | "mp-policy-lo"
-                | "mp-policy-multiline"
-                | "mp-policy-numbered-2"
-                | "mp-policy-root-a-current"
-                | "mp-policy-root-b-current"
-                | "mp-policy-ts-20260729-235700"
-                | "incomplete-01-wcm"
-                | "incomplete-02-wsync-denied"
-                | "incomplete-03-wsus-absent"
-                | "metadata-failure-01-wcm"
-                | "metadata-failure-02-wsync"
-                | "rotation-01-current"
-                | "rotation-02-lo"
-                | "rotation-03-malformed"
-                | "sitecomp-current"
-                | "sup-setup-failure-01-setup"
-                | "sup-sync-capped"
-                | "sup-sync-current"
-                | "sup-wsus-health-skipped"
-                | "supplemental-01-wcm"
-                | "supplemental-02-wsync"
-                | "supplemental-03-wsus"
-                | "supplemental-04-wsus-health"
-                | "sync-retry-01-wcm"
-                | "sync-retry-02-wsync"
-                | "sync-success-01-wcm"
-                | "sync-success-02-wsync"
-                | "sync-success-03-wsus"
-                | "admin-auth-current"
-                | "admin-backend-current"
-                | "admin-iis-current"
-                | "admin-success-current"
-                | "blocked-deferred-admin-current"
-                | "contradictory-provider-current"
-                | "coverage-admin-access-denied"
-                | "coverage-admin-parse-failed"
-                | "coverage-admin-skipped"
-                | "coverage-provider-absent"
-                | "coverage-provider-capped"
-                | "coverage-provider-unsupported"
-                | "iis-supplemental-current"
-                | "incomplete-admin-current"
-                | "privacy-admin-current"
-                | "privacy-provider-current"
-                | "provider-authz-current"
-                | "provider-query-current"
-                | "provider-retry-current"
-                | "provider-success-current"
-                | "provider-timeout-current"
-                | "unrelated-02-wcm"
-                | "unrelated-03-wsync"
-                | "unrelated-04-wsus"
-                | "wcm-failure-01-wcm"
-                | "wsus-failure-01-wcm"
-                | "wsus-failure-02-wsync"
-                | "wsus-failure-03-wsus"
-                | "z-site-status"
-        ) || SYNTHETIC_HIERARCHY_ARTIFACT_IDS.contains(&value);
+        return synthetic_identity(value, "artifact");
     }
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
 }
 
 fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
-    matches!(
-        value,
-        "server-sitecomp"
-            | "server-status"
-            | "server-mp-auth"
-            | "server-mp-policy"
-            | "server-mp-iis"
-            | "server-dp-distribution"
-            | "server-dp-serve"
-            | "server-hierarchy-control"
-            | "server-hierarchy-transfer"
-            | "server-hierarchy-site-database"
-            | "server-sup-sync"
-            | "server-sup-wsus"
-            | "server-provider"
-            | "server-admin-service"
-            | "server-admin-service-iis"
-    ) || (allow_unknown
-        && !synthetic_fixture
-        && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
+    is_declared_server_source_id(value)
+        || (allow_unknown
+            && !synthetic_fixture
+            && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
 }
 
 fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> bool {
@@ -3270,128 +3068,14 @@ fn safe_public_basename(value: &str, synthetic_fixture: bool) -> bool {
 
 fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return matches!(
-            value,
-            "dp-dist-lab"
-                | "dp-distribution-default"
-                | "absent-distmgr"
-                | "absent-provider"
-                | "distribution-failure"
-                | "healthy-distmgr"
-                | "healthy-pkgxfer"
-                | "healthy-provider"
-                | "incomplete-distmgr"
-                | "incomplete-pkgxfer"
-                | "incomplete-provider"
-                | "malformed-provider"
-                | "retry-distmgr"
-                | "retry-pkgxfer"
-                | "transfer-failure-distmgr"
-                | "transfer-failure-pkgxfer"
-                | "backlog-blocked-distmgr"
-                | "backlog-blocked-pkgxfer"
-                | "transfer-deferred-distmgr"
-                | "transfer-deferred-pkgxfer"
-                | "recovery-distmgr"
-                | "recovery-pkgxfer"
-                | "recovery-provider"
-                | "rotation-distmgr"
-                | "rotation-provider"
-                | "serve-distmgr"
-                | "serve-pkgxfer"
-                | "serve-provider"
-                | "serve-status"
-                | "validation-distmgr"
-                | "validation-pkgxfer"
-                | "validation-provider"
-                | "version-distmgr"
-                | "version-pkgxfer"
-                | "version-provider"
-                | "version-provider-dp02"
-                | "version-distmgr-dp02"
-                | "version-pkgxfer-dp02"
-                | "mp-iis-supplement"
-                | "mp-policy-a"
-                | "mp-policy-access"
-                | "mp-policy-configured"
-                | "mp-policy-lab"
-                | "mp-policy-multiline"
-                | "mp-policy-root-a"
-                | "mp-policy-root-b"
-                | "mp-policy-rotation"
-                | "site-status-z"
-                | "sitecomp-a"
-                | "sitecomp-lab"
-                | "sup-sync-cap"
-                | "sup-sync-lab"
-                | "sup-wsus-health"
-                | "provider-primary"
-                | "admin-service-primary"
-                | "admin-service-iis"
-        ) || SYNTHETIC_HIERARCHY_LINEAGES.contains(&value);
+        return synthetic_identity(value, "lineage");
     }
     opaque_sha256_handle(value, "cmtraceopen.lineage.sha256.v1:")
 }
 
 fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return matches!(
-            value,
-            "synthetic:path:a-mp"
-                | "synthetic:path:a-site"
-                | "synthetic:absent-distmgr"
-                | "synthetic:absent-provider"
-                | "synthetic:distribution-failure"
-                | "synthetic:healthy-distmgr"
-                | "synthetic:healthy-pkgxfer"
-                | "synthetic:healthy-provider"
-                | "synthetic:incomplete-distmgr"
-                | "synthetic:incomplete-pkgxfer"
-                | "synthetic:incomplete-provider"
-                | "synthetic:malformed-provider"
-                | "synthetic:retry-distmgr"
-                | "synthetic:retry-pkgxfer"
-                | "synthetic:transfer-failure-distmgr"
-                | "synthetic:transfer-failure-pkgxfer"
-                | "synthetic:backlog-blocked-distmgr"
-                | "synthetic:backlog-blocked-pkgxfer"
-                | "synthetic:transfer-deferred-distmgr"
-                | "synthetic:transfer-deferred-pkgxfer"
-                | "synthetic:recovery-distmgr"
-                | "synthetic:recovery-pkgxfer"
-                | "synthetic:recovery-provider"
-                | "synthetic:rotation-current"
-                | "synthetic:rotation-distmgr"
-                | "synthetic:rotation-lo"
-                | "synthetic:rotation-malformed"
-                | "synthetic:serve-distmgr"
-                | "synthetic:serve-pkgxfer"
-                | "synthetic:serve-provider"
-                | "synthetic:serve-status"
-                | "synthetic:validation-distmgr"
-                | "synthetic:validation-pkgxfer"
-                | "synthetic:validation-provider"
-                | "synthetic:version-distmgr"
-                | "synthetic:version-pkgxfer"
-                | "synthetic:version-provider"
-                | "synthetic:version-provider-dp02"
-                | "synthetic:version-distmgr-dp02"
-                | "synthetic:version-pkgxfer-dp02"
-                | "synthetic:path:dp-default"
-                | "synthetic:path:iis-not-requested"
-                | "synthetic:path:mp-configured-a"
-                | "synthetic:path:mp-default"
-                | "synthetic:path:mp-root-a"
-                | "synthetic:path:mp-root-b"
-                | "synthetic:path:site-default"
-                | "synthetic:path:site-dp-control"
-                | "synthetic:path:site-sup-control"
-                | "synthetic:path:sup-wsus-health"
-                | "synthetic:path:provider-primary"
-                | "synthetic:path:admin-service-primary"
-                | "synthetic:path:admin-service-iis"
-                | "synthetic:path:z-site"
-        ) || SYNTHETIC_HIERARCHY_PATH_FINGERPRINTS.contains(&value);
+        return synthetic_identity(value, "path");
     }
     opaque_sha256_handle(value, "cmtraceopen.path.sha256.v1:")
 }
@@ -3513,33 +3197,46 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
         return true;
     };
     if synthetic_fixture {
-        return match domain {
-            "host" => matches!(
-                value,
-                "synthetic:host:mp-01"
-                    | "synthetic:host:site-01"
-                    | "synthetic:host:site-02"
-                    | "synthetic:host:site-03"
-                    | "synthetic:host:wsus-01"
-                    | "synthetic:host:provider-01"
-                    | "synthetic:host:provider-02"
-                    | "synthetic:host:admin-service-01"
-            ),
-            "subject" => {
-                matches!(
-                    value,
-                    "synthetic:subject:dp-01"
-                        | "synthetic:subject:dp-02"
-                        | "synthetic:subject:sup-01"
-                        | "safe:sup:lab-sup-01"
-                        | "synthetic:subject:provider-01"
-                        | "synthetic:subject:admin-service-01"
-                )
-            }
-            _ => false,
-        };
+        return synthetic_identity(value, domain);
     }
     opaque_sha256_handle(value, &format!("cmtraceopen.{domain}.sha256.v1:"))
+}
+
+fn synthetic_identity(value: &str, domain: &str) -> bool {
+    let Some((actual_domain, digest)) = value
+        .strip_prefix("synthetic:")
+        .and_then(|value| value.split_once(":sha256.v1:"))
+    else {
+        return false;
+    };
+    actual_domain == domain
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn synthetic_site_code(value: &str) -> bool {
+    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase())
+}
+
+fn synthetic_capture_host(value: &str, site_code: &str) -> bool {
+    if !value.is_ascii() {
+        return false;
+    }
+    let Some(role_and_ordinal) = value
+        .strip_prefix(site_code)
+        .and_then(|value| value.strip_prefix('-'))
+    else {
+        return false;
+    };
+    ["CM", "MP", "DP", "SUP", "PROVIDER", "ADMIN"]
+        .iter()
+        .any(|role| {
+            role_and_ordinal.strip_prefix(role).is_some_and(|ordinal| {
+                ordinal.len() == 2 && ordinal.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        })
 }
 
 fn opaque_sha256_digest<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {

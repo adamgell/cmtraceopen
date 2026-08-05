@@ -2,7 +2,7 @@
   "artifactRequests": [
     {
       "layer": "provider",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "producerRole": "provider",
       "request": {
         "logicalId": "smsprov",
@@ -10,18 +10,18 @@
         "role": "provider"
       },
       "sourceVersion": null,
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "coverage": [
     {
-      "artifactId": "coverage-provider-absent",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "artifactId": "synthetic:artifact:sha256.v1:164842f506419e46716997f7c7587e431c0ff1cb084c584187beb03d0dab03dc",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "producerRole": "provider",
       "sourceId": "server-provider",
       "sourceVersion": null,
       "state": "absent",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -33,13 +33,13 @@
         "correlationKeys": [],
         "coverageGaps": [
           {
-            "artifactId": "coverage-provider-absent",
+            "artifactId": "synthetic:artifact:sha256.v1:164842f506419e46716997f7c7587e431c0ff1cb084c584187beb03d0dab03dc",
             "coverage": "absent",
             "role": "provider"
           }
         ],
         "evidence": [],
-        "findingId": "provider-admin-coverage:coverage-provider-absent",
+        "findingId": "provider-admin-coverage:synthetic:artifact:sha256.v1:164842f506419e46716997f7c7587e431c0ff1cb084c584187beb03d0dab03dc",
         "nextArtifacts": [
           {
             "logicalId": "smsprov",
@@ -56,11 +56,11 @@
       },
       "lastSuccessfulPhase": null,
       "layer": "provider",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "sourceId": "server-provider",
       "sourceVersion": null,
-      "subjectId": "coverage-provider-absent",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "subjectId": "synthetic:artifact:sha256.v1:164842f506419e46716997f7c7587e431c0ff1cb084c584187beb03d0dab03dc",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "profiles": [

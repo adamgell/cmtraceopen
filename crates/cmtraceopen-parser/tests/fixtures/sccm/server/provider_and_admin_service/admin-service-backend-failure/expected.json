@@ -2,13 +2,13 @@
   "artifactRequests": [],
   "coverage": [
     {
-      "artifactId": "admin-backend-current",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "producerRole": "adminService",
       "sourceId": "server-admin-service",
       "sourceVersion": "5.00.TEST",
       "state": "captured",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -21,37 +21,37 @@
         "coverageGaps": [],
         "evidence": [
           {
-            "artifactId": "admin-backend-current",
-            "entryId": "admin-backend-current:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
           {
-            "artifactId": "admin-backend-current",
-            "entryId": "admin-backend-current:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
           {
-            "artifactId": "admin-backend-current",
-            "entryId": "admin-backend-current:3-3",
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:3-3",
             "lineEnd": 3,
             "lineStart": 3
           },
           {
-            "artifactId": "admin-backend-current",
-            "entryId": "admin-backend-current:4-4",
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:4-4",
             "lineEnd": 4,
             "lineStart": 4
           },
           {
-            "artifactId": "admin-backend-current",
-            "entryId": "admin-backend-current:5-5",
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:5-5",
             "lineEnd": 5,
             "lineStart": 5
           }
         ],
-        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:ed811b8050ba1f029dba64ff7caa00623603849848ad2c72ef68b54f80a3c60e",
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:cd312ed5e01c11ec9b6dce620aa4f743f65576ea7ffd148e12008db9642f5c32",
         "nextArtifacts": [],
         "phase": "providerAndAdminService",
         "role": "adminService",
@@ -61,8 +61,8 @@
           {
             "kind": "observedFailure",
             "reference": {
-              "artifactId": "admin-backend-current",
-              "entryId": "admin-backend-current:5-5",
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:5-5",
               "lineEnd": 5,
               "lineStart": 5
             }
@@ -72,11 +72,11 @@
       },
       "lastSuccessfulPhase": "route",
       "layer": "adminService",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "sourceId": "server-admin-service",
       "sourceVersion": "5.00.TEST",
-      "subjectId": "adminService:cmtraceopen.request.sha256.v1:c83b03e700efb70eeb3a27cf47f69f9e54e59375f79b1d8b2896f4d89cfc32ab:cmtraceopen.operation.sha256.v1:526ee4e602f7917ad02c5a48c2c4406d02a9f6a19d27173de039e74896de2ec2:synthetic:host:admin-service-01:synthetic:subject:admin-service-01",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "subjectId": "adminService:cmtraceopen.request.sha256.v1:c83b03e700efb70eeb3a27cf47f69f9e54e59375f79b1d8b2896f4d89cfc32ab:cmtraceopen.operation.sha256.v1:526ee4e602f7917ad02c5a48c2c4406d02a9f6a19d27173de039e74896de2ec2:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "profiles": [
@@ -108,7 +108,7 @@
       "coverageGapArtifactIds": [],
       "key": {
         "confidence": "low",
-        "endpointHandle": "synthetic:subject:admin-service-01",
+        "endpointHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
         "extractionProfile": {
           "configmgrVersionPrefixes": [
             "5.00.TEST"
@@ -121,7 +121,7 @@
           ]
         },
         "operationHandle": "cmtraceopen.operation.sha256.v1:526ee4e602f7917ad02c5a48c2c4406d02a9f6a19d27173de039e74896de2ec2",
-        "producerHostHandle": "synthetic:host:admin-service-01",
+        "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
         "requestHandle": "cmtraceopen.request.sha256.v1:c83b03e700efb70eeb3a27cf47f69f9e54e59375f79b1d8b2896f4d89cfc32ab"
       },
       "lastSuccessfulPhase": "route",
@@ -132,13 +132,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "admin-backend-current",
-              "entryId": "admin-backend-current:1-1",
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:1-1",
               "lineEnd": 1,
               "lineStart": 1
             }
           ],
-          "observationId": "admin-backend-current:1-1-01",
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:1-1-01",
           "phase": "receive",
           "terminal": false
         },
@@ -146,13 +146,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "admin-backend-current",
-              "entryId": "admin-backend-current:2-2",
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:2-2",
               "lineEnd": 2,
               "lineStart": 2
             }
           ],
-          "observationId": "admin-backend-current:2-2-02",
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:2-2-02",
           "phase": "authenticateOrAuthorize",
           "terminal": false
         },
@@ -160,13 +160,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "admin-backend-current",
-              "entryId": "admin-backend-current:3-3",
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:3-3",
               "lineEnd": 3,
               "lineStart": 3
             }
           ],
-          "observationId": "admin-backend-current:3-3-03",
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:3-3-03",
           "phase": "route",
           "terminal": false
         },
@@ -174,13 +174,13 @@
           "disposition": "failed",
           "evidence": [
             {
-              "artifactId": "admin-backend-current",
-              "entryId": "admin-backend-current:4-4",
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:4-4",
               "lineEnd": 4,
               "lineStart": 4
             }
           ],
-          "observationId": "admin-backend-current:4-4-04",
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:4-4-04",
           "phase": "executeBackendOperation",
           "terminal": false
         },
@@ -188,13 +188,13 @@
           "disposition": "failed",
           "evidence": [
             {
-              "artifactId": "admin-backend-current",
-              "entryId": "admin-backend-current:5-5",
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:5-5",
               "lineEnd": 5,
               "lineStart": 5
             }
           ],
-          "observationId": "admin-backend-current:5-5-05",
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:5-5-05",
           "phase": "recordOutcome",
           "terminal": true
         }
@@ -206,7 +206,7 @@
       "terminalEvidence": true,
       "timestampOrdering": "usable",
       "topologyCompatibility": "exact",
-      "transactionId": "adminService:cmtraceopen.request.sha256.v1:c83b03e700efb70eeb3a27cf47f69f9e54e59375f79b1d8b2896f4d89cfc32ab:cmtraceopen.operation.sha256.v1:526ee4e602f7917ad02c5a48c2c4406d02a9f6a19d27173de039e74896de2ec2:synthetic:host:admin-service-01:synthetic:subject:admin-service-01"
+      "transactionId": "adminService:cmtraceopen.request.sha256.v1:c83b03e700efb70eeb3a27cf47f69f9e54e59375f79b1d8b2896f4d89cfc32ab:cmtraceopen.operation.sha256.v1:526ee4e602f7917ad02c5a48c2c4406d02a9f6a19d27173de039e74896de2ec2:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "workflow": "providerAndAdminService"

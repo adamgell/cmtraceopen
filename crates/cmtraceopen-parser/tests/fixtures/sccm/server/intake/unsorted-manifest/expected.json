@@ -1,6 +1,6 @@
 {
   "pre318ExpectedVersion": 1,
-  "canonicalArtifactIds": ["a-mp-policy", "b-sitecomp", "z-site-status"],
+  "canonicalArtifactIds": ["synthetic:artifact:sha256.v1:985f51f224668b9bc7dab4496cf3bbd46c29f5b8968931b6a74307d53011c944", "synthetic:artifact:sha256.v1:930503e728322cd7bff72d0c239e9aa3db5178f8c77c3fa349fdeec1e3a7b96d", "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c"],
   "normalizedOutputByteIdenticalWhenReordered": true,
   "artifactIdDerivationIgnoresDiscoveryOrder": true,
   "artifactIdUniquenessScope": "manifest",
@@ -12,8 +12,8 @@
     { "producerRole": "siteServer", "sourceId": "server-status", "state": "captured" }
   ],
   "artifactProvenance": [
-    { "artifactId": "a-mp-policy", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
-    { "artifactId": "b-sitecomp", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
-    { "artifactId": "z-site-status", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
+    { "artifactId": "synthetic:artifact:sha256.v1:985f51f224668b9bc7dab4496cf3bbd46c29f5b8968931b6a74307d53011c944", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "synthetic:artifact:sha256.v1:930503e728322cd7bff72d0c239e9aa3db5178f8c77c3fa349fdeec1e3a7b96d", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
   ]
 }

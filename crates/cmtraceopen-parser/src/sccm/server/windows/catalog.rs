@@ -300,6 +300,13 @@ pub fn declared_server_source_catalog() -> &'static [SccmServerSourceSpec] {
     SERVER_SOURCE_SPECS
 }
 
+pub(crate) fn is_declared_server_source_id(source_id: &str) -> bool {
+    SERVER_SOURCE_SPECS
+        .iter()
+        .chain(std::iter::once(&SERVER_STRUCTURED_SUPPLEMENT_SPEC))
+        .any(|spec| spec.source_id == source_id)
+}
+
 pub(crate) fn classify_declared_server_source(
     source_id: &str,
     producer_role: &SccmRole,

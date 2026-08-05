@@ -5,14 +5,14 @@
   "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
   "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
   "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
-  "coverage": [{"artifactId":"absent-01-sender","state":"captured"},{"artifactId":"absent-02-despool","state":"absent"}],
+  "coverage": [{"artifactId":"synthetic:artifact:sha256.v1:335cb266395cf7c7d238f2c5cc59b01ea326824dc25a341857bb8d6cd93cd842","state":"captured"},{"artifactId":"synthetic:artifact:sha256.v1:2a72dae78102cf278678f6480a276b4d958ae574e9c06c693abf5b037c19cf82","state":"absent"}],
   "transactions": [{
     "transactionId":"hierarchy:msg-absent-01:LAB:CHD:link-lab-chd",
     "key":{"messageId":"msg-absent-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
     "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":false,
     "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
-    "coverageGapArtifactIds":["absent-02-despool"],
-    "observations":[{"observationId":"absent-01-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"absent-01-sender","startLine":1,"endLine":1}]}]
+    "coverageGapArtifactIds":["synthetic:artifact:sha256.v1:2a72dae78102cf278678f6480a276b4d958ae574e9c06c693abf5b037c19cf82"],
+    "observations":[{"observationId":"absent-01-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:335cb266395cf7c7d238f2c5cc59b01ea326824dc25a341857bb8d6cd93cd842","startLine":1,"endLine":1}]}]
   }],
   "sourceLocalObservations": [],
   "artifactRequests": [

@@ -637,7 +637,7 @@ fn canonical_intake_adapter_uses_assessed_mp_evidence_and_rejects_mismatches() {
     assert!(analysis.source_local_observations[0]
         .evidence
         .iter()
-        .all(|reference| reference.artifact_id == "mp-policy-current"));
+        .all(|reference| reference.artifact_id == "synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53"));
 
     let mut supplemental_iis = assessment.clone();
     let mut iis_artifact = supplemental_iis.artifacts[0].clone();
@@ -871,8 +871,10 @@ fn canonical_intake_coverage_rows_distinguished_by_producer_host_reach_topology_
     let fingerprint =
         manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
     let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
-    manifest["artifacts"][1]["producerHostHandle"] =
-        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["producerHostHandle"] = Value::String(
+        "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339"
+            .to_owned(),
+    );
     manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
     manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
 
@@ -892,7 +894,10 @@ fn canonical_intake_coverage_rows_distinguished_by_producer_host_reach_topology_
             .iter()
             .map(|record| record.producer_host_handle.as_deref())
             .collect::<Vec<_>>(),
-        vec![Some("synthetic:host:mp-01"), Some("synthetic:host:site-01")],
+        vec![
+            Some("synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f"),
+            Some("synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339"),
+        ],
     );
 
     assert!(
@@ -926,7 +931,7 @@ fn canonical_intake_adapter_accepts_coverage_rows_distinguished_by_workflow_subj
     let artifact = &mut manifest["artifacts"][3];
     artifact["workflowSubject"] = json!({
         "role": "distributionPoint",
-        "instanceHandle": "synthetic:subject:dp-02",
+        "instanceHandle": "synthetic:subject:sha256.v1:b7f6d3e42b018582c500e7f0abcbb3d976bc45df22eb889e14c5e8b58902a299",
     });
     artifact["sourceId"] = Value::String("server-dp-distribution".to_owned());
     artifact["originalPath"] = Value::String("REDACTED_SITE_DP_CONTROL_ROOT_COPY".to_owned());
@@ -954,8 +959,8 @@ fn canonical_intake_adapter_accepts_coverage_rows_distinguished_by_workflow_subj
             .map(|record| record.workflow_subject_handle.as_deref())
             .collect::<Vec<_>>(),
         vec![
-            Some("synthetic:subject:dp-01"),
-            Some("synthetic:subject:dp-02"),
+            Some("synthetic:subject:sha256.v1:303b321cad551bed85d9b6d366165e1cb287c824090779eadea5673cbeeacf33"),
+            Some("synthetic:subject:sha256.v1:b7f6d3e42b018582c500e7f0abcbb3d976bc45df22eb889e14c5e8b58902a299"),
         ],
     );
 
@@ -1041,7 +1046,7 @@ fn canonical_intake_adapter_rejects_promoted_capped_profile_ineligible_metadata(
         .remove("sourceVersion");
     let manifest_json = serde_json::to_string(&manifest).expect("manifest serializes");
     let payloads = vec![SccmServerArtifactPayload {
-        manifest_artifact_id: "sup-sync-capped".to_owned(),
+        manifest_artifact_id: "synthetic:artifact:sha256.v1:8ffd2bfbfcd641204b0108f4d880ef9aae8472e9cde9abc4da5207791e09f47a".to_owned(),
         bytes: fs::read(directory.join(
             "evidence/sccm/server/site-server/server-sup-sync/subject-software-update-point/instance-17eae15500d8968f/root-b11afca548220198/current/wsyncmgr.log",
         ))

@@ -699,13 +699,7 @@ fn source_shape_is_valid(artifact: &SccmServerArtifactAssessment, group: SiteCor
         && artifact
             .producer_host_handle
             .as_deref()
-            .is_some_and(|host| {
-                !host.is_empty()
-                    && host.len() <= 256
-                    && host.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_')
-                    })
-            })
+            .is_some_and(safe_site_core_host)
 }
 
 fn expected_evidence_component(artifact: &SccmServerArtifactAssessment) -> Option<&'static str> {
@@ -2002,6 +1996,23 @@ fn safe_site_core_opaque_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b':' | b'_' | b'-'))
+}
+
+fn safe_site_core_host(value: &str) -> bool {
+    let existing_opaque_shape = !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_'));
+    let synthetic_digest = value
+        .strip_prefix("synthetic:host:sha256.v1:")
+        .is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        });
+    existing_opaque_shape || synthetic_digest
 }
 
 fn mark_repeated_keys<'a>(unique: &mut [bool], keys: impl Iterator<Item = &'a str>) {

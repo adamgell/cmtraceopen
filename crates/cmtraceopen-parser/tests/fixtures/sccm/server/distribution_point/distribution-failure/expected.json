@@ -15,14 +15,14 @@
       "contentVersionMismatch": false,
       "evidence": [
         {
-          "artifactId": "dp-distribution-failure-01-distmgr",
-          "entryId": "dp-distribution-failure-01-distmgr:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9",
+          "entryId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-distribution-failure-01-distmgr",
-          "entryId": "dp-distribution-failure-01-distmgr:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9",
+          "entryId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9:2-2",
           "lineEnd": 2,
           "lineStart": 2
         }
@@ -30,7 +30,7 @@
       "key": {
         "contentId": "content-beta",
         "contentVersion": 1,
-        "distributionPointHandle": "synthetic:subject:dp-01",
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
         "extractionProfileId": "dp-server-5.00.test-v1",
         "extractionProfileVersion": 1,
         "packageId": "LAB00002",
@@ -43,8 +43,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-distribution-failure-01-distmgr",
-            "entryId": "dp-distribution-failure-01-distmgr:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9",
+            "entryId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -61,8 +61,8 @@
         {
           "disposition": "failed",
           "evidence": {
-            "artifactId": "dp-distribution-failure-01-distmgr",
-            "entryId": "dp-distribution-failure-01-distmgr:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9",
+            "entryId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
@@ -84,13 +84,13 @@
       "stopPhase": "distribute",
       "terminalEvidence": [
         {
-          "artifactId": "dp-distribution-failure-01-distmgr",
-          "entryId": "dp-distribution-failure-01-distmgr:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9",
+          "entryId": "synthetic:artifact:sha256.v1:55a84f7a94798311da069498db66a772201b115d52dd90157d72246ad851b2e9:2-2",
           "lineEnd": 2,
           "lineStart": 2
         }
       ],
-      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00002:content=content-beta:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00002:content=content-beta:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
     }
   ],
   "workflow": "distributionPointContent"

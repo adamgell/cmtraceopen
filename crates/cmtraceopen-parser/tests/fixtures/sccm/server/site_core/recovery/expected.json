@@ -1,11 +1,118 @@
 {
-  "schemaVersion": 1,
-  "workflow": "siteCore",
+  "artifactRequests": [],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "findings": [
+    {
+      "class": "symptom",
+      "confidence": "high",
+      "correlationKeys": [],
+      "coverageGaps": [],
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c",
+          "entryId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c",
+          "entryId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:3-3",
+          "lineEnd": 3,
+          "lineStart": 3
+        }
+      ],
+      "findingId": "site-core:finding:v1:ad02835debd9248d40858d945ea0aef91ebf3872c9a16828a839228a81760ffb",
+      "lastSuccessfulPhase": "healthyOrTerminal",
+      "nextArtifacts": [],
+      "phase": "healthyOrTerminal",
+      "role": "siteServer",
+      "severity": "Warning",
+      "subjectId": "site-core:result:v1:d2adf2b35a3b6e63fdd52267d7fc11fe5407209eeaf7621a91ca823e208f6501",
+      "summary": "The last confirmed successful phase is healthyOrTerminal; later phases are bounded to cited evidence.",
+      "terminalEvidence": [],
+      "title": "Site component and status evidence"
+    }
+  ],
   "profile": {
     "id": "sccm-site-core",
-    "version": 1,
-    "stability": "experimental"
+    "stability": "experimental",
+    "version": 1
   },
+  "results": [
+    {
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c",
+          "entryId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c",
+          "entryId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c:2-2",
+          "lineEnd": 2,
+          "lineStart": 2,
+          "recovery": true,
+          "terminal": true
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:3-3",
+          "lineEnd": 3,
+          "lineStart": 3,
+          "terminal": true
+        }
+      ],
+      "findingClass": "symptom",
+      "lastSuccessfulPhase": "healthyOrTerminal",
+      "nextArtifacts": [],
+      "resultId": "site-core:result:v1:d2adf2b35a3b6e63fdd52267d7fc11fe5407209eeaf7621a91ca823e208f6501",
+      "state": "recovered",
+      "transactionKey": {
+        "componentId": "SMS_EXECUTIVE",
+        "producerHostHandle": "synthetic:host:sha256.v1:4984d720bb6415f515b22c382e5199b0b407bc05246f4b89aff5f290bcd9f313",
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteHandle": "synthetic:site:lab",
+        "workItemId": "SC-RECOVER-001"
+      }
+    }
+  ],
+  "schemaVersion": 1,
   "stateChain": [
     "componentStart",
     "componentWork",
@@ -13,113 +120,6 @@
     "statusOrStateProcessing",
     "healthyOrTerminal"
   ],
-  "results": [
-    {
-      "resultId": "site-core:result:v1:6481f8fcb2dc2b2d95e759d00b6c5332fc83f74a8ce808c4079681340c0547a9",
-      "transactionKey": {
-        "profileId": "sccm-site-core",
-        "profileVersion": 1,
-        "siteHandle": "synthetic:site:lab",
-        "producerHostHandle": "synthetic:host:site-01",
-        "componentId": "SMS_EXECUTIVE",
-        "workItemId": "SC-RECOVER-001"
-      },
-      "state": "recovered",
-      "lastSuccessfulPhase": "healthyOrTerminal",
-      "findingClass": "symptom",
-      "confidence": "high",
-      "confidenceCeiling": "high",
-      "evidence": [
-        {
-          "artifactId": "sitecomp-current",
-          "entryId": "sitecomp-current:1-1",
-          "lineStart": 1,
-          "lineEnd": 1
-        },
-        {
-          "artifactId": "sitecomp-current",
-          "entryId": "sitecomp-current:2-2",
-          "lineStart": 2,
-          "lineEnd": 2
-        },
-        {
-          "artifactId": "sitecomp-current",
-          "entryId": "sitecomp-current:3-3",
-          "lineStart": 3,
-          "lineEnd": 3,
-          "terminal": true
-        },
-        {
-          "artifactId": "z-site-status",
-          "entryId": "z-site-status:1-1",
-          "lineStart": 1,
-          "lineEnd": 1
-        },
-        {
-          "artifactId": "z-site-status",
-          "entryId": "z-site-status:2-2",
-          "lineStart": 2,
-          "lineEnd": 2,
-          "terminal": true,
-          "recovery": true
-        }
-      ],
-      "coverageGapArtifactIds": [],
-      "nextArtifacts": []
-    }
-  ],
   "unlinkedObservations": [],
-  "coverageGaps": [],
-  "findings": [
-    {
-      "findingId": "site-core:finding:v1:0dc72fd549b222924cd7a0207cae9a9e127f0ce27126a7091697d14cd8dfc0fe",
-      "class": "symptom",
-      "phase": "healthyOrTerminal",
-      "role": "siteServer",
-      "severity": "Warning",
-      "confidence": "high",
-      "title": "Site component and status evidence",
-      "summary": "The last confirmed successful phase is healthyOrTerminal; later phases are bounded to cited evidence.",
-      "evidence": [
-        {
-          "artifactId": "sitecomp-current",
-          "entryId": "sitecomp-current:1-1",
-          "lineStart": 1,
-          "lineEnd": 1
-        },
-        {
-          "artifactId": "sitecomp-current",
-          "entryId": "sitecomp-current:2-2",
-          "lineStart": 2,
-          "lineEnd": 2
-        },
-        {
-          "artifactId": "sitecomp-current",
-          "entryId": "sitecomp-current:3-3",
-          "lineStart": 3,
-          "lineEnd": 3
-        },
-        {
-          "artifactId": "z-site-status",
-          "entryId": "z-site-status:1-1",
-          "lineStart": 1,
-          "lineEnd": 1
-        },
-        {
-          "artifactId": "z-site-status",
-          "entryId": "z-site-status:2-2",
-          "lineStart": 2,
-          "lineEnd": 2
-        }
-      ],
-      "terminalEvidence": [],
-      "coverageGaps": [],
-      "correlationKeys": [],
-      "nextArtifacts": [],
-      "subjectId": "site-core:result:v1:6481f8fcb2dc2b2d95e759d00b6c5332fc83f74a8ce808c4079681340c0547a9",
-      "lastSuccessfulPhase": "healthyOrTerminal"
-    }
-  ],
-  "artifactRequests": [],
-  "crossSideCorrelationPerformed": false
+  "workflow": "siteCore"
 }

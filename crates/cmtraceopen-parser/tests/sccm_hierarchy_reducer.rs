@@ -31,47 +31,47 @@ const SCENARIOS: &[&str] = &[
 const FULL_OUTPUT_SHA256: &[(&str, &str)] = &[
     (
         "absent-remote-source",
-        "d433de24f68f9675b97afb3a65b6fe664f389dd3dafb780d5eaae1284f423153",
+        "6f8afa5f1d63728d776499f2e0e89228380b29525573f6b8e552eeff0d32da53",
     ),
     (
         "backlog-retry",
-        "e63b67202b6e5a0aa9179000ad72d3215cae3d5b8bfc894fea2f8c9c7bde36a9",
+        "91c129693c4b6f4b6b1b98dbea435a2e015126f3356f4e6236fb32cd90b834d3",
     ),
     (
         "clock-offset-unknown",
-        "da02ddec04085e5c729365212b2c741d92fc1ec025bfe7bb01ed481e93f6fa71",
+        "9dac3995c32ccf8f6a7388b3202ced2c9a6f9419461f539ce6e2d53627d2293e",
     ),
     (
         "generic-site-token",
-        "03b82f7f80db1f0fe6a6a3738cef962545584d280002558468d03c67e290dcb5",
+        "6cd4a0d116457fdeb5af0713eb1fe831d072ac228a8c4ee176c1f94853e6a049",
     ),
     (
         "healthy-link",
-        "cd3a558339e006cbd8003bc35c81dc94b6db90391302863772debe7e17cff39f",
+        "6ef86704517a60f75bac503cfd59f468021d28b3134c419e4a7cb331696b92be",
     ),
     (
         "incomplete",
-        "43f1a50ac2818110176cb8e4db007e1cbbf3ef920665c956bf8452f80263d9a9",
+        "60e69473ea10f58728a84227be9e1c119855caf46b5521f05a7bdb1374d7d88b",
     ),
     (
         "receiver-processing-failure",
-        "5785052b51919023838db1bb0d282e234002f9eb05609dbf8d74e188e0f04fd7",
+        "6c27e56455427e9234483ccee666d00f64d2a75537f30f600ac8c35bcd9c5c46",
     ),
     (
         "recovery",
-        "d2d7035ae31dc35ed07b517bc8ba1f08159460316fba38d8267932067b7969d9",
+        "5b36ca03e24ff817a7aa1d82b0cd7828f7ba6515ab7bbab80e2ae5ca244e6d4a",
     ),
     (
         "rotation-boundary",
-        "452c1efab5b79c76fb496e75d4ffa8716ed1f41afe47c13709872f4448eb5d42",
+        "fac38ffee82b8eed70c8393329f9b951982542135e1815e4e8595d3df767120c",
     ),
     (
         "sender-failure",
-        "87934ae0c81f5bde7d075fc11f75d982f2f81c02dd045df52ff8c24b51bc88c3",
+        "fb5a38038339f40ff27c8205c2daf1ca2f78a4f8d08821602cf53104ebf305d9",
     ),
     (
         "topology-mismatch",
-        "6747a6b9e63c88ff544be788bf0ce1c51dfa2dfb04dedf45cc67dcb76efc6304",
+        "ac673518ebca88cd4b1b8b9a0c9f8544d9bafb07b75262261ab2262e052f6a64",
     ),
 ];
 
@@ -119,7 +119,7 @@ fn fixture_parts(scenario: &str) -> (Value, Vec<SccmServerArtifactPayload>, Valu
         .expect("artifacts are an array")
         .iter()
         .map(|artifact| {
-            let artifact_id = required_str(artifact, "artifactId");
+            let artifact_id = synthetic_identity("artifact", required_str(artifact, "artifactId"));
             let source_id = required_str(artifact, "sourceId");
             let basename = required_str(artifact, "originalBasename");
             let rotation = match required_str(&artifact["rotation"], "kind") {
@@ -132,7 +132,7 @@ fn fixture_parts(scenario: &str) -> (Value, Vec<SccmServerArtifactPayload>, Valu
                 "captured" | "capped" | "parseFailed"
             );
             let mut normalized = json!({
-                "artifactId": artifact_id,
+                "artifactId": artifact_id.clone(),
                 "producerRole": "siteServer",
                 "producerHostHandle": canonical_host(required_str(artifact, "producerHostHandle")),
                 "sourceId": source_id,
@@ -142,11 +142,17 @@ fn fixture_parts(scenario: &str) -> (Value, Vec<SccmServerArtifactPayload>, Valu
                 "originalBasename": basename,
                 "configuredPathProvenance": {
                     "state": "configured",
-                    "pathFingerprint": required_str(artifact, "pathFingerprint"),
+                    "pathFingerprint": synthetic_identity(
+                        "path",
+                        required_str(artifact, "pathFingerprint"),
+                    ),
                 },
                 "rotation": {
                     "kind": rotation,
-                    "lineageId": required_str(&artifact["rotation"], "lineageId"),
+                    "lineageId": synthetic_identity(
+                        "lineage",
+                        required_str(&artifact["rotation"], "lineageId"),
+                    ),
                 },
                 "captureState": artifact["captureState"],
                 "collectedUtc": artifact["collectedUtc"],
@@ -167,7 +173,7 @@ fn fixture_parts(scenario: &str) -> (Value, Vec<SccmServerArtifactPayload>, Valu
                     normalized["fragmentComplete"] = json!(false);
                 }
                 payloads.push(SccmServerArtifactPayload {
-                    manifest_artifact_id: artifact_id.to_owned(),
+                    manifest_artifact_id: artifact_id,
                     bytes,
                 });
             }
@@ -212,6 +218,7 @@ fn payload_mut<'a>(
     payloads: &'a mut [SccmServerArtifactPayload],
     artifact_id: &str,
 ) -> &'a mut Vec<u8> {
+    let artifact_id = synthetic_identity("artifact", artifact_id);
     &mut payloads
         .iter_mut()
         .find(|payload| payload.manifest_artifact_id == artifact_id)
@@ -239,13 +246,16 @@ fn required_str<'a>(value: &'a Value, field: &str) -> &'a str {
         .unwrap_or_else(|| panic!("{field} is a string"))
 }
 
-fn canonical_host(value: &str) -> &'static str {
-    match value {
-        "safe:server:lab-pri-01" => "synthetic:host:site-01",
-        "safe:server:lab-chd-01" => "synthetic:host:site-02",
-        "safe:server:lab-sec-01" => "synthetic:host:site-03",
-        value => panic!("unregistered hierarchy fixture host {value}"),
-    }
+fn canonical_host(value: &str) -> String {
+    synthetic_identity("host", value)
+}
+
+fn synthetic_identity(domain: &str, label: &str) -> String {
+    let digest = Sha256::digest(format!("{domain}:{label}"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("synthetic:{domain}:sha256.v1:{digest}")
 }
 
 #[test]
@@ -483,7 +493,8 @@ fn rotation_split_requires_the_exact_current_lo_lineage_and_topology_pair() {
     assert_eq!(analysis.artifact_requests[0].origin_site_code, "LAB");
     assert_eq!(analysis.artifact_requests[0].target_site_code, "CHD");
 
-    manifest["artifacts"][1]["rotation"]["lineageId"] = json!("healthy-sender");
+    manifest["artifacts"][1]["rotation"]["lineageId"] =
+        json!(synthetic_identity("lineage", "healthy-sender"));
     let analysis = analyze_hierarchy_replication(&assess(&manifest, &payloads)).expect("sealed");
     assert!(analysis
         .source_local_observations
@@ -498,7 +509,7 @@ fn gaps_and_requests_are_transaction_and_exact_topology_scoped() {
     assert_eq!(analysis.transactions.len(), 1);
     assert_eq!(
         analysis.transactions[0].coverage_gap_artifact_ids,
-        ["absent-02-despool"]
+        [synthetic_identity("artifact", "absent-02-despool")]
     );
     assert!(analysis.transactions[0]
         .next_artifacts
@@ -882,6 +893,14 @@ fn coverage_expectation(expected: &Value, scenario: &str) -> Value {
             item["state"] = json!("parseFailed");
         }
     }
+    coverage
+        .as_array_mut()
+        .expect("coverage array")
+        .sort_by(|left, right| {
+            left["artifactId"]
+                .as_str()
+                .cmp(&right["artifactId"].as_str())
+        });
     coverage
 }
 

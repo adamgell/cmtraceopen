@@ -19,7 +19,7 @@
   "coverageGaps": [
     {
       "artifactIds": [
-        "dp-absent-02-provider"
+        "synthetic:artifact:sha256.v1:fb2e402e1fbf5535663e1b2b3c3f018dd681cbba87c924e0a1968efa10c5da7c"
       ],
       "producerRole": "distributionPoint",
       "reason": "Distribution Point source coverage is absent; recollect the declared source without changing its state.",
@@ -29,7 +29,7 @@
     },
     {
       "artifactIds": [
-        "dp-absent-01-distmgr"
+        "synthetic:artifact:sha256.v1:efc91a21e86562fbd3ac33a2ac867338e40ed93cd76748fe966411bede9b4d41"
       ],
       "producerRole": "siteServer",
       "reason": "Distribution Point source coverage is absent; recollect the declared source without changing its state.",
