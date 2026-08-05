@@ -1079,7 +1079,8 @@ fn source_path_eq(left: &Path, right: &Path) -> bool {
 
 #[cfg(windows)]
 fn windows_path_key(path: &Path) -> String {
-    path.to_string_lossy()
+    windows_final_path(&path.to_string_lossy())
+        .to_string_lossy()
         .replace('/', "\\")
         .trim_end_matches('\\')
         .to_lowercase()
@@ -1346,5 +1347,18 @@ mod tests {
             .is_err());
             assert_eq!(reader.reads, 0);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_extended_and_dos_final_paths_have_one_comparison_key() {
+        assert_eq!(
+            windows_path_key(Path::new(r"\\?\C:\trusted\BgbServer.log")),
+            windows_path_key(Path::new(r"C:\trusted\BgbServer.log"))
+        );
+        assert_eq!(
+            windows_path_key(Path::new(r"\\?\UNC\server\share\BgbServer.log")),
+            windows_path_key(Path::new(r"\\server\share\BgbServer.log"))
+        );
     }
 }
