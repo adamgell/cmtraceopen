@@ -4,8 +4,8 @@ use std::time::Instant;
 use app_lib::sccm::collector::{
     advanced_source_contracts, capture_advanced_authorized, PrivateAdvancedSourceFact,
     PrivateSccmEnvironment, SccmAdvancedCapabilityStore, SccmAdvancedCaptureAuthorizationRequest,
-    SccmCaptureRoot, SccmCollectorError, SccmDetectedRole, SccmDiscoveryBasis,
-    ADVANCED_CAPTURE_BYTE_LIMIT,
+    SccmCaptureRoot, SccmCaptureRootOrigin, SccmCollectorError, SccmDetectedRole,
+    SccmDiscoveryBasis, ADVANCED_CAPTURE_BYTE_LIMIT,
 };
 use app_lib::sccm::{SccmCoverageState, SccmRole};
 
@@ -185,6 +185,7 @@ fn bgb_matching_management_point_fact_is_observed() {
     environment.roots.push(SccmCaptureRoot {
         role: SccmRole::ManagementPoint,
         path: source.path().to_owned(),
+        origin: SccmCaptureRootOrigin::ConfiguredRoleLogDirectory,
     });
     environment
         .advanced_source_facts
@@ -266,6 +267,7 @@ fn bgb_mismatched_path_class_falls_back_to_operator_declared() {
     environment.roots.push(SccmCaptureRoot {
         role: SccmRole::ManagementPoint,
         path: source.path().to_owned(),
+        origin: SccmCaptureRootOrigin::ConfiguredRoleLogDirectory,
     });
     environment
         .advanced_source_facts

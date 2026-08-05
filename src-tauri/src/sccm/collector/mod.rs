@@ -131,6 +131,18 @@ pub struct PrivateSccmEnvironment {
 pub struct SccmCaptureRoot {
     pub role: SccmRole,
     pub path: PathBuf,
+    pub origin: SccmCaptureRootOrigin,
+}
+
+/// Private provenance for a capture root. It must remain attached to the root
+/// so inferred locations cannot later be mistaken for configured evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SccmCaptureRootOrigin {
+    ConfiguredRoleLogDirectory,
+    SiteServerInstallationDirectory,
+    ServiceExecutableDirectory,
+    SiteInstallFallback,
+    DefaultRoleLocation,
 }
 
 pub trait SccmDiscoveryProvider {

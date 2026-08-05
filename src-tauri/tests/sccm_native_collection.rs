@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 
 use app_lib::sccm::collector::{
     capture_environment, discover_environment_with, PrivateSccmEnvironment, SccmCaptureRoot,
-    SccmDetectedRole, SccmDiscoveryBasis, SccmDiscoveryFailure, SccmDiscoveryIssue,
-    SccmDiscoveryIssueCode, SccmDiscoveryProvider, MAX_BYTES_PER_SOURCE, MAX_FRAGMENTS_PER_SOURCE,
+    SccmCaptureRootOrigin, SccmDetectedRole, SccmDiscoveryBasis, SccmDiscoveryFailure,
+    SccmDiscoveryIssue, SccmDiscoveryIssueCode, SccmDiscoveryProvider, MAX_BYTES_PER_SOURCE,
+    MAX_FRAGMENTS_PER_SOURCE,
 };
 use app_lib::sccm::{
     read_sccm_client_intake_bundle, read_sccm_manifest_or_legacy, SccmCoverageState,
@@ -40,6 +41,7 @@ fn provider(role: SccmRole, roots: impl IntoIterator<Item = PathBuf>) -> FakePro
                 .map(|path| SccmCaptureRoot {
                     role: role.clone(),
                     path,
+                    origin: SccmCaptureRootOrigin::ServiceExecutableDirectory,
                 })
                 .collect(),
             private_host: Some("PRIVATE-HOST-SENTINEL".to_owned()),
@@ -112,6 +114,7 @@ fn discovery_defaults_without_role_facts_never_claim_a_role() {
             roots: vec![SccmCaptureRoot {
                 role: SccmRole::SiteServer,
                 path: logs.path().to_owned(),
+                origin: SccmCaptureRootOrigin::SiteServerInstallationDirectory,
             }],
             ..PrivateSccmEnvironment::default()
         },

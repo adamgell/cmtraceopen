@@ -149,8 +149,8 @@ pub fn cancel_sccm_advanced_capture(
 mod tests {
     use super::*;
     use crate::sccm::collector::{
-        PrivateSccmEnvironment, SccmCaptureRoot, SccmDetectedRole, SccmDiscoveryBasis,
-        SccmDiscoveryFailure,
+        PrivateSccmEnvironment, SccmCaptureRoot, SccmCaptureRootOrigin, SccmDetectedRole,
+        SccmDiscoveryBasis, SccmDiscoveryFailure,
     };
     use crate::sccm::SccmRole;
 
@@ -198,6 +198,7 @@ mod tests {
                 roots: vec![SccmCaptureRoot {
                     role: SccmRole::Client,
                     path: logs.path().to_owned(),
+                    origin: SccmCaptureRootOrigin::ServiceExecutableDirectory,
                 }],
                 ..PrivateSccmEnvironment::default()
             },
@@ -223,6 +224,7 @@ mod tests {
                 roots: vec![SccmCaptureRoot {
                     role: SccmRole::Client,
                     path: cache.path().join("private-sentinel"),
+                    origin: SccmCaptureRootOrigin::ServiceExecutableDirectory,
                 }],
                 ..PrivateSccmEnvironment::default()
             },
