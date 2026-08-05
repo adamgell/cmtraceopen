@@ -44,8 +44,7 @@ fn ccm_re() -> &'static Regex {
 /// Returns None if the line doesn't match the CCM format.
 fn parse_line(line: &str) -> Option<CcmParsed> {
     let caps = ccm_re().captures(line)?;
-    let parsed = parse_captures(&caps)?;
-    parsed.public_compatible.then_some(parsed)
+    parse_captures(&caps)
 }
 
 struct CcmParsed {
@@ -60,7 +59,6 @@ struct CcmParsed {
     timezone_offset: i32,
     context: Option<String>,
     timestamp_parse: CcmTimestampParse,
-    public_compatible: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,33 +165,11 @@ impl CcmParsed {
 }
 
 pub(crate) fn truncate_subsecond_to_millis(value: &str) -> Option<u32> {
-    if value.len() > 3 {
-        value[..3].parse().ok()
-    } else {
-        value.parse().ok()
+    match value.len() {
+        1 => value.parse::<u32>().ok().map(|millis| millis * 100),
+        2 => value.parse::<u32>().ok().map(|millis| millis * 10),
+        _ => value.get(..3)?.parse().ok(),
     }
-}
-
-/// Longest offset any real timezone uses, in minutes (UTC-14:00..UTC+14:00).
-const MAX_UTC_OFFSET_MINUTES: u32 = 14 * 60;
-
-/// Every timezone offset in current use is a whole number of quarter hours.
-const UTC_OFFSET_STEP_MINUTES: u32 = 15;
-
-/// Decide whether a signless digit run can be a source timezone offset.
-///
-/// The legacy grammar prints the offset with `%d`, so it never zero-pads and
-/// never emits a sign for a positive value. A run that survives that shape
-/// check still has to name an offset a machine can actually be configured
-/// with; anything else is fractional-second text that happens to be numeric.
-fn signless_offset_is_real(text: &str) -> bool {
-    if text.starts_with('0') {
-        return false;
-    }
-
-    text.parse::<u32>().is_ok_and(|minutes| {
-        minutes <= MAX_UTC_OFFSET_MINUTES && minutes % UTC_OFFSET_STEP_MINUTES == 0
-    })
 }
 
 /// Split CCM's fractional-second field from its optional timezone offset.
@@ -201,23 +177,9 @@ fn signless_offset_is_real(text: &str) -> bool {
 /// A signed offset is self-delimiting and is always taken at face value: the
 /// sign is the source stating its own provenance, so an out-of-range signed
 /// offset is reported as invalid rather than reinterpreted.
-///
-/// A signless tail is genuinely ambiguous. The documented legacy `%03u%d`
-/// grammar emits three millisecond digits followed by an unsigned positive
-/// offset, so `.000240` really is 0 ms at UTC+4; .NET writers instead emit
-/// six- or seven-digit fractional seconds, so `.123456` is 123456
-/// microseconds and carries no offset. Both shapes are six digits wide, and
-/// digit width alone cannot tell them apart.
-///
-/// Two shipped implementations tried to tell them apart positionally and both
-/// were wrong. The original greedy regex `(?P<ms>\d+)(?P<tz>[+-]*\d+)` gave
-/// the last digit to the offset, so `.123456` became 123 ms at UTC+6 minutes.
-/// Its replacement gave the last three digits to the offset whenever the tail
-/// was exactly six wide, so `.123456` became 123 ms at UTC+456 minutes, a
-/// silent 7h36m shift stamped `NormalizedUtc`. Do not add a third rule of
-/// that kind: the split is decided by whether the candidate offset is a real
-/// timezone offset, and a tail that fails that check keeps all of its digits
-/// as fractional seconds and is reported as having no source offset.
+/// An unsigned run is fractional-second text. It has no grammar boundary that
+/// can establish a timezone, so it must never be split into a fabricated
+/// minute offset.
 fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
     if let Some(index) = value
         .as_bytes()
@@ -227,32 +189,7 @@ fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
         return (&value[..index], Some(&value[index..]));
     }
 
-    // `%03u%d` with a three-digit offset is the only signless shape the
-    // legacy grammar can produce that is not also plain fractional text.
-    if value.len() == 6 && signless_offset_is_real(&value[3..]) {
-        return (&value[..3], Some(&value[3..]));
-    }
-
     (value, None)
-}
-
-/// Reproduce the pre-SCCM-spine public regex projection.
-///
-/// The legacy `(?P<ms>\d+)(?P<tz>[+-]*\d+)` captures greedily assigned the
-/// final digit of an unsigned tail to `timezoneOffset`. Public `LogEntry`
-/// callers retain that observable behavior; the SCCM envelope uses
-/// `split_ccm_time_tail` above for corrected provenance.
-fn split_legacy_public_time_tail(value: &str) -> Option<(&str, &str)> {
-    if let Some(index) = value
-        .as_bytes()
-        .iter()
-        .position(|byte| matches!(byte, b'+' | b'-'))
-    {
-        return (index > 0).then_some((&value[..index], &value[index..]));
-    }
-
-    let split_at = value.len().checked_sub(1)?;
-    (split_at > 0).then_some((&value[..split_at], &value[split_at..]))
 }
 
 /// Convert a naive local datetime + optional timezone offset (in minutes) to UTC epoch millis.
@@ -564,26 +501,16 @@ fn scan_ccm_content(
         let line_start = line_number_for_offset(&line_starts, full_match.start());
         let line_end = line_number_for_offset(&line_starts, full_match.end().saturating_sub(1));
         if let Some(parsed) = parse_captures(&caps) {
-            if parsed.public_compatible || mode == CcmScanMode::SccmEvidence {
-                if build.record_limit_reached() {
-                    return build.finish();
-                }
-                build.records.push(parsed.into_logical_record(
-                    build.id_counter,
-                    line_start,
-                    line_end,
-                    file_path,
-                ));
-                build.id_counter += 1;
-            } else {
-                push_unmatched_plain(
-                    full_match.as_str(),
-                    full_match.start(),
-                    &line_starts,
-                    file_path,
-                    &mut build,
-                );
+            if build.record_limit_reached() {
+                return build.finish();
             }
+            build.records.push(parsed.into_logical_record(
+                build.id_counter,
+                line_start,
+                line_end,
+                file_path,
+            ));
+            build.id_counter += 1;
         } else {
             push_unmatched_plain(
                 full_match.as_str(),
@@ -695,25 +622,9 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
     let file = caps.name("file").map(|m| m.as_str().to_string());
 
     let severity = severity_from_type_field(typ, &msg);
-    let public_timestamp = split_legacy_public_time_tail(time_tail).and_then(
-        |(public_ms_text, public_timezone_text)| {
-            let public_ms = truncate_subsecond_to_millis(public_ms_text)?;
-            let public_timezone = public_timezone_text.parse::<i32>().ok()?;
-            let (timestamp, timestamp_display) =
-                build_timestamp(mon, day, yr, h, m, s, public_ms, Some(public_timezone));
-            Some((timestamp, timestamp_display, public_timezone))
-        },
-    );
-    let public_compatible = public_timestamp.is_some();
-    let (timestamp, timestamp_display, timezone_offset) = public_timestamp.unwrap_or_else(|| {
-        let (timestamp, timestamp_display) =
-            build_timestamp(mon, day, yr, h, m, s, ms, parsed_timezone);
-        (
-            timestamp,
-            timestamp_display,
-            parsed_timezone.unwrap_or_default(),
-        )
-    });
+    let (timestamp, timestamp_display) =
+        build_timestamp(mon, day, yr, h, m, s, ms, parsed_timezone);
+    let timezone_offset = parsed_timezone.unwrap_or_default();
     let naive = chrono::NaiveDate::from_ymd_opt(yr, mon, day)
         .and_then(|date| date.and_hms_milli_opt(h, m, s, ms));
     let normalized_timestamp = if timezone_is_explicit {
@@ -754,7 +665,6 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
         timezone_offset,
         context,
         timestamp_parse,
-        public_compatible,
     })
 }
 
@@ -1347,46 +1257,30 @@ mod tests {
 
     /// Frozen answers for every shape of CCM fractional-second tail.
     ///
-    /// Two shipped implementations resolved this ambiguity by counting digits
-    /// and both were wrong (see `split_ccm_time_tail`). This table is the
-    /// regression barrier: it pins the fractional text, the millisecond value,
-    /// the source offset, and the ordering confidence for unsigned tails of
-    /// one to eight digits and for their signed counterparts. Change a row
-    /// only with a documented grammar reason, never to let a new heuristic
-    /// pass.
+    /// Unsigned tails have no offset boundary, so this table pins their
+    /// fraction-only interpretation. Signed tails retain their explicit
+    /// offsets. Change a row only with a documented grammar reason.
     #[test]
     fn ccm_time_tail_ambiguity_table_is_frozen() {
         use CcmTimestampParseState::{NormalizedUtc, OffsetInvalid, OffsetMissing};
 
         // (time tail, fractional text, milliseconds, source offset, ordering state)
         let cases: [(&str, &str, u32, Option<i32>, CcmTimestampParseState); 26] = [
-            // Unsigned tails that cannot be `%03u%d`: no trailing run of
-            // digits reads as a real UTC offset, so they stay fractional and
-            // the record is never promoted to UTC-normalized ordering.
-            ("1", "1", 1, None, OffsetMissing),
-            ("12", "12", 12, None, OffsetMissing),
+            // One and two digits are tenths and hundredths of a second.
+            ("1", "1", 100, None, OffsetMissing),
+            ("12", "12", 120, None, OffsetMissing),
             ("123", "123", 123, None, OffsetMissing),
-            // `%d` prints a zero offset as "0", so a four-digit tail is not
-            // evidence of one; downgrade instead of guessing.
             ("1234", "1234", 123, None, OffsetMissing),
             ("12345", "12345", 123, None, OffsetMissing),
-            // Microsecond precision. 456 is not a UTC offset.
             ("123456", "123456", 123, None, OffsetMissing),
-            // `%d` never zero-pads, so "045" is fractional text and not +45.
             ("123045", "123045", 123, None, OffsetMissing),
-            // Same rule: a padded zero offset always arrives signed ("+000").
             ("123000", "123000", 123, None, OffsetMissing),
-            // 481 minutes is not a whole quarter hour.
             ("123481", "123481", 123, None, OffsetMissing),
-            // 900 minutes exceeds UTC+14:00.
             ("123900", "123900", 123, None, OffsetMissing),
-            // Unsigned tails that are genuine `%03u%d` records: three
-            // millisecond digits followed by a positive offset.
-            ("000240", "000", 0, Some(240), NormalizedUtc),
-            ("123480", "123", 123, Some(480), NormalizedUtc),
-            ("123840", "123", 123, Some(840), NormalizedUtc),
-            ("123105", "123", 123, Some(105), NormalizedUtc),
-            // IME writes seven fractional digits, never an offset.
+            ("000240", "000240", 0, None, OffsetMissing),
+            ("123480", "123480", 123, None, OffsetMissing),
+            ("123840", "123840", 123, None, OffsetMissing),
+            ("123105", "123105", 123, None, OffsetMissing),
             ("1234567", "1234567", 123, None, OffsetMissing),
             ("12345678", "12345678", 123, None, OffsetMissing),
             // Signed tails are self-delimiting: the sign is the source's own
@@ -1396,7 +1290,7 @@ mod tests {
             ("000+000", "000", 0, Some(0), NormalizedUtc),
             ("123+481", "123", 123, Some(481), NormalizedUtc),
             ("123+0", "123", 123, Some(0), NormalizedUtc),
-            ("1+2", "1", 1, Some(2), NormalizedUtc),
+            ("1+2", "1", 100, Some(2), NormalizedUtc),
             ("123456+480", "123456", 123, Some(480), NormalizedUtc),
             ("1234567-060", "1234567", 123, Some(-60), NormalizedUtc),
             // Out-of-range signed offsets stay reported and stay uncomparable.
