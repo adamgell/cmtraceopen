@@ -916,6 +916,30 @@ fn server_intake_rejects_identity_bearing_public_inputs() {
 }
 
 #[test]
+fn server_intake_accepts_new_conforming_synthetic_identities() {
+    let (manifest_json, mut payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+
+    manifest["topology"]["siteCode"] = Value::String("DEV".to_owned());
+    manifest["topology"]["captureHost"] = Value::String("DEV-CM02".to_owned());
+
+    let artifact = &mut manifest["artifacts"][0];
+    artifact["artifactId"] = Value::String("fixture-sitecomp-04".to_owned());
+    artifact["producerHostHandle"] = Value::String("synthetic:host:site-04".to_owned());
+    artifact["configuredPathProvenance"]["pathFingerprint"] =
+        Value::String("synthetic:path:fixture-root-04".to_owned());
+    artifact["rotation"]["lineageId"] = Value::String("fixture-lineage-04".to_owned());
+    manifest["artifacts"][2]["workflowSubject"]["instanceHandle"] =
+        Value::String("synthetic:subject:dp-04".to_owned());
+    payloads[0].manifest_artifact_id = "fixture-sitecomp-04".to_owned();
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_ok(),
+        "a structurally synthetic identity must not require a production-source edit"
+    );
+}
+
+#[test]
 fn server_intake_reserves_windows_equivalent_paths_and_fingerprints() {
     let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
     let accepted =
@@ -1729,8 +1753,13 @@ fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() 
         .expect("requests")
         .is_empty());
 
+    let mut manifest = manifest_value(&manifest_json);
+    manifest["artifacts"][0]["artifactId"] = Value::String("fixture-wsus-artifact-04".to_owned());
+    let generic = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("a synthetic artifact ID is structural, not a catalog entry");
+    assert_eq!(generic.artifacts[0].artifact_id, "fixture-wsus-artifact-04");
+
     for (field, replacement) in [
-        ("artifactId", "free-form-wsus-artifact"),
         ("sourceId", "free-form-wsus-source"),
         ("sourceKind", "structuredSupplement"),
         ("originalBasename", "WSUSHealth.json"),
@@ -1740,7 +1769,7 @@ fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() 
         assert_eq!(
             assess_server_intake(&serialize_manifest(&manifest), &payloads),
             Err(SccmServerIntakeError::InvalidArtifact),
-            "{field} must remain in the frozen WSUS supplemental vocabulary"
+            "{field} must remain bound to the catalogued WSUS supplemental contract"
         );
     }
 
@@ -1783,7 +1812,7 @@ fn wsus_supplement_expected_coverage_uses_only_serialized_fields() {
 }
 
 #[test]
-fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
+fn server_intake_rejects_wsus_supplement_malformed_provenance() {
     type ManifestMutation = (&'static str, fn(&mut Value));
 
     let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
@@ -1801,13 +1830,13 @@ fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
             manifest["artifacts"][0]["workflowSubject"]["role"] =
                 Value::String("distributionPoint".to_owned());
         }),
-        ("producer host rebound", |manifest| {
+        ("producer host malformed", |manifest| {
             manifest["artifacts"][0]["producerHostHandle"] =
-                Value::String("synthetic:host:mp-01".to_owned());
+                Value::String("synthetic:host:wsus-x".to_owned());
         }),
-        ("subject handle rebound", |manifest| {
+        ("subject handle malformed", |manifest| {
             manifest["artifacts"][0]["workflowSubject"]["instanceHandle"] =
-                Value::String("synthetic:subject:dp-01".to_owned());
+                Value::String("synthetic:subject:sup-x".to_owned());
         }),
         ("source version omitted", |manifest| {
             manifest["artifacts"][0]
@@ -1815,13 +1844,12 @@ fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
                 .expect("artifact is an object")
                 .remove("sourceVersion");
         }),
-        ("path fingerprint substituted", |manifest| {
+        ("path fingerprint malformed", |manifest| {
             manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"] =
-                Value::String("synthetic:path:site-sup-control".to_owned());
+                Value::String("synthetic:path:sup".to_owned());
         }),
-        ("rotation lineage substituted", |manifest| {
-            manifest["artifacts"][0]["rotation"]["lineageId"] =
-                Value::String("sup-sync-lab".to_owned());
+        ("rotation lineage malformed", |manifest| {
+            manifest["artifacts"][0]["rotation"]["lineageId"] = Value::String("sup".to_owned());
         }),
     ];
 
@@ -1838,7 +1866,7 @@ fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
 
     assert!(
         unexpected.is_empty(),
-        "WSUS supplemental tuple mutations must fail closed:\n{}",
+        "WSUS supplemental malformed provenance must fail closed:\n{}",
         unexpected.join("\n")
     );
 }
