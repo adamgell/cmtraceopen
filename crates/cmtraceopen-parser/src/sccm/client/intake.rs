@@ -2132,15 +2132,7 @@ fn is_safe_task_sequence_path_evidence(value: &str) -> bool {
     {
         return false;
     }
-    if value.starts_with("SYNTHETIC://") {
-        return task_sequence_path_class_for_evidence(value).is_some();
-    }
-    value.strip_prefix("synthetic:").is_some_and(|token| {
-        !token.is_empty()
-            && token
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b":._-".contains(&byte))
-    })
+    task_sequence_path_class_for_evidence(value).is_some()
 }
 
 fn task_sequence_path_class_for_evidence(value: &str) -> Option<SccmTaskSequencePathClass> {

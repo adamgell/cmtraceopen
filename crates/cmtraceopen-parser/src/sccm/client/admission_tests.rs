@@ -145,6 +145,25 @@ fn task_sequence_provenance_fails_closed_on_malformed_values() {
         SccmClientIntakeError::InvalidTaskSequenceProvenance
     );
 
+    for malformed_evidence in [
+        "synthetic:tenant-alice-secret",
+        "synthetic:smsts-path",
+        "synthetic:smsts-path:Setup",
+        "synthetic:smsts-path:setup:v2",
+    ] {
+        let mut malformed = task_sequence_artifact("unsafe", SccmTaskSequencePathClass::Setup, 1);
+        malformed
+            .task_sequence_provenance
+            .as_mut()
+            .expect("fixture provenance")
+            .smsts_log_path_evidence = Some(malformed_evidence.to_owned());
+        assert_eq!(
+            assess_client_intake(&task_sequence_bundle(vec![malformed])).unwrap_err(),
+            SccmClientIntakeError::InvalidTaskSequenceProvenance,
+            "malformed path evidence must be rejected: {malformed_evidence}"
+        );
+    }
+
     let mut mismatch = task_sequence_artifact("contradictory", SccmTaskSequencePathClass::Setup, 1);
     mismatch
         .task_sequence_provenance
@@ -175,12 +194,9 @@ fn task_sequence_provenance_bounds_are_enforced() {
         .task_sequence_provenance
         .as_mut()
         .expect("fixture provenance")
-        .smsts_log_path_evidence = Some(format!(
-        "synthetic:{}",
-        "a".repeat(MAX_SCCM_TASK_SEQUENCE_PATH_EVIDENCE_CHARS - "synthetic:".len())
-    ));
+        .smsts_log_path_evidence = Some("synthetic:smsts-path:setup".to_owned());
     assess_client_intake(&task_sequence_bundle(vec![evidence_at_limit]))
-        .expect("path evidence at the limit is accepted");
+        .expect("documented path evidence is accepted");
 
     let mut evidence_over_limit =
         task_sequence_artifact("valid", SccmTaskSequencePathClass::Setup, 1);
@@ -188,7 +204,8 @@ fn task_sequence_provenance_bounds_are_enforced() {
         .task_sequence_provenance
         .as_mut()
         .expect("fixture provenance")
-        .smsts_log_path_evidence = Some("synthetic:".to_owned() + &"a".repeat(256));
+        .smsts_log_path_evidence =
+        Some("synthetic:".to_owned() + &"a".repeat(MAX_SCCM_TASK_SEQUENCE_PATH_EVIDENCE_CHARS));
     assert_eq!(
         assess_client_intake(&task_sequence_bundle(vec![evidence_over_limit])).unwrap_err(),
         SccmClientIntakeError::InvalidTaskSequenceProvenance
