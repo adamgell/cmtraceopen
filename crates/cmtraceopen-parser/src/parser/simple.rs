@@ -21,8 +21,8 @@ fn meta_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(concat!(
-            r#"<(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})\.(\d+)([+-]?\d+)>"#,
-            r#"(?:<thread=(\d+)(?:\s*\(0x[0-9a-fA-F]+\))?>)?"#,
+            r#"<([0-9]{1,2})-([0-9]{1,2})-([0-9]{4})\s+([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})\.([0-9]+)([+-]?[0-9]+)>"#,
+            r#"(?:<thread=([0-9]+)(?:\s*\(0x[0-9a-fA-F]+\))?>)?"#,
         ))
         .expect("Simple metadata regex must compile")
     })

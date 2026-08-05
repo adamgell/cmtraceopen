@@ -147,8 +147,12 @@ fn decode_wire_format(raw: &str) -> String {
                         // Root label — signals end of name.
                         break;
                     }
-                    // Extract exactly `len` bytes for the label.
+                    // `len` is supplied by the log. A mid-character byte
+                    // boundary is malformed wire text, not a valid slice.
                     let label_end = len.min(after_paren.len());
+                    if !after_paren.is_char_boundary(label_end) {
+                        break;
+                    }
                     let label = &after_paren[..label_end];
                     if !label.is_empty() {
                         labels.push(label.to_string());
@@ -161,8 +165,11 @@ fn decode_wire_format(raw: &str) -> String {
             break;
         }
 
-        // Unexpected character — advance by one to avoid an infinite loop.
-        remaining = &remaining[1..];
+        // Unexpected text can be Unicode; advance one character at a time.
+        let Some(ch) = remaining.chars().next() else {
+            break;
+        };
+        remaining = &remaining[ch.len_utf8()..];
     }
 
     if labels.is_empty() {
