@@ -13,12 +13,27 @@ use std::sync::OnceLock;
 
 use crate::models::log_entry::{LogEntry, LogFormat, Severity};
 
+/// Maximum UTF-8 byte length of one in-memory Device Inventory logical record.
+///
+/// Framing force-completes bounded pieces beyond this point without dropping
+/// the remainder. Initial parsing and incremental tailing both use this value.
+pub const MAX_LOGICAL_RECORD_BYTES: usize = 1024 * 1024;
+
 /// The known Windows Device Inventory log dialects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceInventoryLogDialect {
     Harvester,
     InventoryAdaptor,
     RotationFailure,
+}
+
+/// A physical-line segment supplied to the logical-record framer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalRecordSegment<'a> {
+    /// The first bytes of a physical line. Header recognition runs here.
+    LineStart(&'a str),
+    /// More bytes from the same physical line, without an inserted newline.
+    LineContinuation(&'a str),
 }
 
 /// A framed Device Inventory logical record and the file span it occupies.
@@ -72,62 +87,113 @@ pub struct LogicalRecordFramingResult {
     pub pending_record: Option<String>,
     /// Number of records force-completed because they reached the size bound.
     pub overflow_count: u32,
+    /// Largest pending record length observed during this framing call.
+    pub max_pending_bytes_observed: usize,
+}
+
+impl LogicalRecordFramingResult {
+    /// Explicitly complete the newest record at an end-of-input boundary.
+    pub fn flush_pending(mut self) -> Self {
+        if let Some(content) = self.pending_record.take() {
+            self.completed_records
+                .push(FramedLogicalRecord::complete(content));
+        }
+        self
+    }
 }
 
 /// Add complete physical lines to a pending Device Inventory logical record.
 ///
 /// Header recognition intentionally stays in this pure parser module so tailing
-/// and whole-file parsing share the same dialect regexes. The caller owns
-/// time-based flushing of `pending_record`.
+/// and whole-file parsing share the same dialect regexes. The caller explicitly
+/// flushes `pending_record` at a real input boundary.
 pub fn frame_logical_records(
     dialect: DeviceInventoryLogDialect,
     mut pending_record: Option<String>,
-    new_lines: &[&str],
-    max_pending_bytes: usize,
+    segments: &[LogicalRecordSegment<'_>],
 ) -> LogicalRecordFramingResult {
-    assert!(
-        max_pending_bytes >= 4,
-        "logical record bound must fit one UTF-8 scalar"
-    );
-
     let mut completed_records = Vec::new();
     let mut overflow_count = 0u32;
+    let mut max_pending_bytes_observed = pending_record.as_ref().map_or(0, String::len);
+    assert!(
+        max_pending_bytes_observed <= MAX_LOGICAL_RECORD_BYTES,
+        "logical-record framing state must already be bounded"
+    );
 
-    for raw_line in new_lines {
-        let line = raw_line.trim_end_matches('\r');
-        if is_record_header(dialect, line) {
-            if let Some(record) = pending_record.take() {
-                completed_records.push(FramedLogicalRecord::complete(record));
+    for segment in segments {
+        let (text, starts_line) = match segment {
+            LogicalRecordSegment::LineStart(raw_line) => {
+                let line = raw_line.trim_end_matches('\r');
+                if is_record_header(dialect, line) {
+                    if let Some(record) = pending_record.take() {
+                        completed_records.push(FramedLogicalRecord::complete(record));
+                    }
+                }
+                (line, true)
             }
-        }
+            LogicalRecordSegment::LineContinuation(text) => (*text, false),
+        };
 
-        match pending_record.as_mut() {
-            Some(record) => {
-                record.push('\n');
-                record.push_str(line);
-            }
-            None => pending_record = Some(line.to_string()),
+        let insert_newline = starts_line && pending_record.is_some();
+        if pending_record.is_none() {
+            pending_record = Some(String::new());
         }
-
-        while pending_record
-            .as_ref()
-            .is_some_and(|record| record.len() > max_pending_bytes)
-        {
-            let mut record = pending_record
-                .take()
-                .expect("oversized pending record must exist");
-            let split_at = previous_char_boundary(&record, max_pending_bytes);
-            let remainder = record.split_off(split_at);
-            completed_records.push(FramedLogicalRecord::split(record));
-            overflow_count = overflow_count.saturating_add(1);
-            pending_record = (!remainder.is_empty()).then_some(remainder);
+        if insert_newline {
+            append_bounded(
+                &mut pending_record,
+                "\n",
+                &mut completed_records,
+                &mut overflow_count,
+                &mut max_pending_bytes_observed,
+            );
         }
+        append_bounded(
+            &mut pending_record,
+            text,
+            &mut completed_records,
+            &mut overflow_count,
+            &mut max_pending_bytes_observed,
+        );
     }
 
     LogicalRecordFramingResult {
         completed_records,
         pending_record,
         overflow_count,
+        max_pending_bytes_observed,
+    }
+}
+
+fn append_bounded(
+    pending_record: &mut Option<String>,
+    mut text: &str,
+    completed_records: &mut Vec<FramedLogicalRecord>,
+    overflow_count: &mut u32,
+    max_pending_bytes_observed: &mut usize,
+) {
+    while !text.is_empty() {
+        let record = pending_record.get_or_insert_with(String::new);
+        let available = MAX_LOGICAL_RECORD_BYTES.saturating_sub(record.len());
+        let split_at = previous_char_boundary(text, available);
+
+        if split_at > 0 {
+            record.push_str(&text[..split_at]);
+            *max_pending_bytes_observed = (*max_pending_bytes_observed).max(record.len());
+            debug_assert!(record.len() <= MAX_LOGICAL_RECORD_BYTES);
+            text = &text[split_at..];
+        }
+
+        if !text.is_empty() {
+            let completed = pending_record
+                .take()
+                .expect("bounded append must have a pending record");
+            completed_records.push(FramedLogicalRecord::split(completed));
+            *overflow_count = overflow_count.saturating_add(1);
+        }
+    }
+
+    if pending_record.is_none() {
+        pending_record.replace(String::new());
     }
 }
 
@@ -212,7 +278,8 @@ pub fn parse_content(
     content: &str,
     dialect: DeviceInventoryLogDialect,
 ) -> (Vec<LogEntry>, u32) {
-    parse_records(file_path, content.lines(), dialect)
+    let lines: Vec<&str> = content.lines().collect();
+    parse_lines(file_path, &lines, dialect)
 }
 
 /// Parse already-split Device Inventory physical lines.
@@ -225,22 +292,70 @@ pub fn parse_lines(
     lines: &[&str],
     dialect: DeviceInventoryLogDialect,
 ) -> (Vec<LogEntry>, u32) {
-    parse_records(file_path, lines.iter().copied(), dialect)
+    let segments = lines
+        .iter()
+        .map(|line| LogicalRecordSegment::LineStart(line))
+        .collect::<Vec<_>>();
+    let framed = frame_logical_records(dialect, None, &segments).flush_pending();
+    let (entries, projection_errors) =
+        parse_framed_records(file_path, &framed.completed_records, dialect);
+    (
+        entries,
+        projection_errors.saturating_add(framed.overflow_count),
+    )
 }
 
-/// Every dialect attaches a non-header line to the record above it, so a
-/// Device Inventory record is a logical record for all three dialects. Callers
-/// that frame input themselves must use [`frame_logical_records`] to keep
-/// incremental framing identical to this whole-input reading.
-fn parse_records<'a>(
+/// Project already-bounded logical records into parsed entries.
+///
+/// Framing and projection stay separate so initial parsing and tailing can use
+/// one lossless framing contract without re-framing completed records. Framing
+/// overflow errors belong to the caller because they are produced before this
+/// projection step.
+pub fn parse_framed_records(
     file_path: &str,
-    lines: impl Iterator<Item = &'a str>,
+    framed_records: &[FramedLogicalRecord],
+    dialect: DeviceInventoryLogDialect,
+) -> (Vec<LogEntry>, u32) {
+    let mut entries = Vec::new();
+    let mut parse_errors = 0u32;
+    let mut record_start_line = 1u32;
+
+    for framed_record in framed_records {
+        let (record_entries, record_errors) = project_logical_record(framed_record, dialect);
+        parse_errors = parse_errors.saturating_add(record_errors);
+
+        for mut entry in record_entries {
+            entry.id = entries.len() as u64;
+            entry.line_number =
+                record_start_line.saturating_add(entry.line_number.saturating_sub(1));
+            entry.file_path = file_path.to_string();
+            entries.push(entry);
+        }
+
+        record_start_line = record_start_line.saturating_add(framed_record.physical_lines);
+    }
+
+    (entries, parse_errors)
+}
+
+fn project_logical_record(
+    framed_record: &FramedLogicalRecord,
     dialect: DeviceInventoryLogDialect,
 ) -> (Vec<LogEntry>, u32) {
     let mut records: Vec<LogEntry> = Vec::new();
-    let mut parse_errors = 0;
+    let mut parse_errors = 0u32;
+    let mut lines = framed_record.content.split('\n').collect::<Vec<_>>();
 
-    for (index, raw_line) in lines.enumerate() {
+    // A force-split piece ending at a newline does not own the next empty
+    // physical line. A naturally completed record does, including a genuine
+    // trailing blank continuation.
+    if framed_record.physical_lines == newline_count(&framed_record.content)
+        && framed_record.content.ends_with('\n')
+    {
+        lines.pop();
+    }
+
+    for (index, raw_line) in lines.into_iter().enumerate() {
         let line_number = (index + 1) as u32;
         let line = raw_line.trim_end_matches('\r');
         if line.is_empty() {
@@ -295,17 +410,7 @@ fn parse_records<'a>(
         }
     }
 
-    let entries = records
-        .into_iter()
-        .enumerate()
-        .map(|(id, mut record)| {
-            record.id = id as u64;
-            record.file_path = file_path.to_string();
-            record
-        })
-        .collect();
-
-    (entries, parse_errors)
+    (records, parse_errors)
 }
 
 fn count_headers(content: &str, regex: &Regex) -> usize {
@@ -577,8 +682,7 @@ mod tests {
         let first = frame_logical_records(
             DeviceInventoryLogDialect::InventoryAdaptor,
             None,
-            &[ADAPTOR_HEADER],
-            1024,
+            &[LogicalRecordSegment::LineStart(ADAPTOR_HEADER)],
         );
         assert!(first.completed_records.is_empty());
 
@@ -586,10 +690,9 @@ mod tests {
             DeviceInventoryLogDialect::InventoryAdaptor,
             first.pending_record,
             &[
-                r#"{"Status":200,"Data":{"Example":"value"}}"#,
-                NEXT_ADAPTOR_HEADER,
+                LogicalRecordSegment::LineStart(r#"{"Status":200,"Data":{"Example":"value"}}"#),
+                LogicalRecordSegment::LineStart(NEXT_ADAPTOR_HEADER),
             ],
-            1024,
         );
 
         assert_eq!(
@@ -644,26 +747,27 @@ mod tests {
 
     #[test]
     fn logical_framing_overflow_is_bounded_counted_and_lossless() {
-        let max_pending_bytes = ADAPTOR_HEADER.len() + 8;
-        let continuation = "continuation-0123456789";
+        let continuation = format!("continuation-{}-TAIL", "x".repeat(MAX_LOGICAL_RECORD_BYTES));
         let expected = format!("{ADAPTOR_HEADER}\n{continuation}");
 
         let framed = frame_logical_records(
             DeviceInventoryLogDialect::InventoryAdaptor,
             None,
-            &[ADAPTOR_HEADER, continuation],
-            max_pending_bytes,
+            &[
+                LogicalRecordSegment::LineStart(ADAPTOR_HEADER),
+                LogicalRecordSegment::LineStart(&continuation),
+            ],
         );
 
         assert_eq!(framed.overflow_count, 1);
         assert!(framed
             .completed_records
             .iter()
-            .all(|record| record.content.len() <= max_pending_bytes));
+            .all(|record| record.content.len() <= MAX_LOGICAL_RECORD_BYTES));
         assert!(framed
             .pending_record
             .as_ref()
-            .is_none_or(|record| record.len() <= max_pending_bytes));
+            .is_none_or(|record| record.len() <= MAX_LOGICAL_RECORD_BYTES));
 
         // A force-split piece ends mid-line and its remainder continues that
         // same physical line, so the pieces together must still account for
