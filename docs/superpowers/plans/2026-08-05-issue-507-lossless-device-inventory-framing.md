@@ -467,6 +467,36 @@ Run changed-file `rustfmt --check`, `git diff --check`, the focused watcher suit
 
 Validated on `origin/main` at `e59aed306b4f8f5ee1b862970169a26b24886f4d`: 29 focused watcher tests passed; the full parser and app suites passed, including 658 parser library tests and 572 app library tests; both strict Clippy runs passed; Vitest passed 638 tests across 51 files; TypeScript, changed-file formatting, and diff checks passed.
 
-- [ ] **Step 5: Push a new frozen revision and refresh PR #511**
+- [x] **Step 5: Push a new frozen revision and refresh PR #511**
 
 Commit and push the existing branch, update the PR evidence pack with the new base/head SHAs and terminal-prefix cases, then confirm the PR remains open and unmerged.
+
+### Task 12: Preserve the complete finalized batch through truncation
+
+**Files:**
+- Modify: `src-tauri/src/watcher/tail.rs`
+- Modify: `docs/superpowers/plans/2026-08-05-issue-507-lossless-device-inventory-framing.md`
+
+- [x] **Step 1: Replace the incorrect truncation regression with a scalar-width matrix**
+
+For `[0xC2]`, `[0xE2, 0x82]`, `[0xF0, 0x9F, 0xA7]`, and partial BOM `[0xEF, 0xBB]`, buffer the suffix after valid `TERMINAL-CONTENT`, truncate the file to zero, and call `read_new_entries`. Assert the returned batch has `reset == true`, exactly one parse error, and exactly one entry whose message is `TERMINAL-CONTENT` with no replacement character. Assert a second read and explicit finalization return no entries or errors and the carry/framing state remains empty.
+
+- [x] **Step 2: Run the focused test and prove the bad field selection**
+
+Run:
+
+```bash
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path src-tauri/Cargo.toml --lib watcher::tail::tests::test_terminal_utf8_prefix_fails_closed_on_truncation
+```
+
+Expected before implementation: FAIL because truncation copies only `finalized.parse_errors` and drops `finalized.entries`.
+
+- [x] **Step 3: Forward terminal finalization atomically**
+
+In the truncation branch, append the complete `TailBatch` returned by `finalize_pending_input` before setting `reset = true`; do not extract individual fields. Audit explicit EOF, parser change, stop, and disconnect call sites to confirm every terminal branch already forwards the complete batch through `TailBatch::append` or the callback helper.
+
+- [ ] **Step 4: Revalidate on current main and refresh PR #511**
+
+Run scoped formatting/diff checks, the 29-test watcher suite, both full Rust suites, both strict all-target Clippy commands, `npm test -- --run`, and `npx tsc --noEmit`. Rebase if `origin/main` advances, push a new frozen SHA, update the evidence pack, and confirm the PR remains open and unmerged.
+
+Validation completed on `origin/main` at `e59aed306b4f8f5ee1b862970169a26b24886f4d`: the 29 focused watcher tests, both full Rust suites, both strict Clippy runs, 638 Vitest tests, TypeScript, scoped formatting, and diff checks passed.

@@ -137,8 +137,7 @@ impl TailReader {
         let mut batch = TailBatch::empty(false);
         let mut reset = false;
         if file_size < self.byte_offset {
-            let finalized = self.finalize_pending_input();
-            batch.parse_errors = finalized.parse_errors;
+            batch.append(self.finalize_pending_input());
             self.byte_offset = 0;
             self.pending_fragment.clear();
             self.pending_fragment_selection = None;
@@ -1247,21 +1246,42 @@ mod tests {
 
     #[test]
     fn test_terminal_utf8_prefix_fails_closed_on_truncation() {
-        let (path, mut reader) =
-            reader_with_terminal_utf8_prefix("terminal-truncation", &[0xF0, 0x9F, 0xA7]);
-        fs::write(&path, []).expect("should truncate terminal UTF-8 fixture");
+        for (label, prefix) in [
+            ("two-byte", &[0xC2][..]),
+            ("three-byte", &[0xE2, 0x82][..]),
+            ("four-byte", &[0xF0, 0x9F, 0xA7][..]),
+            ("partial-bom", &[0xEF, 0xBB][..]),
+        ] {
+            let (path, mut reader) =
+                reader_with_terminal_utf8_prefix(&format!("terminal-truncation-{label}"), prefix);
+            fs::write(&path, []).expect("should truncate terminal UTF-8 fixture");
 
-        let finalized = reader
-            .read_new_entries()
-            .expect("truncation should finalize old decoder state");
-        assert!(finalized.reset);
-        assert_eq!(finalized.parse_errors, 1);
-        assert!(finalized.entries.is_empty());
-        assert!(reader.pending_utf8_bytes.is_empty());
-        assert!(reader.pending_fragment.is_empty());
-        assert!(reader.pending_logical_record.is_none());
+            let finalized = reader
+                .read_new_entries()
+                .expect("truncation should finalize old decoder state");
+            assert!(finalized.reset, "{label}");
+            assert_eq!(finalized.parse_errors, 1, "{label}");
+            assert_eq!(finalized.entries.len(), 1, "{label}");
+            assert_eq!(finalized.entries[0].message, "TERMINAL-CONTENT", "{label}");
+            assert!(!finalized.entries[0].message.contains('�'), "{label}");
+            assert!(reader.pending_utf8_bytes.is_empty(), "{label}");
+            assert!(reader.pending_fragment.is_empty(), "{label}");
+            assert!(reader.pending_logical_record.is_none(), "{label}");
+            assert_eq!(reader.next_id, 1, "{label}");
 
-        fs::remove_file(path).expect("should clean up truncation fixture");
+            let repeated_read = reader
+                .read_new_entries()
+                .expect("empty replacement file should stay empty");
+            assert!(!repeated_read.reset, "{label}");
+            assert_eq!(repeated_read.parse_errors, 0, "{label}");
+            assert!(repeated_read.entries.is_empty(), "{label}");
+
+            let repeated_finalization = reader.finalize_pending_input();
+            assert_eq!(repeated_finalization.parse_errors, 0, "{label}");
+            assert!(repeated_finalization.entries.is_empty(), "{label}");
+
+            fs::remove_file(path).expect("should clean up truncation fixture");
+        }
     }
 
     #[test]
