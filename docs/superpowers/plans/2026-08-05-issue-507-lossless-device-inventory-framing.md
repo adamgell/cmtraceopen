@@ -336,7 +336,7 @@ Change `frame_logical_records` to consume segments and copy at most `MAX_LOGICAL
 
 Map every `parse_lines` physical line to `LogicalRecordSegment::LineStart`, call the same framer, then explicitly `flush_pending`. Preserve CRLF normalization, blank continuation semantics, physical-line spans, overflow errors, and the framed projector.
 
-- [ ] **Step 4: Run focused and full parser suites**
+- [x] **Step 4: Run focused and full parser suites**
 
 Run:
 
@@ -391,7 +391,7 @@ rustfmt --edition 2021 crates/cmtraceopen-parser/src/intune/device/windows/inven
 git diff --check
 ```
 
-- [ ] **Step 2: Run full Rust and strict lint gates**
+- [x] **Step 2: Run full Rust and strict lint gates**
 
 ```bash
 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p cmtraceopen-parser
@@ -400,7 +400,7 @@ CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p cmtraceopen-parser --all-
 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-- [ ] **Step 3: Run TypeScript gates**
+- [x] **Step 3: Run TypeScript gates**
 
 ```bash
 npm test -- --run
@@ -408,6 +408,8 @@ npx tsc --noEmit
 ```
 
 Expected: PASS. Browser E2E remains out of scope because framing does not change frontend or IPC behavior.
+
+Validated after rebasing onto `origin/main` at `e59aed306b4f8f5ee1b862970169a26b24886f4d`: both full Rust suites passed, both all-target Clippy runs passed with warnings denied, Vitest passed 638 tests across 51 files, and `npx tsc --noEmit` passed.
 
 - [ ] **Step 4: Commit, push, and refresh the frozen evidence pack**
 
