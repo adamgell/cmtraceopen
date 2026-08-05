@@ -302,6 +302,7 @@ describe("SccmWorkspace", () => {
       }),
     );
 
+    expect(screen.getByText("4.0 MiB total / source")).toBeInTheDocument();
     await waitFor(() =>
       expect(open).toHaveBeenCalledWith({ directory: true, multiple: false }),
     );
@@ -370,5 +371,78 @@ describe("SccmWorkspace", () => {
     );
     expect(captureSccmAdvancedDiagnostics).not.toHaveBeenCalled();
     expect(useSccmStore.getState().advancedCapability).toBeNull();
+  });
+
+  it("cancels a late authorization after unmount without writing stale state", async () => {
+    const advancedDiscovery: SccmEnvironmentDiscovery = {
+      ...DISCOVERY,
+      advancedSources: [
+        {
+          cardId: "reporting",
+          cardVersion: "1.0.0",
+          sourceId: "advanced-reporting",
+          roleScopes: ["reportingServicesPoint"],
+          pathClasses: ["configuredRoleLogRoot", "reportServerLogs"],
+          sourceVersion: null,
+          availability: "operatorDeclaredCandidate",
+          maxBytes: 4_194_304,
+          maxFiles: 2,
+          rotations: ["current", "lo_"],
+        },
+      ],
+    };
+    const capability = {
+      capabilityHandle: `cmtraceopen.capture-capability.sha256.v1:${"c".repeat(64)}`,
+      cardId: "reporting",
+      cardVersion: "1.0.0",
+      sourceId: "advanced-reporting",
+      roleScope: "reportingServicesPoint",
+      pathClass: "configuredRoleLogRoot",
+      sourceVersion: null,
+    };
+    let resolveAuthorization:
+      | ((value: typeof capability) => void)
+      | undefined;
+    vi.mocked(discoverSccmEnvironment).mockResolvedValue(advancedDiscovery);
+    vi.mocked(open).mockResolvedValue("C:\\private-root");
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true);
+    vi.mocked(authorizeSccmAdvancedCapture).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAuthorization = resolve;
+        }),
+    );
+    const { unmount } = render(<SccmWorkspace />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discover SCCM environment" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Authorize Reporting services bounded capture",
+      }),
+    );
+    await waitFor(() =>
+      expect(authorizeSccmAdvancedCapture).toHaveBeenCalledOnce(),
+    );
+
+    unmount();
+    expect(useSccmStore.getState()).toMatchObject({
+      phase: "ready",
+      advancedCapability: null,
+    });
+    resolveAuthorization?.(capability);
+
+    await waitFor(() =>
+      expect(cancelSccmAdvancedCapture).toHaveBeenCalledWith(
+        capability.capabilityHandle,
+      ),
+    );
+    expect(captureSccmAdvancedDiagnostics).not.toHaveBeenCalled();
+    expect(useSccmStore.getState()).toMatchObject({
+      phase: "ready",
+      advancedCapability: null,
+      capture: null,
+    });
   });
 });

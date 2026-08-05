@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Button, Spinner } from "@fluentui/react-components";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -199,6 +199,8 @@ function SourceLedger({ sources }: { sources: SccmSourceStatus[] }) {
 }
 
 export function SccmWorkspace() {
+  const mountedRef = useRef(true);
+  const advancedOperationRef = useRef(0);
   const phase = useSccmStore((state) => state.phase);
   const discovery = useSccmStore((state) => state.discovery);
   const capture = useSccmStore((state) => state.capture);
@@ -264,20 +266,37 @@ export function SccmWorkspace() {
   };
 
   useEffect(
-    () => () => {
-      const pending = useSccmStore.getState().advancedCapability;
-      if (pending) {
-        void cancelSccmAdvancedCapture(pending.capabilityHandle);
-        useSccmStore.getState().clearAdvancedCapability();
-      }
+    () => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        advancedOperationRef.current += 1;
+        const state = useSccmStore.getState();
+        if (state.advancedCapability) {
+          void cancelSccmAdvancedCapture(
+            state.advancedCapability.capabilityHandle,
+          ).catch(() => undefined);
+        }
+        if (
+          state.advancedCapability ||
+          state.phase === "authorizing" ||
+          state.phase === "capturingAdvanced"
+        ) {
+          state.clearAdvancedCapability();
+        }
+      };
     },
     [],
   );
 
   const captureAdvanced = async (option: SccmAdvancedSourceOption) => {
     if (isBusy || option.availability === "blocked") return;
+    const operationId = advancedOperationRef.current + 1;
+    advancedOperationRef.current = operationId;
+    const isActive = () =>
+      mountedRef.current && advancedOperationRef.current === operationId;
     const selected = await open({ directory: true, multiple: false });
-    if (typeof selected !== "string") return;
+    if (!isActive() || typeof selected !== "string") return;
     const roleScope =
       option.availability === "observed" &&
       option.roleScopes.includes("managementPoint")
@@ -295,6 +314,7 @@ export function SccmWorkspace() {
     if (!consented) return;
 
     beginAdvancedAuthorization();
+    let issuedCapabilityHandle: string | null = null;
     try {
       const capability = await authorizeSccmAdvancedCapture({
         cardId: option.cardId,
@@ -305,22 +325,33 @@ export function SccmWorkspace() {
         expectedSourceVersion: option.sourceVersion,
         selectedRoot: selected,
       });
+      issuedCapabilityHandle = capability.capabilityHandle;
+      if (!isActive()) {
+        await cancelSccmAdvancedCapture(capability.capabilityHandle).catch(
+          () => undefined,
+        );
+        return;
+      }
       completeAdvancedAuthorization(capability);
       if (!window.confirm("Authorization is ready. Capture this bounded source now?")) {
-        await cancelSccmAdvancedCapture(capability.capabilityHandle);
         clearAdvancedCapability();
+        await cancelSccmAdvancedCapture(capability.capabilityHandle);
         return;
       }
       beginAdvancedCapture();
-      completeCapture(
-        await captureSccmAdvancedDiagnostics(capability.capabilityHandle),
+      const result = await captureSccmAdvancedDiagnostics(
+        capability.capabilityHandle,
       );
+      if (isActive()) completeCapture(result);
     } catch (error) {
-      const pending = useSccmStore.getState().advancedCapability;
-      if (pending) {
-        await cancelSccmAdvancedCapture(pending.capabilityHandle).catch(() => undefined);
+      if (issuedCapabilityHandle) {
+        await cancelSccmAdvancedCapture(issuedCapabilityHandle).catch(
+          () => undefined,
+        );
       }
-      fail(errorMessage(error, "Advanced SCCM capture failed."));
+      if (isActive()) {
+        fail(errorMessage(error, "Advanced SCCM capture failed."));
+      }
     }
   };
 
@@ -530,7 +561,7 @@ export function SccmWorkspace() {
                             : "Operator-declared candidate root — role not observed; capture only"}
                       </p>
                       <div className="sccm-advanced-limit">
-                        <span>{formatBytes(option.maxBytes)} max</span>
+                        <span>{formatBytes(option.maxBytes)} total / source</span>
                         <span>{option.maxFiles} files</span>
                         <span>current + LO_</span>
                       </div>
