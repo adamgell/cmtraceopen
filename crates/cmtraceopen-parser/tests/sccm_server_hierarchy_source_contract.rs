@@ -79,13 +79,24 @@ fn live_like_replmgr_manifest(
     direction: Option<&str>,
     hierarchy_links: serde_json::Value,
 ) -> (String, Vec<SccmServerArtifactPayload>) {
+    live_like_replmgr_manifest_with_content(
+        direction,
+        hierarchy_links,
+        br#"<![LOG[replication manager record]LOG]!><time="21:50:03.847+240" date="08-01-2026" component="SMS_REPLICATION_MANAGER" context="" type="1" thread="1" file="replmgr.cpp">"#,
+    )
+}
+
+fn live_like_replmgr_manifest_with_content(
+    direction: Option<&str>,
+    hierarchy_links: serde_json::Value,
+    content: &[u8],
+) -> (String, Vec<SccmServerArtifactPayload>) {
     let artifact_id = opaque("cmtraceopen.artifact.sha256.v1:", 3);
     let host = opaque("cmtraceopen.host.sha256.v1:", 1);
     let site = opaque("cmtraceopen.site.sha256.v1:", 2);
     let producer_host = opaque("cmtraceopen.host.sha256.v1:", 1);
     let path = opaque("cmtraceopen.path.sha256.v1:", 4);
     let lineage = opaque("cmtraceopen.lineage.sha256.v1:", 5);
-    let content = b"SMS_EXECUTIVE started SMS_REPLICATION_MANAGER as thread ID 1 (0x1).  $$<SMS_REPLICATION_MANAGER><08-01-2026 21:50:03.847+240><thread=1 (0x1)>\n";
     let mut artifact = json!({
         "artifactId": artifact_id,
         "producerRole": "siteServer",
@@ -115,6 +126,7 @@ fn live_like_replmgr_manifest(
     }
     let manifest = json!({
         "sccmManifestVersion": 1,
+        "hierarchyContractVersion": 1,
         "syntheticFixture": false,
         "bundleRole": "server",
         "topology": {
@@ -136,7 +148,7 @@ fn live_like_replmgr_manifest(
 
 #[test]
 fn live_like_manifest_preserves_missing_version_topology_direction_and_keys() {
-    let (manifest, payloads) = live_like_replmgr_manifest(None, json!([]));
+    let (manifest, payloads) = live_like_replmgr_manifest(Some("origin"), json!([]));
     let assessment = assess_server_intake(&manifest, &payloads).expect("intake succeeds");
     let artifact = &assessment.artifacts[0];
     let admission = artifact
@@ -147,6 +159,7 @@ fn live_like_manifest_preserves_missing_version_topology_direction_and_keys() {
     assert!(!artifact.profile_eligible);
     assert!(!artifact.parser_eligible);
     assert!(assessment.evidence.is_empty());
+    assert_eq!(admission.direction, None);
     assert!(admission.gaps.contains(
         &cmtraceopen_parser::sccm::server::windows::SccmServerHierarchyAdmissionGap::MissingVersion
     ));
@@ -163,7 +176,7 @@ fn live_like_manifest_preserves_missing_version_topology_direction_and_keys() {
 
 #[test]
 fn direction_is_validated_against_an_explicit_opaque_link() {
-    let origin_site = opaque("cmtraceopen.site.sha256.v1:", 6);
+    let origin_site = opaque("cmtraceopen.site.sha256.v1:", 2);
     let target_site = opaque("cmtraceopen.site.sha256.v1:", 7);
     let origin_host = opaque("cmtraceopen.host.sha256.v1:", 1);
     let target_host = opaque("cmtraceopen.host.sha256.v1:", 8);
@@ -191,6 +204,88 @@ fn direction_is_validated_against_an_explicit_opaque_link() {
         .contains(&cmtraceopen_parser::sccm::server::windows::SccmServerHierarchyAdmissionGap::UnvalidatedDirection));
 }
 
+#[test]
+fn direction_is_non_authoritative_when_site_or_host_does_not_match() {
+    let links = json!([{
+        "originSiteCode": opaque("cmtraceopen.site.sha256.v1:", 6),
+        "targetSiteCode": opaque("cmtraceopen.site.sha256.v1:", 7),
+        "originHostHandle": opaque("cmtraceopen.host.sha256.v1:", 8),
+        "targetHostHandle": opaque("cmtraceopen.host.sha256.v1:", 9),
+    }]);
+    let (manifest, payloads) = live_like_replmgr_manifest(Some("origin"), links);
+    let assessment = assess_server_intake(&manifest, &payloads).expect("intake succeeds");
+    let artifact = &assessment.artifacts[0];
+    let admission = artifact
+        .hierarchy_admission
+        .as_ref()
+        .expect("hierarchy admission is present");
+    assert_eq!(artifact.direction, None);
+    assert_eq!(admission.direction, None);
+    assert!(admission
+        .gaps
+        .contains(&cmtraceopen_parser::sccm::server::windows::SccmServerHierarchyAdmissionGap::UnvalidatedDirection));
+}
+
+#[test]
+fn hierarchy_links_reject_equal_site_or_host_handles() {
+    for links in [
+        json!([{
+            "originSiteCode": opaque("cmtraceopen.site.sha256.v1:", 2),
+            "targetSiteCode": opaque("cmtraceopen.site.sha256.v1:", 2),
+            "originHostHandle": opaque("cmtraceopen.host.sha256.v1:", 8),
+            "targetHostHandle": opaque("cmtraceopen.host.sha256.v1:", 9),
+        }]),
+        json!([{
+            "originSiteCode": opaque("cmtraceopen.site.sha256.v1:", 2),
+            "targetSiteCode": opaque("cmtraceopen.site.sha256.v1:", 7),
+            "originHostHandle": opaque("cmtraceopen.host.sha256.v1:", 8),
+            "targetHostHandle": opaque("cmtraceopen.host.sha256.v1:", 8),
+        }]),
+    ] {
+        let (manifest, payloads) = live_like_replmgr_manifest(None, links);
+        assert!(matches!(
+            assess_server_intake(&manifest, &payloads),
+            Err(cmtraceopen_parser::sccm::server::windows::SccmServerIntakeError::InvalidTopology)
+        ));
+    }
+}
+
+#[test]
+fn hierarchy_contract_version_mismatch_is_an_explicit_gap() {
+    let (manifest, payloads) = live_like_replmgr_manifest(None, json!([]));
+    let mut manifest = serde_json::from_str::<serde_json::Value>(&manifest).expect("manifest JSON");
+    manifest["hierarchyContractVersion"] = json!(2);
+    let assessment = assess_server_intake(
+        &serde_json::to_string(&manifest).expect("manifest serializes"),
+        &payloads,
+    )
+    .expect("mismatched contract remains coverage");
+    let admission = assessment.artifacts[0]
+        .hierarchy_admission
+        .as_ref()
+        .expect("hierarchy admission is present");
+    assert_eq!(admission.contract_version, None);
+    assert!(admission
+        .gaps
+        .contains(&cmtraceopen_parser::sccm::server::windows::SccmServerHierarchyAdmissionGap::UnsupportedContractVersion));
+    assert!(assessment.evidence.is_empty());
+}
+
+#[test]
+fn component_token_outside_a_valid_ccm_record_is_not_component_evidence() {
+    let content = b"plain text mentions SMS_REPLICATION_MANAGER but is not a CCM record\n";
+    let (manifest, payloads) = live_like_replmgr_manifest_with_content(None, json!([]), content);
+    let assessment = assess_server_intake(&manifest, &payloads).expect("intake succeeds");
+    let admission = assessment.artifacts[0]
+        .hierarchy_admission
+        .as_ref()
+        .expect("hierarchy admission is present");
+    assert!(admission
+        .gaps
+        .contains(&cmtraceopen_parser::sccm::server::windows::SccmServerHierarchyAdmissionGap::ComponentMismatch));
+    assert!(assessment.evidence.is_empty());
+}
+
 fn site_database_supplement_manifest(
     schema_version: u64,
     authorized: bool,
@@ -205,6 +300,8 @@ fn site_database_supplement_manifest(
     artifact["supplementSchemaVersion"] = json!(schema_version);
     artifact["operatorAuthorized"] = json!(authorized);
     artifact["privacyClass"] = json!(privacy);
+    artifact["fragmentComplete"] = json!(true);
+    artifact["truncated"] = json!(false);
     artifact["relativePath"] = json!("evidence/sccm/server/site-server/server-hierarchy-site-database/root-00000001/current/site-database.supplement");
     (
         serde_json::to_string(&manifest).expect("manifest serializes"),
@@ -235,10 +332,107 @@ fn structured_supplement_unknown_schema_remains_coverage_only() {
     let assessment =
         assess_server_intake(&manifest, &payloads).expect("unknown schema is coverage");
     assert!(matches!(
-        assessment.artifacts[0].supplement_admission,
+        &assessment.artifacts[0].supplement_admission,
         Some(cmtraceopen_parser::sccm::server::windows::SccmServerSupplementAdmission::CoverageOnly {
-            reason: cmtraceopen_parser::sccm::server::windows::SccmServerSupplementGap::UnsupportedSchemaVersion
-        })
+            gaps
+        }) if gaps.contains(&cmtraceopen_parser::sccm::server::windows::SccmServerSupplementGap::UnsupportedSchemaVersion)
     ));
     assert!(assessment.evidence.is_empty());
+}
+
+#[test]
+fn structured_supplement_matrix_stays_coverage_only_without_complete_integrity() {
+    type SupplementMutation = fn(&mut serde_json::Value);
+    let cases: &[(&str, SupplementMutation)] = &[
+        ("unauthorized", |artifact: &mut serde_json::Value| {
+            artifact["operatorAuthorized"] = json!(false);
+        }),
+        ("wrong privacy", |artifact: &mut serde_json::Value| {
+            artifact["privacyClass"] = json!("raw");
+        }),
+        ("capped", |artifact: &mut serde_json::Value| {
+            artifact["captureState"] = json!("capped");
+            artifact["truncated"] = json!(true);
+            artifact["fragmentComplete"] = json!(false);
+            let copied = artifact["bytesCopied"].clone();
+            artifact["collectionLimit"]["byteLimit"] = copied;
+            artifact["collectionLimit"]["limitApplied"] = json!(true);
+        }),
+        ("incomplete", |artifact: &mut serde_json::Value| {
+            artifact["fragmentComplete"] = json!(false);
+            artifact["truncated"] = json!(false);
+        }),
+        ("malformed payload", |artifact: &mut serde_json::Value| {
+            artifact["encoding"] = json!("not-an-encoding");
+        }),
+        ("oversized for cap", |artifact: &mut serde_json::Value| {
+            artifact["collectionLimit"]["byteLimit"] = json!(1);
+        }),
+        (
+            "missing collection limit",
+            |artifact: &mut serde_json::Value| {
+                artifact
+                    .as_object_mut()
+                    .expect("artifact object")
+                    .remove("collectionLimit");
+            },
+        ),
+        ("missing payload", |artifact: &mut serde_json::Value| {
+            artifact["captureState"] = json!("captured");
+        }),
+        ("absent", |artifact: &mut serde_json::Value| {
+            artifact["captureState"] = json!("absent");
+            let object = artifact.as_object_mut().expect("artifact object");
+            object.remove("relativePath");
+            object.remove("encoding");
+            object.remove("collectionLimit");
+            object.remove("fragmentComplete");
+            object.remove("truncated");
+            artifact["bytesCopied"] = json!(0);
+        }),
+        ("denied", |artifact: &mut serde_json::Value| {
+            artifact["captureState"] = json!("accessDenied");
+            artifact["collectionDetail"] =
+                json!(opaque("cmtraceopen.collection-detail.sha256.v1:", 10));
+            let object = artifact.as_object_mut().expect("artifact object");
+            object.remove("relativePath");
+            object.remove("encoding");
+            object.remove("collectionLimit");
+            object.remove("fragmentComplete");
+            object.remove("truncated");
+            artifact["bytesCopied"] = json!(0);
+        }),
+        ("skipped", |artifact: &mut serde_json::Value| {
+            artifact["captureState"] = json!("skipped");
+            artifact["skipReason"] = json!(opaque("cmtraceopen.skip-reason.sha256.v1:", 11));
+            let object = artifact.as_object_mut().expect("artifact object");
+            object.remove("relativePath");
+            object.remove("encoding");
+            object.remove("collectionLimit");
+            object.remove("fragmentComplete");
+            object.remove("truncated");
+            artifact["bytesCopied"] = json!(0);
+        }),
+    ];
+    for (label, mutate) in cases {
+        let (manifest, payloads) = site_database_supplement_manifest(1, true, "redacted");
+        let mut manifest =
+            serde_json::from_str::<serde_json::Value>(&manifest).expect("manifest JSON");
+        mutate(&mut manifest["artifacts"][0]);
+        let payloads = if *label == "missing payload" {
+            Vec::new()
+        } else {
+            payloads
+        };
+        let assessment = assess_server_intake(
+            &serde_json::to_string(&manifest).expect("manifest serializes"),
+            &payloads,
+        )
+        .unwrap_or_else(|error| panic!("{label} must remain coverage: {error}"));
+        assert!(matches!(
+            assessment.artifacts[0].supplement_admission,
+            Some(cmtraceopen_parser::sccm::server::windows::SccmServerSupplementAdmission::CoverageOnly { .. })
+        ), "{label} was admitted");
+        assert!(assessment.evidence.is_empty(), "{label} produced evidence");
+    }
 }

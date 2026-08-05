@@ -21,7 +21,7 @@ use super::catalog::{
     classify_declared_hierarchy_source, classify_declared_server_source,
     declared_hierarchy_source_contracts, expected_family, SccmServerHierarchyDirection,
     SccmServerHierarchySourceContract, SccmServerSourceKind, SccmServerSourceSpec,
-    SCCM_SERVER_SITE_DATABASE_SCHEMA_VERSION,
+    SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION, SCCM_SERVER_SITE_DATABASE_SCHEMA_VERSION,
 };
 
 /// Keep parser-side work bounded even when the manifest did not come from the
@@ -629,7 +629,7 @@ pub struct SccmServerArtifactAssessment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SccmServerHierarchyAdmission {
-    pub contract_version: u32,
+    pub contract_version: Option<u32>,
     pub component: String,
     pub direction: Option<SccmServerHierarchyDirection>,
     pub profile_id: Option<String>,
@@ -641,6 +641,7 @@ pub struct SccmServerHierarchyAdmission {
 #[serde(rename_all = "camelCase")]
 pub enum SccmServerHierarchyAdmissionGap {
     MissingVersion,
+    MissingContractVersion,
     UnvalidatedProfile,
     MissingTopology,
     UnvalidatedDirection,
@@ -654,16 +655,30 @@ pub enum SccmServerHierarchyAdmissionGap {
 #[serde(rename_all = "camelCase")]
 pub enum SccmServerSupplementAdmission {
     Admitted,
-    CoverageOnly { reason: SccmServerSupplementGap },
+    CoverageOnly { gaps: Vec<SccmServerSupplementGap> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SccmServerSupplementGap {
+    MissingContractVersion,
+    UnsupportedContractVersion,
     MissingSchemaVersion,
     UnsupportedSchemaVersion,
     MissingOperatorAuthorization,
     PrivacyClassMismatch,
+    Absent,
+    AccessDenied,
+    Capped,
+    Skipped,
+    Unsupported,
+    ParseFailed,
+    IncompletePayload,
+    MissingPayload,
+    MissingCollectionLimit,
+    MissingDigest,
+    MissingProvenance,
+    MalformedPayload,
 }
 
 impl SccmServerArtifactAssessment {
@@ -833,6 +848,8 @@ pub fn assess_server_intake(
         let normalized = normalize_artifact(
             artifact,
             manifest.synthetic_fixture,
+            manifest.hierarchy_contract_version,
+            &topology.site_handle,
             &topology.hierarchy_links,
             &topology.roles_observed,
             &mut relative_paths,
@@ -1168,6 +1185,7 @@ fn normalize_hierarchy_link(
             )
     } else {
         link.origin_site_code != link.target_site_code
+            && link.origin_host_handle != link.target_host_handle
             && opaque_sha256_handle(&link.origin_site_code, "cmtraceopen.site.sha256.v1:")
             && opaque_sha256_handle(&link.target_site_code, "cmtraceopen.site.sha256.v1:")
             && opaque_sha256_handle(&link.origin_host_handle, "cmtraceopen.host.sha256.v1:")
@@ -1217,8 +1235,25 @@ fn is_hierarchy_log_source(source_id: &str) -> bool {
     )
 }
 
-fn normalize_supplement_admission(artifact: &RawServerArtifact) -> SccmServerSupplementAdmission {
+fn normalize_supplement_admission(
+    artifact: &RawServerArtifact,
+    synthetic_fixture: bool,
+    manifest_contract_version: Option<u32>,
+    payload_error: Option<&SccmServerIntakeError>,
+    payload_present: bool,
+    capture_provenance: Option<&SccmServerCaptureProvenance>,
+    content_digest_present: bool,
+) -> SccmServerSupplementAdmission {
     let mut gaps = Vec::new();
+    if !synthetic_fixture {
+        match manifest_contract_version {
+            None => gaps.push(SccmServerSupplementGap::MissingContractVersion),
+            Some(version) if version != SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION => {
+                gaps.push(SccmServerSupplementGap::UnsupportedContractVersion)
+            }
+            Some(_) => {}
+        }
+    }
     match artifact.supplement_schema_version {
         None => gaps.push(SccmServerSupplementGap::MissingSchemaVersion),
         Some(version) if version != SCCM_SERVER_SITE_DATABASE_SCHEMA_VERSION => {
@@ -1232,11 +1267,49 @@ fn normalize_supplement_admission(artifact: &RawServerArtifact) -> SccmServerSup
     if artifact.supplement_privacy_class.as_deref() != Some("redacted") {
         gaps.push(SccmServerSupplementGap::PrivacyClassMismatch);
     }
+    match artifact.capture_state {
+        SccmCoverageState::Captured => {}
+        SccmCoverageState::Absent => gaps.push(SccmServerSupplementGap::Absent),
+        SccmCoverageState::AccessDenied => gaps.push(SccmServerSupplementGap::AccessDenied),
+        SccmCoverageState::Capped => gaps.push(SccmServerSupplementGap::Capped),
+        SccmCoverageState::Skipped => gaps.push(SccmServerSupplementGap::Skipped),
+        SccmCoverageState::Unsupported => gaps.push(SccmServerSupplementGap::Unsupported),
+        SccmCoverageState::ParseFailed => gaps.push(SccmServerSupplementGap::ParseFailed),
+    }
+    if artifact.capture_state == SccmCoverageState::Captured
+        && (artifact.fragment_complete != Some(true) || artifact.truncated != Some(false))
+    {
+        gaps.push(SccmServerSupplementGap::IncompletePayload);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured && !payload_present {
+        gaps.push(SccmServerSupplementGap::MissingPayload);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured && artifact.collection_limit.is_none()
+    {
+        gaps.push(SccmServerSupplementGap::MissingCollectionLimit);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured
+        && artifact
+            .collection_limit
+            .as_ref()
+            .is_some_and(|limit| limit.limit_applied || artifact.bytes_copied > limit.byte_limit)
+    {
+        gaps.push(SccmServerSupplementGap::Capped);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured && !content_digest_present {
+        gaps.push(SccmServerSupplementGap::MissingDigest);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured && capture_provenance.is_none() {
+        gaps.push(SccmServerSupplementGap::MissingProvenance);
+    }
+    if payload_error.is_some() {
+        gaps.push(SccmServerSupplementGap::MalformedPayload);
+    }
     gaps.sort();
     gaps.dedup();
-    match gaps.into_iter().next() {
-        None => SccmServerSupplementAdmission::Admitted,
-        Some(reason) => SccmServerSupplementAdmission::CoverageOnly { reason },
+    match gaps.is_empty() {
+        true => SccmServerSupplementAdmission::Admitted,
+        false => SccmServerSupplementAdmission::CoverageOnly { gaps },
     }
 }
 
@@ -1244,6 +1317,8 @@ fn normalize_supplement_admission(artifact: &RawServerArtifact) -> SccmServerSup
 fn normalize_artifact(
     artifact: RawServerArtifact,
     synthetic_fixture: bool,
+    manifest_contract_version: Option<u32>,
+    site_handle: &str,
     hierarchy_links: &[SccmServerHierarchyLinkTopology],
     roles_observed: &[SccmRole],
     relative_paths: &mut BTreeSet<String>,
@@ -1490,8 +1565,12 @@ fn normalize_artifact(
         rotation.as_ref(),
         relative_paths,
     )?;
-    let (bytes, capture_provenance) =
-        validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id)?;
+    let (bytes, capture_provenance, payload_error) =
+        match validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id) {
+            Ok((bytes, capture_provenance)) => (bytes, capture_provenance, None),
+            Err(error) if is_structured_supplement => (None, None, Some(error)),
+            Err(error) => return Err(error),
+        };
     let collection_limit =
         artifact
             .collection_limit
@@ -1510,6 +1589,10 @@ fn normalize_artifact(
     let mut observed_component_matches =
         synthetic_fixture || artifact.capture_state != SccmCoverageState::Captured;
     let mut state = artifact.capture_state.clone();
+    if is_structured_supplement {
+        parser_eligible = false;
+        profile_eligible = false;
+    }
     if artifact.capture_state == SccmCoverageState::Captured && parser_eligible {
         let bytes = bytes.ok_or(SccmServerIntakeError::MissingPayload)?;
         let encoding = artifact
@@ -1526,7 +1609,11 @@ fn normalize_artifact(
                 )
                 .0
                 .is_some_and(|contract| {
-                    content.contains(&format!("$$<{}>", contract.expected_component))
+                    crate::parser::ccm::scan_logical_records(&content, &artifact.original_basename)
+                        .iter()
+                        .any(|record| {
+                            record.entry.component.as_deref() == Some(contract.expected_component)
+                        })
                 });
             }
             let display_name = original_basename
@@ -1584,9 +1671,13 @@ fn normalize_artifact(
             &artifact.original_basename,
             rotation.as_ref(),
         );
-        let contract_version = contract
-            .map(|contract| contract.contract_version)
-            .unwrap_or_default();
+        let contract_version = if synthetic_fixture {
+            contract.map(|contract| contract.contract_version)
+        } else if manifest_contract_version == Some(SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION) {
+            manifest_contract_version
+        } else {
+            None
+        };
         let component = contract
             .map(|contract| contract.expected_component.to_owned())
             .unwrap_or_else(|| "unknown".to_owned());
@@ -1599,6 +1690,15 @@ fn normalize_artifact(
         let mut gaps = Vec::new();
         if source_version.is_none() {
             gaps.push(SccmServerHierarchyAdmissionGap::MissingVersion);
+        }
+        if !synthetic_fixture {
+            match manifest_contract_version {
+                None => gaps.push(SccmServerHierarchyAdmissionGap::MissingContractVersion),
+                Some(version) if version != SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION => {
+                    gaps.push(SccmServerHierarchyAdmissionGap::UnsupportedContractVersion)
+                }
+                Some(_) => {}
+            }
         }
         if profile
             .as_ref()
@@ -1615,25 +1715,29 @@ fn normalize_artifact(
         if hierarchy_links.is_empty() {
             gaps.push(SccmServerHierarchyAdmissionGap::MissingTopology);
         }
-        match direction {
-            None => gaps.push(SccmServerHierarchyAdmissionGap::UnvalidatedDirection),
-            Some(SccmServerHierarchyDirection::Origin) if !hierarchy_links.is_empty() => {
-                if !hierarchy_links.iter().any(|link| {
-                    link.origin_host_handle
-                        == artifact.producer_host_handle.as_deref().unwrap_or_default()
-                }) {
-                    return Err(SccmServerIntakeError::InvalidArtifact);
-                }
+        let validated_direction = match direction {
+            Some(SccmServerHierarchyDirection::Origin)
+                if hierarchy_links.iter().any(|link| {
+                    link.origin_site_code == site_handle
+                        && link.origin_host_handle
+                            == artifact.producer_host_handle.as_deref().unwrap_or_default()
+                }) =>
+            {
+                Some(SccmServerHierarchyDirection::Origin)
             }
-            Some(SccmServerHierarchyDirection::Target) if !hierarchy_links.is_empty() => {
-                if !hierarchy_links.iter().any(|link| {
-                    link.target_host_handle
-                        == artifact.producer_host_handle.as_deref().unwrap_or_default()
-                }) {
-                    return Err(SccmServerIntakeError::InvalidArtifact);
-                }
+            Some(SccmServerHierarchyDirection::Target)
+                if hierarchy_links.iter().any(|link| {
+                    link.target_site_code == site_handle
+                        && link.target_host_handle
+                            == artifact.producer_host_handle.as_deref().unwrap_or_default()
+                }) =>
+            {
+                Some(SccmServerHierarchyDirection::Target)
             }
-            Some(_) => {}
+            _ => None,
+        };
+        if validated_direction.is_none() {
+            gaps.push(SccmServerHierarchyAdmissionGap::UnvalidatedDirection);
         }
         if !synthetic_fixture {
             gaps.push(SccmServerHierarchyAdmissionGap::UnvalidatedKeys);
@@ -1654,7 +1758,7 @@ fn normalize_artifact(
         Some(SccmServerHierarchyAdmission {
             contract_version,
             component,
-            direction,
+            direction: validated_direction,
             profile_id,
             confidence,
             gaps,
@@ -1663,7 +1767,15 @@ fn normalize_artifact(
         None
     };
     let supplement_admission = if is_structured_supplement {
-        Some(normalize_supplement_admission(&artifact))
+        Some(normalize_supplement_admission(
+            &artifact,
+            synthetic_fixture,
+            manifest_contract_version,
+            payload_error.as_ref(),
+            bytes.is_some(),
+            capture_provenance.as_ref(),
+            content_sha256.is_some(),
+        ))
     } else {
         None
     };
@@ -1684,7 +1796,9 @@ fn normalize_artifact(
             source_kind: artifact.source_kind,
             family,
             original_basename,
-            direction,
+            direction: hierarchy_admission
+                .as_ref()
+                .and_then(|admission| admission.direction),
             hierarchy_admission,
             supplement_schema_version: artifact.supplement_schema_version,
             supplement_operator_authorized: artifact.supplement_operator_authorized,
@@ -1760,6 +1874,7 @@ fn artifact_family_integrity_key(family: &SccmArtifactFamily) -> &str {
 fn hierarchy_admission_gap_key(gap: &SccmServerHierarchyAdmissionGap) -> &'static str {
     match gap {
         SccmServerHierarchyAdmissionGap::MissingVersion => "missingVersion",
+        SccmServerHierarchyAdmissionGap::MissingContractVersion => "missingContractVersion",
         SccmServerHierarchyAdmissionGap::UnvalidatedProfile => "unvalidatedProfile",
         SccmServerHierarchyAdmissionGap::MissingTopology => "missingTopology",
         SccmServerHierarchyAdmissionGap::UnvalidatedDirection => "unvalidatedDirection",
@@ -1772,10 +1887,24 @@ fn hierarchy_admission_gap_key(gap: &SccmServerHierarchyAdmissionGap) -> &'stati
 
 fn supplement_gap_key(gap: &SccmServerSupplementGap) -> &'static str {
     match gap {
+        SccmServerSupplementGap::MissingContractVersion => "missingContractVersion",
+        SccmServerSupplementGap::UnsupportedContractVersion => "unsupportedContractVersion",
         SccmServerSupplementGap::MissingSchemaVersion => "missingSchemaVersion",
         SccmServerSupplementGap::UnsupportedSchemaVersion => "unsupportedSchemaVersion",
         SccmServerSupplementGap::MissingOperatorAuthorization => "missingOperatorAuthorization",
         SccmServerSupplementGap::PrivacyClassMismatch => "privacyClassMismatch",
+        SccmServerSupplementGap::Absent => "absent",
+        SccmServerSupplementGap::AccessDenied => "accessDenied",
+        SccmServerSupplementGap::Capped => "capped",
+        SccmServerSupplementGap::Skipped => "skipped",
+        SccmServerSupplementGap::Unsupported => "unsupported",
+        SccmServerSupplementGap::ParseFailed => "parseFailed",
+        SccmServerSupplementGap::IncompletePayload => "incompletePayload",
+        SccmServerSupplementGap::MissingPayload => "missingPayload",
+        SccmServerSupplementGap::MissingCollectionLimit => "missingCollectionLimit",
+        SccmServerSupplementGap::MissingDigest => "missingDigest",
+        SccmServerSupplementGap::MissingProvenance => "missingProvenance",
+        SccmServerSupplementGap::MalformedPayload => "malformedPayload",
     }
 }
 
@@ -1815,7 +1944,9 @@ fn artifact_string_bytes(artifacts: &[SccmServerArtifactAssessment]) -> Option<u
             )?;
         }
         if let Some(admission) = &artifact.hierarchy_admission {
-            checked_add_string_bytes(&mut total, &admission.contract_version.to_string())?;
+            if let Some(contract_version) = admission.contract_version {
+                checked_add_string_bytes(&mut total, &contract_version.to_string())?;
+            }
             checked_add_string_bytes(&mut total, &admission.component)?;
             checked_add_optional_string_bytes(&mut total, admission.profile_id.as_deref())?;
             checked_add_string_bytes(
@@ -1855,8 +1986,10 @@ fn artifact_string_bytes(artifacts: &[SccmServerArtifactAssessment]) -> Option<u
                     SccmServerSupplementAdmission::CoverageOnly { .. } => "coverageOnly",
                 },
             )?;
-            if let SccmServerSupplementAdmission::CoverageOnly { reason } = admission {
-                checked_add_string_bytes(&mut total, supplement_gap_key(reason))?;
+            if let SccmServerSupplementAdmission::CoverageOnly { gaps } = admission {
+                for gap in gaps {
+                    checked_add_string_bytes(&mut total, supplement_gap_key(gap))?;
+                }
             }
         }
         checked_add_optional_string_bytes(&mut total, artifact.supplement_provenance.as_deref())?;
@@ -2948,6 +3081,7 @@ fn validate_artifact_annotations(
 
     match (artifact.truncated, artifact.fragment_complete) {
         (None, None) => {}
+        (Some(false), Some(true)) if artifact.capture_state == SccmCoverageState::Captured => {}
         (Some(false), Some(false)) if artifact.capture_state == SccmCoverageState::Captured => {}
         (None, Some(false)) if artifact.capture_state == SccmCoverageState::Captured => {}
         (Some(true), Some(false)) if artifact.capture_state == SccmCoverageState::Capped => {}
@@ -3757,6 +3891,7 @@ macro_rules! define_raw_server_wire {
 define_raw_server_wire! {
     struct RawServerManifest {
         "sccmManifestVersion" => sccm_manifest_version: u32,
+        "hierarchyContractVersion" => hierarchy_contract_version: Option<u32>,
         #[serde(default)]
         "syntheticFixture" => synthetic_fixture: bool,
         "proposalOnly" => proposal_only: Option<bool>,
@@ -3936,6 +4071,7 @@ mod opaque_extension_boundary_tests {
             RawServerManifest::KNOWN_FIELDS,
             [
                 "sccmManifestVersion",
+                "hierarchyContractVersion",
                 "syntheticFixture",
                 "proposalOnly",
                 "privacy",
