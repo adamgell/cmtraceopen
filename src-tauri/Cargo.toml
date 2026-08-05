@@ -144,6 +144,14 @@ required-features = ["sccm-diagnostics"]
 name = "sccm_native_collection"
 required-features = ["sccm-diagnostics"]
 
+[[test]]
+name = "sccm_advanced_ipc"
+required-features = ["sccm-diagnostics"]
+
+[[test]]
+name = "sccm_advanced_server_capture"
+required-features = ["sccm-diagnostics"]
+
 [[bench]]
 name = "intune_pipeline"
 harness = false
