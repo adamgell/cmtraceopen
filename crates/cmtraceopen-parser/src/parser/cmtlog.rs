@@ -426,18 +426,26 @@ mod tests {
 
     #[test]
     fn cmtlog_accepts_signed_offsets_and_rejects_unicode_structural_digits() {
+        let positive = r##"<![LOG[Positive offset]LOG]!><time="10:00:00.12+240" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="" color="#5b9aff">"##;
         let signed = r#"<![LOG[Résumé ✓]LOG]!><time="10:00:00.12-240" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="">"#;
         let unicode = r#"<![LOG[日本語 payload]LOG]!><time="10:00:00.12١" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="">"#;
-        let (entries, errors) = parse_lines(&[signed, unicode], "test.cmtlog");
+        let (entries, errors) = parse_lines(&[positive, signed, unicode], "test.cmtlog");
 
-        assert_eq!(entries[0].timezone_offset, Some(-240));
+        assert_eq!(entries[0].timezone_offset, Some(240));
         assert_eq!(
             entries[0].timestamp_display.as_deref(),
             Some("04-13-2026 10:00:00.120")
         );
-        assert_eq!(entries[0].message, "Résumé ✓");
+        assert_eq!(entries[0].message, "Positive offset");
+
+        assert_eq!(entries[1].timezone_offset, Some(-240));
+        assert_eq!(
+            entries[1].timestamp_display.as_deref(),
+            Some("04-13-2026 10:00:00.120")
+        );
+        assert_eq!(entries[1].message, "Résumé ✓");
         assert_eq!(errors, 1);
-        assert_eq!(entries[1].timestamp, None);
-        assert_eq!(entries[1].message, unicode);
+        assert_eq!(entries[2].timestamp, None);
+        assert_eq!(entries[2].message, unicode);
     }
 }

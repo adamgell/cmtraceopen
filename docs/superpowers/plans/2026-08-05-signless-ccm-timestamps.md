@@ -22,6 +22,7 @@
 
 **Files:**
 - Modify: `crates/cmtraceopen-parser/tests/sccm_spine_contract.rs:5845-6015`
+- Modify: `crates/cmtraceopen-parser/tests/sccm_client_inventory_compliance_metering_fixture_contract.rs:2660-2678`
 - Modify: `crates/cmtraceopen-parser/src/parser/cmtlog.rs:352-410`
 
 - [ ] **Step 1: Replace the compatibility-baseline CCM table with semantic public projection assertions**
@@ -61,15 +62,19 @@ fn signless_fractional_tails_never_become_cmtlog_offsets() {
 
 #[test]
 fn cmtlog_accepts_signed_offsets_and_rejects_unicode_structural_digits() {
+    let positive = r##"<![LOG[Positive offset]LOG]!><time="10:00:00.12+240" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="" color="#5b9aff">"##;
     let signed = r#"<![LOG[Résumé ✓]LOG]!><time="10:00:00.12-240" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="">"#;
     let unicode = r#"<![LOG[日本語 payload]LOG]!><time="10:00:00.12١" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="">"#;
-    let (entries, errors) = parse_lines(&[signed, unicode], "test.cmtlog");
-    assert_eq!(entries[0].timezone_offset, Some(-240));
+    let (entries, errors) = parse_lines(&[positive, signed, unicode], "test.cmtlog");
+    assert_eq!(entries[0].timezone_offset, Some(240));
     assert_eq!(entries[0].timestamp_display.as_deref(), Some("04-13-2026 10:00:00.120"));
-    assert_eq!(entries[0].message, "Résumé ✓");
+    assert_eq!(entries[0].message, "Positive offset");
+    assert_eq!(entries[1].timezone_offset, Some(-240));
+    assert_eq!(entries[1].timestamp_display.as_deref(), Some("04-13-2026 10:00:00.120"));
+    assert_eq!(entries[1].message, "Résumé ✓");
     assert_eq!(errors, 1);
-    assert_eq!(entries[1].timestamp, None);
-    assert_eq!(entries[1].message, unicode);
+    assert_eq!(entries[2].timestamp, None);
+    assert_eq!(entries[2].message, unicode);
 }
 ```
 
@@ -158,14 +163,20 @@ Run: `cargo test -p cmtraceopen-parser --lib parser::cmtlog::tests -- --nocaptur
 
 Expected: PASS.
 
-Run: `cargo test -p cmtraceopen-parser --test sccm_spine_contract -- public_ccm_digit_only_timestamp_tails_are_fraction_only explicit_signed_ccm_offsets_remain_normalized timeline_does_not_order_signless_fraction_as_utc`
+Run:
+
+```bash
+cargo test -p cmtraceopen-parser --test sccm_spine_contract public_ccm_digit_only_timestamp_tails_are_fraction_only -- --exact
+cargo test -p cmtraceopen-parser --test sccm_spine_contract explicit_signed_ccm_offsets_remain_normalized -- --exact
+cargo test -p cmtraceopen-parser --test sccm_spine_contract signless_ccm_fraction_is_not_timeline_orderable -- --exact
+```
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit the coherent parser repair**
 
 ```bash
-git add crates/cmtraceopen-parser/src/parser/ccm.rs crates/cmtraceopen-parser/src/parser/cmtlog.rs crates/cmtraceopen-parser/tests/sccm_spine_contract.rs
+git add crates/cmtraceopen-parser/src/parser/ccm.rs crates/cmtraceopen-parser/src/parser/cmtlog.rs crates/cmtraceopen-parser/tests/sccm_spine_contract.rs crates/cmtraceopen-parser/tests/sccm_client_inventory_compliance_metering_fixture_contract.rs
 git commit -m "fix(parser): treat signless CCM tails as fractions"
 ```
 
@@ -187,17 +198,18 @@ Append exactly:
 Run:
 
 ```bash
-cargo test -p cmtraceopen-parser --lib parser::ccm::tests parser::cmtlog::tests
+cargo test -p cmtraceopen-parser --lib parser::ccm::tests -- --nocapture
+cargo test -p cmtraceopen-parser --lib parser::cmtlog::tests -- --nocapture
 cargo test -p cmtraceopen-parser --test sccm_spine_contract
 cargo test -p cmtraceopen-parser --test issue_413_unicode_panics
 cargo test -p cmtraceopen-parser
 cargo clippy -p cmtraceopen-parser --all-targets -- -D warnings
-cargo fmt --check --package cmtraceopen-parser
+rustfmt --edition 2021 --check crates/cmtraceopen-parser/src/parser/ccm.rs crates/cmtraceopen-parser/src/parser/cmtlog.rs crates/cmtraceopen-parser/tests/sccm_spine_contract.rs crates/cmtraceopen-parser/tests/sccm_client_inventory_compliance_metering_fixture_contract.rs crates/cmtraceopen-parser/tests/sccm_client_management_fixture_contract.rs
 git diff --check
 git status --short --branch
 ```
 
-Expected: all commands exit 0; the integrated #413 suite proves the CmtLog grammar keeps ASCII structural digits while accepting Unicode payload text.
+Expected: every command above exits 0; the scoped Rust formatter excludes unrelated baseline drift, and the integrated #413 suite proves the CmtLog grammar keeps ASCII structural digits while accepting Unicode payload text.
 
 - [ ] **Step 3: Commit documentation, push, and open the PR**
 

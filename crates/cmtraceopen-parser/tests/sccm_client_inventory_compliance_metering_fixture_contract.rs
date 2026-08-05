@@ -2659,7 +2659,7 @@ fn independent_review_blocker_last_success_respects_family_phase_order() {
 #[test]
 fn signless_fractional_tail_is_not_usable_recovery_chronology() {
     let (temporary, manifest, expected) = copied_inventory_recovery_with_time_replacements(
-        "signless-offset",
+        "signless-fraction",
         &[
             ("time=\"01:20:00.000+000\"", "time=\"10:00:00.000240\""),
             ("time=\"01:20:01.000+000\"", "time=\"07:00:00.000+000\""),
