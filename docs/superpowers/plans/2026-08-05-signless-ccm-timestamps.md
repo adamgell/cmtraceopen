@@ -13,7 +13,7 @@
 ## File structure
 
 - `crates/cmtraceopen-parser/src/parser/ccm.rs` owns CCM structural parsing, timestamp projection, and SCCM timestamp provenance. Remove its legacy public-tail split and compatibility demotion.
-- `crates/cmtraceopen-parser/src/parser/cmtlog.rs` owns CmtLog's relaxed record grammar. Make its optional signed timezone self-delimiting and retain ASCII-only structural numeric fields.
+- `crates/cmtraceopen-parser/src/parser/cmtlog.rs` owns CmtLog's relaxed record grammar. Make its optional signed timezone self-delimiting while retaining the ASCII-only structural numeric fields integrated by #413.
 - `crates/cmtraceopen-parser/tests/sccm_spine_contract.rs` owns public CCM projection and SCCM timeline-ordering contract assertions. Replace the pinned wrong public baseline with the corrected semantic table.
 - `library.md` owns workspace routing. Add the condition-first pointer for this implementation plan.
 
@@ -88,9 +88,9 @@ Expected: FAIL because the public projection still uses `split_legacy_public_tim
 - Modify: `crates/cmtraceopen-parser/src/parser/ccm.rs:31-64,169-256,540-586,666-758`
 - Modify: `crates/cmtraceopen-parser/src/parser/cmtlog.rs:35-153`
 
-- [ ] **Step 1: Make CCM's structural grammar ASCII-only and delete the signless-offset heuristic**
+- [ ] **Step 1: Retain CCM's #413 ASCII structural grammar and delete the signless-offset heuristic**
 
-Change CCM structural digit classes from `\\d` to `[0-9]`. Delete `MAX_UTC_OFFSET_MINUTES`, `UTC_OFFSET_STEP_MINUTES`, `signless_offset_is_real`, and all comments describing signless offset interpretation. Implement the tail split as:
+Keep the upstream #413 `[0-9]` structural digit classes unchanged. Delete `MAX_UTC_OFFSET_MINUTES`, `UTC_OFFSET_STEP_MINUTES`, `signless_offset_is_real`, and all comments describing signless offset interpretation. Implement the tail split as:
 
 ```rust
 fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
@@ -180,7 +180,7 @@ git diff --check
 git status --short --branch
 ```
 
-Expected: all commands exit 0; the #413 suite remains available from its owning branch or must be explicitly restored before this step, because the CmtLog grammar must keep ASCII structural digits while accepting Unicode payload text.
+Expected: all commands exit 0; the integrated #413 suite proves the CmtLog grammar keeps ASCII structural digits while accepting Unicode payload text.
 
 - [ ] **Step 3: Commit documentation, push, and open the PR**
 
