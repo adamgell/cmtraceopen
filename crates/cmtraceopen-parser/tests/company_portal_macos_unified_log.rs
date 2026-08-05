@@ -1228,7 +1228,8 @@ fn ipv6_redaction_does_not_claim_timestamps_macs_or_prose() {
         "a timestamp is not an address: {redacted}"
     );
 
-    // A bare `::` identifies nothing and appears in ordinary prose.
+    // C++ scope syntax is not an address because the consumed left guard
+    // rejects a preceding word character.
     let redacted = redact_text("called std::process::exit");
     assert_eq!(redacted, "called std::process::exit");
 
@@ -1254,6 +1255,30 @@ fn network_addresses_are_redacted() {
         "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
     ] {
         assert!(!redacted.contains(secret), "{secret} leaked: {redacted}");
+    }
+}
+
+#[test]
+fn bare_unspecified_ipv6_is_redacted_in_unified_log_export() {
+    let header = format!(
+        r#"{{"captureId":"c","schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
+    );
+    let record = r#"{"category":"Network","eventMessage":"peer :: connected; std::process::exit; ratio 3:2; mode:key","messageType":"Default","process":"CompanyPortal","sourceSequence":0,"subsystem":"com.microsoft.CompanyPortalMac","timestamp":"2026-07-15 07:02:00.000000-0500"}"#;
+    let capture = parse_capture(&format!("{header}\n{record}\n"));
+
+    let export = redacted_capture_projection(&capture);
+    let json = serde_json::to_string(&export).expect("export must serialize");
+
+    assert!(
+        !json.contains("peer :: connected"),
+        "bare IPv6 leaked: {json}"
+    );
+    assert!(
+        json.contains("peer [redacted:host] connected"),
+        "redaction must retain delimiters: {json}"
+    );
+    for safe_text in ["std::process::exit", "ratio 3:2", "mode:key"] {
+        assert!(json.contains(safe_text), "non-address text changed: {json}");
     }
 }
 

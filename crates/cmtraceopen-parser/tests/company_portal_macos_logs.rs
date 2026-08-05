@@ -224,6 +224,30 @@ fn advanced_logging_certificate_and_network_records_are_redacted() {
     }
 }
 
+#[test]
+fn bare_unspecified_ipv6_is_redacted_in_direct_log_export() {
+    let parse = parse_scenario(
+        "2026-05-12 08:14:22:007 | CompanyPortal | I | 7 | NetworkService | peer :: connected; std::process::exit; ratio 3:2; mode:key\n",
+        "bare-unspecified-ipv6",
+        "CompanyPortal.log",
+    );
+
+    let export = redacted_export_projection(&parse);
+    let json = serde_json::to_string(&export).expect("export must serialize");
+
+    assert!(
+        !json.contains("peer :: connected"),
+        "bare IPv6 leaked: {json}"
+    );
+    assert!(
+        json.contains("peer [redacted:ip:001] connected"),
+        "redaction must retain delimiters: {json}"
+    );
+    for safe_text in ["std::process::exit", "ratio 3:2", "mode:key"] {
+        assert!(json.contains(safe_text), "non-address text changed: {json}");
+    }
+}
+
 /// A version banner, a timestamp, and a GUID all look address-shaped to a lazy
 /// matcher. Redacting them as network addresses would corrupt evidence the
 /// module promises to preserve losslessly.

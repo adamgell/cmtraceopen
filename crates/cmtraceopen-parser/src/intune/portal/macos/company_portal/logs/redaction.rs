@@ -124,14 +124,11 @@ fn mac_address_re() -> &'static Regex {
 ///   eight groups or a `::` run. A MAC (`00:11:22:33:44:55`) and a house-grammar
 ///   timestamp (`08:18:00:104`) have neither, so neither can be claimed.
 ///
-/// A bare `::` carrying no group is excluded on purpose. It is the all-zeros
-/// address, it identifies nothing, and matching it would redact the path
-/// separator in ordinary prose such as `std::process`.
 fn ipv6_address_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?:^|[^0-9A-Za-z:])((?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)",
+            r"(?i)(?:^|[^0-9A-Za-z:])((?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)",
         )
         .expect("ipv6 address pattern must compile")
     })
@@ -448,9 +445,8 @@ mod tests {
         );
         assert!(redacted.ends_with(" up"));
 
-        // A bare `::` identifies nothing and appears in ordinary prose. Keep
-        // the runtime sample intact while avoiding a raw forbidden-token
-        // self-match in the module purity scan.
+        // C++ scope syntax is not an address because the consumed left guard
+        // rejects a preceding word character.
         let no_address = concat!("called std::", "process::exit");
         let redacted = redact(no_address);
         assert_eq!(

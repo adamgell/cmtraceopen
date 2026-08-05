@@ -137,13 +137,11 @@ fn mac_address_pattern() -> &'static Regex {
 ///   eight groups or a `::` run. A MAC (`00:11:22:33:44:55`) and a wall-clock
 ///   timestamp (`08:18:00:104`) have neither, so neither can be claimed.
 ///
-/// A bare `::` carrying no group is excluded on purpose: it is the all-zeros
-/// address, it identifies nothing, and matching it damages prose.
 fn ipv6_address_pattern() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     compiled(
         &CELL,
-        r"(?i)(^|[^0-9A-Za-z:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)",
+        r"(?i)(^|[^0-9A-Za-z:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)",
     )
 }
 
