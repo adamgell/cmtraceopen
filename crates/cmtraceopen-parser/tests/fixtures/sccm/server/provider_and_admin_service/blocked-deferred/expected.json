@@ -2,7 +2,7 @@
   "artifactRequests": [
     {
       "layer": "adminService",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "producerRole": "adminService",
       "request": {
         "logicalId": "adminService",
@@ -10,18 +10,18 @@
         "role": "adminService"
       },
       "sourceVersion": "5.00.TEST",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "coverage": [
     {
-      "artifactId": "blocked-deferred-admin-current",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "producerRole": "adminService",
       "sourceId": "server-admin-service",
       "sourceVersion": "5.00.TEST",
       "state": "captured",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -34,25 +34,25 @@
         "coverageGaps": [],
         "evidence": [
           {
-            "artifactId": "blocked-deferred-admin-current",
-            "entryId": "blocked-deferred-admin-current:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+            "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
           {
-            "artifactId": "blocked-deferred-admin-current",
-            "entryId": "blocked-deferred-admin-current:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+            "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
           {
-            "artifactId": "blocked-deferred-admin-current",
-            "entryId": "blocked-deferred-admin-current:3-3",
+            "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+            "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:3-3",
             "lineEnd": 3,
             "lineStart": 3
           }
         ],
-        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:1daee4807bef24f65f11588e50c2917eb53be2645485bc2da695e59165fa0ed2",
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:47431b531453b9c7ade49fefd9a91a6248f67023bb08bca393e9c964335d483b",
         "nextArtifacts": [
           {
             "logicalId": "adminService",
@@ -69,11 +69,11 @@
       },
       "lastSuccessfulPhase": "authenticateOrAuthorize",
       "layer": "adminService",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "sourceId": "server-admin-service",
       "sourceVersion": "5.00.TEST",
-      "subjectId": "adminService:cmtraceopen.request.sha256.v1:c90815886d04b162dd7a2e2393ee97fbbbc1c5ccb166116ec825e167f0bb094b:cmtraceopen.operation.sha256.v1:845ac95236bc882dceb085e4c8f22b2080fa2f1731b7e30e3a63a5c22627f305:synthetic:host:admin-service-01:synthetic:subject:admin-service-01",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "subjectId": "adminService:cmtraceopen.request.sha256.v1:c90815886d04b162dd7a2e2393ee97fbbbc1c5ccb166116ec825e167f0bb094b:cmtraceopen.operation.sha256.v1:845ac95236bc882dceb085e4c8f22b2080fa2f1731b7e30e3a63a5c22627f305:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "profiles": [
@@ -105,7 +105,7 @@
       "coverageGapArtifactIds": [],
       "key": {
         "confidence": "low",
-        "endpointHandle": "synthetic:subject:admin-service-01",
+        "endpointHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
         "extractionProfile": {
           "configmgrVersionPrefixes": [
             "5.00.TEST"
@@ -118,7 +118,7 @@
           ]
         },
         "operationHandle": "cmtraceopen.operation.sha256.v1:845ac95236bc882dceb085e4c8f22b2080fa2f1731b7e30e3a63a5c22627f305",
-        "producerHostHandle": "synthetic:host:admin-service-01",
+        "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
         "requestHandle": "cmtraceopen.request.sha256.v1:c90815886d04b162dd7a2e2393ee97fbbbc1c5ccb166116ec825e167f0bb094b"
       },
       "lastSuccessfulPhase": "authenticateOrAuthorize",
@@ -126,7 +126,7 @@
       "nextArtifactRequests": [
         {
           "layer": "adminService",
-          "producerHostHandle": "synthetic:host:admin-service-01",
+          "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
           "producerRole": "adminService",
           "request": {
             "logicalId": "adminService",
@@ -134,7 +134,7 @@
             "role": "adminService"
           },
           "sourceVersion": "5.00.TEST",
-          "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+          "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
         }
       ],
       "observations": [
@@ -142,13 +142,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "blocked-deferred-admin-current",
-              "entryId": "blocked-deferred-admin-current:1-1",
+              "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+              "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:1-1",
               "lineEnd": 1,
               "lineStart": 1
             }
           ],
-          "observationId": "blocked-deferred-admin-current:1-1-01",
+          "observationId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:1-1-01",
           "phase": "receive",
           "terminal": false
         },
@@ -156,13 +156,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "blocked-deferred-admin-current",
-              "entryId": "blocked-deferred-admin-current:2-2",
+              "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+              "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:2-2",
               "lineEnd": 2,
               "lineStart": 2
             }
           ],
-          "observationId": "blocked-deferred-admin-current:2-2-02",
+          "observationId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:2-2-02",
           "phase": "authenticateOrAuthorize",
           "terminal": false
         },
@@ -170,13 +170,13 @@
           "disposition": "pending",
           "evidence": [
             {
-              "artifactId": "blocked-deferred-admin-current",
-              "entryId": "blocked-deferred-admin-current:3-3",
+              "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+              "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:3-3",
               "lineEnd": 3,
               "lineStart": 3
             }
           ],
-          "observationId": "blocked-deferred-admin-current:3-3-03",
+          "observationId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:3-3-03",
           "phase": "route",
           "terminal": false
         }
@@ -188,7 +188,7 @@
       "terminalEvidence": false,
       "timestampOrdering": "usable",
       "topologyCompatibility": "exact",
-      "transactionId": "adminService:cmtraceopen.request.sha256.v1:c90815886d04b162dd7a2e2393ee97fbbbc1c5ccb166116ec825e167f0bb094b:cmtraceopen.operation.sha256.v1:845ac95236bc882dceb085e4c8f22b2080fa2f1731b7e30e3a63a5c22627f305:synthetic:host:admin-service-01:synthetic:subject:admin-service-01"
+      "transactionId": "adminService:cmtraceopen.request.sha256.v1:c90815886d04b162dd7a2e2393ee97fbbbc1c5ccb166116ec825e167f0bb094b:cmtraceopen.operation.sha256.v1:845ac95236bc882dceb085e4c8f22b2080fa2f1731b7e30e3a63a5c22627f305:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "workflow": "providerAndAdminService"

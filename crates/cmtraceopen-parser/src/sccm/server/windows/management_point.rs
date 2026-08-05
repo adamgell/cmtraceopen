@@ -298,8 +298,8 @@ struct ReducedTransaction {
 /// Reduce Management Point evidence only after canonical server intake has
 /// admitted its topology, artifact provenance, and CCM records for the
 /// synthetic `mp-server-5.00.test-v1` profile. This adapter admits only the
-/// literal `synthetic:site:lab` site handle and exact `5.00.TEST` source
-/// version; canonical non-synthetic intake bundles intentionally return
+/// structural three-character `synthetic:site:<site>` namespace and exact `5.00.TEST`
+/// source version; canonical non-synthetic intake bundles intentionally return
 /// [`SccmManagementPointIntakeError::TopologyMismatch`].
 ///
 /// This is the server-intake entry point. It preserves the intake artifact IDs
@@ -469,10 +469,12 @@ fn canonical_fragment_complete(artifact: &SccmServerArtifactAssessment) -> Optio
     }
 }
 
-/// Maps the sole synthetic site handle admitted by this adapter. Opaque
-/// production handles intentionally do not select the test-only profile.
+/// Maps the structural three-character synthetic site namespace admitted by this adapter.
+/// Opaque production handles intentionally do not select the test-only profile.
 fn canonical_intake_site_code(site_handle: &str) -> Option<String> {
-    (site_handle == "synthetic:site:lab").then(|| "LAB".to_owned())
+    let site_code = site_handle.strip_prefix("synthetic:site:")?;
+    (site_code.len() == 3 && site_code.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .then(|| site_code.to_ascii_uppercase())
 }
 
 fn management_point_profile_is_admitted(artifact: &SccmServerArtifactAssessment) -> bool {
@@ -1328,19 +1330,21 @@ fn valid_safe_handle(value: &str, prefix: &str) -> bool {
 
 fn valid_management_point_handle(value: &str) -> bool {
     valid_safe_handle(value, "safe:mp:")
-        || value == "synthetic:host:mp-01"
+        || sha256_handle(value, "synthetic:host:sha256.v1:")
         || opaque_host_handle(value)
 }
 
 fn opaque_host_handle(value: &str) -> bool {
-    value
-        .strip_prefix("cmtraceopen.host.sha256.v1:")
-        .is_some_and(|digest| {
-            digest.len() == 64
-                && digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
+    sha256_handle(value, "cmtraceopen.host.sha256.v1:")
+}
+
+fn sha256_handle(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 #[cfg(test)]

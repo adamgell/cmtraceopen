@@ -14,8 +14,8 @@
   "coverageGaps": [
     {
       "artifactIds": [
-        "dp-rotation-01-current-fragment",
-        "dp-rotation-02-lo-fragment"
+        "synthetic:artifact:sha256.v1:4e69776de65089e53498b26003cdf45bf88edc8b55bc331eeafb98f1dcda9ca1",
+        "synthetic:artifact:sha256.v1:8a8d4a5f5d35e824b3417e5b9d8215d3c6f05eba27a5d43a6be2e4f7ab21041f"
       ],
       "producerRole": "siteServer",
       "reason": "Captured Distribution Point evidence is incomplete or outside the supported intake profile.",

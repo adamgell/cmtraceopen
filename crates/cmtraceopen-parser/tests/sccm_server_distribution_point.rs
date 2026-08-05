@@ -12,6 +12,7 @@ use cmtraceopen_parser::sccm::{
     SccmArtifactRequest, SccmCoverageState, SccmRole, SccmRotation, SccmTimeOrderingState,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 fn artifact_request_contracts(requests: &[SccmArtifactRequest]) -> Vec<(&str, SccmRole, &str)> {
     requests
@@ -28,14 +29,14 @@ fn artifact_request_contracts(requests: &[SccmArtifactRequest]) -> Vec<(&str, Sc
 
 fn observation_citations(
     transaction: &SccmDistributionPointContentTransaction,
-) -> Vec<(SccmDistributionPointContentPhase, &str, Option<u32>)> {
+) -> Vec<(SccmDistributionPointContentPhase, String, Option<u32>)> {
     transaction
         .observations
         .iter()
         .map(|observation| {
             (
                 observation.phase,
-                observation.evidence.artifact_id.as_str(),
+                observation.evidence.artifact_id.clone(),
                 observation.evidence.line_start,
             )
         })
@@ -165,7 +166,7 @@ fn optional_serve_recovery_and_exact_source_evidence_are_preserved() {
     assert_eq!(recovered.terminal_evidence.len(), 1);
     assert_eq!(
         recovered.terminal_evidence[0].artifact_id,
-        "dp-recovery-02-pkgxfer"
+        synthetic_identity("artifact", "dp-recovery-02-pkgxfer")
     );
 }
 
@@ -225,22 +226,22 @@ fn downstream_after_terminal_phase_is_cited_as_decisive_contradiction_evidence()
         vec![
             (
                 SccmDistributionPointContentPhase::ReceiveContent,
-                "dp-healthy-01-distmgr",
+                synthetic_identity("artifact", "dp-healthy-01-distmgr"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::Distribute,
-                "dp-healthy-01-distmgr",
+                synthetic_identity("artifact", "dp-healthy-01-distmgr"),
                 Some(2),
             ),
             (
                 SccmDistributionPointContentPhase::Transfer,
-                "dp-healthy-02-pkgxfer",
+                synthetic_identity("artifact", "dp-healthy-02-pkgxfer"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::Validate,
-                "dp-healthy-03-provider",
+                synthetic_identity("artifact", "dp-healthy-03-provider"),
                 Some(1),
             ),
         ]
@@ -280,22 +281,22 @@ fn missing_phase_cites_only_the_first_decisive_downstream_fact() {
         vec![
             (
                 SccmDistributionPointContentPhase::ReceiveContent,
-                "dp-healthy-01-distmgr",
+                synthetic_identity("artifact", "dp-healthy-01-distmgr"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::Distribute,
-                "dp-healthy-01-distmgr",
+                synthetic_identity("artifact", "dp-healthy-01-distmgr"),
                 Some(2),
             ),
             (
                 SccmDistributionPointContentPhase::Transfer,
-                "dp-healthy-02-pkgxfer",
+                synthetic_identity("artifact", "dp-healthy-02-pkgxfer"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::MakeAvailable,
-                "dp-healthy-03-provider",
+                synthetic_identity("artifact", "dp-healthy-03-provider"),
                 Some(1),
             ),
         ]
@@ -328,22 +329,22 @@ fn non_monotonic_phase_cites_the_exact_out_of_order_fact() {
         vec![
             (
                 SccmDistributionPointContentPhase::ReceiveContent,
-                "dp-healthy-01-distmgr",
+                synthetic_identity("artifact", "dp-healthy-01-distmgr"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::Distribute,
-                "dp-healthy-01-distmgr",
+                synthetic_identity("artifact", "dp-healthy-01-distmgr"),
                 Some(2),
             ),
             (
                 SccmDistributionPointContentPhase::Transfer,
-                "dp-healthy-02-pkgxfer",
+                synthetic_identity("artifact", "dp-healthy-02-pkgxfer"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::Validate,
-                "dp-healthy-03-provider",
+                synthetic_identity("artifact", "dp-healthy-03-provider"),
                 Some(1),
             ),
         ]
@@ -376,32 +377,32 @@ fn non_monotonic_optional_report_is_cited_without_unrelated_evidence() {
         vec![
             (
                 SccmDistributionPointContentPhase::ReceiveContent,
-                "dp-serve-01-distmgr",
+                synthetic_identity("artifact", "dp-serve-01-distmgr"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::Distribute,
-                "dp-serve-01-distmgr",
+                synthetic_identity("artifact", "dp-serve-01-distmgr"),
                 Some(2),
             ),
             (
                 SccmDistributionPointContentPhase::Transfer,
-                "dp-serve-02-pkgxfer",
+                synthetic_identity("artifact", "dp-serve-02-pkgxfer"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::Validate,
-                "dp-serve-03-provider",
+                synthetic_identity("artifact", "dp-serve-03-provider"),
                 Some(1),
             ),
             (
                 SccmDistributionPointContentPhase::MakeAvailable,
-                "dp-serve-03-provider",
+                synthetic_identity("artifact", "dp-serve-03-provider"),
                 Some(2),
             ),
             (
                 SccmDistributionPointContentPhase::ServeOrReport,
-                "dp-serve-04-status",
+                synthetic_identity("artifact", "dp-serve-04-status"),
                 Some(1),
             ),
         ]
@@ -423,7 +424,7 @@ fn multiple_distribution_points_and_versions_sort_by_the_full_sealed_key() {
             .transactions
             .iter()
             .map(|transaction| (
-                transaction.key.distribution_point_handle.as_str(),
+                transaction.key.distribution_point_handle.clone(),
                 transaction.key.content_version,
                 transaction.content_version_mismatch,
                 transaction.state,
@@ -431,19 +432,19 @@ fn multiple_distribution_points_and_versions_sort_by_the_full_sealed_key() {
             .collect::<Vec<_>>(),
         vec![
             (
-                "synthetic:subject:dp-01",
-                1,
-                true,
-                SccmDistributionPointContentState::Succeeded,
-            ),
-            (
-                "synthetic:subject:dp-02",
+                synthetic_identity("subject", "safe:dp:lab-dp-02"),
                 1,
                 false,
                 SccmDistributionPointContentState::Succeeded,
             ),
             (
-                "synthetic:subject:dp-01",
+                synthetic_identity("subject", "safe:dp:lab-dp-01"),
+                1,
+                true,
+                SccmDistributionPointContentState::Succeeded,
+            ),
+            (
+                synthetic_identity("subject", "safe:dp:lab-dp-01"),
                 2,
                 true,
                 SccmDistributionPointContentState::Retrying,
@@ -677,6 +678,19 @@ fn load_distribution_point_assessment_after(
         })
         .collect::<Vec<_>>();
     mutate(&mut manifest, &mut payloads);
+    let first_dp = synthetic_identity("subject", "safe:dp:lab-dp-01");
+    let second_dp = synthetic_identity("subject", "safe:dp:lab-dp-02");
+    for payload in &mut payloads {
+        let content = String::from_utf8(std::mem::take(&mut payload.bytes))
+            .expect("distribution point fixture evidence is UTF-8")
+            .replace("synthetic:subject:dp-01", &first_dp)
+            .replace("synthetic:subject:dp-02", &second_dp);
+        payload.bytes = content.into_bytes();
+    }
+    for payload in &mut payloads {
+        payload.manifest_artifact_id =
+            synthetic_identity("artifact", &payload.manifest_artifact_id);
+    }
     let canonical_manifest = json!({
         "sccmManifestVersion": 1,
         "syntheticFixture": true,
@@ -692,8 +706,21 @@ fn load_distribution_point_assessment_after(
             .as_array()
             .expect("artifacts are an array")
             .iter()
-            .map(|artifact| json!({
-                "artifactId": artifact["artifactId"],
+            .map(|artifact| {
+                let artifact_id = synthetic_identity(
+                    "artifact",
+                    artifact["artifactId"].as_str().expect("artifact ID"),
+                );
+                let path_fingerprint = synthetic_identity(
+                    "path",
+                    artifact["pathFingerprint"].as_str().expect("path fingerprint"),
+                );
+                let lineage_id = synthetic_identity(
+                    "lineage",
+                    artifact["rotation"]["lineageId"].as_str().expect("lineage ID"),
+                );
+                json!({
+                "artifactId": artifact_id,
                 "producerRole": artifact["producerRole"],
                 "producerHostHandle": canonical_distribution_point_host_handle(
                     artifact["producerHostHandle"].as_str()
@@ -715,11 +742,11 @@ fn load_distribution_point_assessment_after(
                 "originalBasename": artifact["originalBasename"],
                 "configuredPathProvenance": {
                     "state": "configured",
-                    "pathFingerprint": artifact["pathFingerprint"],
+                    "pathFingerprint": path_fingerprint,
                 },
                 "rotation": {
                     "kind": artifact["rotation"]["kind"],
-                    "lineageId": artifact["rotation"]["lineageId"],
+                    "lineageId": lineage_id,
                 },
                 "captureState": artifact["captureState"],
                 "truncated": if artifact["rotation"]["fragmentComplete"] == json!(false) {
@@ -745,10 +772,16 @@ fn load_distribution_point_assessment_after(
                 },
                 "bytesCopied": payloads
                     .iter()
-                    .find(|payload| payload.manifest_artifact_id == artifact["artifactId"])
+                    .find(|payload| {
+                        payload.manifest_artifact_id
+                            == synthetic_identity(
+                                "artifact",
+                                artifact["artifactId"].as_str().expect("artifact ID"),
+                            )
+                    })
                     .map(|payload| payload.bytes.len() as u64)
                     .unwrap_or(0),
-            }))
+            })})
             .collect::<Vec<_>>(),
     });
     let canonical_manifest_json =
@@ -791,29 +824,29 @@ fn canonical_distribution_point_relative_path(artifact: &Value) -> String {
 }
 
 fn canonical_distribution_point_host_handle(handle: Option<&str>) -> Value {
-    match handle {
-        Some("safe:server:lab-pri-01") => json!("synthetic:host:site-01"),
-        Some("safe:dp:lab-dp-01") => json!("synthetic:host:mp-01"),
-        Some("safe:dp:lab-dp-02") => json!("synthetic:host:wsus-01"),
-        Some("safe:client:lab-client-01") => json!("synthetic:host:site-01"),
-        None => Value::Null,
-        Some(other) => panic!("unsupported DP fixture host handle: {other}"),
-    }
+    handle.map_or(Value::Null, |handle| {
+        json!(synthetic_identity("host", handle))
+    })
 }
 
 fn canonical_distribution_point_subject_handle(handle: Option<&str>) -> Value {
-    match handle {
-        Some("safe:dp:lab-dp-01") => json!("synthetic:subject:dp-01"),
-        Some("safe:dp:lab-dp-02") => json!("synthetic:subject:dp-02"),
-        None => Value::Null,
-        Some(other) => panic!("unsupported DP fixture subject handle: {other}"),
-    }
+    handle.map_or(Value::Null, |handle| {
+        json!(synthetic_identity("subject", handle))
+    })
+}
+
+fn synthetic_identity(domain: &str, label: &str) -> String {
+    let digest = Sha256::digest(label)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("synthetic:{domain}:sha256.v1:{digest}")
 }
 
 fn dp_payload_mut(payloads: &mut [SccmServerArtifactPayload]) -> &mut SccmServerArtifactPayload {
     payloads
         .iter_mut()
-        .find(|payload| payload.manifest_artifact_id == "dp-dist-current")
+        .find(|payload| payload.manifest_artifact_id == "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6")
         .expect("fixture contains the DP payload")
 }
 
@@ -839,7 +872,7 @@ fn set_dp_nonphysical_coverage(
         }
         _ => {}
     }
-    payloads.retain(|payload| payload.manifest_artifact_id != "dp-dist-current");
+    payloads.retain(|payload| payload.manifest_artifact_id != "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6");
 }
 
 fn dp_coverage_assessment(case: &str) -> SccmServerIntakeAssessment {
@@ -873,7 +906,7 @@ fn dp_manifest_artifact_mut(manifest: &mut Value) -> &mut Value {
         .as_array_mut()
         .expect("artifacts are an array")
         .iter_mut()
-        .find(|artifact| artifact["artifactId"] == "dp-dist-current")
+        .find(|artifact| artifact["artifactId"] == "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6")
         .expect("fixture contains the DP artifact")
 }
 
@@ -881,7 +914,7 @@ fn dp_artifact_index(assessment: &SccmServerIntakeAssessment) -> usize {
     assessment
         .artifacts
         .iter()
-        .position(|artifact| artifact.artifact_id == "dp-dist-current")
+        .position(|artifact| artifact.artifact_id == "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6")
         .expect("fixture contains the DP artifact")
 }
 
@@ -889,7 +922,7 @@ fn dp_evidence_index(assessment: &SccmServerIntakeAssessment) -> usize {
     assessment
         .evidence
         .iter()
-        .position(|evidence| evidence.reference.artifact_id == "dp-dist-current")
+        .position(|evidence| evidence.reference.artifact_id == "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6")
         .expect("fixture contains the DP evidence")
 }
 
@@ -938,7 +971,7 @@ fn assert_dp_sealed_guard_rejection(
         "{context}"
     );
     assert_eq!(gap.state, Some(SccmCoverageState::Captured), "{context}");
-    assert_eq!(gap.artifact_ids, vec!["dp-dist-current"], "{context}");
+    assert_eq!(gap.artifact_ids, vec!["synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6"], "{context}");
     assert_eq!(
         gap.reason,
         "Captured Distribution Point evidence is incomplete or outside the supported intake profile.",
@@ -1011,11 +1044,11 @@ fn distribution_point_adapter_projects_only_canonical_intake_observations_determ
     assert_eq!(analysis.source_observations.len(), 1);
 
     let observation = &analysis.source_observations[0];
-    assert_eq!(observation.artifact_id, "dp-dist-current");
+    assert_eq!(observation.artifact_id, "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6");
     assert_eq!(observation.producer_role, SccmRole::SiteServer);
     assert_eq!(
         observation.producer_host_handle.as_deref(),
-        Some("synthetic:host:site-01")
+        Some("synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339")
     );
     assert_eq!(
         observation.workflow_subject_role,
@@ -1023,11 +1056,11 @@ fn distribution_point_adapter_projects_only_canonical_intake_observations_determ
     );
     assert_eq!(
         observation.workflow_subject_handle.as_deref(),
-        Some("synthetic:subject:dp-01")
+        Some("synthetic:subject:sha256.v1:303b321cad551bed85d9b6d366165e1cb287c824090779eadea5673cbeeacf33")
     );
     assert_eq!(observation.source_id, "server-dp-distribution");
     assert_eq!(observation.rotation, Some(SccmRotation::Current));
-    assert_eq!(observation.rotation_lineage_handle, "dp-dist-lab");
+    assert_eq!(observation.rotation_lineage_handle, "synthetic:lineage:sha256.v1:8717cd88e50756e8c7c3bd8b7fb244f69f8998861e9eaeae8b7261736941b19c");
     assert_eq!(
         observation.timestamp.ordering_state,
         SccmTimeOrderingState::NormalizedUtc
@@ -1068,7 +1101,7 @@ fn healthy_package_reduces_a_sealed_role_local_transaction() {
             .key
             .distribution_point_handle
             .as_str(),
-        "synthetic:subject:dp-01"
+        synthetic_identity("subject", "safe:dp:lab-dp-01")
     );
     assert_eq!(analysis.transactions[0].evidence.len(), 5);
 }
@@ -1249,7 +1282,7 @@ fn healthy_transaction_cannot_hide_a_sealed_coverage_gap_or_keep_high_confidence
             .as_array_mut()
             .expect("artifacts are an array")
             .push(json!({
-                "artifactId": "dp-distribution-absent-candidate",
+                "artifactId": "synthetic:artifact:sha256.v1:08b572c79ca8a7c3f5d9ac3d1f5900ee21e8dc14f9431acbee243d579a4880f5",
                 "sourceId": "server-dp-distribution",
                 "producerRole": "siteServer",
                 "producerHostHandle": "safe:server:lab-pri-01",
@@ -1258,8 +1291,8 @@ fn healthy_transaction_cannot_hide_a_sealed_coverage_gap_or_keep_high_confidence
                 "sourceKind": "ccmLog",
                 "sourceVersion": "5.00.TEST.0001",
                 "originalBasename": "distmgr.log",
-                "pathFingerprint": "synthetic:path:dp-default",
-                "rotation": {"kind": "current", "lineageId": "dp-distribution-default"},
+                "pathFingerprint": "synthetic:path:sha256.v1:6f8fc72bb6fbe681ce9594ed6727eb5dc54bd53be5e174429c502466459464e3",
+                "rotation": {"kind": "current", "lineageId": "synthetic:lineage:sha256.v1:ce486242d5484616648fb9a33cf16549e2146ed970978aca1c798c29daa1e35f"},
                 "captureState": "absent",
                 "encoding": null,
                 "collectionLimit": null,
@@ -1304,7 +1337,7 @@ fn sealed_intake_without_dp_source_version_reaches_profile_eligibility_guard() {
     assert!(artifact.parser_eligible);
     assert_eq!(
         artifact.workflow_subject_handle.as_deref(),
-        Some("synthetic:subject:dp-01")
+        Some("synthetic:subject:sha256.v1:303b321cad551bed85d9b6d366165e1cb287c824090779eadea5673cbeeacf33")
     );
     assert!(assessment
         .topology
@@ -1357,7 +1390,7 @@ fn sealed_intake_without_observed_dp_role_reaches_topology_congruence_guard() {
     assert!(artifact.parser_eligible);
     assert_eq!(
         artifact.workflow_subject_handle.as_deref(),
-        Some("synthetic:subject:dp-01")
+        Some("synthetic:subject:sha256.v1:303b321cad551bed85d9b6d366165e1cb287c824090779eadea5673cbeeacf33")
     );
     assert!(!assessment
         .topology

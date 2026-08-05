@@ -1,16 +1,16 @@
 {
   "pre318ExpectedVersion": 1,
-  "lineageId": "mp-policy-rotation",
-  "canonicalRotationArtifactIds": ["mp-policy-ts-20260729-235700", "mp-policy-numbered-2", "mp-policy-lo", "mp-policy-current"],
+  "lineageId": "synthetic:lineage:sha256.v1:23bf9e874701c542bf0fe2e3fcdf5f3438a5a92ecf4bb76d8d274802e8ea8019",
+  "canonicalRotationArtifactIds": ["synthetic:artifact:sha256.v1:ea4afe186fc87642f4641b3f207dd2b56a5275d38d418ef0a8363c5dfa2a7fb5", "synthetic:artifact:sha256.v1:0ccdeaa6040b48f044e18ccb64d0b9192440d4837de83b31efea34f9a782cab7", "synthetic:artifact:sha256.v1:10e37cba0f125b6bd5b5e84cae6cb52e70c5921eb4cfc5a414bbfd2bc39ae10e", "synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53"],
   "totalRotationSort": true,
   "serializationOrderIsChronology": false,
   "uniqueRelativePaths": true,
   "collisionSafe": true,
   "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" }],
   "artifactProvenance": [
-    { "artifactId": "mp-policy-ts-20260729-235700", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 182 },
-    { "artifactId": "mp-policy-numbered-2", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 179 },
-    { "artifactId": "mp-policy-lo", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 177 },
-    { "artifactId": "mp-policy-current", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 178 }
+    { "artifactId": "synthetic:artifact:sha256.v1:ea4afe186fc87642f4641b3f207dd2b56a5275d38d418ef0a8363c5dfa2a7fb5", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 182 },
+    { "artifactId": "synthetic:artifact:sha256.v1:0ccdeaa6040b48f044e18ccb64d0b9192440d4837de83b31efea34f9a782cab7", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 179 },
+    { "artifactId": "synthetic:artifact:sha256.v1:10e37cba0f125b6bd5b5e84cae6cb52e70c5921eb4cfc5a414bbfd2bc39ae10e", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 177 },
+    { "artifactId": "synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 178 }
   ]
 }

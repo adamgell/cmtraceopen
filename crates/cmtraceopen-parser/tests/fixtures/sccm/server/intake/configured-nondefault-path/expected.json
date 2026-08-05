@@ -1,9 +1,9 @@
 {
   "pre318ExpectedVersion": 1,
-  "artifactId": "mp-policy-configured",
-  "configuredPathProvenance": { "state": "configured", "pathClass": "nonDefault", "pathFingerprint": "synthetic:path:mp-configured-a" },
+  "artifactId": "synthetic:artifact:sha256.v1:a77e71c0b196187e25d552021e469b7441592a61640ee134aa45b3fc106860d0",
+  "configuredPathProvenance": { "state": "configured", "pathClass": "nonDefault", "pathFingerprint": "synthetic:path:sha256.v1:b75a3632071cb269affe517c8d05f7a71fbe0d7e691ef489f4bb77717c6a6d32" },
   "defaultCandidateInterpretation": "candidateAbsentOnly",
   "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" }],
-  "artifactProvenance": [{ "artifactId": "mp-policy-configured", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }],
+  "artifactProvenance": [{ "artifactId": "synthetic:artifact:sha256.v1:a77e71c0b196187e25d552021e469b7441592a61640ee134aa45b3fc106860d0", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }],
   "roleInference": "managementPoint is observed from topology, not from default path"
 }

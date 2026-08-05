@@ -5,7 +5,7 @@
   "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
   "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
   "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
-  "coverage": [{"artifactId":"receiver-01-sender","state":"captured"},{"artifactId":"receiver-02-despool","state":"captured"}],
+  "coverage": [{"artifactId":"synthetic:artifact:sha256.v1:48d72b7cbc91762721025b77cbf8afdd0713d0a21a34870671d1f5c8434c451d","state":"captured"},{"artifactId":"synthetic:artifact:sha256.v1:f8b07b7b846e6569a73fee926d8b8475017ffa49f0626cbaff8b7a5b772c69a1","state":"captured"}],
   "transactions": [{
     "transactionId":"hierarchy:msg-receiver-01:LAB:CHD:link-lab-chd",
     "key":{"messageId":"msg-receiver-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
@@ -13,9 +13,9 @@
     "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
     "coverageGapArtifactIds":[],
     "observations":[
-      {"observationId":"receiver-01-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"receiver-01-sender","startLine":1,"endLine":1}]},
-      {"observationId":"receiver-02-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"receiver-02-despool","startLine":1,"endLine":1}]},
-      {"observationId":"receiver-03-process","phase":"process","disposition":"failed","terminal":true,"evidence":[{"artifactId":"receiver-02-despool","startLine":2,"endLine":2}]}
+      {"observationId":"receiver-01-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:48d72b7cbc91762721025b77cbf8afdd0713d0a21a34870671d1f5c8434c451d","startLine":1,"endLine":1}]},
+      {"observationId":"receiver-02-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:f8b07b7b846e6569a73fee926d8b8475017ffa49f0626cbaff8b7a5b772c69a1","startLine":1,"endLine":1}]},
+      {"observationId":"receiver-03-process","phase":"process","disposition":"failed","terminal":true,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:f8b07b7b846e6569a73fee926d8b8475017ffa49f0626cbaff8b7a5b772c69a1","startLine":2,"endLine":2}]}
     ]
   }],
   "sourceLocalObservations": [],

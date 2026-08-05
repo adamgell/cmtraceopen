@@ -13,6 +13,7 @@ use cmtraceopen_parser::sccm::{
     SccmUpdatesSoftwareUpdatePointInput, SCCM_EXPERIMENTAL_KEY_PROFILE_ID,
 };
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const SCENARIOS: &[&str] = &[
     "incomplete",
@@ -100,13 +101,69 @@ fn raw_scenario(scenario: &str) -> (Value, Vec<SccmServerArtifactPayload>) {
 }
 
 fn assess_prepared_manifest(
-    manifest: Value,
+    mut manifest: Value,
     payloads: &[SccmServerArtifactPayload],
 ) -> SccmServerIntakeAssessment {
+    let mut payloads = payloads.to_vec();
+    canonicalize_prepared_identities(&mut manifest, &mut payloads);
     let canonical_manifest = serde_json::to_string(&manifest).expect("manifest serializes");
-    assess_server_intake(&canonical_manifest, payloads).unwrap_or_else(|error| {
+    assess_server_intake(&canonical_manifest, &payloads).unwrap_or_else(|error| {
         panic!("fixture is accepted by canonical server intake: {error:?}\n{canonical_manifest}")
     })
+}
+
+fn synthetic_identity(domain: &str, label: &str) -> String {
+    let digest = Sha256::digest(format!("{domain}:{label}"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("synthetic:{domain}:sha256.v1:{digest}")
+}
+
+fn canonicalize_identity(value: &mut Value, field: &str, domain: &str) {
+    if let Some(label) = value[field].as_str() {
+        value[field] = Value::String(synthetic_identity(domain, label));
+    }
+}
+
+fn canonicalize_prepared_identities(
+    manifest: &mut Value,
+    payloads: &mut [SccmServerArtifactPayload],
+) {
+    let main_subject = synthetic_identity("subject", "safe:sup:lab-sup-01");
+    for payload in payloads.iter_mut() {
+        payload.manifest_artifact_id =
+            synthetic_identity("artifact", &payload.manifest_artifact_id);
+        let content = String::from_utf8(std::mem::take(&mut payload.bytes))
+            .expect("SUP fixture evidence is UTF-8")
+            .replace("safe:sup:lab-sup-01", &main_subject);
+        payload.bytes = content.into_bytes();
+    }
+    let payload_lengths = payloads
+        .iter()
+        .map(|payload| (payload.manifest_artifact_id.clone(), payload.bytes.len()))
+        .collect::<BTreeMap<_, _>>();
+    for artifact in manifest["artifacts"].as_array_mut().into_iter().flatten() {
+        canonicalize_identity(artifact, "artifactId", "artifact");
+        canonicalize_identity(artifact, "producerHostHandle", "host");
+        canonicalize_identity(
+            &mut artifact["workflowSubject"],
+            "instanceHandle",
+            "subject",
+        );
+        canonicalize_identity(
+            &mut artifact["configuredPathProvenance"],
+            "pathFingerprint",
+            "path",
+        );
+        canonicalize_identity(&mut artifact["rotation"], "lineageId", "lineage");
+        if let Some(bytes_copied) = artifact["artifactId"]
+            .as_str()
+            .and_then(|artifact_id| payload_lengths.get(artifact_id))
+        {
+            artifact["bytesCopied"] = Value::from(*bytes_copied);
+        }
+    }
 }
 
 fn canonicalize_preparation_manifest(manifest: &mut Value) {
@@ -258,7 +315,7 @@ fn canonicalize_preparation_manifest(manifest: &mut Value) {
     }
 }
 
-fn production_projection(mut expected: Value) -> Value {
+fn production_projection(scenario: &str, mut expected: Value) -> Value {
     let object = expected
         .as_object_mut()
         .expect("expected output is an object");
@@ -276,9 +333,84 @@ fn production_projection(mut expected: Value) -> Value {
         .as_array_mut()
         .expect("artifact requests are an array")
     {
-        request["supHandle"] = Value::String("safe:sup:lab-sup-01".to_owned());
+        request["supHandle"] = Value::String(synthetic_identity("subject", "safe:sup:lab-sup-01"));
+    }
+    let (manifest, _) = raw_scenario(scenario);
+    let mut replacements = manifest["artifacts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|artifact| artifact["artifactId"].as_str())
+        .map(|artifact_id| {
+            (
+                artifact_id.to_owned(),
+                synthetic_identity("artifact", artifact_id),
+            )
+        })
+        .collect::<Vec<_>>();
+    replacements.push((
+        "safe:sup:lab-sup-01".to_owned(),
+        synthetic_identity("subject", "safe:sup:lab-sup-01"),
+    ));
+    canonicalize_projection_strings(&mut expected, &replacements);
+    if let Some(coverage) = expected["coverage"].as_array_mut() {
+        coverage.sort_by(|left, right| {
+            left["artifactId"]
+                .as_str()
+                .cmp(&right["artifactId"].as_str())
+        });
+    }
+    for transaction in expected["transactions"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(artifact_ids) = transaction["coverageGapArtifactIds"].as_array_mut() {
+            artifact_ids.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        }
+    }
+    for observation in expected["sourceLocalObservations"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        let Some(artifact_id) = observation["artifactIds"]
+            .as_array()
+            .and_then(|artifact_ids| artifact_ids.first())
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let suffix = match observation["classification"].as_str() {
+            Some("rotationSplit") => "01-split",
+            Some("malformedEvidence") => "02-malformed",
+            _ => continue,
+        };
+        observation["observationId"] = Value::String(format!("{artifact_id}-{suffix}"));
     }
     expected
+}
+
+fn canonicalize_projection_strings(value: &mut Value, replacements: &[(String, String)]) {
+    match value {
+        Value::String(text) => {
+            for (raw, canonical) in replacements {
+                *text = text.replace(raw, canonical);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                canonicalize_projection_strings(value, replacements);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                canonicalize_projection_strings(value, replacements);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn empty_client_updates_analysis() -> SccmClientUpdatesAnalysis {
@@ -323,7 +455,7 @@ fn every_committed_scenario_runs_through_the_exported_production_analyzer() {
 
         assert_eq!(
             actual,
-            production_projection(expected),
+            production_projection(scenario, expected),
             "scenario {scenario}"
         );
     }
@@ -359,7 +491,13 @@ fn accepted_sup_rotation_split_triggers_the_typed_correlation_guard() {
                 == SccmSoftwareUpdatePointSourceLocalClassification::RotationSplit
         })
         .expect("accepted endpoint emits the typed rotation split");
-    assert_eq!(split.observation_id, "sync-01-split");
+    assert_eq!(
+        split.observation_id,
+        format!(
+            "{}-01-split",
+            synthetic_identity("artifact", "sync-success-01-wcm")
+        )
+    );
     assert!(!split.observation_id.contains("rotation"));
 
     let updates = empty_client_updates_analysis();
@@ -488,7 +626,7 @@ fn required_coverage_gap_overrides_retry_deferred_classification() {
     assert_eq!(transaction["confidence"], "low");
     assert_eq!(
         transaction["coverageGapArtifactIds"],
-        serde_json::json!(["incomplete-02-wsync-denied"])
+        serde_json::json!([synthetic_identity("artifact", "incomplete-02-wsync-denied")])
     );
 }
 
@@ -520,7 +658,7 @@ fn coverage_gaps_and_requests_are_scoped_to_the_exact_sup_subject() {
     assert_eq!(
         serialized["artifactRequests"],
         serde_json::json!([{
-            "supHandle": "synthetic:subject:sup-01",
+            "supHandle": synthetic_identity("subject", "synthetic:subject:sup-01"),
             "sourceId": "server-sup-sync",
             "reasonCode": "coverageAccessDenied",
         }])

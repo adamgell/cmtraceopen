@@ -10,6 +10,7 @@ use cmtraceopen_parser::sccm::server::windows::{
 };
 use cmtraceopen_parser::sccm::{SccmCoverageState, SccmKeyConfidence, SccmRole};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 const SCENARIOS: [&str; 20] = [
     "admin-service-access-denied",
@@ -43,8 +44,8 @@ fn load_manifest_and_payloads(scenario: &str) -> (Value, Vec<SccmServerArtifactP
     let scenario_root = corpus_root().join(scenario);
     let manifest_json =
         fs::read_to_string(scenario_root.join("manifest.json")).expect("fixture manifest");
-    let manifest: Value = serde_json::from_str(&manifest_json).expect("valid fixture manifest");
-    let payloads = manifest["artifacts"]
+    let mut manifest: Value = serde_json::from_str(&manifest_json).expect("valid fixture manifest");
+    let mut payloads = manifest["artifacts"]
         .as_array()
         .expect("artifact array")
         .iter()
@@ -59,8 +60,41 @@ fn load_manifest_and_payloads(scenario: &str) -> (Value, Vec<SccmServerArtifactP
                     .expect("fixture payload"),
             })
         })
-        .collect();
+        .collect::<Vec<_>>();
+    for payload in &mut payloads {
+        payload.manifest_artifact_id =
+            synthetic_identity("artifact", &payload.manifest_artifact_id);
+    }
+    for artifact in manifest["artifacts"].as_array_mut().into_iter().flatten() {
+        canonicalize_identity(artifact, "artifactId", "artifact");
+        canonicalize_identity(artifact, "producerHostHandle", "host");
+        canonicalize_identity(
+            &mut artifact["workflowSubject"],
+            "instanceHandle",
+            "subject",
+        );
+        canonicalize_identity(
+            &mut artifact["configuredPathProvenance"],
+            "pathFingerprint",
+            "path",
+        );
+        canonicalize_identity(&mut artifact["rotation"], "lineageId", "lineage");
+    }
     (manifest, payloads)
+}
+
+fn canonicalize_identity(value: &mut Value, field: &str, domain: &str) {
+    if let Some(label) = value[field].as_str() {
+        value[field] = Value::String(synthetic_identity(domain, label));
+    }
+}
+
+fn synthetic_identity(domain: &str, label: &str) -> String {
+    let digest = Sha256::digest(format!("{domain}:{label}"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("synthetic:{domain}:sha256.v1:{digest}")
 }
 
 fn assess(scenario: &str) -> SccmServerIntakeAssessment {
@@ -81,8 +115,9 @@ fn analyze(scenario: &str) -> ProviderAdminServiceAnalysis {
 }
 
 fn make_provider_host_two(artifact: &mut Value, artifact_id: &str) {
-    artifact["artifactId"] = json!(artifact_id);
-    artifact["producerHostHandle"] = json!("synthetic:host:provider-02");
+    artifact["artifactId"] = json!(synthetic_identity("artifact", artifact_id));
+    artifact["producerHostHandle"] =
+        json!(synthetic_identity("host", "synthetic:host:provider-02"));
     let basename = artifact["originalBasename"]
         .as_str()
         .expect("provider basename");
@@ -367,7 +402,7 @@ fn coverage_gaps_are_scoped_to_the_exact_topology_subject() {
     assert_eq!(transaction.state, ProviderAdminServiceState::Incomplete);
     assert_eq!(
         transaction.coverage_gap_artifact_ids,
-        vec!["coverage-provider-capped"]
+        vec![synthetic_identity("artifact", "coverage-provider-capped")]
     );
     assert!(!transaction.next_artifact_requests.is_empty());
     assert!(!transaction.correlation_eligible);
@@ -409,7 +444,7 @@ fn coverage_gaps_are_scoped_to_the_producer_host_as_well_as_the_subject() {
     assert_eq!(analysis.artifact_requests.len(), 1);
     assert_eq!(
         analysis.artifact_requests[0].producer_host_handle,
-        "synthetic:host:provider-02"
+        synthetic_identity("host", "synthetic:host:provider-02")
     );
 }
 

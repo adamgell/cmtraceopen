@@ -2,7 +2,7 @@
   "artifactRequests": [
     {
       "layer": "adminService",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "producerRole": "adminService",
       "request": {
         "logicalId": "adminService",
@@ -10,18 +10,18 @@
         "role": "adminService"
       },
       "sourceVersion": "5.00.TEST",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "coverage": [
     {
-      "artifactId": "coverage-admin-parse-failed",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "artifactId": "synthetic:artifact:sha256.v1:a41d94f279f9ce85bec50cf7407eff01a3f7b86f8578cc96c6e92aa0ba352b71",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "producerRole": "adminService",
       "sourceId": "server-admin-service",
       "sourceVersion": "5.00.TEST",
       "state": "parseFailed",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -33,13 +33,13 @@
         "correlationKeys": [],
         "coverageGaps": [
           {
-            "artifactId": "coverage-admin-parse-failed",
+            "artifactId": "synthetic:artifact:sha256.v1:a41d94f279f9ce85bec50cf7407eff01a3f7b86f8578cc96c6e92aa0ba352b71",
             "coverage": "parseFailed",
             "role": "adminService"
           }
         ],
         "evidence": [],
-        "findingId": "provider-admin-coverage:coverage-admin-parse-failed",
+        "findingId": "provider-admin-coverage:synthetic:artifact:sha256.v1:a41d94f279f9ce85bec50cf7407eff01a3f7b86f8578cc96c6e92aa0ba352b71",
         "nextArtifacts": [
           {
             "logicalId": "adminService",
@@ -56,11 +56,11 @@
       },
       "lastSuccessfulPhase": null,
       "layer": "adminService",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "sourceId": "server-admin-service",
       "sourceVersion": "5.00.TEST",
-      "subjectId": "coverage-admin-parse-failed",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "subjectId": "synthetic:artifact:sha256.v1:a41d94f279f9ce85bec50cf7407eff01a3f7b86f8578cc96c6e92aa0ba352b71",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "profiles": [

@@ -15,38 +15,38 @@
       "contentVersionMismatch": false,
       "evidence": [
         {
-          "artifactId": "dp-recovery-01-distmgr",
-          "entryId": "dp-recovery-01-distmgr:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:628c19cf1b9ea5d8162df44950bbeccfabf98e42d40a1b43ab2d0382e09ee699",
+          "entryId": "synthetic:artifact:sha256.v1:628c19cf1b9ea5d8162df44950bbeccfabf98e42d40a1b43ab2d0382e09ee699:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-recovery-01-distmgr",
-          "entryId": "dp-recovery-01-distmgr:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:628c19cf1b9ea5d8162df44950bbeccfabf98e42d40a1b43ab2d0382e09ee699",
+          "entryId": "synthetic:artifact:sha256.v1:628c19cf1b9ea5d8162df44950bbeccfabf98e42d40a1b43ab2d0382e09ee699:2-2",
           "lineEnd": 2,
           "lineStart": 2
         },
         {
-          "artifactId": "dp-recovery-02-pkgxfer",
-          "entryId": "dp-recovery-02-pkgxfer:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4",
+          "entryId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-recovery-02-pkgxfer",
-          "entryId": "dp-recovery-02-pkgxfer:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4",
+          "entryId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4:2-2",
           "lineEnd": 2,
           "lineStart": 2
         },
         {
-          "artifactId": "dp-recovery-03-provider",
-          "entryId": "dp-recovery-03-provider:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:45dc07bc27e1115f1108ec9420799341607f583dc1f900184f0acb4a6f006f69",
+          "entryId": "synthetic:artifact:sha256.v1:45dc07bc27e1115f1108ec9420799341607f583dc1f900184f0acb4a6f006f69:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-recovery-03-provider",
-          "entryId": "dp-recovery-03-provider:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:45dc07bc27e1115f1108ec9420799341607f583dc1f900184f0acb4a6f006f69",
+          "entryId": "synthetic:artifact:sha256.v1:45dc07bc27e1115f1108ec9420799341607f583dc1f900184f0acb4a6f006f69:2-2",
           "lineEnd": 2,
           "lineStart": 2
         }
@@ -54,7 +54,7 @@
       "key": {
         "contentId": "content-kappa",
         "contentVersion": 1,
-        "distributionPointHandle": "synthetic:subject:dp-01",
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
         "extractionProfileId": "dp-server-5.00.test-v1",
         "extractionProfileVersion": 1,
         "packageId": "LAB00010",
@@ -67,8 +67,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-recovery-01-distmgr",
-            "entryId": "dp-recovery-01-distmgr:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:628c19cf1b9ea5d8162df44950bbeccfabf98e42d40a1b43ab2d0382e09ee699",
+            "entryId": "synthetic:artifact:sha256.v1:628c19cf1b9ea5d8162df44950bbeccfabf98e42d40a1b43ab2d0382e09ee699:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -85,8 +85,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-recovery-01-distmgr",
-            "entryId": "dp-recovery-01-distmgr:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:628c19cf1b9ea5d8162df44950bbeccfabf98e42d40a1b43ab2d0382e09ee699",
+            "entryId": "synthetic:artifact:sha256.v1:628c19cf1b9ea5d8162df44950bbeccfabf98e42d40a1b43ab2d0382e09ee699:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
@@ -103,8 +103,8 @@
         {
           "disposition": "failed",
           "evidence": {
-            "artifactId": "dp-recovery-02-pkgxfer",
-            "entryId": "dp-recovery-02-pkgxfer:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4",
+            "entryId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -121,8 +121,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-recovery-02-pkgxfer",
-            "entryId": "dp-recovery-02-pkgxfer:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4",
+            "entryId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
@@ -139,8 +139,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-recovery-03-provider",
-            "entryId": "dp-recovery-03-provider:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:45dc07bc27e1115f1108ec9420799341607f583dc1f900184f0acb4a6f006f69",
+            "entryId": "synthetic:artifact:sha256.v1:45dc07bc27e1115f1108ec9420799341607f583dc1f900184f0acb4a6f006f69:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -157,8 +157,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-recovery-03-provider",
-            "entryId": "dp-recovery-03-provider:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:45dc07bc27e1115f1108ec9420799341607f583dc1f900184f0acb4a6f006f69",
+            "entryId": "synthetic:artifact:sha256.v1:45dc07bc27e1115f1108ec9420799341607f583dc1f900184f0acb4a6f006f69:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
@@ -180,13 +180,13 @@
       "stopPhase": null,
       "terminalEvidence": [
         {
-          "artifactId": "dp-recovery-02-pkgxfer",
-          "entryId": "dp-recovery-02-pkgxfer:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4",
+          "entryId": "synthetic:artifact:sha256.v1:1b07c9a0006563c19cba0b0acc384f7865547dd5c9107cc80a9ea4db08e986d4:1-1",
           "lineEnd": 1,
           "lineStart": 1
         }
       ],
-      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00010:content=content-kappa:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00010:content=content-kappa:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
     }
   ],
   "workflow": "distributionPointContent"

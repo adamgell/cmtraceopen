@@ -24,7 +24,7 @@
 **Files:**
 - Modify only conflict paths listed above plus the plan/library route.
 
-- [ ] **Step 1: Record exact parent identities and cleanliness**
+- [x] **Step 1: Record exact parent identities and cleanliness**
 
 ```bash
 git status --short --branch
@@ -35,15 +35,15 @@ git merge-base HEAD origin/main
 
 Expected: PR head is `078892967cd07ff288a2f3a8e460563983aff1d5`, current main is `e59aed306b4f8f5ee1b862970169a26b24886f4d`, and only this plan/library route is uncommitted.
 
-- [ ] **Step 2: Merge current main without committing**
+- [x] **Step 2: Merge current main without committing**
 
 ```bash
 git merge --no-commit --no-ff e59aed306b4f8f5ee1b862970169a26b24886f4d
 ```
 
-Expected: conflicts only in `intake.rs`, `sccm_server_intake.rs`, and `src-tauri/Cargo.toml`.
+Result: Git auto-merged the three overlapping code paths. `library.md` was the only textual conflict because the integration-plan route and main's #409 route were concurrent; both routes were retained.
 
-- [ ] **Step 3: Resolve intake around ownership, not compatibility**
+- [x] **Step 3: Resolve intake around ownership, not compatibility**
 
 Keep `is_declared_server_source_id` as the sole normal-source membership check. Keep advanced IDs behind `captureContract` validation and preserve `operatorDeclared`/`observed` provenance, per-source budgets, and `parser_eligible=false`. Keep the exact synthetic identity grammar:
 
@@ -63,7 +63,7 @@ fn synthetic_identity(value: &str, domain: &str) -> bool {
 }
 ```
 
-- [ ] **Step 4: Resolve tests and manifests additively**
+- [x] **Step 4: Resolve tests and manifests additively**
 
 Keep the #409 `alice-smith` and `ALC-CM0１` fail-closed cases. Keep every advanced capture test registration and the current-main dependency floor. Confirm `Cargo.lock` still contains `getrandom` and no package is silently removed.
 
@@ -74,7 +74,7 @@ Keep the #409 `alice-smith` and `ALC-CM0１` fail-closed cases. Keep every advan
 - Test `crates/cmtraceopen-parser/tests/sccm_server_advanced_roles_catalog.rs`
 - Test `src-tauri/tests/sccm_advanced_server_capture.rs`
 
-- [ ] **Step 1: Run exact privacy regressions**
+- [x] **Step 1: Run exact privacy regressions**
 
 ```bash
 cargo test --locked -p cmtraceopen-parser --test sccm_server_intake server_intake_rejects_personal_name_shaped_synthetic_identities
@@ -83,7 +83,7 @@ cargo test --locked -p cmtraceopen-parser --test sccm_server_intake server_intak
 
 Expected: both pass; `alice-smith` is rejected on every identity-bearing field and `ALC-CM0１` returns a typed error without panic.
 
-- [ ] **Step 2: Prove advanced IDs are not normal catalog IDs**
+- [x] **Step 2: Prove advanced IDs are not normal catalog IDs**
 
 ```bash
 cargo test --locked -p cmtraceopen-parser --test sccm_server_advanced_roles_catalog
@@ -92,7 +92,7 @@ rg -n 'smspxe|CloudMgr|ProxyConnector|BgbServer|srsrp|crp' crates/cmtraceopen-pa
 
 Expected: catalog tests pass and the production normal-source catalog scan has no advanced source literals.
 
-- [ ] **Step 3: Run complete intake and advanced native contracts**
+- [x] **Step 3: Run complete intake and advanced native contracts**
 
 ```bash
 cargo test --locked -p cmtraceopen-parser --test sccm_server_intake
@@ -108,18 +108,20 @@ Expected: all pass with operator-declared rows unsupported/parser-ineligible and
 **Files:**
 - Verify all changed Rust and TypeScript surfaces.
 
-- [ ] **Step 1: Run parser/privacy/timestamp/native matrix**
+- [x] **Step 1: Run parser/privacy/timestamp/native matrix**
 
 ```bash
 cargo test --locked -p cmtraceopen-parser
 cargo test --locked -p cmtraceopen-parser --test issue_413_unicode_panics
-cargo test --locked -p cmtraceopen-parser --test issue_410_signless_ccm_timestamps
-cargo test --locked -p cmtraceopen-parser --test issue_414_signless_cmtlog_timestamps
+cargo test --locked -p cmtraceopen-parser --lib signless
+cargo test --locked -p cmtraceopen-parser --test sccm_spine_contract signless_ccm_fraction_is_not_timeline_orderable
+cargo test --locked -p cmtraceopen-parser --test sccm_client_inventory_compliance_metering_fixture_contract signless_fractional_tail_is_not_usable_recovery_chronology
+cargo test --locked -p cmtraceopen-parser --test sccm_client_management_fixture_contract additive_timestamp_and_capture_chronology_mutations_fail_closed
 ```
 
 Expected: every suite passes.
 
-- [ ] **Step 2: Run frontend contracts**
+- [x] **Step 2: Run frontend contracts**
 
 ```bash
 npx vitest run src/lib/commands.test.ts src/workspaces/sccm/SccmWorkspace.test.tsx src/workspaces/sccm/sccm-store.test.ts
@@ -129,7 +131,7 @@ npm run frontend:build
 
 Expected: every command exits zero.
 
-- [ ] **Step 3: Run strict quality gates**
+- [x] **Step 3: Run strict quality gates**
 
 ```bash
 cargo fmt --all -- --check
@@ -138,7 +140,7 @@ cargo clippy --locked -p cmtrace-open --all-targets --all-features -- -D warning
 git diff --check
 ```
 
-Expected: zero warnings and no whitespace errors.
+Result: both clippy commands, the scoped rustfmt check over the PR Rust delta, and `git diff --check` pass. Full-repository `cargo fmt --all -- --check` remains red on pre-existing out-of-scope Intune, Jamf, and elevation formatting drift; no unrelated files were reformatted for this integration.
 
 ### Task 4: Freeze, push, and publish evidence
 

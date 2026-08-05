@@ -5846,60 +5846,49 @@ fn public_ccm_malformed_continuation_stays_plain() {
 }
 
 #[test]
-fn public_ccm_digit_only_timestamp_tails_match_pre_spine_baseline() {
-    // Commit 463133d's public regex greedily assigned all but the final digit
-    // to milliseconds and the final digit to timezoneOffset. Preserve that
-    // observable LogEntry behavior while SCCM provenance interprets the same
-    // captured tail independently.
+fn public_ccm_digit_only_timestamp_tails_are_fraction_only() {
+    // An unsigned CCM tail has no delimiter separating a timezone offset from
+    // fractional seconds. Treat every digit as fraction text; only a sign can
+    // establish an offset. Public projection and SCCM provenance must agree.
     let cases = [
         (
-            "000",
-            "07-30-2026 10:00:00.000",
-            0,
-            0,
-            "07-30-2026 10:00:00.000",
+            "1",
+            100,
+            "07-30-2026 10:00:00.100",
+            None,
+            SccmTimeOrderingState::OffsetMissing,
+        ),
+        (
+            "12",
+            120,
+            "07-30-2026 10:00:00.120",
             None,
             SccmTimeOrderingState::OffsetMissing,
         ),
         (
             "123",
-            "07-30-2026 10:00:00.012",
-            12,
-            3,
+            123,
             "07-30-2026 10:00:00.123",
             None,
             SccmTimeOrderingState::OffsetMissing,
         ),
         (
             "000240",
-            "07-30-2026 10:00:00.000",
-            0,
             0,
             "07-30-2026 10:00:00.000",
-            Some(240),
-            SccmTimeOrderingState::NormalizedUtc,
+            None,
+            SccmTimeOrderingState::OffsetMissing,
         ),
         (
             "1234567",
-            "07-30-2026 10:00:00.123",
             123,
-            7,
-            "07-30-2026 10:00:00.1234567",
+            "07-30-2026 10:00:00.123",
             None,
             SccmTimeOrderingState::OffsetMissing,
         ),
     ];
 
-    for (
-        time_tail,
-        public_display,
-        public_millis,
-        public_offset,
-        evidence_display,
-        evidence_offset,
-        evidence_state,
-    ) in cases
-    {
+    for (time_tail, public_millis, public_display, evidence_offset, evidence_state) in cases {
         let text = format!(
             r#"<![LOG[Tail {time_tail}]LOG]!><time="10:00:00.{time_tail}" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
         );
@@ -5911,8 +5900,8 @@ fn public_ccm_digit_only_timestamp_tails_match_pre_spine_baseline() {
             .and_hms_milli_opt(10, 0, 0, public_millis)
             .unwrap()
             .and_utc()
-            .timestamp_millis()
-            - i64::from(public_offset) * 60_000;
+            .timestamp_millis();
+        let evidence_display = format!("07-30-2026 10:00:00.{time_tail}");
 
         assert_eq!(errors, 0, "{time_tail}");
         assert_eq!(entries.len(), 1, "{time_tail}");
@@ -5922,11 +5911,7 @@ fn public_ccm_digit_only_timestamp_tails_match_pre_spine_baseline() {
             Some(public_display),
             "{time_tail}"
         );
-        assert_eq!(
-            entries[0].timezone_offset,
-            Some(public_offset),
-            "{time_tail}"
-        );
+        assert_eq!(entries[0].timezone_offset, Some(0), "{time_tail}");
         assert_eq!(
             entries[0].timestamp,
             Some(expected_public_timestamp),
@@ -5935,7 +5920,7 @@ fn public_ccm_digit_only_timestamp_tails_match_pre_spine_baseline() {
         assert_eq!(evidence.len(), 1, "{time_tail}");
         assert_eq!(
             evidence[0].timestamp.original_display.as_deref(),
-            Some(evidence_display),
+            Some(evidence_display.as_str()),
             "{time_tail}"
         );
         assert_eq!(
@@ -5946,16 +5931,13 @@ fn public_ccm_digit_only_timestamp_tails_match_pre_spine_baseline() {
             evidence[0].timestamp.ordering_state, evidence_state,
             "{time_tail}"
         );
+        assert_eq!(evidence[0].timestamp.utc_millis, None, "{time_tail}");
     }
 }
 
 #[test]
-fn signless_ccm_offset_is_enriched_only_in_sccm_provenance() {
-    // CMTrace's documented `%03u%d` grammar permits the decimal offset to
-    // omit a sign: three millisecond digits followed by the offset. The
-    // public LogEntry keeps its pre-spine projection; only the additive SCCM
-    // timestamp provenance receives the corrected interpretation.
-    let text = r#"<![LOG[Signless source offset]LOG]!><time="10:00:00.000240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
+fn explicit_signed_ccm_offsets_remain_normalized() {
+    let text = r#"<![LOG[Signed source offset]LOG]!><time="10:00:00.123+240" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#;
     let (entries, errors) =
         cmtraceopen_parser::parser::ccm::parse_content(text, "PolicyAgent.log", None);
     let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
@@ -5963,14 +5945,30 @@ fn signless_ccm_offset_is_enriched_only_in_sccm_provenance() {
     assert_eq!(errors, 0);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].format, LogFormat::Ccm);
-    assert_eq!(entries[0].timezone_offset, Some(0));
+    assert_eq!(
+        entries[0].timestamp_display.as_deref(),
+        Some("07-30-2026 10:00:00.123")
+    );
+    assert_eq!(entries[0].timezone_offset, Some(240));
+    assert_eq!(
+        entries[0].timestamp,
+        Some(
+            chrono::NaiveDate::from_ymd_opt(2026, 7, 30)
+                .unwrap()
+                .and_hms_milli_opt(10, 0, 0, 123)
+                .unwrap()
+                .and_utc()
+                .timestamp_millis()
+                - 240 * 60_000
+        )
+    );
     assert_eq!(evidence.len(), 1);
     assert_eq!(evidence[0].timestamp.offset_minutes, Some(240));
     assert_eq!(
         evidence[0].timestamp.ordering_state,
         SccmTimeOrderingState::NormalizedUtc
     );
-    assert!(evidence[0].timestamp.utc_millis.is_some());
+    assert_eq!(evidence[0].timestamp.utc_millis, entries[0].timestamp);
 }
 
 #[test]
@@ -5999,11 +5997,33 @@ fn microsecond_precision_tail_is_not_read_as_a_source_offset() {
     );
     assert_eq!(evidence[0].timestamp.utc_millis, None);
 
-    // The public LogEntry still carries the pre-spine greedy projection,
-    // which assigns the final digit to the offset. That divergence is
-    // deliberate compatibility, not a second reading of the grammar.
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].timezone_offset, Some(6));
+    assert_eq!(
+        entries[0].timestamp_display.as_deref(),
+        Some("07-30-2026 10:00:00.123")
+    );
+    assert_eq!(entries[0].timezone_offset, Some(0));
+}
+
+#[test]
+fn signless_ccm_fraction_is_not_timeline_orderable() {
+    let text = concat!(
+        r#"<![LOG[Signless]LOG]!><time="10:00:00.123456" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">\n"#,
+        r#"<![LOG[Signed]LOG]!><time="09:59:59.999+000" date="07-30-2026" component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#,
+    );
+    let evidence = normalize_ccm_artifact(client_policy_artifact(), text);
+
+    assert_eq!(evidence.len(), 2);
+    assert_eq!(
+        evidence[0].timestamp.ordering_state,
+        SccmTimeOrderingState::OffsetMissing
+    );
+    assert_eq!(evidence[0].timestamp.utc_millis, None);
+    assert_eq!(
+        evidence[1].timestamp.ordering_state,
+        SccmTimeOrderingState::NormalizedUtc
+    );
+    assert!(evidence[1].timestamp.utc_millis.is_some());
 }
 
 #[test]

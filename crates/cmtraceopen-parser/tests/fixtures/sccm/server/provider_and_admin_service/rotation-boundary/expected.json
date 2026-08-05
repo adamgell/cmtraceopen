@@ -2,7 +2,7 @@
   "artifactRequests": [
     {
       "layer": "provider",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "producerRole": "provider",
       "request": {
         "logicalId": "smsprov",
@@ -10,27 +10,27 @@
         "role": "provider"
       },
       "sourceVersion": null,
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "coverage": [
     {
-      "artifactId": "rotation-01-current",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "artifactId": "synthetic:artifact:sha256.v1:74c4dbd840d49599e5493974bb14d3ec6c1fa9a121cafab7acb68f27be982f66",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "producerRole": "provider",
       "sourceId": "server-provider",
       "sourceVersion": null,
       "state": "parseFailed",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     },
     {
-      "artifactId": "rotation-02-lo",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "artifactId": "synthetic:artifact:sha256.v1:b755717f473fd02da03bfb215a0607120af5005a718980a342caaba72b7fab77",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "producerRole": "provider",
       "sourceId": "server-provider",
       "sourceVersion": null,
       "state": "parseFailed",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -42,13 +42,13 @@
         "correlationKeys": [],
         "coverageGaps": [
           {
-            "artifactId": "rotation-01-current",
+            "artifactId": "synthetic:artifact:sha256.v1:74c4dbd840d49599e5493974bb14d3ec6c1fa9a121cafab7acb68f27be982f66",
             "coverage": "parseFailed",
             "role": "provider"
           }
         ],
         "evidence": [],
-        "findingId": "provider-admin-coverage:rotation-01-current",
+        "findingId": "provider-admin-coverage:synthetic:artifact:sha256.v1:74c4dbd840d49599e5493974bb14d3ec6c1fa9a121cafab7acb68f27be982f66",
         "nextArtifacts": [
           {
             "logicalId": "smsprov",
@@ -65,11 +65,11 @@
       },
       "lastSuccessfulPhase": null,
       "layer": "provider",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "sourceId": "server-provider",
       "sourceVersion": null,
-      "subjectId": "rotation-01-current",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "subjectId": "synthetic:artifact:sha256.v1:74c4dbd840d49599e5493974bb14d3ec6c1fa9a121cafab7acb68f27be982f66",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     },
     {
       "finding": {
@@ -78,13 +78,13 @@
         "correlationKeys": [],
         "coverageGaps": [
           {
-            "artifactId": "rotation-02-lo",
+            "artifactId": "synthetic:artifact:sha256.v1:b755717f473fd02da03bfb215a0607120af5005a718980a342caaba72b7fab77",
             "coverage": "parseFailed",
             "role": "provider"
           }
         ],
         "evidence": [],
-        "findingId": "provider-admin-coverage:rotation-02-lo",
+        "findingId": "provider-admin-coverage:synthetic:artifact:sha256.v1:b755717f473fd02da03bfb215a0607120af5005a718980a342caaba72b7fab77",
         "nextArtifacts": [
           {
             "logicalId": "smsprov",
@@ -101,11 +101,11 @@
       },
       "lastSuccessfulPhase": null,
       "layer": "provider",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "sourceId": "server-provider",
       "sourceVersion": null,
-      "subjectId": "rotation-02-lo",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "subjectId": "synthetic:artifact:sha256.v1:b755717f473fd02da03bfb215a0607120af5005a718980a342caaba72b7fab77",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "profiles": [
@@ -129,19 +129,19 @@
   "sourceLocalObservations": [
     {
       "artifactIds": [
-        "rotation-01-current"
+        "synthetic:artifact:sha256.v1:74c4dbd840d49599e5493974bb14d3ec6c1fa9a121cafab7acb68f27be982f66"
       ],
       "correlationEligible": false,
       "kind": "rotationFragment",
-      "observationId": "rotation-01-current-rotation"
+      "observationId": "synthetic:artifact:sha256.v1:74c4dbd840d49599e5493974bb14d3ec6c1fa9a121cafab7acb68f27be982f66-rotation"
     },
     {
       "artifactIds": [
-        "rotation-02-lo"
+        "synthetic:artifact:sha256.v1:b755717f473fd02da03bfb215a0607120af5005a718980a342caaba72b7fab77"
       ],
       "correlationEligible": false,
       "kind": "rotationFragment",
-      "observationId": "rotation-02-lo-rotation"
+      "observationId": "synthetic:artifact:sha256.v1:b755717f473fd02da03bfb215a0607120af5005a718980a342caaba72b7fab77-rotation"
     }
   ],
   "supportState": "syntheticProfileOnly",

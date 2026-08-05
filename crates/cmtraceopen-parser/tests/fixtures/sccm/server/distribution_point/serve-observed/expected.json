@@ -15,38 +15,38 @@
       "contentVersionMismatch": false,
       "evidence": [
         {
-          "artifactId": "dp-serve-01-distmgr",
-          "entryId": "dp-serve-01-distmgr:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:8c889ff07689b563b288b2f5d1eb8b5918b2d88e7ad1b376557c9e37b4f96487",
+          "entryId": "synthetic:artifact:sha256.v1:8c889ff07689b563b288b2f5d1eb8b5918b2d88e7ad1b376557c9e37b4f96487:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-serve-01-distmgr",
-          "entryId": "dp-serve-01-distmgr:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:8c889ff07689b563b288b2f5d1eb8b5918b2d88e7ad1b376557c9e37b4f96487",
+          "entryId": "synthetic:artifact:sha256.v1:8c889ff07689b563b288b2f5d1eb8b5918b2d88e7ad1b376557c9e37b4f96487:2-2",
           "lineEnd": 2,
           "lineStart": 2
         },
         {
-          "artifactId": "dp-serve-02-pkgxfer",
-          "entryId": "dp-serve-02-pkgxfer:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:40ac2ace33945633c14b8266143414db9c047248717311f7d587b23847dcc74d",
+          "entryId": "synthetic:artifact:sha256.v1:40ac2ace33945633c14b8266143414db9c047248717311f7d587b23847dcc74d:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-serve-03-provider",
-          "entryId": "dp-serve-03-provider:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:469e3fa552b79ff16913f430427bff5dd96cd0a248a43d246876b5b38b45ab7f",
+          "entryId": "synthetic:artifact:sha256.v1:469e3fa552b79ff16913f430427bff5dd96cd0a248a43d246876b5b38b45ab7f:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-serve-03-provider",
-          "entryId": "dp-serve-03-provider:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:469e3fa552b79ff16913f430427bff5dd96cd0a248a43d246876b5b38b45ab7f",
+          "entryId": "synthetic:artifact:sha256.v1:469e3fa552b79ff16913f430427bff5dd96cd0a248a43d246876b5b38b45ab7f:2-2",
           "lineEnd": 2,
           "lineStart": 2
         },
         {
-          "artifactId": "dp-serve-04-status",
-          "entryId": "dp-serve-04-status:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:b36187c1a68e3dad747e65f1a0a09ed5d0f633fc2991bd4aa0834674b76672cd",
+          "entryId": "synthetic:artifact:sha256.v1:b36187c1a68e3dad747e65f1a0a09ed5d0f633fc2991bd4aa0834674b76672cd:1-1",
           "lineEnd": 1,
           "lineStart": 1
         }
@@ -54,7 +54,7 @@
       "key": {
         "contentId": "content-zeta",
         "contentVersion": 1,
-        "distributionPointHandle": "synthetic:subject:dp-01",
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
         "extractionProfileId": "dp-server-5.00.test-v1",
         "extractionProfileVersion": 1,
         "packageId": "LAB00006",
@@ -67,8 +67,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-serve-01-distmgr",
-            "entryId": "dp-serve-01-distmgr:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:8c889ff07689b563b288b2f5d1eb8b5918b2d88e7ad1b376557c9e37b4f96487",
+            "entryId": "synthetic:artifact:sha256.v1:8c889ff07689b563b288b2f5d1eb8b5918b2d88e7ad1b376557c9e37b4f96487:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -85,8 +85,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-serve-01-distmgr",
-            "entryId": "dp-serve-01-distmgr:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:8c889ff07689b563b288b2f5d1eb8b5918b2d88e7ad1b376557c9e37b4f96487",
+            "entryId": "synthetic:artifact:sha256.v1:8c889ff07689b563b288b2f5d1eb8b5918b2d88e7ad1b376557c9e37b4f96487:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
@@ -103,8 +103,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-serve-02-pkgxfer",
-            "entryId": "dp-serve-02-pkgxfer:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:40ac2ace33945633c14b8266143414db9c047248717311f7d587b23847dcc74d",
+            "entryId": "synthetic:artifact:sha256.v1:40ac2ace33945633c14b8266143414db9c047248717311f7d587b23847dcc74d:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -121,8 +121,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-serve-03-provider",
-            "entryId": "dp-serve-03-provider:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:469e3fa552b79ff16913f430427bff5dd96cd0a248a43d246876b5b38b45ab7f",
+            "entryId": "synthetic:artifact:sha256.v1:469e3fa552b79ff16913f430427bff5dd96cd0a248a43d246876b5b38b45ab7f:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -139,8 +139,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-serve-03-provider",
-            "entryId": "dp-serve-03-provider:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:469e3fa552b79ff16913f430427bff5dd96cd0a248a43d246876b5b38b45ab7f",
+            "entryId": "synthetic:artifact:sha256.v1:469e3fa552b79ff16913f430427bff5dd96cd0a248a43d246876b5b38b45ab7f:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
@@ -157,8 +157,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-serve-04-status",
-            "entryId": "dp-serve-04-status:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:b36187c1a68e3dad747e65f1a0a09ed5d0f633fc2991bd4aa0834674b76672cd",
+            "entryId": "synthetic:artifact:sha256.v1:b36187c1a68e3dad747e65f1a0a09ed5d0f633fc2991bd4aa0834674b76672cd:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -179,7 +179,7 @@
       "state": "succeeded",
       "stopPhase": null,
       "terminalEvidence": [],
-      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00006:content=content-zeta:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00006:content=content-zeta:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
     }
   ],
   "workflow": "distributionPointContent"
