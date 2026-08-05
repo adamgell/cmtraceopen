@@ -341,6 +341,29 @@ fn structured_supplement_unknown_schema_remains_coverage_only() {
 }
 
 #[test]
+fn structured_supplement_unknown_encoding_remains_coverage_only_without_digest() {
+    let (manifest, payloads) = site_database_supplement_manifest(1, true, "redacted");
+    let mut manifest = serde_json::from_str::<serde_json::Value>(&manifest).expect("manifest JSON");
+    manifest["artifacts"][0]["encoding"] = json!("unknown");
+
+    let assessment = assess_server_intake(
+        &serde_json::to_string(&manifest).expect("manifest serializes"),
+        &payloads,
+    )
+    .expect("unknown encoding remains coverage");
+    let artifact = &assessment.artifacts[0];
+    assert!(matches!(
+        &artifact.supplement_admission,
+        Some(cmtraceopen_parser::sccm::server::windows::SccmServerSupplementAdmission::CoverageOnly {
+            gaps
+        }) if gaps.contains(&cmtraceopen_parser::sccm::server::windows::SccmServerSupplementGap::MissingDigest)
+    ));
+    assert_eq!(artifact.content_sha256, None);
+    assert!(!artifact.parser_eligible);
+    assert!(assessment.evidence.is_empty());
+}
+
+#[test]
 fn structured_supplement_matrix_stays_coverage_only_without_complete_integrity() {
     type SupplementMutation = fn(&mut serde_json::Value);
     let cases: &[(&str, SupplementMutation)] = &[

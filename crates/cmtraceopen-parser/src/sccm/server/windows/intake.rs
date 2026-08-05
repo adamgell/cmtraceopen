@@ -1580,7 +1580,9 @@ fn normalize_artifact(
                 file_limit: limit.file_limit,
                 limit_applied: limit.limit_applied,
             });
-    let content_sha256 = bytes.map(payload_sha256);
+    let content_sha256 = bytes
+        .filter(|_| !is_structured_supplement || artifact.encoding.as_deref() != Some("unknown"))
+        .map(payload_sha256);
     let mut profile_eligible = source_version
         .as_deref()
         .is_some_and(|version| source_version_is_profile_eligible(version, synthetic_fixture));
