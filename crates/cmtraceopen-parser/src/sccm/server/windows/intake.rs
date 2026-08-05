@@ -2660,10 +2660,14 @@ fn normalize_advanced_capture_contract(
             "cmtraceopen.capture-authorization.sha256.v1:",
         )
         || artifact.workflow_subject.is_some()
-        || artifact
-            .collection_limit
-            .as_ref()
-            .is_none_or(|limit| limit.byte_limit != 4 * 1024 * 1024 || limit.file_limit != Some(2))
+        || artifact.collection_limit.as_ref().is_none_or(|limit| {
+            limit.file_limit != Some(2)
+                || if artifact.capture_state == SccmCoverageState::Capped {
+                    limit.byte_limit == 0 || limit.byte_limit > 4 * 1024 * 1024
+                } else {
+                    limit.byte_limit != 4 * 1024 * 1024
+                }
+        })
         || !matches!(artifact.rotation.kind.as_str(), "current" | "lo_")
         || artifact.rotation.value.is_some()
     {

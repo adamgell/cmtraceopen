@@ -226,18 +226,20 @@ impl SccmAdvancedCapabilityStore {
             && environment
                 .roles
                 .iter()
-                .any(|role| role.role == SccmRole::ManagementPoint)
-            && environment.roots.iter().any(|root| {
-                root.role == SccmRole::ManagementPoint
-                    && root.path.canonicalize().ok().as_deref() == Some(canonical_root.as_path())
-            });
-        let provenance = if observed_fact.is_some() || observed_management_point {
+                .any(|role| role.role == SccmRole::ManagementPoint);
+        let observed = if contract.source_id == "advanced-client-notification-bgb" {
+            observed_management_point && observed_fact.is_some()
+        } else {
+            observed_fact.is_some()
+        };
+        let provenance = if observed {
             SccmAdvancedProvenance::Observed
         } else {
             SccmAdvancedProvenance::OperatorDeclared
         };
-        let source_version = observed_fact
-            .and_then(|fact| fact.source_version.clone())
+        let source_version = observed
+            .then(|| observed_fact.and_then(|fact| fact.source_version.clone()))
+            .flatten()
             .or_else(|| environment.configmgr_version.clone());
         let identity = format!(
             "{}\0{}\0{}\0{}\0{}\0{}\0{}\0{}",
@@ -393,20 +395,28 @@ fn contract_is_observed(
     environment: &PrivateSccmEnvironment,
     contract: &SccmAdvancedSourceContract,
 ) -> bool {
-    environment.advanced_source_facts.iter().any(|fact| {
+    let fact_is_observed = |fact: &PrivateAdvancedSourceFact| {
         fact.source_id == contract.source_id
             && contract.role_scopes.contains(&fact.role_scope.as_str())
             && contract.path_classes.contains(&fact.path_class.as_str())
             && (!contract.requires_pxe_fact || fact.pxe_enabled)
-    }) || (contract.source_id == "advanced-client-notification-bgb"
-        && environment
+            && canonical_observed_root(&fact.root).is_some()
+    };
+    if contract.source_id == "advanced-client-notification-bgb" {
+        environment
             .roles
             .iter()
             .any(|role| role.role == SccmRole::ManagementPoint)
-        && environment
-            .roots
+            && environment
+                .advanced_source_facts
+                .iter()
+                .any(|fact| fact.role_scope == "managementPoint" && fact_is_observed(fact))
+    } else {
+        environment
+            .advanced_source_facts
             .iter()
-            .any(|root| root.role == SccmRole::ManagementPoint))
+            .any(fact_is_observed)
+    }
 }
 
 fn observed_fact_for<'a>(
@@ -420,8 +430,16 @@ fn observed_fact_for<'a>(
             && fact.role_scope == request.role_scope
             && fact.path_class == request.path_class
             && (!contract.requires_pxe_fact || fact.pxe_enabled)
-            && fact.root.canonicalize().ok().as_deref() == Some(canonical_root)
+            && canonical_observed_root(&fact.root).as_deref() == Some(canonical_root)
     })
+}
+
+fn canonical_observed_root(root: &Path) -> Option<PathBuf> {
+    let metadata = fs::symlink_metadata(root).ok()?;
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !metadata.is_dir() {
+        return None;
+    }
+    root.canonicalize().ok()
 }
 
 fn validate_selected_root(value: &str) -> Result<PathBuf, SccmCollectorError> {
@@ -517,6 +535,7 @@ pub fn capture_advanced_authorized(
     let mut payloads = Vec::new();
     let mut statuses = Vec::new();
     let mut retained_bytes = 0_u64;
+    let mut remaining_bytes = ADVANCED_CAPTURE_BYTE_LIMIT;
     let manifest_context = AdvancedManifestContext {
         authorization: &authorization,
         producer_role: &producer_role,
@@ -538,9 +557,11 @@ pub fn capture_advanced_authorized(
             &authorization.canonical_root,
             &source_path,
             &bundle_root.join(&relative_path),
+            remaining_bytes,
         ) {
             Ok((bytes, capped)) => {
                 retained_bytes += bytes.len() as u64;
+                remaining_bytes = remaining_bytes.saturating_sub(bytes.len() as u64);
                 let artifact_id = advanced_artifact_id(
                     &authorization,
                     &producer_role,
@@ -603,6 +624,33 @@ pub fn capture_advanced_authorized(
                 });
             }
             Err(CopyAdvancedFailure::Missing) => continue,
+            Err(CopyAdvancedFailure::BudgetExhausted) => {
+                let artifact_id = advanced_artifact_id(
+                    &authorization,
+                    &producer_role,
+                    &root_handle,
+                    &basename,
+                    &rotation,
+                    "capped",
+                );
+                artifacts.push(advanced_manifest_row(
+                    &manifest_context,
+                    &artifact_id,
+                    &basename,
+                    &rotation,
+                    "capped",
+                    None,
+                    0,
+                ));
+                statuses.push(SccmSourceStatus {
+                    role: producer_role.clone(),
+                    source_id: authorization.contract.source_id.to_owned(),
+                    rotation: rotation_category(&rotation),
+                    state: SccmCoverageState::Capped,
+                    retained_bytes: 0,
+                    detail_code: Some(SccmSourceDetailCode::ByteLimitExceeded),
+                });
+            }
             Err(CopyAdvancedFailure::Unsafe) => {
                 return Err(SccmCollectorError::AdvancedAuthorizationRejected)
             }
@@ -765,7 +813,7 @@ fn advanced_manifest_row(
         "unsupportedReason": if state == "unsupported" { json!(opaque_reason("unsupported-reason", artifact_id)) } else { Value::Null },
         "encoding": relative_path.as_ref().map(|_| "unknown"),
         "collectionLimit": {
-            "byteLimit": ADVANCED_CAPTURE_BYTE_LIMIT,
+            "byteLimit": if state == "capped" && bytes_copied > 0 { bytes_copied } else { ADVANCED_CAPTURE_BYTE_LIMIT },
             "fileLimit": ADVANCED_CAPTURE_FILE_LIMIT,
             "limitApplied": state == "capped"
         },
@@ -895,6 +943,7 @@ fn prepare_bundle_root(bundle_root: &Path) -> Result<(), SccmCollectorError> {
 enum CopyAdvancedFailure {
     AccessDenied,
     Missing,
+    BudgetExhausted,
     Unsafe,
     Failed,
 }
@@ -903,6 +952,7 @@ fn copy_exact_source(
     canonical_root: &Path,
     source: &Path,
     destination: &Path,
+    byte_limit: u64,
 ) -> Result<(Vec<u8>, bool), CopyAdvancedFailure> {
     let metadata = fs::symlink_metadata(source).map_err(map_copy_error)?;
     if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !metadata.is_file() {
@@ -914,9 +964,12 @@ fn copy_exact_source(
     {
         return Err(CopyAdvancedFailure::Unsafe);
     }
+    if byte_limit == 0 && metadata.len() > 0 {
+        return Err(CopyAdvancedFailure::BudgetExhausted);
+    }
     let mut input = open_source_no_follow(source).map_err(map_copy_error)?;
-    let capped = metadata.len() > ADVANCED_CAPTURE_BYTE_LIMIT;
-    let read_limit = metadata.len().min(ADVANCED_CAPTURE_BYTE_LIMIT);
+    let capped = metadata.len() > byte_limit;
+    let read_limit = metadata.len().min(byte_limit);
     let mut bytes =
         Vec::with_capacity(usize::try_from(read_limit).map_err(|_| CopyAdvancedFailure::Failed)?);
     Read::by_ref(&mut input)

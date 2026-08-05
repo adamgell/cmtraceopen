@@ -145,7 +145,7 @@ fn operator_declared_missing_candidate_is_unsupported_not_absent() {
 }
 
 #[test]
-fn management_point_root_is_the_only_generic_observed_bgb_admission() {
+fn bgb_matching_management_point_fact_is_observed() {
     let source = tempfile::tempdir().unwrap();
     fs::write(source.path().join("BgbServer.log"), b"bgb").unwrap();
     let mut environment = operator_environment();
@@ -157,6 +157,16 @@ fn management_point_root_is_the_only_generic_observed_bgb_admission() {
         role: SccmRole::ManagementPoint,
         path: source.path().to_owned(),
     });
+    environment
+        .advanced_source_facts
+        .push(PrivateAdvancedSourceFact {
+            source_id: "advanced-client-notification-bgb".to_owned(),
+            role_scope: "managementPoint".to_owned(),
+            path_class: "configuredRoleLogRoot".to_owned(),
+            root: source.path().to_owned(),
+            source_version: Some("5.00.9141.1000".to_owned()),
+            pxe_enabled: false,
+        });
     let mut request = request(
         source.path().to_str().unwrap(),
         "advanced-client-notification-bgb",
@@ -177,6 +187,135 @@ fn management_point_root_is_the_only_generic_observed_bgb_admission() {
     assert!(manifest.contains("\"producerRole\": \"managementPoint\""));
     assert!(manifest.contains("\"roleProvenance\": \"observed\""));
     assert!(manifest.contains("\"pathClass\": \"configuredRoleLogRoot\""));
+}
+
+#[test]
+fn bgb_missing_management_point_role_falls_back_to_operator_declared() {
+    let source = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("BgbServer.log"), b"bgb").unwrap();
+    let mut environment = operator_environment();
+    environment
+        .advanced_source_facts
+        .push(PrivateAdvancedSourceFact {
+            source_id: "advanced-client-notification-bgb".to_owned(),
+            role_scope: "managementPoint".to_owned(),
+            path_class: "configuredRoleLogRoot".to_owned(),
+            root: source.path().to_owned(),
+            source_version: Some("5.00.9141.1000".to_owned()),
+            pxe_enabled: false,
+        });
+    let mut bgb_request = request(
+        source.path().to_str().unwrap(),
+        "advanced-client-notification-bgb",
+    );
+    bgb_request.role_scope = "managementPoint".to_owned();
+
+    let mut store = SccmAdvancedCapabilityStore::default();
+    let capability = store
+        .authorize(&environment, bgb_request, Instant::now())
+        .unwrap();
+    let authorization = store
+        .consume(&capability.capability_handle, Instant::now())
+        .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    capture_advanced_authorized(authorization, &output.path().join("bundle")).unwrap();
+    let manifest =
+        fs::read_to_string(output.path().join("bundle/sccm-server-manifest.json")).unwrap();
+
+    assert!(manifest.contains("\"roleProvenance\": \"operatorDeclared\""));
+}
+
+#[test]
+fn bgb_mismatched_path_class_falls_back_to_operator_declared() {
+    let source = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("BgbServer.log"), b"bgb").unwrap();
+    let mut environment = operator_environment();
+    environment.roles.push(SccmDetectedRole {
+        role: SccmRole::ManagementPoint,
+        basis: SccmDiscoveryBasis::Registry,
+    });
+    environment.roots.push(SccmCaptureRoot {
+        role: SccmRole::ManagementPoint,
+        path: source.path().to_owned(),
+    });
+    environment
+        .advanced_source_facts
+        .push(PrivateAdvancedSourceFact {
+            source_id: "advanced-client-notification-bgb".to_owned(),
+            role_scope: "managementPoint".to_owned(),
+            path_class: "configuredRoleLogRoot".to_owned(),
+            root: source.path().to_owned(),
+            source_version: Some("5.00.9141.1000".to_owned()),
+            pxe_enabled: false,
+        });
+    let mut bgb_request = request(
+        source.path().to_str().unwrap(),
+        "advanced-client-notification-bgb",
+    );
+    bgb_request.role_scope = "managementPoint".to_owned();
+    bgb_request.path_class = "siteServerLogs".to_owned();
+
+    let mut store = SccmAdvancedCapabilityStore::default();
+    let capability = store
+        .authorize(&environment, bgb_request, Instant::now())
+        .unwrap();
+    let authorization = store
+        .consume(&capability.capability_handle, Instant::now())
+        .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    capture_advanced_authorized(authorization, &output.path().join("bundle")).unwrap();
+    let manifest =
+        fs::read_to_string(output.path().join("bundle/sccm-server-manifest.json")).unwrap();
+
+    assert!(manifest.contains("\"roleProvenance\": \"operatorDeclared\""));
+    assert!(!manifest.contains("\"producerRole\": \"managementPoint\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn bgb_hostile_symlink_fact_falls_back_to_operator_declared() {
+    use std::os::unix::fs::symlink;
+
+    let source = tempfile::tempdir().unwrap();
+    let hostile_fact_root = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("BgbServer.log"), b"bgb").unwrap();
+    let fact_link = hostile_fact_root.path().join("observed-root");
+    symlink(source.path(), &fact_link).unwrap();
+
+    let mut environment = operator_environment();
+    environment.roles.push(SccmDetectedRole {
+        role: SccmRole::ManagementPoint,
+        basis: SccmDiscoveryBasis::Registry,
+    });
+    environment
+        .advanced_source_facts
+        .push(PrivateAdvancedSourceFact {
+            source_id: "advanced-client-notification-bgb".to_owned(),
+            role_scope: "managementPoint".to_owned(),
+            path_class: "configuredRoleLogRoot".to_owned(),
+            root: fact_link,
+            source_version: Some("5.00.9141.1000".to_owned()),
+            pxe_enabled: false,
+        });
+    let mut bgb_request = request(
+        source.path().to_str().unwrap(),
+        "advanced-client-notification-bgb",
+    );
+    bgb_request.role_scope = "managementPoint".to_owned();
+
+    let mut store = SccmAdvancedCapabilityStore::default();
+    let capability = store
+        .authorize(&environment, bgb_request, Instant::now())
+        .unwrap();
+    let authorization = store
+        .consume(&capability.capability_handle, Instant::now())
+        .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    capture_advanced_authorized(authorization, &output.path().join("bundle")).unwrap();
+    let manifest =
+        fs::read_to_string(output.path().join("bundle/sccm-server-manifest.json")).unwrap();
+
+    assert!(manifest.contains("\"roleProvenance\": \"operatorDeclared\""));
 }
 
 #[test]
@@ -248,4 +387,105 @@ fn oversized_source_is_capped_at_four_mib() {
     let result = capture_advanced_authorized(authorization, &output.path().join("bundle")).unwrap();
     assert_eq!(result.retained_bytes, ADVANCED_CAPTURE_BYTE_LIMIT);
     assert_eq!(result.sources[0].state, SccmCoverageState::Capped);
+}
+
+#[test]
+fn advanced_capture_byte_limit_is_shared_exactly_across_current_and_lo() {
+    let source = tempfile::tempdir().unwrap();
+    let current_bytes = ADVANCED_CAPTURE_BYTE_LIMIT as usize - 11;
+    fs::write(
+        source.path().join("CloudMgr.log"),
+        vec![b'c'; current_bytes],
+    )
+    .unwrap();
+    fs::write(source.path().join("CloudMgr.lo_"), vec![b'l'; 11]).unwrap();
+    let mut store = SccmAdvancedCapabilityStore::default();
+    let capability = store
+        .authorize(
+            &operator_environment(),
+            request(source.path().to_str().unwrap(), "advanced-cloud-manager"),
+            Instant::now(),
+        )
+        .unwrap();
+    let authorization = store
+        .consume(&capability.capability_handle, Instant::now())
+        .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let bundle = output.path().join("bundle");
+    let result = capture_advanced_authorized(authorization, &bundle).unwrap();
+
+    assert_eq!(result.retained_bytes, ADVANCED_CAPTURE_BYTE_LIMIT);
+    assert_eq!(
+        result
+            .sources
+            .iter()
+            .map(|source| source.state.clone())
+            .collect::<Vec<_>>(),
+        vec![SccmCoverageState::Captured, SccmCoverageState::Captured]
+    );
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle.join("sccm-server-manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(manifest["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|artifact| {
+            artifact["collectionLimit"]["byteLimit"] == ADVANCED_CAPTURE_BYTE_LIMIT
+                && artifact["collectionLimit"]["limitApplied"] == false
+                && artifact["captureState"] == "captured"
+        }));
+}
+
+#[test]
+fn advanced_capture_byte_limit_is_current_first_and_caps_overflow_rotation() {
+    let source = tempfile::tempdir().unwrap();
+    fs::write(
+        source.path().join("CloudMgr.log"),
+        vec![b'c'; ADVANCED_CAPTURE_BYTE_LIMIT as usize - 1],
+    )
+    .unwrap();
+    fs::write(source.path().join("CloudMgr.lo_"), b"overflow").unwrap();
+    let mut store = SccmAdvancedCapabilityStore::default();
+    let capability = store
+        .authorize(
+            &operator_environment(),
+            request(source.path().to_str().unwrap(), "advanced-cloud-manager"),
+            Instant::now(),
+        )
+        .unwrap();
+    let authorization = store
+        .consume(&capability.capability_handle, Instant::now())
+        .unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let bundle = output.path().join("bundle");
+    let result = capture_advanced_authorized(authorization, &bundle).unwrap();
+
+    assert_eq!(result.retained_bytes, ADVANCED_CAPTURE_BYTE_LIMIT);
+    assert_eq!(result.sources.len(), 2);
+    assert_eq!(result.sources[0].state, SccmCoverageState::Captured);
+    assert_eq!(
+        result.sources[0].retained_bytes,
+        ADVANCED_CAPTURE_BYTE_LIMIT - 1
+    );
+    assert_eq!(result.sources[1].state, SccmCoverageState::Capped);
+    assert_eq!(result.sources[1].retained_bytes, 1);
+    let manifest: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(bundle.join("sccm-server-manifest.json")).unwrap(),
+    )
+    .unwrap();
+    let overflow = manifest["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|artifact| artifact["originalBasename"] == "CloudMgr.lo_")
+        .unwrap();
+    assert_eq!(overflow["captureState"], "capped");
+    assert_eq!(overflow["bytesCopied"], 1);
+    assert_eq!(overflow["collectionLimit"]["byteLimit"], 1);
+    assert_eq!(overflow["collectionLimit"]["fileLimit"], 2);
+    assert_eq!(overflow["collectionLimit"]["limitApplied"], true);
+    assert_eq!(overflow["truncated"], true);
+    assert_eq!(overflow["fragmentComplete"], false);
 }
