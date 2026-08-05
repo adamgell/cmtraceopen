@@ -265,6 +265,13 @@ const sanitizePersistedUiState = (
 ): Partial<UiState> => {
   const sanitized: Partial<UiState> = { ...state };
 
+  // Authentication lifecycle state is process-local. Ignore stale or
+  // externally injected values during rehydration even though current writes
+  // already omit them through `partialize`.
+  delete sanitized.graphApiStatus;
+  delete sanitized.graphApiCapability;
+  delete sanitized.graphApiLastAttempt;
+
   if (sanitized.logListFontSize !== undefined) {
     const raw = Number(sanitized.logListFontSize);
     const base = Number.isFinite(raw) ? raw : DEFAULT_LOG_LIST_FONT_SIZE;

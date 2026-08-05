@@ -58,24 +58,34 @@ describe("ui-store", () => {
       expect(useUiStore.getState().activeView).toBe("log");
     });
 
-    it("persists only Graph opt-in and never transient authentication state", () => {
+    it("rehydrates only Graph opt-in and discards transient authentication state", async () => {
       useUiStore.setState({
-        graphApiEnabled: true,
-        graphApiStatus: "connected",
-        graphApiCapability: { kind: "available" },
-        graphApiLastAttempt: {
-          outcome: "connected",
-          message: "transient-attempt",
-        },
+        graphApiEnabled: false,
+        graphApiStatus: "disconnected",
+        graphApiCapability: null,
+        graphApiLastAttempt: null,
       });
+      localStorage.setItem(
+        "cmtraceopen-ui-preferences",
+        JSON.stringify({
+          state: {
+            graphApiEnabled: true,
+            graphApiStatus: "connected",
+            graphApiCapability: { kind: "available" },
+            graphApiLastAttempt: {
+              outcome: "connected",
+              message: "stale-attempt",
+            },
+          },
+        }),
+      );
 
-      const persisted = JSON.parse(
-        localStorage.getItem("cmtraceopen-ui-preferences") ?? "{}",
-      ).state;
-      expect(persisted.graphApiEnabled).toBe(true);
-      expect(persisted).not.toHaveProperty("graphApiStatus");
-      expect(persisted).not.toHaveProperty("graphApiCapability");
-      expect(persisted).not.toHaveProperty("graphApiLastAttempt");
+      await useUiStore.persist.rehydrate();
+
+      expect(useUiStore.getState().graphApiEnabled).toBe(true);
+      expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
+      expect(useUiStore.getState().graphApiCapability).toBeNull();
+      expect(useUiStore.getState().graphApiLastAttempt).toBeNull();
     });
   });
 

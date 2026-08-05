@@ -309,7 +309,9 @@ export function GraphApiTab() {
           ? sharedGraphAction
           : null;
       if (interactiveAction?.requestId) {
-        void graphCancelAuthentication(interactiveAction.requestId);
+        void graphCancelAuthentication(interactiveAction.requestId).catch(
+          () => false,
+        );
       } else {
         invalidateSharedGraphActions();
       }
@@ -937,6 +939,7 @@ export function GraphApiTab() {
                 </div>
                 {graphApiLastAttempt?.message && (
                   <div
+                    role="alert"
                     style={{
                       color: tokens.colorPaletteRedForeground1,
                       marginBottom: "8px",
@@ -946,18 +949,19 @@ export function GraphApiTab() {
                     {graphApiLastAttempt.message}
                   </div>
                 )}
-                {graphApiStatus === "unsupported" && (
-                  <div
-                    role="status"
-                    style={{
-                      color: tokens.colorPaletteYellowForeground2,
-                      marginBottom: "8px",
-                      fontSize: "11px",
-                    }}
-                  >
-                    {unsupportedCapabilityMessage(graphApiCapability?.kind)}
-                  </div>
-                )}
+                {graphApiStatus === "unsupported" &&
+                  !graphApiLastAttempt?.message && (
+                    <div
+                      role="status"
+                      style={{
+                        color: tokens.colorPaletteYellowForeground2,
+                        marginBottom: "8px",
+                        fontSize: "11px",
+                      }}
+                    >
+                      {unsupportedCapabilityMessage(graphApiCapability?.kind)}
+                    </div>
+                  )}
                 {loading ? (
                   <button
                     type="button"

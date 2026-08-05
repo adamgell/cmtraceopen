@@ -250,31 +250,6 @@ impl Drop for GraphInteractiveOperationLease {
 }
 
 #[cfg(any(target_os = "windows", test))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeadlineReceiveError {
-    Timeout,
-    Disconnected,
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn receive_before_deadline<T>(
-    receiver: &std::sync::mpsc::Receiver<T>,
-    deadline: std::time::Instant,
-) -> Result<T, DeadlineReceiveError> {
-    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-    if remaining.is_zero() {
-        return Err(DeadlineReceiveError::Timeout);
-    }
-    match receiver.recv_timeout(remaining) {
-        Ok(value) => Ok(value),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(DeadlineReceiveError::Timeout),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            Err(DeadlineReceiveError::Disconnected)
-        }
-    }
-}
-
-#[cfg(any(target_os = "windows", test))]
 fn invalid_graph_app_response(required_scope: &str) -> client::GraphClientError {
     client::GraphClientError::new(
         client::GraphClientErrorKind::InvalidResponse,
@@ -2416,15 +2391,12 @@ pub use windows_impl::*;
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
-
     use super::client::GraphClientErrorKind;
     use super::{
         parse_graph_app_json, parse_graph_app_values, GraphAppInfo, VersionedAuthSlot,
         VersionedGuidCache,
     };
+    use std::collections::HashMap;
 
     const APP_A: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const APP_B: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -2545,35 +2517,6 @@ mod tests {
                 "near miss was classified as a denial: {error_code:?} {message:?}"
             );
         }
-    }
-
-    #[test]
-    fn deadline_receiver_distinguishes_ready_timeout_and_disconnect() {
-        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
-        ready_sender.send(7_u8).expect("ready value");
-        assert_eq!(
-            super::receive_before_deadline(
-                &ready_receiver,
-                Instant::now() + Duration::from_secs(1)
-            ),
-            Ok(7)
-        );
-
-        let (_pending_sender, pending_receiver) = mpsc::sync_channel::<u8>(1);
-        assert_eq!(
-            super::receive_before_deadline(&pending_receiver, Instant::now()),
-            Err(super::DeadlineReceiveError::Timeout)
-        );
-
-        let (disconnected_sender, disconnected_receiver) = mpsc::sync_channel::<u8>(1);
-        drop(disconnected_sender);
-        assert_eq!(
-            super::receive_before_deadline(
-                &disconnected_receiver,
-                Instant::now() + Duration::from_secs(1)
-            ),
-            Err(super::DeadlineReceiveError::Disconnected)
-        );
     }
 
     fn app(id: &str, name: &str) -> GraphAppInfo {

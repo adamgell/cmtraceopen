@@ -1146,6 +1146,9 @@ describe("GraphApiTab delegated capabilities", () => {
     const cancelledAuthentication = deferred<GraphAuthAttemptResult>();
     const currentAuthentication = deferred<GraphAuthAttemptResult>();
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphCancelAuthentication).mockRejectedValueOnce(
+      new Error("cancel transport failed"),
+    );
     vi.mocked(graphAuthenticate)
       .mockReturnValueOnce(cancelledAuthentication.promise)
       .mockReturnValueOnce(currentAuthentication.promise);
@@ -1225,6 +1228,29 @@ describe("GraphApiTab delegated capabilities", () => {
     expect(useUiStore.getState().graphApiStatus).toBe("unsupported");
   });
 
+  it("shows one announced native message when sign-in discovers an unsupported host", async () => {
+    const message =
+      "Only a personal Microsoft account is available. Connect a Windows work or school account to use Microsoft Graph.";
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphAuthenticate).mockResolvedValue({
+      outcome: "unavailable",
+      status: disconnectedStatus(),
+      capability: { kind: "personalAccountOnly" },
+      message,
+    });
+
+    render(<GraphApiTab />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(message);
+    expect(screen.getAllByText(/Only a personal Microsoft account/)).toHaveLength(
+      1,
+    );
+    expect(useUiStore.getState().graphApiStatus).toBe("unsupported");
+  });
+
   it("cancels the matching request and remains cancelling until native settles", async () => {
     const authentication = deferred<GraphAuthAttemptResult>();
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
@@ -1277,6 +1303,9 @@ describe("GraphApiTab delegated capabilities", () => {
     );
 
     await screen.findByText(
+      "Microsoft Graph sign-in timed out after 120 seconds.",
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
       "Microsoft Graph sign-in timed out after 120 seconds.",
     );
     expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
