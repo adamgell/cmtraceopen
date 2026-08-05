@@ -103,6 +103,94 @@ fn advanced_capture_manifest(
     (serde_json::to_string(&manifest).unwrap(), payloads)
 }
 
+fn advanced_capture_over_budget_manifest(
+    tamper_handles: bool,
+    reverse_order: bool,
+) -> (String, Vec<SccmServerArtifactPayload>) {
+    let (manifest, mut payloads) = advanced_capture_manifest("captured", true);
+    let mut manifest: Value = serde_json::from_str(&manifest).unwrap();
+    let mut overflow = manifest["artifacts"][0].clone();
+    let overflow_id = format!("cmtraceopen.artifact.sha256.v1:{}", "9".repeat(64));
+    overflow["artifactId"] = json!(overflow_id.clone());
+    overflow["originalBasename"] = json!("smspxe.lo_");
+    overflow["rotation"] = json!({
+        "kind": "lo_",
+        "value": null,
+        "lineageId": format!("cmtraceopen.lineage.sha256.v1:{}", "2".repeat(64))
+    });
+    overflow["captureState"] = json!("capped");
+    overflow["collectionLimit"] = json!({
+        "byteLimit": 4 * 1024 * 1024,
+        "fileLimit": 2,
+        "limitApplied": true
+    });
+    overflow["truncated"] = json!(true);
+    overflow["fragmentComplete"] = json!(false);
+    overflow["relativePath"] = json!(
+        "evidence/sccm/server/unclassified/advanced-osd-pxe/root-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/lo_/smspxe.lo_"
+    );
+    overflow["bytesCopied"] = json!(4 * 1024 * 1024);
+    if tamper_handles {
+        overflow["captureContract"]["capabilityHandle"] = json!(format!(
+            "cmtraceopen.capture-capability.sha256.v1:{}",
+            "e".repeat(64)
+        ));
+        overflow["captureContract"]["authorizationHandle"] = json!(format!(
+            "cmtraceopen.capture-authorization.sha256.v1:{}",
+            "f".repeat(64)
+        ));
+    }
+    manifest["artifacts"].as_array_mut().unwrap().push(overflow);
+    payloads.push(SccmServerArtifactPayload {
+        manifest_artifact_id: overflow_id,
+        bytes: vec![b'x'; 4 * 1024 * 1024],
+    });
+    if reverse_order {
+        manifest["artifacts"].as_array_mut().unwrap().reverse();
+        payloads.reverse();
+    }
+    (serde_json::to_string(&manifest).unwrap(), payloads)
+}
+
+fn advanced_capture_distinct_source_manifest() -> (String, Vec<SccmServerArtifactPayload>) {
+    let (manifest, mut payloads) = advanced_capture_manifest("captured", true);
+    let mut manifest: Value = serde_json::from_str(&manifest).unwrap();
+    let mut separate_source = manifest["artifacts"][0].clone();
+    let separate_id = format!("cmtraceopen.artifact.sha256.v1:{}", "9".repeat(64));
+    separate_source["artifactId"] = json!(separate_id.clone());
+    separate_source["configuredPathProvenance"]["pathFingerprint"] =
+        json!(format!("cmtraceopen.path.sha256.v1:{}", "3".repeat(64)));
+    separate_source["captureContract"]["capabilityHandle"] = json!(format!(
+        "cmtraceopen.capture-capability.sha256.v1:{}",
+        "e".repeat(64)
+    ));
+    separate_source["captureContract"]["authorizationHandle"] = json!(format!(
+        "cmtraceopen.capture-authorization.sha256.v1:{}",
+        "f".repeat(64)
+    ));
+    separate_source["captureState"] = json!("capped");
+    separate_source["collectionLimit"] = json!({
+        "byteLimit": 4 * 1024 * 1024,
+        "fileLimit": 2,
+        "limitApplied": true
+    });
+    separate_source["truncated"] = json!(true);
+    separate_source["fragmentComplete"] = json!(false);
+    separate_source["relativePath"] = json!(
+        "evidence/sccm/server/unclassified/advanced-osd-pxe/root-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/current/smspxe.log"
+    );
+    separate_source["bytesCopied"] = json!(4 * 1024 * 1024);
+    manifest["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .push(separate_source);
+    payloads.push(SccmServerArtifactPayload {
+        manifest_artifact_id: separate_id,
+        bytes: vec![b'x'; 4 * 1024 * 1024],
+    });
+    (serde_json::to_string(&manifest).unwrap(), payloads)
+}
+
 #[test]
 fn advanced_capture_operator_declared_payload_is_preserved_but_parser_ineligible() {
     let (manifest, payloads) = advanced_capture_manifest("captured", true);
@@ -202,6 +290,34 @@ fn advanced_capture_contract_participates_in_duplicate_identity() {
         normalize_server_bundle(&serde_json::to_string(&value).unwrap(), &payloads),
         Err(SccmServerIntakeError::DuplicateArtifact)
     );
+}
+
+#[test]
+fn advanced_capture_rejects_total_budget_overage_regardless_of_order() {
+    for reverse_order in [false, true] {
+        let (manifest, payloads) = advanced_capture_over_budget_manifest(false, reverse_order);
+        assert_eq!(
+            normalize_server_bundle(&manifest, &payloads),
+            Err(SccmServerIntakeError::InvalidArtifact),
+            "over-budget current + lo_ must fail regardless of input order"
+        );
+    }
+}
+
+#[test]
+fn advanced_capture_rejects_budget_evasion_by_tampered_handles() {
+    let (manifest, payloads) = advanced_capture_over_budget_manifest(true, true);
+    assert_eq!(
+        normalize_server_bundle(&manifest, &payloads),
+        Err(SccmServerIntakeError::InvalidArtifact)
+    );
+}
+
+#[test]
+fn advanced_capture_keeps_distinct_sources_outside_each_others_budget() {
+    let (manifest, payloads) = advanced_capture_distinct_source_manifest();
+    let assessment = normalize_server_bundle(&manifest, &payloads).expect("separate sources");
+    assert_eq!(assessment.artifacts.len(), 2);
 }
 
 fn load_bundle(scenario: &str) -> (String, Vec<SccmServerArtifactPayload>) {

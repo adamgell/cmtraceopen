@@ -26,6 +26,7 @@ pub const MAX_SCCM_SERVER_MANIFEST_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_SCCM_SERVER_MANIFEST_ARTIFACTS: usize = 512;
 pub const MAX_SCCM_SERVER_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_SCCM_SERVER_TOTAL_DECLARED_BYTES: u64 = 1024 * 1024 * 1024;
+const ADVANCED_CAPTURE_SOURCE_BYTE_LIMIT: u64 = 4 * 1024 * 1024;
 const MAX_SCCM_SERVER_OPAQUE_EXTENSIONS: usize = 32;
 const MAX_SCCM_SERVER_OPAQUE_EXTENSION_BYTES_PER_SCOPE: usize = 8 * 1024;
 const MAX_SCCM_SERVER_TOTAL_OPAQUE_EXTENSIONS: usize = 1_024;
@@ -825,6 +826,8 @@ pub fn assess_server_intake(
         prepared.push(normalized);
     }
 
+    validate_advanced_capture_source_budgets(&prepared)?;
+
     if payload_by_id
         .keys()
         .any(|artifact_id| !manifest_artifact_ids.contains(*artifact_id))
@@ -946,6 +949,93 @@ pub fn assess_server_intake(
 struct PreparedArtifact {
     assessment: SccmServerArtifactAssessment,
     evidence: Vec<SccmEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct AdvancedCaptureBudgetKey {
+    producer_role: String,
+    producer_host_handle: Option<String>,
+    source_id: String,
+    source_version: Option<String>,
+    path_fingerprint: String,
+    card_id: String,
+    card_version: String,
+    role_claim: String,
+    path_claim: String,
+    role_provenance: SccmServerAdvancedProvenance,
+    path_provenance: SccmServerAdvancedProvenance,
+}
+
+impl AdvancedCaptureBudgetKey {
+    fn from_artifact(
+        artifact: &SccmServerArtifactAssessment,
+        contract: &SccmServerCaptureContract,
+    ) -> Self {
+        Self {
+            producer_role: role_sort_key(&artifact.producer_role).to_owned(),
+            producer_host_handle: artifact.producer_host_handle.clone(),
+            source_id: artifact.source_id.clone(),
+            source_version: artifact.source_version.clone(),
+            path_fingerprint: artifact.path_fingerprint.clone(),
+            card_id: contract.card_id.clone(),
+            card_version: contract.card_version.clone(),
+            role_claim: contract.role_claim.clone(),
+            path_claim: contract.path_claim.clone(),
+            role_provenance: contract.role_provenance,
+            path_provenance: contract.path_provenance,
+        }
+    }
+}
+
+struct AdvancedCaptureBudget {
+    capability_handle: String,
+    authorization_handle: String,
+    artifact_count: usize,
+    retained_bytes: u64,
+}
+
+fn validate_advanced_capture_source_budgets(
+    prepared: &[PreparedArtifact],
+) -> Result<(), SccmServerIntakeError> {
+    let mut budgets = BTreeMap::<AdvancedCaptureBudgetKey, AdvancedCaptureBudget>::new();
+    for prepared_artifact in prepared {
+        let artifact = &prepared_artifact.assessment;
+        let Some(contract) = artifact.capture_contract.as_ref() else {
+            continue;
+        };
+        let key = AdvancedCaptureBudgetKey::from_artifact(artifact, contract);
+        if let Some(budget) = budgets.get_mut(&key) {
+            if budget.capability_handle != contract.capability_handle
+                || budget.authorization_handle != contract.authorization_handle
+            {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+            budget.artifact_count += 1;
+            budget.retained_bytes = budget
+                .retained_bytes
+                .checked_add(artifact.bytes_copied)
+                .ok_or(SccmServerIntakeError::InvalidArtifact)?;
+            if budget.artifact_count > 2
+                || budget.retained_bytes > ADVANCED_CAPTURE_SOURCE_BYTE_LIMIT
+            {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+        } else {
+            if artifact.bytes_copied > ADVANCED_CAPTURE_SOURCE_BYTE_LIMIT {
+                return Err(SccmServerIntakeError::InvalidArtifact);
+            }
+            budgets.insert(
+                key,
+                AdvancedCaptureBudget {
+                    capability_handle: contract.capability_handle.clone(),
+                    authorization_handle: contract.authorization_handle.clone(),
+                    artifact_count: 1,
+                    retained_bytes: artifact.bytes_copied,
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 impl PreparedArtifact {
@@ -2663,9 +2753,9 @@ fn normalize_advanced_capture_contract(
         || artifact.collection_limit.as_ref().is_none_or(|limit| {
             limit.file_limit != Some(2)
                 || if artifact.capture_state == SccmCoverageState::Capped {
-                    limit.byte_limit == 0 || limit.byte_limit > 4 * 1024 * 1024
+                    limit.byte_limit == 0 || limit.byte_limit > ADVANCED_CAPTURE_SOURCE_BYTE_LIMIT
                 } else {
-                    limit.byte_limit != 4 * 1024 * 1024
+                    limit.byte_limit != ADVANCED_CAPTURE_SOURCE_BYTE_LIMIT
                 }
         })
         || !matches!(artifact.rotation.kind.as_str(), "current" | "lo_")
