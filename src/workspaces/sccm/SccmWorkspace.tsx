@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Button, Spinner } from "@fluentui/react-components";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   ArchiveRegular,
   CheckmarkCircleRegular,
@@ -11,12 +12,16 @@ import {
 } from "@fluentui/react-icons";
 import {
   captureSccmDiagnostics,
+  authorizeSccmAdvancedCapture,
+  cancelSccmAdvancedCapture,
+  captureSccmAdvancedDiagnostics,
   discoverSccmEnvironment,
   revealInFileManager,
 } from "../../lib/commands";
 import { useSccmStore } from "./sccm-store";
 import type {
   SccmCoverageState,
+  SccmAdvancedSourceOption,
   SccmDiscoveryBasis,
   SccmDiscoveryIssueCode,
   SccmRole,
@@ -35,6 +40,21 @@ const ROLE_LABELS: Record<SccmRole, string> = {
   wsUs: "WSUS",
   provider: "Provider",
   adminService: "Admin Service",
+  distributionPointPxe: "PXE Distribution Point",
+  certificateRegistrationPoint: "Certificate Registration Point",
+  reportingServicesPoint: "Reporting Services Point",
+  cloudManagementGatewayConnectionPoint: "CMG Connection Point",
+  serviceConnectionPoint: "Service Connection Point",
+  clientNotificationServer: "Client Notification Server",
+  unclassified: "Unclassified candidate",
+};
+
+const ADVANCED_CARD_LABELS: Record<string, string> = {
+  "osd-pxe": "OSD / PXE",
+  "certificate-enrollment-pki": "Certificate enrollment / PKI",
+  reporting: "Reporting services",
+  "cloud-service-connection": "Cloud service connection",
+  "client-notification-bgb": "Client notification / BGB",
 };
 
 const BASIS_LABELS: Record<SccmDiscoveryBasis, string> = {
@@ -188,7 +208,27 @@ export function SccmWorkspace() {
   const beginCapture = useSccmStore((state) => state.beginCapture);
   const completeCapture = useSccmStore((state) => state.completeCapture);
   const fail = useSccmStore((state) => state.fail);
-  const isBusy = phase === "discovering" || phase === "capturing";
+  const advancedCapability = useSccmStore(
+    (state) => state.advancedCapability,
+  );
+  const beginAdvancedAuthorization = useSccmStore(
+    (state) => state.beginAdvancedAuthorization,
+  );
+  const completeAdvancedAuthorization = useSccmStore(
+    (state) => state.completeAdvancedAuthorization,
+  );
+  const beginAdvancedCapture = useSccmStore(
+    (state) => state.beginAdvancedCapture,
+  );
+  const clearAdvancedCapability = useSccmStore(
+    (state) => state.clearAdvancedCapability,
+  );
+  const isBusy = [
+    "discovering",
+    "capturing",
+    "authorizing",
+    "capturingAdvanced",
+  ].includes(phase);
   const canCapture = Boolean(
     discovery?.supported && discovery.roles.length > 0,
   );
@@ -220,6 +260,67 @@ export function SccmWorkspace() {
       await revealInFileManager(capture.bundleRoot);
     } catch (error) {
       fail(errorMessage(error, "The captured bundle could not be revealed."));
+    }
+  };
+
+  useEffect(
+    () => () => {
+      const pending = useSccmStore.getState().advancedCapability;
+      if (pending) {
+        void cancelSccmAdvancedCapture(pending.capabilityHandle);
+        useSccmStore.getState().clearAdvancedCapability();
+      }
+    },
+    [],
+  );
+
+  const captureAdvanced = async (option: SccmAdvancedSourceOption) => {
+    if (isBusy || option.availability === "blocked") return;
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected !== "string") return;
+    const roleScope =
+      option.availability === "observed" &&
+      option.roleScopes.includes("managementPoint")
+        ? "managementPoint"
+        : option.roleScopes[0];
+    const pathClass = option.pathClasses[0];
+    if (!roleScope || !pathClass) return;
+    const provenanceLabel =
+      option.availability === "observed"
+        ? "Observed role/path — bounded capture"
+        : "Operator-declared candidate root — role not observed; capture only";
+    const consented = window.confirm(
+      `${ADVANCED_CARD_LABELS[option.cardId] ?? option.cardId}\n${provenanceLabel}\n\nRetain at most ${formatBytes(option.maxBytes)} across ${option.maxFiles} exact current/LO_ files?`,
+    );
+    if (!consented) return;
+
+    beginAdvancedAuthorization();
+    try {
+      const capability = await authorizeSccmAdvancedCapture({
+        cardId: option.cardId,
+        cardVersion: option.cardVersion,
+        sourceId: option.sourceId,
+        roleScope,
+        pathClass,
+        expectedSourceVersion: option.sourceVersion,
+        selectedRoot: selected,
+      });
+      completeAdvancedAuthorization(capability);
+      if (!window.confirm("Authorization is ready. Capture this bounded source now?")) {
+        await cancelSccmAdvancedCapture(capability.capabilityHandle);
+        clearAdvancedCapability();
+        return;
+      }
+      beginAdvancedCapture();
+      completeCapture(
+        await captureSccmAdvancedDiagnostics(capability.capabilityHandle),
+      );
+    } catch (error) {
+      const pending = useSccmStore.getState().advancedCapability;
+      if (pending) {
+        await cancelSccmAdvancedCapture(pending.capabilityHandle).catch(() => undefined);
+      }
+      fail(errorMessage(error, "Advanced SCCM capture failed."));
     }
   };
 
@@ -388,10 +489,79 @@ export function SccmWorkspace() {
             </section>
           ) : null}
 
+          {discovery.advancedSources.length > 0 ? (
+            <section
+              className="sccm-advanced-panel"
+              aria-labelledby="sccm-advanced-title"
+            >
+              <div className="sccm-panel-heading">
+                <div>
+                  <span className="sccm-panel-index">02 / ADVANCED SOURCES</span>
+                  <h2 id="sccm-advanced-title">Bounded role capture</h2>
+                </div>
+                <span className="sccm-ledger-count">
+                  {discovery.advancedSources.length} allow-listed
+                </span>
+              </div>
+              <p className="sccm-advanced-intro">
+                Select one exact source contract. The chosen directory crosses
+                the native boundary once and is never returned, logged, or
+                stored in the workspace.
+              </p>
+              <div className="sccm-advanced-grid">
+                {discovery.advancedSources.map((option) => {
+                  const observed = option.availability === "observed";
+                  return (
+                    <article
+                      className={`sccm-advanced-source sccm-advanced-source--${option.availability}`}
+                      key={option.sourceId}
+                    >
+                      <div>
+                        <span className="sccm-advanced-card-id">
+                          {ADVANCED_CARD_LABELS[option.cardId] ?? option.cardId}
+                        </span>
+                        <strong>{option.sourceId}</strong>
+                      </div>
+                      <p className="sccm-advanced-provenance">
+                        {observed
+                          ? "Observed role/path — bounded capture"
+                          : option.availability === "blocked"
+                            ? "Unavailable on this host"
+                            : "Operator-declared candidate root — role not observed; capture only"}
+                      </p>
+                      <div className="sccm-advanced-limit">
+                        <span>{formatBytes(option.maxBytes)} max</span>
+                        <span>{option.maxFiles} files</span>
+                        <span>current + LO_</span>
+                      </div>
+                      <Button
+                        appearance={observed ? "primary" : "secondary"}
+                        disabled={isBusy || option.availability === "blocked"}
+                        onClick={() => void captureAdvanced(option)}
+                        aria-label={`Authorize ${ADVANCED_CARD_LABELS[option.cardId] ?? option.cardId} bounded capture`}
+                      >
+                        {phase === "authorizing"
+                          ? "Authorizing"
+                          : phase === "capturingAdvanced"
+                            ? "Capturing"
+                            : "Choose candidate root"}
+                      </Button>
+                    </article>
+                  );
+                })}
+              </div>
+              {advancedCapability ? (
+                <span className="sccm-capability-pending" role="status">
+                  Single-use authorization ready
+                </span>
+              ) : null}
+            </section>
+          ) : null}
+
           <section className="sccm-ledger-panel" aria-labelledby="sccm-ledger-title">
             <div className="sccm-panel-heading">
               <div>
-                <span className="sccm-panel-index">02 / SOURCE COVERAGE</span>
+                <span className="sccm-panel-index">03 / SOURCE COVERAGE</span>
                 <h2 id="sccm-ledger-title">Evidence ledger</h2>
               </div>
               <span className="sccm-ledger-count">{sources.length} rows</span>

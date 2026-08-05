@@ -2,9 +2,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureSccmDiagnostics,
+  authorizeSccmAdvancedCapture,
+  cancelSccmAdvancedCapture,
+  captureSccmAdvancedDiagnostics,
   discoverSccmEnvironment,
   revealInFileManager,
 } from "../../lib/commands";
+import { open } from "@tauri-apps/plugin-dialog";
 import { SccmWorkspace } from "./SccmWorkspace";
 import { useSccmStore } from "./sccm-store";
 import type {
@@ -14,10 +18,15 @@ import type {
 } from "./types";
 
 vi.mock("../../lib/commands", () => ({
+  authorizeSccmAdvancedCapture: vi.fn(),
+  cancelSccmAdvancedCapture: vi.fn(),
+  captureSccmAdvancedDiagnostics: vi.fn(),
   captureSccmDiagnostics: vi.fn(),
   discoverSccmEnvironment: vi.fn(),
   revealInFileManager: vi.fn(),
 }));
+
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 const COVERAGE_ROWS: SccmSourceStatus[] = [
   {
@@ -84,6 +93,7 @@ const DISCOVERY: SccmEnvironmentDiscovery = {
   ],
   sources: COVERAGE_ROWS,
   issues: [{ code: "registryAccessDenied", role: "client" }],
+  advancedSources: [],
 };
 
 const ROLELESS_DISCOVERY: SccmEnvironmentDiscovery = {
@@ -92,6 +102,7 @@ const ROLELESS_DISCOVERY: SccmEnvironmentDiscovery = {
   roles: [],
   sources: [],
   issues: [],
+  advancedSources: [],
 };
 
 const CAPTURE: SccmCaptureResult = {
@@ -108,6 +119,7 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   useSccmStore.getState().reset();
+  vi.mocked(cancelSccmAdvancedCapture).mockResolvedValue(undefined);
 });
 
 describe("SccmWorkspace", () => {
@@ -247,5 +259,116 @@ describe("SccmWorkspace", () => {
     await waitFor(() =>
       expect(revealInFileManager).toHaveBeenCalledWith(CAPTURE.bundleRoot),
     );
+  });
+
+  it("runs picker consent authorization and single-use advanced capture", async () => {
+    const advancedDiscovery: SccmEnvironmentDiscovery = {
+      ...DISCOVERY,
+      advancedSources: [
+        {
+          cardId: "reporting",
+          cardVersion: "1.0.0",
+          sourceId: "advanced-reporting",
+          roleScopes: ["reportingServicesPoint"],
+          pathClasses: ["configuredRoleLogRoot", "reportServerLogs"],
+          sourceVersion: "5.00.9128.1000",
+          availability: "operatorDeclaredCandidate",
+          maxBytes: 4_194_304,
+          maxFiles: 2,
+          rotations: ["current", "lo_"],
+        },
+      ],
+    };
+    const capability = {
+      capabilityHandle: `cmtraceopen.capture-capability.sha256.v1:${"a".repeat(64)}`,
+      cardId: "reporting",
+      cardVersion: "1.0.0",
+      sourceId: "advanced-reporting",
+      roleScope: "reportingServicesPoint",
+      pathClass: "configuredRoleLogRoot",
+      sourceVersion: "5.00.9128.1000",
+    };
+    vi.mocked(discoverSccmEnvironment).mockResolvedValue(advancedDiscovery);
+    vi.mocked(open).mockResolvedValue("C:\\private-root");
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true).mockReturnValueOnce(true);
+    vi.mocked(authorizeSccmAdvancedCapture).mockResolvedValue(capability);
+    vi.mocked(captureSccmAdvancedDiagnostics).mockResolvedValue(CAPTURE);
+    render(<SccmWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Discover SCCM environment" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Authorize Reporting services bounded capture",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(open).toHaveBeenCalledWith({ directory: true, multiple: false }),
+    );
+    expect(authorizeSccmAdvancedCapture).toHaveBeenCalledWith({
+      cardId: "reporting",
+      cardVersion: "1.0.0",
+      sourceId: "advanced-reporting",
+      roleScope: "reportingServicesPoint",
+      pathClass: "configuredRoleLogRoot",
+      expectedSourceVersion: "5.00.9128.1000",
+      selectedRoot: "C:\\private-root",
+    });
+    await waitFor(() =>
+      expect(captureSccmAdvancedDiagnostics).toHaveBeenCalledWith(
+        capability.capabilityHandle,
+      ),
+    );
+    expect(cancelSccmAdvancedCapture).not.toHaveBeenCalled();
+    expect(useSccmStore.getState().advancedCapability).toBeNull();
+  });
+
+  it("cancels a capability when final consent is declined", async () => {
+    const advancedDiscovery: SccmEnvironmentDiscovery = {
+      ...DISCOVERY,
+      advancedSources: [
+        {
+          cardId: "client-notification-bgb",
+          cardVersion: "1.0.0",
+          sourceId: "advanced-client-notification-bgb",
+          roleScopes: ["clientNotificationServer", "managementPoint"],
+          pathClasses: ["configuredRoleLogRoot", "siteServerLogs"],
+          sourceVersion: null,
+          availability: "observed",
+          maxBytes: 4_194_304,
+          maxFiles: 2,
+          rotations: ["current", "lo_"],
+        },
+      ],
+    };
+    const capability = {
+      capabilityHandle: `cmtraceopen.capture-capability.sha256.v1:${"b".repeat(64)}`,
+      cardId: "client-notification-bgb",
+      cardVersion: "1.0.0",
+      sourceId: "advanced-client-notification-bgb",
+      roleScope: "managementPoint",
+      pathClass: "configuredRoleLogRoot",
+      sourceVersion: null,
+    };
+    vi.mocked(discoverSccmEnvironment).mockResolvedValue(advancedDiscovery);
+    vi.mocked(open).mockResolvedValue("C:\\private-root");
+    vi.spyOn(window, "confirm").mockReturnValueOnce(true).mockReturnValueOnce(false);
+    vi.mocked(authorizeSccmAdvancedCapture).mockResolvedValue(capability);
+    render(<SccmWorkspace />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Discover SCCM environment" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Authorize Client notification / BGB bounded capture",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(cancelSccmAdvancedCapture).toHaveBeenCalledWith(
+        capability.capabilityHandle,
+      ),
+    );
+    expect(captureSccmAdvancedDiagnostics).not.toHaveBeenCalled();
+    expect(useSccmStore.getState().advancedCapability).toBeNull();
   });
 });
