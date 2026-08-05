@@ -517,11 +517,16 @@ pub fn capture_advanced_authorized(
     let mut payloads = Vec::new();
     let mut statuses = Vec::new();
     let mut retained_bytes = 0_u64;
+    let manifest_context = AdvancedManifestContext {
+        authorization: &authorization,
+        producer_role: &producer_role,
+        host_handle: &host_handle,
+        path_fingerprint: &path_fingerprint,
+        lineage: &lineage,
+        collected_at_utc: &collected_at_utc,
+    };
     for (rotation, basename) in rotations {
         let source_path = authorization.canonical_root.join(&basename);
-        if !source_path.exists() {
-            continue;
-        }
         let relative_path = advanced_relative_path(
             &producer_role,
             authorization.contract.source_id,
@@ -549,19 +554,13 @@ pub fn capture_advanced_authorized(
                     bytes: bytes.clone(),
                 });
                 artifacts.push(advanced_manifest_row(
-                    &authorization,
-                    &producer_role,
+                    &manifest_context,
                     &artifact_id,
-                    &host_handle,
-                    &root_handle,
-                    &path_fingerprint,
-                    &lineage,
                     &basename,
                     &rotation,
                     if capped { "capped" } else { "captured" },
                     Some(relative_path),
                     bytes.len() as u64,
-                    &collected_at_utc,
                 ));
                 statuses.push(SccmSourceStatus {
                     role: producer_role.clone(),
@@ -586,19 +585,13 @@ pub fn capture_advanced_authorized(
                     "accessDenied",
                 );
                 artifacts.push(advanced_manifest_row(
-                    &authorization,
-                    &producer_role,
+                    &manifest_context,
                     &artifact_id,
-                    &host_handle,
-                    &root_handle,
-                    &path_fingerprint,
-                    &lineage,
                     &basename,
                     &rotation,
                     "accessDenied",
                     None,
                     0,
-                    &collected_at_utc,
                 ));
                 statuses.push(SccmSourceStatus {
                     role: producer_role.clone(),
@@ -609,6 +602,7 @@ pub fn capture_advanced_authorized(
                     detail_code: Some(SccmSourceDetailCode::AccessDenied),
                 });
             }
+            Err(CopyAdvancedFailure::Missing) => continue,
             Err(CopyAdvancedFailure::Unsafe) => {
                 return Err(SccmCollectorError::AdvancedAuthorizationRejected)
             }
@@ -632,19 +626,13 @@ pub fn capture_advanced_authorized(
             state,
         );
         artifacts.push(advanced_manifest_row(
-            &authorization,
-            &producer_role,
+            &manifest_context,
             &artifact_id,
-            &host_handle,
-            &root_handle,
-            &path_fingerprint,
-            &lineage,
             authorization.contract.basename,
             &rotation,
             state,
             None,
             0,
-            &collected_at_utc,
         ));
         statuses.push(SccmSourceStatus {
             role: producer_role.clone(),
@@ -720,26 +708,30 @@ pub fn capture_advanced_authorized(
     })
 }
 
+struct AdvancedManifestContext<'a> {
+    authorization: &'a PrivateAdvancedCaptureAuthorization,
+    producer_role: &'a SccmRole,
+    host_handle: &'a str,
+    path_fingerprint: &'a str,
+    lineage: &'a str,
+    collected_at_utc: &'a str,
+}
+
 fn advanced_manifest_row(
-    authorization: &PrivateAdvancedCaptureAuthorization,
-    producer_role: &SccmRole,
+    context: &AdvancedManifestContext<'_>,
     artifact_id: &str,
-    host_handle: &str,
-    _root_handle: &str,
-    path_fingerprint: &str,
-    lineage: &str,
     basename: &str,
     rotation: &SccmRotation,
     state: &str,
     relative_path: Option<String>,
     bytes_copied: u64,
-    collected_at_utc: &str,
 ) -> Value {
+    let authorization = context.authorization;
     let operator_declared = authorization.provenance == SccmAdvancedProvenance::OperatorDeclared;
     json!({
         "artifactId": artifact_id,
-        "producerRole": producer_role,
-        "producerHostHandle": host_handle,
+        "producerRole": context.producer_role,
+        "producerHostHandle": context.host_handle,
         "workflowSubject": Value::Null,
         "sourceId": authorization.contract.source_id,
         "sourceKind": "advancedCapture",
@@ -749,7 +741,7 @@ fn advanced_manifest_row(
         "configuredPathProvenance": {
             "state": if operator_declared { "operatorDeclared" } else { "configured" },
             "pathClass": if operator_declared { Value::Null } else { json!(authorization.path_class) },
-            "pathFingerprint": path_fingerprint
+            "pathFingerprint": context.path_fingerprint
         },
         "captureContract": {
             "cardId": authorization.contract.card_id,
@@ -765,7 +757,7 @@ fn advanced_manifest_row(
         "rotation": {
             "kind": match rotation { SccmRotation::Current => "current", SccmRotation::LoUnderscore => "lo_", _ => "none" },
             "value": Value::Null,
-            "lineageId": lineage
+            "lineageId": context.lineage
         },
         "captureState": state,
         "collectionDetail": if state == "accessDenied" { json!(opaque_reason("collection-detail", artifact_id)) } else { Value::Null },
@@ -779,7 +771,7 @@ fn advanced_manifest_row(
         },
         "truncated": if state == "capped" { Some(true) } else { None },
         "fragmentComplete": if state == "capped" { Some(false) } else { None },
-        "collectedUtc": collected_at_utc,
+        "collectedUtc": context.collected_at_utc,
         "relativePath": relative_path,
         "bytesCopied": bytes_copied
     })
@@ -902,6 +894,7 @@ fn prepare_bundle_root(bundle_root: &Path) -> Result<(), SccmCollectorError> {
 
 enum CopyAdvancedFailure {
     AccessDenied,
+    Missing,
     Unsafe,
     Failed,
 }
@@ -965,10 +958,10 @@ fn open_source_no_follow(path: &Path) -> std::io::Result<File> {
 }
 
 fn map_copy_error(error: std::io::Error) -> CopyAdvancedFailure {
-    if error.kind() == std::io::ErrorKind::PermissionDenied {
-        CopyAdvancedFailure::AccessDenied
-    } else {
-        CopyAdvancedFailure::Failed
+    match error.kind() {
+        std::io::ErrorKind::NotFound => CopyAdvancedFailure::Missing,
+        std::io::ErrorKind::PermissionDenied => CopyAdvancedFailure::AccessDenied,
+        _ => CopyAdvancedFailure::Failed,
     }
 }
 
