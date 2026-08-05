@@ -2,215 +2,177 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add one bounded, capture-only native surface for the six #475–#479 advanced SCCM server log sources, with explicit authorization and provenance, while leaving every source card candidate-only and outside semantic analysis.
+**Goal:** Add one bounded, capture-only native surface for the six #475–#479 advanced SCCM server log sources, with a real Windows picker/consent flow, backend-issued opaque capabilities, provenance, and no semantic promotion.
 
-**Architecture:** `src-tauri/src/sccm/collector/advanced_capture.rs` owns the six typed capture contracts and is the only advanced-source collector surface. Existing discovery supplies only observed role/root facts; a private, operator-authorized supplemental request supplies an exact card/source/root tuple when discovery cannot prove the role. The engine enumerates only those typed contracts, applies each contract's cap and rotation policy, and writes opaque, redacted server-manifest rows plus raw payloads that remain in the local capture bundle.
+**Architecture:** The existing SCCM workspace uses the installed `@tauri-apps/plugin-dialog` folder picker. It sends a typed authorization request containing only the selected directory plus exact card/source/role/path-class fields to a backend command; the backend re-discovers facts, validates the directory and contract, stores the private request in managed state, and returns a single-use opaque capability. A second command consumes that capability through one collector owner, `advanced_capture.rs`; raw paths stay private and the manifest carries only validated metadata and opaque handles.
 
-**Tech Stack:** Rust 1.88, `cmtrace-open` native Tauri crate, `cmtraceopen-parser` server-manifest validator, serde/serde_json, Windows Registry/CIM discovery, bounded filesystem reads with no-follow/reparse rejection, synthetic fixtures, and an authorized Windows SCCM development deployment.
+**Tech Stack:** Rust 1.88, Tauri v2 commands and managed state, React/TypeScript SCCM workspace, `@tauri-apps/plugin-dialog` already present in `package.json`, `cmtraceopen-parser` server intake, serde/serde_json, bounded Windows filesystem/Registry/CIM access, and authorized Windows SCCM reproduction.
 
 ---
 
 ## Frozen scope and non-goals
 
 - Work from base `8064b5aa1457f72ea8dbb7cb979ec3ea863c524c` on branch `codex/sccm-advanced-server-capture` in `.worktrees/sccm-advanced-server-capture`.
-- The allowlist is exactly `smspxe.log`, `crp.log`, `srsrp.log`, `CloudMgr.log`, `SMS_Cloud_ProxyConnector.log`, and `BgbServer.log`.
-- The six JSON cards under `crates/cmtraceopen-parser/tests/fixtures/sccm/server/advanced_roles/source-cards/` remain `candidate`, `captureGuidanceOnly`, and semantically inert. Do not edit them, promote them, add a reducer, add findings, or add a parser semantic catalog entry.
-- Do not infer a producer role, configured root, PXE enablement, or role instance from a basename, default directory, registry path guess, service name analogy, or file presence.
-- Do not expose a free-form filesystem path or arbitrary glob in the Tauri/API surface. Do not add a compatibility fallback or legacy collector path.
-- Do not commit, print, fixture, or upload raw Windows evidence. The only committed evidence is sanitized test data and metadata contracts.
+- The exact allowlist is `smspxe.log`, `crp.log`, `srsrp.log`, `CloudMgr.log`, `SMS_Cloud_ProxyConnector.log`, and `BgbServer.log`.
+- The six JSON cards under `crates/cmtraceopen-parser/tests/fixtures/sccm/server/advanced_roles/source-cards/` remain `candidate`, `captureGuidanceOnly`, and semantically inert. Do not edit or promote them, add reducers/findings, or add a semantic parser catalog entry.
+- Do not infer a producer role, configured root, PXE enablement, or role instance from a basename, default directory, guessed registry path, service-name analogy, or file presence.
+- Do not expose a free-form filesystem API, glob, arbitrary basename, raw selected path, raw host/site identity, or raw evidence outside the native private capture path. The selected path may cross IPC once as an ephemeral authorization input; it must never appear in command results, manifests, logs, or frontend state persisted beyond the consent operation.
+- Do not add a compatibility fallback. Existing zero-argument generic capture remains the existing generic path; advanced sources are reachable only through the new typed authorization/capability path.
+- Do not commit, print, fixture, or upload raw Windows evidence.
 
 ## Current evidence and decision
 
-The current native collector has one `SccmCaptureRoot { role, path }` per discovered generic role, matches server files through `declared_server_source_catalog()`, uses process-wide `MAX_FRAGMENTS_PER_SOURCE = 8` and `MAX_BYTES_PER_SOURCE = 16 MiB`, and writes server rows with `sourceVersion: null` and `pathClass: null` for non-WSUS sources. That surface cannot safely collect these candidates: none of the six names is in the current parser/server catalog, the discovery model has no advanced-role or PXE-enabled fact, and the current default roots are not proof that an optional role is configured.
+The current native path is `discover_sccm_environment` → `capture_sccm_diagnostics(app)` → `capture_environment(provider, bundle_root)`. `capture_sccm_diagnostics` accepts no request, `PrivateSccmEnvironment` has only generic `{ role, path }` roots, and `declared_server_source_catalog()` contains none of the six names. The current collector uses global 8-fragment/16-MiB limits and writes non-WSUS rows with null source version/path class. A private Rust request with no command, state, or UI producer would therefore be dead code and is explicitly not the design.
 
-The capture matrix is deliberately conservative:
+The repository already has the needed production primitives: the SCCM workspace in `src/workspaces/sccm/`, `@tauri-apps/plugin-dialog` in `package.json`, `commands::sccm` registered in `src-tauri/src/lib.rs`, and managed `AppState` in `src-tauri/src/state/app_state.rs`. Use those primitives to make the flow reachable.
 
-| Source | Card role scope | Existing discovered root sufficient? | Required gate | Capture result before gate |
+| Source | Card role scope | Existing discovered root sufficient? | Production gate | Before the gate |
 | --- | --- | --- | --- | --- |
-| `smspxe.log` | `distributionPointPxe`, `siteServer` | No. A `DistributionPoint` root does not prove PXE enablement; a `SiteServer` root does not identify the PXE producer. | A discovered PXE-enabled DP fact with configured-path provenance, or an operator-authorized typed request that includes that observed fact and topology binding. | `Unsupported`/`notRequested`; never `Absent` from a generic DP root. |
-| `crp.log` | `certificateRegistrationPoint` | No. No current discovery role fact names the certificate registration point. | Typed operator-authorized request or a future observed role fact; the request must state the exact role scope and path class. | `Unsupported`/`notRequested`. |
-| `srsrp.log` | `reportingServicesPoint` | No. No current discovery role fact names the reporting services point. | Typed operator-authorized request or a future observed role fact. | `Unsupported`/`notRequested`. |
-| `CloudMgr.log` | `cloudManagementGatewayConnectionPoint`, `serviceConnectionPoint` | No. A site-server log root does not prove either configured cloud role. | Typed operator-authorized configured-role request or a future observed role fact. | `Unsupported`/`notRequested`. |
-| `SMS_Cloud_ProxyConnector.log` | `cloudManagementGatewayConnectionPoint`, `serviceConnectionPoint` | No; it shares the cloud card but not an implied site-server root. | The same typed configured-role request as `CloudMgr.log`, with the exact basename allowlist. | `Unsupported`/`notRequested`. |
-| `BgbServer.log` | `clientNotificationServer`, `managementPoint` | Conditional. An observed `ManagementPoint` role plus an observed/configured MP root is sufficient for a role-bound capture request. A generic site-server root is not. | MP role fact and `configuredRoleLogRoot` or `siteServerLogs` path provenance; otherwise a typed request or future notification-server fact. | `Unsupported`/`notRequested` when the MP binding is absent. |
+| `smspxe.log` | `distributionPointPxe`, `siteServer` | No. Generic DP discovery does not prove PXE enablement; a site-server root does not identify the PXE producer. | A fresh observed PXE-enabled DP fact plus topology/path provenance. A picker request cannot invent that fact; it can only select a root after the fact is observed. | `Unsupported` with configured path state `notRequested`; never false `Absent`. |
+| `crp.log` | `certificateRegistrationPoint` | No current role fact names the certificate registration point. | Explicit picker/consent request whose backend role claim is permitted by a validated operator contract, or a future observed role fact. | `Unsupported`/`notRequested`. |
+| `srsrp.log` | `reportingServicesPoint` | No current role fact names the reporting services point. | Explicit picker/consent request with backend validation, or a future observed role fact. | `Unsupported`/`notRequested`. |
+| `CloudMgr.log` | `cloudManagementGatewayConnectionPoint`, `serviceConnectionPoint` | No. A site-server log root does not prove either configured cloud role. | Explicit picker/consent request with an observed/configured role fact; no site-server fallback. | `Unsupported`/`notRequested`. |
+| `SMS_Cloud_ProxyConnector.log` | `cloudManagementGatewayConnectionPoint`, `serviceConnectionPoint` | No; the shared card does not imply a site-server root. | Same typed request gate as `CloudMgr.log`, with backend-selected exact source contract. | `Unsupported`/`notRequested`. |
+| `BgbServer.log` | `clientNotificationServer`, `managementPoint` | Conditional. An observed MP role and observed/configured MP root can authorize the MP scope. A generic site-server root cannot. | Backend validates the MP role fact and `configuredRoleLogRoot`/`siteServerLogs` path class, or requires the typed role request. | `Unsupported`/`notRequested` when MP binding is absent. |
 
-For all six cards, the current card contract is exact: optional capture, maximum 4 MiB per source, least-privilege/no escalation, rotations `current` and `lo_`, maximum two files, high-sensitivity redaction, no raw sensitive projection, and no time-only correlation. The implementation must keep these limits per typed source contract even though the current six values happen to match; it must not route through the existing global 8-file/16-MiB policy.
+Every card currently declares optional capture, 4 MiB per source, least-privilege/no escalation, rotations `current` and `lo_`, max two files, high sensitivity, redaction required, no raw sensitive projection, and no time-only correlation. Keep these limits in the native contract per source, not in the generic global constants.
 
-## File structure and ownership
+## Production file map and one owner
 
-**Create:**
+**Frontend path:**
 
-- `src-tauri/src/sccm/collector/advanced_capture.rs` — the single owner of typed advanced-source contracts, card/source allowlists, per-source limits, role/path admission, supplemental-request validation, and advanced candidate identity.
-- `src-tauri/tests/sccm_advanced_server_capture.rs` — integration coverage for the public native capture result, server manifest, coverage states, opaque handles, and raw-local-only boundary.
+- Modify `src/workspaces/sccm/SccmWorkspace.tsx` to display sanitized advanced-source options, open a directory picker, show a consent summary, and call authorize then capture commands. It never accepts or displays a basename/path returned by the backend.
+- Modify `src/workspaces/sccm/sccm-store.ts` to track `authorizing`/`capturingAdvanced` and the opaque capability only for the active operation; clear it after capture/cancel/error.
+- Modify `src/workspaces/sccm/types.ts` with exact serialized request/option/capability/result types and no raw-path result field.
+- Modify `src/lib/commands.ts` with `authorizeSccmAdvancedCapture(request)` and `captureSccmAdvancedDiagnostics(capabilityHandle)` wrappers.
+- Modify `src/workspaces/sccm/SccmWorkspace.test.tsx`, `src/workspaces/sccm/sccm-store.test.ts`, and `src/lib/commands.test.ts` for UI/command contract coverage.
 
-**Modify:**
+**Tauri/backend path:**
 
-- `src-tauri/src/sccm/collector/mod.rs` — register the one owner module and add private discovery/root provenance plus typed supplemental-request plumbing without exposing arbitrary paths.
-- `src-tauri/src/sccm/collector/discovery.rs` — attach observed `pathClass` and observed ConfigMgr version to roots; add only evidence-backed PXE/advanced-role facts, never guessed registry keys or default-root role assertions.
-- `src-tauri/src/sccm/collector/engine.rs` — pass discovered roots and authorized supplemental contracts through the one collector surface; preserve deterministic ordering, no-follow/reparse checks, source-specific caps, and explicit coverage rows.
-- `src-tauri/src/sccm/collector/server_manifest.rs` — write the advanced card/source identity, producer role claim, source version, path class, rotation lineage, opaque handles, source-specific limits, and redacted privacy projection without hardcoded or guessed metadata.
-- `src-tauri/tests/sccm_native_collection.rs` — retain existing generic collector regression coverage and add the shared root/provenance assertions where the existing test helper is the correct owner.
-- `crates/cmtraceopen-parser/tests/sccm_server_intake.rs` — add only manifest contract cases required to accept the bounded capture-only rows, including explicitly unrequested/unsupported advanced coverage; do not add semantic admission.
+- Modify `src-tauri/src/commands/sccm.rs` with the serde-deny-unknown-fields request, `authorize_sccm_advanced_capture`, and `capture_sccm_advanced_diagnostics` commands plus testable provider helpers. The authorize command receives the ephemeral selected path, but returns only a capability handle and sanitized contract summary.
+- Modify `src-tauri/src/lib.rs` to register both commands under `sccm-diagnostics` and to manage the capability store.
+- Modify `src-tauri/src/state/app_state.rs` to add a mutex-protected, single-use `SccmAdvancedCapabilityStore` under the SCCM feature. The store holds private canonical paths and contract facts; it is never serialized.
+- Create `src-tauri/src/sccm/collector/advanced_capture.rs` as the single owner of the six immutable contracts, role/path admission, source-local caps/rotations, capability-bound request types, exact source selection, and opaque identity derivation.
+- Modify `src-tauri/src/sccm/collector/mod.rs`, `discovery.rs`, and `engine.rs` to carry observed root/path/version facts, publish sanitized `advancedSources` options, and consume the capability's private request through the same collector engine.
+- Modify `src-tauri/src/sccm/collector/server_manifest.rs` to emit capture-contract metadata, observed version/path class, opaque handles, source-local limits, and explicit coverage without raw paths.
+- Create `src-tauri/tests/sccm_advanced_server_capture.rs` for native contract/capability/collector/manifest coverage and `src-tauri/tests/sccm_advanced_ipc.rs` for command-boundary negative cases and a sanitized end-to-end command flow.
+- Extend `src-tauri/src/commands/sccm.rs` unit tests for provider-backed IPC validation and `src-tauri/tests/sccm_native_collection.rs` only where generic collector regressions overlap.
 
-Do not modify the six source-card JSON files, `crates/cmtraceopen-parser/src/sccm/catalog.rs`, or semantic server-role reducers. The parser remains the manifest validation boundary, not the owner of advanced capture policy.
+**Parser production path:**
 
-## Typed contract
+- Modify `crates/cmtraceopen-parser/src/sccm/server/windows/intake.rs` to add typed `captureContract` raw/public fields, validate them, preserve them on artifact and coverage assessments, and include card/source/role/path/version/capability identity in canonical intake integrity and duplicate identity checks.
+- Modify `crates/cmtraceopen-parser/src/sccm/server/windows/mod.rs` only if re-exports are required by existing public intake consumers.
+- Modify `crates/cmtraceopen-parser/tests/sccm_server_intake.rs` with captured/coverage contract rows, malformed/missing/mismatched contract cases, and order/tamper integrity tests. These are parser production tests, not only fixture tests.
+- Do not modify `crates/cmtraceopen-parser/src/sccm/catalog.rs` or `crates/cmtraceopen-parser/tests/sccm_server_advanced_roles_catalog.rs` except to prove the cards remain candidate-only.
 
-The implementation owner must encode one immutable contract per source, equivalent to the following Rust shape (names may follow local conventions, but the fields and invariants are required):
+## Boundary contract
+
+The IPC request is a closed DTO, not a collector request:
 
 ```rust
-struct AdvancedCaptureContract {
-    card_id: &'static str,
-    card_version: &'static str,
-    source_id: &'static str,
-    basenames: &'static [&'static str],
-    role_scopes: &'static [&'static str],
-    path_classes: &'static [&'static str],
-    max_bytes: u64,
-    max_files: usize,
-    rotations: &'static [AdvancedRotation],
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SccmAdvancedCaptureAuthorizationRequest {
+    pub card_id: String,
+    pub card_version: String,
+    pub source_id: String,
+    pub role_scope: String,
+    pub path_class: String,
+    pub expected_source_version: Option<String>,
+    pub selected_root: String, // ephemeral input only; never returned or logged
 }
 
-struct AuthorizedAdvancedRequest {
-    contract: &'static AdvancedCaptureContract,
-    declared_role_scope: &'static str,
-    root: SccmCaptureRoot,
-    authorization_handle: OpaqueAuthorizationHandle,
-    observed_source_version: Option<String>,
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmAdvancedCaptureCapability {
+    pub capability_handle: String, // cmtraceopen.capture-capability.sha256.v1:<digest>
+    pub card_id: String,
+    pub card_version: String,
+    pub source_id: String,
+    pub role_scope: String,
+    pub path_class: String,
+    pub source_version: Option<String>,
 }
 ```
 
-The request constructor is private to native discovery/operator code. It must reject a card/source mismatch, a basename outside the immutable allowlist, a role scope outside the card, a path class outside the card, missing authorization, duplicate source/root tuples, numbered or timestamped rotations, and any path that is not a validated root. A request carries a root handle derived from the validated canonical root, but never exports the raw path. A test-only constructor may create deterministic authorized requests from temporary roots; production callers cannot construct one from an arbitrary string.
+The backend ignores no field and accepts no extra field. It re-runs native discovery, verifies the exact card/source/version against the immutable native contract, compares `expectedSourceVersion` to the freshly observed version, verifies the role fact and allowed path class, canonicalizes the selected directory, rejects symlink/reparse roots and non-directories, and creates a random single-use capability bound to the canonical root, contract, role, path class, observed version, and authorization nonce. The capability store is the only place that retains the private path. `capture_sccm_advanced_diagnostics` accepts only the opaque handle, consumes it before collection, and passes the private authorized request to the one collector owner.
 
-The existing discovered-root path is admitted only when its observed role and path provenance match a contract. For `BgbServer.log`, that is the MP role binding. A generic root without the required role fact produces `notRequested`/`Unsupported` coverage and is not scanned for the basename. Supplemental requests are additive typed inputs to this same engine, not a second collector.
+`discover_sccm_environment` gains a sanitized `advancedSources` array. Each `SccmAdvancedSourceOption` contains `cardId`, `cardVersion`, `sourceId`, allowed `roleScopes`, allowed `pathClasses`, observed `sourceVersion`, a bounded availability state, and the card-local cap/rotation summary. It contains no basename, filesystem path, root handle, host/site identifier, or authorization token. `discovery.rs` builds these options from the immutable native contract plus observed facts; the UI does not invent options.
 
-Every physical or coverage row is keyed by `(cardId, cardVersion, sourceId, producerRoleScope, rootHandle, basename, rotation)`. Preserve `sourceVersion` only from an observed ConfigMgr/source-version fact or the authorized request; otherwise serialize null and retain the coverage limitation. Preserve `pathClass` as `configuredRoleLogRoot`, `reportServerLogs`, or `siteServerLogs` only when observed or explicitly authorized by the request. Never write a guessed version or path class.
+The frontend cannot choose a basename, rotation, cap, source version, or producer role outside the option it displays. A malicious IPC caller that submits a different card/source/role/path class, a guessed registry path, a glob-like string, a symlink root, or an extra field receives a generic validation error and no capability. The capture result contains only the existing bundle receipt and public coverage rows.
 
-## Implementation tasks
+The manifest adds a typed `captureContract` object to advanced artifact and coverage rows:
 
-### Task 1: Lock the advanced capture contract with red tests
+```json
+{
+  "cardId": "osd-pxe",
+  "cardVersion": "1.0.0",
+  "capabilityHandle": "cmtraceopen.capture-capability.sha256.v1:<digest>"
+}
+```
 
-**Files:**
+`capabilityHandle` is a non-reusable opaque digest, not the private selected path. Parser production intake must deserialize and validate this object, require it for `sourceKind: "advancedCapture"`, bind `cardId`/`cardVersion`/capability handle into artifact and coverage identity, and reject missing, malformed, duplicate, or tampered contract metadata. Generic existing source rows remain on their existing schema path; advanced rows cannot enter semantic classification or emit findings.
 
-- Create: `src-tauri/src/sccm/collector/advanced_capture.rs`
-- Modify: `src-tauri/src/sccm/collector/mod.rs`
-- Create: `src-tauri/tests/sccm_advanced_server_capture.rs`
+## Red-first implementation tasks
 
-- [ ] **Step 1: Add contract table tests before implementation.** Assert that the owner returns exactly the six basenames, six card/source identities, the card versions, 4 MiB byte cap, two-file cap, and only `current`/`lo_` rotations. Assert that `sql-database-export` and every unlisted basename are rejected.
+### Task 1: Define the reachable UI-to-capability flow
 
-- [ ] **Step 2: Run the focused red test.**
+**Files:** `src/workspaces/sccm/SccmWorkspace.tsx`, `src/workspaces/sccm/sccm-store.ts`, `src/workspaces/sccm/types.ts`, `src/lib/commands.ts`, `src-tauri/src/commands/sccm.rs`, `src-tauri/src/lib.rs`, `src-tauri/src/state/app_state.rs`, `src-tauri/src/sccm/collector/mod.rs`, `src-tauri/src/sccm/collector/advanced_capture.rs`, `src-tauri/tests/sccm_advanced_ipc.rs`, `src/lib/commands.test.ts`, `src/workspaces/sccm/SccmWorkspace.test.tsx`, `src/workspaces/sccm/sccm-store.test.ts`.
+
+- [ ] **Step 1: Write failing IPC/UI tests.** Assert the frontend calls `open({ directory: true, multiple: false })`, renders only the sanitized `advancedSources` options, sends only `cardId`, `cardVersion`, `sourceId`, `roleScope`, `pathClass`, `expectedSourceVersion`, and the ephemeral selected directory to `authorize_sccm_advanced_capture`, then sends only `capabilityHandle` to `capture_sccm_advanced_diagnostics`. Assert no request has `basename`, `glob`, or arbitrary source path result fields. Assert consent cancellation never invokes authorization.
+- [ ] **Step 2: Write failing backend boundary tests.** Through the command request DTO, reject unknown fields, arbitrary card/source/role/path class, mismatched card/source, glob-like selected paths, symlink/reparse roots, and a path outside the validated directory contract. Assert every rejection leaves the capability store empty and reveals only a generic error code.
+- [ ] **Step 3: Run red tests.**
+
+```bash
+npx vitest run src/lib/commands.test.ts src/workspaces/sccm/SccmWorkspace.test.tsx src/workspaces/sccm/sccm-store.test.ts
+cargo test --locked -p cmtrace-open --test sccm_advanced_ipc --features sccm-diagnostics
+```
+
+Expected result: `FAIL` because the command, capability store, and picker flow do not yet exist.
+- [ ] **Step 4: Implement the smallest reachable path.** Add the closed DTO, sanitized `advancedSources` discovery output, managed single-use capability store, two registered commands, TypeScript wrappers, picker/consent UI, and store transitions. Keep generic `capture_sccm_diagnostics` unchanged for generic sources; advanced capture has no zero-argument fallback.
+- [ ] **Step 5: Run the focused tests green.**
+
+```bash
+npx vitest run src/lib/commands.test.ts src/workspaces/sccm/SccmWorkspace.test.tsx src/workspaces/sccm/sccm-store.test.ts
+cargo test --locked -p cmtrace-open --test sccm_advanced_ipc --features sccm-diagnostics
+```
+
+### Task 2: Implement the single native advanced contract owner
+
+**Files:** `src-tauri/src/sccm/collector/advanced_capture.rs`, `src-tauri/src/sccm/collector/mod.rs`, `src-tauri/src/sccm/collector/discovery.rs`, `src-tauri/src/state/app_state.rs`, `src-tauri/tests/sccm_advanced_server_capture.rs`.
+
+- [ ] **Step 1: Add red contract tests.** Require exactly six source contracts, exact card IDs/versions, exact basenames, role scopes, allowed path classes, 4 MiB/two-file/current+lo_ policy, and no SQL/database or unlisted source. Require MP-root-only BGB admission, PXE fact for `smspxe.log`, and no generic-root admission for CRP/SRSRP/cloud sources.
+- [ ] **Step 2: Add private discovery/provenance types.** Carry observed path class, ConfigMgr/source version, role fact, PXE/topology fact where actually observed, and canonical root handle. Keep raw paths private. A typed operator request may select a configured directory only after the backend validates its exact card/source/role/path contract; it cannot manufacture an absent role fact.
+- [ ] **Step 3: Implement contract validation and capability materialization.** Validate the closed DTO against the table, re-discover facts, reject unauthorized role/path/version tuples, reject no-follow/reparse violations, and store only the private request behind a digest capability. Deduplicate by complete `(card, version, source, role, path class, root handle, observed version)` identity.
+- [ ] **Step 4: Run green native admission tests.**
 
 ```bash
 cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --features sccm-diagnostics advanced_contract
-```
-
-Expected result: `FAIL` because the advanced owner module and typed contract do not yet exist.
-
-- [ ] **Step 3: Implement the immutable contract table and validation functions.** Keep the table in `advanced_capture.rs`; do not derive capture behavior from a basename or add entries to the parser semantic catalog. Make validation return a typed rejection for card/source/role/path/authorization/rotation violations. Keep unknown roles as explicit operator claims (`SccmRole::Unknown` only when the request states the canonical card scope); never synthesize them from a filename.
-
-- [ ] **Step 4: Re-run the focused contract tests.**
-
-```bash
-cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --features sccm-diagnostics advanced_contract
-```
-
-Expected result: `PASS`, with no changes to existing source-card inventory or semantic admission tests.
-
-### Task 2: Preserve observed discovery facts and authorize supplemental roots
-
-**Files:**
-
-- Modify: `src-tauri/src/sccm/collector/mod.rs`
-- Modify: `src-tauri/src/sccm/collector/discovery.rs`
-- Modify: `src-tauri/src/sccm/collector/advanced_capture.rs`
-- Test: `src-tauri/src/sccm/collector/discovery.rs` tests
-- Test: `src-tauri/tests/sccm_advanced_server_capture.rs`
-
-- [ ] **Step 1: Add failing admission tests for the decision matrix.** Cover: MP role plus an observed MP root admits `BgbServer.log`; DP role alone rejects `smspxe.log`; site-server root alone rejects all cloud sources; no current role fact admits `crp.log` or `srsrp.log`; a typed authorized request admits only its exact source; an unauthorized, duplicate, mismatched, or arbitrary-path request is rejected.
-
-- [ ] **Step 2: Run the red discovery/admission tests.**
-
-```bash
-cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --features sccm-diagnostics discovery_admission
-```
-
-Expected result: `FAIL` on the new typed provenance/request API.
-
-- [ ] **Step 3: Extend private root facts.** Carry `path_class`, observed ConfigMgr/source version, and a root authorization handle alongside `role` and `path`. Mark registry-provided log directories as `configuredRoleLogRoot`; mark a site installation `Logs` fallback as `siteServerLogs` only when the site-server installation fact is observed. Preserve the existing rule that roots without role facts do not admit roles. Do not add guessed registry keys for certificate, reporting, cloud, notification, or PXE roles.
-
-- [ ] **Step 4: Add only observed advanced-role discovery inputs.** The Windows discovery boundary may add a narrowly allowlisted, read-only fact for PXE enablement or an advanced configured-role path when the deployment exposes that fact. If the fact is not observed, leave the source `notRequested`/`Unsupported`. Do not treat `SMS_EXECUTIVE`, a default directory, or the presence of a candidate file as an advanced-role fact.
-
-- [ ] **Step 5: Implement the private operator-authorized request constructor.** Require the contract ID, exact declared role scope, validated root, path class, authorization handle, and optional observed version. Validate all fields against the immutable contract and deduplicate by the complete source/root identity. There is no public arbitrary-path request and no fallback to a legacy collector.
-
-- [ ] **Step 6: Run discovery and existing native regressions.**
-
-```bash
-cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --features sccm-diagnostics discovery_admission
 cargo test --locked -p cmtrace-open --test sccm_native_collection --features sccm-diagnostics
 ```
 
-Expected result: `PASS`; existing generic discovery still never invents a role from a root.
+### Task 3: Route authorized capabilities through one bounded collector
 
-### Task 3: Integrate one bounded collector surface
+**Files:** `src-tauri/src/sccm/collector/engine.rs`, `src-tauri/src/sccm/collector/advanced_capture.rs`, `src-tauri/src/sccm/collector/server_manifest.rs`, `src-tauri/tests/sccm_advanced_server_capture.rs`, `src-tauri/tests/sccm_native_collection.rs`.
 
-**Files:**
-
-- Modify: `src-tauri/src/sccm/collector/engine.rs`
-- Modify: `src-tauri/src/sccm/collector/advanced_capture.rs`
-- Modify: `src-tauri/src/sccm/collector/mod.rs`
-- Test: `src-tauri/tests/sccm_advanced_server_capture.rs`
-- Test: `src-tauri/tests/sccm_native_collection.rs`
-
-- [ ] **Step 1: Add failing capture tests.** Use temporary roots and typed test requests for each allowlisted source. Assert capture of `current` and `lo_`, rejection/coverage for numbered and timestamped rotations, per-source 4 MiB truncation and two-file cap, and no capture of similarly named or unlisted files. Assert two authorized roots with the same basename retain distinct opaque identity.
-
-- [ ] **Step 2: Add failing safety and coverage tests.** Cover absent root, access denied, unreadable file, file cap, byte cap, malformed rotation, symlink/reparse root, symlink/reparse entry, root escape, duplicate request, and destination collision. Each must produce an explicit coverage state and zero payload for unsafe/blocked cases.
-
-- [ ] **Step 3: Run the red capture tests.**
-
-```bash
-cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --features sccm-diagnostics capture_contract
-```
-
-Expected result: `FAIL` until advanced contracts are routed through the engine.
-
-- [ ] **Step 4: Route discovered and supplemental contracts through the same engine.** Replace basename-driven advanced matching with a contract lookup already bound to `(role/root/request, cardId, sourceId)`. Enumerate only exact contract basenames. Reuse the existing canonical-root, `symlink_metadata`, `is_reparse_point`, parent containment, and `open_source_no_follow` checks. Do not broaden directory traversal or use a glob.
-
-- [ ] **Step 5: Apply contract-local limits and rotations.** Track file and byte totals by full source identity, use 4 MiB and two fragments for these six sources, reject every other rotation, and retain `Capped`/`Unsupported`/`Skipped` coverage rows for omitted candidates. Do not change the existing generic constants for unrelated client/server sources.
-
-- [ ] **Step 6: Run focused and generic collection tests.**
+- [ ] **Step 1: Add red capture/safety tests.** Test all six sources through a consumed capability; capture only exact current/`lo_` files; reject numbered/timestamped rotations and similarly named files; enforce per-source 4 MiB/two-file limits; preserve distinct opaque identity for duplicate basenames in distinct authorized roots; and cover absent, denied, capped, skipped, unsupported, malformed, symlink/reparse, root escape, replayed capability, and destination collision cases.
+- [ ] **Step 2: Integrate the capability's private request into the existing engine.** Enumerate only contract-selected exact basenames, reuse canonical-root containment, `symlink_metadata`, `is_reparse_point`, and `open_source_no_follow`, and consume the capability before reading. Do not add a glob, directory-wide arbitrary collection, or generic basename matching for advanced sources.
+- [ ] **Step 3: Emit explicit coverage.** Use `Unsupported` plus `configuredPathProvenance.state: notRequested` when role/configuration evidence is missing; use `Absent` only after an authorized root is enumerated. Retain `AccessDenied`, `Capped`, `Skipped`, `ParseFailed`, and `Captured` with source-local limits and rotation identity.
+- [ ] **Step 4: Run green focused/native tests.**
 
 ```bash
 cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --features sccm-diagnostics capture_contract
 cargo test --locked -p cmtrace-open --test sccm_native_collection --features sccm-diagnostics
 ```
 
-Expected result: `PASS`; no raw source bytes appear in test output or public result JSON.
+### Task 4: Make manifest fields real in native writer and parser intake
 
-### Task 4: Emit provenance-safe server manifest rows
+**Files:** `src-tauri/src/sccm/collector/server_manifest.rs`, `src-tauri/src/sccm/collector/engine.rs`, `crates/cmtraceopen-parser/src/sccm/server/windows/intake.rs`, `crates/cmtraceopen-parser/src/sccm/server/windows/mod.rs` if re-export is needed, `crates/cmtraceopen-parser/tests/sccm_server_intake.rs`, `src-tauri/tests/sccm_advanced_server_capture.rs`.
 
-**Files:**
-
-- Modify: `src-tauri/src/sccm/collector/server_manifest.rs`
-- Modify: `src-tauri/src/sccm/collector/engine.rs`
-- Modify: `crates/cmtraceopen-parser/tests/sccm_server_intake.rs`
-- Test: `src-tauri/tests/sccm_advanced_server_capture.rs`
-
-- [ ] **Step 1: Add failing manifest assertions.** Require each captured or coverage row to retain card ID/version, source ID, declared producer role scope, observed source version when present, observed path class, root/source/path opaque handles, rotation kind/lineage, coverage state, source-local file/byte limits, and redacted `originalPath`. Reject raw paths, raw host/site values, raw sensitive fields, free-form request fields, and hardcoded source versions.
-
-- [ ] **Step 2: Run the red manifest tests.**
-
-```bash
-cargo test --locked -p cmtraceopen-parser --test sccm_server_intake advanced_capture
-cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --features sccm-diagnostics manifest_provenance
-```
-
-Expected result: `FAIL` until the manifest carries the new capture-only metadata.
-
-- [ ] **Step 3: Extend the native manifest input/output structs.** Carry the typed contract metadata into `CapturedServerArtifact` and `ServerCoverageRecord`. Write `sourceVersion` from observed facts only; write `configuredPathProvenance.pathClass` from the validated root/request only; retain `null` plus a coverage limitation when unknown. Remove the current non-WSUS hardcoded/null shortcut for advanced rows. Keep raw payloads under the private bundle root and keep public projections to opaque handles, card/source identity, provenance state, capture limits, and coverage.
-
-- [ ] **Step 4: Represent blocked advanced sources without false absence.** Emit a manifest coverage row with `captureState: unsupported` and `configuredPathProvenance.state: notRequested` when the required role/configuration fact was not observed. Emit `Absent` only after a validated contract/root was enumerated and the exact basename/rotation was missing. Emit no payload or relative path for blocked, unsafe, denied, or unsupported rows.
-
-- [ ] **Step 5: Re-run manifest and parser gates.**
+- [ ] **Step 1: Add parser-production red tests before changing the wire types.** Assert `captureContract` is required for `advancedCapture`, card/source/version/capability mismatch is rejected, card metadata is preserved in artifact and coverage assessments, duplicate/tampered rows fail canonical integrity, and order changes do not change the normalized integrity result. Assert advanced rows remain parser-ineligible and generate no semantic evidence/findings.
+- [ ] **Step 2: Add production raw/public intake types.** In `intake.rs`, add `RawServerCaptureContract`, public `SccmServerCaptureContract`, and optional `capture_contract` fields to `SccmServerArtifactAssessment` and `SccmServerCoverage`. Validate canonical card ID/version, opaque capability handle, required advanced source kind, source/role binding, and no raw path. Include card/version/capability in canonical artifact identity, coverage identity, path-lineage duplicate checks, and `SccmServerIntakeIntegrity` digest input. Update `RawServerArtifact::KNOWN_FIELDS` and bounded manifest preflight lists.
+- [ ] **Step 3: Write native manifest metadata from the validated capability.** Add the same contract object to captured and coverage rows; write source version/path class only from backend-observed/authorized facts; write opaque root/source/path/rotation handles; retain raw payload only under the private bundle root; and remove the old advanced-row null/hardcoded shortcut. Generic rows keep their current path.
+- [ ] **Step 4: Run parser/native green gates.**
 
 ```bash
 cargo test --locked -p cmtraceopen-parser --test sccm_server_intake advanced_capture
@@ -219,31 +181,18 @@ cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --featur
 cargo test --locked -p cmtrace-open --test sccm_native_collection --features sccm-diagnostics
 ```
 
-Expected result: `PASS`; all six cards remain candidate-only and no reducer/finding test changes are needed.
+### Task 5: Reproduce the user flow on authorized Windows
 
-### Task 5: Exercise the authorized Windows deployment path
+**Files:** `src-tauri/tests/sccm_advanced_ipc.rs`, `src-tauri/tests/sccm_advanced_server_capture.rs`, `src/workspaces/sccm/SccmWorkspace.test.tsx`; raw validation output remains under `/tmp/cmtraceopen-sccm-advanced-capture-validation/` and is never committed.
 
-**Files:**
+- [ ] **Step 1: Discover and display only sanitized options.** Confirm the UI receives card/source/role/path-class availability and version facts, never paths or basenames. Confirm the native picker returns a selected directory only to the authorize command.
+- [ ] **Step 2: Prove negative gates first.** With generic discovery only, confirm BGB requires MP binding; DP alone does not admit PXE; CRP/SRSRP/cloud stay `Unsupported`/`notRequested`; malicious IPC payloads cannot change card/source/role/path class or inject a basename/glob.
+- [ ] **Step 3: Prove consent and capability replay safety.** In `src-tauri/tests/sccm_advanced_ipc.rs`, run the same serialized request shape used by the UI through authorize then capture, assert one successful end-to-end command contract, authorize once, capture once, and verify a second capture with the same handle fails. Confirm result/manifest/logs contain no selected path or raw evidence.
+- [ ] **Step 4: Prove exact source/rotation/cap behavior.** In the sanitized lab, place only allowlisted current/`lo_` files, verify local byte hashes against the operator's private copy, verify source-specific caps and lineage, and retain only metadata in repository-facing test output.
 
-- Test: `src-tauri/tests/sccm_advanced_server_capture.rs`
-- Test: `src-tauri/tests/sccm_native_collection.rs`
-- Validation record (local only): `/tmp/cmtraceopen-sccm-advanced-capture-validation/`
+### Task 6: Complete gates and self-review
 
-- [ ] **Step 1: Prepare a sanitized Windows lab matrix.** Use an authorized SCCM development server with known ConfigMgr version and host/site handles. Record, outside the repository and without raw logs, which of the following facts are actually observed: MP role/root for BGB, PXE-enabled DP topology, certificate registration point, reporting services point, service connection/CMG role, configured path class, and source version.
-
-- [ ] **Step 2: Prove the negative gates first.** Run capture with only current generic discovery. Confirm BGB is eligible only from an observed MP root; `smspxe.log` does not become eligible from DP alone; `crp.log`, `srsrp.log`, and both cloud sources remain `notRequested`/`Unsupported` without their role facts; no candidate basename creates a role.
-
-- [ ] **Step 3: Prove typed supplemental capture.** For each observed advanced role, issue only its typed operator-authorized request, collect only the exact current/`lo_` files, and verify manifest row identity, source version, path class, rotation lineage, source-local caps, and redacted public metadata. Verify bytes against the local lab copy only; never paste or commit them.
-
-- [ ] **Step 4: Prove terminal disposition is still capture-only.** A rejection, service error, absent file, access denial, and partial/capped capture remain coverage/source evidence. No implementation in this plan turns them into a transaction, terminal diagnosis, reducer, or finding.
-
-### Task 6: Run complete gates and review the diff
-
-**Files:**
-
-- All implementation files listed above; no source-card or raw-evidence changes.
-
-- [ ] **Step 1: Run the complete required verification suite.**
+- [ ] **Step 1: Run all required gates.**
 
 ```bash
 cargo fmt --all -- --check
@@ -251,32 +200,36 @@ cargo test --locked -p cmtraceopen-parser --test sccm_server_advanced_roles_cata
 cargo test --locked -p cmtraceopen-parser --test sccm_server_intake
 cargo test --locked -p cmtraceopen-parser
 cargo check --locked -p cmtraceopen-parser --target wasm32-unknown-unknown
+cargo test --locked -p cmtrace-open --test sccm_advanced_ipc --features sccm-diagnostics
 cargo test --locked -p cmtrace-open --test sccm_advanced_server_capture --features sccm-diagnostics
 cargo test --locked -p cmtrace-open --test sccm_native_collection --features sccm-diagnostics
 cargo clippy --locked -p cmtrace-open --all-targets --all-features -- -D warnings
 cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
+npx vitest run src/lib/commands.test.ts src/workspaces/sccm/SccmWorkspace.test.tsx src/workspaces/sccm/sccm-store.test.ts
 npx tsc --noEmit
 npm run frontend:build
 git diff --check
 ```
 
-Expected result: every command exits zero. A Windows CI/native run is mandatory before implementation merge because Registry/CIM facts, Windows reparse behavior, and no-follow flags are not fully reproduced on macOS.
+Expected result: every command exits zero. Windows CI/native execution is mandatory before implementation merge because Registry/CIM facts, Windows reparse behavior, and no-follow flags are not fully reproduced on macOS.
 
-- [ ] **Step 2: Perform the red-first self-review.** Confirm the diff has exactly one advanced collector owner; no new semantic source catalog, reducer, finding, card promotion, compatibility fallback, guessed registry path, arbitrary filesystem API, raw payload, or public raw path. Confirm every source has exact card/source/basename/role/path/version/cap/rotation coverage and that blocked role facts are not reported as absent.
+- [ ] **Step 2: Re-run self-review against the reworked scope.** Confirm the request is reachable from the existing SCCM UI; the command is registered; managed state creates and consumes the capability; backend—not frontend—validates every field; parser production types validate and integrity-bind every new manifest field; one collector owner handles all six sources; no card promotion/reducer/finding/compatibility fallback/arbitrary filesystem collection/raw evidence exists.
+- [ ] **Step 3: Commit implementation in reviewable commits only after SUP acceptance.** Keep UI/IPC, native contract/collector, and parser manifest work separable. Do not merge or push from this worktree.
 
-- [ ] **Step 3: Commit the implementation in small commits.** Keep contract tests, discovery authorization, engine integration, and manifest changes separately reviewable. Do not merge or push from this worktree.
+## Blocking self-review and stop conditions
 
-## Self-review checklist and stop conditions
+- 🔴 Stop if no user-visible picker/consent action can create a capability.
+- 🔴 Stop if advanced capture still relies on a zero-argument command or an unreachable private constructor.
+- 🔴 Stop if any frontend-provided card/source/role/path/version value is trusted without fresh backend validation.
+- 🔴 Stop if any command returns a raw path or stores a capability that can be replayed.
+- 🔴 Stop if parser production intake does not deserialize, validate, preserve, and integrity-bind `captureContract` on both artifact and coverage rows.
+- 🔴 Stop if a source can be selected by basename, glob, default root, or guessed registry path.
+- 🔴 Stop if generic DP discovery yields PXE capture without observed PXE enablement/topology.
+- 🔴 Stop if source version/path class is guessed or silently dropped.
+- 🔴 Stop if numbered/timestamped rotations or global 8-file/16-MiB limits replace the card-local contract.
+- 🔴 Stop if a symlink/reparse root/file is followed or a supplemental root escapes its authorized directory.
+- 🔴 Stop if public JSON contains raw host, site, path, certificate, tenant, endpoint, token, user, device, MAC, network, report, query, or data-source values.
+- 🔴 Stop if blocked sources disappear instead of retaining `Unsupported` plus `notRequested` provenance.
+- 🔴 Stop if any card becomes `observed`, `fixtureValidated`, or `ruleValidated` as a side effect of capture work.
 
-- 🔴 Stop if any source can be selected by basename without a bound role/root contract.
-- 🔴 Stop if a generic DP root yields `smspxe.log` without an observed PXE-enabled fact and topology binding.
-- 🔴 Stop if a missing default file is reported as role absence, health, or terminal failure.
-- 🔴 Stop if source version or path class is guessed, hardcoded, or silently dropped.
-- 🔴 Stop if a numbered/timestamped rotation is copied despite the card's `current`/`lo_` contract.
-- 🔴 Stop if per-source limits are replaced by the existing generic 8-file/16-MiB limits.
-- 🔴 Stop if a symlink/reparse root or file is followed, or if a supplemental path can escape its authorized root.
-- 🔴 Stop if public JSON contains raw path, host, site, certificate, tenant, endpoint, token, user, device, MAC, network, report, query, or data-source values.
-- 🔴 Stop if blocked/unobserved sources disappear instead of retaining explicit `Unsupported` plus `notRequested` provenance.
-- 🔴 Stop if any source card becomes `observed`, `fixtureValidated`, or `ruleValidated` as a side effect of capture work.
-
-The first post-SUP action is to run the contract/admission red tests against the accepted SUP-frozen manifest/discovery API, then implement Task 1 only. No coupled collector code should be changed before that freeze and acceptance.
+The first post-SUP action is to run Task 1's red UI/IPC and parser-contract tests against the accepted SUP-frozen APIs. No coupled collector implementation starts before SUP is frozen and accepted.
