@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use cmtraceopen_parser::sccm::server::windows::{
     assess_sccm_site_database_export, SccmSiteDatabaseExportCoverageState,
-    SccmSiteDatabaseExportEvidenceDisposition,
+    SccmSiteDatabaseExportError, SccmSiteDatabaseExportEvidenceDisposition,
 };
 use serde_json::Value;
 
@@ -109,4 +109,91 @@ fn captured_export_is_coverage_only() {
             "public assessment must not expose {forbidden}"
         );
     }
+}
+
+fn fixture_bytes(scenario: &str) -> Vec<u8> {
+    std::fs::read(fixture_root(scenario).join("export.json")).expect("fixture is readable")
+}
+
+fn fixture_value(scenario: &str) -> Value {
+    serde_json::from_slice(&fixture_bytes(scenario)).expect("fixture is JSON")
+}
+
+#[test]
+fn rejects_or_preserves_only_coverage_for_failed_gates() {
+    let partial = assess_sccm_site_database_export(&fixture_bytes("partial"))
+        .expect("partial export remains a coverage result");
+    assert_eq!(
+        partial.coverage().state(),
+        SccmSiteDatabaseExportCoverageState::Partial
+    );
+    assert_eq!(
+        partial.evidence_disposition(),
+        SccmSiteDatabaseExportEvidenceDisposition::CoverageOnly
+    );
+
+    let denied = assess_sccm_site_database_export(&fixture_bytes("denied"))
+        .expect("denied export remains a coverage result");
+    assert_eq!(
+        denied.coverage().state(),
+        SccmSiteDatabaseExportCoverageState::AccessDenied
+    );
+    assert_eq!(
+        denied.evidence_disposition(),
+        SccmSiteDatabaseExportEvidenceDisposition::CoverageOnly
+    );
+
+    assert_eq!(
+        assess_sccm_site_database_export(&fixture_bytes("malformed")),
+        Err(SccmSiteDatabaseExportError::MalformedDocument)
+    );
+    assert_eq!(
+        assess_sccm_site_database_export(&fixture_bytes("unknown-version")),
+        Err(SccmSiteDatabaseExportError::UnsupportedSchemaVersion { found: 2 })
+    );
+    assert_eq!(
+        assess_sccm_site_database_export(&fixture_bytes("duplicate")),
+        Err(SccmSiteDatabaseExportError::DuplicateJsonKey)
+    );
+    assert_eq!(
+        assess_sccm_site_database_export(&fixture_bytes("oversized")),
+        Err(SccmSiteDatabaseExportError::InputLimitExceeded)
+    );
+
+    let mut bad_integrity = fixture_value("captured");
+    bad_integrity["integrity"]["canonicalPayloadSha256"] = Value::String("0".repeat(64));
+    assert_eq!(
+        assess_sccm_site_database_export(
+            &serde_json::to_vec(&bad_integrity).expect("mutation serializes")
+        ),
+        Err(SccmSiteDatabaseExportError::IntegrityMismatch)
+    );
+
+    for field in [
+        "queryText",
+        "databaseName",
+        "deviceId",
+        "packageId",
+        "userName",
+        "siteCode",
+    ] {
+        let mut document = fixture_value("captured");
+        document[field] = Value::String("not-admitted".to_owned());
+        assert_eq!(
+            assess_sccm_site_database_export(
+                &serde_json::to_vec(&document).expect("mutation serializes")
+            ),
+            Err(SccmSiteDatabaseExportError::UnexpectedField),
+            "{field} must not be admitted"
+        );
+    }
+
+    let mut second_snapshot = fixture_value("captured");
+    second_snapshot["snapshots"] = Value::Array(vec![second_snapshot["snapshot"].clone()]);
+    assert_eq!(
+        assess_sccm_site_database_export(
+            &serde_json::to_vec(&second_snapshot).expect("mutation serializes")
+        ),
+        Err(SccmSiteDatabaseExportError::SnapshotContractViolation)
+    );
 }

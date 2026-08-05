@@ -114,6 +114,9 @@ pub fn assess_sccm_site_database_export(
     let preserved = parse_preserved_json(input).map_err(map_preflight_error)?;
     reject_duplicate_object_keys(&preserved).map_err(map_preflight_error)?;
     let root = object_fields(&preserved).ok_or(SccmSiteDatabaseExportError::MalformedDocument)?;
+    if field(root, "snapshots").is_some() {
+        return Err(SccmSiteDatabaseExportError::SnapshotContractViolation);
+    }
     let schema_version = match field(root, "schemaVersion") {
         Some(PreservedJsonValue::Unsigned(found)) => {
             u32::try_from(*found).map_err(|_| SccmSiteDatabaseExportError::MalformedDocument)?
