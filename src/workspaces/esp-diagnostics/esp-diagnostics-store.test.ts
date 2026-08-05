@@ -276,7 +276,7 @@ beforeEach(() => {
   );
   useUiStore.setState({
     graphApiEnabled: false,
-    graphApiStatus: "idle",
+    graphApiStatus: "disconnected",
   });
 });
 
@@ -2510,7 +2510,7 @@ describe("ESP Graph scheduling", () => {
     coordinator.dispose();
   });
 
-  it.each(["idle", "connecting", "error"] as const)(
+  it.each(["disconnected", "signingIn", "error"] as const)(
     "requires explicit refresh after Graph is %s and never queues behind WAM",
     async (graphApiStatus) => {
       const fetchGraph = vi.fn(async (request: EspGraphRequest) =>
@@ -3918,7 +3918,7 @@ describe("ESP Graph scheduling", () => {
       cancelGraph: nonOwnerCancelGraph,
       createRequestId: () => "graph-non-owner",
     });
-    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "idle" });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "disconnected" });
     useEspDiagnosticsStore.setState({
       phase: "ready",
       snapshot: makeSnapshot(["local-owner"], "owner-device"),
@@ -3986,7 +3986,7 @@ describe("ESP Graph scheduling", () => {
       }
       throw new Error(`Unexpected IPC command: ${command}`);
     });
-    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "idle" });
+    useUiStore.setState({ graphApiEnabled: true, graphApiStatus: "disconnected" });
     useEspDiagnosticsStore.setState({
       phase: "ready",
       snapshot: makeSnapshot(["local-hook"], "hook-device"),
@@ -4704,7 +4704,7 @@ describe("ESP Graph publication reentrancy", () => {
       cancelGraph,
       createRequestId: () => "graph-reentrant-analysis",
     });
-    useUiStore.setState({ graphApiEnabled: false, graphApiStatus: "idle" });
+    useUiStore.setState({ graphApiEnabled: false, graphApiStatus: "disconnected" });
     useEspDiagnosticsStore.setState({
       phase: "ready",
       snapshot: makeSnapshot(["local-reentrant-analysis"]),

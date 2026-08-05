@@ -1,0 +1,77 @@
+{
+  "scenario": "deterministic-privacy-redaction",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "compliant",
+    "rationale": "allEvaluatedSettingsCompliant"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "rpt-1"
+      ]
+    }
+  ],
+  "access": [
+    {
+      "decision": "granted",
+      "linkage": "noMatchingComplianceEvidence",
+      "matchedEvidence": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "compliance-device-compliant",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "rpt-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "redaction": {
+    "deviceKey": "[deviceKey:bdc8a4ec488acb6b]",
+    "tenantKey": "[tenantKey:fba19559833dab09]",
+    "enrollmentId": "[enrollmentId:d7a9fc68c2aba0d9]",
+    "activeUserKey": "[userKey:5df91adf9471a500]",
+    "windowsBuild": "10.0.26100.1742",
+    "settingDisplayName": "BitLocker status for [upn:18becf9e0626016f]",
+    "policyCachePath": "D:\\Users\\[user:fcd48b38cec43b13]\\policy-cache.json",
+    "customRawOutput": "[output:c7b8281e700113e1]",
+    "accessResource": "[resource:9d3708a4f60b93bf]"
+  },
+  "assertions": [
+    "the same identity always masks to the same token, so shared evidence stays visible",
+    "states, counts, timestamps, and evidence references survive redaction unchanged"
+  ],
+  "coverage": [
+    {
+      "artifactId": "access-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "custom-compliance",
+      "status": "available"
+    },
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-report",
+      "status": "available"
+    }
+  ]
+}

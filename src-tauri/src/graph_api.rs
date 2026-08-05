@@ -11,11 +11,12 @@ pub mod esp;
 pub mod models;
 
 pub use models::{
-    normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthCapabilities,
-    GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-    GraphTransportResponse, GraphWamPermissionRequestContract, GraphWamRequestContract,
-    GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST, GRAPH_WAM_PERMISSION_REQUEST,
-    GRAPH_WAM_PERMISSION_SCOPE_REQUEST, GRAPH_WAM_REQUEST,
+    normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthAttemptOutcome,
+    GraphAuthAttemptResult, GraphAuthCapabilities, GraphAuthStatus, GraphHostCapability,
+    GraphHostCapabilityKind, GraphHttpMethod, GraphInteractiveOperationKind,
+    GraphInteractiveOperationTicket, GraphResolutionResult, GraphTransportRequest,
+    GraphTransportResponse, GraphWamRequestContract, GRAPH_DELEGATED_SCOPES, GRAPH_WAM_REQUEST,
+    GRAPH_WAM_SCOPE_REQUEST,
 };
 
 #[cfg(any(target_os = "windows", test))]
@@ -119,25 +120,162 @@ impl<T> VersionedAuthSlot<T> {
 
 #[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeadlineReceiveError {
-    Timeout,
-    Disconnected,
+enum GraphAccountEnumeration {
+    Accounts(usize),
+    ProviderUnavailable,
+    Unknown,
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn receive_before_deadline<T>(
-    receiver: &std::sync::mpsc::Receiver<T>,
-    deadline: std::time::Instant,
-) -> Result<T, DeadlineReceiveError> {
-    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-    if remaining.is_zero() {
-        return Err(DeadlineReceiveError::Timeout);
+fn classify_graph_host_capability(
+    organizational: GraphAccountEnumeration,
+    personal: GraphAccountEnumeration,
+) -> GraphHostCapabilityKind {
+    match organizational {
+        GraphAccountEnumeration::Accounts(count) if count > 0 => GraphHostCapabilityKind::Available,
+        GraphAccountEnumeration::ProviderUnavailable => {
+            GraphHostCapabilityKind::ProviderUnavailable
+        }
+        GraphAccountEnumeration::Unknown => GraphHostCapabilityKind::Unknown,
+        GraphAccountEnumeration::Accounts(_) => match personal {
+            GraphAccountEnumeration::Accounts(count) if count > 0 => {
+                GraphHostCapabilityKind::PersonalAccountOnly
+            }
+            GraphAccountEnumeration::Unknown => GraphHostCapabilityKind::Unknown,
+            GraphAccountEnumeration::Accounts(_) | GraphAccountEnumeration::ProviderUnavailable => {
+                GraphHostCapabilityKind::NoOrganizationalAccount
+            }
+        },
     }
-    match receiver.recv_timeout(remaining) {
-        Ok(value) => Ok(value),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(DeadlineReceiveError::Timeout),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            Err(DeadlineReceiveError::Disconnected)
+}
+
+#[cfg(any(target_os = "windows", test))]
+struct GraphInteractiveOperationEntry {
+    attempt_id: uuid::Uuid,
+    kind: GraphInteractiveOperationKind,
+    claimed: bool,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    accepts_cancellation: bool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Default)]
+struct GraphInteractiveOperationRegistry {
+    active: std::sync::Mutex<Option<GraphInteractiveOperationEntry>>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GraphInteractiveOperationError {
+    Busy,
+    InvalidTicket,
+}
+
+#[cfg(any(target_os = "windows", test))]
+pub(crate) struct GraphInteractiveOperationLease {
+    registry: std::sync::Arc<GraphInteractiveOperationRegistry>,
+    attempt_id: uuid::Uuid,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl GraphInteractiveOperationRegistry {
+    fn reserve(
+        &self,
+        kind: GraphInteractiveOperationKind,
+    ) -> Result<GraphInteractiveOperationTicket, GraphInteractiveOperationError> {
+        let mut active = self.active.lock().unwrap();
+        if active.is_some() {
+            return Err(GraphInteractiveOperationError::Busy);
+        }
+        let attempt_id = uuid::Uuid::new_v4();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        *active = Some(GraphInteractiveOperationEntry {
+            attempt_id,
+            kind,
+            claimed: false,
+            cancelled,
+            accepts_cancellation: true,
+        });
+        Ok(GraphInteractiveOperationTicket {
+            attempt_id: attempt_id.hyphenated().to_string(),
+        })
+    }
+
+    fn claim(
+        self: &std::sync::Arc<Self>,
+        attempt_id: &str,
+        kind: GraphInteractiveOperationKind,
+    ) -> Result<GraphInteractiveOperationLease, GraphInteractiveOperationError> {
+        let attempt_id = uuid::Uuid::parse_str(attempt_id)
+            .map_err(|_| GraphInteractiveOperationError::InvalidTicket)?;
+        let mut active = self.active.lock().unwrap();
+        let entry = active
+            .as_mut()
+            .filter(|entry| entry.attempt_id == attempt_id && entry.kind == kind && !entry.claimed)
+            .ok_or(GraphInteractiveOperationError::InvalidTicket)?;
+        entry.claimed = true;
+        Ok(GraphInteractiveOperationLease {
+            registry: self.clone(),
+            attempt_id,
+            cancelled: entry.cancelled.clone(),
+        })
+    }
+
+    fn cancel(&self, attempt_id: &str) -> bool {
+        let Ok(attempt_id) = uuid::Uuid::parse_str(attempt_id) else {
+            return false;
+        };
+        let mut active = self.active.lock().unwrap();
+        let Some(entry) = active
+            .as_ref()
+            .filter(|active| active.attempt_id == attempt_id && active.accepts_cancellation)
+        else {
+            return false;
+        };
+        if !entry.claimed {
+            *active = None;
+            return true;
+        }
+        !entry
+            .cancelled
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl GraphInteractiveOperationLease {
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn cancellation_flag(&self) -> &std::sync::atomic::AtomicBool {
+        self.cancelled.as_ref()
+    }
+
+    fn publish_if_active<T>(&self, publish: impl FnOnce() -> T) -> Option<T> {
+        let mut active = self.registry.active.lock().unwrap();
+        let entry = active
+            .as_mut()
+            .filter(|active| active.attempt_id == self.attempt_id)?;
+        if entry.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return None;
+        }
+        entry.accepts_cancellation = false;
+        Some(publish())
+    }
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl Drop for GraphInteractiveOperationLease {
+    fn drop(&mut self) {
+        let mut active = self.registry.active.lock().unwrap();
+        if active
+            .as_ref()
+            .is_some_and(|active| active.attempt_id == self.attempt_id)
+        {
+            *active = None;
         }
     }
 }
@@ -228,11 +366,13 @@ mod windows_impl {
         GraphPermissionUpgradeOutcome, GraphPermissionUpgradeResult,
     };
     use super::{
-        normalize_graph_guid, parse_graph_app_json, parse_graph_app_values,
-        project_graph_auth_status, receive_before_deadline, DeadlineReceiveError, GraphAppInfo,
-        GraphAuthStatus, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache,
-        GRAPH_WAM_PERMISSION_REQUEST, GRAPH_WAM_REQUEST,
+        classify_graph_host_capability, normalize_graph_guid, parse_graph_app_json,
+        parse_graph_app_values, project_graph_auth_status, GraphAccountEnumeration, GraphAppInfo,
+        GraphAuthAttemptOutcome, GraphAuthAttemptResult, GraphAuthStatus, GraphHostCapability,
+        GraphHostCapabilityKind, GraphHttpMethod, GraphInteractiveOperationKind,
+        GraphInteractiveOperationLease, GraphInteractiveOperationRegistry,
+        GraphInteractiveOperationTicket, GraphResolutionResult, GraphTransportRequest,
+        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache, GRAPH_WAM_REQUEST,
     };
     use crate::error::AppError;
 
@@ -244,6 +384,7 @@ mod windows_impl {
     struct GraphAuthStateInner {
         access_token: Mutex<VersionedAuthSlot<CachedToken>>,
         guid_cache: Mutex<VersionedGuidCache>,
+        interactive_operations: Arc<GraphInteractiveOperationRegistry>,
         #[cfg(feature = "esp-diagnostics")]
         esp_operations: EspGraphOperationRegistry,
         #[cfg(test)]
@@ -261,35 +402,18 @@ mod windows_impl {
         status: GraphAuthStatus,
     }
 
+    #[derive(Debug)]
     enum WamAcquisitionFailure {
         Cancelled,
-        Denied(AppError),
-        Failed(AppError),
+        TimedOut,
+        Denied,
+        Failed,
     }
-
-    const WAM_USER_INTERACTION_REQUIRED_MESSAGE: &str =
-        "Interactive authentication required. Please sign in to Windows with your Entra ID account first.";
 
     impl From<AppError> for WamAcquisitionFailure {
-        fn from(error: AppError) -> Self {
-            Self::Failed(error)
+        fn from(_error: AppError) -> Self {
+            Self::Failed
         }
-    }
-
-    impl WamAcquisitionFailure {
-        fn into_initial_auth_error(self) -> AppError {
-            match self {
-                Self::Cancelled => {
-                    AppError::Internal("Authentication was cancelled by user.".into())
-                }
-                Self::Denied(error) | Self::Failed(error) => error,
-            }
-        }
-    }
-
-    fn wam_provider_legacy_error(error_message: Option<String>) -> AppError {
-        let error_message = error_message.unwrap_or_else(|| "Unknown WAM error".to_string());
-        AppError::Internal(format!("WAM authentication failed: {error_message}"))
     }
 
     fn wam_provider_status_failure(
@@ -297,11 +421,10 @@ mod windows_impl {
         error_message: Option<String>,
     ) -> WamAcquisitionFailure {
         let denied = super::is_wam_consent_denial(error_code, error_message.as_deref());
-        let legacy_error = wam_provider_legacy_error(error_message);
         if denied {
-            WamAcquisitionFailure::Denied(legacy_error)
+            WamAcquisitionFailure::Denied
         } else {
-            WamAcquisitionFailure::Failed(legacy_error)
+            WamAcquisitionFailure::Failed
         }
     }
 
@@ -315,6 +438,38 @@ mod windows_impl {
     impl GraphAuthState {
         pub fn new() -> Self {
             Self::default()
+        }
+
+        pub(crate) fn reserve_interactive_operation(
+            &self,
+            kind: GraphInteractiveOperationKind,
+        ) -> Result<GraphInteractiveOperationTicket, AppError> {
+            self.inner
+                .interactive_operations
+                .reserve(kind)
+                .map_err(|_| {
+                    AppError::InvalidInput(
+                        "Another Microsoft Graph sign-in action is already in progress."
+                            .to_string(),
+                    )
+                })
+        }
+
+        pub(crate) fn claim_interactive_operation(
+            &self,
+            attempt_id: &str,
+            kind: GraphInteractiveOperationKind,
+        ) -> Result<GraphInteractiveOperationLease, AppError> {
+            self.inner
+                .interactive_operations
+                .claim(attempt_id, kind)
+                .map_err(|_| {
+                    AppError::InvalidInput("Invalid Microsoft Graph operation ticket.".to_string())
+                })
+        }
+
+        pub(crate) fn cancel_interactive_operation(&self, attempt_id: &str) -> bool {
+            self.inner.interactive_operations.cancel(attempt_id)
         }
 
         fn get_valid_token_snapshot(&self) -> (Option<CachedToken>, u64) {
@@ -465,8 +620,8 @@ mod windows_impl {
 
         use windows::core::{factory, RuntimeType, HSTRING};
         use windows::Security::Authentication::Web::Core::{
-            WebAuthenticationCoreManager, WebTokenRequest, WebTokenRequestPromptType,
-            WebTokenRequestResult, WebTokenRequestStatus,
+            FindAllWebAccountsStatus, WebAuthenticationCoreManager, WebTokenRequest,
+            WebTokenRequestPromptType, WebTokenRequestResult, WebTokenRequestStatus,
         };
         use windows::Win32::Foundation::HWND;
         use windows::Win32::System::WinRT::{
@@ -477,12 +632,7 @@ mod windows_impl {
 
         const GRAPH_WAM_ACQUISITION_TIMEOUT: std::time::Duration =
             std::time::Duration::from_secs(120);
-
-        #[derive(Clone, Copy)]
-        enum WamRequestMode {
-            InitialConnect,
-            PermissionConsent,
-        }
+        const GRAPH_WAM_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
         struct WinRtApartment;
 
@@ -504,8 +654,8 @@ mod windows_impl {
         fn wait_for_operation<T>(
             operation: &IAsyncOperation<T>,
             deadline: std::time::Instant,
-            stage: &str,
-        ) -> Result<T, AppError>
+            cancelled: Option<&std::sync::atomic::AtomicBool>,
+        ) -> Result<T, WamAcquisitionFailure>
         where
             T: RuntimeType + Send + 'static,
         {
@@ -516,26 +666,135 @@ mod windows_impl {
                     let _ = sender.send(result);
                     Ok(())
                 }))
-                .map_err(|error| {
-                    AppError::Internal(format!(
-                        "WAM {stage} completion registration failed: {error}"
-                    ))
-                })?;
+                .map_err(|_| WamAcquisitionFailure::Failed)?;
 
-            match receive_before_deadline(&receiver, deadline) {
-                Ok(result) => result
-                    .map_err(|error| AppError::Internal(format!("WAM {stage} failed: {error}"))),
-                Err(DeadlineReceiveError::Timeout) => {
+            loop {
+                if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
                     let _ = operation.Cancel();
-                    Err(AppError::Internal(format!(
-                        "WAM authentication timed out during {stage} after {} seconds.",
-                        GRAPH_WAM_ACQUISITION_TIMEOUT.as_secs()
-                    )))
+                    return Err(WamAcquisitionFailure::Cancelled);
                 }
-                Err(DeadlineReceiveError::Disconnected) => Err(AppError::Internal(format!(
-                    "WAM {stage} completion channel disconnected."
-                ))),
+
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    let _ = operation.Cancel();
+                    return Err(WamAcquisitionFailure::TimedOut);
+                }
+
+                match receiver.recv_timeout(remaining.min(GRAPH_WAM_POLL_INTERVAL)) {
+                    Ok(result) => {
+                        return result.map_err(|_| WamAcquisitionFailure::Failed);
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(WamAcquisitionFailure::Failed);
+                    }
+                }
             }
+        }
+
+        fn enumerate_accounts(
+            authority: &str,
+            deadline: std::time::Instant,
+            cancelled: Option<&std::sync::atomic::AtomicBool>,
+        ) -> Result<GraphAccountEnumeration, WamAcquisitionFailure> {
+            let provider_operation =
+                match WebAuthenticationCoreManager::FindAccountProviderWithAuthorityAsync(
+                    &HSTRING::from("https://login.microsoft.com"),
+                    &HSTRING::from(authority),
+                ) {
+                    Ok(operation) => operation,
+                    Err(error) => {
+                        log::debug!(
+                            "event=graph_capability_provider_lookup_failed authority={authority} error={error}"
+                        );
+                        return Ok(GraphAccountEnumeration::ProviderUnavailable);
+                    }
+                };
+            let provider = match wait_for_operation(&provider_operation, deadline, cancelled) {
+                Ok(provider) => provider,
+                Err(WamAcquisitionFailure::Cancelled) => {
+                    return Err(WamAcquisitionFailure::Cancelled)
+                }
+                Err(WamAcquisitionFailure::TimedOut) => {
+                    return Err(WamAcquisitionFailure::TimedOut)
+                }
+                Err(failure @ (WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed)) => {
+                    log::debug!(
+                        "event=graph_capability_provider_lookup_wait_failed authority={authority} failure={failure:?}"
+                    );
+                    return Ok(GraphAccountEnumeration::ProviderUnavailable);
+                }
+            };
+
+            let accounts_operation = match WebAuthenticationCoreManager::FindAllAccountsAsync(
+                &provider,
+            ) {
+                Ok(operation) => operation,
+                Err(error) => {
+                    log::debug!(
+                            "event=graph_capability_account_discovery_failed authority={authority} error={error}"
+                        );
+                    return Ok(GraphAccountEnumeration::Unknown);
+                }
+            };
+            let result = match wait_for_operation(&accounts_operation, deadline, cancelled) {
+                Ok(result) => result,
+                Err(WamAcquisitionFailure::Cancelled) => {
+                    return Err(WamAcquisitionFailure::Cancelled)
+                }
+                Err(WamAcquisitionFailure::TimedOut) => {
+                    return Err(WamAcquisitionFailure::TimedOut)
+                }
+                Err(failure @ (WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed)) => {
+                    log::debug!(
+                        "event=graph_capability_account_discovery_wait_failed authority={authority} failure={failure:?}"
+                    );
+                    return Ok(GraphAccountEnumeration::Unknown);
+                }
+            };
+
+            let Ok(status) = result.Status() else {
+                return Ok(GraphAccountEnumeration::Unknown);
+            };
+            if status != FindAllWebAccountsStatus::Success {
+                return Ok(GraphAccountEnumeration::Unknown);
+            }
+            let count = result
+                .Accounts()
+                .ok()
+                .and_then(|accounts| accounts.Size().ok())
+                .map(|count| count as usize);
+            Ok(count
+                .map(GraphAccountEnumeration::Accounts)
+                .unwrap_or(GraphAccountEnumeration::Unknown))
+        }
+
+        fn probe_host_capability_with_deadline(
+            deadline: std::time::Instant,
+            cancelled: Option<&std::sync::atomic::AtomicBool>,
+        ) -> Result<GraphHostCapability, WamAcquisitionFailure> {
+            let organizational = enumerate_accounts("organizations", deadline, cancelled)?;
+            let personal = if organizational == GraphAccountEnumeration::Accounts(0) {
+                enumerate_accounts("consumers", deadline, cancelled)?
+            } else {
+                GraphAccountEnumeration::Accounts(0)
+            };
+            Ok(GraphHostCapability::new(classify_graph_host_capability(
+                organizational,
+                personal,
+            )))
+        }
+
+        pub fn authentication_deadline() -> std::time::Instant {
+            std::time::Instant::now() + GRAPH_WAM_ACQUISITION_TIMEOUT
+        }
+
+        pub fn probe_host_capability_for_authentication(
+            deadline: std::time::Instant,
+            lease: &GraphInteractiveOperationLease,
+        ) -> Result<GraphHostCapability, WamAcquisitionFailure> {
+            let _apartment = WinRtApartment::initialize()?;
+            probe_host_capability_with_deadline(deadline, Some(lease.cancellation_flag()))
         }
 
         /// Acquire a token via WAM using the Win32 interop path.
@@ -543,23 +802,13 @@ mod windows_impl {
         /// Desktop (Win32) apps don't have a CoreWindow, so we must use
         /// `IWebAuthenticationCoreManagerInterop::RequestTokenForWindowAsync`
         /// with an explicit HWND instead of the UWP `RequestTokenAsync`.
-        pub fn acquire_permission_consent_token_on_initialized_worker(
+        pub fn acquire_token(
             hwnd_raw: isize,
+            deadline: std::time::Instant,
+            lease: &GraphInteractiveOperationLease,
         ) -> Result<CachedToken, WamAcquisitionFailure> {
             let _apartment = WinRtApartment::initialize()?;
-            acquire_token_with_request(hwnd_raw, WamRequestMode::PermissionConsent)
-        }
-
-        pub fn acquire_token(hwnd_raw: isize) -> Result<CachedToken, WamAcquisitionFailure> {
-            acquire_token_with_request(hwnd_raw, WamRequestMode::InitialConnect)
-        }
-
-        fn acquire_token_with_request(
-            hwnd_raw: isize,
-            request_mode: WamRequestMode,
-        ) -> Result<CachedToken, WamAcquisitionFailure> {
             let hwnd = HWND(hwnd_raw as *mut _);
-            let deadline = std::time::Instant::now() + GRAPH_WAM_ACQUISITION_TIMEOUT;
 
             // Provider lookup doesn't need a window
             let authority = HSTRING::from("organizations");
@@ -569,58 +818,21 @@ mod windows_impl {
                     &authority,
                 )
                 .map_err(|e| AppError::Internal(format!("WAM provider lookup failed: {e}")))?;
-            let provider = wait_for_operation(&provider_operation, deadline, "provider lookup")?;
+            let provider = wait_for_operation(
+                &provider_operation,
+                deadline,
+                Some(lease.cancellation_flag()),
+            )?;
 
             let client_id = HSTRING::from(GRAPH_POWERSHELL_CLIENT_ID);
-            let request = match request_mode {
-                WamRequestMode::PermissionConsent => {
-                    let scope = HSTRING::from(GRAPH_WAM_PERMISSION_REQUEST.scope);
-                    if GRAPH_WAM_PERMISSION_REQUEST.force_authentication {
-                        WebTokenRequest::CreateWithPromptType(
-                            &provider,
-                            &scope,
-                            &client_id,
-                            WebTokenRequestPromptType::ForceAuthentication,
-                        )
-                    } else {
-                        WebTokenRequest::Create(&provider, &scope, &client_id)
-                    }
-                }
-                WamRequestMode::InitialConnect => {
-                    let scope = HSTRING::from(GRAPH_WAM_REQUEST.scope);
-                    WebTokenRequest::Create(&provider, &scope, &client_id)
-                }
-            }
+            let scope = HSTRING::from(GRAPH_WAM_REQUEST.scope);
+            let request = WebTokenRequest::CreateWithPromptType(
+                &provider,
+                &scope,
+                &client_id,
+                WebTokenRequestPromptType::ForceAuthentication,
+            )
             .map_err(|e| AppError::Internal(format!("WAM request creation failed: {e}")))?;
-
-            let properties = request
-                .Properties()
-                .map_err(|e| AppError::Internal(format!("WAM properties failed: {e}")))?;
-            match request_mode {
-                WamRequestMode::PermissionConsent => {
-                    // The explicit permission action mirrors MSAL's Entra WAM
-                    // v2 consent shape. In particular, it must not attach the
-                    // v1 `resource` property or WAM may reuse the cached token.
-                    for &(name, value) in GRAPH_WAM_PERMISSION_REQUEST.properties {
-                        properties
-                            .Insert(&HSTRING::from(name), &HSTRING::from(value))
-                            .map_err(|e| {
-                                AppError::Internal(format!("WAM set consent property failed: {e}"))
-                            })?;
-                    }
-                }
-                WamRequestMode::InitialConnect => {
-                    // Preserve the established initial-connect contract.
-                    // Without this resource property the legacy/default request
-                    // can report Success while returning an empty token.
-                    properties
-                        .Insert(
-                            &HSTRING::from(GRAPH_WAM_REQUEST.resource_property),
-                            &HSTRING::from(GRAPH_WAM_REQUEST.resource),
-                        )
-                        .map_err(|e| AppError::Internal(format!("WAM set resource failed: {e}")))?;
-                }
-            }
 
             // Use the COM interop interface to pass our HWND
             let interop: IWebAuthenticationCoreManagerInterop =
@@ -631,7 +843,7 @@ mod windows_impl {
                 unsafe { interop.RequestTokenForWindowAsync(hwnd, &request) }
                     .map_err(|e| AppError::Internal(format!("WAM token request failed: {e}")))?;
 
-            let result = wait_for_operation(&operation, deadline, "token request")?;
+            let result = wait_for_operation(&operation, deadline, Some(lease.cancellation_flag()))?;
 
             let status = result
                 .ResponseStatus()
@@ -677,24 +889,18 @@ mod windows_impl {
                         upn.as_deref(),
                         tenant.as_deref(),
                         unix_now(),
-                    );
-                    if !status.is_authenticated {
-                        return Err(AppError::Internal(
-                            status
-                                .error
-                                .clone()
-                                .unwrap_or_else(|| "InvalidWamToken".to_string()),
-                        )
-                        .into());
+                    )
+                    .map_err(|error| AppError::Internal(error.to_string()))?;
+
+                    if lease.is_cancelled() {
+                        return Err(WamAcquisitionFailure::Cancelled);
                     }
 
                     Ok(CachedToken { token, status })
                 }
                 WebTokenRequestStatus::UserCancel => Err(WamAcquisitionFailure::Cancelled),
                 WebTokenRequestStatus::UserInteractionRequired => {
-                    Err(WamAcquisitionFailure::Denied(AppError::Internal(
-                        WAM_USER_INTERACTION_REQUIRED_MESSAGE.into(),
-                    )))
+                    Err(WamAcquisitionFailure::Denied)
                 }
                 WebTokenRequestStatus::ProviderError => {
                     let provider_error = result.ResponseError().ok();
@@ -706,16 +912,7 @@ mod windows_impl {
                         .map(|message| message.to_string());
                     Err(wam_provider_status_failure(error_code, error_message))
                 }
-                _ => {
-                    let error_message = result
-                        .ResponseError()
-                        .ok()
-                        .and_then(|error| error.ErrorMessage().ok())
-                        .map(|message| message.to_string());
-                    Err(WamAcquisitionFailure::Failed(wam_provider_legacy_error(
-                        error_message,
-                    )))
-                }
+                _ => Err(WamAcquisitionFailure::Failed),
             }
         }
     }
@@ -961,13 +1158,15 @@ mod windows_impl {
         state
             .get_valid_token()
             .map(|(cached, _)| cached.status)
-            .unwrap_or_else(|| GraphAuthStatus::disconnected(None))
+            .unwrap_or_else(GraphAuthStatus::disconnected)
     }
 
     const GRAPH_PERMISSION_DENIED_MESSAGE: &str =
         "Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the missing permissions.";
     const GRAPH_PERMISSION_FAILED_MESSAGE: &str =
         "Windows could not complete the permission request. Your existing Graph permissions remain available.";
+    const GRAPH_PERMISSION_TIMED_OUT_MESSAGE: &str =
+        "The Windows permission request timed out. Your existing Graph permissions remain available.";
     const GRAPH_PERMISSION_STALE_MESSAGE: &str =
         "The permission request was superseded by a newer Graph connection change.";
 
@@ -980,7 +1179,7 @@ mod windows_impl {
         let (token, generation) = state.get_valid_token_snapshot();
         let status = token
             .map(|cached| cached.status)
-            .unwrap_or_else(|| GraphAuthStatus::disconnected(None));
+            .unwrap_or_else(GraphAuthStatus::disconnected);
         if generation == expected_generation {
             GraphPermissionUpgradeResult {
                 outcome,
@@ -998,6 +1197,7 @@ mod windows_impl {
 
     fn request_missing_permissions_with<F>(
         state: &GraphAuthState,
+        lease: &GraphInteractiveOperationLease,
         acquire: F,
     ) -> Result<GraphPermissionUpgradeResult, AppError>
     where
@@ -1022,7 +1222,15 @@ mod windows_impl {
                     None,
                 ));
             }
-            Err(WamAcquisitionFailure::Denied(_)) => {
+            Err(WamAcquisitionFailure::TimedOut) => {
+                return Ok(retained_permission_upgrade_result(
+                    state,
+                    generation,
+                    GraphPermissionUpgradeOutcome::TimedOut,
+                    Some(GRAPH_PERMISSION_TIMED_OUT_MESSAGE),
+                ));
+            }
+            Err(WamAcquisitionFailure::Denied) => {
                 return Ok(retained_permission_upgrade_result(
                     state,
                     generation,
@@ -1030,7 +1238,7 @@ mod windows_impl {
                     Some(GRAPH_PERMISSION_DENIED_MESSAGE),
                 ));
             }
-            Err(WamAcquisitionFailure::Failed(_)) => {
+            Err(WamAcquisitionFailure::Failed) => {
                 return Ok(retained_permission_upgrade_result(
                     state,
                     generation,
@@ -1043,12 +1251,21 @@ mod windows_impl {
         match classify_graph_permission_candidate(&current.status, &candidate.status) {
             GraphPermissionCandidateDecision::Upgrade => {
                 let status = candidate.status.clone();
-                if state.set_token_if_generation(generation, candidate) {
+                let published = lease
+                    .publish_if_active(|| state.set_token_if_generation(generation, candidate));
+                if published == Some(true) {
                     Ok(GraphPermissionUpgradeResult {
                         outcome: GraphPermissionUpgradeOutcome::Upgraded,
                         status,
                         message: None,
                     })
+                } else if published.is_none() {
+                    Ok(retained_permission_upgrade_result(
+                        state,
+                        generation,
+                        GraphPermissionUpgradeOutcome::Cancelled,
+                        None,
+                    ))
                 } else {
                     Ok(retained_permission_upgrade_result(
                         state,
@@ -1078,43 +1295,170 @@ mod windows_impl {
         }
     }
 
-    /// Authenticate with Graph API via WAM. Returns current auth status.
-    /// `hwnd_raw` is the native window handle for the WAM dialog.
-    pub fn authenticate(
-        state: &GraphAuthState,
-        hwnd_raw: isize,
-    ) -> Result<GraphAuthStatus, AppError> {
-        let expected_generation = match state.claim_authentication() {
-            Ok(cached) => return Ok(cached.status),
-            Err(generation) => generation,
-        };
+    const GRAPH_AUTH_CANCELLED_MESSAGE: &str = "Microsoft Graph sign-in was cancelled.";
+    const GRAPH_AUTH_TIMED_OUT_MESSAGE: &str =
+        "Microsoft Graph sign-in timed out after 120 seconds.";
+    const GRAPH_AUTH_FAILED_MESSAGE: &str = "Windows could not complete Microsoft Graph sign-in.";
+    const GRAPH_AUTH_STALE_MESSAGE: &str =
+        "The sign-in result was superseded by a newer Graph connection change.";
 
-        match wam::acquire_token(hwnd_raw) {
-            Ok(token) => {
-                let status = token.status.clone();
-                if state.set_token_if_generation(expected_generation, token) {
-                    Ok(status)
-                } else {
-                    Ok(current_auth_status(state))
-                }
+    fn retained_auth_attempt(
+        state: &GraphAuthState,
+        expected_generation: u64,
+        outcome: GraphAuthAttemptOutcome,
+        capability: GraphHostCapability,
+        message: Option<&'static str>,
+    ) -> GraphAuthAttemptResult {
+        let (token, generation) = state.get_valid_token_snapshot();
+        let status = token
+            .map(|cached| cached.status)
+            .unwrap_or_else(GraphAuthStatus::disconnected);
+        if generation == expected_generation {
+            GraphAuthAttemptResult {
+                outcome,
+                status,
+                capability,
+                message: message.map(str::to_string),
             }
-            Err(failure) => {
-                let error = failure.into_initial_auth_error();
-                if state.clear_token_if_generation(expected_generation) {
-                    Ok(GraphAuthStatus::disconnected(Some(error.to_string())))
-                } else {
-                    Ok(current_auth_status(state))
-                }
+        } else {
+            GraphAuthAttemptResult {
+                outcome: GraphAuthAttemptOutcome::Stale,
+                status,
+                capability,
+                message: Some(GRAPH_AUTH_STALE_MESSAGE.to_string()),
             }
         }
     }
 
-    pub fn request_missing_permissions_on_initialized_worker(
+    fn unavailable_message(kind: GraphHostCapabilityKind) -> Option<&'static str> {
+        match kind {
+            GraphHostCapabilityKind::PersonalAccountOnly => Some(
+                "Only a personal Microsoft account is available. Connect a Windows work or school account to use Microsoft Graph.",
+            ),
+            GraphHostCapabilityKind::NoOrganizationalAccount => Some(
+                "No Windows work or school account is available for Microsoft Graph.",
+            ),
+            GraphHostCapabilityKind::ProviderUnavailable => Some(
+                "Windows Web Account Manager is unavailable on this host.",
+            ),
+            GraphHostCapabilityKind::Available | GraphHostCapabilityKind::Unknown => None,
+        }
+    }
+
+    /// Authenticate with Graph API via WAM on an off-thread worker.
+    pub(crate) fn authenticate(
         state: &GraphAuthState,
         hwnd_raw: isize,
+        lease: &GraphInteractiveOperationLease,
+    ) -> GraphAuthAttemptResult {
+        let expected_generation = match state.claim_authentication() {
+            Ok(cached) => {
+                return GraphAuthAttemptResult {
+                    outcome: GraphAuthAttemptOutcome::Connected,
+                    status: cached.status,
+                    capability: GraphHostCapability::new(GraphHostCapabilityKind::Available),
+                    message: None,
+                }
+            }
+            Err(generation) => generation,
+        };
+        let deadline = wam::authentication_deadline();
+        let capability = match wam::probe_host_capability_for_authentication(deadline, lease) {
+            Ok(capability) => capability,
+            Err(WamAcquisitionFailure::Cancelled) => {
+                return retained_auth_attempt(
+                    state,
+                    expected_generation,
+                    GraphAuthAttemptOutcome::Cancelled,
+                    GraphHostCapability::new(GraphHostCapabilityKind::Unknown),
+                    Some(GRAPH_AUTH_CANCELLED_MESSAGE),
+                )
+            }
+            Err(WamAcquisitionFailure::TimedOut) => {
+                return retained_auth_attempt(
+                    state,
+                    expected_generation,
+                    GraphAuthAttemptOutcome::TimedOut,
+                    GraphHostCapability::new(GraphHostCapabilityKind::Unknown),
+                    Some(GRAPH_AUTH_TIMED_OUT_MESSAGE),
+                )
+            }
+            Err(WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed) => {
+                GraphHostCapability::new(GraphHostCapabilityKind::Unknown)
+            }
+        };
+        if let Some(message) = unavailable_message(capability.kind) {
+            return retained_auth_attempt(
+                state,
+                expected_generation,
+                GraphAuthAttemptOutcome::Unavailable,
+                capability,
+                Some(message),
+            );
+        }
+
+        match wam::acquire_token(hwnd_raw, deadline, lease) {
+            Ok(token) => {
+                let status = token.status.clone();
+                match lease
+                    .publish_if_active(|| state.set_token_if_generation(expected_generation, token))
+                {
+                    Some(true) => GraphAuthAttemptResult {
+                        outcome: GraphAuthAttemptOutcome::Connected,
+                        status,
+                        capability,
+                        message: None,
+                    },
+                    None => retained_auth_attempt(
+                        state,
+                        expected_generation,
+                        GraphAuthAttemptOutcome::Cancelled,
+                        capability,
+                        Some(GRAPH_AUTH_CANCELLED_MESSAGE),
+                    ),
+                    Some(false) => retained_auth_attempt(
+                        state,
+                        expected_generation,
+                        GraphAuthAttemptOutcome::Stale,
+                        capability,
+                        Some(GRAPH_AUTH_STALE_MESSAGE),
+                    ),
+                }
+            }
+            Err(WamAcquisitionFailure::Cancelled) => retained_auth_attempt(
+                state,
+                expected_generation,
+                GraphAuthAttemptOutcome::Cancelled,
+                capability,
+                Some(GRAPH_AUTH_CANCELLED_MESSAGE),
+            ),
+            Err(WamAcquisitionFailure::TimedOut) => retained_auth_attempt(
+                state,
+                expected_generation,
+                GraphAuthAttemptOutcome::TimedOut,
+                capability,
+                Some(GRAPH_AUTH_TIMED_OUT_MESSAGE),
+            ),
+            Err(WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed) => {
+                retained_auth_attempt(
+                    state,
+                    expected_generation,
+                    GraphAuthAttemptOutcome::Failed,
+                    capability,
+                    Some(GRAPH_AUTH_FAILED_MESSAGE),
+                )
+            }
+        }
+    }
+
+    pub(crate) fn request_missing_permissions(
+        state: &GraphAuthState,
+        hwnd_raw: isize,
+        lease: &GraphInteractiveOperationLease,
     ) -> Result<GraphPermissionUpgradeResult, AppError> {
-        request_missing_permissions_with(state, || {
-            wam::acquire_permission_consent_token_on_initialized_worker(hwnd_raw)
+        let deadline = wam::authentication_deadline();
+        request_missing_permissions_with(state, lease, || {
+            wam::acquire_token(hwnd_raw, deadline, lease)
         })
     }
 
@@ -1430,7 +1774,6 @@ mod windows_impl {
                     .collect(),
                 expires_at: Some(unix_now() + 3_600),
                 capabilities: GraphAuthCapabilities::default(),
-                error: None,
             }
         }
 
@@ -1455,6 +1798,26 @@ mod windows_impl {
             state
         }
 
+        fn request_missing_permissions_for_test<F>(
+            state: &GraphAuthState,
+            acquire: F,
+        ) -> Result<GraphPermissionUpgradeResult, AppError>
+        where
+            F: FnOnce() -> Result<CachedToken, WamAcquisitionFailure>,
+        {
+            let registry = Arc::new(GraphInteractiveOperationRegistry::default());
+            let ticket = registry
+                .reserve(GraphInteractiveOperationKind::PermissionConsent)
+                .expect("test operation ticket");
+            let lease = registry
+                .claim(
+                    &ticket.attempt_id,
+                    GraphInteractiveOperationKind::PermissionConsent,
+                )
+                .expect("test operation lease");
+            request_missing_permissions_with(state, &lease, acquire)
+        }
+
         fn stored_token_and_generation(state: &GraphAuthState) -> (String, u64) {
             let guard = state.inner.access_token.lock().unwrap();
             let cached = guard.value.as_ref().expect("cached token");
@@ -1465,7 +1828,7 @@ mod windows_impl {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
-            let result = request_missing_permissions_with(&state, || Ok(candidate))
+            let result = request_missing_permissions_for_test(&state, || Ok(candidate))
                 .expect("candidate rejection is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
@@ -1483,7 +1846,7 @@ mod windows_impl {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
-            let result = request_missing_permissions_with(&state, || Err(failure))
+            let result = request_missing_permissions_for_test(&state, || Err(failure))
                 .expect("acquisition failure is a structured outcome");
 
             assert_eq!(result.outcome, expected_outcome);
@@ -1497,7 +1860,7 @@ mod windows_impl {
             let state = GraphAuthState::new();
             let calls = Cell::new(0);
 
-            let result = request_missing_permissions_with(&state, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 calls.set(calls.get() + 1);
                 unreachable!("disconnected precondition must stop before WAM")
             });
@@ -1520,7 +1883,7 @@ mod windows_impl {
             ));
             let calls = Cell::new(0);
 
-            let result = request_missing_permissions_with(&state, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 calls.set(calls.get() + 1);
                 unreachable!("complete precondition must stop before WAM")
             });
@@ -1546,7 +1909,7 @@ mod windows_impl {
             let expected_status = candidate.status.clone();
             let calls = Cell::new(0);
 
-            let result = request_missing_permissions_with(&state, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 calls.set(calls.get() + 1);
                 Ok(candidate)
             })
@@ -1570,6 +1933,36 @@ mod windows_impl {
         }
 
         #[test]
+        fn graph_permission_upgrade_cancelled_lease_blocks_candidate_publication() {
+            let state = seed_partial_state();
+            let before = stored_token_and_generation(&state);
+            let registry = Arc::new(GraphInteractiveOperationRegistry::default());
+            let ticket = registry
+                .reserve(GraphInteractiveOperationKind::PermissionConsent)
+                .unwrap();
+            let lease = registry
+                .claim(
+                    &ticket.attempt_id,
+                    GraphInteractiveOperationKind::PermissionConsent,
+                )
+                .expect("test operation lease");
+            assert!(registry.cancel(&ticket.attempt_id));
+            let candidate = token(
+                CANDIDATE_TOKEN,
+                "user@contoso.example",
+                "tenant-a",
+                &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
+            );
+
+            let result = request_missing_permissions_with(&state, &lease, || Ok(candidate))
+                .expect("cancelled publication is a structured outcome");
+
+            assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Cancelled);
+            assert_eq!(result.status, current_auth_status(&state));
+            assert_eq!(stored_token_and_generation(&state), before);
+        }
+
+        #[test]
         fn graph_permission_upgrade_equal_scopes_retain_original_token_and_generation() {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
@@ -1580,7 +1973,7 @@ mod windows_impl {
                 &[GRAPH_DELEGATED_SCOPES[0]],
             );
 
-            let result = request_missing_permissions_with(&state, || Ok(candidate))
+            let result = request_missing_permissions_for_test(&state, || Ok(candidate))
                 .expect("equal scopes are unchanged");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Unchanged);
@@ -1609,7 +2002,7 @@ mod windows_impl {
                 &[GRAPH_DELEGATED_SCOPES[0]],
             );
 
-            let result = request_missing_permissions_with(&state, || Ok(candidate))
+            let result = request_missing_permissions_for_test(&state, || Ok(candidate))
                 .expect("scope regression is a structured failure");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
@@ -1660,87 +2053,50 @@ mod windows_impl {
         }
 
         #[test]
-        fn graph_permission_upgrade_denial_retains_original_token_and_sanitizes_provider_text() {
-            let raw_provider_text = "AADSTS65004: UserDeclinedConsent access_denied";
+        fn graph_permission_upgrade_timeout_retains_original_token() {
+            assert_acquisition_failure_retains_current(
+                WamAcquisitionFailure::TimedOut,
+                GraphPermissionUpgradeOutcome::TimedOut,
+                true,
+            );
+        }
+
+        #[test]
+        fn graph_permission_upgrade_denial_retains_original_token() {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
-            let result = request_missing_permissions_with(&state, || {
-                Err(WamAcquisitionFailure::Denied(AppError::Internal(
-                    raw_provider_text.to_string(),
-                )))
-            })
-            .expect("provider denial is a structured outcome");
+            let result =
+                request_missing_permissions_for_test(&state, || Err(WamAcquisitionFailure::Denied))
+                    .expect("provider denial is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Denied);
             assert!(result.message.is_some());
-            assert!(!format!("{result:?}").contains(raw_provider_text));
             assert_eq!(result.status, current_auth_status(&state));
             assert_eq!(stored_token_and_generation(&state), before);
         }
 
         #[test]
-        fn graph_permission_upgrade_provider_failure_retains_original_token_and_sanitizes_message()
-        {
-            let raw_provider_text = "raw-provider-sensitive-text";
+        fn graph_permission_upgrade_provider_failure_retains_original_token() {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
-            let result = request_missing_permissions_with(&state, || {
-                Err(WamAcquisitionFailure::Failed(AppError::Internal(
-                    raw_provider_text.to_string(),
-                )))
-            })
-            .expect("provider failure is a structured outcome");
+            let result =
+                request_missing_permissions_for_test(&state, || Err(WamAcquisitionFailure::Failed))
+                    .expect("provider failure is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
             assert!(result.message.is_some());
-            assert!(!format!("{result:?}").contains(raw_provider_text));
             assert_eq!(result.status, current_auth_status(&state));
             assert_eq!(stored_token_and_generation(&state), before);
         }
 
         #[test]
-        fn graph_permission_upgrade_provider_status_failure_preserves_legacy_initial_auth_detail() {
-            let raw_provider_text = "provider-specific failure";
-            let error = wam_provider_status_failure(None, Some(raw_provider_text.to_string()))
-                .into_initial_auth_error();
-            assert_eq!(
-                error.to_string(),
-                format!("WAM authentication failed: {raw_provider_text}")
-            );
-
-            let fallback = wam_provider_status_failure(None, None).into_initial_auth_error();
-            assert_eq!(
-                fallback.to_string(),
-                "WAM authentication failed: Unknown WAM error"
-            );
-        }
-
-        #[test]
-        fn graph_permission_upgrade_provider_denial_is_reachable_and_preserves_legacy_detail() {
+        fn graph_permission_upgrade_provider_denial_is_classified_without_exposing_detail() {
             let raw_provider_text = "AADSTS65004: UserDeclinedConsent; OAuth error=access_denied";
             let failure =
                 wam_provider_status_failure(Some(65_004), Some(raw_provider_text.to_string()));
-            assert!(matches!(&failure, WamAcquisitionFailure::Denied(_)));
-
-            let error = failure.into_initial_auth_error();
-            assert_eq!(
-                error.to_string(),
-                format!("WAM authentication failed: {raw_provider_text}")
-            );
-        }
-
-        #[test]
-        fn graph_permission_upgrade_user_interaction_required_preserves_legacy_guidance() {
-            let failure = WamAcquisitionFailure::Denied(AppError::Internal(
-                WAM_USER_INTERACTION_REQUIRED_MESSAGE.into(),
-            ));
-
-            assert_eq!(
-                failure.into_initial_auth_error().to_string(),
-                "Interactive authentication required. Please sign in to Windows with your Entra ID account first."
-            );
+            assert!(matches!(failure, WamAcquisitionFailure::Denied));
         }
 
         #[test]
@@ -1749,7 +2105,7 @@ mod windows_impl {
                 Some(65_005),
                 Some("AADSTS65005: MisconfiguredApplication".to_string()),
             );
-            assert!(matches!(failure, WamAcquisitionFailure::Failed(_)));
+            assert!(matches!(failure, WamAcquisitionFailure::Failed));
         }
 
         #[test]
@@ -1762,7 +2118,7 @@ mod windows_impl {
                 &[GRAPH_DELEGATED_SCOPES[0], GRAPH_DELEGATED_SCOPES[1]],
             );
 
-            let result = request_missing_permissions_with(&state, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 state.clear_token();
                 Ok(candidate)
             })
@@ -1793,7 +2149,7 @@ mod windows_impl {
             );
             let newer_status = newer.status.clone();
 
-            let result = request_missing_permissions_with(&state, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 assert!(state.set_token_if_generation(1, newer));
                 Ok(candidate)
             })
@@ -1818,17 +2174,14 @@ mod windows_impl {
             );
             let newer_status = newer.status.clone();
 
-            let result = request_missing_permissions_with(&state, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 assert!(state.set_token_if_generation(1, newer));
-                Err(WamAcquisitionFailure::Failed(AppError::Internal(
-                    "raw-provider-sensitive-text".to_string(),
-                )))
+                Err(WamAcquisitionFailure::Failed)
             })
             .expect("stale failure is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Stale);
             assert_eq!(result.status, newer_status);
-            assert!(!format!("{result:?}").contains("raw-provider-sensitive-text"));
         }
 
         #[cfg(feature = "esp-diagnostics")]
@@ -1855,7 +2208,7 @@ mod windows_impl {
                 .expect("ESP operation");
             assert!(!operation.is_cancelled());
 
-            let result = request_missing_permissions_with(&state, || {
+            let result = request_missing_permissions_for_test(&state, || {
                 Ok(token(
                     CANDIDATE_TOKEN,
                     "user@contoso.example",
@@ -1915,7 +2268,6 @@ mod windows_impl {
                     missing_scopes: Vec::new(),
                     expires_at: Some(unix_now() + 3_600),
                     capabilities: super::super::GraphAuthCapabilities::all(),
-                    error: None,
                 },
             }
         }
@@ -1958,19 +2310,170 @@ pub use windows_impl::*;
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
-
     use super::client::GraphClientErrorKind;
     use super::{
         parse_graph_app_json, parse_graph_app_values, GraphAppInfo, VersionedAuthSlot,
         VersionedGuidCache,
     };
+    use std::collections::HashMap;
 
     const APP_A: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const APP_B: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const APP_SCOPE: &str = "DeviceManagementApps.Read.All";
+
+    #[test]
+    fn graph_host_capability_distinguishes_organizational_and_personal_hosts() {
+        use super::{
+            classify_graph_host_capability, GraphAccountEnumeration as Accounts,
+            GraphHostCapabilityKind as Capability,
+        };
+
+        for (organizational, personal, expected) in [
+            (
+                Accounts::Accounts(1),
+                Accounts::Accounts(0),
+                Capability::Available,
+            ),
+            (
+                Accounts::Accounts(0),
+                Accounts::Accounts(1),
+                Capability::PersonalAccountOnly,
+            ),
+            (
+                Accounts::Accounts(0),
+                Accounts::Accounts(0),
+                Capability::NoOrganizationalAccount,
+            ),
+            (
+                Accounts::ProviderUnavailable,
+                Accounts::Accounts(0),
+                Capability::ProviderUnavailable,
+            ),
+            (
+                Accounts::Unknown,
+                Accounts::Accounts(0),
+                Capability::Unknown,
+            ),
+            (
+                Accounts::Accounts(0),
+                Accounts::Unknown,
+                Capability::Unknown,
+            ),
+        ] {
+            assert_eq!(
+                classify_graph_host_capability(organizational, personal),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn graph_interactive_operation_issues_single_use_kind_bound_tickets() {
+        let registry = std::sync::Arc::new(super::GraphInteractiveOperationRegistry::default());
+        let first_ticket = registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .expect("first reservation should own the slot");
+        assert_eq!(
+            registry
+                .reserve(super::GraphInteractiveOperationKind::PermissionConsent)
+                .err(),
+            Some(super::GraphInteractiveOperationError::Busy)
+        );
+        assert_eq!(
+            registry
+                .claim(
+                    &first_ticket.attempt_id,
+                    super::GraphInteractiveOperationKind::PermissionConsent,
+                )
+                .err(),
+            Some(super::GraphInteractiveOperationError::InvalidTicket)
+        );
+        let first = registry
+            .claim(
+                &first_ticket.attempt_id,
+                super::GraphInteractiveOperationKind::Authentication,
+            )
+            .expect("matching operation should claim its ticket");
+        assert_eq!(
+            registry
+                .claim(
+                    &first_ticket.attempt_id,
+                    super::GraphInteractiveOperationKind::Authentication,
+                )
+                .err(),
+            Some(super::GraphInteractiveOperationError::InvalidTicket)
+        );
+        assert!(!registry.cancel("22d12752-4b6e-45e0-aac4-0bc351e91118"));
+        assert!(registry.cancel(&first_ticket.attempt_id));
+        assert!(first.is_cancelled());
+        assert!(!registry.cancel(&first_ticket.attempt_id));
+
+        drop(first);
+        let second_ticket = registry
+            .reserve(super::GraphInteractiveOperationKind::PermissionConsent)
+            .expect("dropping the lease should release ownership");
+        assert_ne!(first_ticket.attempt_id, second_ticket.attempt_id);
+        assert!(!registry.cancel(&first_ticket.attempt_id));
+        let second = registry
+            .claim(
+                &second_ticket.attempt_id,
+                super::GraphInteractiveOperationKind::PermissionConsent,
+            )
+            .unwrap();
+        assert!(!second.is_cancelled());
+    }
+
+    #[test]
+    fn graph_interactive_operation_never_publishes_after_matching_cancellation() {
+        let registry = std::sync::Arc::new(super::GraphInteractiveOperationRegistry::default());
+        let cancelled_ticket = registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .unwrap();
+        let cancelled = registry
+            .claim(
+                &cancelled_ticket.attempt_id,
+                super::GraphInteractiveOperationKind::Authentication,
+            )
+            .unwrap();
+        assert!(registry.cancel(&cancelled_ticket.attempt_id));
+        let mut published = false;
+        assert_eq!(cancelled.publish_if_active(|| published = true), None,);
+        assert!(!published);
+
+        drop(cancelled);
+        let completed_ticket = registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .unwrap();
+        let completed = registry
+            .claim(
+                &completed_ticket.attempt_id,
+                super::GraphInteractiveOperationKind::Authentication,
+            )
+            .unwrap();
+        assert_eq!(completed.publish_if_active(|| 42), Some(42));
+        assert!(!registry.cancel(&completed_ticket.attempt_id));
+    }
+
+    #[test]
+    fn graph_interactive_operation_cancellation_retires_an_unclaimed_ticket() {
+        let registry = std::sync::Arc::new(super::GraphInteractiveOperationRegistry::default());
+        let retired = registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .unwrap();
+        assert!(registry.cancel(&retired.attempt_id));
+        assert_eq!(
+            registry
+                .claim(
+                    &retired.attempt_id,
+                    super::GraphInteractiveOperationKind::Authentication,
+                )
+                .err(),
+            Some(super::GraphInteractiveOperationError::InvalidTicket)
+        );
+        assert!(registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .is_ok());
+    }
 
     #[test]
     fn graph_permission_upgrade_recognizes_documented_consent_denial_markers() {
@@ -2004,35 +2507,6 @@ mod tests {
                 "near miss was classified as a denial: {error_code:?} {message:?}"
             );
         }
-    }
-
-    #[test]
-    fn deadline_receiver_distinguishes_ready_timeout_and_disconnect() {
-        let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
-        ready_sender.send(7_u8).expect("ready value");
-        assert_eq!(
-            super::receive_before_deadline(
-                &ready_receiver,
-                Instant::now() + Duration::from_secs(1)
-            ),
-            Ok(7)
-        );
-
-        let (_pending_sender, pending_receiver) = mpsc::sync_channel::<u8>(1);
-        assert_eq!(
-            super::receive_before_deadline(&pending_receiver, Instant::now()),
-            Err(super::DeadlineReceiveError::Timeout)
-        );
-
-        let (disconnected_sender, disconnected_receiver) = mpsc::sync_channel::<u8>(1);
-        drop(disconnected_sender);
-        assert_eq!(
-            super::receive_before_deadline(
-                &disconnected_receiver,
-                Instant::now() + Duration::from_secs(1)
-            ),
-            Err(super::DeadlineReceiveError::Disconnected)
-        );
     }
 
     fn app(id: &str, name: &str) -> GraphAppInfo {

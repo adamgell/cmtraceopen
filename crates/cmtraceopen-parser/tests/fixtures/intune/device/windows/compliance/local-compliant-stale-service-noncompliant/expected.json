@@ -1,0 +1,64 @@
+{
+  "scenario": "local-compliant-stale-service-noncompliant",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "compliant",
+    "rationale": "allEvaluatedSettingsCompliant"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "stale",
+    "serviceDisagreesWithLocal": true
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-1"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-service-state-stale",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        "svc-1"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "compliance-device-compliant",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "evt-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a stale service record produces a reporting-freshness finding, never a local setting state"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "service-facts",
+      "status": "available"
+    }
+  ]
+}

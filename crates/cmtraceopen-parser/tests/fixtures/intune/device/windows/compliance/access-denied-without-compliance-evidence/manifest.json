@@ -1,0 +1,42 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "access-denied-without-compliance-evidence",
+  "workload": "device/windows/compliance",
+  "description": "A denial with no compliance record to match against. No causal claim, no local state, and the finding is info-severity at low confidence.",
+  "generatedAtUtc": "2026-07-31T12:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-context",
+      "family": "deviceContext",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device-context.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/device-context/device-context.json",
+      "relativePath": "evidence/device-context/current/device-context.json",
+      "bytesCopied": 1228,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "access-facts",
+      "family": "accessFacts",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "access-facts.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/access-facts/access-facts.json",
+      "relativePath": "evidence/access-facts/current/access-facts.json",
+      "bytesCopied": 1411,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

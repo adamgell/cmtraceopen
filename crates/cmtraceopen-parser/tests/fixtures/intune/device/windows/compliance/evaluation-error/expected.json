@@ -1,0 +1,62 @@
+{
+  "scenario": "evaluation-error",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "evaluationError",
+    "rationale": "localEvaluationError"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "evaluationError",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-1"
+      ]
+    },
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/firewallstatus",
+      "scope": "device",
+      "state": "evaluationError",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-2"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-local-evaluation-error",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "evt-1",
+        "evt-2"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an error-level event naming a setting with no verdict is an evaluation error, not a noncompliance"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "available"
+    }
+  ]
+}

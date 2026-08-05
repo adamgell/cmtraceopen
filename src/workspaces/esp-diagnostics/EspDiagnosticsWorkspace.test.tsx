@@ -581,7 +581,7 @@ describe("optional Graph enrichment presentation", () => {
     const snapshot = makeSnapshot();
     useUiStore.setState({
       graphApiEnabled: false,
-      graphApiStatus: "idle",
+      graphApiStatus: "disconnected",
     });
     useEspDiagnosticsStore.setState({
       snapshot,
@@ -604,7 +604,7 @@ describe("optional Graph enrichment presentation", () => {
     act(() => {
       useUiStore.setState({
         graphApiEnabled: true,
-        graphApiStatus: "connecting",
+        graphApiStatus: "signingIn",
       });
       useEspDiagnosticsStore
         .getState()

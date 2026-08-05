@@ -356,6 +356,10 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]
+            commands::graph_api::graph_reserve_interactive_operation,
+            #[cfg(target_os = "windows")]
+            commands::graph_api::graph_cancel_authentication,
+            #[cfg(target_os = "windows")]
             commands::graph_api::graph_request_missing_permissions,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_get_auth_status,
