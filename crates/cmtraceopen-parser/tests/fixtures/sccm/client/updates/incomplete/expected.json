@@ -1,0 +1,173 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "incomplete",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": [
+      "client-updates"
+    ]
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-maintenance-window",
+      "state": "absent"
+    },
+    {
+      "logicalArtifactId": "client-policy-state",
+      "state": "absent"
+    },
+    {
+      "logicalArtifactId": "client-reboot",
+      "state": "absent"
+    },
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "captured"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-incomplete-01-deployment",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-incomplete-02-window-absent",
+      "captureState": "absent",
+      "encoding": null,
+      "byteLimit": null,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-incomplete-03-reboot-absent",
+      "captureState": "absent",
+      "encoding": null,
+      "byteLimit": null,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-incomplete-04-report-absent",
+      "captureState": "absent",
+      "encoding": null,
+      "byteLimit": null,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "updates:update:32300000-0000-0000-0000-000000000010",
+      "key": {
+        "updateId": "32300000-0000-0000-0000-000000000010",
+        "ciId": "CI-UPDATE-10",
+        "contentId": "CONTENT-UPDATE-10",
+        "updateJobId": "JOB-UPDATE-10",
+        "clientHandle": "safe:client:updates-10",
+        "siteCode": "LAB",
+        "supHostHandle": null,
+        "confidence": "exact",
+        "extractionProfileId": "updates-client-5.00.test-v1"
+      },
+      "phase": "maintenanceWindow",
+      "state": "incomplete",
+      "lastSuccessfulPhase": "download",
+      "classification": "insufficientEvidence",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "coverageGapArtifactIds": [
+        "client-maintenance-window"
+      ],
+      "nextArtifact": {
+        "logicalArtifactId": "client-maintenance-window",
+        "reason": "Collect the smallest bounded client-maintenance-window continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-incomplete-01-deployment",
+          "startLine": 1,
+          "endLine": 4
+        }
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {
+      "findingId": "finding:updates:incomplete",
+      "subjectId": "updates:update:32300000-0000-0000-0000-000000000010",
+      "class": "insufficientEvidence",
+      "phase": "maintenanceWindow",
+      "lastSuccessfulPhase": "download",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "nextArtifact": {
+        "logicalArtifactId": "client-maintenance-window",
+        "reason": "Collect the smallest bounded client-maintenance-window continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-incomplete-01-deployment",
+          "startLine": 1,
+          "endLine": 4
+        }
+      ]
+    }
+  ],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": false,
+    "counterpartReadyFacts": []
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

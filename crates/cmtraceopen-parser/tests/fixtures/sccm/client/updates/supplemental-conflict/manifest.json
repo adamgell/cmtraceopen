@@ -1,0 +1,71 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "role": "client",
+    "workflow": "updates",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "updates-supplemental-conflict-01-install",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "UpdatesHandler.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/UpdatesHandler.log",
+      "pathFingerprint": "synthetic:updates-supplemental-conflict-01-install",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T18:59:59Z",
+      "bytesCopied": 405,
+      "relativePath": "evidence/client-updates/current/UpdatesHandler.log"
+    },
+    {
+      "artifactId": "updates-supplemental-conflict-02-cbs",
+      "designOnlyCatalog": {
+        "entryId": "client-windows-update-supplemental",
+        "groupMemberships": [
+          "client-windows-update-supplemental"
+        ]
+      },
+      "role": "client",
+      "kind": "cbsLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "CBS.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/Windows/Logs/CBS/CBS.log",
+      "pathFingerprint": "synthetic:updates-supplemental-conflict-02-cbs",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": null,
+      "capturedUtc": "2026-07-30T18:59:59Z",
+      "bytesCopied": 117,
+      "relativePath": "evidence/client-windows-update-supplemental/current/CBS.log"
+    }
+  ]
+}

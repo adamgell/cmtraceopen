@@ -1,0 +1,127 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {
+    "role": "client",
+    "workflow": "updates",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "updates-reporting-failure-01-scan",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "ScanAgent.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/ScanAgent.log",
+      "pathFingerprint": "synthetic:updates-reporting-failure-01-scan",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T10:59:59Z",
+      "bytesCopied": 791,
+      "relativePath": "evidence/client-updates/current/ScanAgent.log"
+    },
+    {
+      "artifactId": "updates-reporting-failure-02-sup",
+      "designOnlyCatalog": {
+        "entryId": "client-location-services-shared",
+        "groupMemberships": [
+          "client-location-services-shared"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "LocationServices.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/LocationServices.log",
+      "pathFingerprint": "synthetic:updates-reporting-failure-02-sup",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T10:59:59Z",
+      "bytesCopied": 404,
+      "relativePath": "evidence/client-location-services-shared/current/LocationServices.log"
+    },
+    {
+      "artifactId": "updates-reporting-failure-03-deployment",
+      "designOnlyCatalog": {
+        "entryId": "client-updates",
+        "groupMemberships": [
+          "client-updates"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "UpdatesDeployment.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/UpdatesDeployment.log",
+      "pathFingerprint": "synthetic:updates-reporting-failure-03-deployment",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T10:59:59Z",
+      "bytesCopied": 1620,
+      "relativePath": "evidence/client-updates/current/UpdatesDeployment.log"
+    },
+    {
+      "artifactId": "updates-reporting-failure-04-report",
+      "designOnlyCatalog": {
+        "entryId": "client-policy-state",
+        "groupMemberships": [
+          "client-policy-state"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "originalBasename": "StateMessage.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/StateMessage.log",
+      "pathFingerprint": "synthetic:updates-reporting-failure-04-report",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.0000",
+      "capturedUtc": "2026-07-30T10:59:59Z",
+      "bytesCopied": 421,
+      "relativePath": "evidence/client-policy-state/current/StateMessage.log"
+    }
+  ]
+}

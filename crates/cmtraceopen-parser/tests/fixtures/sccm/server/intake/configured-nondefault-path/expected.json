@@ -1,0 +1,9 @@
+{
+  "pre318ExpectedVersion": 1,
+  "artifactId": "mp-policy-configured",
+  "configuredPathProvenance": { "state": "configured", "pathClass": "nonDefault", "pathFingerprint": "synthetic:path:mp-configured-a" },
+  "defaultCandidateInterpretation": "candidateAbsentOnly",
+  "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" }],
+  "artifactProvenance": [{ "artifactId": "mp-policy-configured", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }],
+  "roleInference": "managementPoint is observed from topology, not from default path"
+}

@@ -1,0 +1,46 @@
+{
+  "sccmManifestVersion": 1,
+  "contractState": "proposedPending318And319",
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "success",
+  "workflowFamily": "metering",
+  "bundle": {
+    "bundleId": "sccm-325-metering-success",
+    "role": "client",
+    "captureHost": "LAB-CLIENT-01",
+    "siteCode": "LAB",
+    "artifactOrder": "designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId",
+    "rotationOrder": "current,lo,numeric-ascending,timestamp-ascending"
+  },
+  "artifacts": [
+    {
+      "artifactId": "metering-success-report-current",
+      "designOnlyCatalog": {
+        "entryId": "client-metering",
+        "groupMemberships": [
+          "client-metering"
+        ]
+      },
+      "role": "client",
+      "kind": "ccmLog",
+      "captureState": "captured",
+      "originalBasename": "SWMTRReportGen.log",
+      "sanitizedSourcePath": "SYNTHETIC://root-a/CCM/Logs/SWMTRReportGen.log",
+      "pathFingerprint": "synthetic-metering-success-report-current-root-a",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "sourceVersion": "5.00.TEST.325",
+      "capturedUtc": "2026-07-30T04:00:00Z",
+      "bytesCopied": 975,
+      "relativePath": "evidence/client-metering/root-a/current/SWMTRReportGen.log",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      }
+    }
+  ]
+}

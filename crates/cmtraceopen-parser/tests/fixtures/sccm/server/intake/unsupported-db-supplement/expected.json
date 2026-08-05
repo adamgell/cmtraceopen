@@ -1,0 +1,8 @@
+{
+  "pre318ExpectedVersion": 1,
+  "retainedUnclassifiedArtifactIds": ["unknown-db-export"],
+  "coverage": [{ "producerRole": "unclassified", "sourceId": "unknown-db-supplement", "state": "unsupported" }],
+  "nonCapturedProvenance": { "encoding": "omitted", "collectionLimit": "omitted" },
+  "eligibleForRoleReducer": false,
+  "databaseOrRoleFinding": "none"
+}

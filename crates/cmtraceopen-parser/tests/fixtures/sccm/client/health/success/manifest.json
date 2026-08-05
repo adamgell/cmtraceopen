@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "success",
+  "artifacts": [
+    {"artifactId":"health-success-ccmsetup-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ccmsetup.log","pathFingerprint":"synthetic-root-a-health-success-ccmsetup-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:00:00Z","bytesCopied":260,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"health-success-evaluation-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"CcmEval.log","pathFingerprint":"synthetic-root-a-health-success-evaluation-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:00:01Z","bytesCopied":742,"relativePath":"evidence/client-evaluation/current/CcmEval.log"},
+    {"artifactId":"health-success-identity-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ClientIDManagerStartup.log","pathFingerprint":"synthetic-root-a-health-success-identity-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:00:02Z","bytesCopied":550,"relativePath":"evidence/client-identity/current/ClientIDManagerStartup.log"},
+    {"artifactId":"health-success-location-services-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"LocationServices.log","pathFingerprint":"synthetic-root-a-health-success-location-services-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:00:07Z","bytesCopied":1376,"relativePath":"evidence/client-location-services-shared/current/LocationServices.log"}
+  ]
+}

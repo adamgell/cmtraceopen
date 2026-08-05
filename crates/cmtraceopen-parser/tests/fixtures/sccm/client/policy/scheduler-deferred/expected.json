@@ -1,0 +1,45 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "scheduler-deferred",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"}],
+  "artifactProvenance": [
+    {"artifactId":"policy-deferred-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-deferred-scheduler-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions": [{
+    "transactionId": "policy:assignment:15151515-1515-1515-1515-151515151515",
+    "key": {"keyProfileKind":"requestPolicyClientTopology","assignmentId":"15151515-1515-1515-1515-151515151515","policyId":"aeaeaeae-aeae-aeae-aeae-aeaeaeaeaeae","requestId":"27151515-1515-1515-1515-151515151515","clientHandle":"safe:client:policy-15","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","managementPointEvidenceKind":"selected","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "counterpartReadyFact": {"phase":"request","extractionProfileId":"policy-client-5.00.test-v1","evidence":{"artifactId":"policy-deferred-agent-current","startLine":1,"endLine":1}},
+    "phase": "schedule",
+    "state": "deferred",
+    "lastSuccessfulPhase": "persist",
+    "classification": "blockedOrDeferred",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": {"logicalArtifactId":"client-policy-agent","reason":"Capture the bounded scheduler continuation after the retry window."},
+    "evidence": [
+      {"artifactId":"policy-deferred-agent-current","startLine":1,"endLine":3},
+      {"artifactId":"policy-deferred-scheduler-current","startLine":1,"endLine":1}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "findings": [{
+    "findingId": "finding:policy-scheduler-deferred",
+    "subjectId": "policy:assignment:15151515-1515-1515-1515-151515151515",
+    "class": "blockedOrDeferred",
+    "phase": "schedule",
+    "lastSuccessfulPhase": "persist",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "nextArtifact": {"logicalArtifactId":"client-policy-agent","reason":"Capture the bounded scheduler continuation after the retry window."},
+    "evidence": [{"artifactId":"policy-deferred-scheduler-current","startLine":1,"endLine":1}]
+  }],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":true},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}

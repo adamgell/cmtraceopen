@@ -42,6 +42,10 @@ import type {
   EspRelaunchResult,
   EspSessionEnvelope,
 } from "../workspaces/esp-diagnostics/types";
+import type {
+  SccmCaptureResult,
+  SccmEnvironmentDiscovery,
+} from "../workspaces/sccm/types";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -509,6 +513,18 @@ export async function getInitialElevationRestore(): Promise<RestoreTicket | null
 
 export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
   return invokeCommand<WorkspaceId[]>("get_available_workspaces");
+}
+
+export async function discoverSccmEnvironment(): Promise<SccmEnvironmentDiscovery> {
+  return invokeCommand<SccmEnvironmentDiscovery>("discover_sccm_environment");
+}
+
+export async function captureSccmDiagnostics(): Promise<SccmCaptureResult> {
+  return invokeCommand<SccmCaptureResult>("capture_sccm_diagnostics");
+}
+
+export async function revealInFileManager(path: string): Promise<void> {
+  return invokeCommand<void>("reveal_in_file_manager", { path });
 }
 
 export async function getUpdatePolicy(): Promise<UpdatePolicy> {

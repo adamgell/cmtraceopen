@@ -1,0 +1,434 @@
+{
+  "contractState": "pureIntakeImplementedNativePending",
+  "scenario": "missing-root",
+  "pureAssessment": {
+    "schemaVersion": 1,
+    "groups": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-app-enforce-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-app-intent-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-ccmsetup-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-compliance",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-content-current",
+          "fixture-missing-location-services-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-evaluation-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-identity-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-inventory",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-location-services-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-location-services-shared",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-location-services-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-metering",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-policy-agent-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-task-sequence-smsts",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-policy-state-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-reboot",
+        "coverage": "absent",
+        "fragmentArtifactIds": []
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-updates-current"
+        ]
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "coverage": "absent",
+        "fragmentArtifactIds": [
+          "fixture-missing-update-supplemental-current"
+        ]
+      }
+    ],
+    "fragments": [
+      {
+        "artifactId": "fixture-missing-app-enforce-current",
+        "basename": "AppEnforce.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:00Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-app-intent-current",
+        "basename": "AppIntentEval.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:01Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-ccmsetup-current",
+        "basename": "ccmsetup.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:02Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-content-current",
+        "basename": "CAS.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:03Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-evaluation-current",
+        "basename": "CcmEval.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:04Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-identity-current",
+        "basename": "ClientIDManagerStartup.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:05Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-location-services-current",
+        "basename": "LocationServices.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:06Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-policy-agent-current",
+        "basename": "PolicyAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:07Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-policy-state-current",
+        "basename": "CIAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:08Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-update-supplemental-current",
+        "basename": "ReportingEvents.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:10Z",
+        "encoding": null
+      },
+      {
+        "artifactId": "fixture-missing-updates-current",
+        "basename": "ScanAgent.log",
+        "rotation": {
+          "kind": "current"
+        },
+        "coverage": "absent",
+        "pathFingerprint": null,
+        "relativePath": null,
+        "fragmentComplete": false,
+        "configmgrVersion": null,
+        "collectedAtUtc": "2026-07-30T00:04:09Z",
+        "encoding": null
+      }
+    ],
+    "physicalArtifactIds": [],
+    "unsupportedArtifacts": [],
+    "coverageGaps": [
+      {
+        "logicalArtifactId": "client-app-enforce",
+        "artifactId": "fixture-missing-app-enforce-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source AppEnforce.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-app-intent",
+        "artifactId": "fixture-missing-app-intent-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source AppIntentEval.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-ccmsetup",
+        "artifactId": "fixture-missing-ccmsetup-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source ccmsetup.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-compliance",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "artifactId": "fixture-missing-content-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source CAS.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-content",
+        "artifactId": "fixture-missing-location-services-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source LocationServices.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-evaluation",
+        "artifactId": "fixture-missing-evaluation-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source CcmEval.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-identity",
+        "artifactId": "fixture-missing-identity-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source ClientIDManagerStartup.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-inventory",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-location",
+        "artifactId": "fixture-missing-location-services-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source LocationServices.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-location-services-shared",
+        "artifactId": "fixture-missing-location-services-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source LocationServices.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-maintenance-window",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-metering",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-agent",
+        "artifactId": "fixture-missing-policy-agent-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source PolicyAgent.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-task-sequence-smsts",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-policy-state",
+        "artifactId": "fixture-missing-policy-state-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source CIAgent.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-reboot",
+        "artifactId": null,
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for this bounded client source group was supplied."
+      },
+      {
+        "logicalArtifactId": "client-updates",
+        "artifactId": "fixture-missing-updates-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source ScanAgent.log was supplied."
+      },
+      {
+        "logicalArtifactId": "client-windows-update-supplemental",
+        "artifactId": "fixture-missing-update-supplemental-current",
+        "role": "client",
+        "coverage": "absent",
+        "reason": "No artifact for client source ReportingEvents.log was supplied."
+      }
+    ]
+  },
+  "nativeDesignPending": {
+    "artifactProvenance": []
+  },
+  "downstreamDesignPending": {
+    "workflowDiagnosisExpected": false,
+    "requests": [
+      {
+        "kind": "intakeCoverage",
+        "reason": "No configured client root was discovered."
+      }
+    ],
+    "prohibitedClaims": [
+      "client not installed",
+      "client healthy",
+      "client failing"
+    ]
+  }
+}

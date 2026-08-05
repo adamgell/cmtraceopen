@@ -1,0 +1,91 @@
+{
+  "productionOutputSha256": "7e4bd13a3cfbde74a79fabbf4f260972f48b30e643d3c5e1d9fbcca9f7c5ba72",
+  "productionAdmissionError": null,
+  "contractState": "proposedPending318And319",
+  "scenario": "recovery-contradictory",
+  "workflow": "inventory",
+  "extractionProfile": {
+    "id": "sccm-client-inventory-5.00.test-v1",
+    "selectionState": "selected",
+    "versionPrefix": "5.00.TEST."
+  },
+  "transactions": [
+    {
+      "transactionId": "inventory-recovered",
+      "workflow": "inventory",
+      "key": {
+        "InventoryCycleId": "INV-CYCLE-020",
+        "ResourceHandle": "safe:resource:inventory-020",
+        "ReportId": "INV-REPORT-020",
+        "keyProfileKind": "inventoryExact",
+        "extractionProfileId": "sccm-client-inventory-5.00.test-v1",
+        "confidence": "exact"
+      },
+      "phase": "Report",
+      "state": "recovered",
+      "classification": "recovery",
+      "confidence": "medium",
+      "lastSuccessfulPhase": "Report",
+      "evidence": [
+        {
+          "artifactId": "inventory-recovery-contradictory-report-current",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "inventory-recovery-contradictory-report-current",
+          "startLine": 2,
+          "endLine": 2
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null
+    },
+    {
+      "transactionId": "inventory-contradictory",
+      "workflow": "inventory",
+      "key": {
+        "InventoryCycleId": "INV-CYCLE-021",
+        "ResourceHandle": "safe:resource:inventory-021",
+        "ReportId": "INV-REPORT-021",
+        "keyProfileKind": "inventoryExact",
+        "extractionProfileId": "sccm-client-inventory-5.00.test-v1",
+        "confidence": "exact"
+      },
+      "phase": "Report",
+      "state": "contradictory",
+      "classification": "symptom",
+      "confidence": "low",
+      "lastSuccessfulPhase": null,
+      "evidence": [
+        {
+          "artifactId": "inventory-recovery-contradictory-report-current",
+          "startLine": 3,
+          "endLine": 3
+        },
+        {
+          "artifactId": "inventory-recovery-contradictory-report-current",
+          "startLine": 4,
+          "endLine": 4
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null
+    }
+  ],
+  "sourceLocalObservations": [],
+  "coverage": [
+    {
+      "artifactId": "inventory-recovery-contradictory-report-current",
+      "logicalArtifactId": "client-inventory",
+      "state": "captured"
+    }
+  ],
+  "findings": [],
+  "prohibitedClaims": [
+    "missing or unreadable evidence proves workflow success or failure",
+    "same-minute records are causally related without one exact validated key tuple",
+    "client evidence alone proves a server-side cause",
+    "this preparation corpus is live Windows acceptance"
+  ]
+}

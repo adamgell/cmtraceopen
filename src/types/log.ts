@@ -69,6 +69,7 @@ export type WorkspaceId =
   | "deployment"
   | "event-log"
   | "esp-diagnostics"
+  | "sccm"
   | "secureboot"
   | "sysmon"
   | "timeline"

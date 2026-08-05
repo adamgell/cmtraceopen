@@ -33,6 +33,8 @@ pub mod parsing;
 pub mod recent_entries;
 pub mod registry_ops;
 pub mod reveal;
+#[cfg(feature = "sccm-diagnostics")]
+pub mod sccm;
 #[cfg(feature = "secureboot")]
 pub mod secureboot;
 #[cfg(feature = "sysmon")]

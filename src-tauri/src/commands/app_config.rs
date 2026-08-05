@@ -94,6 +94,10 @@ pub fn get_available_workspaces() -> Vec<&'static str> {
         workspaces.push("secureboot");
     }
 
+    if cfg!(feature = "sccm-diagnostics") {
+        workspaces.push("sccm");
+    }
+
     workspaces.push("timeline");
     workspaces.push("dns-dhcp");
 
@@ -126,6 +130,14 @@ mod tests {
         assert_eq!(
             get_available_workspaces().contains(&"esp-diagnostics"),
             cfg!(feature = "esp-diagnostics")
+        );
+    }
+
+    #[test]
+    fn sccm_workspace_availability_matches_the_build_feature() {
+        assert_eq!(
+            get_available_workspaces().contains(&"sccm"),
+            cfg!(feature = "sccm-diagnostics")
         );
     }
 }

@@ -43,6 +43,7 @@ import {
 } from "./esp-diagnostics";
 import { eventLogWorkspace } from "./event-log";
 import { logWorkspace } from "./log";
+import { sccmWorkspace } from "./sccm";
 import { getAvailableWorkspaces, getWorkspace } from "./registry";
 import type { WorkspaceDefinition } from "./types";
 
@@ -589,6 +590,30 @@ describe("ESP workspace registration", () => {
       "analyze_esp_evidence",
       expect.anything(),
     );
+  });
+});
+
+describe("SCCM workspace registration", () => {
+  it("registers a Windows-only live-acquisition workspace without shell sidebars", () => {
+    expect(getWorkspace("sccm")).toBe(sccmWorkspace);
+    expect(sccmWorkspace.label).toBe("SCCM Diagnostics");
+    expect(sccmWorkspace.platforms).toEqual(["windows"]);
+    expect(sccmWorkspace.capabilities).toMatchObject({
+      sidebar: false,
+      liveAcquisition: true,
+      tabStrip: false,
+      knownSources: false,
+    });
+    expect(
+      getAvailableWorkspaces("windows").map((workspace) => workspace.id),
+    ).toContain("sccm");
+    expect(
+      getAvailableWorkspaces("macos").map((workspace) => workspace.id),
+    ).not.toContain("sccm");
+    expect(
+      getAvailableWorkspaces("linux").map((workspace) => workspace.id),
+    ).not.toContain("sccm");
+    expect(shouldRenderWorkspaceSidebar(sccmWorkspace)).toBe(false);
   });
 });
 

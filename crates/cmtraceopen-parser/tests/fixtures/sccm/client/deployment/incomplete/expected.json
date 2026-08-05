@@ -1,0 +1,23 @@
+{
+  "contractState":"proposedPending318And319",
+  "workflow":"deployment",
+  "scenario":"incomplete",
+  "stateChain":["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
+  "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","ciId"],"validatedArtifactFamilies":["client-app-intent"]},
+  "reorderedInputDeterministic":true,
+  "coverage":[{"logicalArtifactId":"client-app-enforce","state":"capped"},{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"accessDenied"}],
+  "artifactProvenance":[
+    {"artifactId":"deployment-incomplete-enforce-capped","bytesCopied":146,"encoding":"utf-8","byteLimit":146,"limitApplied":true},
+    {"artifactId":"deployment-incomplete-intent-current","bytesCopied":590,"encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions":[
+    {"transactionId":"deployment:assignment:10000000-0000-0000-0000-000000000012","key":{"keyProfileKind":"assignmentCi","assignmentId":"10000000-0000-0000-0000-000000000012","ciId":"20000000-0000-0000-0000-000000001012","confidence":"exact","extractionProfileId":"deployment-client-5.00.test-v1"},"counterpartReadyFact":null,"phase":"locateContent","state":"insufficientEvidence","lastSuccessfulPhase":"requirements","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low","coverageGapArtifactIds":["deployment-incomplete-content-access-denied"],"nextArtifact":{"logicalArtifactId":"client-content","reason":"access denied is a coverage state, not proof of content success or failure"},"evidence":[{"artifactId":"deployment-incomplete-intent-current","startLine":1,"endLine":1}]},
+    {"transactionId":"deployment:assignment:10000000-0000-0000-0000-000000000013","key":{"keyProfileKind":"assignmentCi","assignmentId":"10000000-0000-0000-0000-000000000013","ciId":"20000000-0000-0000-0000-000000001013","confidence":"exact","extractionProfileId":"deployment-client-5.00.test-v1"},"counterpartReadyFact":null,"phase":"locateContent","state":"insufficientEvidence","lastSuccessfulPhase":"requirements","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low","coverageGapArtifactIds":["deployment-incomplete-content-access-denied"],"nextArtifact":{"logicalArtifactId":"client-content","reason":"access denied is a coverage state, not proof of content success or failure"},"evidence":[{"artifactId":"deployment-incomplete-intent-current","startLine":2,"endLine":2}]}
+  ],
+  "sourceLocalObservations":[],
+  "findings":[],
+  "adversarialControls":{"sameMinuteDifferentExactKeysStaySeparate":true,"cappedUnkeyedFragmentStaysSourceLocal":true,"accessDeniedIsCoverageOnly":true},
+  "correlationHandoff":{"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"serverCauseClaimed":false,"counterpartReadyKeyKinds":["contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"emittedCounterpartReadyFact":false},
+  "prohibitedClaims":["same-minute transactions merge","access denied proves content success or failure","capped enforcement text proves an outcome"]
+}

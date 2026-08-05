@@ -1,0 +1,147 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "access-denied",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": [
+      "client-updates"
+    ]
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "accessDenied"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-access-denied-01-scan",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-access-denied-02-install-denied",
+      "captureState": "accessDenied",
+      "encoding": null,
+      "byteLimit": null,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "updates:update:32300000-0000-0000-0000-000000000013",
+      "key": {
+        "updateId": "32300000-0000-0000-0000-000000000013",
+        "ciId": "CI-UPDATE-13",
+        "contentId": "CONTENT-UPDATE-13",
+        "updateJobId": "JOB-UPDATE-13",
+        "clientHandle": "safe:client:updates-13",
+        "siteCode": "LAB",
+        "supHostHandle": null,
+        "confidence": "exact",
+        "extractionProfileId": "updates-client-5.00.test-v1"
+      },
+      "phase": "install",
+      "state": "incomplete",
+      "lastSuccessfulPhase": "scan",
+      "classification": "insufficientEvidence",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "coverageGapArtifactIds": [
+        "client-updates"
+      ],
+      "nextArtifact": {
+        "logicalArtifactId": "client-updates",
+        "reason": "Collect the smallest bounded client-updates continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-access-denied-01-scan",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {
+      "findingId": "finding:updates:access-denied",
+      "subjectId": "updates:update:32300000-0000-0000-0000-000000000013",
+      "class": "insufficientEvidence",
+      "phase": "install",
+      "lastSuccessfulPhase": "scan",
+      "confidence": "medium",
+      "confidenceCeiling": "medium",
+      "nextArtifact": {
+        "logicalArtifactId": "client-updates",
+        "reason": "Collect the smallest bounded client-updates continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-access-denied-01-scan",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": false,
+    "counterpartReadyFacts": []
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

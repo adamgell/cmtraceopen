@@ -1,0 +1,2 @@
+<![LOG[SYNTHETIC FIXTURE Family=health Phase=assignment Disposition=succeeded Terminal=true ClientGuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa SiteCode=LAB]LOG]!><time="03:10:06.000+000" date="07-30-2026" component="LocationServices" context="" type="1" thread="1" file="location.cc:1">
+<![LOG[Family=health Phase=boundary Disposition=failed Terminal=true ClientGuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa SiteCode=LAB Error=0x80004005]LOG]!><time="03:10:07.000+000" date="07-30-2026" component="LocationServices" context="" type="3" thread="1" file="location.cc:2">

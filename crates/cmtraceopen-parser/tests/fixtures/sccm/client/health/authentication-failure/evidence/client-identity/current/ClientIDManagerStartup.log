@@ -1,0 +1,2 @@
+<![LOG[SYNTHETIC FIXTURE Family=health Phase=identityRegistration Disposition=succeeded Terminal=true ClientGuid=99999999-9999-9999-9999-999999999999]LOG]!><time="03:00:04.000+000" date="07-30-2026" component="ClientIDManagerStartup" context="" type="1" thread="1" file="clientid.cc:1">
+<![LOG[Family=health Phase=authentication Disposition=failed Terminal=true ClientGuid=99999999-9999-9999-9999-999999999999 Error=0x800B0109]LOG]!><time="03:00:05.000+000" date="07-30-2026" component="ClientIDManagerStartup" context="" type="3" thread="1" file="clientid.cc:2">

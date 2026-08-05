@@ -14,6 +14,7 @@ import { sysmonWorkspace } from "./sysmon";
 import { securebootWorkspace } from "./secureboot";
 import { timelineWorkspace } from "./timeline";
 import { dnsDhcpWorkspace } from "./dns-dhcp";
+import { sccmWorkspace } from "./sccm";
 
 const ALL_WORKSPACES: WorkspaceDefinition[] = [
   logWorkspace,
@@ -25,6 +26,7 @@ const ALL_WORKSPACES: WorkspaceDefinition[] = [
   deploymentWorkspace,
   eventLogWorkspace,
   espDiagnosticsWorkspace,
+  sccmWorkspace,
   sysmonWorkspace,
   securebootWorkspace,
   timelineWorkspace,

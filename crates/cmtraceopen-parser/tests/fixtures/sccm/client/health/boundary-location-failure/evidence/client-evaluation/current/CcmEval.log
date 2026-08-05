@@ -1,0 +1,3 @@
+<![LOG[SYNTHETIC FIXTURE Family=health Phase=service Disposition=succeeded Terminal=true ClientGuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa]LOG]!><time="03:10:01.000+000" date="07-30-2026" component="CcmEval" context="" type="1" thread="1" file="ccmeval.cc:1">
+<![LOG[Family=health Phase=clientHealth Disposition=succeeded Terminal=true ClientGuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa]LOG]!><time="03:10:02.000+000" date="07-30-2026" component="CcmEval" context="" type="1" thread="1" file="ccmeval.cc:2">
+<![LOG[Family=health Phase=reboot Disposition=succeeded Terminal=true ClientGuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa]LOG]!><time="03:10:03.000+000" date="07-30-2026" component="CcmEval" context="" type="1" thread="1" file="ccmeval.cc:3">

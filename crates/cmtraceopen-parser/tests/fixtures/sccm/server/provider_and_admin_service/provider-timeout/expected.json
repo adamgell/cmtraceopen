@@ -1,0 +1,195 @@
+{
+  "artifactRequests": [
+    {
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "producerRole": "provider",
+      "request": {
+        "logicalId": "smsprov",
+        "reason": "Collect the complete Smsprov.log file.",
+        "role": "provider"
+      },
+      "sourceVersion": "5.00.TEST",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "provider-timeout-current",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "producerRole": "provider",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "symptom",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "provider-timeout-current",
+            "entryId": "provider-timeout-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "provider-timeout-current",
+            "entryId": "provider-timeout-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          {
+            "artifactId": "provider-timeout-current",
+            "entryId": "provider-timeout-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:a905773c9e4bccf6937959c95f0a6b7e5f2d7d54466edcdf738787f65be7230e",
+        "nextArtifacts": [
+          {
+            "logicalId": "smsprov",
+            "reason": "Collect the complete Smsprov.log file.",
+            "role": "provider"
+          }
+        ],
+        "phase": "providerAndAdminService",
+        "role": "provider",
+        "severity": "Warning",
+        "summary": "Provider evidence is incomplete, contradictory, or not comparably ordered.",
+        "terminalEvidence": [],
+        "title": "Provider insufficient evidence"
+      },
+      "lastSuccessfulPhase": null,
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "provider:cmtraceopen.request.sha256.v1:0cc4a44c3fed5ad67d93ffcf74331cf00b27aead47742bdcc118c0a268e52388:cmtraceopen.operation.sha256.v1:81b06444c4b09f92d8fbcf959a2aa771feb38d74be73dec8a8a333797d515fa1:synthetic:host:provider-01:synthetic:subject:provider-01",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:provider-01",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "provider-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "provider"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:81b06444c4b09f92d8fbcf959a2aa771feb38d74be73dec8a8a333797d515fa1",
+        "producerHostHandle": "synthetic:host:provider-01",
+        "requestHandle": "cmtraceopen.request.sha256.v1:0cc4a44c3fed5ad67d93ffcf74331cf00b27aead47742bdcc118c0a268e52388"
+      },
+      "lastSuccessfulPhase": null,
+      "layer": "provider",
+      "nextArtifactRequests": [
+        {
+          "layer": "provider",
+          "producerHostHandle": "synthetic:host:provider-01",
+          "producerRole": "provider",
+          "request": {
+            "logicalId": "smsprov",
+            "reason": "Collect the complete Smsprov.log file.",
+            "role": "provider"
+          },
+          "sourceVersion": "5.00.TEST",
+          "workflowSubjectHandle": "synthetic:subject:provider-01"
+        }
+      ],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-timeout-current",
+              "entryId": "provider-timeout-current:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "provider-timeout-current:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-timeout-current",
+              "entryId": "provider-timeout-current:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "provider-timeout-current:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "pending",
+          "evidence": [
+            {
+              "artifactId": "provider-timeout-current",
+              "entryId": "provider-timeout-current:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "provider-timeout-current:3-3-03",
+          "phase": "executeProviderOperation",
+          "terminal": false
+        }
+      ],
+      "producerRole": "provider",
+      "publicSummary": "Provider evidence is incomplete, contradictory, or not comparably ordered.",
+      "sourceVersion": "5.00.TEST",
+      "state": "incomplete",
+      "terminalEvidence": false,
+      "timestampOrdering": "unusable",
+      "topologyCompatibility": "exact",
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:0cc4a44c3fed5ad67d93ffcf74331cf00b27aead47742bdcc118c0a268e52388:cmtraceopen.operation.sha256.v1:81b06444c4b09f92d8fbcf959a2aa771feb38d74be73dec8a8a333797d515fa1:synthetic:host:provider-01:synthetic:subject:provider-01"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

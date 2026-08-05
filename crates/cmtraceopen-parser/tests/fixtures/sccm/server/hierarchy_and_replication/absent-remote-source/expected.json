@@ -1,0 +1,24 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "absent-remote-source",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"absent-01-sender","state":"captured"},{"artifactId":"absent-02-despool","state":"absent"}],
+  "transactions": [{
+    "transactionId":"hierarchy:msg-absent-01:LAB:CHD:link-lab-chd",
+    "key":{"messageId":"msg-absent-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
+    "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":false,
+    "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
+    "coverageGapArtifactIds":["absent-02-despool"],
+    "observations":[{"observationId":"absent-01-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"absent-01-sender","startLine":1,"endLine":1}]}]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [
+    {"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"},
+    {"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["despool.log"],"reasonCode":"missingTargetReceiveProcessApply"}
+  ],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

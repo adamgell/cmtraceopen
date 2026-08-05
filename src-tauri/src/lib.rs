@@ -23,6 +23,8 @@ mod menu;
 pub use cmtraceopen_parser::models;
 pub mod parser;
 pub mod process_util;
+#[cfg(feature = "sccm-diagnostics")]
+pub mod sccm;
 #[cfg(feature = "secureboot")]
 pub mod secureboot;
 mod state;
@@ -239,6 +241,10 @@ pub fn run() {
             commands::file_association::set_file_association_prompt_suppressed,
             commands::app_config::get_available_workspaces,
             commands::app_config::get_update_policy,
+            #[cfg(feature = "sccm-diagnostics")]
+            commands::sccm::discover_sccm_environment,
+            #[cfg(feature = "sccm-diagnostics")]
+            commands::sccm::capture_sccm_diagnostics,
             commands::recent_entries::push_recent_entry,
             commands::recent_entries::clear_recent_entries,
             menu::sync_app_menu_state,

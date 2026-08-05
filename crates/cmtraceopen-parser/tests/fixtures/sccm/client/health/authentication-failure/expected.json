@@ -1,0 +1,173 @@
+{
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [
+      {
+        "class": "confirmedFailure",
+        "confidence": "high",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "health-authentication-failure-identity-current",
+            "entryId": "health-authentication-failure-identity-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "findingId": "client-health-authentication-stop",
+        "healthPhase": "authentication",
+        "lastConfirmedSuccessfulPhase": "identity",
+        "nextArtifacts": [
+          {
+            "logicalId": "clientIdManagerStartup",
+            "reason": "Confirm the root cause recorded by ClientIDManagerStartup.",
+            "role": "client"
+          }
+        ],
+        "phase": "authentication",
+        "role": "client",
+        "severity": "Error",
+        "summary": "Admitted client evidence recorded a terminal failure at the authentication phase.",
+        "terminalEvidence": [
+          {
+            "kind": "observedFailure",
+            "reference": {
+              "artifactId": "health-authentication-failure-identity-current",
+              "entryId": "health-authentication-failure-identity-current:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          }
+        ],
+        "title": "Client health authentication recorded a terminal failure"
+      }
+    ],
+    "hops": [
+      {
+        "evidence": [
+          {
+            "artifactId": "health-authentication-failure-ccmsetup-current",
+            "entryId": "health-authentication-failure-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "install",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-authentication-failure-evaluation-current",
+            "entryId": "health-authentication-failure-evaluation-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "service",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-authentication-failure-evaluation-current",
+            "entryId": "health-authentication-failure-evaluation-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "clientHealth",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-authentication-failure-evaluation-current",
+            "entryId": "health-authentication-failure-evaluation-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "phase": "reboot",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-authentication-failure-identity-current",
+            "entryId": "health-authentication-failure-identity-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "identity",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-authentication-failure-identity-current",
+            "entryId": "health-authentication-failure-identity-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "authentication",
+        "state": "failed"
+      }
+    ],
+    "lastConfirmedSuccessfulPhase": "identity",
+    "lifecyclePhase": "install",
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-authentication-failure-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-authentication-failure-evaluation-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-evaluation",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-authentication-failure-identity-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-identity",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-authentication-failure-location-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-location",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "authentication-failure"
+}

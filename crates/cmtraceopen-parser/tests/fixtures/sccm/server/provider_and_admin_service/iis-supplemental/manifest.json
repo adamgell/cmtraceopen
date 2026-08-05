@@ -1,0 +1,81 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": {
+    "synthetic": true,
+    "rawPaths": "redacted"
+  },
+  "bundleRole": "server",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "siteCode": "LAB",
+    "rolesObserved": [
+      "adminService"
+    ]
+  },
+  "artifacts": [
+    {
+      "artifactId": "admin-iis-current",
+      "producerRole": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "workflowSubject": {
+        "role": "adminService",
+        "instanceHandle": "synthetic:subject:admin-service-01"
+      },
+      "sourceId": "server-admin-service",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED_ADMIN_SERVICE_ROOT",
+      "originalBasename": "AdminService.log",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:admin-service-primary"
+      },
+      "rotation": {
+        "kind": "current",
+        "lineageId": "admin-service-primary"
+      },
+      "captureState": "captured",
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 2495,
+      "sourceVersion": "5.00.TEST",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "relativePath": "evidence/sccm/server/admin-service/server-admin-service/subject-admin-service/current/AdminService.log"
+    },
+    {
+      "artifactId": "iis-supplemental-current",
+      "producerRole": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "workflowSubject": {
+        "role": "adminService",
+        "instanceHandle": "synthetic:subject:admin-service-01"
+      },
+      "sourceId": "server-admin-service-iis",
+      "sourceKind": "iisW3c",
+      "originalPath": "REDACTED_ADMIN_SERVICE_IIS_ROOT",
+      "originalBasename": "u_ex_synthetic.log",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:admin-service-iis"
+      },
+      "rotation": {
+        "kind": "current",
+        "lineageId": "admin-service-iis"
+      },
+      "captureState": "captured",
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 157,
+      "sourceVersion": "5.00.TEST",
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "relativePath": "evidence/sccm/server/admin-service/server-admin-service-iis/subject-admin-service/current/u_ex_synthetic.log"
+    }
+  ]
+}

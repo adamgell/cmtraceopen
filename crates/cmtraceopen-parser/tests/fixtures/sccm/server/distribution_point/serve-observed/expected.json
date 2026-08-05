@@ -1,0 +1,186 @@
+{
+  "artifactRequests": [],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "success",
+      "confidence": "high",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "dp-serve-01-distmgr",
+          "entryId": "dp-serve-01-distmgr:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-serve-01-distmgr",
+          "entryId": "dp-serve-01-distmgr:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "dp-serve-02-pkgxfer",
+          "entryId": "dp-serve-02-pkgxfer:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-serve-03-provider",
+          "entryId": "dp-serve-03-provider:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-serve-03-provider",
+          "entryId": "dp-serve-03-provider:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "dp-serve-04-status",
+          "entryId": "dp-serve-04-status:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        }
+      ],
+      "key": {
+        "contentId": "content-zeta",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:dp-01",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00006",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "serveOrReport",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-serve-01-distmgr",
+            "entryId": "dp-serve-01-distmgr:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:06:00.000",
+            "utcMillis": 1785413160000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-serve-01-distmgr",
+            "entryId": "dp-serve-01-distmgr:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:06:01.000",
+            "utcMillis": 1785413161000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-serve-02-pkgxfer",
+            "entryId": "dp-serve-02-pkgxfer:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:06:02.000",
+            "utcMillis": 1785413162000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-serve-03-provider",
+            "entryId": "dp-serve-03-provider:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "validate",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:06:03.000",
+            "utcMillis": 1785413163000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-serve-03-provider",
+            "entryId": "dp-serve-03-provider:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "makeAvailable",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:06:04.000",
+            "utcMillis": 1785413164000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-serve-04-status",
+            "entryId": "dp-serve-04-status:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "serveOrReport",
+          "sourceId": "server-dp-serve",
+          "terminal": true,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:06:05.000",
+            "utcMillis": 1785413165000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Success",
+      "state": "succeeded",
+      "stopPhase": null,
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00006:content=content-zeta:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

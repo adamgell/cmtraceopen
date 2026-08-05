@@ -1,0 +1,25 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "receiver-processing-failure",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"receiver-01-sender","state":"captured"},{"artifactId":"receiver-02-despool","state":"captured"}],
+  "transactions": [{
+    "transactionId":"hierarchy:msg-receiver-01:LAB:CHD:link-lab-chd",
+    "key":{"messageId":"msg-receiver-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
+    "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":true,
+    "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
+    "coverageGapArtifactIds":[],
+    "observations":[
+      {"observationId":"receiver-01-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"receiver-01-sender","startLine":1,"endLine":1}]},
+      {"observationId":"receiver-02-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"receiver-02-despool","startLine":1,"endLine":1}]},
+      {"observationId":"receiver-03-process","phase":"process","disposition":"failed","terminal":true,"evidence":[{"artifactId":"receiver-02-despool","startLine":2,"endLine":2}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [{"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"}],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

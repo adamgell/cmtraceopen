@@ -1,0 +1,25 @@
+{
+  "contractVersion": 1,
+  "syntheticFixture": true,
+  "testOnly": true,
+  "assets": [
+    {
+      "assetId": "cross-family-lo-wcm",
+      "relativePath": "cross-family-lo-wcm.log",
+      "bytesCopied": 192,
+      "testPurpose": "rejectCrossFamilyRotationGrouping"
+    },
+    {
+      "assetId": "incomplete-required-numbered-wsyncmgr",
+      "relativePath": "incomplete-required-numbered-wsyncmgr.log",
+      "bytesCopied": 182,
+      "testPurpose": "rejectIncompleteRequiredRotationSuccess"
+    },
+    {
+      "assetId": "parse-failed-valid-numbered-wsusctrl",
+      "relativePath": "parse-failed-valid-numbered-wsusctrl.log",
+      "bytesCopied": 326,
+      "testPurpose": "rejectParseFailedUsableCcm"
+    }
+  ]
+}

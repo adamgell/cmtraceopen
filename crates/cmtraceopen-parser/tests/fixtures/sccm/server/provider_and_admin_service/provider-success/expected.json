@@ -1,0 +1,147 @@
+{
+  "artifactRequests": [],
+  "coverage": [
+    {
+      "artifactId": "provider-success-current",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "producerRole": "provider",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:provider-01",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "provider-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "provider"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:d7887edd39e359767a86999e1312648ebc17a6c9813b172f03883914bc334a7f",
+        "producerHostHandle": "synthetic:host:provider-01",
+        "requestHandle": "cmtraceopen.request.sha256.v1:8e30a49c634a05e538c508d53fe5699ab3e52ce078e500e64a5322c1593f40f4"
+      },
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "provider",
+      "nextArtifactRequests": [],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-success-current",
+              "entryId": "provider-success-current:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "provider-success-current:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-success-current",
+              "entryId": "provider-success-current:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "provider-success-current:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-success-current",
+              "entryId": "provider-success-current:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "provider-success-current:3-3-03",
+          "phase": "executeProviderOperation",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-success-current",
+              "entryId": "provider-success-current:4-4",
+              "lineEnd": 4,
+              "lineStart": 4
+            }
+          ],
+          "observationId": "provider-success-current:4-4-04",
+          "phase": "respond",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "provider-success-current",
+              "entryId": "provider-success-current:5-5",
+              "lineEnd": 5,
+              "lineStart": 5
+            }
+          ],
+          "observationId": "provider-success-current:5-5-05",
+          "phase": "recordOutcome",
+          "terminal": true
+        }
+      ],
+      "producerRole": "provider",
+      "publicSummary": "Provider operation completed with explicit terminal evidence.",
+      "sourceVersion": "5.00.TEST",
+      "state": "succeeded",
+      "terminalEvidence": true,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:8e30a49c634a05e538c508d53fe5699ab3e52ce078e500e64a5322c1593f40f4:cmtraceopen.operation.sha256.v1:d7887edd39e359767a86999e1312648ebc17a6c9813b172f03883914bc334a7f:synthetic:host:provider-01:synthetic:subject:provider-01"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

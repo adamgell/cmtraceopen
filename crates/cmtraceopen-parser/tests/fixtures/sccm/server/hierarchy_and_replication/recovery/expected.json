@@ -1,0 +1,27 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "recovery",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"recovery-01-sender","state":"captured"},{"artifactId":"recovery-02-despool","state":"captured"}],
+  "transactions": [{
+    "transactionId":"hierarchy:msg-recovery-01:LAB:CHD:link-lab-chd",
+    "key":{"messageId":"msg-recovery-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
+    "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":true,
+    "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
+    "coverageGapArtifactIds":[],
+    "observations":[
+      {"observationId":"recovery-01-retry","phase":"send","disposition":"retrying","terminal":false,"evidence":[{"artifactId":"recovery-01-sender","startLine":1,"endLine":1}]},
+      {"observationId":"recovery-02-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"recovery-01-sender","startLine":2,"endLine":2}]},
+      {"observationId":"recovery-03-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"recovery-02-despool","startLine":1,"endLine":1}]},
+      {"observationId":"recovery-04-process","phase":"process","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"recovery-02-despool","startLine":2,"endLine":2}]},
+      {"observationId":"recovery-05-terminal","phase":"healthyOrTerminal","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"recovery-02-despool","startLine":3,"endLine":3}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [{"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"target","targetSiteCode":"CHD","basenames":["rcmctrl.log"],"reasonCode":"missingTargetReceiveProcessApply"}],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

@@ -1,0 +1,204 @@
+{
+  "schemaVersion": "1.0.0",
+  "pair": "policyManagementPoint",
+  "scenarios": [
+    {
+      "scenarioId": "policy-healthy",
+      "mutation": "healthy",
+      "expectedOutcome": "causalFinding",
+      "expectedLinkStrength": "exactCorroborated",
+      "expectedConfidence": "high",
+      "expectedReasonCodes": [],
+      "expectedTriggeredGuards": [],
+      "expectedOutputSha256": "c3ebc9911c021195611ffbdc8c497f906c7fadf60f5dae419da95eddaf47a46b"
+    },
+    {
+      "scenarioId": "policy-conflicting-key",
+      "mutation": "conflictingExactKey",
+      "expectedOutcome": "incompatible",
+      "expectedLinkStrength": "incompatible",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "exact-key-conflict"
+      ],
+      "expectedTriggeredGuards": [
+        "conflicting-exact-key"
+      ],
+      "expectedOutputSha256": "8f1dd8e33138013e162411a8c2d4221a346e4fbab113ba629c7b0846b8d34555"
+    },
+    {
+      "scenarioId": "policy-topology-mismatch",
+      "mutation": "incompatibleTopology",
+      "expectedOutcome": "incompatible",
+      "expectedLinkStrength": "incompatible",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "topology-mismatch"
+      ],
+      "expectedTriggeredGuards": [
+        "incompatible-topology"
+      ],
+      "expectedOutputSha256": "b2dadae5c089876db567510611254811ab277d17ddb0c7aae7737feb837ba5a5"
+    },
+    {
+      "scenarioId": "policy-invalid-offset",
+      "mutation": "invalidTimestampOffset",
+      "expectedOutcome": "notCausal",
+      "expectedLinkStrength": "exactPartial",
+      "expectedConfidence": "medium",
+      "expectedReasonCodes": [
+        "ordering-unavailable"
+      ],
+      "expectedTriggeredGuards": [
+        "invalid-timestamp-offset"
+      ],
+      "expectedOutputSha256": "3a6fa01021ca34b579662cc598e4e78ffc2279699562a05abcf679123fe15434"
+    },
+    {
+      "scenarioId": "policy-client-only",
+      "mutation": "missingServerCounterpart",
+      "expectedOutcome": "counterpartRequested",
+      "expectedLinkStrength": "unlinked",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "server-counterpart-missing"
+      ],
+      "expectedTriggeredGuards": [
+        "missing-server-counterpart"
+      ],
+      "expectedOutputSha256": "61bc960e21763e7964293fa79b6508e28e65ac49a2172ea302c77e86536eb00e"
+    },
+    {
+      "scenarioId": "policy-server-only",
+      "mutation": "missingClientCounterpart",
+      "expectedOutcome": "counterpartRequested",
+      "expectedLinkStrength": "unlinked",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "client-counterpart-missing"
+      ],
+      "expectedTriggeredGuards": [
+        "missing-client-counterpart"
+      ],
+      "expectedOutputSha256": "6fba97248a83d7664f42c5fc5767225d394620b9f5791d91fa32e81d4ee42628"
+    },
+    {
+      "scenarioId": "policy-partial-capture",
+      "mutation": "partialCapture",
+      "expectedOutcome": "coverageGap",
+      "expectedLinkStrength": "exactPartial",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "partial-source-coverage"
+      ],
+      "expectedTriggeredGuards": [
+        "partial-capture"
+      ],
+      "expectedOutputSha256": "1484872bdf1783a11cd1d8e9f43218eea755ff3ed3dc8b9234a96137b43bff1a"
+    },
+    {
+      "scenarioId": "policy-redaction",
+      "mutation": "redactionBoundary",
+      "expectedOutcome": "causalFinding",
+      "expectedLinkStrength": "exactCorroborated",
+      "expectedConfidence": "high",
+      "expectedReasonCodes": [],
+      "expectedTriggeredGuards": [],
+      "expectedOutputSha256": "997942ab5a47842cbe50e126e03151b8fd9a2843843b26635bc083e0b7b88521"
+    },
+    {
+      "scenarioId": "policy-reordered-input-a",
+      "mutation": "reorderedInputA",
+      "expectedOutcome": "causalFinding",
+      "expectedLinkStrength": "exactCorroborated",
+      "expectedConfidence": "high",
+      "expectedReasonCodes": [],
+      "expectedTriggeredGuards": [],
+      "expectedOutputSha256": "7b9cc92b8084b0c61933c5fc606211e404c7f06dce9e742ae157d971589b2fd0"
+    },
+    {
+      "scenarioId": "policy-reordered-input-b",
+      "mutation": "reorderedInputB",
+      "expectedOutcome": "causalFinding",
+      "expectedLinkStrength": "exactCorroborated",
+      "expectedConfidence": "high",
+      "expectedReasonCodes": [],
+      "expectedTriggeredGuards": [],
+      "expectedOutputSha256": "7b9cc92b8084b0c61933c5fc606211e404c7f06dce9e742ae157d971589b2fd0"
+    },
+    {
+      "scenarioId": "policy-rotation-split",
+      "mutation": "rotationSplit",
+      "expectedOutcome": "coverageGap",
+      "expectedLinkStrength": "exactPartial",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "rotation-incomplete"
+      ],
+      "expectedTriggeredGuards": [
+        "rotation-split"
+      ],
+      "expectedOutputSha256": "0e5cd3e0f384249e02cdb839ad211d2a450e29ccd6402a0bd570a1cdc98e1165"
+    },
+    {
+      "scenarioId": "policy-same-time-no-key",
+      "mutation": "sameTimeNoKey",
+      "expectedOutcome": "candidateOnly",
+      "expectedLinkStrength": "candidate",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "exact-key-conflict",
+        "same-time-without-exact-key"
+      ],
+      "expectedTriggeredGuards": [
+        "conflicting-exact-key",
+        "same-time-no-key"
+      ],
+      "expectedOutputSha256": "7b031625aebbd2f82edd3aefe6a0ea6a8ce50f991bcd3a2befe149d9110fc3c8"
+    },
+    {
+      "scenarioId": "policy-unknown-profile",
+      "mutation": "unknownExtractionProfile",
+      "expectedOutcome": "profileGap",
+      "expectedLinkStrength": "candidate",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "profile-unvalidated"
+      ],
+      "expectedTriggeredGuards": [
+        "unknown-extraction-profile"
+      ],
+      "expectedOutputSha256": "2a114d06ca9156e924216e8cec28ae4afe238d4b801640218061718e478e46ac"
+    },
+    {
+      "scenarioId": "policy-unrelated-terminal-error",
+      "mutation": "unrelatedTerminalError",
+      "expectedOutcome": "incompatible",
+      "expectedLinkStrength": "incompatible",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "exact-key-conflict",
+        "unrelated-server-terminal"
+      ],
+      "expectedTriggeredGuards": [
+        "conflicting-exact-key",
+        "unrelated-terminal-error"
+      ],
+      "expectedOutputSha256": "ec6fb443597a7c99cdb90ef70f898039156a18bae55d3e22b9983a203bb3d4b7"
+    },
+    {
+      "scenarioId": "policy-version-mismatch",
+      "mutation": "versionMismatch",
+      "expectedOutcome": "incompatible",
+      "expectedLinkStrength": "incompatible",
+      "expectedConfidence": "low",
+      "expectedReasonCodes": [
+        "profile-version-mismatch"
+      ],
+      "expectedTriggeredGuards": [
+        "version-mismatch"
+      ],
+      "expectedOutputSha256": "10f24737a3cbe41cb17529d9a1eef4786b24c8fb57cce2c57f9fa37533d7af55"
+    }
+  ]
+}

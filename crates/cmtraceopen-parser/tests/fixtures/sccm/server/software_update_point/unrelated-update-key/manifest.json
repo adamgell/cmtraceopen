@@ -1,0 +1,22 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "unrelated-update-key",
+  "bundle": {"bundleRole":"server","workflow":"softwareUpdatePoint","capturedUtc":"2026-07-30T19:00:00Z"},
+  "topology": {"siteCode":"LAB","supHandle":"safe:sup:lab-sup-01","wsusHandle":"safe:wsus:lab-wsus-01","rolesObserved":["siteServer","softwareUpdatePoint","wsUs"]},
+  "artifacts": [
+    {
+      "artifactId":"unrelated-01-client","sourceId":"client-updates-control","producerRole":"client","producerHostHandle":"safe:client:lab-client-01","workflowSubjectRole":"softwareUpdatePoint","workflowSubjectHandle":"safe:sup:lab-sup-01","sourceKind":"ccmLog","originalBasename":"WUAHandler.log","sanitizedSourcePath":"SYNTHETIC://configured-root/Client/Logs/WUAHandler.log","pathFingerprint":"synthetic:unrelated-client","rotation":{"kind":"current","lineageId":"unrelated-client","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T18:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":399,"relativePath":"evidence/client-updates-control/current/WUAHandler.log"
+    },
+    {
+      "artifactId":"unrelated-02-wcm","sourceId":"server-sup-sync","producerRole":"siteServer","producerHostHandle":"safe:server:lab-pri-01","workflowSubjectRole":"softwareUpdatePoint","workflowSubjectHandle":"safe:sup:lab-sup-01","sourceKind":"ccmLog","originalBasename":"WCM.log","sanitizedSourcePath":"SYNTHETIC://configured-root/Site/Logs/WCM.log","pathFingerprint":"synthetic:unrelated-wcm","rotation":{"kind":"current","lineageId":"unrelated-wcm","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T18:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":340,"relativePath":"evidence/server-sup-sync/site/current/WCM.log"
+    },
+    {
+      "artifactId":"unrelated-03-wsync","sourceId":"server-sup-sync","producerRole":"siteServer","producerHostHandle":"safe:server:lab-pri-01","workflowSubjectRole":"softwareUpdatePoint","workflowSubjectHandle":"safe:sup:lab-sup-01","sourceKind":"ccmLog","originalBasename":"wsyncmgr.log","sanitizedSourcePath":"SYNTHETIC://configured-root/Site/Logs/wsyncmgr.log","pathFingerprint":"synthetic:unrelated-wsync","rotation":{"kind":"current","lineageId":"unrelated-wsync","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T18:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":1115,"relativePath":"evidence/server-sup-sync/site/current/wsyncmgr.log"
+    },
+    {
+      "artifactId":"unrelated-04-wsus","sourceId":"server-sup-sync","producerRole":"softwareUpdatePoint","producerHostHandle":"safe:sup:lab-sup-01","workflowSubjectRole":"softwareUpdatePoint","workflowSubjectHandle":"safe:sup:lab-sup-01","sourceKind":"ccmLog","originalBasename":"WSUSCtrl.log","sanitizedSourcePath":"SYNTHETIC://configured-root/SUP/Logs/WSUSCtrl.log","pathFingerprint":"synthetic:unrelated-wsus","rotation":{"kind":"current","lineageId":"unrelated-wsus","fragmentComplete":true},"captureState":"captured","sourceVersion":"5.00.TEST.0001","collectedUtc":"2026-07-30T18:00:00Z","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"bytesCopied":742,"relativePath":"evidence/server-sup-sync/sup/current/WSUSCtrl.log"
+    }
+  ]
+}

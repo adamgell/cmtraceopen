@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE Family=health Phase=install Disposition=succeeded Terminal=true ClientGuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa]LOG]!><time="03:10:00.000+000" date="07-30-2026" component="ccmsetup" context="" type="1" thread="1" file="ccmsetup.cc:1">

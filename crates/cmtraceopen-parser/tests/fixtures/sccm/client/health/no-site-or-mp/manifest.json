@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "no-site-or-mp",
+  "artifacts": [
+    {"artifactId":"health-no-site-or-mp-ccmsetup-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ccmsetup.log","pathFingerprint":"synthetic-root-a-health-no-site-or-mp-ccmsetup-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:30:00Z","bytesCopied":260,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"health-no-site-or-mp-evaluation-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"CcmEval.log","pathFingerprint":"synthetic-root-a-health-no-site-or-mp-evaluation-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:30:01Z","bytesCopied":742,"relativePath":"evidence/client-evaluation/current/CcmEval.log"},
+    {"artifactId":"health-no-site-or-mp-identity-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ClientIDManagerStartup.log","pathFingerprint":"synthetic-root-a-health-no-site-or-mp-identity-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:30:02Z","bytesCopied":550,"relativePath":"evidence/client-identity/current/ClientIDManagerStartup.log"},
+    {"artifactId":"health-no-site-or-mp-location-services-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"LocationServices.log","pathFingerprint":"synthetic-root-a-health-no-site-or-mp-location-services-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:30:04Z","bytesCopied":650,"relativePath":"evidence/client-location-services-shared/current/LocationServices.log"}
+  ]
+}

@@ -532,10 +532,7 @@ mod tests {
         use std::thread;
 
         let dir = tempdir().expect("tempdir");
-        let state = Arc::new(RecentEntriesState::load(
-            dir.path().to_path_buf(),
-            &["log"],
-        ));
+        let state = Arc::new(RecentEntriesState::load(dir.path().to_path_buf(), &["log"]));
 
         let threads: Vec<_> = (0..8)
             .map(|index| {

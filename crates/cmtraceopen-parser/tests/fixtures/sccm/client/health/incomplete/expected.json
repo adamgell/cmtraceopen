@@ -1,0 +1,138 @@
+{
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [
+      {
+        "class": "insufficientEvidence",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [
+          {
+            "artifactId": "health-incomplete-identity-access-denied",
+            "coverage": "accessDenied",
+            "role": "client"
+          }
+        ],
+        "evidence": [],
+        "findingId": "client-health-identityRegistration-stop",
+        "healthPhase": "identity",
+        "lastConfirmedSuccessfulPhase": "reboot",
+        "nextArtifacts": [
+          {
+            "logicalId": "clientIdManagerStartup",
+            "reason": "Confirm the root cause recorded by ClientIDManagerStartup.",
+            "role": "client"
+          }
+        ],
+        "phase": "identityRegistration",
+        "role": "client",
+        "severity": "Warning",
+        "summary": "The identity registration phase cannot be evaluated because its exact source coverage is incomplete.",
+        "terminalEvidence": [],
+        "title": "Client health identity registration evidence is incomplete"
+      }
+    ],
+    "hops": [
+      {
+        "evidence": [
+          {
+            "artifactId": "health-incomplete-ccmsetup-current",
+            "entryId": "health-incomplete-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "install",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-incomplete-evaluation-current",
+            "entryId": "health-incomplete-evaluation-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "service",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-incomplete-evaluation-current",
+            "entryId": "health-incomplete-evaluation-current:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          }
+        ],
+        "phase": "clientHealth",
+        "state": "succeeded"
+      },
+      {
+        "evidence": [
+          {
+            "artifactId": "health-incomplete-evaluation-current",
+            "entryId": "health-incomplete-evaluation-current:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "phase": "reboot",
+        "state": "succeeded"
+      }
+    ],
+    "lastConfirmedSuccessfulPhase": "reboot",
+    "lifecyclePhase": "install",
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-incomplete-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-incomplete-evaluation-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-evaluation",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-incomplete-identity-access-denied",
+        "coverage": "accessDenied",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-identity",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-incomplete-location-services-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-location",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "incomplete"
+}

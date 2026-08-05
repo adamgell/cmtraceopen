@@ -1573,6 +1573,9 @@ mod windows_provider {
 
     use windows::core::{BSTR, HRESULT, PCWSTR};
     use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, HANDLE, RPC_E_CHANGED_MODE};
+    use windows::Win32::NetworkManagement::NetManagement::{
+        NetFreeAadJoinInformation, NetGetAadJoinInformation,
+    };
     use windows::Win32::Security::{
         GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
     };
@@ -1580,9 +1583,6 @@ mod windows_provider {
         CoCreateInstance, CoDisableCallCancellation, CoEnableCallCancellation, CoInitializeEx,
         CoSetProxyBlanket, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, EOAC_NONE,
         RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE,
-    };
-    use windows::Win32::NetworkManagement::NetManagement::{
-        NetFreeAadJoinInformation, NetGetAadJoinInformation,
     };
     use windows::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};

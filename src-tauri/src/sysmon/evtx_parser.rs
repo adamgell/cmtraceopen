@@ -274,10 +274,7 @@ pub fn build_summary(
                 // for this event. String-only events can still update earliest/latest
                 // even when other events had numeric timestamps.
                 let ts = event.timestamp.as_str();
-                if earliest_ts
-                    .as_deref()
-                    .is_none_or(|existing| ts < existing)
-                {
+                if earliest_ts.as_deref().is_none_or(|existing| ts < existing) {
                     earliest_ts = Some(event.timestamp.clone());
                 }
                 if latest_ts.as_deref().is_none_or(|existing| ts > existing) {

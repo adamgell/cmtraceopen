@@ -1,0 +1,97 @@
+{
+  "artifactRequests": [
+    {
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "producerRole": "provider",
+      "request": {
+        "logicalId": "smsprov",
+        "reason": "Collect the complete Smsprov.log file.",
+        "role": "provider"
+      },
+      "sourceVersion": "5.00.TEST",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "coverage-provider-capped",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "producerRole": "provider",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "state": "capped",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "insufficientEvidence",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [
+          {
+            "artifactId": "coverage-provider-capped",
+            "coverage": "capped",
+            "role": "provider"
+          }
+        ],
+        "evidence": [],
+        "findingId": "provider-admin-coverage:coverage-provider-capped",
+        "nextArtifacts": [
+          {
+            "logicalId": "smsprov",
+            "reason": "Collect the complete Smsprov.log file.",
+            "role": "provider"
+          }
+        ],
+        "phase": "providerAndAdminService",
+        "role": "provider",
+        "severity": "Warning",
+        "summary": "Provider cannot be evaluated because its scoped source is not a complete capture.",
+        "terminalEvidence": [],
+        "title": "Provider evidence unavailable"
+      },
+      "lastSuccessfulPhase": null,
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "coverage-provider-capped",
+      "workflowSubjectHandle": "synthetic:subject:provider-01"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [
+    {
+      "artifactIds": [
+        "coverage-provider-capped"
+      ],
+      "correlationEligible": false,
+      "kind": "rotationFragment",
+      "observationId": "coverage-provider-capped-rotation"
+    }
+  ],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [],
+  "workflow": "providerAndAdminService"
+}

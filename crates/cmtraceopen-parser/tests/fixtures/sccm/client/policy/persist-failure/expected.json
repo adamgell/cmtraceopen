@@ -1,0 +1,39 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "persist-failure",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"}],
+  "artifactProvenance": [{"artifactId":"policy-persist-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}],
+  "transactions": [{
+    "transactionId": "policy:assignment:14141414-1414-1414-1414-141414141414",
+    "key": {"keyProfileKind":"requestPolicyClientTopology","assignmentId":"14141414-1414-1414-1414-141414141414","policyId":"adadadad-adad-adad-adad-adadadadadad","requestId":"27141414-1414-1414-1414-141414141414","clientHandle":"safe:client:policy-14","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","managementPointEvidenceKind":"selected","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "counterpartReadyFact": {"phase":"request","extractionProfileId":"policy-client-5.00.test-v1","evidence":{"artifactId":"policy-persist-agent-current","startLine":1,"endLine":1}},
+    "phase": "persist",
+    "state": "failed",
+    "lastSuccessfulPhase": "download",
+    "classification": "confirmedFailure",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": null,
+    "evidence": [{"artifactId":"policy-persist-agent-current","startLine":1,"endLine":3}]
+  }],
+  "sourceLocalObservations": [],
+  "findings": [{
+    "findingId": "finding:policy-persist-failure",
+    "subjectId": "policy:assignment:14141414-1414-1414-1414-141414141414",
+    "class": "confirmedFailure",
+    "phase": "persist",
+    "lastSuccessfulPhase": "download",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "nextArtifact": null,
+    "evidence": [{"artifactId":"policy-persist-agent-current","startLine":3,"endLine":3}]
+  }],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":true},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}

@@ -1,0 +1,41 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {"bundleRole": "server", "workflow": "distributionPoint", "capturedUtc": "2026-07-30T12:30:00Z"},
+  "topology": {"siteCode": "LAB", "distributionPointHandle": "safe:dp:lab-dp-01", "distributionPointHandles": ["safe:dp:lab-dp-01"], "rolesObserved": ["distributionPoint", "siteServer"]},
+  "artifacts": [
+    {
+      "artifactId": "dp-absent-01-distmgr",
+      "sourceId": "server-dp-distribution",
+      "producerRole": "siteServer",
+      "producerHostHandle": "safe:server:lab-pri-01",
+      "workflowSubjectRole": "distributionPoint",
+      "workflowSubjectHandle": "safe:dp:lab-dp-01",
+      "sourceKind": "ccmLog",
+      "originalBasename": "distmgr.log",
+      "sanitizedSourcePath": "SYNTHETIC://default-site-root/Logs/distmgr.log",
+      "pathFingerprint": "synthetic:absent-distmgr",
+      "rotation": {"kind": "current", "lineageId": "absent-distmgr"},
+      "captureState": "absent",
+      "sourceVersion": "5.00.TEST.0001",
+      "collectedUtc": "2026-07-30T12:20:00Z"
+    },
+    {
+      "artifactId": "dp-absent-02-provider",
+      "sourceId": "server-dp-distribution",
+      "producerRole": "distributionPoint",
+      "producerHostHandle": "safe:dp:lab-dp-01",
+      "workflowSubjectRole": "distributionPoint",
+      "workflowSubjectHandle": "safe:dp:lab-dp-01",
+      "sourceKind": "ccmLog",
+      "originalBasename": "SMSDPProv.log",
+      "sanitizedSourcePath": "SYNTHETIC://default-dp-root/Logs/SMSDPProv.log",
+      "pathFingerprint": "synthetic:absent-provider",
+      "rotation": {"kind": "current", "lineageId": "absent-provider"},
+      "captureState": "absent",
+      "sourceVersion": "5.00.TEST.0001",
+      "collectedUtc": "2026-07-30T12:20:00Z"
+    }
+  ]
+}

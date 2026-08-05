@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "setup-failure",
+  "artifacts": [
+    {"artifactId":"health-setup-failure-ccmsetup-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ccmsetup.log","pathFingerprint":"synthetic-root-a-health-setup-failure-ccmsetup-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:10:00Z","bytesCopied":275,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"health-setup-failure-evaluation-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"CcmEval.log","pathFingerprint":"synthetic-candidate-health-setup-failure-evaluation-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:10:01Z","bytesCopied":0,"relativePath":null},
+    {"artifactId":"health-setup-failure-identity-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"ClientIDManagerStartup.log","pathFingerprint":"synthetic-candidate-health-setup-failure-identity-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:10:02Z","bytesCopied":0,"relativePath":null},
+    {"artifactId":"health-setup-failure-location-services-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"LocationServices.log","pathFingerprint":"synthetic-candidate-health-setup-failure-location-services-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:10:03Z","bytesCopied":0,"relativePath":null}
+  ]
+}
