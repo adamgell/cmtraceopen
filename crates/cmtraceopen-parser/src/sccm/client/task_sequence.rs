@@ -19,7 +19,7 @@ use crate::sccm::{
 
 use super::{
     SccmClientAdmittedEvidence, SccmClientEvidenceAdmissionError, SccmTaskSequencePathClass,
-    TASK_SEQUENCE_TEST_PROFILE_ID, TASK_SEQUENCE_TEST_VERSION,
+    SccmTaskSequenceProvenance, TASK_SEQUENCE_TEST_PROFILE_ID, TASK_SEQUENCE_TEST_VERSION,
 };
 
 const TASK_SEQUENCE_LOGICAL_ARTIFACT_ID: &str = "client-task-sequence-smsts";
@@ -86,6 +86,7 @@ pub struct SccmTaskSequencePathObservation {
     pub artifact_id: String,
     pub path_class: SccmTaskSequencePathClass,
     pub rotation: SccmRotation,
+    pub relocation_ordinal: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -200,6 +201,8 @@ struct Observation {
     identity: ExecutionIdentity,
     evidence: SccmEvidenceRef,
     path_class: SccmTaskSequencePathClass,
+    relocation_lineage: String,
+    relocation_ordinal: u32,
     rotation: SccmRotation,
     phase: SccmTaskSequencePhase,
     state: SccmTaskSequenceState,
@@ -233,10 +236,13 @@ pub fn analyze_client_task_sequence(
         let Some(source) = sources.get(&record.reference.artifact_id) else {
             continue;
         };
+        let Some(provenance) = source.provenance.as_ref() else {
+            continue;
+        };
         let Some(profile) = sealed.profiles.get(&record.reference.artifact_id) else {
             unlinked.push(UnlinkedObservation {
                 evidence: record.reference.clone(),
-                path_class: source.path_class,
+                path_class: provenance.path_class,
                 rotation: source.rotation.clone(),
                 key_confidence: SccmTaskSequenceKeyConfidence::None,
                 phase_hint: None,
@@ -248,18 +254,17 @@ pub fn analyze_client_task_sequence(
         if !is_reviewed_profile(profile) {
             unlinked.push(unlinked_observation(
                 record,
-                source.path_class,
+                provenance.path_class,
                 &source.rotation,
                 "Key-looking fields from an unrecognized source version cannot be promoted by an unverified extraction profile.",
             ));
             continue;
         }
-        let Some(observation) =
-            extract_observation(record, source.path_class, &source.rotation, profile)
+        let Some(observation) = extract_observation(record, provenance, &source.rotation, profile)
         else {
             unlinked.push(unlinked_observation(
                 record,
-                source.path_class,
+                provenance.path_class,
                 &source.rotation,
                 "A path, timestamp, display name, or partial key cannot substitute for the complete record-local execution key.",
             ));
@@ -292,7 +297,30 @@ pub fn analyze_client_task_sequence(
         }
     }
 
-    let mut transactions = groups.into_values().map(reduce_group).collect::<Vec<_>>();
+    let mut transactions = Vec::new();
+    for observations in groups.into_values() {
+        let relocation_lineages = observations
+            .iter()
+            .map(|observation| observation.relocation_lineage.as_str())
+            .collect::<BTreeSet<_>>();
+        if relocation_lineages.len() == 1 {
+            transactions.push(reduce_group(observations));
+        } else {
+            unlinked.extend(
+                observations
+                    .into_iter()
+                    .map(|observation| UnlinkedObservation {
+                        evidence: observation.evidence,
+                        path_class: observation.path_class,
+                        rotation: observation.rotation,
+                        key_confidence: SccmTaskSequenceKeyConfidence::Candidate,
+                        phase_hint: Some(observation.phase),
+                        state_hint: Some(observation.state),
+                        reason: "An execution identity observed across distinct sealed relocation lineages cannot be correlated.",
+                    }),
+            );
+        }
+    }
     transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
 
     let mut coverage_gaps = sources
@@ -303,7 +331,12 @@ pub fn analyze_client_task_sequence(
         .map(|(artifact_id, source)| SccmTaskSequenceCoverageGap {
             artifact_id: artifact_id.clone(),
             coverage: task_sequence_coverage(source),
-            path_class: source.path_class,
+            path_class: source
+                .provenance
+                .as_ref()
+                .map_or(SccmTaskSequencePathClass::Unknown, |provenance| {
+                    provenance.path_class
+                }),
         })
         .collect::<Vec<_>>();
     if coverage_gaps.is_empty() {
@@ -389,7 +422,7 @@ fn coverage_state(coverage: &SccmCoverageState) -> SccmTaskSequenceCoverageState
 
 fn extract_observation(
     evidence: &SccmEvidence,
-    admitted_path_class: SccmTaskSequencePathClass,
+    provenance: &SccmTaskSequenceProvenance,
     rotation: &SccmRotation,
     profile: &SccmExtractionProfile,
 ) -> Option<Observation> {
@@ -404,16 +437,10 @@ fn extract_observation(
     let phase = parse_phase(capture_field(&evidence.message, "phase")?)?;
     let state = parse_state(capture_field(&evidence.message, "state")?)?;
     let terminal = parse_bool(capture_field(&evidence.message, "terminal")?)?;
-    let observed_path_class = capture_field(&evidence.message, "_SMSTSLogPath")
-        .map(classify_observed_path)
-        .unwrap_or(SccmTaskSequencePathClass::Unknown);
-
     if !is_uuid(execution_id)
         || !is_fixed_alphanumeric(package_id, 8)
         || !is_fixed_alphanumeric(advertisement_id, 8)
         || !is_opaque_token(run_context)
-        || observed_path_class != SccmTaskSequencePathClass::Unknown
-            && observed_path_class != admitted_path_class
     {
         return None;
     }
@@ -426,7 +453,9 @@ fn extract_observation(
             run_context: run_context.to_ascii_lowercase(),
         },
         evidence: evidence.reference.clone(),
-        path_class: observed_path_class,
+        path_class: provenance.path_class,
+        relocation_lineage: provenance.relocation_lineage.clone(),
+        relocation_ordinal: provenance.relocation_ordinal,
         rotation: rotation.clone(),
         phase,
         state,
@@ -524,7 +553,12 @@ fn source_local_fragment_observation(
         phase_hint: None,
         state_hint: None,
         evidence: Some(citation),
-        path_class: source.path_class,
+        path_class: source
+            .provenance
+            .as_ref()
+            .map_or(SccmTaskSequencePathClass::Unknown, |provenance| {
+                provenance.path_class
+            }),
         rotation: source.rotation.clone(),
         coverage: source.coverage.clone(),
         reason:
@@ -593,23 +627,6 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
-fn classify_observed_path(value: &str) -> SccmTaskSequencePathClass {
-    match value {
-        "SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log" => SccmTaskSequencePathClass::WinPe,
-        "SYNTHETIC://setup/smstslog/smsts.log" => SccmTaskSequencePathClass::Setup,
-        "SYNTHETIC://full-os/_SMSTaskSequence/Logs/smstslog/smsts.log" => {
-            SccmTaskSequencePathClass::FullOs
-        }
-        "SYNTHETIC://client/CCM/Logs/smsts.log"
-        | "SYNTHETIC://client/CCM/Logs/smstslog/smsts.log"
-        | "SYNTHETIC://client/root-a/CCM/Logs/smstslog/smsts.log"
-        | "SYNTHETIC://client/root-b/CCM/Logs/smstslog/smsts.log" => {
-            SccmTaskSequencePathClass::Client
-        }
-        _ => SccmTaskSequencePathClass::Unknown,
-    }
-}
-
 fn is_uuid(value: &str) -> bool {
     value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| match index {
@@ -645,7 +662,20 @@ fn reduce_group(mut observations: Vec<Observation>) -> SccmTaskSequenceTransacti
         .collect::<BTreeSet<_>>()
         .len()
         == observations.len();
-    if ordering_is_normalized && timestamps_are_unique {
+    let relocation_ordinals_are_unique = observations
+        .iter()
+        .map(|observation| {
+            (
+                observation.relocation_lineage.as_str(),
+                observation.relocation_ordinal,
+            )
+        })
+        .collect::<BTreeSet<_>>()
+        .len()
+        == observations.len();
+    if relocation_ordinals_are_unique {
+        observations.sort_by(compare_relocation_observations);
+    } else if ordering_is_normalized && timestamps_are_unique {
         observations.sort_by(compare_observations);
     } else {
         observations.sort_by(|left, right| compare_evidence_refs(&left.evidence, &right.evidence));
@@ -662,7 +692,7 @@ fn reduce_group(mut observations: Vec<Observation>) -> SccmTaskSequenceTransacti
         .enumerate()
         .all(|(index, observation)| !observation.terminal || index + 1 == observations.len());
     let ordering_is_safe = ordering_is_normalized
-        && timestamps_are_unique
+        && (relocation_ordinals_are_unique || timestamps_are_unique)
         && phases_are_monotonic
         && terminal_is_final;
     let representative = if ordering_is_safe {
@@ -715,6 +745,7 @@ fn reduce_group(mut observations: Vec<Observation>) -> SccmTaskSequenceTransacti
                 artifact_id: observation.evidence.artifact_id.clone(),
                 path_class: observation.path_class,
                 rotation: observation.rotation.clone(),
+                relocation_ordinal: observation.relocation_ordinal,
             })
             .collect(),
         phase: representative.phase,
@@ -742,6 +773,13 @@ fn task_sequence_ordering_state(
 fn compare_observations(left: &Observation, right: &Observation) -> Ordering {
     left.utc_millis
         .cmp(&right.utc_millis)
+        .then_with(|| compare_evidence_refs(&left.evidence, &right.evidence))
+}
+
+fn compare_relocation_observations(left: &Observation, right: &Observation) -> Ordering {
+    left.relocation_lineage
+        .cmp(&right.relocation_lineage)
+        .then_with(|| left.relocation_ordinal.cmp(&right.relocation_ordinal))
         .then_with(|| compare_evidence_refs(&left.evidence, &right.evidence))
 }
 

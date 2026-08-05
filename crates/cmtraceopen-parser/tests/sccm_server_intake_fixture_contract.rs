@@ -37,7 +37,7 @@ fn server_intake_manifests() -> Vec<(String, Value)> {
 #[test]
 fn server_intake_uses_canonical_site_and_rotation_contracts() {
     let manifests = server_intake_manifests();
-    assert_eq!(manifests.len(), 12, "server intake scenario matrix changed");
+    assert_eq!(manifests.len(), 11, "server intake scenario matrix changed");
 
     let mut failures = Vec::new();
     for (scenario, manifest) in &manifests {

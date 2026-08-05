@@ -31,6 +31,12 @@ const MAX_ARTIFACT_ID_CHARS: usize = 160;
 const MAX_BASENAME_CHARS: usize = 160;
 const MAX_COLLECTED_AT_CHARS: usize = 64;
 const MAX_PATH_IDENTITY_CHARS: usize = 512;
+pub const SCCM_TASK_SEQUENCE_PROVENANCE_VERSION: u16 = 1;
+pub const MAX_SCCM_TASK_SEQUENCE_PATH_EVIDENCE_CHARS: usize = 256;
+pub const MAX_SCCM_TASK_SEQUENCE_RELOCATION_LINEAGE_CHARS: usize = 128;
+/// Closed token for a native client-side `smsts.log` location. It conveys only
+/// the reviewed path class, never a raw machine path.
+pub const SCCM_TASK_SEQUENCE_CLIENT_PATH_EVIDENCE_TOKEN: &str = "synthetic:smsts-path:client";
 const MAX_SYNTHETIC_FINGERPRINT_TOKENS: usize = 10;
 const NATIVE_ARTIFACT_ID_PREFIX_V1: &str = "sccm-artifact:v1:sha256:";
 const OPAQUE_UNSUPPORTED_BASENAME_PREFIX_V1: &str = "sccm-unknown-v1-sha256-";
@@ -160,6 +166,17 @@ pub enum SccmTaskSequencePathClass {
     Unknown,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SccmTaskSequenceProvenance {
+    pub version: u16,
+    pub path_class: SccmTaskSequencePathClass,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smsts_log_path_evidence: Option<String>,
+    pub relocation_lineage: String,
+    pub relocation_ordinal: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SccmClientSourceRequiredness {
@@ -195,6 +212,8 @@ pub struct SccmClientIntakeArtifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_sequence_provenance: Option<SccmTaskSequenceProvenance>,
     /// Whether the captured bytes begin and end on complete logical-record
     /// boundaries. This is independent of normalization success: a
     /// `ParseFailed` fragment may be complete when all bytes were copied but
@@ -500,6 +519,7 @@ pub struct SccmClientIntakeFragment {
     pub path_fingerprint: Option<String>,
     pub rotation_lineage: Option<String>,
     pub relative_path: Option<String>,
+    pub task_sequence_provenance: Option<SccmTaskSequenceProvenance>,
     /// Boundary completeness projected independently from `coverage`.
     /// In particular, `ParseFailed` plus `Some(true)` means the full fragment
     /// was copied but could not be normalized as CCM evidence.
@@ -569,6 +589,8 @@ struct SccmClientIntakeFragmentWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     rotation_lineage: Option<String>,
     relative_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_sequence_provenance: Option<SccmTaskSequenceProvenance>,
     fragment_complete: Option<bool>,
     configmgr_version: Option<String>,
     collected_at_utc: Option<String>,
@@ -589,6 +611,7 @@ impl From<SccmClientIntakeFragmentWire> for SccmClientIntakeFragment {
             path_fingerprint: wire.path_fingerprint,
             rotation_lineage: wire.rotation_lineage,
             relative_path: wire.relative_path,
+            task_sequence_provenance: wire.task_sequence_provenance,
             fragment_complete: wire.fragment_complete,
             configmgr_version: wire.configmgr_version,
             collected_at_utc: wire.collected_at_utc,
@@ -609,6 +632,7 @@ impl From<&SccmClientIntakeFragment> for SccmClientIntakeFragmentWire {
             path_fingerprint: fragment.path_fingerprint.clone(),
             rotation_lineage: fragment.rotation_lineage.clone(),
             relative_path: fragment.relative_path.clone(),
+            task_sequence_provenance: fragment.task_sequence_provenance.clone(),
             fragment_complete: fragment.fragment_complete,
             configmgr_version: fragment.configmgr_version.clone(),
             collected_at_utc: fragment.collected_at_utc.clone(),
@@ -866,6 +890,12 @@ pub enum SccmClientIntakeError {
     InvalidRelativePath,
     #[error("client intake contains a colliding path identity")]
     CollidingPhysicalIdentity,
+    #[error("a physical Task Sequence artifact is missing relocation provenance")]
+    MissingTaskSequenceProvenance,
+    #[error("Task Sequence relocation provenance is malformed or unsafe")]
+    InvalidTaskSequenceProvenance,
+    #[error("Task Sequence relocation lineage and ordinal collide")]
+    CollidingTaskSequenceRelocation,
     #[error("a physical capture state is missing its collision-safe path provenance")]
     MissingPhysicalProvenance,
     #[error("client intake fragment completeness must be explicitly declared")]
@@ -1204,6 +1234,7 @@ fn fragment_as_intake_artifact(fragment: &SccmClientIntakeFragment) -> SccmClien
         path_fingerprint: fragment.path_fingerprint.clone(),
         rotation_lineage: fragment.rotation_lineage.clone(),
         relative_path: fragment.relative_path.clone(),
+        task_sequence_provenance: fragment.task_sequence_provenance.clone(),
         fragment_complete: fragment.fragment_complete,
         declared_byte_length: fragment.declared_byte_length,
         content_sha256: fragment.content_sha256.clone(),
@@ -1229,6 +1260,7 @@ fn unsupported_as_intake_artifact(
         path_fingerprint: unsupported.path_fingerprint.clone(),
         rotation_lineage: unsupported.rotation_lineage.clone(),
         relative_path: unsupported.relative_path.clone(),
+        task_sequence_provenance: None,
         fragment_complete: unsupported.fragment_complete,
         declared_byte_length: None,
         content_sha256: None,
@@ -1271,6 +1303,10 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
     let mut rotation_lineage_bindings = BTreeMap::new();
     let mut lineage_rotation_identities = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
+    let mut task_sequence_relocations: BTreeMap<
+        (String, u32),
+        (String, SccmTaskSequencePathClass),
+    > = BTreeMap::new();
     // Canonical source identity (casefolded basename plus rotation
     // discriminator) for every declaration, split by declaration shape so
     // the identity intersects across ALL declarations for a source: a
@@ -1392,6 +1428,44 @@ fn validate_bundle(bundle: &SccmClientIntakeBundle) -> Result<(), SccmClientInta
             if !relative_paths.insert(relative_path.to_ascii_lowercase()) {
                 return Err(SccmClientIntakeError::CollidingPhysicalIdentity);
             }
+        }
+
+        let is_task_sequence = source_matches_group(
+            &source.artifact.display_name,
+            &source.artifact.rotation,
+            "client-task-sequence-smsts",
+        );
+        if is_task_sequence {
+            if is_physical_state(&source.artifact.coverage) {
+                let provenance = source
+                    .task_sequence_provenance
+                    .as_ref()
+                    .ok_or(SccmClientIntakeError::MissingTaskSequenceProvenance)?;
+                validate_task_sequence_provenance(provenance, source.relative_path.as_deref())?;
+                let relocation_key = (
+                    provenance.relocation_lineage.clone(),
+                    provenance.relocation_ordinal,
+                );
+                let physical_identity = (
+                    source
+                        .path_fingerprint
+                        .as_deref()
+                        .expect("physical source path provenance is validated above")
+                        .to_ascii_lowercase(),
+                    provenance.path_class,
+                );
+                if let Some(previous_identity) =
+                    task_sequence_relocations.insert(relocation_key, physical_identity.clone())
+                {
+                    if previous_identity != physical_identity {
+                        return Err(SccmClientIntakeError::CollidingTaskSequenceRelocation);
+                    }
+                }
+            } else if source.task_sequence_provenance.is_some() {
+                return Err(SccmClientIntakeError::InvalidTaskSequenceProvenance);
+            }
+        } else if source.task_sequence_provenance.is_some() {
+            return Err(SccmClientIntakeError::InvalidTaskSequenceProvenance);
         }
 
         let fragment_complete = source
@@ -1575,6 +1649,7 @@ fn intake_fragment(source: &SccmClientIntakeArtifact) -> SccmClientIntakeFragmen
         path_fingerprint: source.path_fingerprint.clone(),
         rotation_lineage: source.rotation_lineage.clone(),
         relative_path: source.relative_path.clone(),
+        task_sequence_provenance: source.task_sequence_provenance.clone(),
         fragment_complete: source.fragment_complete,
         configmgr_version: source.artifact.configmgr_version.clone(),
         collected_at_utc: normalized_collected_at(source.artifact.collected_at_utc.as_deref()),
@@ -1981,6 +2056,9 @@ fn is_safe_task_sequence_relative_path(
 ) -> bool {
     let (path_class, root, rotation_segment, basename) = match body {
         [_, path_class, basename] => (*path_class, None, None, *basename),
+        [_, root, rotation_segment, basename] if is_safe_root_path_segment(root) => {
+            ("client", Some(*root), Some(*rotation_segment), *basename)
+        }
         [_, path_class, rotation_segment, basename] => {
             (*path_class, None, Some(*rotation_segment), *basename)
         }
@@ -2010,7 +2088,79 @@ pub(super) fn task_sequence_path_class_for_relative_path(
         return None;
     };
     match body {
+        ["client-task-sequence-smsts", root, _, _] if is_safe_root_path_segment(root) => {
+            Some(SccmTaskSequencePathClass::Client)
+        }
         ["client-task-sequence-smsts", path_class, ..] => task_sequence_path_class(path_class),
+        _ => None,
+    }
+}
+
+fn validate_task_sequence_provenance(
+    provenance: &SccmTaskSequenceProvenance,
+    relative_path: Option<&str>,
+) -> Result<(), SccmClientIntakeError> {
+    if provenance.version != SCCM_TASK_SEQUENCE_PROVENANCE_VERSION
+        || !is_safe_task_sequence_relocation_lineage(&provenance.relocation_lineage)
+        || provenance
+            .smsts_log_path_evidence
+            .as_deref()
+            .is_some_and(|value| !is_safe_task_sequence_path_evidence(value))
+        || relative_path.is_some_and(|value| {
+            task_sequence_path_class_for_relative_path(value) != Some(provenance.path_class)
+        })
+        || provenance
+            .smsts_log_path_evidence
+            .as_deref()
+            .is_some_and(|value| {
+                task_sequence_path_class_for_evidence(value)
+                    .is_some_and(|path_class| path_class != provenance.path_class)
+            })
+    {
+        return Err(SccmClientIntakeError::InvalidTaskSequenceProvenance);
+    }
+
+    Ok(())
+}
+
+fn is_safe_task_sequence_relocation_lineage(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().count() <= MAX_SCCM_TASK_SEQUENCE_RELOCATION_LINEAGE_CHARS
+        && (value.starts_with("synthetic:")
+            || value.starts_with("cmtraceopen.task-sequence.relocation.sha256.v1:"))
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b":._-".contains(&byte))
+}
+
+fn is_safe_task_sequence_path_evidence(value: &str) -> bool {
+    if value.is_empty()
+        || value.chars().count() > MAX_SCCM_TASK_SEQUENCE_PATH_EVIDENCE_CHARS
+        || value.chars().any(char::is_control)
+        || value.contains("..")
+    {
+        return false;
+    }
+    task_sequence_path_class_for_evidence(value).is_some()
+}
+
+fn task_sequence_path_class_for_evidence(value: &str) -> Option<SccmTaskSequencePathClass> {
+    match value {
+        "SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log" | "synthetic:smsts-path:winpe" => {
+            Some(SccmTaskSequencePathClass::WinPe)
+        }
+        "SYNTHETIC://setup/smstslog/smsts.log" | "synthetic:smsts-path:setup" => {
+            Some(SccmTaskSequencePathClass::Setup)
+        }
+        "SYNTHETIC://full-os/_SMSTaskSequence/Logs/smstslog/smsts.log"
+        | "synthetic:smsts-path:full-os" => Some(SccmTaskSequencePathClass::FullOs),
+        "SYNTHETIC://client/CCM/Logs/smsts.log"
+        | "SYNTHETIC://client/CCM/Logs/smstslog/smsts.log"
+        | "SYNTHETIC://client/root-a/CCM/Logs/smstslog/smsts.log"
+        | "SYNTHETIC://client/root-b/CCM/Logs/smstslog/smsts.log"
+        | SCCM_TASK_SEQUENCE_CLIENT_PATH_EVIDENCE_TOKEN => Some(SccmTaskSequencePathClass::Client),
+        "SYNTHETIC://unknown/observed/smsts.log" => Some(SccmTaskSequencePathClass::Unknown),
+        "synthetic:smsts-path:unknown" => Some(SccmTaskSequencePathClass::Unknown),
         _ => None,
     }
 }

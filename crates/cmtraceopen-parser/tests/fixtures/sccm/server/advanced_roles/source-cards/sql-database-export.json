@@ -1,7 +1,7 @@
 {
   "cardSchemaVersion": "1.0.0",
   "cardId": "sql-database-export",
-  "cardVersion": "1.0.0",
+  "cardVersion": "1.1.0",
   "family": "SQL database and supplementary export diagnostics",
   "roleScope": [
     "siteDatabaseServer"
@@ -53,14 +53,22 @@
     "timeOnlyEligible": false,
     "topologyRequired": true
   },
-  "fixtureIds": [],
-  "ownerIssue": "#334",
+  "fixtureIds": [
+    "captured",
+    "denied",
+    "duplicate",
+    "malformed",
+    "oversized",
+    "partial",
+    "unknown-version"
+  ],
+  "ownerIssue": "#480",
   "promotion": {
     "state": "deferred",
     "observedEvidenceIds": [],
     "implementationIssue": null,
     "productionReducer": null,
-    "deferredReason": "Database and export parsing needs a separately approved source contract, privacy model, and bounded operator workflow."
+    "deferredReason": "Synthetic v1 gates exist, but sanitized observed operator provenance, source-version policy, and semantic admission evidence do not."
   },
   "semanticPolicy": {
     "captureGuidanceOnly": true,
@@ -68,8 +76,8 @@
     "canCreateFailureFindings": false
   },
   "nextEvidence": [
-    "Approve a dedicated database-supplement contract with data minimization and explicit operator authorization.",
-    "Create sanitized schema, privacy, cap, unsupported-version, malformed, and partial-export fixtures in a separate implementation issue."
+    "Provide sanitized observed operator authorization and provenance plus an approved source-version policy.",
+    "Provide exact correlation keys, incomplete/error scenarios, a named implementation issue, and a separately tested reducer before semantic admission."
   ],
   "supersession": {
     "state": "active",

@@ -7,7 +7,8 @@ use cmtraceopen_parser::sccm::{
     SccmClientIntakeArtifact, SccmClientIntakeAssessment, SccmClientIntakeBundle,
     SccmClientIntakeCaptureGap, SccmClientIntakeCoverageGap, SccmClientIntakeError,
     SccmClientIntakeFragment, SccmClientUnsupportedArtifact, SccmCoverageState, SccmRole,
-    SccmRotation, SccmUnknownRotation, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    SccmRotation, SccmTaskSequencePathClass, SccmTaskSequenceProvenance, SccmUnknownRotation,
+    MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -207,6 +208,20 @@ fn load_bundle(scenario: &str) -> SccmClientIntakeBundle {
             .into_iter()
             .map(|fixture| {
                 assert_eq!(fixture.role, "client");
+                let task_sequence_provenance = (fixture.original_basename == "smsts.log"
+                    && matches!(
+                        coverage(&fixture.capture_state),
+                        SccmCoverageState::Captured
+                            | SccmCoverageState::Capped
+                            | SccmCoverageState::ParseFailed
+                    ))
+                .then(|| SccmTaskSequenceProvenance {
+                    version: 1,
+                    path_class: SccmTaskSequencePathClass::Client,
+                    smsts_log_path_evidence: None,
+                    relocation_lineage: "synthetic:ts-relocation:intake".to_owned(),
+                    relocation_ordinal: 0,
+                });
                 SccmClientIntakeArtifact {
                     artifact: SccmArtifact {
                         artifact_id: fixture.artifact_id,
@@ -223,6 +238,7 @@ fn load_bundle(scenario: &str) -> SccmClientIntakeBundle {
                     path_fingerprint: fixture.path_fingerprint,
                     rotation_lineage: fixture.rotation.lineage_id,
                     relative_path: fixture.relative_path,
+                    task_sequence_provenance,
                     fragment_complete: fixture.rotation.fragment_complete,
                     declared_byte_length: None,
                     content_sha256: None,
@@ -413,6 +429,7 @@ fn synthetic_artifact(artifact_id: &str, display_name: &str) -> SccmClientIntake
         path_fingerprint: Some(format!("synthetic-{artifact_id}")),
         rotation_lineage: None,
         relative_path: Some(relative_path),
+        task_sequence_provenance: None,
         fragment_complete: Some(true),
         declared_byte_length: None,
         content_sha256: None,
@@ -452,6 +469,7 @@ fn opaque_numbered_artifact(number: usize) -> SccmClientIntakeArtifact {
         relative_path: Some(format!(
             "evidence/client-policy-agent/numbered-{number}/PolicyAgent.log.{number}"
         )),
+        task_sequence_provenance: None,
         fragment_complete: Some(true),
         declared_byte_length: None,
         content_sha256: None,
@@ -1728,6 +1746,7 @@ fn capped_cas_fragment_cannot_claim_complete() {
         path_fingerprint: Some("synthetic:content-capped".to_owned()),
         rotation_lineage: None,
         relative_path: Some("evidence/client-content/current/CAS.log".to_owned()),
+        task_sequence_provenance: None,
         fragment_complete: Some(true),
         declared_byte_length: None,
         content_sha256: None,

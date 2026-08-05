@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmtraceopen.dev/schemas/sccm-site-database-export-v1.schema.json",
+  "title": "SCCM site-database export coverage contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "contractId", "intent", "captureState", "authorization", "provenance", "snapshot", "integrity"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "contractId": { "const": "sccm-site-database-export" },
+    "intent": { "const": "captureMore" },
+    "captureState": { "enum": ["captured", "partial", "accessDenied"] },
+    "authorization": { "$ref": "#/$defs/authorization" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "snapshot": { "oneOf": [{ "$ref": "#/$defs/snapshot" }, { "type": "null" }] },
+    "integrity": { "$ref": "#/$defs/integrity" }
+  },
+  "allOf": [
+    { "if": { "properties": { "captureState": { "const": "captured" } } }, "then": { "properties": { "authorization": { "properties": { "decision": { "const": "granted" } } }, "snapshot": { "$ref": "#/$defs/completeSnapshot" } } } },
+    { "if": { "properties": { "captureState": { "const": "partial" } } }, "then": { "properties": { "authorization": { "properties": { "decision": { "const": "granted" } } }, "snapshot": { "$ref": "#/$defs/partialSnapshot" } } } },
+    { "if": { "properties": { "captureState": { "const": "accessDenied" } } }, "then": { "properties": { "authorization": { "properties": { "decision": { "const": "denied" } } }, "snapshot": { "type": "null" } } } }
+  ],
+  "$defs": {
+    "utc": { "type": "string", "format": "date-time", "pattern": "Z$" },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "authorization": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authorizationId", "authorizerHandle", "authorizedAtUtc", "decision", "scope"],
+      "properties": {
+        "authorizationId": { "type": "string", "pattern": "^cmtraceopen\\.sccm\\.dbexport\\.authorization\\.sha256\\.v1:[0-9a-f]{64}$" },
+        "authorizerHandle": { "type": "string", "pattern": "^cmtraceopen\\.operator\\.sha256\\.v1:[0-9a-f]{64}$" },
+        "authorizedAtUtc": { "$ref": "#/$defs/utc" },
+        "decision": { "enum": ["granted", "denied"] },
+        "scope": { "const": "coverageOnlySccmSiteDatabaseExport" }
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["siteHandle", "databaseHandle", "exporterHostHandle", "exportProfileId", "exportStartedUtc", "exportCompletedUtc"],
+      "properties": {
+        "siteHandle": { "type": "string", "pattern": "^cmtraceopen\\.site\\.sha256\\.v1:[0-9a-f]{64}$" },
+        "databaseHandle": { "type": "string", "pattern": "^cmtraceopen\\.database\\.sha256\\.v1:[0-9a-f]{64}$" },
+        "exporterHostHandle": { "type": "string", "pattern": "^cmtraceopen\\.host\\.sha256\\.v1:[0-9a-f]{64}$" },
+        "exportProfileId": { "const": "sccm-site-database-export-v1" },
+        "exportStartedUtc": { "$ref": "#/$defs/utc" },
+        "exportCompletedUtc": { "$ref": "#/$defs/utc" }
+      }
+    },
+    "summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["activeClientCount", "managedDeviceCount", "packageCount", "deploymentCount"],
+      "properties": {
+        "activeClientCount": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "managedDeviceCount": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "packageCount": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "deploymentCount": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
+      }
+    },
+    "snapshot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["snapshotId", "capturedAtUtc", "complete", "summary"],
+      "properties": {
+        "snapshotId": { "type": "string", "pattern": "^cmtraceopen\\.sccm\\.dbexport\\.snapshot\\.sha256\\.v1:[0-9a-f]{64}$" },
+        "capturedAtUtc": { "$ref": "#/$defs/utc" },
+        "complete": { "type": "boolean" },
+        "summary": { "$ref": "#/$defs/summary" }
+      }
+    },
+    "completeSnapshot": { "allOf": [{ "$ref": "#/$defs/snapshot" }, { "properties": { "complete": { "const": true } } }] },
+    "partialSnapshot": { "allOf": [{ "$ref": "#/$defs/snapshot" }, { "properties": { "complete": { "const": false } } }] },
+    "integrity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["algorithm", "canonicalPayloadSha256"],
+      "properties": {
+        "algorithm": { "const": "sha256" },
+        "canonicalPayloadSha256": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

@@ -1,23 +1,29 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::io::{self, Write};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::de::{Error as _, MapAccess, SeqAccess, Visitor};
+use serde::de::Error as _;
 use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::sccm::json_contract::{
+    field as preserved_field, parse_preserved_json, PreservedJsonValue,
+};
 use crate::sccm::rotation::is_canonical_rotation_timestamp;
 use crate::sccm::{
     classify_artifact_name, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
-    SccmArtifactRequest, SccmCoverageState, SccmEvidence, SccmFinding, SccmRole, SccmRotation,
+    SccmArtifactRequest, SccmCoverageState, SccmEvidence, SccmExtractionProfile,
+    SccmExtractionProfileMaturity, SccmFinding, SccmKeyConfidence, SccmRole, SccmRotation,
 };
 
 use super::catalog::{
-    classify_declared_server_source, expected_family, SccmServerSourceKind, SccmServerSourceSpec,
+    classify_declared_hierarchy_source, classify_declared_server_source,
+    declared_hierarchy_source_contracts, expected_family, SccmServerHierarchyDirection,
+    SccmServerHierarchySourceContract, SccmServerSourceKind, SccmServerSourceSpec,
+    SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION, SCCM_SERVER_SITE_DATABASE_SCHEMA_VERSION,
 };
 
 /// Keep parser-side work bounded even when the manifest did not come from the
@@ -573,6 +579,19 @@ pub struct SccmServerArtifactAssessment {
     pub source_kind: String,
     pub family: SccmArtifactFamily,
     pub original_basename: Option<String>,
+    pub direction: Option<SccmServerHierarchyDirection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hierarchy_admission: Option<SccmServerHierarchyAdmission>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplement_schema_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplement_operator_authorized: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplement_privacy_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplement_admission: Option<SccmServerSupplementAdmission>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supplement_provenance: Option<String>,
     pub rotation: Option<SccmRotation>,
     pub rotation_lineage_handle: String,
     pub state: SccmCoverageState,
@@ -618,6 +637,61 @@ pub struct SccmServerArtifactAssessment {
         serialize_with = "serialize_opaque_extensions"
     )]
     collection_limit_extensions: Vec<SccmServerOpaqueExtension>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SccmServerHierarchyAdmission {
+    pub contract_version: Option<u32>,
+    pub component: String,
+    pub direction: Option<SccmServerHierarchyDirection>,
+    pub profile_id: Option<String>,
+    pub confidence: SccmKeyConfidence,
+    pub gaps: Vec<SccmServerHierarchyAdmissionGap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmServerHierarchyAdmissionGap {
+    MissingVersion,
+    MissingContractVersion,
+    UnvalidatedProfile,
+    MissingTopology,
+    UnvalidatedDirection,
+    UnvalidatedKeys,
+    ComponentMismatch,
+    RotationMismatch,
+    UnsupportedContractVersion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmServerSupplementAdmission {
+    Admitted,
+    CoverageOnly { gaps: Vec<SccmServerSupplementGap> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SccmServerSupplementGap {
+    MissingContractVersion,
+    UnsupportedContractVersion,
+    MissingSchemaVersion,
+    UnsupportedSchemaVersion,
+    MissingOperatorAuthorization,
+    PrivacyClassMismatch,
+    Absent,
+    AccessDenied,
+    Capped,
+    Skipped,
+    Unsupported,
+    ParseFailed,
+    IncompletePayload,
+    MissingPayload,
+    MissingCollectionLimit,
+    MissingDigest,
+    MissingProvenance,
+    MalformedPayload,
 }
 
 impl SccmServerArtifactAssessment {
@@ -817,6 +891,9 @@ pub fn assess_server_intake(
         let normalized = normalize_artifact(
             artifact,
             manifest.synthetic_fixture,
+            manifest.hierarchy_contract_version,
+            &topology.site_handle,
+            &topology.hierarchy_links,
             &topology.roles_observed,
             &mut relative_paths,
             &mut path_fingerprint_lineages,
@@ -1227,18 +1304,27 @@ fn normalize_hierarchy_link(
     synthetic_fixture: bool,
 ) -> Result<SccmServerHierarchyLinkTopology, SccmServerIntakeError> {
     let _ = RawServerHierarchyLink::KNOWN_FIELDS;
-    if !synthetic_fixture || !link.extensions.is_empty() {
+    if !link.extensions.is_empty() {
         return Err(SccmServerIntakeError::InvalidTopology);
     }
-    let valid = link.origin_site_code == "LAB"
-        && link.origin_host_handle == "synthetic:host:site-01"
-        && matches!(
-            (
-                link.target_site_code.as_str(),
-                link.target_host_handle.as_str()
-            ),
-            ("CHD", "synthetic:host:site-02") | ("SEC", "synthetic:host:site-03")
-        );
+    let valid = if synthetic_fixture {
+        link.origin_site_code == "LAB"
+            && link.origin_host_handle == "synthetic:host:site-01"
+            && matches!(
+                (
+                    link.target_site_code.as_str(),
+                    link.target_host_handle.as_str()
+                ),
+                ("CHD", "synthetic:host:site-02") | ("SEC", "synthetic:host:site-03")
+            )
+    } else {
+        link.origin_site_code != link.target_site_code
+            && link.origin_host_handle != link.target_host_handle
+            && opaque_sha256_handle(&link.origin_site_code, "cmtraceopen.site.sha256.v1:")
+            && opaque_sha256_handle(&link.target_site_code, "cmtraceopen.site.sha256.v1:")
+            && opaque_sha256_handle(&link.origin_host_handle, "cmtraceopen.host.sha256.v1:")
+            && opaque_sha256_handle(&link.target_host_handle, "cmtraceopen.host.sha256.v1:")
+    };
     if !valid {
         return Err(SccmServerIntakeError::InvalidTopology);
     }
@@ -1250,9 +1336,124 @@ fn normalize_hierarchy_link(
     })
 }
 
+fn hierarchy_contract_status(
+    source_id: &str,
+    producer_role: &SccmRole,
+    basename: &str,
+    rotation: Option<&SccmRotation>,
+) -> (Option<&'static SccmServerHierarchySourceContract>, bool) {
+    let classified = classify_artifact_name(basename, producer_role.clone());
+    let contract = declared_hierarchy_source_contracts()
+        .iter()
+        .find(|contract| {
+            contract.source_id == source_id
+                && &contract.producer_role == producer_role
+                && contract.logical_name == classified.logical_name
+        });
+    let rotation_matches = rotation.is_some_and(|rotation| {
+        classify_declared_hierarchy_source(
+            source_id,
+            producer_role,
+            &classified.logical_name,
+            rotation,
+        )
+        .is_some()
+    });
+    (contract, rotation_matches)
+}
+
+fn is_hierarchy_log_source(source_id: &str) -> bool {
+    matches!(
+        source_id,
+        "server-hierarchy-control" | "server-hierarchy-transfer"
+    )
+}
+
+fn normalize_supplement_admission(
+    artifact: &RawServerArtifact,
+    synthetic_fixture: bool,
+    manifest_contract_version: Option<u32>,
+    payload_error: Option<&SccmServerIntakeError>,
+    payload_present: bool,
+    capture_provenance: Option<&SccmServerCaptureProvenance>,
+    content_digest_present: bool,
+) -> SccmServerSupplementAdmission {
+    let mut gaps = Vec::new();
+    if !synthetic_fixture {
+        match manifest_contract_version {
+            None => gaps.push(SccmServerSupplementGap::MissingContractVersion),
+            Some(version) if version != SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION => {
+                gaps.push(SccmServerSupplementGap::UnsupportedContractVersion)
+            }
+            Some(_) => {}
+        }
+    }
+    match artifact.supplement_schema_version {
+        None => gaps.push(SccmServerSupplementGap::MissingSchemaVersion),
+        Some(version) if version != SCCM_SERVER_SITE_DATABASE_SCHEMA_VERSION => {
+            gaps.push(SccmServerSupplementGap::UnsupportedSchemaVersion)
+        }
+        Some(_) => {}
+    }
+    if artifact.supplement_operator_authorized != Some(true) {
+        gaps.push(SccmServerSupplementGap::MissingOperatorAuthorization);
+    }
+    if artifact.supplement_privacy_class.as_deref() != Some("redacted") {
+        gaps.push(SccmServerSupplementGap::PrivacyClassMismatch);
+    }
+    match artifact.capture_state {
+        SccmCoverageState::Captured => {}
+        SccmCoverageState::Absent => gaps.push(SccmServerSupplementGap::Absent),
+        SccmCoverageState::AccessDenied => gaps.push(SccmServerSupplementGap::AccessDenied),
+        SccmCoverageState::Capped => gaps.push(SccmServerSupplementGap::Capped),
+        SccmCoverageState::Skipped => gaps.push(SccmServerSupplementGap::Skipped),
+        SccmCoverageState::Unsupported => gaps.push(SccmServerSupplementGap::Unsupported),
+        SccmCoverageState::ParseFailed => gaps.push(SccmServerSupplementGap::ParseFailed),
+    }
+    if artifact.capture_state == SccmCoverageState::Captured
+        && (artifact.fragment_complete != Some(true) || artifact.truncated != Some(false))
+    {
+        gaps.push(SccmServerSupplementGap::IncompletePayload);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured && !payload_present {
+        gaps.push(SccmServerSupplementGap::MissingPayload);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured && artifact.collection_limit.is_none()
+    {
+        gaps.push(SccmServerSupplementGap::MissingCollectionLimit);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured
+        && artifact
+            .collection_limit
+            .as_ref()
+            .is_some_and(|limit| limit.limit_applied || artifact.bytes_copied > limit.byte_limit)
+    {
+        gaps.push(SccmServerSupplementGap::Capped);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured && !content_digest_present {
+        gaps.push(SccmServerSupplementGap::MissingDigest);
+    }
+    if artifact.capture_state == SccmCoverageState::Captured && capture_provenance.is_none() {
+        gaps.push(SccmServerSupplementGap::MissingProvenance);
+    }
+    if payload_error.is_some() {
+        gaps.push(SccmServerSupplementGap::MalformedPayload);
+    }
+    gaps.sort();
+    gaps.dedup();
+    match gaps.is_empty() {
+        true => SccmServerSupplementAdmission::Admitted,
+        false => SccmServerSupplementAdmission::CoverageOnly { gaps },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn normalize_artifact(
     artifact: RawServerArtifact,
     synthetic_fixture: bool,
+    manifest_contract_version: Option<u32>,
+    site_handle: &str,
+    hierarchy_links: &[SccmServerHierarchyLinkTopology],
     roles_observed: &[SccmRole],
     relative_paths: &mut BTreeSet<String>,
     path_fingerprint_lineages: &mut BTreeMap<PathFingerprintKey, String>,
@@ -1482,6 +1683,16 @@ fn normalize_artifact(
         return Err(SccmServerIntakeError::DuplicateArtifact);
     }
 
+    let direction = artifact.direction;
+    let is_structured_supplement = artifact.source_id == "server-hierarchy-site-database";
+    if (!is_hierarchy_log_source(&artifact.source_id) && direction.is_some())
+        || (!is_structured_supplement
+            && (artifact.supplement_schema_version.is_some()
+                || artifact.supplement_operator_authorized.is_some()
+                || artifact.supplement_privacy_class.is_some()))
+    {
+        return Err(SccmServerIntakeError::InvalidArtifact);
+    }
     let configured_path_state =
         parse_configured_path_state(&artifact.configured_path_provenance.state)?;
     let configured_path_class = match artifact.configured_path_provenance.path_class.as_deref() {
@@ -1508,8 +1719,12 @@ fn normalize_artifact(
         rotation.as_ref(),
         relative_paths,
     )?;
-    let (bytes, capture_provenance) =
-        validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id)?;
+    let (bytes, capture_provenance, payload_error) =
+        match validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id) {
+            Ok((bytes, capture_provenance)) => (bytes, capture_provenance, None),
+            Err(error) if is_structured_supplement => (None, None, Some(error)),
+            Err(error) => return Err(error),
+        };
     let collection_limit =
         artifact
             .collection_limit
@@ -1519,13 +1734,21 @@ fn normalize_artifact(
                 file_limit: limit.file_limit,
                 limit_applied: limit.limit_applied,
             });
-    let content_sha256 = bytes.map(payload_sha256);
-    let profile_eligible = source_version
+    let content_sha256 = bytes
+        .filter(|_| !is_structured_supplement || artifact.encoding.as_deref() != Some("unknown"))
+        .map(payload_sha256);
+    let mut profile_eligible = source_version
         .as_deref()
         .is_some_and(|version| source_version_is_profile_eligible(version, synthetic_fixture));
 
     let mut evidence = Vec::new();
+    let mut observed_component_matches =
+        synthetic_fixture || artifact.capture_state != SccmCoverageState::Captured;
     let mut state = artifact.capture_state.clone();
+    if is_structured_supplement {
+        parser_eligible = false;
+        profile_eligible = false;
+    }
     if artifact.capture_state == SccmCoverageState::Captured && parser_eligible {
         let bytes = bytes.ok_or(SccmServerIntakeError::MissingPayload)?;
         let encoding = artifact
@@ -1533,6 +1756,22 @@ fn normalize_artifact(
             .as_deref()
             .ok_or(SccmServerIntakeError::InvalidArtifact)?;
         if let Some(content) = decode_server_payload(bytes, encoding)? {
+            if family == SccmArtifactFamily::Hierarchy {
+                observed_component_matches = hierarchy_contract_status(
+                    &artifact.source_id,
+                    &artifact.producer_role,
+                    &artifact.original_basename,
+                    rotation.as_ref(),
+                )
+                .0
+                .is_some_and(|contract| {
+                    crate::parser::ccm::scan_logical_records(&content, &artifact.original_basename)
+                        .iter()
+                        .any(|record| {
+                            record.entry.component.as_deref() == Some(contract.expected_component)
+                        })
+                });
+            }
             let display_name = original_basename
                 .clone()
                 .ok_or(SccmServerIntakeError::InvalidArtifact)?;
@@ -1581,6 +1820,125 @@ fn normalize_artifact(
         }
     }
 
+    let hierarchy_admission = if is_hierarchy_log_source(&artifact.source_id) {
+        let (contract, rotation_matches) = hierarchy_contract_status(
+            &artifact.source_id,
+            &artifact.producer_role,
+            &artifact.original_basename,
+            rotation.as_ref(),
+        );
+        let contract_version = if synthetic_fixture {
+            contract.map(|contract| contract.contract_version)
+        } else if manifest_contract_version == Some(SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION) {
+            manifest_contract_version
+        } else {
+            None
+        };
+        let component = contract
+            .map(|contract| contract.expected_component.to_owned())
+            .unwrap_or_else(|| "unknown".to_owned());
+        let profile = source_version.as_deref().map(|version| {
+            SccmExtractionProfile::for_artifact_family(
+                Some(version),
+                &SccmArtifactFamily::Hierarchy,
+            )
+        });
+        let mut gaps = Vec::new();
+        if source_version.is_none() {
+            gaps.push(SccmServerHierarchyAdmissionGap::MissingVersion);
+        }
+        if !synthetic_fixture {
+            match manifest_contract_version {
+                None => gaps.push(SccmServerHierarchyAdmissionGap::MissingContractVersion),
+                Some(version) if version != SCCM_SERVER_HIERARCHY_SOURCE_CONTRACT_VERSION => {
+                    gaps.push(SccmServerHierarchyAdmissionGap::UnsupportedContractVersion)
+                }
+                Some(_) => {}
+            }
+        }
+        if profile
+            .as_ref()
+            .is_none_or(|profile| profile.maturity != SccmExtractionProfileMaturity::Stable)
+        {
+            gaps.push(SccmServerHierarchyAdmissionGap::UnvalidatedProfile);
+        }
+        if !rotation_matches {
+            gaps.push(SccmServerHierarchyAdmissionGap::RotationMismatch);
+        }
+        if !observed_component_matches {
+            gaps.push(SccmServerHierarchyAdmissionGap::ComponentMismatch);
+        }
+        if hierarchy_links.is_empty() {
+            gaps.push(SccmServerHierarchyAdmissionGap::MissingTopology);
+        }
+        let validated_direction = match direction {
+            Some(SccmServerHierarchyDirection::Origin)
+                if hierarchy_links.iter().any(|link| {
+                    link.origin_site_code == site_handle
+                        && link.origin_host_handle
+                            == artifact.producer_host_handle.as_deref().unwrap_or_default()
+                }) =>
+            {
+                Some(SccmServerHierarchyDirection::Origin)
+            }
+            Some(SccmServerHierarchyDirection::Target)
+                if hierarchy_links.iter().any(|link| {
+                    link.target_site_code == site_handle
+                        && link.target_host_handle
+                            == artifact.producer_host_handle.as_deref().unwrap_or_default()
+                }) =>
+            {
+                Some(SccmServerHierarchyDirection::Target)
+            }
+            _ => None,
+        };
+        if validated_direction.is_none() {
+            gaps.push(SccmServerHierarchyAdmissionGap::UnvalidatedDirection);
+        }
+        if !synthetic_fixture {
+            gaps.push(SccmServerHierarchyAdmissionGap::UnvalidatedKeys);
+        }
+        gaps.sort();
+        gaps.dedup();
+        let confidence = if gaps.is_empty() {
+            SccmKeyConfidence::Exact
+        } else {
+            SccmKeyConfidence::Low
+        };
+        let profile_id = profile.map(|profile| profile.profile_id);
+        if !synthetic_fixture && !gaps.is_empty() {
+            parser_eligible = false;
+            profile_eligible = false;
+            evidence.clear();
+        }
+        Some(SccmServerHierarchyAdmission {
+            contract_version,
+            component,
+            direction: validated_direction,
+            profile_id,
+            confidence,
+            gaps,
+        })
+    } else {
+        None
+    };
+    let supplement_admission = if is_structured_supplement {
+        Some(normalize_supplement_admission(
+            &artifact,
+            synthetic_fixture,
+            manifest_contract_version,
+            payload_error.as_ref(),
+            bytes.is_some(),
+            capture_provenance.as_ref(),
+            content_sha256.is_some(),
+        ))
+    } else {
+        None
+    };
+    let supplement_provenance = supplement_admission
+        .as_ref()
+        .map(|_| "imported supplemental evidence".to_owned());
+
     Ok(PreparedArtifact {
         assessment: SccmServerArtifactAssessment {
             artifact_id: artifact.artifact_id,
@@ -1594,6 +1952,15 @@ fn normalize_artifact(
             source_kind: artifact.source_kind,
             family,
             original_basename,
+            direction: hierarchy_admission
+                .as_ref()
+                .and_then(|admission| admission.direction),
+            hierarchy_admission,
+            supplement_schema_version: artifact.supplement_schema_version,
+            supplement_operator_authorized: artifact.supplement_operator_authorized,
+            supplement_privacy_class: artifact.supplement_privacy_class,
+            supplement_admission,
+            supplement_provenance,
             rotation,
             rotation_lineage_handle: artifact.rotation.lineage_id,
             state,
@@ -1661,6 +2028,43 @@ fn artifact_family_integrity_key(family: &SccmArtifactFamily) -> &str {
     family.serialized_name()
 }
 
+fn hierarchy_admission_gap_key(gap: &SccmServerHierarchyAdmissionGap) -> &'static str {
+    match gap {
+        SccmServerHierarchyAdmissionGap::MissingVersion => "missingVersion",
+        SccmServerHierarchyAdmissionGap::MissingContractVersion => "missingContractVersion",
+        SccmServerHierarchyAdmissionGap::UnvalidatedProfile => "unvalidatedProfile",
+        SccmServerHierarchyAdmissionGap::MissingTopology => "missingTopology",
+        SccmServerHierarchyAdmissionGap::UnvalidatedDirection => "unvalidatedDirection",
+        SccmServerHierarchyAdmissionGap::UnvalidatedKeys => "unvalidatedKeys",
+        SccmServerHierarchyAdmissionGap::ComponentMismatch => "componentMismatch",
+        SccmServerHierarchyAdmissionGap::RotationMismatch => "rotationMismatch",
+        SccmServerHierarchyAdmissionGap::UnsupportedContractVersion => "unsupportedContractVersion",
+    }
+}
+
+fn supplement_gap_key(gap: &SccmServerSupplementGap) -> &'static str {
+    match gap {
+        SccmServerSupplementGap::MissingContractVersion => "missingContractVersion",
+        SccmServerSupplementGap::UnsupportedContractVersion => "unsupportedContractVersion",
+        SccmServerSupplementGap::MissingSchemaVersion => "missingSchemaVersion",
+        SccmServerSupplementGap::UnsupportedSchemaVersion => "unsupportedSchemaVersion",
+        SccmServerSupplementGap::MissingOperatorAuthorization => "missingOperatorAuthorization",
+        SccmServerSupplementGap::PrivacyClassMismatch => "privacyClassMismatch",
+        SccmServerSupplementGap::Absent => "absent",
+        SccmServerSupplementGap::AccessDenied => "accessDenied",
+        SccmServerSupplementGap::Capped => "capped",
+        SccmServerSupplementGap::Skipped => "skipped",
+        SccmServerSupplementGap::Unsupported => "unsupported",
+        SccmServerSupplementGap::ParseFailed => "parseFailed",
+        SccmServerSupplementGap::IncompletePayload => "incompletePayload",
+        SccmServerSupplementGap::MissingPayload => "missingPayload",
+        SccmServerSupplementGap::MissingCollectionLimit => "missingCollectionLimit",
+        SccmServerSupplementGap::MissingDigest => "missingDigest",
+        SccmServerSupplementGap::MissingProvenance => "missingProvenance",
+        SccmServerSupplementGap::MalformedPayload => "malformedPayload",
+    }
+}
+
 fn topology_string_bytes(topology: &SccmServerTopologyAssessment) -> Option<usize> {
     let mut total = 0usize;
     checked_add_string_bytes(&mut total, &topology.capture_host_handle)?;
@@ -1687,6 +2091,65 @@ fn artifact_string_bytes(artifacts: &[SccmServerArtifactAssessment]) -> Option<u
         checked_add_string_bytes(&mut total, &artifact.source_kind)?;
         checked_add_string_bytes(&mut total, artifact_family_integrity_key(&artifact.family))?;
         checked_add_optional_string_bytes(&mut total, artifact.original_basename.as_deref())?;
+        if let Some(direction) = artifact.direction {
+            checked_add_string_bytes(
+                &mut total,
+                match direction {
+                    SccmServerHierarchyDirection::Origin => "origin",
+                    SccmServerHierarchyDirection::Target => "target",
+                },
+            )?;
+        }
+        if let Some(admission) = &artifact.hierarchy_admission {
+            if let Some(contract_version) = admission.contract_version {
+                checked_add_string_bytes(&mut total, &contract_version.to_string())?;
+            }
+            checked_add_string_bytes(&mut total, &admission.component)?;
+            checked_add_optional_string_bytes(&mut total, admission.profile_id.as_deref())?;
+            checked_add_string_bytes(
+                &mut total,
+                match admission.confidence {
+                    SccmKeyConfidence::Low => "low",
+                    SccmKeyConfidence::Strong => "strong",
+                    SccmKeyConfidence::Exact => "exact",
+                },
+            )?;
+            for gap in &admission.gaps {
+                checked_add_string_bytes(&mut total, hierarchy_admission_gap_key(gap))?;
+            }
+        }
+        if let Some(version) = artifact.supplement_schema_version {
+            checked_add_string_bytes(&mut total, &version.to_string())?;
+        }
+        if let Some(authorized) = artifact.supplement_operator_authorized {
+            checked_add_string_bytes(
+                &mut total,
+                if authorized {
+                    "authorized"
+                } else {
+                    "unauthorized"
+                },
+            )?;
+        }
+        checked_add_optional_string_bytes(
+            &mut total,
+            artifact.supplement_privacy_class.as_deref(),
+        )?;
+        if let Some(admission) = &artifact.supplement_admission {
+            checked_add_string_bytes(
+                &mut total,
+                match admission {
+                    SccmServerSupplementAdmission::Admitted => "admitted",
+                    SccmServerSupplementAdmission::CoverageOnly { .. } => "coverageOnly",
+                },
+            )?;
+            if let SccmServerSupplementAdmission::CoverageOnly { gaps } = admission {
+                for gap in gaps {
+                    checked_add_string_bytes(&mut total, supplement_gap_key(gap))?;
+                }
+            }
+        }
+        checked_add_optional_string_bytes(&mut total, artifact.supplement_provenance.as_deref())?;
         match artifact.rotation.as_ref() {
             None => {}
             Some(SccmRotation::Current) => checked_add_string_bytes(&mut total, "current")?,
@@ -3020,6 +3483,7 @@ fn validate_artifact_annotations(
 
     match (artifact.truncated, artifact.fragment_complete) {
         (None, None) => {}
+        (Some(false), Some(true)) if artifact.capture_state == SccmCoverageState::Captured => {}
         (Some(false), Some(false)) if artifact.capture_state == SccmCoverageState::Captured => {}
         (None, Some(false)) if artifact.capture_state == SccmCoverageState::Captured => {}
         (Some(true), Some(false)) if artifact.capture_state == SccmCoverageState::Capped => {}
@@ -3149,7 +3613,6 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "provider-retry-current"
                 | "provider-success-current"
                 | "provider-timeout-current"
-                | "unknown-db-export"
                 | "unrelated-02-wcm"
                 | "unrelated-03-wsync"
                 | "unrelated-04-wsus"
@@ -3175,12 +3638,12 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
             | "server-dp-serve"
             | "server-hierarchy-control"
             | "server-hierarchy-transfer"
+            | "server-hierarchy-site-database"
             | "server-sup-sync"
             | "server-sup-wsus"
             | "server-provider"
             | "server-admin-service"
             | "server-admin-service-iis"
-            | "unknown-db-supplement"
     ) || (allow_unknown
         && !synthetic_fixture
         && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
@@ -3197,7 +3660,7 @@ fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -
 
 fn safe_public_basename(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        value == "synthetic-db-export.txt"
+        false
     } else {
         opaque_sha256_handle(value, "cmtraceopen.basename.sha256.v1:")
     }
@@ -3263,7 +3726,6 @@ fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "provider-primary"
                 | "admin-service-primary"
                 | "admin-service-iis"
-                | "unknown-db-export"
         ) || SYNTHETIC_HIERARCHY_LINEAGES.contains(&value);
     }
     opaque_sha256_handle(value, "cmtraceopen.lineage.sha256.v1:")
@@ -3326,7 +3788,6 @@ fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
                 | "synthetic:path:provider-primary"
                 | "synthetic:path:admin-service-primary"
                 | "synthetic:path:admin-service-iis"
-                | "synthetic:path:unsupported-db"
                 | "synthetic:path:z-site"
         ) || SYNTHETIC_HIERARCHY_PATH_FINGERPRINTS.contains(&value);
     }
@@ -3559,98 +4020,6 @@ fn rotation_sort_key(rotation: Option<&SccmRotation>) -> String {
     }
 }
 
-#[derive(Debug)]
-enum PreservedJsonValue {
-    Unsigned(u64),
-    String(String),
-    Array(Vec<Self>),
-    Object(Vec<(String, Self)>),
-    Other,
-}
-
-struct PreservedJsonValueVisitor;
-
-impl<'de> Visitor<'de> for PreservedJsonValueVisitor {
-    type Value = PreservedJsonValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("any JSON value while preserving duplicate object keys")
-    }
-
-    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Unsigned(value))
-    }
-
-    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(PreservedJsonValue::String(value.to_owned()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::String(value))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(Self)
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::new();
-        while let Some(value) = sequence.next_element()? {
-            values.push(value);
-        }
-        Ok(PreservedJsonValue::Array(values))
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut fields = Vec::new();
-        while let Some(name) = map.next_key()? {
-            fields.push((name, map.next_value()?));
-        }
-        Ok(PreservedJsonValue::Object(fields))
-    }
-}
-
-impl<'de> Deserialize<'de> for PreservedJsonValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(PreservedJsonValueVisitor)
-    }
-}
-
 #[derive(Default)]
 struct OpaqueExtensionTotals {
     count: usize,
@@ -3678,7 +4047,7 @@ impl OpaqueExtensionTotals {
 }
 
 fn preflight_server_manifest_extensions(manifest_json: &str) -> Result<(), SccmServerIntakeError> {
-    let document: PreservedJsonValue = serde_json::from_str(manifest_json)
+    let document = parse_preserved_json(manifest_json)
         .map_err(|_| SccmServerIntakeError::MalformedManifest)?;
     let PreservedJsonValue::Object(manifest) = &document else {
         return Err(SccmServerIntakeError::MalformedManifest);
@@ -3767,15 +4136,6 @@ fn validate_unique_object_fields(
     Ok(())
 }
 
-fn preserved_field<'a>(
-    object: &'a [(String, PreservedJsonValue)],
-    name: &str,
-) -> Option<&'a PreservedJsonValue> {
-    object
-        .iter()
-        .find_map(|(field, value)| (field == name).then_some(value))
-}
-
 fn validate_preserved_extensions(
     object: &[(String, PreservedJsonValue)],
     known_fields: &[&str],
@@ -3839,6 +4199,7 @@ macro_rules! define_raw_server_wire {
 define_raw_server_wire! {
     struct RawServerManifest {
         "sccmManifestVersion" => sccm_manifest_version: u32,
+        "hierarchyContractVersion" => hierarchy_contract_version: Option<u32>,
         #[serde(default)]
         "syntheticFixture" => synthetic_fixture: bool,
         "proposalOnly" => proposal_only: Option<bool>,
@@ -3885,6 +4246,10 @@ define_raw_server_wire! {
         "sourceId" => source_id: String,
         "sourceKind" => source_kind: String,
         "sourceVersion" => source_version: Option<String>,
+        "direction" => direction: Option<SccmServerHierarchyDirection>,
+        "supplementSchemaVersion" => supplement_schema_version: Option<u32>,
+        "operatorAuthorized" => supplement_operator_authorized: Option<bool>,
+        "privacyClass" => supplement_privacy_class: Option<String>,
         "originalPath" => original_path: String,
         "originalBasename" => original_basename: String,
         "configuredPathProvenance" => configured_path_provenance: RawConfiguredPathProvenance,
@@ -4028,6 +4393,7 @@ mod opaque_extension_boundary_tests {
             RawServerManifest::KNOWN_FIELDS,
             [
                 "sccmManifestVersion",
+                "hierarchyContractVersion",
                 "syntheticFixture",
                 "proposalOnly",
                 "privacy",
@@ -4090,6 +4456,10 @@ mod opaque_extension_boundary_tests {
                 "sourceId",
                 "sourceKind",
                 "sourceVersion",
+                "direction",
+                "supplementSchemaVersion",
+                "operatorAuthorized",
+                "privacyClass",
                 "originalPath",
                 "originalBasename",
                 "configuredPathProvenance",
@@ -4233,6 +4603,13 @@ mod opaque_extension_boundary_tests {
             source_kind: "unused".to_owned(),
             family: SccmArtifactFamily::Unknown("unused".to_owned()),
             original_basename: None,
+            direction: None,
+            hierarchy_admission: None,
+            supplement_schema_version: None,
+            supplement_operator_authorized: None,
+            supplement_privacy_class: None,
+            supplement_admission: None,
+            supplement_provenance: None,
             rotation: None,
             rotation_lineage_handle: "unused".to_owned(),
             state: SccmCoverageState::Unsupported,

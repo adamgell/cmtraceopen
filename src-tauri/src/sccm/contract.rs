@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use cmtraceopen_parser::sccm::{
     classify_artifact_name, declared_client_source_groups, SccmCoverageState, SccmRole,
-    SccmRotation,
+    SccmRotation, SccmTaskSequenceProvenance,
 };
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,8 @@ pub struct SccmManifestArtifact {
     pub path_fingerprint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_lineage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_sequence_provenance: Option<SccmTaskSequenceProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_path: Option<String>,
     pub basename: String,

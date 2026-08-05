@@ -443,6 +443,19 @@ fn intake_scenarios() -> Vec<String> {
     scenarios
 }
 
+#[test]
+fn server_intake_fixture_inventory_excludes_obsolete_database_placeholder() {
+    let fixtures = std::fs::read_dir(intake_root())
+        .expect("intake fixture root is readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !fixtures.contains("unsupported-db-supplement"),
+        "database exports use the explicit v1 contract, never generic server intake"
+    );
+}
+
 fn opaque_handle(prefix: &str, ordinal: usize) -> String {
     format!("{prefix}{ordinal:064x}")
 }
@@ -1149,7 +1162,7 @@ fn server_intake_gap_requests_use_exact_shared_catalog_artifacts() {
 }
 
 #[test]
-fn server_intake_does_not_request_unknown_or_non_ccm_sources() {
+fn server_intake_does_not_request_non_ccm_sources() {
     let (iis_manifest, iis_payloads) = load_bundle("skipped-iis");
     let mut denied_iis = manifest_value(&iis_manifest);
     denied_iis["artifacts"][0]["captureState"] = Value::String("accessDenied".to_owned());
@@ -1159,14 +1172,6 @@ fn server_intake_does_not_request_unknown_or_non_ccm_sources() {
     assert!(
         iis.next_artifact_requests.is_empty(),
         "a non-CCM group has no shared catalog artifact request"
-    );
-
-    let (unknown_manifest, unknown_payloads) = load_bundle("unsupported-db-supplement");
-    let unknown = assess_server_intake(&unknown_manifest, &unknown_payloads)
-        .expect("unknown coverage remains assessable");
-    assert!(
-        unknown.next_artifact_requests.is_empty(),
-        "an unknown source has no shared catalog artifact request"
     );
 }
 
@@ -1775,12 +1780,6 @@ fn server_intake_exercises_role_state_rotation_and_privacy_matrix() {
         ("access-denied-mp", SccmCoverageState::AccessDenied, 0, 1),
         ("capped-sup", SccmCoverageState::Capped, 0, 1),
         ("skipped-iis", SccmCoverageState::Skipped, 0, 0),
-        (
-            "unsupported-db-supplement",
-            SccmCoverageState::Unsupported,
-            0,
-            0,
-        ),
     ];
     for (scenario, state, evidence_count, request_count) in cases {
         let (manifest, payloads) = load_bundle(scenario);
@@ -1984,38 +1983,6 @@ fn server_intake_keeps_unknown_encoding_as_unsupported_coverage() {
     assert_eq!(
         serialized["artifacts"][0]["captureProvenance"]["encoding"],
         "unknown"
-    );
-}
-
-#[test]
-fn server_intake_retains_unsupported_source_provenance() {
-    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
-    let assessment = assess_server_intake(&manifest_json, &payloads)
-        .expect("unsupported source remains assessable");
-    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
-    let artifact = artifact_json(&serialized, "unknown-db-export");
-
-    assert_eq!(artifact["sourceId"], "unknown-db-supplement");
-    assert_eq!(artifact["sourceKind"], "unknown");
-    assert_eq!(artifact["family"], "unknown-db-supplement");
-    assert_eq!(artifact["originalBasename"], "synthetic-db-export.txt");
-    assert_eq!(artifact["rotationLineageHandle"], "unknown-db-export");
-    assert_eq!(
-        serialized["coverage"][0]["sourceId"],
-        "unknown-db-supplement"
-    );
-}
-
-#[test]
-fn server_intake_rejects_unversioned_future_unsupported_source_labels() {
-    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
-    let mut manifest = manifest_value(&manifest_json);
-    manifest["artifacts"][0]["sourceId"] = Value::String("future-server-supplement".to_owned());
-    manifest["artifacts"][0]["sourceKind"] = Value::String("futureSupplement".to_owned());
-
-    assert!(
-        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
-        "future provenance needs a versioned opaque handle, not an arbitrary public label"
     );
 }
 
@@ -2250,33 +2217,6 @@ fn server_intake_accepts_profile_validated_production_wsus_tuple_with_opaque_pro
     assert_eq!(artifact["workflowSubjectRole"], "softwareUpdatePoint");
     assert_eq!(artifact["sourceVersion"], "5.00.9999.9999");
     assert_eq!(artifact["state"], "skipped");
-}
-
-#[test]
-fn server_intake_rejects_opaque_future_source_ids_in_synthetic_fixtures() {
-    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
-    let mut manifest = manifest_value(&manifest_json);
-    manifest["artifacts"][0]["sourceId"] =
-        Value::String(opaque_handle("cmtraceopen.source.sha256.v1:", 77));
-
-    assert_eq!(
-        assess_server_intake(&serialize_manifest(&manifest), &payloads),
-        Err(SccmServerIntakeError::InvalidArtifact),
-        "synthetic fixtures must use the frozen public source vocabulary"
-    );
-}
-
-#[test]
-fn server_intake_rejects_identity_bearing_unsupported_public_provenance() {
-    for (field, marker) in [
-        ("sourceId", "realuser-example"),
-        ("sourceKind", "RealUser"),
-        ("originalBasename", "RealUser.log"),
-    ] {
-        assert_unsafe_mutation_is_rejected("unsupported-db-supplement", marker, |manifest, _| {
-            manifest["artifacts"][0][field] = Value::String(marker.to_owned());
-        });
-    }
 }
 
 #[test]
@@ -2893,21 +2833,6 @@ fn server_intake_rejects_future_role_artifacts_missing_from_topology() {
 }
 
 #[test]
-fn server_intake_rejects_hashed_future_roles_in_synthetic_fixtures() {
-    let (manifest_json, _) = load_bundle("unsupported-db-supplement");
-    let mut manifest = manifest_value(&manifest_json);
-    let future_role = opaque_handle("cmtraceopen.role.sha256.v1:", 42);
-    manifest["topology"]["rolesObserved"] = json!(["managementPoint", future_role]);
-    manifest["artifacts"][0]["producerRole"] = Value::String(future_role);
-
-    assert_eq!(
-        assess_server_intake(&serialize_manifest(&manifest), &[]),
-        Err(SccmServerIntakeError::InvalidTopology),
-        "synthetic fixtures keep the finite committed role vocabulary"
-    );
-}
-
-#[test]
 fn server_intake_production_original_path_must_be_redacted_or_opaque() {
     let (manifest_json, payloads) = bounded_manifest(1, 4_096);
     let mut arbitrary = manifest_value(&manifest_json);
@@ -2942,10 +2867,8 @@ fn server_intake_expected_oracle_has_no_unhandled_contract_keys() {
         "configuredPathProvenance",
         "coverage",
         "crossBundleArtifactIdReuseAllowed",
-        "databaseOrRoleFinding",
         "defaultCandidateInterpretation",
         "deterministicEvidenceIds",
-        "eligibleForRoleReducer",
         "evidence",
         "forbiddenConclusion",
         "lineageId",
@@ -2958,7 +2881,6 @@ fn server_intake_expected_oracle_has_no_unhandled_contract_keys() {
         "privacy",
         "rawByteCountedBeforeDecoding",
         "requiredSourceFailure",
-        "retainedUnclassifiedArtifactIds",
         "roleHealthFinding",
         "roleInference",
         "rolesObserved",
@@ -3006,27 +2928,6 @@ fn server_intake_expected_oracles_do_not_claim_native_collection_acceptance() {
         assert!(
             forbidden_native_claims.is_disjoint(&asserted_collision_keys),
             "{scenario}: pure parser oracles cannot claim native collection acceptance"
-        );
-    }
-}
-
-#[test]
-fn server_intake_rejects_ambiguous_retained_unknown_rotations() {
-    for (kind, value) in [
-        ("future", Value::Null),
-        ("current", Value::String("unexpected".to_owned())),
-        ("none", Value::String("unexpected".to_owned())),
-        ("timestamped", Value::String("not-a-timestamp".to_owned())),
-    ] {
-        let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
-        let mut manifest = manifest_value(&manifest_json);
-        manifest["artifacts"][0]["rotation"]["kind"] = Value::String(kind.to_owned());
-        manifest["artifacts"][0]["rotation"]["value"] = value;
-
-        assert_eq!(
-            assess_server_intake(&serialize_manifest(&manifest), &payloads),
-            Err(SccmServerIntakeError::InvalidArtifact),
-            "retained unknown evidence needs an unambiguous rotation identity"
         );
     }
 }
