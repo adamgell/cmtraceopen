@@ -4,7 +4,8 @@ use cmtraceopen_parser::sccm::client::{
     admit_client_evidence, analyze_client_task_sequence, assess_client_intake,
     SccmClientCapturedPayload, SccmClientIntakeArtifact, SccmClientIntakeBundle,
     SccmClientIntakeCaptureGap, SccmTaskSequenceClassification, SccmTaskSequenceConfidence,
-    SccmTaskSequenceCoverageState, SccmTaskSequenceOrderingState,
+    SccmTaskSequenceCoverageState, SccmTaskSequenceOrderingState, SccmTaskSequencePathClass,
+    SccmTaskSequenceProvenance,
 };
 use cmtraceopen_parser::sccm::{SccmArtifact, SccmCoverageState, SccmRole, SccmRotation};
 use serde_json::Value;
@@ -120,6 +121,17 @@ fn safe_path_class(value: &str) -> &str {
     }
 }
 
+fn path_class(value: &str) -> SccmTaskSequencePathClass {
+    match value {
+        "winpe" => SccmTaskSequencePathClass::WinPe,
+        "setup" => SccmTaskSequencePathClass::Setup,
+        "fullOs" => SccmTaskSequencePathClass::FullOs,
+        "client" => SccmTaskSequencePathClass::Client,
+        "unknown" => SccmTaskSequencePathClass::Unknown,
+        other => panic!("unsupported Task Sequence fixture path class: {other}"),
+    }
+}
+
 fn intake_relative_path(artifact: &Value, display_name: &str, rotation: &SccmRotation) -> String {
     let path_class = safe_path_class(
         artifact["pathClass"]
@@ -204,6 +216,43 @@ fn admitted_scenario_with_order(
                     digest(parent.as_bytes())
                 )
             });
+        let task_sequence_provenance =
+            matches!(capture_state, "captured" | "capped" | "parseFailed").then(|| {
+                SccmTaskSequenceProvenance {
+                    version: 1,
+                    path_class: path_class(
+                        fixture["pathClass"]
+                            .as_str()
+                            .expect("pathClass is a string"),
+                    ),
+                    smsts_log_path_evidence: fixture["smstsLogPathEvidence"]
+                        .as_str()
+                        .map(str::to_owned),
+                    relocation_lineage: stable_opaque_id(
+                        "cmtraceopen.task-sequence.relocation.sha256.v1:",
+                        &[
+                            scenario,
+                            if fixture["relativePath"]
+                                .as_str()
+                                .is_some_and(|path| path.contains("/root-a/"))
+                            {
+                                "root-a"
+                            } else if fixture["relativePath"]
+                                .as_str()
+                                .is_some_and(|path| path.contains("/root-b/"))
+                            {
+                                "root-b"
+                            } else {
+                                "single-root"
+                            },
+                        ],
+                    ),
+                    relocation_ordinal: fixture["relocationOrdinal"]
+                        .as_u64()
+                        .expect("relocationOrdinal is a number")
+                        as u32,
+                }
+            });
 
         artifacts.push(SccmClientIntakeArtifact {
             artifact: SccmArtifact {
@@ -222,6 +271,7 @@ fn admitted_scenario_with_order(
             rotation_lineage,
             relative_path: relative_path
                 .map(|_| intake_relative_path(fixture, display_name, &rotation)),
+            task_sequence_provenance,
             fragment_complete,
             declared_byte_length: content_binding.map(|bytes| bytes.len() as u64),
             content_sha256: content_binding.map(|bytes| digest(bytes)),
@@ -278,6 +328,13 @@ fn admitted_custom_records(
             relative_path: Some(
                 "evidence/client-task-sequence-smsts/client/current/smsts.log".to_owned(),
             ),
+            task_sequence_provenance: Some(SccmTaskSequenceProvenance {
+                version: 1,
+                path_class: SccmTaskSequencePathClass::Client,
+                smsts_log_path_evidence: None,
+                relocation_lineage: "synthetic:ts-relocation:custom".to_owned(),
+                relocation_ordinal: 0,
+            }),
             fragment_complete: Some(true),
             declared_byte_length: Some(bytes.len() as u64),
             content_sha256: Some(digest(&bytes)),
@@ -458,6 +515,21 @@ fn every_committed_scenario_runs_through_the_exported_production_reducer() {
                     .map(|path| path["pathClass"].clone())
                     .collect::<Vec<_>>(),
                 "{scenario}: admitted path progression"
+            );
+            assert_eq!(
+                actual_transaction["pathSequence"]
+                    .as_array()
+                    .expect("pathSequence is an array")
+                    .iter()
+                    .map(|path| path["relocationOrdinal"].clone())
+                    .collect::<Vec<_>>(),
+                expected_transaction["pathSequence"]
+                    .as_array()
+                    .expect("expected pathSequence is an array")
+                    .iter()
+                    .map(|path| path["relocationOrdinal"].clone())
+                    .collect::<Vec<_>>(),
+                "{scenario}: explicit relocation ordering"
             );
             for path in actual_transaction["pathSequence"]
                 .as_array()

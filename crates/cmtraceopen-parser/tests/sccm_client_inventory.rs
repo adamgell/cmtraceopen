@@ -72,6 +72,7 @@ fn admitted(
                     source.basename
                 )
             }),
+            task_sequence_provenance: None,
             fragment_complete: Some(captured),
             declared_byte_length: captured.then_some(bytes.len() as u64),
             content_sha256: captured.then(|| {
@@ -228,6 +229,7 @@ fn corpus_admitted(scenario_dir: &Path) -> Result<CorpusAdmission, String> {
             relative_path: physical.then(|| {
                 format!("evidence/{group}/root-{root_digest}/{rotation_segment}/{basename}")
             }),
+            task_sequence_provenance: None,
             fragment_complete: Some(fragment_complete),
             declared_byte_length: payload_bytes.as_ref().map(|bytes| bytes.len() as u64),
             content_sha256: payload_bytes.as_ref().map(|bytes| {

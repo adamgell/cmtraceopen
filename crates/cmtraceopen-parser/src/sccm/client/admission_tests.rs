@@ -5,7 +5,11 @@ use super::admission::{
     SccmClientEvidenceAdmissionError, MAX_SCCM_CLIENT_ADMISSION_AGGREGATE_SEAL_BYTES,
     MAX_SCCM_CLIENT_ADMISSION_SEAL_BYTES, MAX_SCCM_CLIENT_ADMISSION_SOURCE_SEAL_BYTES,
 };
-use super::{assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle};
+use super::{
+    assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle, SccmClientIntakeError,
+    SccmTaskSequencePathClass, SccmTaskSequenceProvenance,
+    MAX_SCCM_TASK_SEQUENCE_PATH_EVIDENCE_CHARS, MAX_SCCM_TASK_SEQUENCE_RELOCATION_LINEAGE_CHARS,
+};
 use crate::parser::ccm::{observe_bounded_scans, CcmBoundedScanObservation};
 use crate::sccm::{
     SccmArtifact, SccmCoverageState, SccmExtractionGapKind, SccmRole, SccmRotation,
@@ -44,6 +48,165 @@ fn bundle_with_bound_policy(bytes: &[u8]) -> SccmClientIntakeBundle {
     bundle
 }
 
+fn task_sequence_artifact(
+    identity: &str,
+    path_class: SccmTaskSequencePathClass,
+    relocation_ordinal: u32,
+) -> SccmClientIntakeArtifact {
+    let path_class_segment = match path_class {
+        SccmTaskSequencePathClass::WinPe => "winpe",
+        SccmTaskSequencePathClass::Setup => "setup",
+        SccmTaskSequencePathClass::FullOs => "full-os",
+        SccmTaskSequencePathClass::Client => "client",
+        SccmTaskSequencePathClass::Unknown => "unknown",
+    };
+    SccmClientIntakeArtifact {
+        artifact: SccmArtifact {
+            artifact_id: format!("fixture-{identity}"),
+            display_name: "smsts.log".to_owned(),
+            original_path: None,
+            host: None,
+            role: SccmRole::Client,
+            configmgr_version: Some("5.00.TEST.0000".to_owned()),
+            collected_at_utc: Some("2026-07-30T00:00:00Z".to_owned()),
+            rotation: SccmRotation::Current,
+            coverage: SccmCoverageState::Captured,
+            encoding: Some("utf-8".to_owned()),
+        },
+        path_fingerprint: Some(format!("synthetic-{identity}")),
+        rotation_lineage: None,
+        relative_path: Some(format!(
+            "evidence/client-task-sequence-smsts/{path_class_segment}/current/smsts.log"
+        )),
+        task_sequence_provenance: Some(SccmTaskSequenceProvenance {
+            version: 1,
+            path_class,
+            smsts_log_path_evidence: Some(format!("synthetic:smsts-path:{path_class_segment}")),
+            relocation_lineage: "synthetic:ts-relocation:fixture".to_owned(),
+            relocation_ordinal,
+        }),
+        fragment_complete: Some(true),
+        declared_byte_length: None,
+        content_sha256: None,
+    }
+}
+
+fn task_sequence_bundle(artifacts: Vec<SccmClientIntakeArtifact>) -> SccmClientIntakeBundle {
+    SccmClientIntakeBundle {
+        artifacts,
+        capture_gaps: Vec::new(),
+    }
+}
+
+#[test]
+fn task_sequence_provenance_is_required_and_explicit() {
+    let mut missing = task_sequence_artifact("missing", SccmTaskSequencePathClass::Setup, 1);
+    missing.task_sequence_provenance = None;
+    assert_eq!(
+        assess_client_intake(&task_sequence_bundle(vec![missing])).unwrap_err(),
+        SccmClientIntakeError::MissingTaskSequenceProvenance
+    );
+
+    let valid = task_sequence_artifact("valid", SccmTaskSequencePathClass::Setup, 1);
+    let assessment = assess_client_intake(&task_sequence_bundle(vec![valid]))
+        .expect("explicit Task Sequence provenance is accepted");
+    assert_eq!(
+        assessment.physical_artifacts[0]
+            .task_sequence_provenance
+            .as_ref()
+            .expect("provenance is carried")
+            .path_class,
+        SccmTaskSequencePathClass::Setup
+    );
+}
+
+#[test]
+fn task_sequence_provenance_fails_closed_on_malformed_values() {
+    let mut unsupported_version =
+        task_sequence_artifact("version", SccmTaskSequencePathClass::Setup, 1);
+    unsupported_version
+        .task_sequence_provenance
+        .as_mut()
+        .expect("fixture provenance")
+        .version = 2;
+    assert_eq!(
+        assess_client_intake(&task_sequence_bundle(vec![unsupported_version])).unwrap_err(),
+        SccmClientIntakeError::InvalidTaskSequenceProvenance
+    );
+
+    let mut unsafe_evidence = task_sequence_artifact("unsafe", SccmTaskSequencePathClass::Setup, 1);
+    unsafe_evidence
+        .task_sequence_provenance
+        .as_mut()
+        .expect("fixture provenance")
+        .smsts_log_path_evidence = Some("C:\\\\Windows\\\\Temp\\\\smsts.log".to_owned());
+    assert_eq!(
+        assess_client_intake(&task_sequence_bundle(vec![unsafe_evidence])).unwrap_err(),
+        SccmClientIntakeError::InvalidTaskSequenceProvenance
+    );
+
+    let mut mismatch = task_sequence_artifact("contradictory", SccmTaskSequencePathClass::Setup, 1);
+    mismatch
+        .task_sequence_provenance
+        .as_mut()
+        .expect("fixture provenance")
+        .path_class = SccmTaskSequencePathClass::FullOs;
+    assert_eq!(
+        assess_client_intake(&task_sequence_bundle(vec![mismatch])).unwrap_err(),
+        SccmClientIntakeError::InvalidTaskSequenceProvenance
+    );
+}
+
+#[test]
+fn task_sequence_relocation_ordinal_collisions_fail_closed() {
+    let first = task_sequence_artifact("one", SccmTaskSequencePathClass::Setup, 1);
+    let second = task_sequence_artifact("two", SccmTaskSequencePathClass::FullOs, 1);
+    assert_eq!(
+        assess_client_intake(&task_sequence_bundle(vec![first, second])).unwrap_err(),
+        SccmClientIntakeError::CollidingTaskSequenceRelocation
+    );
+}
+
+#[test]
+fn task_sequence_provenance_bounds_are_enforced() {
+    let mut evidence_at_limit =
+        task_sequence_artifact("valid", SccmTaskSequencePathClass::Setup, 1);
+    evidence_at_limit
+        .task_sequence_provenance
+        .as_mut()
+        .expect("fixture provenance")
+        .smsts_log_path_evidence = Some(format!(
+        "synthetic:{}",
+        "a".repeat(MAX_SCCM_TASK_SEQUENCE_PATH_EVIDENCE_CHARS - "synthetic:".len())
+    ));
+    assess_client_intake(&task_sequence_bundle(vec![evidence_at_limit]))
+        .expect("path evidence at the limit is accepted");
+
+    let mut evidence_over_limit =
+        task_sequence_artifact("valid", SccmTaskSequencePathClass::Setup, 1);
+    evidence_over_limit
+        .task_sequence_provenance
+        .as_mut()
+        .expect("fixture provenance")
+        .smsts_log_path_evidence = Some("synthetic:".to_owned() + &"a".repeat(256));
+    assert_eq!(
+        assess_client_intake(&task_sequence_bundle(vec![evidence_over_limit])).unwrap_err(),
+        SccmClientIntakeError::InvalidTaskSequenceProvenance
+    );
+
+    let mut lineage_over_limit =
+        task_sequence_artifact("valid", SccmTaskSequencePathClass::Setup, 1);
+    lineage_over_limit
+        .task_sequence_provenance
+        .as_mut()
+        .expect("fixture provenance")
+        .relocation_lineage = "a".repeat(MAX_SCCM_TASK_SEQUENCE_RELOCATION_LINEAGE_CHARS + 1);
+    assert_eq!(
+        assess_client_intake(&task_sequence_bundle(vec![lineage_over_limit])).unwrap_err(),
+        SccmClientIntakeError::InvalidTaskSequenceProvenance
+    );
+}
+
 fn artifact(identity: &str, basename: &str) -> SccmClientIntakeArtifact {
     let artifact_id = format!("fixture-{identity}");
     let bytes = payload_bytes_for(&artifact_id, "+000");
@@ -72,6 +235,7 @@ fn artifact_bound_to(identity: &str, basename: &str, bytes: &[u8]) -> SccmClient
         path_fingerprint: Some(format!("synthetic-{identity}")),
         rotation_lineage: None,
         relative_path: Some(format!("evidence/{group}/current/{basename}")),
+        task_sequence_provenance: None,
         fragment_complete: Some(true),
         declared_byte_length: Some(bytes.len() as u64),
         content_sha256: Some(digest(bytes)),
@@ -188,6 +352,7 @@ fn numbered_artifact_bound_to(number: u32, bytes: &[u8]) -> SccmClientIntakeArti
         relative_path: Some(format!(
             "evidence/client-policy-agent/numbered-{number}/{basename}"
         )),
+        task_sequence_provenance: None,
         fragment_complete: Some(true),
         declared_byte_length: Some(bytes.len() as u64),
         content_sha256: Some(digest(bytes)),
