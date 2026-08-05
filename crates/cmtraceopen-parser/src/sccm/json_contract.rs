@@ -141,3 +141,13 @@ pub(crate) fn has_duplicate_object_keys(value: &PreservedJsonValue) -> bool {
         _ => false,
     }
 }
+
+pub(crate) fn reject_duplicate_object_keys(
+    value: &PreservedJsonValue,
+) -> Result<(), JsonContractPreflightError> {
+    if has_duplicate_object_keys(value) {
+        Err(JsonContractPreflightError::DuplicateKey)
+    } else {
+        Ok(())
+    }
+}
