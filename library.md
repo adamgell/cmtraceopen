@@ -9,3 +9,4 @@
 - IF implementing or reviewing signless CCM/CmtLog timestamp repairs (#410, #414) → read [[docs/superpowers/plans/2026-08-05-signless-ccm-timestamps.md]]
 - IF implementing or reviewing GitHub issue #506 Device Inventory rotation detection narrowing → read [[docs/superpowers/plans/2026-08-05-issue-506-rotation-detection-narrowing.md]]
 - IF implementing or reviewing GitHub issue #507 lossless bounded Device Inventory framing → read [[docs/superpowers/plans/2026-08-05-issue-507-lossless-device-inventory-framing.md]]
+- IF reviewing SCCM issue #326 client-management proposal corpus or production source gate → read [[docs/sccm/preparation/issue-326-client-management-corpus.md]]
