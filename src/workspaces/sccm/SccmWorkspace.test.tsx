@@ -1,4 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureSccmDiagnostics,
@@ -439,6 +446,111 @@ describe("SccmWorkspace", () => {
       ),
     );
     expect(captureSccmAdvancedDiagnostics).not.toHaveBeenCalled();
+    expect(useSccmStore.getState()).toMatchObject({
+      phase: "ready",
+      advancedCapability: null,
+      capture: null,
+    });
+  });
+
+  it("cancels a late authorization after operation replacement without overwriting the replacement", async () => {
+    const advancedDiscovery: SccmEnvironmentDiscovery = {
+      ...DISCOVERY,
+      advancedSources: [
+        {
+          cardId: "reporting",
+          cardVersion: "1.0.0",
+          sourceId: "advanced-reporting",
+          roleScopes: ["reportingServicesPoint"],
+          pathClasses: ["configuredRoleLogRoot"],
+          sourceVersion: null,
+          availability: "operatorDeclaredCandidate",
+          maxBytes: 4_194_304,
+          maxFiles: 2,
+          rotations: ["current", "lo_"],
+        },
+      ],
+    };
+    const firstCapability = {
+      capabilityHandle: `cmtraceopen.capture-capability.sha256.v1:${"d".repeat(64)}`,
+      cardId: "reporting",
+      cardVersion: "1.0.0",
+      sourceId: "advanced-reporting",
+      roleScope: "reportingServicesPoint",
+      pathClass: "configuredRoleLogRoot",
+      sourceVersion: null,
+    };
+    const replacementCapability = {
+      ...firstCapability,
+      capabilityHandle: `cmtraceopen.capture-capability.sha256.v1:${"e".repeat(64)}`,
+    };
+    let resolveFirst:
+      | ((value: typeof firstCapability) => void)
+      | undefined;
+    let resolveReplacement:
+      | ((value: typeof replacementCapability) => void)
+      | undefined;
+    vi.mocked(discoverSccmEnvironment).mockResolvedValue(advancedDiscovery);
+    vi.mocked(open).mockResolvedValue("C:\\private-root");
+    vi.spyOn(window, "confirm")
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+    vi.mocked(authorizeSccmAdvancedCapture)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveReplacement = resolve;
+          }),
+      );
+    render(<SccmWorkspace />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discover SCCM environment" }),
+    );
+    const authorizeButton = await screen.findByRole("button", {
+      name: "Authorize Reporting services bounded capture",
+    });
+    fireEvent.click(authorizeButton);
+    await waitFor(() =>
+      expect(authorizeSccmAdvancedCapture).toHaveBeenCalledTimes(1),
+    );
+
+    act(() => useSccmStore.getState().completeDiscovery(advancedDiscovery));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Authorize Reporting services bounded capture",
+      }),
+    );
+    await waitFor(() =>
+      expect(authorizeSccmAdvancedCapture).toHaveBeenCalledTimes(2),
+    );
+
+    resolveFirst?.(firstCapability);
+    await waitFor(() =>
+      expect(cancelSccmAdvancedCapture).toHaveBeenCalledWith(
+        firstCapability.capabilityHandle,
+      ),
+    );
+    expect(useSccmStore.getState()).toMatchObject({
+      phase: "authorizing",
+      advancedCapability: null,
+      capture: null,
+    });
+    expect(captureSccmAdvancedDiagnostics).not.toHaveBeenCalled();
+
+    resolveReplacement?.(replacementCapability);
+    await waitFor(() =>
+      expect(cancelSccmAdvancedCapture).toHaveBeenCalledWith(
+        replacementCapability.capabilityHandle,
+      ),
+    );
     expect(useSccmStore.getState()).toMatchObject({
       phase: "ready",
       advancedCapability: null,
