@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::io::{self, Write};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::de::{Error as _, MapAccess, SeqAccess, Visitor};
+use serde::de::Error as _;
 use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::sccm::json_contract::{
+    field as preserved_field, parse_preserved_json, PreservedJsonValue,
+};
 use crate::sccm::rotation::is_canonical_rotation_timestamp;
 use crate::sccm::{
     classify_artifact_name, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
@@ -3213,7 +3215,6 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "provider-retry-current"
                 | "provider-success-current"
                 | "provider-timeout-current"
-                | "unknown-db-export"
                 | "unrelated-02-wcm"
                 | "unrelated-03-wsync"
                 | "unrelated-04-wsus"
@@ -3245,7 +3246,6 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
             | "server-provider"
             | "server-admin-service"
             | "server-admin-service-iis"
-            | "unknown-db-supplement"
     ) || (allow_unknown
         && !synthetic_fixture
         && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
@@ -3262,7 +3262,7 @@ fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -
 
 fn safe_public_basename(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        value == "synthetic-db-export.txt"
+        false
     } else {
         opaque_sha256_handle(value, "cmtraceopen.basename.sha256.v1:")
     }
@@ -3328,7 +3328,6 @@ fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "provider-primary"
                 | "admin-service-primary"
                 | "admin-service-iis"
-                | "unknown-db-export"
         ) || SYNTHETIC_HIERARCHY_LINEAGES.contains(&value);
     }
     opaque_sha256_handle(value, "cmtraceopen.lineage.sha256.v1:")
@@ -3391,7 +3390,6 @@ fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
                 | "synthetic:path:provider-primary"
                 | "synthetic:path:admin-service-primary"
                 | "synthetic:path:admin-service-iis"
-                | "synthetic:path:unsupported-db"
                 | "synthetic:path:z-site"
         ) || SYNTHETIC_HIERARCHY_PATH_FINGERPRINTS.contains(&value);
     }
@@ -3614,98 +3612,6 @@ fn rotation_sort_key(rotation: Option<&SccmRotation>) -> String {
     }
 }
 
-#[derive(Debug)]
-enum PreservedJsonValue {
-    Unsigned(u64),
-    String(String),
-    Array(Vec<Self>),
-    Object(Vec<(String, Self)>),
-    Other,
-}
-
-struct PreservedJsonValueVisitor;
-
-impl<'de> Visitor<'de> for PreservedJsonValueVisitor {
-    type Value = PreservedJsonValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("any JSON value while preserving duplicate object keys")
-    }
-
-    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Unsigned(value))
-    }
-
-    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(PreservedJsonValue::String(value.to_owned()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::String(value))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(Self)
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::new();
-        while let Some(value) = sequence.next_element()? {
-            values.push(value);
-        }
-        Ok(PreservedJsonValue::Array(values))
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut fields = Vec::new();
-        while let Some(name) = map.next_key()? {
-            fields.push((name, map.next_value()?));
-        }
-        Ok(PreservedJsonValue::Object(fields))
-    }
-}
-
-impl<'de> Deserialize<'de> for PreservedJsonValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(PreservedJsonValueVisitor)
-    }
-}
-
 #[derive(Default)]
 struct OpaqueExtensionTotals {
     count: usize,
@@ -3733,7 +3639,7 @@ impl OpaqueExtensionTotals {
 }
 
 fn preflight_server_manifest_extensions(manifest_json: &str) -> Result<(), SccmServerIntakeError> {
-    let document: PreservedJsonValue = serde_json::from_str(manifest_json)
+    let document = parse_preserved_json(manifest_json)
         .map_err(|_| SccmServerIntakeError::MalformedManifest)?;
     let PreservedJsonValue::Object(manifest) = &document else {
         return Err(SccmServerIntakeError::MalformedManifest);
@@ -3819,15 +3725,6 @@ fn validate_unique_object_fields(
         return Err(scope_error);
     }
     Ok(())
-}
-
-fn preserved_field<'a>(
-    object: &'a [(String, PreservedJsonValue)],
-    name: &str,
-) -> Option<&'a PreservedJsonValue> {
-    object
-        .iter()
-        .find_map(|(field, value)| (field == name).then_some(value))
 }
 
 fn validate_preserved_extensions(

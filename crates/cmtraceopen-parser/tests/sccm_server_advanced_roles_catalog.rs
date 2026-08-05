@@ -756,6 +756,33 @@ fn candidate_catalog_is_typed_private_and_not_semantically_admitted() {
 }
 
 #[test]
+fn sql_database_export_card_remains_deferred_behind_v1_coverage_gates() {
+    let card = load_card(&corpus_root().join("source-cards/sql-database-export.json"))
+        .expect("SQL database export card is readable");
+    assert_eq!(card.owner_issue, "#480");
+    assert_eq!(card.promotion.state, PromotionState::Deferred);
+    assert_eq!(card.raw_parser_family, RawParserFamily::Unsupported);
+    assert_eq!(card.capture.max_bytes, 1_048_576);
+    assert_eq!(card.capture.rotation_policy.kinds, ["snapshot"]);
+    assert_eq!(card.capture.rotation_policy.max_files, 1);
+    assert_eq!(
+        card.fixture_ids,
+        [
+            "captured",
+            "denied",
+            "duplicate",
+            "malformed",
+            "oversized",
+            "partial",
+            "unknown-version",
+        ]
+    );
+    assert!(card.semantic_policy.capture_guidance_only);
+    assert!(!card.semantic_policy.can_create_transactions);
+    assert!(!card.semantic_policy.can_create_failure_findings);
+}
+
+#[test]
 fn catalog_fixture_matrix_has_exact_deterministic_admission_results() {
     let root = corpus_root().join("catalog-fixtures");
     let actual = fs::read_dir(&root)

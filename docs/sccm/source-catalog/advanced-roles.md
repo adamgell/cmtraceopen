@@ -1,6 +1,6 @@
 # SCCM advanced-role source-card catalog
 
-Issue: #334
+Issue: #480
 
 Card schema: `1.0.0`
 
@@ -37,9 +37,9 @@ No initial card has sanitized lab-observed provenance, so none has a follow-up i
 | `cloud-service-connection` | Service connection point and CMG connection point; candidates `CloudMgr.log`, `SMS_Cloud_ProxyConnector.log` | CCM | `candidate` | High: tenant, endpoint, certificate, and token-like data | Authorized configured-role observation followed by privacy review and bounded scenario fixtures |
 | `osd-pxe` | PXE-enabled distribution point and site server; candidate `smspxe.log` | CCM | `candidate` | High: device, MAC, network, and resource identity | Sanitized configured-role observation plus topology, privacy, rejection, rotation, malformed, and incomplete fixtures |
 | `reporting` | Reporting services point; candidate `srsrp.log` | CCM | `candidate` | High: report, query, account, and data-source identity | Sanitized configured-role observation and bounded redaction fixtures |
-| `sql-database-export` | Explicit operator-provided database supplement | Unsupported | `deferred` | High: database, query, device, and user identity | Separately approved data-minimized export contract, authorization model, schema, and fixtures |
+| `sql-database-export` | Explicit operator-provided database supplement | Unsupported | `deferred` | High: database, query, device, and user identity | Sanitized observed operator provenance, source-version policy, correlation keys, incomplete/error scenarios, and separately tested semantic admission |
 
-Candidate names must be confirmed against configured role provenance before promotion. A missing default path never proves that a role is absent or broken. Database access is not a parser fallback and is not authorized by this card.
+Candidate names must be confirmed against configured role provenance before promotion. A missing default path never proves that a role is absent or broken. The separate `assess_sccm_site_database_export` v1 API accepts only an explicit, bounded coverage envelope; it is not server intake, a database fallback, or a semantic source. Database access is not a parser fallback and is not authorized by this card.
 
 ## Determinism and lifecycle
 
