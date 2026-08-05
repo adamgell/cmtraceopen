@@ -9,11 +9,15 @@ import { tokens } from "@fluentui/react-components";
 import { useUiStore } from "../../../stores/ui-store";
 import {
   graphAuthenticate,
+  graphCancelAuthentication,
   graphGetAuthStatus,
+  graphProbeCapability,
   graphRequestMissingPermissions,
   graphSignOut,
   graphFetchAllApps,
   type GraphAuthStatus,
+  type GraphAuthAttemptResult,
+  type GraphHostCapabilityKind,
   type GraphPermissionUpgradeOutcome,
   type GraphPermissionUpgradeResult,
 } from "../../../lib/commands";
@@ -43,6 +47,8 @@ const PERMISSION_NOTICE_COPY: Record<GraphPermissionUpgradeOutcome, string> = {
     "No additional permissions were granted. A tenant administrator may need to approve the missing permissions.",
   cancelled:
     "Permission request cancelled. Your existing Graph permissions are unchanged.",
+  timedOut:
+    "The Windows permission request timed out. Your existing Graph permissions are unchanged.",
   denied:
     "Consent was not granted. Your existing Graph permissions remain available. A tenant administrator may need to approve the missing permissions.",
   failed:
@@ -57,6 +63,7 @@ type PermissionNoticeTone = "success" | "warning" | "error";
 interface SharedGraphAction {
   action: GraphAction;
   generation: number;
+  requestId: string | null;
   statusAtStart: GraphAuthStatus | null;
 }
 
@@ -88,6 +95,10 @@ function beginSharedGraphAction(
   sharedGraphAction = {
     action,
     generation: graphActionGeneration,
+    requestId:
+      action === "signIn" || action === "permissions"
+        ? globalThis.crypto.randomUUID()
+        : null,
     statusAtStart,
   };
   notifyGraphActionSubscribers();
@@ -97,8 +108,7 @@ function beginSharedGraphAction(
 function isCurrentSharedGraphAction(generation: number) {
   return (
     sharedGraphAction?.generation === generation &&
-    graphActionGeneration === generation &&
-    useUiStore.getState().graphApiEnabled
+    graphActionGeneration === generation
   );
 }
 
@@ -166,6 +176,7 @@ function buildPermissionNotice(
   const useNativeMessage =
     result.outcome === "denied" ||
     result.outcome === "failed" ||
+    result.outcome === "timedOut" ||
     result.outcome === "stale";
 
   return {
@@ -179,12 +190,39 @@ function buildPermissionNotice(
 
 function graphApiPhaseFromStatus(
   status: GraphAuthStatus,
-): "connected" | "error" | "idle" {
-  return status.isAuthenticated ? "connected" : status.error ? "error" : "idle";
+): "connected" | "disconnected" {
+  return status.isAuthenticated ? "connected" : "disconnected";
+}
+
+function graphApiPhaseFromAttempt(
+  result: GraphAuthAttemptResult,
+): "connected" | "disconnected" | "unsupported" | "error" {
+  if (result.status.isAuthenticated) return "connected";
+  if (result.outcome === "unavailable") return "unsupported";
+  if (result.outcome === "failed") return "error";
+  return "disconnected";
+}
+
+function unsupportedCapabilityMessage(
+  kind: GraphHostCapabilityKind | undefined,
+): string | null {
+  switch (kind) {
+    case "personalAccountOnly":
+      return "Only a personal Microsoft account is available. Add a Windows work or school account to continue.";
+    case "noOrganizationalAccount":
+      return "No Windows work or school account is available for Microsoft Graph.";
+    case "providerUnavailable":
+      return "Windows Web Account Manager is unavailable on this host.";
+    default:
+      return null;
+  }
 }
 
 export function GraphApiTab() {
   const graphApiEnabled = useUiStore((state) => state.graphApiEnabled);
+  const graphApiStatus = useUiStore((state) => state.graphApiStatus);
+  const graphApiCapability = useUiStore((state) => state.graphApiCapability);
+  const graphApiLastAttempt = useUiStore((state) => state.graphApiLastAttempt);
   const setGraphApiEnabled = useUiStore((state) => state.setGraphApiEnabled);
   const currentPlatform = useUiStore((state) => state.currentPlatform);
 
@@ -237,6 +275,15 @@ export function GraphApiTab() {
       sharedGraphAction === null &&
       useUiStore.getState().graphApiEnabled;
     try {
+      useUiStore.getState().setGraphApiStatus("checkingCapability");
+      const capability = await graphProbeCapability();
+      if (!isCurrentRefresh()) return;
+      useUiStore.getState().setGraphApiCapability(capability);
+      if (capability.kind !== "available" && capability.kind !== "unknown") {
+        setAuthStatus(null);
+        useUiStore.getState().setGraphApiStatus("unsupported");
+        return;
+      }
       const status = await graphGetAuthStatus();
       if (!isCurrentRefresh()) return;
       setAuthStatus(status);
@@ -256,19 +303,38 @@ export function GraphApiTab() {
     if (checked) {
       setShowConfirmEnable(true);
     } else {
-      invalidateSharedGraphActions();
+      const interactiveAction =
+        sharedGraphAction?.action === "signIn" ||
+        sharedGraphAction?.action === "permissions"
+          ? sharedGraphAction
+          : null;
+      if (interactiveAction?.requestId) {
+        void graphCancelAuthentication(interactiveAction.requestId);
+      } else {
+        invalidateSharedGraphActions();
+      }
       localRefreshGeneration.current += 1;
       setGraphApiEnabled(false);
       setAuthStatus(null);
       setCachedAppCount(null);
       setCacheError(null);
       setPermissionNotice(null);
-      useUiStore.getState().setGraphApiStatus("idle");
+      useUiStore.getState().setGraphApiStatus("disconnected");
+      useUiStore.getState().setGraphApiCapability(null);
+      useUiStore.getState().setGraphApiLastAttempt(null);
     }
   };
 
   const confirmEnable = () => {
+    useUiStore.getState().setGraphApiCapability(null);
+    useUiStore.getState().setGraphApiLastAttempt(null);
     setGraphApiEnabled(true);
+    if (
+      sharedGraphAction?.action === "signIn" ||
+      sharedGraphAction?.action === "permissions"
+    ) {
+      useUiStore.getState().setGraphApiStatus("cancelling");
+    }
     setShowConfirmEnable(false);
   };
 
@@ -286,38 +352,38 @@ export function GraphApiTab() {
   const handleSignIn = async () => {
     const generation = beginGraphAction("signIn");
     if (generation === null) return;
+    const requestId = sharedGraphAction?.requestId;
+    if (!requestId) {
+      finishGraphAction("signIn", generation);
+      return;
+    }
     setPermissionNotice(null);
-    useUiStore.getState().setGraphApiStatus("connecting");
+    useUiStore.getState().setGraphApiStatus("signingIn");
     try {
-      const status = await graphAuthenticate();
+      const result = await graphAuthenticate(requestId);
       if (!isCurrentSharedGraphAction(generation)) return;
-      useUiStore
-        .getState()
-        .setGraphApiStatus(status.isAuthenticated ? "connected" : "error");
-      if (isCurrentMountedGraphAction(generation)) {
-        setAuthStatus(status);
+      if (useUiStore.getState().graphApiEnabled) {
+        useUiStore.getState().setGraphApiCapability(result.capability);
+        useUiStore.getState().setGraphApiLastAttempt({
+          outcome: result.outcome,
+          message: result.message,
+        });
+        useUiStore.getState().setGraphApiStatus(graphApiPhaseFromAttempt(result));
       }
-    } catch (e) {
+      if (
+        isCurrentMountedGraphAction(generation) &&
+        useUiStore.getState().graphApiEnabled
+      ) {
+        setAuthStatus(result.status);
+      }
+    } catch {
       if (!isCurrentSharedGraphAction(generation)) return;
-      const status: GraphAuthStatus = {
-        isAuthenticated: false,
-        userPrincipalName: null,
-        tenantId: null,
-        grantedScopes: [],
-        missingScopes: GRAPH_CAPABILITY_ROWS.map(([, , scope]) => scope),
-        expiresAt: null,
-        capabilities: {
-          managedDevices: false,
-          serviceConfig: false,
-          apps: false,
-          configuration: false,
-          scripts: false,
-        },
-        error: e instanceof Error ? e.message : String(e),
-      };
-      useUiStore.getState().setGraphApiStatus("error");
-      if (isCurrentMountedGraphAction(generation)) {
-        setAuthStatus(status);
+      if (useUiStore.getState().graphApiEnabled) {
+        useUiStore.getState().setGraphApiLastAttempt({
+          outcome: "failed",
+          message: "Windows could not complete Microsoft Graph sign-in.",
+        });
+        useUiStore.getState().setGraphApiStatus("error");
       }
     } finally {
       finishGraphAction("signIn", generation);
@@ -330,7 +396,8 @@ export function GraphApiTab() {
     try {
       await graphSignOut();
       if (!isCurrentSharedGraphAction(generation)) return;
-      useUiStore.getState().setGraphApiStatus("idle");
+      useUiStore.getState().setGraphApiStatus("disconnected");
+      useUiStore.getState().setGraphApiLastAttempt(null);
       if (isCurrentMountedGraphAction(generation)) {
         setAuthStatus(null);
         setCachedAppCount(null);
@@ -346,14 +413,24 @@ export function GraphApiTab() {
   const handleRequestMissingPermissions = async () => {
     const generation = beginGraphAction("permissions");
     if (generation === null) return;
+    const requestId = sharedGraphAction?.requestId;
+    if (!requestId) {
+      finishGraphAction("permissions", generation);
+      return;
+    }
     setPermissionNotice(null);
     try {
-      const result = await graphRequestMissingPermissions();
+      const result = await graphRequestMissingPermissions(requestId);
       if (!isCurrentSharedGraphAction(generation)) return;
-      useUiStore
-        .getState()
-        .setGraphApiStatus(graphApiPhaseFromStatus(result.status));
-      if (isCurrentMountedGraphAction(generation)) {
+      if (useUiStore.getState().graphApiEnabled) {
+        useUiStore
+          .getState()
+          .setGraphApiStatus(graphApiPhaseFromStatus(result.status));
+      }
+      if (
+        isCurrentMountedGraphAction(generation) &&
+        useUiStore.getState().graphApiEnabled
+      ) {
         setAuthStatus(result.status);
         setPermissionNotice(buildPermissionNotice(result));
       }
@@ -362,9 +439,11 @@ export function GraphApiTab() {
       try {
         const status = await graphGetAuthStatus();
         if (!isCurrentSharedGraphAction(generation)) return;
-        useUiStore
-          .getState()
-          .setGraphApiStatus(graphApiPhaseFromStatus(status));
+        if (useUiStore.getState().graphApiEnabled) {
+          useUiStore
+            .getState()
+            .setGraphApiStatus(graphApiPhaseFromStatus(status));
+        }
         if (isCurrentMountedGraphAction(generation)) {
           setAuthStatus(status);
           setPermissionNotice(buildPermissionReconciliationNotice(status));
@@ -377,6 +456,18 @@ export function GraphApiTab() {
     } finally {
       finishGraphAction("permissions", generation);
     }
+  };
+
+  const handleCancelAuthentication = async () => {
+    const action = sharedGraphAction;
+    if (
+      !action?.requestId ||
+      (action.action !== "signIn" && action.action !== "permissions")
+    ) {
+      return;
+    }
+    useUiStore.getState().setGraphApiStatus("cancelling");
+    await graphCancelAuthentication(action.requestId).catch(() => false);
   };
 
   const handlePrePopulateCache = async () => {
@@ -708,6 +799,27 @@ export function GraphApiTab() {
                         : "Request missing permissions"}
                     </button>
                   )}
+                  {permissionsLoading && (
+                    <button
+                      type="button"
+                      onClick={handleCancelAuthentication}
+                      disabled={graphApiStatus === "cancelling"}
+                      style={{
+                        padding: "4px 12px",
+                        fontSize: "12px",
+                        border: `1px solid ${tokens.colorNeutralStroke1}`,
+                        backgroundColor: "transparent",
+                        color: tokens.colorNeutralForeground2,
+                        borderRadius: "4px",
+                        cursor:
+                          graphApiStatus === "cancelling" ? "wait" : "pointer",
+                      }}
+                    >
+                      {graphApiStatus === "cancelling"
+                        ? "Cancelling..."
+                        : "Cancel permission request"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={handlePrePopulateCache}
@@ -813,9 +925,17 @@ export function GraphApiTab() {
                       display: "inline-block",
                     }}
                   />
-                  <span>Not connected</span>
+                  <span>
+                    {graphApiStatus === "checkingCapability"
+                      ? "Checking Windows account support..."
+                      : graphApiStatus === "unsupported"
+                        ? "Work or school account unavailable"
+                        : graphApiStatus === "cancelling"
+                          ? "Cancelling sign-in..."
+                          : "Not connected"}
+                  </span>
                 </div>
-                {displayedAuthStatus?.error && (
+                {graphApiLastAttempt?.message && (
                   <div
                     style={{
                       color: tokens.colorPaletteRedForeground1,
@@ -823,26 +943,73 @@ export function GraphApiTab() {
                       fontSize: "11px",
                     }}
                   >
-                    {displayedAuthStatus.error}
+                    {graphApiLastAttempt.message}
                   </div>
                 )}
-                <button
-                  type="button"
-                  onClick={handleSignIn}
-                  disabled={graphActionBusy}
-                  style={{
-                    padding: "4px 12px",
-                    fontSize: "12px",
-                    border: `1px solid ${tokens.colorBrandStroke1}`,
-                    backgroundColor: tokens.colorBrandBackground,
-                    color: tokens.colorNeutralForegroundOnBrand,
-                    borderRadius: "4px",
-                    cursor: loading ? "wait" : "pointer",
-                    opacity: loading ? 0.7 : 1,
-                  }}
-                >
-                  {loading ? "Signing in..." : "Sign in with Windows"}
-                </button>
+                {graphApiStatus === "unsupported" && (
+                  <div
+                    role="status"
+                    style={{
+                      color: tokens.colorPaletteYellowForeground2,
+                      marginBottom: "8px",
+                      fontSize: "11px",
+                    }}
+                  >
+                    {unsupportedCapabilityMessage(graphApiCapability?.kind)}
+                  </div>
+                )}
+                {loading ? (
+                  <button
+                    type="button"
+                    onClick={handleCancelAuthentication}
+                    disabled={graphApiStatus === "cancelling"}
+                    style={{
+                      padding: "4px 12px",
+                      fontSize: "12px",
+                      border: `1px solid ${tokens.colorNeutralStroke1}`,
+                      backgroundColor: "transparent",
+                      color: tokens.colorNeutralForeground2,
+                      borderRadius: "4px",
+                      cursor:
+                        graphApiStatus === "cancelling" ? "wait" : "pointer",
+                    }}
+                  >
+                    {graphApiStatus === "cancelling"
+                      ? "Cancelling..."
+                      : "Cancel sign-in"}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSignIn}
+                    disabled={
+                      graphActionBusy ||
+                      graphApiStatus === "checkingCapability" ||
+                      graphApiStatus === "unsupported"
+                    }
+                    style={{
+                      padding: "4px 12px",
+                      fontSize: "12px",
+                      border: `1px solid ${tokens.colorBrandStroke1}`,
+                      backgroundColor: tokens.colorBrandBackground,
+                      color: tokens.colorNeutralForegroundOnBrand,
+                      borderRadius: "4px",
+                      cursor:
+                        graphApiStatus === "checkingCapability"
+                          ? "wait"
+                          : graphApiStatus === "unsupported"
+                            ? "not-allowed"
+                            : "pointer",
+                      opacity:
+                        graphApiStatus === "checkingCapability" ||
+                        graphApiStatus === "unsupported"
+                          ? 0.7
+                          : 1,
+                    }}
+                  >
+                    Sign in with Windows
+                  </button>
+                )}
               </div>
             )}
             {permissionNotice && (

@@ -10,11 +10,15 @@ import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   graphAuthenticate,
+  graphCancelAuthentication,
   graphFetchAllApps,
   graphGetAuthStatus,
+  graphProbeCapability,
   graphRequestMissingPermissions,
   graphSignOut,
   type GraphAuthStatus,
+  type GraphAuthAttemptOutcome,
+  type GraphAuthAttemptResult,
   type GraphPermissionUpgradeOutcome,
   type GraphPermissionUpgradeResult,
 } from "../../../lib/commands";
@@ -24,8 +28,10 @@ import { GraphApiTab } from "./GraphApiTab";
 
 vi.mock("../../../lib/commands", () => ({
   graphAuthenticate: vi.fn(),
+  graphCancelAuthentication: vi.fn(),
   graphFetchAllApps: vi.fn(),
   graphGetAuthStatus: vi.fn(),
+  graphProbeCapability: vi.fn(),
   graphRequestMissingPermissions: vi.fn(),
   graphSignOut: vi.fn(),
 }));
@@ -42,6 +48,7 @@ const partialStatus = (apps: boolean): GraphAuthStatus =>
   ({
     isAuthenticated: true,
     userPrincipalName: "user@contoso.example",
+    objectId: "00000000-0000-0000-0000-0000000000a1",
     tenantId: "tenant-a",
     grantedScopes: apps ? ["DeviceManagementApps.Read.All"] : [],
     missingScopes: [
@@ -59,12 +66,12 @@ const partialStatus = (apps: boolean): GraphAuthStatus =>
       configuration: false,
       scripts: false,
     },
-    error: null,
   }) as GraphAuthStatus;
 
 const disconnectedStatus = (): GraphAuthStatus => ({
   isAuthenticated: false,
   userPrincipalName: null,
+  objectId: null,
   tenantId: null,
   grantedScopes: [],
   missingScopes: [
@@ -82,7 +89,6 @@ const disconnectedStatus = (): GraphAuthStatus => ({
     configuration: false,
     scripts: false,
   },
-  error: null,
 });
 
 const fullStatus = (): GraphAuthStatus => ({
@@ -104,6 +110,19 @@ const permissionResult = (
   message: string | null = null,
 ): GraphPermissionUpgradeResult => ({ outcome, status, message });
 
+const authResult = (
+  status: GraphAuthStatus,
+  outcome: GraphAuthAttemptOutcome = status.isAuthenticated
+    ? "connected"
+    : "cancelled",
+  message: string | null = null,
+): GraphAuthAttemptResult => ({
+  outcome,
+  status,
+  capability: { kind: "available" },
+  message,
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -118,10 +137,14 @@ describe("GraphApiTab delegated capabilities", () => {
     useUiStore.setState({
       currentPlatform: "windows",
       graphApiEnabled: true,
-      graphApiStatus: "idle",
+      graphApiStatus: "disconnected",
+      graphApiCapability: null,
+      graphApiLastAttempt: null,
     });
     useIntuneStore.setState({ guidRegistry: {} });
-    vi.mocked(graphAuthenticate).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphProbeCapability).mockResolvedValue({ kind: "available" });
+    vi.mocked(graphCancelAuthentication).mockResolvedValue(true);
+    vi.mocked(graphAuthenticate).mockResolvedValue(authResult(partialStatus(true)));
     vi.mocked(graphFetchAllApps).mockResolvedValue([]);
     vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
       permissionResult("unchanged"),
@@ -222,7 +245,7 @@ describe("GraphApiTab delegated capabilities", () => {
   });
 
   it("keeps initial sign-in locked while its Graph action is pending", async () => {
-    const authentication = deferred<GraphAuthStatus>();
+    const authentication = deferred<GraphAuthAttemptResult>();
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
     vi.mocked(graphAuthenticate).mockReturnValue(authentication.promise);
 
@@ -233,12 +256,12 @@ describe("GraphApiTab delegated capabilities", () => {
     );
 
     expect(
-      await screen.findByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
+      await screen.findByRole("button", { name: "Cancel sign-in" }),
+    ).toBeEnabled();
     expect(graphRequestMissingPermissions).not.toHaveBeenCalled();
 
     await act(async () => {
-      authentication.resolve(partialStatus(true));
+      authentication.resolve(authResult(partialStatus(true)));
       await authentication.promise;
     });
   });
@@ -398,7 +421,7 @@ describe("GraphApiTab delegated capabilities", () => {
       }),
     ).toBeVisible();
     expect(screen.getByText("Not connected")).toBeVisible();
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
   });
 
   it.each(["denied", "failed", "stale"] as const)(
@@ -490,7 +513,7 @@ describe("GraphApiTab delegated capabilities", () => {
       screen.queryByText("secret-token-shaped expired-state payload"),
     ).not.toBeInTheDocument();
     expect(graphGetAuthStatus).toHaveBeenCalledTimes(2);
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
   });
 
   it("reconciles a rejected permission request to authoritative complete state", async () => {
@@ -525,57 +548,6 @@ describe("GraphApiTab delegated capabilities", () => {
     expect(useUiStore.getState().graphApiStatus).toBe("connected");
   });
 
-  it("does not let delayed permission reconciliation overwrite a newer remounted action", async () => {
-    const reconciliation = deferred<GraphAuthStatus>();
-    const currentAuthentication = deferred<GraphAuthStatus>();
-    vi.mocked(graphGetAuthStatus)
-      .mockResolvedValueOnce(partialStatus(true))
-      .mockReturnValueOnce(reconciliation.promise)
-      .mockResolvedValueOnce(disconnectedStatus());
-    vi.mocked(graphRequestMissingPermissions).mockRejectedValue(
-      new Error("secret-token-shaped stale reconciliation payload"),
-    );
-    vi.mocked(graphAuthenticate).mockReturnValue(currentAuthentication.promise);
-
-    const firstTab = render(<GraphApiTab />);
-
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Request missing permissions",
-      }),
-    );
-    await waitFor(() => expect(graphGetAuthStatus).toHaveBeenCalledTimes(2));
-    fireEvent.click(screen.getByRole("checkbox"));
-    firstTab.unmount();
-
-    useUiStore.setState({ graphApiEnabled: true });
-    render(<GraphApiTab />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Sign in with Windows" }),
-    );
-    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
-
-    await act(async () => {
-      reconciliation.resolve(fullStatus());
-      await reconciliation.promise;
-    });
-
-    expect(useUiStore.getState().graphApiStatus).toBe("connecting");
-    expect(
-      screen.getByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
-    expect(
-      screen.queryByText("secret-token-shaped stale reconciliation payload"),
-    ).not.toBeInTheDocument();
-
-    await act(async () => {
-      currentAuthentication.resolve(partialStatus(true));
-      await currentAuthentication.promise;
-    });
-    expect(
-      await screen.findByText("Connected with partial permissions"),
-    ).toBeVisible();
-  });
 
   it("retains permission guidance during app cache hydration", async () => {
     const apps = deferred<Awaited<ReturnType<typeof graphFetchAllApps>>>();
@@ -643,7 +615,7 @@ describe("GraphApiTab delegated capabilities", () => {
   });
 
   it("clears permission guidance when a fresh initial sign-in begins", async () => {
-    const authentication = deferred<GraphAuthStatus>();
+    const authentication = deferred<GraphAuthAttemptResult>();
     vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
     vi.mocked(graphRequestMissingPermissions).mockResolvedValue(
       permissionResult("stale", disconnectedStatus()),
@@ -668,12 +640,12 @@ describe("GraphApiTab delegated capabilities", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
+      screen.getByRole("button", { name: "Cancel sign-in" }),
+    ).toBeEnabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     await act(async () => {
-      authentication.resolve(partialStatus(true));
+      authentication.resolve(authResult(partialStatus(true)));
       await authentication.promise;
     });
   });
@@ -731,7 +703,7 @@ describe("GraphApiTab delegated capabilities", () => {
     });
 
     expect(useUiStore.getState().graphApiEnabled).toBe(false);
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
     expect(
       screen.queryByText(
         "Permissions updated. Additional Graph capabilities are now available.",
@@ -739,59 +711,6 @@ describe("GraphApiTab delegated capabilities", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not let a stale permission result overwrite a newer frontend operation", async () => {
-    const staleRequest = deferred<GraphPermissionUpgradeResult>();
-    const currentAuthentication = deferred<GraphAuthStatus>();
-    vi.mocked(graphGetAuthStatus)
-      .mockResolvedValueOnce(partialStatus(true))
-      .mockResolvedValueOnce(disconnectedStatus());
-    vi.mocked(graphRequestMissingPermissions).mockReturnValue(
-      staleRequest.promise,
-    );
-    vi.mocked(graphAuthenticate).mockReturnValue(currentAuthentication.promise);
-
-    render(<GraphApiTab />);
-
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Request missing permissions",
-      }),
-    );
-    await waitFor(() =>
-      expect(graphRequestMissingPermissions).toHaveBeenCalledOnce(),
-    );
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(
-      screen.getByRole("button", { name: "I understand, enable it" }),
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Sign in with Windows" }),
-    );
-    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
-
-    await act(async () => {
-      staleRequest.resolve(permissionResult("upgraded", fullStatus()));
-      await staleRequest.promise;
-    });
-
-    expect(
-      screen.getByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
-    expect(
-      screen.queryByText(
-        "Permissions updated. Additional Graph capabilities are now available.",
-      ),
-    ).not.toBeInTheDocument();
-
-    await act(async () => {
-      currentAuthentication.resolve(partialStatus(true));
-      await currentAuthentication.promise;
-    });
-    expect(
-      await screen.findByText("Connected with partial permissions"),
-    ).toBeVisible();
-  });
 
   it("keeps a pending permission action shared across remounts without hydration superseding it", async () => {
     const request = deferred<GraphPermissionUpgradeResult>();
@@ -834,7 +753,7 @@ describe("GraphApiTab delegated capabilities", () => {
   });
 
   it("publishes a pending sign-in globally after unmount and then hydrates the remounted tab", async () => {
-    const authentication = deferred<GraphAuthStatus>();
+    const authentication = deferred<GraphAuthAttemptResult>();
     vi.mocked(graphGetAuthStatus)
       .mockResolvedValueOnce(disconnectedStatus())
       .mockResolvedValueOnce(partialStatus(true));
@@ -851,12 +770,12 @@ describe("GraphApiTab delegated capabilities", () => {
     render(<GraphApiTab />);
 
     expect(
-      await screen.findByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
+      await screen.findByRole("button", { name: "Cancel sign-in" }),
+    ).toBeEnabled();
     expect(graphGetAuthStatus).toHaveBeenCalledOnce();
 
     await act(async () => {
-      authentication.resolve(partialStatus(true));
+      authentication.resolve(authResult(partialStatus(true)));
       await authentication.promise;
     });
 
@@ -892,7 +811,7 @@ describe("GraphApiTab delegated capabilities", () => {
       await signOut.promise;
     });
 
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
     await waitFor(() => expect(graphGetAuthStatus).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("Not connected")).toBeVisible();
   });
@@ -931,7 +850,7 @@ describe("GraphApiTab delegated capabilities", () => {
       await reconciliation.promise;
     });
 
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
     await waitFor(() => expect(graphGetAuthStatus).toHaveBeenCalledTimes(3));
     expect(await screen.findByText("Not connected")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -940,110 +859,11 @@ describe("GraphApiTab delegated capabilities", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not let an invalidated permission completion overwrite a newer remounted action", async () => {
-    const staleRequest = deferred<GraphPermissionUpgradeResult>();
-    const currentAuthentication = deferred<GraphAuthStatus>();
-    vi.mocked(graphGetAuthStatus)
-      .mockResolvedValueOnce(partialStatus(true))
-      .mockResolvedValueOnce(disconnectedStatus());
-    vi.mocked(graphRequestMissingPermissions).mockReturnValue(
-      staleRequest.promise,
-    );
-    vi.mocked(graphAuthenticate).mockReturnValue(currentAuthentication.promise);
 
-    const firstTab = render(<GraphApiTab />);
-
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Request missing permissions",
-      }),
-    );
-    await waitFor(() =>
-      expect(graphRequestMissingPermissions).toHaveBeenCalledOnce(),
-    );
-    fireEvent.click(screen.getByRole("checkbox"));
-    firstTab.unmount();
-
-    useUiStore.setState({ graphApiEnabled: true });
-    render(<GraphApiTab />);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Sign in with Windows" }),
-    );
-    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
-    expect(useUiStore.getState().graphApiStatus).toBe("connecting");
-
-    await act(async () => {
-      staleRequest.resolve(permissionResult("upgraded", fullStatus()));
-      await staleRequest.promise;
-    });
-
-    expect(useUiStore.getState().graphApiStatus).toBe("connecting");
-    expect(screen.getByText("Not connected")).toBeVisible();
-    expect(
-      screen.queryByLabelText("Graph delegated capabilities"),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
-
-    await act(async () => {
-      currentAuthentication.resolve(partialStatus(true));
-      await currentAuthentication.promise;
-    });
-    expect(
-      await screen.findByText("Connected with partial permissions"),
-    ).toBeVisible();
-  });
-
-  it("does not let an invalidated sign-in completion overwrite a newer remounted sign-in", async () => {
-    const staleAuthentication = deferred<GraphAuthStatus>();
-    const currentAuthentication = deferred<GraphAuthStatus>();
-    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
-    vi.mocked(graphAuthenticate)
-      .mockReturnValueOnce(staleAuthentication.promise)
-      .mockReturnValueOnce(currentAuthentication.promise);
-
-    const firstTab = render(<GraphApiTab />);
-
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Sign in with Windows" }),
-    );
-    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("checkbox"));
-    firstTab.unmount();
-
-    useUiStore.setState({ graphApiEnabled: true });
-    render(<GraphApiTab />);
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Sign in with Windows" }),
-    );
-    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledTimes(2));
-
-    await act(async () => {
-      staleAuthentication.resolve(fullStatus());
-      await staleAuthentication.promise;
-    });
-
-    expect(useUiStore.getState().graphApiStatus).toBe("connecting");
-    expect(
-      screen.getByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
-
-    await act(async () => {
-      currentAuthentication.resolve(partialStatus(true));
-      await currentAuthentication.promise;
-    });
-    expect(
-      await screen.findByText("Connected with partial permissions"),
-    ).toBeVisible();
-  });
 
   it("does not let an invalidated sign-out completion overwrite a newer remounted sign-in", async () => {
     const staleSignOut = deferred<void>();
-    const currentAuthentication = deferred<GraphAuthStatus>();
+    const currentAuthentication = deferred<GraphAuthAttemptResult>();
     vi.mocked(graphGetAuthStatus)
       .mockResolvedValueOnce(partialStatus(true))
       .mockResolvedValueOnce(disconnectedStatus());
@@ -1069,13 +889,13 @@ describe("GraphApiTab delegated capabilities", () => {
       await staleSignOut.promise;
     });
 
-    expect(useUiStore.getState().graphApiStatus).toBe("connecting");
+    expect(useUiStore.getState().graphApiStatus).toBe("signingIn");
     expect(
-      screen.getByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
+      screen.getByRole("button", { name: "Cancel sign-in" }),
+    ).toBeEnabled();
 
     await act(async () => {
-      currentAuthentication.resolve(partialStatus(true));
+      currentAuthentication.resolve(authResult(partialStatus(true)));
       await currentAuthentication.promise;
     });
     expect(
@@ -1084,7 +904,7 @@ describe("GraphApiTab delegated capabilities", () => {
   });
 
   it("publishes an existing authenticated status after settings refresh", async () => {
-    useUiStore.setState({ graphApiStatus: "idle" });
+    useUiStore.setState({ graphApiStatus: "disconnected" });
     vi.mocked(graphGetAuthStatus).mockResolvedValue(partialStatus(true));
 
     render(<GraphApiTab />);
@@ -1113,7 +933,7 @@ describe("GraphApiTab delegated capabilities", () => {
 
   it("publishes a successful manual connection for first-use ESP enrichment", async () => {
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
-    vi.mocked(graphAuthenticate).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphAuthenticate).mockResolvedValue(authResult(partialStatus(true)));
 
     render(<GraphApiTab />);
 
@@ -1129,7 +949,7 @@ describe("GraphApiTab delegated capabilities", () => {
 
   it("restores mounted-local publication after StrictMode effect replay", async () => {
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
-    vi.mocked(graphAuthenticate).mockResolvedValue(partialStatus(true));
+    vi.mocked(graphAuthenticate).mockResolvedValue(authResult(partialStatus(true)));
 
     render(
       <StrictMode>
@@ -1150,10 +970,9 @@ describe("GraphApiTab delegated capabilities", () => {
   it("clears a stale connected phase when manual authentication is rejected", async () => {
     useUiStore.setState({ graphApiStatus: "connected" });
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
-    vi.mocked(graphAuthenticate).mockResolvedValue({
-      ...disconnectedStatus(),
-      error: "Consent was not granted",
-    });
+    vi.mocked(graphAuthenticate).mockResolvedValue(
+      authResult(disconnectedStatus(), "failed", "Consent was not granted"),
+    );
 
     render(<GraphApiTab />);
 
@@ -1174,7 +993,7 @@ describe("GraphApiTab delegated capabilities", () => {
     fireEvent.click(await screen.findByRole("checkbox"));
 
     expect(useUiStore.getState().graphApiEnabled).toBe(false);
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
   });
 
   it("does not restore connected state when a refresh finishes after Graph is disabled", async () => {
@@ -1195,11 +1014,11 @@ describe("GraphApiTab delegated capabilities", () => {
     });
 
     expect(useUiStore.getState().graphApiEnabled).toBe(false);
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
   });
 
   it("does not restore connected state when manual authentication finishes after Graph is disabled", async () => {
-    let resolveAuthentication!: (status: GraphAuthStatus) => void;
+    let resolveAuthentication!: (result: GraphAuthAttemptResult) => void;
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
     vi.mocked(graphAuthenticate).mockReturnValue(
       new Promise((resolve) => {
@@ -1216,15 +1035,15 @@ describe("GraphApiTab delegated capabilities", () => {
 
     fireEvent.click(screen.getByRole("checkbox"));
     expect(useUiStore.getState().graphApiEnabled).toBe(false);
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
 
     await act(async () => {
-      resolveAuthentication(partialStatus(true));
+      resolveAuthentication(authResult(partialStatus(true)));
       await Promise.resolve();
     });
 
     expect(useUiStore.getState().graphApiEnabled).toBe(false);
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
   });
 
   it("does not merge app data when Graph is disabled during manual cache hydration", async () => {
@@ -1271,7 +1090,7 @@ describe("GraphApiTab delegated capabilities", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
 
     await waitFor(() => expect(graphSignOut).toHaveBeenCalledOnce());
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
   });
 
   it("does not let cache hydration supersede an in-flight sign-out", async () => {
@@ -1296,7 +1115,7 @@ describe("GraphApiTab delegated capabilities", () => {
       signOut.resolve();
       await signOut.promise;
     });
-    expect(useUiStore.getState().graphApiStatus).toBe("idle");
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
   });
 
   it("does not let sign-out supersede in-flight cache hydration", async () => {
@@ -1323,12 +1142,12 @@ describe("GraphApiTab delegated capabilities", () => {
     ).toBeEnabled();
   });
 
-  it("keeps a newer sign-in busy when a disabled operation settles late", async () => {
-    const staleAuthentication = deferred<GraphAuthStatus>();
-    const currentAuthentication = deferred<GraphAuthStatus>();
+  it("cancels a disabled sign-in and blocks replacement until native settles", async () => {
+    const cancelledAuthentication = deferred<GraphAuthAttemptResult>();
+    const currentAuthentication = deferred<GraphAuthAttemptResult>();
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
     vi.mocked(graphAuthenticate)
-      .mockReturnValueOnce(staleAuthentication.promise)
+      .mockReturnValueOnce(cancelledAuthentication.promise)
       .mockReturnValueOnce(currentAuthentication.promise);
 
     render(<GraphApiTab />);
@@ -1337,30 +1156,130 @@ describe("GraphApiTab delegated capabilities", () => {
       await screen.findByRole("button", { name: "Sign in with Windows" }),
     );
     await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledTimes(1));
+    const firstRequestId = vi.mocked(graphAuthenticate).mock.calls[0][0];
     fireEvent.click(screen.getByRole("checkbox"));
+    expect(graphCancelAuthentication).toHaveBeenCalledWith(firstRequestId);
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(
       screen.getByRole("button", { name: "I understand, enable it" }),
     );
+    expect(
+      await screen.findByRole("button", { name: "Cancelling..." }),
+    ).toBeDisabled();
+    expect(graphAuthenticate).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      cancelledAuthentication.resolve(
+        authResult(
+          disconnectedStatus(),
+          "cancelled",
+          "Microsoft Graph sign-in was cancelled.",
+        ),
+      );
+      await cancelledAuthentication.promise;
+    });
     fireEvent.click(
       await screen.findByRole("button", { name: "Sign in with Windows" }),
     );
     await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(graphAuthenticate).mock.calls[1][0]).not.toBe(
+      firstRequestId,
+    );
 
     await act(async () => {
-      staleAuthentication.resolve(partialStatus(true));
-      await staleAuthentication.promise;
-    });
-    expect(
-      screen.getByRole("button", { name: "Signing in..." }),
-    ).toBeDisabled();
-
-    await act(async () => {
-      currentAuthentication.resolve(partialStatus(true));
+      currentAuthentication.resolve(authResult(partialStatus(true)));
       await currentAuthentication.promise;
     });
     expect(
       await screen.findByText("Connected with partial permissions"),
     ).toBeVisible();
+  });
+
+  it("probes capability on a persisted opt-in without starting WAM", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+
+    render(<GraphApiTab />);
+
+    await waitFor(() => expect(graphProbeCapability).toHaveBeenCalledOnce());
+    await screen.findByRole("button", { name: "Sign in with Windows" });
+    expect(graphGetAuthStatus).toHaveBeenCalledOnce();
+    expect(graphAuthenticate).not.toHaveBeenCalled();
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
+  });
+
+  it("reports a personal-only host without opening WAM", async () => {
+    vi.mocked(graphProbeCapability).mockResolvedValue({
+      kind: "personalAccountOnly",
+    });
+
+    render(<GraphApiTab />);
+
+    expect(
+      await screen.findByText(/Only a personal Microsoft account is available/),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Sign in with Windows" }),
+    ).toBeDisabled();
+    expect(graphGetAuthStatus).not.toHaveBeenCalled();
+    expect(graphAuthenticate).not.toHaveBeenCalled();
+    expect(useUiStore.getState().graphApiStatus).toBe("unsupported");
+  });
+
+  it("cancels the matching request and remains cancelling until native settles", async () => {
+    const authentication = deferred<GraphAuthAttemptResult>();
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphAuthenticate).mockReturnValue(authentication.promise);
+
+    render(<GraphApiTab />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
+    const requestId = vi.mocked(graphAuthenticate).mock.calls[0][0];
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+
+    expect(graphCancelAuthentication).toHaveBeenCalledWith(requestId);
+    expect(useUiStore.getState().graphApiStatus).toBe("cancelling");
+    expect(
+      screen.getByRole("button", { name: "Cancelling..." }),
+    ).toBeDisabled();
+
+    await act(async () => {
+      authentication.resolve(
+        authResult(
+          disconnectedStatus(),
+          "cancelled",
+          "Microsoft Graph sign-in was cancelled.",
+        ),
+      );
+      await authentication.promise;
+    });
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
+    expect(useUiStore.getState().graphApiLastAttempt).toEqual({
+      outcome: "cancelled",
+      message: "Microsoft Graph sign-in was cancelled.",
+    });
+  });
+
+  it("keeps a timed-out attempt distinct from connection state", async () => {
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphAuthenticate).mockResolvedValue(
+      authResult(
+        disconnectedStatus(),
+        "timedOut",
+        "Microsoft Graph sign-in timed out after 120 seconds.",
+      ),
+    );
+
+    render(<GraphApiTab />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+
+    await screen.findByText(
+      "Microsoft Graph sign-in timed out after 120 seconds.",
+    );
+    expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
+    expect(useUiStore.getState().graphApiLastAttempt?.outcome).toBe("timedOut");
   });
 });

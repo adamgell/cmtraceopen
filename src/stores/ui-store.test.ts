@@ -57,6 +57,26 @@ describe("ui-store", () => {
       expect(useUiStore.persist.hasHydrated()).toBe(true);
       expect(useUiStore.getState().activeView).toBe("log");
     });
+
+    it("persists only Graph opt-in and never transient authentication state", () => {
+      useUiStore.setState({
+        graphApiEnabled: true,
+        graphApiStatus: "connected",
+        graphApiCapability: { kind: "available" },
+        graphApiLastAttempt: {
+          outcome: "connected",
+          message: "transient-attempt",
+        },
+      });
+
+      const persisted = JSON.parse(
+        localStorage.getItem("cmtraceopen-ui-preferences") ?? "{}",
+      ).state;
+      expect(persisted.graphApiEnabled).toBe(true);
+      expect(persisted).not.toHaveProperty("graphApiStatus");
+      expect(persisted).not.toHaveProperty("graphApiCapability");
+      expect(persisted).not.toHaveProperty("graphApiLastAttempt");
+    });
   });
 
   describe("font size controls", () => {

@@ -537,60 +537,76 @@ export function StatusBar() {
             </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
-        {graphApiStatus !== "idle" && (
-          <span
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "4px",
-              fontSize: "11px",
-              color: graphApiStatus === "connected"
-                ? tokens.colorPaletteGreenForeground1
-                : graphApiStatus === "connecting"
-                  ? tokens.colorNeutralForeground3
-                  : tokens.colorPaletteRedForeground1,
-            }}
-            title={
-              graphApiStatus === "connected"
-                ? "Graph API connected — GUID resolution active"
-                : graphApiStatus === "connecting"
-                  ? "Connecting to Graph API..."
-                  : "Graph API connection failed"
-            }
-          >
+            {graphApiStatus !== "disconnected" && (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "11px",
+                  color: graphApiStatus === "connected"
+                    ? tokens.colorPaletteGreenForeground1
+                    : graphApiStatus === "checkingCapability" ||
+                        graphApiStatus === "signingIn" ||
+                        graphApiStatus === "cancelling"
+                      ? tokens.colorNeutralForeground3
+                      : graphApiStatus === "unsupported"
+                        ? tokens.colorPaletteYellowForeground2
+                        : tokens.colorPaletteRedForeground1,
+                }}
+                title={
+                  graphApiStatus === "connected"
+                    ? "Graph API connected — GUID resolution active"
+                    : graphApiStatus === "checkingCapability"
+                      ? "Checking Microsoft Graph host capability..."
+                      : graphApiStatus === "signingIn"
+                        ? "Connecting to Graph API..."
+                        : graphApiStatus === "cancelling"
+                          ? "Cancelling Microsoft Graph sign-in..."
+                          : graphApiStatus === "unsupported"
+                            ? "Microsoft Graph is unavailable on this host"
+                            : "Graph API connection failed"
+                }
+              >
+                <span
+                  style={{
+                    width: "6px",
+                    height: "6px",
+                    borderRadius: "50%",
+                    backgroundColor: "currentColor",
+                    display: "inline-block",
+                  }}
+                />
+                {graphApiStatus === "checkingCapability"
+                  ? "Graph API: Checking..."
+                  : graphApiStatus === "signingIn"
+                    ? "Graph API: Connecting..."
+                    : graphApiStatus === "cancelling"
+                      ? "Graph API: Cancelling..."
+                      : graphApiStatus === "connected"
+                        ? "Graph API: Connected"
+                        : graphApiStatus === "unsupported"
+                          ? "Graph API: Unavailable"
+                          : "Graph API: Error"}
+              </span>
+            )}
+            {activeView === "event-log" && evtxIsLoading && (
+              <Spinner size="tiny" />
+            )}
             <span
+              title={rightStatusText}
               style={{
-                width: "6px",
-                height: "6px",
-                borderRadius: "50%",
-                backgroundColor: "currentColor",
-                display: "inline-block",
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: rightTone,
+                fontWeight: 500,
+                fontVariantNumeric: "tabular-nums",
               }}
-            />
-            {graphApiStatus === "connecting"
-              ? "Graph API: Connecting..."
-              : graphApiStatus === "connected"
-                ? "Graph API: Connected"
-                : "Graph API: Error"}
-          </span>
-        )}
-        {activeView === "event-log" && evtxIsLoading && (
-          <Spinner size="tiny" />
-        )}
-        <span
-          title={rightStatusText}
-          style={{
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            color: rightTone,
-            fontWeight: 500,
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {rightStatusText}
-        </span>
+            >
+              {rightStatusText}
+            </span>
           </div>
         </>
       </WorkspaceStatusBarContent>

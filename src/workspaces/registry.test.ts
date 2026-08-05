@@ -193,7 +193,7 @@ beforeEach(() => {
     currentPlatform: "windows",
     enabledWorkspaces: null,
     graphApiEnabled: false,
-    graphApiStatus: "idle",
+    graphApiStatus: "disconnected",
   });
 });
 
