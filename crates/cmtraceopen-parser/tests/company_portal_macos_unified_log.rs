@@ -1259,27 +1259,76 @@ fn network_addresses_are_redacted() {
 }
 
 #[test]
-fn bare_unspecified_ipv6_is_redacted_in_unified_log_export() {
+fn unified_log_export_enforces_ipv6_token_boundaries() {
     let header = format!(
         r#"{{"captureId":"c","schemaId":"{PORTAL_UNIFIED_LOG_SCHEMA_ID}","schemaVersion":{PORTAL_UNIFIED_LOG_SCHEMA_VERSION}}}"#
     );
-    let record = r#"{"category":"Network","eventMessage":"peer :: connected; std::process::exit; ratio 3:2; mode:key","messageType":"Default","process":"CompanyPortal","sourceSequence":0,"subsystem":"com.microsoft.CompanyPortalMac","timestamp":"2026-07-15 07:02:00.000000-0500"}"#;
-    let capture = parse_capture(&format!("{header}\n{record}\n"));
+    let messages = [
+        ":: start",
+        "middle :: value",
+        "end ::",
+        "bracket [::]",
+        "peers ::,2001:db8:0:0:0:0:0:1;fd12:3456:789a:: done",
+        "mapped ::ffff:192.0.2.128 done",
+        "safe std::__1::basic_string std::process café::babe ::1β _::1 at 08:18:00:104 ratio 3:2 mode:key version 5.2504.0 guid 4b2f9d61-1c53-4c58-8f1a-b0d3e1b5aa77 mac 00:11:22:33:44:55",
+    ];
+    let records = messages
+        .iter()
+        .enumerate()
+        .map(|(source_sequence, message)| {
+            serde_json::json!({
+                "category": "Network",
+                "eventMessage": message,
+                "messageType": "Default",
+                "process": "CompanyPortal",
+                "sourceSequence": source_sequence,
+                "subsystem": "com.microsoft.CompanyPortalMac",
+                "timestamp": "2026-07-15 07:02:00.000000-0500",
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let capture = parse_capture(&format!("{header}\n{records}\n"));
 
     let export = redacted_capture_projection(&capture);
-    let json = serde_json::to_string(&export).expect("export must serialize");
+    let messages: Vec<&str> = export
+        .records
+        .iter()
+        .map(|record| record.event_message.value.as_str())
+        .collect();
 
-    assert!(
-        !json.contains("peer :: connected"),
-        "bare IPv6 leaked: {json}"
+    assert_eq!(messages[0], "[redacted:host] start");
+    assert_eq!(messages[1], "middle [redacted:host] value");
+    assert_eq!(messages[2], "end [redacted:host]");
+    assert_eq!(messages[3], "bracket [[redacted:host]]");
+    assert_eq!(
+        messages[4],
+        "peers [redacted:host],[redacted:host];[redacted:host] done"
     );
-    assert!(
-        json.contains("peer [redacted:host] connected"),
-        "redaction must retain delimiters: {json}"
-    );
-    for safe_text in ["std::process::exit", "ratio 3:2", "mode:key"] {
-        assert!(json.contains(safe_text), "non-address text changed: {json}");
+    for leaked in ["2001:db8:0:0:0:0:0:1", "fd12:3456:789a::", "192.0.2.128"] {
+        assert!(
+            !messages[4..=5].join(" ").contains(leaked),
+            "{leaked} leaked"
+        );
     }
+
+    let safe = messages[6];
+    for text in [
+        "std::__1::basic_string",
+        "std::process",
+        "café::babe",
+        "::1β",
+        "_::1",
+        "08:18:00:104",
+        "ratio 3:2",
+        "mode:key",
+        "version 5.2504.0",
+    ] {
+        assert!(safe.contains(text), "non-address text changed: {safe}");
+    }
+    assert!(safe.contains("guid [redacted:guid]"));
+    assert!(safe.contains("mac [redacted:host]"));
 }
 
 /// Address matchers must not eat evidence that merely looks address-shaped.

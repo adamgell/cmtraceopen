@@ -104,31 +104,15 @@ fn mac_address_re() -> &'static Regex {
     })
 }
 
-/// Fully-expanded eight-group IPv6 or any `::`-compressed form, in group 1.
+/// Fully-expanded eight-group IPv6 or any `::`-compressed form.
 ///
-/// The address is **not** wrapped in `\b`. `\b` is a word-boundary assertion and
-/// `:` is not a word character, so it cannot anchor an address that begins or
-/// ends with a colon, which every `::`-compressed form does at one end or both.
-/// With `\b` on both sides `fd12:3456:789a::` matched nothing at all and exported
-/// verbatim, and `::1` was missed the same way.
-///
-/// This engine has no look-around, so the left edge is a *consumed* guard group
-/// and the right edge has no assertion at all. That asymmetry is deliberate:
-///
-/// * Consuming only the left delimiter keeps two addresses separated by a single
-///   character both matchable. A guard on both sides would eat the delimiter that
-///   the following address needs, and `^` cannot stand in for it because it
-///   anchors to the start of the text, not to where scanning resumed.
-/// * No right-edge assertion is needed because the alternatives are already
-///   self-limiting: they consume only hex and colons, and each requires either
-///   eight groups or a `::` run. A MAC (`00:11:22:33:44:55`) and a house-grammar
-///   timestamp (`08:18:00:104`) have neither, so neither can be claimed.
-///
+/// Deliberately unanchored: [`Redactor::replace_ipv6_addresses`] checks both
+/// Unicode-aware token boundaries without consuming either delimiter.
 fn ipv6_address_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?:^|[^0-9A-Za-z:])((?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)",
+            r"(?i)(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?|::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?)",
         )
         .expect("ipv6 address pattern must compile")
     })
@@ -221,6 +205,26 @@ impl Redactor {
         out
     }
 
+    fn replace_ipv6_addresses(&mut self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0usize;
+
+        for target in ipv6_address_re().find_iter(text) {
+            out.push_str(&text[last..target.start()]);
+            let before = text[..target.start()].chars().next_back();
+            let after = text[target.end()..].chars().next();
+            if before.is_some_and(binds_to_identifier) || after.is_some_and(binds_to_identifier) {
+                out.push_str(target.as_str());
+            } else {
+                out.push_str(&self.token_for(PortalRedactionKind::Ip, target.as_str()));
+            }
+            last = target.end();
+        }
+
+        out.push_str(&text[last..]);
+        out
+    }
+
     /// Apply every redaction rule, in a fixed order.
     ///
     /// Certificate subjects go first and are deliberately over-broad (`CN=` to
@@ -245,15 +249,17 @@ impl Redactor {
         let text = self.replace_group(&text, guid_re(), PortalRedactionKind::Guid, 0);
         let text = self.replace_group(&text, ipv4_address_re(), PortalRedactionKind::Ip, 0);
         let text = self.replace_group(&text, mac_address_re(), PortalRedactionKind::Mac, 0);
-        // Group 1: the IPv6 pattern consumes a leading delimiter that must be
-        // written back out, so the address is captured rather than whole-matched.
-        let text = self.replace_group(&text, ipv6_address_re(), PortalRedactionKind::Ip, 1);
+        let text = self.replace_ipv6_addresses(&text);
         self.replace_user_paths(&text)
     }
 
     fn into_placeholders(self) -> Vec<PortalPlaceholder> {
         self.placeholders.into_values().collect()
     }
+}
+
+fn binds_to_identifier(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 /// Build the deterministic, redacted export projection of a parse.
