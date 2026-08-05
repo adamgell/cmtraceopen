@@ -37,12 +37,12 @@ fn cmtlog_re() -> &'static Regex {
     CELL.get_or_init(|| {
         Regex::new(concat!(
             r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
-            r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<ms>\d+)(?P<tz>[+-]*\d+)""#,
-            r#"\s+date="(?P<mon>\d{1,2})-(?P<day>\d{1,2})-(?P<yr>\d{4})""#,
+            r#"<time="(?P<h>[0-9]{1,2}):(?P<m>[0-9]{1,2}):(?P<s>[0-9]{1,2})\.(?P<ms>[0-9]+)(?P<tz>[+-]*[0-9]+)""#,
+            r#"\s+date="(?P<mon>[0-9]{1,2})-(?P<day>[0-9]{1,2})-(?P<yr>[0-9]{4})""#,
             r#"\s+component="(?P<comp>[^"]*)""#,
             r#"\s+context="[^"]*""#,
-            r#"\s+type="(?P<typ>\d)""#,
-            r#"\s+thread="(?P<thr>\d+)""#,
+            r#"\s+type="(?P<typ>[0-9])""#,
+            r#"\s+thread="(?P<thr>[0-9]+)""#,
             r#"[^>]*>"#,
         ))
         .expect("CmtLog regex must compile")
