@@ -41,11 +41,6 @@ const GRAPH_API_INDICATORS: Record<
   GraphApiIndicatorPhase,
   { color: string; title: string; label: string }
 > = {
-  checkingCapability: {
-    color: tokens.colorNeutralForeground3,
-    title: "Checking Microsoft Graph host capability...",
-    label: "Graph API: Checking...",
-  },
   signingIn: {
     color: tokens.colorNeutralForeground3,
     title: "Connecting to Graph API...",

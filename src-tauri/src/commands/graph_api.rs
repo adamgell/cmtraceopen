@@ -9,7 +9,7 @@ use crate::graph_api::models::GraphPermissionUpgradeResult;
 #[cfg(target_os = "windows")]
 use crate::graph_api::{
     self, GraphAppInfo, GraphAuthAttemptResult, GraphAuthState, GraphAuthStatus,
-    GraphHostCapability, GraphResolutionResult,
+    GraphResolutionResult,
 };
 #[cfg(feature = "esp-diagnostics")]
 use cmtraceopen_parser::esp::EspGraphOverlay;
@@ -87,13 +87,25 @@ impl Drop for InteractiveAuthWindow {
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
+pub fn graph_reserve_interactive_operation(
+    kind: graph_api::GraphInteractiveOperationKind,
+    state: tauri::State<'_, GraphAuthState>,
+) -> CmdResult<graph_api::GraphInteractiveOperationTicket> {
+    state.reserve_interactive_operation(kind)
+}
+
+#[tauri::command]
+#[cfg(target_os = "windows")]
 pub async fn graph_authenticate(
-    request_id: String,
+    attempt_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, GraphAuthState>,
 ) -> CmdResult<GraphAuthAttemptResult> {
     let state = state.inner().clone();
-    let lease = state.begin_interactive_operation(request_id)?;
+    let lease = state.claim_interactive_operation(
+        &attempt_id,
+        graph_api::GraphInteractiveOperationKind::Authentication,
+    )?;
     let window = InteractiveAuthWindow::acquire(&app)?;
     let hwnd = window.hwnd();
     tauri::async_runtime::spawn_blocking(move || graph_api::authenticate(&state, hwnd, &lease))
@@ -103,30 +115,25 @@ pub async fn graph_authenticate(
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
-pub async fn graph_probe_capability() -> CmdResult<GraphHostCapability> {
-    tauri::async_runtime::spawn_blocking(graph_api::probe_host_capability)
-        .await
-        .map_err(|error| AppError::Internal(format!("GraphCapabilityTaskFailed: {error}")))
-}
-
-#[tauri::command]
-#[cfg(target_os = "windows")]
 pub fn graph_cancel_authentication(
-    request_id: String,
+    attempt_id: String,
     state: tauri::State<'_, GraphAuthState>,
 ) -> bool {
-    state.cancel_interactive_operation(&request_id)
+    state.cancel_interactive_operation(&attempt_id)
 }
 
 #[tauri::command]
 #[cfg(target_os = "windows")]
 pub async fn graph_request_missing_permissions(
-    request_id: String,
+    attempt_id: String,
     app: tauri::AppHandle,
     state: tauri::State<'_, GraphAuthState>,
 ) -> CmdResult<GraphPermissionUpgradeResult> {
     let state = state.inner().clone();
-    let lease = state.begin_interactive_operation(request_id)?;
+    let lease = state.claim_interactive_operation(
+        &attempt_id,
+        graph_api::GraphInteractiveOperationKind::PermissionConsent,
+    )?;
     // The guard is held across the await and restores the pin on scope exit,
     // including the `?` early return below.
     let window = InteractiveAuthWindow::acquire(&app)?;

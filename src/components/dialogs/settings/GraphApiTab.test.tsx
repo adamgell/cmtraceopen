@@ -13,7 +13,7 @@ import {
   graphCancelAuthentication,
   graphFetchAllApps,
   graphGetAuthStatus,
-  graphProbeCapability,
+  graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
   graphSignOut,
   type GraphAuthStatus,
@@ -31,7 +31,7 @@ vi.mock("../../../lib/commands", () => ({
   graphCancelAuthentication: vi.fn(),
   graphFetchAllApps: vi.fn(),
   graphGetAuthStatus: vi.fn(),
-  graphProbeCapability: vi.fn(),
+  graphReserveInteractiveOperation: vi.fn(),
   graphRequestMissingPermissions: vi.fn(),
   graphSignOut: vi.fn(),
 }));
@@ -142,8 +142,13 @@ describe("GraphApiTab delegated capabilities", () => {
       graphApiLastAttempt: null,
     });
     useIntuneStore.setState({ guidRegistry: {} });
-    vi.mocked(graphProbeCapability).mockResolvedValue({ kind: "available" });
     vi.mocked(graphCancelAuthentication).mockResolvedValue(true);
+    let nextAttempt = 1;
+    vi.mocked(graphReserveInteractiveOperation).mockImplementation(
+      async () => ({
+        attemptId: `00000000-0000-4000-8000-${String(nextAttempt++).padStart(12, "0")}`,
+      }),
+    );
     vi.mocked(graphAuthenticate).mockResolvedValue(
       authResult(partialStatus(true)),
     );
@@ -745,7 +750,11 @@ describe("GraphApiTab delegated capabilities", () => {
       await request.promise;
     });
 
-    await waitFor(() => expect(graphGetAuthStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        vi.mocked(graphGetAuthStatus).mock.calls.length,
+      ).toBeGreaterThanOrEqual(2),
+    );
     expect(
       await screen.findByText("Connected with partial permissions"),
     ).toBeVisible();
@@ -780,7 +789,11 @@ describe("GraphApiTab delegated capabilities", () => {
     });
 
     expect(useUiStore.getState().graphApiStatus).toBe("connected");
-    await waitFor(() => expect(graphGetAuthStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        vi.mocked(graphGetAuthStatus).mock.calls.length,
+      ).toBeGreaterThanOrEqual(2),
+    );
     expect(
       await screen.findByText("Connected with partial permissions"),
     ).toBeVisible();
@@ -1201,34 +1214,117 @@ describe("GraphApiTab delegated capabilities", () => {
     ).toBeVisible();
   });
 
-  it("probes capability on a persisted opt-in without starting WAM", async () => {
+  it("never starts native WAM during opt-in, restart, mount, remount, or passive initialization", async () => {
     vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
 
-    render(<GraphApiTab />);
+    const firstMount = render(<GraphApiTab />);
 
-    await waitFor(() => expect(graphProbeCapability).toHaveBeenCalledOnce());
     await screen.findByRole("button", { name: "Sign in with Windows" });
     expect(graphGetAuthStatus).toHaveBeenCalledOnce();
     expect(graphAuthenticate).not.toHaveBeenCalled();
+    expect(graphReserveInteractiveOperation).not.toHaveBeenCalled();
+    expect(graphRequestMissingPermissions).not.toHaveBeenCalled();
+
+    firstMount.unmount();
+    render(
+      <StrictMode>
+        <GraphApiTab />
+      </StrictMode>,
+    );
+    await waitFor(() =>
+      expect(
+        vi.mocked(graphGetAuthStatus).mock.calls.length,
+      ).toBeGreaterThanOrEqual(2),
+    );
+    expect(graphAuthenticate).not.toHaveBeenCalled();
+    expect(graphReserveInteractiveOperation).not.toHaveBeenCalled();
+    expect(graphRequestMissingPermissions).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("checkbox"));
+    expect(useUiStore.getState().graphApiEnabled).toBe(false);
+    const passiveCallsBeforeEnable =
+      vi.mocked(graphGetAuthStatus).mock.calls.length;
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "I understand, enable it" }),
+    );
+    await waitFor(() =>
+      expect(vi.mocked(graphGetAuthStatus).mock.calls.length).toBeGreaterThan(
+        passiveCallsBeforeEnable,
+      ),
+    );
+    expect(graphAuthenticate).not.toHaveBeenCalled();
+    expect(graphReserveInteractiveOperation).not.toHaveBeenCalled();
+    expect(graphRequestMissingPermissions).not.toHaveBeenCalled();
     expect(useUiStore.getState().graphApiStatus).toBe("disconnected");
   });
 
-  it("reports a personal-only host without opening WAM", async () => {
-    vi.mocked(graphProbeCapability).mockResolvedValue({
-      kind: "personalAccountOnly",
-    });
+  it("cancels a delayed native ticket before WAM and serializes disable, restart, and rapid retry", async () => {
+    const reservation = deferred<{ attemptId: string }>();
+    const retiredAttemptId = "10000000-0000-4000-8000-000000000001";
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphReserveInteractiveOperation).mockReturnValueOnce(
+      reservation.promise,
+    );
 
     render(<GraphApiTab />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() =>
+      expect(graphReserveInteractiveOperation).toHaveBeenCalledWith(
+        "authentication",
+      ),
+    );
 
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "I understand, enable it" }),
+    );
     expect(
-      await screen.findByText(/Only a personal Microsoft account is available/),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("button", { name: "Sign in with Windows" }),
+      await screen.findByRole("button", { name: "Cancelling..." }),
     ).toBeDisabled();
-    expect(graphGetAuthStatus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      reservation.resolve({ attemptId: retiredAttemptId });
+      await reservation.promise;
+    });
+    expect(graphCancelAuthentication).toHaveBeenCalledWith(retiredAttemptId);
     expect(graphAuthenticate).not.toHaveBeenCalled();
-    expect(useUiStore.getState().graphApiStatus).toBe("unsupported");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() => expect(graphAuthenticate).toHaveBeenCalledOnce());
+    expect(vi.mocked(graphAuthenticate).mock.calls[0][0]).not.toBe(
+      retiredAttemptId,
+    );
+  });
+
+  it("cancels a ticket that arrives after unmount without opening WAM", async () => {
+    const reservation = deferred<{ attemptId: string }>();
+    const retiredAttemptId = "20000000-0000-4000-8000-000000000001";
+    vi.mocked(graphGetAuthStatus).mockResolvedValue(disconnectedStatus());
+    vi.mocked(graphReserveInteractiveOperation).mockReturnValueOnce(
+      reservation.promise,
+    );
+
+    const view = render(<GraphApiTab />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Sign in with Windows" }),
+    );
+    await waitFor(() =>
+      expect(graphReserveInteractiveOperation).toHaveBeenCalledOnce(),
+    );
+    view.unmount();
+
+    await act(async () => {
+      reservation.resolve({ attemptId: retiredAttemptId });
+      await reservation.promise;
+    });
+    expect(graphCancelAuthentication).toHaveBeenCalledWith(retiredAttemptId);
+    expect(graphAuthenticate).not.toHaveBeenCalled();
   });
 
   it("shows one announced native message when sign-in discovers an unsupported host", async () => {

@@ -17,18 +17,9 @@ pub const GRAPH_DELEGATED_SCOPES: [&str; 5] = [
     "DeviceManagementScripts.Read.All",
 ];
 
-pub const GRAPH_SCOPE_REQUEST: &str = concat!(
-    "DeviceManagementManagedDevices.Read.All ",
-    "DeviceManagementServiceConfig.Read.All ",
-    "DeviceManagementApps.Read.All ",
-    "DeviceManagementConfiguration.Read.All ",
-    "DeviceManagementScripts.Read.All"
-);
-
-/// Interactive Entra WAM v2 scope string. The five declared Intune data
-/// permissions remain fixed; these three standard OpenID Connect scopes are
-/// the identity/session scopes MSAL adds to interactive public-client calls.
-pub const GRAPH_WAM_PERMISSION_SCOPE_REQUEST: &str = concat!(
+/// Organizations-only interactive scope request shared by initial sign-in and
+/// explicit missing-permission consent.
+pub const GRAPH_WAM_SCOPE_REQUEST: &str = concat!(
     "DeviceManagementManagedDevices.Read.All ",
     "DeviceManagementServiceConfig.Read.All ",
     "DeviceManagementApps.Read.All ",
@@ -40,45 +31,13 @@ pub const GRAPH_WAM_PERMISSION_SCOPE_REQUEST: &str = concat!(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GraphWamRequestContract {
     pub scope: &'static str,
-    pub resource_property: &'static str,
-    pub resource: &'static str,
 }
 
 pub const GRAPH_WAM_REQUEST: GraphWamRequestContract = GraphWamRequestContract {
-    scope: GRAPH_SCOPE_REQUEST,
-    resource_property: "resource",
-    resource: "https://graph.microsoft.com",
+    scope: GRAPH_WAM_SCOPE_REQUEST,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GraphWamPermissionRequestContract {
-    pub scope: &'static str,
-    pub force_authentication: bool,
-    pub properties: &'static [(&'static str, &'static str)],
-}
-
-/// Provider contract for the explicit permission-upgrade action.
-///
-/// The Entra WAM provider's v2 compatibility mode interprets `scope` as a
-/// dynamic delegated-permission request. `prompt=consent` requests an explicit
-/// approval/denial surface instead of allowing the button to reuse the
-/// established default/resource request that returned a cached partial token.
-pub const GRAPH_WAM_PERMISSION_REQUEST: GraphWamPermissionRequestContract =
-    GraphWamPermissionRequestContract {
-        scope: GRAPH_WAM_PERMISSION_SCOPE_REQUEST,
-        force_authentication: true,
-        properties: &[
-            ("wam_compat", "2.0"),
-            ("prompt", "consent"),
-            (
-                "authority",
-                "https://login.microsoftonline.com/organizations/",
-            ),
-            ("validateAuthority", "yes"),
-        ],
-    };
-
-const GRAPH_URL_AUDIENCE: &str = GRAPH_WAM_REQUEST.resource;
+const GRAPH_URL_AUDIENCE: &str = "https://graph.microsoft.com";
 const GRAPH_APP_ID_AUDIENCE: &str = "00000003-0000-0000-c000-000000000000";
 const MAX_ACCESS_TOKEN_BYTES: usize = 64 * 1024;
 
@@ -170,6 +129,19 @@ impl GraphHostCapability {
     pub const fn new(kind: GraphHostCapabilityKind) -> Self {
         Self { kind }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphInteractiveOperationKind {
+    Authentication,
+    PermissionConsent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphInteractiveOperationTicket {
+    pub attempt_id: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

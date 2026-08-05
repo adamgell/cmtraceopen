@@ -7,7 +7,7 @@ import {
   graphGetAuthStatus,
   graphAuthenticate,
   graphCancelAuthentication,
-  graphProbeCapability,
+  graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
   openLogFile,
   revealInFileManager,
@@ -151,12 +151,41 @@ describe("Graph permission upgrade IPC boundary", () => {
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "graph_request_missing_permissions",
-      { requestId: "permission-request-1" },
+      { attemptId: "permission-request-1" },
     );
   });
 });
 
 describe("Graph authentication IPC boundary", () => {
+  it("accepts only native-issued UUID-shaped operation tickets", async () => {
+    const ticket = {
+      attemptId: "22d12752-4b6e-45e0-aac4-0bc351e91118",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(ticket).mockResolvedValueOnce({
+      attemptId: "frontend-controlled",
+    });
+
+    await expect(
+      graphReserveInteractiveOperation("authentication"),
+    ).resolves.toBe(ticket);
+    await expect(
+      graphReserveInteractiveOperation("permissionConsent"),
+    ).rejects.toThrow(
+      "Command 'graph_reserve_interactive_operation' returned an invalid response.",
+    );
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      "graph_reserve_interactive_operation",
+      { kind: "authentication" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      "graph_reserve_interactive_operation",
+      { kind: "permissionConsent" },
+    );
+  });
+
   it("passes request ownership through authenticate and cancellation", async () => {
     const result = {
       outcome: "cancelled",
@@ -164,34 +193,22 @@ describe("Graph authentication IPC boundary", () => {
       capability: { kind: "available" },
       message: "Microsoft Graph sign-in was cancelled.",
     };
-    vi.mocked(invoke)
-      .mockResolvedValueOnce({ kind: "available" })
-      .mockResolvedValueOnce(result)
-      .mockResolvedValueOnce(true);
+    vi.mocked(invoke).mockResolvedValueOnce(result).mockResolvedValueOnce(true);
 
-    await expect(graphProbeCapability()).resolves.toEqual({
-      kind: "available",
-    });
     await expect(graphAuthenticate("auth-request-1")).resolves.toBe(result);
     await expect(graphCancelAuthentication("auth-request-1")).resolves.toBe(
       true,
     );
 
-    expect(invoke).toHaveBeenNthCalledWith(
-      1,
-      "graph_probe_capability",
-      undefined,
-    );
-    expect(invoke).toHaveBeenNthCalledWith(2, "graph_authenticate", {
-      requestId: "auth-request-1",
+    expect(invoke).toHaveBeenNthCalledWith(1, "graph_authenticate", {
+      attemptId: "auth-request-1",
     });
-    expect(invoke).toHaveBeenNthCalledWith(3, "graph_cancel_authentication", {
-      requestId: "auth-request-1",
+    expect(invoke).toHaveBeenNthCalledWith(2, "graph_cancel_authentication", {
+      attemptId: "auth-request-1",
     });
   });
 
   it.each([
-    ["graph_probe_capability", () => graphProbeCapability(), { kind: "other" }],
     ["graph_authenticate", () => graphAuthenticate("auth-request-1"), null],
     [
       "graph_authenticate",

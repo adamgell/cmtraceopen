@@ -184,7 +184,7 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
         }
 
         "graph_authenticate"
-        | "graph_probe_capability"
+        | "graph_reserve_interactive_operation"
         | "graph_cancel_authentication"
         | "graph_request_missing_permissions" => {
             err_json("Microsoft Graph sign-in is unavailable through the debug IPC bridge")

@@ -38,7 +38,6 @@ export interface ErrorLookupHistoryEntry {
 }
 
 export type GraphApiPhase =
-  | "checkingCapability"
   | "disconnected"
   | "signingIn"
   | "cancelling"

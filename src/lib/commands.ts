@@ -765,6 +765,13 @@ export interface GraphPermissionUpgradeResult {
   message: string | null;
 }
 
+export type GraphInteractiveOperationKind =
+  "authentication" | "permissionConsent";
+
+export interface GraphInteractiveOperationTicket {
+  attemptId: string;
+}
+
 function isGraphRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -891,6 +898,22 @@ function decodeGraphPermissionUpgradeResult(
   return value as unknown as GraphPermissionUpgradeResult;
 }
 
+function decodeGraphInteractiveOperationTicket(
+  value: unknown,
+  commandName: string,
+): GraphInteractiveOperationTicket {
+  if (
+    !isGraphRecord(value) ||
+    typeof value.attemptId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value.attemptId,
+    )
+  ) {
+    return invalidGraphResponse(commandName);
+  }
+  return value as unknown as GraphInteractiveOperationTicket;
+}
+
 export interface GraphAppInfo {
   id: string;
   displayName: string;
@@ -904,40 +927,42 @@ export interface GraphResolutionResult {
   errors: string[];
 }
 
-export async function graphProbeCapability(): Promise<GraphHostCapability> {
-  const commandName = "graph_probe_capability";
-  return decodeGraphHostCapability(
-    await invokeCommand<unknown>(commandName),
+export async function graphReserveInteractiveOperation(
+  kind: GraphInteractiveOperationKind,
+): Promise<GraphInteractiveOperationTicket> {
+  const commandName = "graph_reserve_interactive_operation";
+  return decodeGraphInteractiveOperationTicket(
+    await invokeCommand<unknown>(commandName, { kind }),
     commandName,
   );
 }
 
 export async function graphAuthenticate(
-  requestId: string,
+  attemptId: string,
 ): Promise<GraphAuthAttemptResult> {
   const commandName = "graph_authenticate";
   return decodeGraphAuthAttemptResult(
-    await invokeCommand<unknown>(commandName, { requestId }),
+    await invokeCommand<unknown>(commandName, { attemptId }),
     commandName,
   );
 }
 
 export async function graphCancelAuthentication(
-  requestId: string,
+  attemptId: string,
 ): Promise<boolean> {
   const commandName = "graph_cancel_authentication";
-  const result = await invokeCommand<unknown>(commandName, { requestId });
+  const result = await invokeCommand<unknown>(commandName, { attemptId });
   return typeof result === "boolean"
     ? result
     : invalidGraphResponse(commandName);
 }
 
 export async function graphRequestMissingPermissions(
-  requestId: string,
+  attemptId: string,
 ): Promise<GraphPermissionUpgradeResult> {
   const commandName = "graph_request_missing_permissions";
   return decodeGraphPermissionUpgradeResult(
-    await invokeCommand<unknown>(commandName, { requestId }),
+    await invokeCommand<unknown>(commandName, { attemptId }),
     commandName,
   );
 }

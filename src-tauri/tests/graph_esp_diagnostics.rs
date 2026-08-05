@@ -16,8 +16,7 @@ use app_lib::graph_api::models::{
     GraphAuthStatus, GraphHostCapability, GraphHostCapabilityKind, GraphHttpMethod,
     GraphPermissionCandidateDecision, GraphPermissionUpgradeOutcome, GraphPermissionUpgradeResult,
     GraphResolutionResult, GraphTransportRequest, GraphTransportResponse, GRAPH_DELEGATED_SCOPES,
-    GRAPH_SCOPE_REQUEST, GRAPH_WAM_PERMISSION_REQUEST, GRAPH_WAM_PERMISSION_SCOPE_REQUEST,
-    GRAPH_WAM_REQUEST,
+    GRAPH_WAM_REQUEST, GRAPH_WAM_SCOPE_REQUEST,
 };
 use base64::Engine;
 use serde::Deserialize;
@@ -194,17 +193,7 @@ fn graph_permission_upgrade_command_runs_owned_wam_on_a_blocking_worker() {
         "pub(crate) fn request_missing_permissions(",
         "/// Get current auth status",
     );
-    assert!(permission_entry
-        .contains("wam::acquire_permission_consent_token(hwnd_raw, deadline, lease)"));
-    assert!(!permission_entry.contains("wam::acquire_token("));
-
-    let permission_worker = source_section(
-        graph_source,
-        "pub fn acquire_permission_consent_token(",
-        "pub fn acquire_token(",
-    );
-    assert!(permission_worker.contains("WinRtApartment::initialize()"));
-    assert!(permission_worker.contains("WamRequestMode::PermissionConsent"));
+    assert!(permission_entry.contains("wam::acquire_token(hwnd_raw, deadline, lease)"));
 
     let apartment_init = source_section(
         graph_source,
@@ -219,71 +208,62 @@ fn graph_permission_upgrade_command_runs_owned_wam_on_a_blocking_worker() {
     );
     assert!(apartment_drop.contains("RoUninitialize()"));
 
-    let initial_entry = source_section(
-        graph_source,
-        "pub fn acquire_token(",
-        "fn acquire_token_with_request(",
-    );
-    assert!(initial_entry.contains("WamRequestMode::InitialConnect"));
-    assert!(!initial_entry.contains("WamRequestMode::PermissionConsent"));
-
     let request_builder = source_section(
         graph_source,
-        "fn acquire_token_with_request(",
+        "pub fn acquire_token(",
         "// Use the COM interop interface to pass our HWND",
     );
-    let constructor_match = source_section(
-        request_builder,
-        "let request = match request_mode {",
-        ".map_err(|e| AppError::Internal(format!(\"WAM request creation failed: {e}\")))?;",
-    );
-    let permission_constructor = source_section(
-        constructor_match,
-        "WamRequestMode::PermissionConsent =>",
-        "WamRequestMode::InitialConnect =>",
-    );
-    assert!(permission_constructor.contains("GRAPH_WAM_PERMISSION_REQUEST.scope"));
-    assert!(permission_constructor.contains("WebTokenRequest::CreateWithPromptType"));
-    assert!(permission_constructor.contains("WebTokenRequestPromptType::ForceAuthentication"));
-    assert!(!permission_constructor.contains("GRAPH_WAM_REQUEST"));
-
-    let initial_constructor_start = constructor_match
-        .find("WamRequestMode::InitialConnect =>")
-        .expect("initial constructor arm must exist");
-    let initial_constructor = &constructor_match[initial_constructor_start..];
-    assert!(initial_constructor.contains("GRAPH_WAM_REQUEST.scope"));
-    assert!(initial_constructor.contains("WebTokenRequest::Create(&provider"));
-    assert!(!initial_constructor.contains("CreateWithPromptType"));
-    assert!(!initial_constructor.contains("GRAPH_WAM_PERMISSION_REQUEST"));
-
-    let property_start = request_builder
-        .find("let properties = request")
-        .expect("request properties must be configured");
-    let property_match = &request_builder[property_start..];
-    let permission_properties = source_section(
-        property_match,
-        "WamRequestMode::PermissionConsent =>",
-        "WamRequestMode::InitialConnect =>",
-    );
-    assert!(permission_properties.contains("GRAPH_WAM_PERMISSION_REQUEST.properties"));
-    assert!(!permission_properties.contains("GRAPH_WAM_REQUEST.resource"));
-
-    let initial_properties_start = property_match
-        .find("WamRequestMode::InitialConnect =>")
-        .expect("initial property arm must exist");
-    let initial_properties = &property_match[initial_properties_start..];
-    assert!(initial_properties.contains("GRAPH_WAM_REQUEST.resource_property"));
-    assert!(initial_properties.contains("GRAPH_WAM_REQUEST.resource"));
-    assert!(!initial_properties.contains("GRAPH_WAM_PERMISSION_REQUEST"));
+    assert!(request_builder.contains("WinRtApartment::initialize()"));
+    assert!(request_builder.contains("HSTRING::from(\"organizations\")"));
+    assert!(request_builder.contains("HSTRING::from(GRAPH_WAM_REQUEST.scope)"));
+    assert!(request_builder.contains("WebTokenRequest::CreateWithPromptType"));
+    assert!(request_builder.contains("WebTokenRequestPromptType::ForceAuthentication"));
+    assert!(!request_builder.contains("WamRequestMode"));
+    assert!(!request_builder.contains("wam_compat"));
+    assert!(!request_builder.contains("resource_property"));
+    assert!(!request_builder.contains(".Properties()"));
 
     let authenticate = source_section(
         graph_source,
         "pub(crate) fn authenticate(",
         "pub(crate) fn request_missing_permissions(",
     );
+    assert_eq!(authenticate.matches("wam::authentication_deadline()").count(), 1);
     assert!(authenticate.contains("match wam::acquire_token(hwnd_raw, deadline, lease)"));
     assert!(authenticate.contains("probe_host_capability_for_authentication(deadline, lease)"));
-    assert!(!authenticate.contains("acquire_permission_consent_token"));
+    assert!(graph_source.contains("std::time::Duration::from_secs(120)"));
+    assert!(!graph_source.contains("acquire_permission_consent_token"));
+}
+
+#[test]
+fn graph_interactive_commands_require_native_single_use_tickets() {
+    let command_source = include_str!("../src/commands/graph_api.rs");
+    let reserve = source_section(
+        command_source,
+        "pub fn graph_reserve_interactive_operation(",
+        "pub async fn graph_authenticate(",
+    );
+    assert!(reserve.contains("kind: graph_api::GraphInteractiveOperationKind"));
+    assert!(reserve.contains("state.reserve_interactive_operation(kind)"));
+
+    let authenticate = source_section(
+        command_source,
+        "pub async fn graph_authenticate(",
+        "pub fn graph_cancel_authentication(",
+    );
+    assert!(authenticate.contains("attempt_id: String"));
+    assert!(authenticate.contains("claim_interactive_operation"));
+    assert!(authenticate.contains("GraphInteractiveOperationKind::Authentication"));
+
+    let permission = source_section(
+        command_source,
+        "pub async fn graph_request_missing_permissions(",
+        "pub fn graph_get_auth_status(",
+    );
+    assert!(permission.contains("attempt_id: String"));
+    assert!(permission.contains("claim_interactive_operation"));
+    assert!(permission.contains("GraphInteractiveOperationKind::PermissionConsent"));
+    assert!(!command_source.contains("begin_interactive_operation"));
 }
 
 #[test]
@@ -623,31 +603,9 @@ fn platform_boundary_transport_dtos_round_trip_off_windows() {
 }
 
 #[test]
-fn graph_wam_scope_request_uses_short_delegated_permissions() {
-    assert_eq!(
-        GRAPH_SCOPE_REQUEST,
-        "DeviceManagementManagedDevices.Read.All \
-DeviceManagementServiceConfig.Read.All \
-DeviceManagementApps.Read.All \
-DeviceManagementConfiguration.Read.All \
-DeviceManagementScripts.Read.All"
-    );
-}
-
-#[test]
-fn graph_wam_request_targets_microsoft_graph_resource() {
-    assert_eq!(GRAPH_WAM_REQUEST.scope, GRAPH_SCOPE_REQUEST);
-    assert_eq!(GRAPH_WAM_REQUEST.resource_property, "resource");
-    assert_eq!(GRAPH_WAM_REQUEST.resource, "https://graph.microsoft.com");
-}
-
-#[test]
-fn graph_wam_permission_request_requires_explicit_v2_consent() {
-    assert_eq!(
-        GRAPH_WAM_PERMISSION_REQUEST.scope,
-        GRAPH_WAM_PERMISSION_SCOPE_REQUEST
-    );
-    let actual_scopes = GRAPH_WAM_PERMISSION_REQUEST
+fn graph_wam_request_uses_one_organizations_scope_contract() {
+    assert_eq!(GRAPH_WAM_REQUEST.scope, GRAPH_WAM_SCOPE_REQUEST);
+    let actual_scopes = GRAPH_WAM_REQUEST
         .scope
         .split_ascii_whitespace()
         .collect::<Vec<_>>();
@@ -656,28 +614,6 @@ fn graph_wam_permission_request_requires_explicit_v2_consent() {
         .chain(["openid", "profile", "offline_access"])
         .collect::<Vec<_>>();
     assert_eq!(actual_scopes, expected_scopes);
-    assert!(std::hint::black_box(
-        GRAPH_WAM_PERMISSION_REQUEST.force_authentication
-    ));
-    assert_eq!(
-        GRAPH_WAM_PERMISSION_REQUEST.properties,
-        &[
-            ("wam_compat", "2.0"),
-            ("prompt", "consent"),
-            (
-                "authority",
-                "https://login.microsoftonline.com/organizations/",
-            ),
-            ("validateAuthority", "yes")
-        ]
-    );
-    assert!(
-        GRAPH_WAM_PERMISSION_REQUEST
-            .properties
-            .iter()
-            .all(|(name, _)| !name.eq_ignore_ascii_case("resource")),
-        "a v2 incremental-consent request must not be downgraded to a v1 resource request"
-    );
 }
 
 #[test]

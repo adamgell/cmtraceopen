@@ -13,10 +13,10 @@ pub mod models;
 pub use models::{
     normalize_graph_guid, project_graph_auth_status, GraphAppInfo, GraphAuthAttemptOutcome,
     GraphAuthAttemptResult, GraphAuthCapabilities, GraphAuthStatus, GraphHostCapability,
-    GraphHostCapabilityKind, GraphHttpMethod, GraphResolutionResult, GraphTransportRequest,
-    GraphTransportResponse, GraphWamPermissionRequestContract, GraphWamRequestContract,
-    GRAPH_DELEGATED_SCOPES, GRAPH_SCOPE_REQUEST, GRAPH_WAM_PERMISSION_REQUEST,
-    GRAPH_WAM_PERMISSION_SCOPE_REQUEST, GRAPH_WAM_REQUEST,
+    GraphHostCapabilityKind, GraphHttpMethod, GraphInteractiveOperationKind,
+    GraphInteractiveOperationTicket, GraphResolutionResult, GraphTransportRequest,
+    GraphTransportResponse, GraphWamRequestContract, GRAPH_DELEGATED_SCOPES, GRAPH_WAM_REQUEST,
+    GRAPH_WAM_SCOPE_REQUEST,
 };
 
 #[cfg(any(target_os = "windows", test))]
@@ -151,7 +151,9 @@ fn classify_graph_host_capability(
 
 #[cfg(any(target_os = "windows", test))]
 struct GraphInteractiveOperationEntry {
-    request_id: String,
+    attempt_id: uuid::Uuid,
+    kind: GraphInteractiveOperationKind,
+    claimed: bool,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     accepts_cancellation: bool,
 }
@@ -166,47 +168,76 @@ struct GraphInteractiveOperationRegistry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GraphInteractiveOperationError {
     Busy,
+    InvalidTicket,
 }
 
 #[cfg(any(target_os = "windows", test))]
 pub(crate) struct GraphInteractiveOperationLease {
     registry: std::sync::Arc<GraphInteractiveOperationRegistry>,
-    request_id: String,
+    attempt_id: uuid::Uuid,
     cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(any(target_os = "windows", test))]
 impl GraphInteractiveOperationRegistry {
-    fn begin(
-        self: &std::sync::Arc<Self>,
-        request_id: String,
-    ) -> Result<GraphInteractiveOperationLease, GraphInteractiveOperationError> {
+    fn reserve(
+        &self,
+        kind: GraphInteractiveOperationKind,
+    ) -> Result<GraphInteractiveOperationTicket, GraphInteractiveOperationError> {
         let mut active = self.active.lock().unwrap();
         if active.is_some() {
             return Err(GraphInteractiveOperationError::Busy);
         }
+        let attempt_id = uuid::Uuid::new_v4();
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         *active = Some(GraphInteractiveOperationEntry {
-            request_id: request_id.clone(),
-            cancelled: cancelled.clone(),
+            attempt_id,
+            kind,
+            claimed: false,
+            cancelled,
             accepts_cancellation: true,
         });
-        Ok(GraphInteractiveOperationLease {
-            registry: self.clone(),
-            request_id,
-            cancelled,
+        Ok(GraphInteractiveOperationTicket {
+            attempt_id: attempt_id.hyphenated().to_string(),
         })
     }
 
-    fn cancel(&self, request_id: &str) -> bool {
-        let active = self.active.lock().unwrap();
-        let Some(active) = active
+    fn claim(
+        self: &std::sync::Arc<Self>,
+        attempt_id: &str,
+        kind: GraphInteractiveOperationKind,
+    ) -> Result<GraphInteractiveOperationLease, GraphInteractiveOperationError> {
+        let attempt_id = uuid::Uuid::parse_str(attempt_id)
+            .map_err(|_| GraphInteractiveOperationError::InvalidTicket)?;
+        let mut active = self.active.lock().unwrap();
+        let entry = active
+            .as_mut()
+            .filter(|entry| entry.attempt_id == attempt_id && entry.kind == kind && !entry.claimed)
+            .ok_or(GraphInteractiveOperationError::InvalidTicket)?;
+        entry.claimed = true;
+        Ok(GraphInteractiveOperationLease {
+            registry: self.clone(),
+            attempt_id,
+            cancelled: entry.cancelled.clone(),
+        })
+    }
+
+    fn cancel(&self, attempt_id: &str) -> bool {
+        let Ok(attempt_id) = uuid::Uuid::parse_str(attempt_id) else {
+            return false;
+        };
+        let mut active = self.active.lock().unwrap();
+        let Some(entry) = active
             .as_ref()
-            .filter(|active| active.request_id == request_id && active.accepts_cancellation)
+            .filter(|active| active.attempt_id == attempt_id && active.accepts_cancellation)
         else {
             return false;
         };
-        !active
+        if !entry.claimed {
+            *active = None;
+            return true;
+        }
+        !entry
             .cancelled
             .swap(true, std::sync::atomic::Ordering::AcqRel)
     }
@@ -227,7 +258,7 @@ impl GraphInteractiveOperationLease {
         let mut active = self.registry.active.lock().unwrap();
         let entry = active
             .as_mut()
-            .filter(|active| active.request_id == self.request_id)?;
+            .filter(|active| active.attempt_id == self.attempt_id)?;
         if entry.cancelled.load(std::sync::atomic::Ordering::Acquire) {
             return None;
         }
@@ -242,7 +273,7 @@ impl Drop for GraphInteractiveOperationLease {
         let mut active = self.registry.active.lock().unwrap();
         if active
             .as_ref()
-            .is_some_and(|active| active.request_id == self.request_id)
+            .is_some_and(|active| active.attempt_id == self.attempt_id)
         {
             *active = None;
         }
@@ -338,10 +369,10 @@ mod windows_impl {
         classify_graph_host_capability, normalize_graph_guid, parse_graph_app_json,
         parse_graph_app_values, project_graph_auth_status, GraphAccountEnumeration, GraphAppInfo,
         GraphAuthAttemptOutcome, GraphAuthAttemptResult, GraphAuthStatus, GraphHostCapability,
-        GraphHostCapabilityKind, GraphHttpMethod, GraphInteractiveOperationLease,
-        GraphInteractiveOperationRegistry, GraphResolutionResult, GraphTransportRequest,
-        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache,
-        GRAPH_WAM_PERMISSION_REQUEST, GRAPH_WAM_REQUEST,
+        GraphHostCapabilityKind, GraphHttpMethod, GraphInteractiveOperationKind,
+        GraphInteractiveOperationLease, GraphInteractiveOperationRegistry,
+        GraphInteractiveOperationTicket, GraphResolutionResult, GraphTransportRequest,
+        GraphTransportResponse, VersionedAuthSlot, VersionedGuidCache, GRAPH_WAM_REQUEST,
     };
     use crate::error::AppError;
 
@@ -409,23 +440,39 @@ mod windows_impl {
             Self::default()
         }
 
-        pub(crate) fn begin_interactive_operation(
+        pub(crate) fn reserve_interactive_operation(
             &self,
-            request_id: String,
-        ) -> Result<GraphInteractiveOperationLease, AppError> {
+            kind: GraphInteractiveOperationKind,
+        ) -> Result<GraphInteractiveOperationTicket, AppError> {
             self.inner
                 .interactive_operations
-                .begin(request_id)
-                .map_err(|_| {
-                    AppError::InvalidInput(
+                .reserve(kind)
+                .map_err(|error| match error {
+                    GraphInteractiveOperationError::Busy => AppError::InvalidInput(
                         "Another Microsoft Graph sign-in action is already in progress."
                             .to_string(),
-                    )
+                    ),
+                    GraphInteractiveOperationError::InvalidTicket => AppError::InvalidInput(
+                        "Invalid Microsoft Graph operation ticket.".to_string(),
+                    ),
                 })
         }
 
-        pub(crate) fn cancel_interactive_operation(&self, request_id: &str) -> bool {
-            self.inner.interactive_operations.cancel(request_id)
+        pub(crate) fn claim_interactive_operation(
+            &self,
+            attempt_id: &str,
+            kind: GraphInteractiveOperationKind,
+        ) -> Result<GraphInteractiveOperationLease, AppError> {
+            self.inner
+                .interactive_operations
+                .claim(attempt_id, kind)
+                .map_err(|_| {
+                    AppError::InvalidInput("Invalid Microsoft Graph operation ticket.".to_string())
+                })
+        }
+
+        pub(crate) fn cancel_interactive_operation(&self, attempt_id: &str) -> bool {
+            self.inner.interactive_operations.cancel(attempt_id)
         }
 
         fn get_valid_token_snapshot(&self) -> (Option<CachedToken>, u64) {
@@ -588,15 +635,7 @@ mod windows_impl {
 
         const GRAPH_WAM_ACQUISITION_TIMEOUT: std::time::Duration =
             std::time::Duration::from_secs(120);
-        const GRAPH_WAM_CAPABILITY_TIMEOUT: std::time::Duration =
-            std::time::Duration::from_secs(15);
         const GRAPH_WAM_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-
-        #[derive(Clone, Copy)]
-        enum WamRequestMode {
-            InitialConnect,
-            PermissionConsent,
-        }
 
         struct WinRtApartment;
 
@@ -749,17 +788,6 @@ mod windows_impl {
             )))
         }
 
-        pub fn probe_host_capability() -> GraphHostCapability {
-            let Ok(_apartment) = WinRtApartment::initialize() else {
-                return GraphHostCapability::new(GraphHostCapabilityKind::ProviderUnavailable);
-            };
-            probe_host_capability_with_deadline(
-                std::time::Instant::now() + GRAPH_WAM_CAPABILITY_TIMEOUT,
-                None,
-            )
-            .unwrap_or_else(|_| GraphHostCapability::new(GraphHostCapabilityKind::Unknown))
-        }
-
         pub fn authentication_deadline() -> std::time::Instant {
             std::time::Instant::now() + GRAPH_WAM_ACQUISITION_TIMEOUT
         }
@@ -777,30 +805,12 @@ mod windows_impl {
         /// Desktop (Win32) apps don't have a CoreWindow, so we must use
         /// `IWebAuthenticationCoreManagerInterop::RequestTokenForWindowAsync`
         /// with an explicit HWND instead of the UWP `RequestTokenAsync`.
-        pub fn acquire_permission_consent_token(
-            hwnd_raw: isize,
-            deadline: std::time::Instant,
-            lease: &GraphInteractiveOperationLease,
-        ) -> Result<CachedToken, WamAcquisitionFailure> {
-            let _apartment = WinRtApartment::initialize()?;
-            acquire_token_with_request(hwnd_raw, WamRequestMode::PermissionConsent, deadline, lease)
-        }
-
         pub fn acquire_token(
             hwnd_raw: isize,
             deadline: std::time::Instant,
             lease: &GraphInteractiveOperationLease,
         ) -> Result<CachedToken, WamAcquisitionFailure> {
             let _apartment = WinRtApartment::initialize()?;
-            acquire_token_with_request(hwnd_raw, WamRequestMode::InitialConnect, deadline, lease)
-        }
-
-        fn acquire_token_with_request(
-            hwnd_raw: isize,
-            request_mode: WamRequestMode,
-            deadline: std::time::Instant,
-            lease: &GraphInteractiveOperationLease,
-        ) -> Result<CachedToken, WamAcquisitionFailure> {
             let hwnd = HWND(hwnd_raw as *mut _);
 
             // Provider lookup doesn't need a window
@@ -818,55 +828,14 @@ mod windows_impl {
             )?;
 
             let client_id = HSTRING::from(GRAPH_POWERSHELL_CLIENT_ID);
-            let request = match request_mode {
-                WamRequestMode::PermissionConsent => {
-                    let scope = HSTRING::from(GRAPH_WAM_PERMISSION_REQUEST.scope);
-                    if GRAPH_WAM_PERMISSION_REQUEST.force_authentication {
-                        WebTokenRequest::CreateWithPromptType(
-                            &provider,
-                            &scope,
-                            &client_id,
-                            WebTokenRequestPromptType::ForceAuthentication,
-                        )
-                    } else {
-                        WebTokenRequest::Create(&provider, &scope, &client_id)
-                    }
-                }
-                WamRequestMode::InitialConnect => {
-                    let scope = HSTRING::from(GRAPH_WAM_REQUEST.scope);
-                    WebTokenRequest::Create(&provider, &scope, &client_id)
-                }
-            }
+            let scope = HSTRING::from(GRAPH_WAM_REQUEST.scope);
+            let request = WebTokenRequest::CreateWithPromptType(
+                &provider,
+                &scope,
+                &client_id,
+                WebTokenRequestPromptType::ForceAuthentication,
+            )
             .map_err(|e| AppError::Internal(format!("WAM request creation failed: {e}")))?;
-
-            let properties = request
-                .Properties()
-                .map_err(|e| AppError::Internal(format!("WAM properties failed: {e}")))?;
-            match request_mode {
-                WamRequestMode::PermissionConsent => {
-                    // The explicit permission action mirrors MSAL's Entra WAM
-                    // v2 consent shape. In particular, it must not attach the
-                    // v1 `resource` property or WAM may reuse the cached token.
-                    for &(name, value) in GRAPH_WAM_PERMISSION_REQUEST.properties {
-                        properties
-                            .Insert(&HSTRING::from(name), &HSTRING::from(value))
-                            .map_err(|e| {
-                                AppError::Internal(format!("WAM set consent property failed: {e}"))
-                            })?;
-                    }
-                }
-                WamRequestMode::InitialConnect => {
-                    // Preserve the established initial-connect contract.
-                    // Without this resource property the legacy/default request
-                    // can report Success while returning an empty token.
-                    properties
-                        .Insert(
-                            &HSTRING::from(GRAPH_WAM_REQUEST.resource_property),
-                            &HSTRING::from(GRAPH_WAM_REQUEST.resource),
-                        )
-                        .map_err(|e| AppError::Internal(format!("WAM set resource failed: {e}")))?;
-                }
-            }
 
             // Use the COM interop interface to pass our HWND
             let interop: IWebAuthenticationCoreManagerInterop =
@@ -1379,10 +1348,6 @@ mod windows_impl {
         }
     }
 
-    pub fn probe_host_capability() -> GraphHostCapability {
-        wam::probe_host_capability()
-    }
-
     /// Authenticate with Graph API via WAM on an off-thread worker.
     pub(crate) fn authenticate(
         state: &GraphAuthState,
@@ -1496,7 +1461,7 @@ mod windows_impl {
     ) -> Result<GraphPermissionUpgradeResult, AppError> {
         let deadline = wam::authentication_deadline();
         request_missing_permissions_with(state, lease, || {
-            wam::acquire_permission_consent_token(hwnd_raw, deadline, lease)
+            wam::acquire_token(hwnd_raw, deadline, lease)
         })
     }
 
@@ -1844,8 +1809,14 @@ mod windows_impl {
             F: FnOnce() -> Result<CachedToken, WamAcquisitionFailure>,
         {
             let registry = Arc::new(GraphInteractiveOperationRegistry::default());
+            let ticket = registry
+                .reserve(GraphInteractiveOperationKind::PermissionConsent)
+                .expect("test operation ticket");
             let lease = registry
-                .begin("permission-test-request".to_string())
+                .claim(
+                    &ticket.attempt_id,
+                    GraphInteractiveOperationKind::PermissionConsent,
+                )
                 .expect("test operation lease");
             request_missing_permissions_with(state, &lease, acquire)
         }
@@ -1969,11 +1940,16 @@ mod windows_impl {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
             let registry = Arc::new(GraphInteractiveOperationRegistry::default());
-            let request_id = "cancelled-permission-request";
+            let ticket = registry
+                .reserve(GraphInteractiveOperationKind::PermissionConsent)
+                .unwrap();
             let lease = registry
-                .begin(request_id.to_string())
+                .claim(
+                    &ticket.attempt_id,
+                    GraphInteractiveOperationKind::PermissionConsent,
+                )
                 .expect("test operation lease");
-            assert!(registry.cancel(request_id));
+            assert!(registry.cancel(&ticket.attempt_id));
             let candidate = token(
                 CANDIDATE_TOKEN,
                 "user@contoso.example",
@@ -2395,40 +2371,111 @@ mod tests {
     }
 
     #[test]
-    fn graph_interactive_operation_owns_and_cancels_only_the_matching_request() {
+    fn graph_interactive_operation_issues_single_use_kind_bound_tickets() {
         let registry = std::sync::Arc::new(super::GraphInteractiveOperationRegistry::default());
-        let first = registry
-            .begin("request-a".to_string())
-            .expect("first operation should own the slot");
+        let first_ticket = registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .expect("first reservation should own the slot");
         assert_eq!(
-            registry.begin("request-b".to_string()).err(),
+            registry
+                .reserve(super::GraphInteractiveOperationKind::PermissionConsent)
+                .err(),
             Some(super::GraphInteractiveOperationError::Busy)
         );
-        assert!(!registry.cancel("request-b"));
-        assert!(registry.cancel("request-a"));
+        assert_eq!(
+            registry
+                .claim(
+                    &first_ticket.attempt_id,
+                    super::GraphInteractiveOperationKind::PermissionConsent,
+                )
+                .err(),
+            Some(super::GraphInteractiveOperationError::InvalidTicket)
+        );
+        let first = registry
+            .claim(
+                &first_ticket.attempt_id,
+                super::GraphInteractiveOperationKind::Authentication,
+            )
+            .expect("matching operation should claim its ticket");
+        assert_eq!(
+            registry
+                .claim(
+                    &first_ticket.attempt_id,
+                    super::GraphInteractiveOperationKind::Authentication,
+                )
+                .err(),
+            Some(super::GraphInteractiveOperationError::InvalidTicket)
+        );
+        assert!(!registry.cancel("22d12752-4b6e-45e0-aac4-0bc351e91118"));
+        assert!(registry.cancel(&first_ticket.attempt_id));
         assert!(first.is_cancelled());
-        assert!(!registry.cancel("request-a"));
+        assert!(!registry.cancel(&first_ticket.attempt_id));
 
         drop(first);
-        let second = registry
-            .begin("request-b".to_string())
+        let second_ticket = registry
+            .reserve(super::GraphInteractiveOperationKind::PermissionConsent)
             .expect("dropping the lease should release ownership");
+        assert_ne!(first_ticket.attempt_id, second_ticket.attempt_id);
+        assert!(!registry.cancel(&first_ticket.attempt_id));
+        let second = registry
+            .claim(
+                &second_ticket.attempt_id,
+                super::GraphInteractiveOperationKind::PermissionConsent,
+            )
+            .unwrap();
         assert!(!second.is_cancelled());
     }
 
     #[test]
     fn graph_interactive_operation_never_publishes_after_matching_cancellation() {
         let registry = std::sync::Arc::new(super::GraphInteractiveOperationRegistry::default());
-        let cancelled = registry.begin("cancelled".to_string()).unwrap();
-        assert!(registry.cancel("cancelled"));
+        let cancelled_ticket = registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .unwrap();
+        let cancelled = registry
+            .claim(
+                &cancelled_ticket.attempt_id,
+                super::GraphInteractiveOperationKind::Authentication,
+            )
+            .unwrap();
+        assert!(registry.cancel(&cancelled_ticket.attempt_id));
         let mut published = false;
         assert_eq!(cancelled.publish_if_active(|| published = true), None,);
         assert!(!published);
 
         drop(cancelled);
-        let completed = registry.begin("completed".to_string()).unwrap();
+        let completed_ticket = registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .unwrap();
+        let completed = registry
+            .claim(
+                &completed_ticket.attempt_id,
+                super::GraphInteractiveOperationKind::Authentication,
+            )
+            .unwrap();
         assert_eq!(completed.publish_if_active(|| 42), Some(42));
-        assert!(!registry.cancel("completed"));
+        assert!(!registry.cancel(&completed_ticket.attempt_id));
+    }
+
+    #[test]
+    fn graph_interactive_operation_cancellation_retires_an_unclaimed_ticket() {
+        let registry = std::sync::Arc::new(super::GraphInteractiveOperationRegistry::default());
+        let retired = registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .unwrap();
+        assert!(registry.cancel(&retired.attempt_id));
+        assert_eq!(
+            registry
+                .claim(
+                    &retired.attempt_id,
+                    super::GraphInteractiveOperationKind::Authentication,
+                )
+                .err(),
+            Some(super::GraphInteractiveOperationError::InvalidTicket)
+        );
+        assert!(registry
+            .reserve(super::GraphInteractiveOperationKind::Authentication)
+            .is_ok());
     }
 
     #[test]

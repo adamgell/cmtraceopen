@@ -350,7 +350,7 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]
-            commands::graph_api::graph_probe_capability,
+            commands::graph_api::graph_reserve_interactive_operation,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_cancel_authentication,
             #[cfg(target_os = "windows")]
