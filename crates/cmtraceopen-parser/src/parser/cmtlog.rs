@@ -37,7 +37,7 @@ fn cmtlog_re() -> &'static Regex {
     CELL.get_or_init(|| {
         Regex::new(concat!(
             r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
-            r#"<time="(?P<h>[0-9]{1,2}):(?P<m>[0-9]{1,2}):(?P<s>[0-9]{1,2})\.(?P<ms>[0-9]+)(?P<tz>[+-]*[0-9]+)""#,
+            r#"<time="(?P<h>[0-9]{1,2}):(?P<m>[0-9]{1,2}):(?P<s>[0-9]{1,2})\.(?P<ms>[0-9]+)(?P<tz>[+-][0-9]+)?""#,
             r#"\s+date="(?P<mon>[0-9]{1,2})-(?P<day>[0-9]{1,2})-(?P<yr>[0-9]{4})""#,
             r#"\s+component="(?P<comp>[^"]*)""#,
             r#"\s+context="[^"]*""#,
@@ -119,12 +119,11 @@ fn parse_cmtlog_line(line: &str) -> Option<CmtLogParsed> {
         .name("s")
         .and_then(|m| m.as_str().parse().ok())
         .unwrap_or(0);
-    let ms: u32 = caps
-        .name("ms")
-        .and_then(|m| m.as_str().parse().ok())
+    let ms = ccm::truncate_subsecond_to_millis(caps.name("ms")?.as_str())?;
+    let tz_offset = caps
+        .name("tz")
+        .and_then(|value| value.as_str().parse::<i32>().ok())
         .unwrap_or(0);
-    let tz_str = caps.name("tz").map(|m| m.as_str()).unwrap_or("0");
-    let tz_offset: i32 = tz_str.replace("+-", "-").parse().unwrap_or(0);
     let mon: u32 = caps
         .name("mon")
         .and_then(|m| m.as_str().parse().ok())
@@ -409,5 +408,36 @@ mod tests {
         let line_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
         let (entries, _) = parse_lines(&line_refs, "test.cmtlog");
         assert_eq!(entries[0].severity, Severity::Error);
+    }
+
+    #[test]
+    fn signless_fractional_tails_never_become_cmtlog_offsets() {
+        let line = r#"<![LOG[fractional payload ✓]LOG]!><time="10:00:00.123456" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="">"#;
+        let (entries, errors) = parse_lines(&[line], "test.cmtlog");
+
+        assert_eq!(errors, 0);
+        assert_eq!(
+            entries[0].timestamp_display.as_deref(),
+            Some("04-13-2026 10:00:00.123")
+        );
+        assert_eq!(entries[0].timezone_offset, Some(0));
+        assert_eq!(entries[0].message, "fractional payload ✓");
+    }
+
+    #[test]
+    fn cmtlog_accepts_signed_offsets_and_rejects_unicode_structural_digits() {
+        let signed = r#"<![LOG[Résumé ✓]LOG]!><time="10:00:00.12-240" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="">"#;
+        let unicode = r#"<![LOG[日本語 payload]LOG]!><time="10:00:00.12١" date="04-13-2026" component="__HEADER__" context="" type="1" thread="0" file="">"#;
+        let (entries, errors) = parse_lines(&[signed, unicode], "test.cmtlog");
+
+        assert_eq!(entries[0].timezone_offset, Some(-240));
+        assert_eq!(
+            entries[0].timestamp_display.as_deref(),
+            Some("04-13-2026 10:00:00.120")
+        );
+        assert_eq!(entries[0].message, "Résumé ✓");
+        assert_eq!(errors, 1);
+        assert_eq!(entries[1].timestamp, None);
+        assert_eq!(entries[1].message, unicode);
     }
 }

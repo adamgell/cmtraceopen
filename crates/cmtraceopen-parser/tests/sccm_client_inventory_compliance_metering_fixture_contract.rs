@@ -2657,7 +2657,7 @@ fn independent_review_blocker_last_success_respects_family_phase_order() {
 }
 
 #[test]
-fn independent_review_blocker_recovery_uses_additive_signless_offset_ordering() {
+fn signless_fractional_tail_is_not_usable_recovery_chronology() {
     let (temporary, manifest, expected) = copied_inventory_recovery_with_time_replacements(
         "signless-offset",
         &[
@@ -2665,16 +2665,15 @@ fn independent_review_blocker_recovery_uses_additive_signless_offset_ordering() 
             ("time=\"01:20:01.000+000\"", "time=\"07:00:00.000+000\""),
         ],
     );
-    validate_contract(
+    assert_rejected_with(
+        "recovery with signless fractional tail",
         "inventory",
         "recovery-contradictory",
         &temporary.root,
         &manifest,
         &expected,
-    )
-    .unwrap_or_else(|error| {
-        panic!("valid signless +240 SCCM provenance must order recovery: {error}")
-    });
+        "normalized additive SCCM timestamp provenance",
+    );
 }
 
 #[test]
