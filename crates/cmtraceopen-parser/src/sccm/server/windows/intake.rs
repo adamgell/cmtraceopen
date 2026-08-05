@@ -2753,7 +2753,6 @@ fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "provider-retry-current"
                 | "provider-success-current"
                 | "provider-timeout-current"
-                | "unknown-db-export"
                 | "unrelated-02-wcm"
                 | "unrelated-03-wsync"
                 | "unrelated-04-wsus"
@@ -2784,7 +2783,6 @@ fn safe_source_id(value: &str, allow_unknown: bool, synthetic_fixture: bool) -> 
             | "server-provider"
             | "server-admin-service"
             | "server-admin-service-iis"
-            | "unknown-db-supplement"
     ) || (allow_unknown
         && !synthetic_fixture
         && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
@@ -2801,7 +2799,7 @@ fn safe_source_kind(value: &str, allow_unknown: bool, synthetic_fixture: bool) -
 
 fn safe_public_basename(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        value == "synthetic-db-export.txt"
+        false
     } else {
         opaque_sha256_handle(value, "cmtraceopen.basename.sha256.v1:")
     }
@@ -2867,7 +2865,6 @@ fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
                 | "provider-primary"
                 | "admin-service-primary"
                 | "admin-service-iis"
-                | "unknown-db-export"
         ) || SYNTHETIC_HIERARCHY_LINEAGES.contains(&value);
     }
     opaque_sha256_handle(value, "cmtraceopen.lineage.sha256.v1:")
@@ -2930,7 +2927,6 @@ fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
                 | "synthetic:path:provider-primary"
                 | "synthetic:path:admin-service-primary"
                 | "synthetic:path:admin-service-iis"
-                | "synthetic:path:unsupported-db"
                 | "synthetic:path:z-site"
         ) || SYNTHETIC_HIERARCHY_PATH_FINGERPRINTS.contains(&value);
     }
