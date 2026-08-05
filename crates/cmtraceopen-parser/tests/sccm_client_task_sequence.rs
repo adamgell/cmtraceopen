@@ -300,53 +300,100 @@ fn admitted_scenario_with_order(
         .expect("Task Sequence evidence reaches the sealed admission boundary")
 }
 
-fn admitted_custom_records(
-    label: &str,
-    content: &str,
+struct CustomTaskSequenceSource<'a> {
+    artifact_label: &'a str,
+    source_label: &'a str,
+    content: &'a str,
+    rotation: SccmRotation,
+    root: Option<&'a str>,
+    relocation_lineage: &'a str,
+    relocation_ordinal: u32,
+}
+
+fn admitted_custom_sources(
+    sources: Vec<CustomTaskSequenceSource<'_>>,
 ) -> cmtraceopen_parser::sccm::client::SccmClientAdmittedEvidence {
-    let bytes = content.as_bytes().to_vec();
-    let artifact_id = opaque_artifact_id(label);
-    let bundle = SccmClientIntakeBundle {
-        artifacts: vec![SccmClientIntakeArtifact {
+    let mut artifacts = Vec::new();
+    let mut payloads = Vec::new();
+    for source in sources {
+        let bytes = source.content.as_bytes().to_vec();
+        let artifact_id = opaque_artifact_id(source.artifact_label);
+        let basename = match source.rotation {
+            SccmRotation::Current => "smsts.log",
+            SccmRotation::LoUnderscore => "smsts.lo_",
+            _ => panic!("custom Task Sequence source uses an unsupported rotation"),
+        };
+        let rotation_segment = match source.rotation {
+            SccmRotation::Current => "current",
+            SccmRotation::LoUnderscore => "lo",
+            _ => unreachable!("custom Task Sequence rotation is bounded above"),
+        };
+        let relative_path = source.root.map_or_else(
+            || format!("evidence/client-task-sequence-smsts/client/{rotation_segment}/{basename}"),
+            |root| {
+                format!(
+                    "evidence/client-task-sequence-smsts/client/{root}/{rotation_segment}/{basename}"
+                )
+            },
+        );
+        artifacts.push(SccmClientIntakeArtifact {
             artifact: SccmArtifact {
                 artifact_id: artifact_id.clone(),
-                display_name: "smsts.log".to_owned(),
+                display_name: basename.to_owned(),
                 original_path: None,
                 host: None,
                 role: SccmRole::Client,
                 configmgr_version: Some("5.00.TEST.0000".to_owned()),
                 collected_at_utc: Some("2026-07-30T02:00:00Z".to_owned()),
-                rotation: SccmRotation::Current,
+                rotation: source.rotation,
                 coverage: SccmCoverageState::Captured,
                 encoding: Some("utf-8".to_owned()),
             },
-            path_fingerprint: Some(format!("sha256:{}", digest(label.as_bytes()))),
+            path_fingerprint: Some(format!("sha256:{}", digest(source.source_label.as_bytes()))),
             rotation_lineage: Some(format!(
                 "cmtraceopen.lineage.sha256.v1:{}",
-                digest(format!("{label}-lineage").as_bytes())
+                digest(format!("{}-lineage", source.source_label).as_bytes())
             )),
-            relative_path: Some(
-                "evidence/client-task-sequence-smsts/client/current/smsts.log".to_owned(),
-            ),
+            relative_path: Some(relative_path),
             task_sequence_provenance: Some(SccmTaskSequenceProvenance {
                 version: 1,
                 path_class: SccmTaskSequencePathClass::Client,
                 smsts_log_path_evidence: None,
-                relocation_lineage: "synthetic:ts-relocation:custom".to_owned(),
-                relocation_ordinal: 0,
+                relocation_lineage: source.relocation_lineage.to_owned(),
+                relocation_ordinal: source.relocation_ordinal,
             }),
             fragment_complete: Some(true),
             declared_byte_length: Some(bytes.len() as u64),
             content_sha256: Some(digest(&bytes)),
-        }],
+        });
+        payloads.push(
+            SccmClientCapturedPayload::new(&artifact_id, bytes)
+                .expect("custom payload identity is canonical"),
+        );
+    }
+    let bundle = SccmClientIntakeBundle {
+        artifacts,
         capture_gaps: Vec::new(),
     };
     let assessment =
         assess_client_intake(&bundle).expect("custom Task Sequence intake is canonical");
-    let payload = SccmClientCapturedPayload::new(&artifact_id, bytes)
-        .expect("custom payload identity is canonical");
-    admit_client_evidence(&bundle, &assessment, &[payload])
+    admit_client_evidence(&bundle, &assessment, &payloads)
         .expect("custom Task Sequence records are admitted")
+}
+
+fn admitted_custom_records(
+    label: &str,
+    content: &str,
+) -> cmtraceopen_parser::sccm::client::SccmClientAdmittedEvidence {
+    admitted_custom_sources(vec![CustomTaskSequenceSource {
+        artifact_label: label,
+        source_label: label,
+        content,
+        rotation: SccmRotation::Current,
+        root: None,
+        relocation_lineage: "synthetic:ts-relocation:custom",
+        relocation_ordinal: 0,
+    }])
 }
 
 fn evidence_projection(value: &Value, make_opaque: bool) -> Vec<(String, u64, u64)> {
@@ -915,6 +962,98 @@ fn transaction_ids_are_subject_derived_and_stable_across_result_sets() {
             .collect::<std::collections::BTreeSet<_>>(),
         [id_a.as_str(), id_b.as_str()].into_iter().collect()
     );
+}
+
+#[test]
+fn identical_execution_identity_across_distinct_relocation_lineages_stays_source_local() {
+    let execution_id = "72400000-0000-0000-0000-000000000095";
+    let package_id = "LAB00324";
+    let advertisement_id = "LAB20395";
+    let run_context = "osd";
+    let first = format!(
+        "<![LOG[phase=preflight state=inProgress terminal=false executionId={execution_id} taskSequencePackageId={package_id} advertisementId={advertisement_id} runContext={run_context} _SMSTSLogPath=SYNTHETIC://client/root-a/CCM/Logs/smstslog/smsts.log]LOG]!><time=\"02:00:01.000+000\" date=\"07-30-2026\" component=\"TSManager\" context=\"\" type=\"1\" thread=\"1\" file=\"synthetic.ts:1\">\n"
+    );
+    let terminal = format!(
+        "<![LOG[phase=complete state=succeeded terminal=true executionId={execution_id} taskSequencePackageId={package_id} advertisementId={advertisement_id} runContext={run_context} _SMSTSLogPath=SYNTHETIC://client/root-b/CCM/Logs/smstslog/smsts.log]LOG]!><time=\"02:00:02.000+000\" date=\"07-30-2026\" component=\"TSManager\" context=\"\" type=\"0\" thread=\"1\" file=\"synthetic.ts:2\">\n"
+    );
+    let admitted = admitted_custom_sources(vec![
+        CustomTaskSequenceSource {
+            artifact_label: "cross-lineage-a",
+            source_label: "cross-lineage-source-a",
+            content: &first,
+            rotation: SccmRotation::Current,
+            root: Some("root-a"),
+            relocation_lineage: "synthetic:ts-relocation:root-a",
+            relocation_ordinal: 0,
+        },
+        CustomTaskSequenceSource {
+            artifact_label: "cross-lineage-b",
+            source_label: "cross-lineage-source-b",
+            content: &terminal,
+            rotation: SccmRotation::Current,
+            root: Some("root-b"),
+            relocation_lineage: "synthetic:ts-relocation:root-b",
+            relocation_ordinal: 0,
+        },
+    ]);
+
+    let analysis = analyze_client_task_sequence(&admitted).expect("analysis succeeds");
+
+    assert!(analysis.transactions.is_empty());
+    assert_eq!(analysis.source_local_observations.len(), 2);
+    assert!(analysis
+        .source_local_observations
+        .iter()
+        .all(|observation| !observation.correlation_eligible));
+    assert_eq!(analysis.findings.len(), 2);
+    assert!(analysis.findings.iter().all(|finding| {
+        finding.transaction_id.is_none()
+            && finding.classification == SccmTaskSequenceClassification::InsufficientEvidence
+            && finding.confidence == SccmTaskSequenceConfidence::Low
+    }));
+}
+
+#[test]
+fn same_lineage_current_and_lo_rotation_still_form_one_transaction() {
+    let execution_id = "72400000-0000-0000-0000-000000000096";
+    let package_id = "LAB00324";
+    let advertisement_id = "LAB20396";
+    let run_context = "osd";
+    let archived = format!(
+        "<![LOG[phase=preflight state=inProgress terminal=false executionId={execution_id} taskSequencePackageId={package_id} advertisementId={advertisement_id} runContext={run_context} _SMSTSLogPath=SYNTHETIC://client/CCM/Logs/smsts.log]LOG]!><time=\"02:00:01.000+000\" date=\"07-30-2026\" component=\"TSManager\" context=\"\" type=\"1\" thread=\"1\" file=\"synthetic.ts:1\">\n"
+    );
+    let current = format!(
+        "<![LOG[phase=complete state=succeeded terminal=true executionId={execution_id} taskSequencePackageId={package_id} advertisementId={advertisement_id} runContext={run_context} _SMSTSLogPath=SYNTHETIC://client/CCM/Logs/smsts.log]LOG]!><time=\"02:00:02.000+000\" date=\"07-30-2026\" component=\"TSManager\" context=\"\" type=\"0\" thread=\"1\" file=\"synthetic.ts:2\">\n"
+    );
+    let admitted = admitted_custom_sources(vec![
+        CustomTaskSequenceSource {
+            artifact_label: "same-lineage-lo",
+            source_label: "same-lineage-source",
+            content: &archived,
+            rotation: SccmRotation::LoUnderscore,
+            root: None,
+            relocation_lineage: "synthetic:ts-relocation:same-source",
+            relocation_ordinal: 0,
+        },
+        CustomTaskSequenceSource {
+            artifact_label: "same-lineage-current",
+            source_label: "same-lineage-source",
+            content: &current,
+            rotation: SccmRotation::Current,
+            root: None,
+            relocation_lineage: "synthetic:ts-relocation:same-source",
+            relocation_ordinal: 0,
+        },
+    ]);
+
+    let analysis = analyze_client_task_sequence(&admitted).expect("analysis succeeds");
+
+    assert_eq!(analysis.transactions.len(), 1);
+    assert_eq!(
+        analysis.transactions[0].classification,
+        SccmTaskSequenceClassification::Success
+    );
+    assert!(analysis.transactions[0].terminal_evidence.is_some());
 }
 
 #[test]

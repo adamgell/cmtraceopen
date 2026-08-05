@@ -297,7 +297,30 @@ pub fn analyze_client_task_sequence(
         }
     }
 
-    let mut transactions = groups.into_values().map(reduce_group).collect::<Vec<_>>();
+    let mut transactions = Vec::new();
+    for observations in groups.into_values() {
+        let relocation_lineages = observations
+            .iter()
+            .map(|observation| observation.relocation_lineage.as_str())
+            .collect::<BTreeSet<_>>();
+        if relocation_lineages.len() == 1 {
+            transactions.push(reduce_group(observations));
+        } else {
+            unlinked.extend(
+                observations
+                    .into_iter()
+                    .map(|observation| UnlinkedObservation {
+                        evidence: observation.evidence,
+                        path_class: observation.path_class,
+                        rotation: observation.rotation,
+                        key_confidence: SccmTaskSequenceKeyConfidence::Candidate,
+                        phase_hint: Some(observation.phase),
+                        state_hint: Some(observation.state),
+                        reason: "An execution identity observed across distinct sealed relocation lineages cannot be correlated.",
+                    }),
+            );
+        }
+    }
     transactions.sort_by(|left, right| left.transaction_id.cmp(&right.transaction_id));
 
     let mut coverage_gaps = sources
