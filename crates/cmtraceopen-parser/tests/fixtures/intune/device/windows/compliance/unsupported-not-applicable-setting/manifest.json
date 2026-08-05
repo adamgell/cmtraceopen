@@ -1,0 +1,42 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "unsupported-not-applicable-setting",
+  "workload": "device/windows/compliance",
+  "description": "A setting that does not apply to this device is excluded from the aggregate rather than counted as a pass or a failure.",
+  "generatedAtUtc": "2026-07-31T12:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-context",
+      "family": "deviceContext",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device-context.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/device-context/device-context.json",
+      "relativePath": "evidence/device-context/current/device-context.json",
+      "bytesCopied": 1228,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "mdm-report",
+      "family": "mdmReport",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "mdm-report.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/mdm-report/mdm-report.json",
+      "relativePath": "evidence/mdm-report/current/mdm-report.json",
+      "bytesCopied": 2392,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

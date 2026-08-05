@@ -1,0 +1,45 @@
+{
+  "scenario": "malformed-and-unknown-schema",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "insufficientEvidence",
+    "rationale": "noLocalSourceAvailable"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-source-malformed",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "mdm-events",
+        "mdm-report"
+      ]
+    }
+  ],
+  "assertions": [
+    "malformed bytes and an unknown schema version are distinct from an absent source"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "parseFailed"
+    },
+    {
+      "artifactId": "mdm-report",
+      "status": "unsupported"
+    }
+  ]
+}

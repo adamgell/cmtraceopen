@@ -1,0 +1,40 @@
+{
+  "scenario": "custom-compliance-discovery-noncompliant",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "noncompliant",
+    "rationale": "customComplianceDiscoveryNoncompliant"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-custom-discovery-noncompliant",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "cst-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a completed discovery run's noncompliant verdict aggregates as a noncompliance"
+  ],
+  "coverage": [
+    {
+      "artifactId": "custom-compliance",
+      "status": "available"
+    },
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    }
+  ]
+}

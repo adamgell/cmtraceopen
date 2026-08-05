@@ -1,0 +1,4 @@
+{ "syntheticFixture": "SYNTHETIC FIXTURE - deliberately truncated compliance evidence",
+  "complianceInputVersion": 1,
+  "kind": "windowsEvents",
+  "records": [ { "context": { "evidenceRef": { "evidenceId": "evt-1"

@@ -1,0 +1,70 @@
+{
+  "scenario": "unsupported-not-applicable-setting",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "compliant",
+    "rationale": "allEvaluatedSettingsCompliant"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "rpt-1"
+      ]
+    },
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/firewallstatus",
+      "scope": "device",
+      "state": "notApplicable",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "rpt-2"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-setting-not-applicable",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "rpt-2"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "compliance-device-compliant",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "rpt-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a not-applicable setting does not contribute to the aggregate in either direction"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-report",
+      "status": "available"
+    }
+  ]
+}
