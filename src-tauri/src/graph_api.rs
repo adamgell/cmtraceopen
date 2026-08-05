@@ -447,14 +447,11 @@ mod windows_impl {
             self.inner
                 .interactive_operations
                 .reserve(kind)
-                .map_err(|error| match error {
-                    GraphInteractiveOperationError::Busy => AppError::InvalidInput(
+                .map_err(|_| {
+                    AppError::InvalidInput(
                         "Another Microsoft Graph sign-in action is already in progress."
                             .to_string(),
-                    ),
-                    GraphInteractiveOperationError::InvalidTicket => AppError::InvalidInput(
-                        "Invalid Microsoft Graph operation ticket.".to_string(),
-                    ),
+                    )
                 })
         }
 
