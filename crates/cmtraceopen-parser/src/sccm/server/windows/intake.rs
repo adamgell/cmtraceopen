@@ -778,10 +778,15 @@ pub fn assess_server_intake(
 
     let topology = normalize_topology(&manifest)?;
     if topology.roles_observed.iter().any(|role| {
-        (is_opaque_future_role(role) || is_advanced_capture_role(role))
-            && !manifest.artifacts.iter().any(|artifact| {
-                artifact.producer_role == *role && artifact.source_kind == "advancedCapture"
-            })
+        (is_opaque_future_role(role)
+            && !manifest
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.producer_role == *role))
+            || (is_advanced_capture_role(role)
+                && !manifest.artifacts.iter().any(|artifact| {
+                    artifact.producer_role == *role && artifact.source_kind == "advancedCapture"
+                }))
     }) {
         return Err(SccmServerIntakeError::InvalidTopology);
     }

@@ -16,9 +16,9 @@ pub mod intune;
 #[cfg(debug_assertions)]
 mod ipc_bridge;
 #[cfg(feature = "macos-diag")]
-pub mod jamf;
-#[cfg(feature = "macos-diag")]
 pub mod macos_diag;
+#[cfg(feature = "macos-diag")]
+pub mod jamf;
 mod menu;
 pub use cmtraceopen_parser::models;
 pub mod parser;
