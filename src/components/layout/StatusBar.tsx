@@ -17,6 +17,7 @@ import {
   getUiChromeStatus,
   isIntuneWorkspace,
   useUiStore,
+  type GraphApiPhase,
 } from "../../stores/ui-store";
 import { useIntuneStore } from "../../workspaces/intune/intune-store";
 import { useDsregcmdStore } from "../../workspaces/dsregcmd/dsregcmd-store";
@@ -34,10 +35,45 @@ interface SeverityCounts {
   success: number;
 }
 
+type GraphApiIndicatorPhase = Exclude<GraphApiPhase, "disconnected">;
+
+const GRAPH_API_INDICATORS: Record<
+  GraphApiIndicatorPhase,
+  { color: string; title: string; label: string }
+> = {
+  signingIn: {
+    color: tokens.colorNeutralForeground3,
+    title: "Connecting to Graph API...",
+    label: "Graph API: Connecting...",
+  },
+  cancelling: {
+    color: tokens.colorNeutralForeground3,
+    title: "Cancelling Microsoft Graph sign-in...",
+    label: "Graph API: Cancelling...",
+  },
+  connected: {
+    color: tokens.colorPaletteGreenForeground1,
+    title: "Graph API connected — GUID resolution active",
+    label: "Graph API: Connected",
+  },
+  unsupported: {
+    color: tokens.colorPaletteYellowForeground2,
+    title: "Microsoft Graph is unavailable on this host",
+    label: "Graph API: Unavailable",
+  },
+  error: {
+    color: tokens.colorPaletteRedForeground1,
+    title: "Graph API connection failed",
+    label: "Graph API: Error",
+  },
+};
+
 function formatSeverityCounts(counts: SeverityCounts): string {
   const parts: string[] = [];
-  if (counts.errors > 0) parts.push(`${counts.errors} error${counts.errors === 1 ? "" : "s"}`);
-  if (counts.warnings > 0) parts.push(`${counts.warnings} warning${counts.warnings === 1 ? "" : "s"}`);
+  if (counts.errors > 0)
+    parts.push(`${counts.errors} error${counts.errors === 1 ? "" : "s"}`);
+  if (counts.warnings > 0)
+    parts.push(`${counts.warnings} warning${counts.warnings === 1 ? "" : "s"}`);
   if (counts.info > 0) parts.push(`${counts.info} info`);
   if (counts.success > 0) parts.push(`${counts.success} success`);
   return parts.join(", ");
@@ -79,7 +115,9 @@ export function StatusBar() {
   const sourceStatus = useLogStore((s) => s.sourceStatus);
   const folderLoadProgress = useLogStore((s) => s.folderLoadProgress);
   const folderLoadCurrentFile = useLogStore((s) => s.folderLoadCurrentFile);
-  const folderLoadCompletedFiles = useLogStore((s) => s.folderLoadCompletedFiles);
+  const folderLoadCompletedFiles = useLogStore(
+    (s) => s.folderLoadCompletedFiles,
+  );
   const folderLoadTotalFiles = useLogStore((s) => s.folderLoadTotalFiles);
 
   const activeView = useUiStore((s) => s.activeView);
@@ -89,6 +127,10 @@ export function StatusBar() {
   const activeTabIndex = useUiStore((s) => s.activeTabIndex);
 
   const graphApiStatus = useUiStore((s) => s.graphApiStatus);
+  const graphApiIndicator =
+    graphApiStatus === "disconnected"
+      ? null
+      : GRAPH_API_INDICATORS[graphApiStatus];
 
   const intuneAnalysisState = useIntuneStore((s) => s.analysisState);
   const intuneSummary = useIntuneStore((s) => s.summary);
@@ -196,15 +238,19 @@ export function StatusBar() {
     isLoading,
     isPaused,
     activeSource,
-    openFilePath
+    openFilePath,
   );
   const parserDisplay = getParserSelectionDisplay(parserSelection);
-  const uiChromeStatus = getUiChromeStatus(activeView, showDetails, showInfoPane);
+  const uiChromeStatus = getUiChromeStatus(
+    activeView,
+    showDetails,
+    showInfoPane,
+  );
   const filterStatus = getFilterStatusSnapshot(
     filterClauseCount,
     filteredIds?.size ?? null,
     isFiltering,
-    filterError
+    filterError,
   );
 
   let leftParts: string[] = [];
@@ -261,8 +307,8 @@ export function StatusBar() {
         : null;
 
     const logStatusText =
-      folderLoadStatusText
-        ?? (entries.length > 0
+      folderLoadStatusText ??
+      (entries.length > 0
         ? [
             positionText ?? entriesCountText,
             `${totalLines} lines`,
@@ -279,22 +325,29 @@ export function StatusBar() {
         : failureReason
           ? `Reason: ${failureReason}`
           : sourceStatus.kind !== "idle"
-            ? sourceStatus.detail ?? sourceStatus.message
+            ? (sourceStatus.detail ?? sourceStatus.message)
             : "");
 
-    const filterStatusText = filterError ? `Filter error: ${filterError}` : filterStatus.label;
+    const filterStatusText = filterError
+      ? `Filter error: ${filterError}`
+      : filterStatus.label;
 
     rightStatusText = [logStatusText, filterStatusText]
       .filter((part) => part.length > 0)
       .join(" | ");
-    rightTone = filterStatus.tone === "error" ? tokens.colorPaletteRedForeground2 : undefined;
+    rightTone =
+      filterStatus.tone === "error"
+        ? tokens.colorPaletteRedForeground2
+        : undefined;
   } else if (isIntuneWorkspace(activeView)) {
     const intuneSourceLabel = getBaseName(
-      intuneAnalysisState.requestedPath ?? intuneSourceContext.analyzedPath
+      intuneAnalysisState.requestedPath ?? intuneSourceContext.analyzedPath,
     );
 
     leftParts = [
-      activeView === "new-intune" ? "New Intune Workspace" : "Intune Diagnostics",
+      activeView === "new-intune"
+        ? "New Intune Workspace"
+        : "Intune Diagnostics",
       intuneAnalysisState.phase === "analyzing"
         ? "Analyzing"
         : intuneAnalysisState.phase === "error"
@@ -315,13 +368,23 @@ export function StatusBar() {
     }
 
     if (intuneAnalysisState.phase === "analyzing") {
-      rightStatusText = intuneAnalysisState.detail ?? intuneAnalysisState.message;
+      rightStatusText =
+        intuneAnalysisState.detail ?? intuneAnalysisState.message;
       rightTone = tokens.colorPaletteBlueForeground2;
-    } else if (intuneAnalysisState.phase === "error" || intuneAnalysisState.phase === "empty") {
-      rightStatusText = [intuneAnalysisState.message, intuneAnalysisState.detail]
+    } else if (
+      intuneAnalysisState.phase === "error" ||
+      intuneAnalysisState.phase === "empty"
+    ) {
+      rightStatusText = [
+        intuneAnalysisState.message,
+        intuneAnalysisState.detail,
+      ]
         .filter((part): part is string => Boolean(part))
         .join(" | ");
-      rightTone = intuneAnalysisState.phase === "error" ? tokens.colorPaletteRedForeground2 : tokens.colorPaletteMarigoldForeground2;
+      rightTone =
+        intuneAnalysisState.phase === "error"
+          ? tokens.colorPaletteRedForeground2
+          : tokens.colorPaletteMarigoldForeground2;
     } else if (intuneSummary) {
       rightStatusText = [
         `${intuneSummary.totalEvents} events`,
@@ -377,8 +440,12 @@ export function StatusBar() {
       rightStatusText = [
         `${deploymentResult.succeeded} succeeded`,
         `${deploymentResult.failed} failed`,
-        deploymentResult.deferred > 0 ? `${deploymentResult.deferred} deferred` : null,
-      ].filter(Boolean).join(" | ");
+        deploymentResult.deferred > 0
+          ? `${deploymentResult.deferred} deferred`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" | ");
     }
   } else if (activeView === "event-log") {
     leftParts = [
@@ -393,20 +460,24 @@ export function StatusBar() {
     ];
 
     if (evtxIsLoading) {
-      rightStatusText = evtxRecordCount > 0
-        ? `${evtxRecordCount.toLocaleString()} events loaded...`
-        : "Querying event logs...";
+      rightStatusText =
+        evtxRecordCount > 0
+          ? `${evtxRecordCount.toLocaleString()} events loaded...`
+          : "Querying event logs...";
       rightTone = tokens.colorPaletteBlueForeground2;
     } else if (evtxRecordCount > 0) {
-      const timeStr = evtxLoadElapsedMs != null
-        ? ` in ${(evtxLoadElapsedMs / 1000).toFixed(1)}s`
-        : "";
+      const timeStr =
+        evtxLoadElapsedMs != null
+          ? ` in ${(evtxLoadElapsedMs / 1000).toFixed(1)}s`
+          : "";
       rightStatusText = `${evtxRecordCount.toLocaleString()} events${timeStr}`;
     }
   } else if (activeView === "secureboot") {
     const sbDiagnostics = securebootResult?.diagnostics ?? [];
     const sbErrors = sbDiagnostics.filter((d) => d.severity === "error").length;
-    const sbWarnings = sbDiagnostics.filter((d) => d.severity === "warning").length;
+    const sbWarnings = sbDiagnostics.filter(
+      (d) => d.severity === "warning",
+    ).length;
 
     leftParts = [
       "Secure Boot",
@@ -422,10 +493,14 @@ export function StatusBar() {
     }
 
     if (securebootAnalysisState.phase === "analyzing") {
-      rightStatusText = securebootAnalysisState.detail ?? securebootAnalysisState.message;
+      rightStatusText =
+        securebootAnalysisState.detail ?? securebootAnalysisState.message;
       rightTone = tokens.colorPaletteBlueForeground2;
     } else if (securebootAnalysisState.phase === "error") {
-      rightStatusText = [securebootAnalysisState.message, securebootAnalysisState.detail]
+      rightStatusText = [
+        securebootAnalysisState.message,
+        securebootAnalysisState.detail,
+      ]
         .filter((part): part is string => Boolean(part))
         .join(" | ");
       rightTone = tokens.colorPaletteRedForeground2;
@@ -440,8 +515,12 @@ export function StatusBar() {
     }
   } else {
     const diagnostics = dsregcmdResult?.diagnostics ?? [];
-    const errorCount = diagnostics.filter((item) => item.severity === "Error").length;
-    const warningCount = diagnostics.filter((item) => item.severity === "Warning").length;
+    const errorCount = diagnostics.filter(
+      (item) => item.severity === "Error",
+    ).length;
+    const warningCount = diagnostics.filter(
+      (item) => item.severity === "Warning",
+    ).length;
 
     leftParts = [
       "dsregcmd",
@@ -457,10 +536,14 @@ export function StatusBar() {
     }
 
     if (dsregcmdAnalysisState.phase === "analyzing") {
-      rightStatusText = dsregcmdAnalysisState.detail ?? dsregcmdAnalysisState.message;
+      rightStatusText =
+        dsregcmdAnalysisState.detail ?? dsregcmdAnalysisState.message;
       rightTone = tokens.colorPaletteBlueForeground2;
     } else if (dsregcmdAnalysisState.phase === "error") {
-      rightStatusText = [dsregcmdAnalysisState.message, dsregcmdAnalysisState.detail]
+      rightStatusText = [
+        dsregcmdAnalysisState.message,
+        dsregcmdAnalysisState.detail,
+      ]
         .filter((part): part is string => Boolean(part))
         .join(" | ");
       rightTone = tokens.colorPaletteRedForeground2;
@@ -494,10 +577,10 @@ export function StatusBar() {
                 : activeView === "macos-diag"
                   ? "macOS Diagnostics"
                   : activeView === "secureboot"
-                  ? "Secure Boot"
-                  : activeView === "dsregcmd"
-                    ? "dsregcmd"
-                    : activeView;
+                    ? "Secure Boot"
+                    : activeView === "dsregcmd"
+                      ? "dsregcmd"
+                      : activeView;
 
   return (
     <div
@@ -531,66 +614,64 @@ export function StatusBar() {
             </Badge>
             <span
               title={leftStatusText}
-              style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              style={{
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
             >
               {leftStatusText}
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }}>
-        {graphApiStatus !== "idle" && (
-          <span
+          <div
             style={{
               display: "flex",
               alignItems: "center",
-              gap: "4px",
-              fontSize: "11px",
-              color: graphApiStatus === "connected"
-                ? tokens.colorPaletteGreenForeground1
-                : graphApiStatus === "connecting"
-                  ? tokens.colorNeutralForeground3
-                  : tokens.colorPaletteRedForeground1,
+              gap: "10px",
+              flexShrink: 0,
             }}
-            title={
-              graphApiStatus === "connected"
-                ? "Graph API connected — GUID resolution active"
-                : graphApiStatus === "connecting"
-                  ? "Connecting to Graph API..."
-                  : "Graph API connection failed"
-            }
           >
+            {graphApiIndicator && (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "11px",
+                  color: graphApiIndicator.color,
+                }}
+                title={graphApiIndicator.title}
+              >
+                <span
+                  style={{
+                    width: "6px",
+                    height: "6px",
+                    borderRadius: "50%",
+                    backgroundColor: "currentColor",
+                    display: "inline-block",
+                  }}
+                />
+                {graphApiIndicator.label}
+              </span>
+            )}
+            {activeView === "event-log" && evtxIsLoading && (
+              <Spinner size="tiny" />
+            )}
             <span
+              title={rightStatusText}
               style={{
-                width: "6px",
-                height: "6px",
-                borderRadius: "50%",
-                backgroundColor: "currentColor",
-                display: "inline-block",
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: rightTone,
+                fontWeight: 500,
+                fontVariantNumeric: "tabular-nums",
               }}
-            />
-            {graphApiStatus === "connecting"
-              ? "Graph API: Connecting..."
-              : graphApiStatus === "connected"
-                ? "Graph API: Connected"
-                : "Graph API: Error"}
-          </span>
-        )}
-        {activeView === "event-log" && evtxIsLoading && (
-          <Spinner size="tiny" />
-        )}
-        <span
-          title={rightStatusText}
-          style={{
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            color: rightTone,
-            fontWeight: 500,
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {rightStatusText}
-        </span>
+            >
+              {rightStatusText}
+            </span>
           </div>
         </>
       </WorkspaceStatusBarContent>
