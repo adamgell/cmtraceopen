@@ -5,8 +5,8 @@
   "privacy": { "synthetic": true, "rawPaths": "redacted" },
   "bundleRole": "server",
   "topology": {
-    "captureHost": "S01-CM01",
-    "siteCode": "S01",
+    "captureHost": "LAB-CM01",
+    "siteCode": "LAB",
     "rolesObserved": ["softwareUpdatePoint", "wsUs"]
   },
   "artifacts": [

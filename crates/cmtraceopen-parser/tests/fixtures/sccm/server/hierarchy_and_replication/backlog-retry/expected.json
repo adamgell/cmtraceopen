@@ -5,14 +5,14 @@
   "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
   "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
   "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
-  "coverage": [{"artifactId":"backlog-01-replmgr","state":"captured"}],
+  "coverage": [{"artifactId":"synthetic:artifact:sha256.v1:75d9aaa235969f55de0f041e643b8c0f4b6cb5e8134eb4b7db654290424203f9","state":"captured"}],
   "transactions": [{
     "transactionId":"hierarchy:msg-backlog-01:LAB:CHD:link-lab-chd",
     "key":{"messageId":"msg-backlog-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
     "topologyCompatibility":"exact","timestampOrdering":"usable","terminalEvidence":false,
     "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
     "coverageGapArtifactIds":[],
-    "observations":[{"observationId":"backlog-01-queue","phase":"queueOrSerialize","disposition":"retrying","terminal":false,"evidence":[{"artifactId":"backlog-01-replmgr","startLine":1,"endLine":1}]}]
+    "observations":[{"observationId":"backlog-01-queue","phase":"queueOrSerialize","disposition":"retrying","terminal":false,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:75d9aaa235969f55de0f041e643b8c0f4b6cb5e8134eb4b7db654290424203f9","startLine":1,"endLine":1}]}]
   }],
   "sourceLocalObservations": [],
   "artifactRequests": [

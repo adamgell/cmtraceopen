@@ -15,26 +15,26 @@
       "contentVersionMismatch": false,
       "evidence": [
         {
-          "artifactId": "dp-validation-failure-01-distmgr",
-          "entryId": "dp-validation-failure-01-distmgr:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:897db0806c24d0c47681dc718e5c8cf4bdb2f62463349d8047bbeb78fed21586",
+          "entryId": "synthetic:artifact:sha256.v1:897db0806c24d0c47681dc718e5c8cf4bdb2f62463349d8047bbeb78fed21586:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-validation-failure-01-distmgr",
-          "entryId": "dp-validation-failure-01-distmgr:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:897db0806c24d0c47681dc718e5c8cf4bdb2f62463349d8047bbeb78fed21586",
+          "entryId": "synthetic:artifact:sha256.v1:897db0806c24d0c47681dc718e5c8cf4bdb2f62463349d8047bbeb78fed21586:2-2",
           "lineEnd": 2,
           "lineStart": 2
         },
         {
-          "artifactId": "dp-validation-failure-02-pkgxfer",
-          "entryId": "dp-validation-failure-02-pkgxfer:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:8ec1c5cdf3907b6a60670d9fefc346e0bbdb339772d45a9f0098f696cedeb52e",
+          "entryId": "synthetic:artifact:sha256.v1:8ec1c5cdf3907b6a60670d9fefc346e0bbdb339772d45a9f0098f696cedeb52e:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-validation-failure-03-provider",
-          "entryId": "dp-validation-failure-03-provider:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:c814c5ea07b67076ede4171bd3f846d89a8de14bd89628440d76d69857825e24",
+          "entryId": "synthetic:artifact:sha256.v1:c814c5ea07b67076ede4171bd3f846d89a8de14bd89628440d76d69857825e24:1-1",
           "lineEnd": 1,
           "lineStart": 1
         }
@@ -42,7 +42,7 @@
       "key": {
         "contentId": "content-delta",
         "contentVersion": 1,
-        "distributionPointHandle": "synthetic:subject:dp-01",
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
         "extractionProfileId": "dp-server-5.00.test-v1",
         "extractionProfileVersion": 1,
         "packageId": "LAB00004",
@@ -55,8 +55,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-validation-failure-01-distmgr",
-            "entryId": "dp-validation-failure-01-distmgr:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:897db0806c24d0c47681dc718e5c8cf4bdb2f62463349d8047bbeb78fed21586",
+            "entryId": "synthetic:artifact:sha256.v1:897db0806c24d0c47681dc718e5c8cf4bdb2f62463349d8047bbeb78fed21586:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -73,8 +73,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-validation-failure-01-distmgr",
-            "entryId": "dp-validation-failure-01-distmgr:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:897db0806c24d0c47681dc718e5c8cf4bdb2f62463349d8047bbeb78fed21586",
+            "entryId": "synthetic:artifact:sha256.v1:897db0806c24d0c47681dc718e5c8cf4bdb2f62463349d8047bbeb78fed21586:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
@@ -91,8 +91,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-validation-failure-02-pkgxfer",
-            "entryId": "dp-validation-failure-02-pkgxfer:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:8ec1c5cdf3907b6a60670d9fefc346e0bbdb339772d45a9f0098f696cedeb52e",
+            "entryId": "synthetic:artifact:sha256.v1:8ec1c5cdf3907b6a60670d9fefc346e0bbdb339772d45a9f0098f696cedeb52e:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -109,8 +109,8 @@
         {
           "disposition": "failed",
           "evidence": {
-            "artifactId": "dp-validation-failure-03-provider",
-            "entryId": "dp-validation-failure-03-provider:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:c814c5ea07b67076ede4171bd3f846d89a8de14bd89628440d76d69857825e24",
+            "entryId": "synthetic:artifact:sha256.v1:c814c5ea07b67076ede4171bd3f846d89a8de14bd89628440d76d69857825e24:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -132,13 +132,13 @@
       "stopPhase": "validate",
       "terminalEvidence": [
         {
-          "artifactId": "dp-validation-failure-03-provider",
-          "entryId": "dp-validation-failure-03-provider:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:c814c5ea07b67076ede4171bd3f846d89a8de14bd89628440d76d69857825e24",
+          "entryId": "synthetic:artifact:sha256.v1:c814c5ea07b67076ede4171bd3f846d89a8de14bd89628440d76d69857825e24:1-1",
           "lineEnd": 1,
           "lineStart": 1
         }
       ],
-      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00004:content=content-delta:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00004:content=content-delta:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
     }
   ],
   "workflow": "distributionPointContent"

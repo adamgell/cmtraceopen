@@ -9,7 +9,7 @@
   "coverageGaps": [
     {
       "artifactIds": [
-        "dp-malformed-01-provider"
+        "synthetic:artifact:sha256.v1:047110ccf882fe1d1e9b9a81e17cff7463be29e804d23233365ca869566bf8e7"
       ],
       "producerRole": "distributionPoint",
       "reason": "Distribution Point source coverage is parseFailed; recollect the declared source without changing its state.",

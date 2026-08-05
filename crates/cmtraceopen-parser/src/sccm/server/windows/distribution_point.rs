@@ -558,7 +558,7 @@ fn parse_distribution_point_fact(
         }
     };
     let observed_distribution_point = match observation.producer_role {
-        SccmRole::SiteServer => observation.workflow_subject_handle.as_deref(),
+        SccmRole::SiteServer => observation.workflow_subject_handle.clone(),
         SccmRole::DistributionPoint => {
             canonical_dp_subject_for_host(observation.producer_host_handle.as_deref())
         }
@@ -566,7 +566,7 @@ fn parse_distribution_point_fact(
     };
     let expected_terminal = expected_terminal(phase, disposition)?;
     if !expected_source
-        || observed_distribution_point != Some(distribution_point_handle)
+        || observed_distribution_point.as_deref() != Some(distribution_point_handle)
         || terminal != if expected_terminal { "true" } else { "false" }
     {
         return None;
@@ -589,12 +589,9 @@ fn parse_distribution_point_fact(
     })
 }
 
-fn canonical_dp_subject_for_host(host: Option<&str>) -> Option<&'static str> {
-    match host {
-        Some("synthetic:host:mp-01") => Some("synthetic:subject:dp-01"),
-        Some("synthetic:host:wsus-01") => Some("synthetic:subject:dp-02"),
-        _ => None,
-    }
+fn canonical_dp_subject_for_host(host: Option<&str>) -> Option<String> {
+    let digest = synthetic_identity_digest(host?, "synthetic:host:sha256.v1:")?;
+    Some(format!("synthetic:subject:sha256.v1:{digest}"))
 }
 
 fn expected_terminal(
@@ -1018,7 +1015,16 @@ fn safe_site_code(value: &str) -> bool {
 }
 
 fn safe_distribution_point_handle(value: &str) -> bool {
-    matches!(value, "synthetic:subject:dp-01" | "synthetic:subject:dp-02")
+    synthetic_identity_digest(value, "synthetic:subject:sha256.v1:").is_some()
+}
+
+fn synthetic_identity_digest<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+    let digest = value.strip_prefix(prefix)?;
+    (digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
+    .then_some(digest)
 }
 
 fn intake_authority_invalid_analysis() -> SccmDistributionPointAnalysis {

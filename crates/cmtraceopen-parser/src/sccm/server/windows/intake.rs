@@ -3217,7 +3217,7 @@ fn synthetic_identity(value: &str, domain: &str) -> bool {
 }
 
 fn synthetic_site_code(value: &str) -> bool {
-    matches!(value.as_bytes(), [b'S', first, second] if first.is_ascii_digit() && second.is_ascii_digit())
+    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase())
 }
 
 fn synthetic_capture_host(value: &str, site_code: &str) -> bool {

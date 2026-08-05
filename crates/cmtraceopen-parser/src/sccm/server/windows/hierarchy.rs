@@ -29,102 +29,32 @@ pub const SCCM_HIERARCHY_SOURCE_VERSION: &str = "5.00.TEST";
 pub const SCCM_HIERARCHY_PROFILE_VERSION: u32 = 1;
 const MISSING_TARGET_REASON_CODE: &str = "missingTargetReceiveProcessApply";
 
-// Exact raw-payload registry for the synthetic profile. A caller can invoke
-// canonical intake, but cannot turn arbitrary CCM text into reviewed hierarchy
-// facts by reusing one of the public fixture artifact IDs.
-const SYNTHETIC_PROFILE_PAYLOADS: &[(&str, &str)] = &[
-    (
-        "absent-01-sender",
-        "e2b8000d9c61a1d8cc8fc5adf67aa09ef18c0ac83aa6c2be82bb31ab96cf7d43",
-    ),
-    (
-        "backlog-01-replmgr",
-        "5076cad377b0161380e205b6da68743f77d9cca3b1ce38be518283f7a9b6b4a3",
-    ),
-    (
-        "clock-01-sender",
-        "0d0f5f0e21da23617b45afeb469cd315bd250c19d61e98ceda4d8982d9b1e8c7",
-    ),
-    (
-        "clock-02-despool",
-        "e6f19320c96b7939a25124bb8bfaa3699e9762c08e6a2f7c86d0290cd98c24a1",
-    ),
-    (
-        "generic-01-sender",
-        "1e16a6a63b19610c91ea714fa74d82328b5d1e64f5d680d43842312c19722530",
-    ),
-    (
-        "healthy-01-replmgr",
-        "46c5657073e106c6543283d2374dd4c16a4018288a27b2fca4f5581bd7dd0a94",
-    ),
-    (
-        "healthy-01-replmgr",
-        "8dfae54db00614bd99b39b77dc7d6fed838be518bc2e7c44045057382303734d",
-    ),
-    (
-        "healthy-01-replmgr",
-        "03b983e6f7282d3c919e46cc44e721521c41f0b32bf7ffd5559d9c95374f954a",
-    ),
-    (
-        "healthy-02-sender",
-        "7147bd84db5386ecb685519a9393b26ddd1280ce179ff3bf5acac8c05f9e004a",
-    ),
-    (
-        "healthy-02-sender",
-        "60755b460ccc3bd4c77ad30c8bf8b3e0c72091c7e9e05da8061e79c4e1799687",
-    ),
-    (
-        "healthy-03-despool",
-        "6fecb3909732f086f2cd3ec0244a345373f6754e5e53e948a20c414ece8a6d49",
-    ),
-    (
-        "healthy-04-rcmctrl",
-        "12b3a0d0210606312c744e38d34f54c4f4210b8e1def4acab85fbaf05cb023c7",
-    ),
-    (
-        "incomplete-01-replmgr",
-        "179bf0e10615d0ffa0a5ec72748e79d6b8ec86e26d285d75b33592c91fbde25e",
-    ),
-    (
-        "mismatch-01-sender",
-        "6f0813d7bf0309401adaac19ac96fe4b674ab8491d3dc5f581f529c9fa108dcd",
-    ),
-    (
-        "mismatch-02-despool",
-        "8d08a41bc7d735ecbaae4c8dc18285f1a77b65e30fb3903fa3e83b4d7be40a8b",
-    ),
-    (
-        "receiver-01-sender",
-        "efa57e6e8b95133d4fa1be54998eec8959e4c85ad0a28221adff44d93e48ff9f",
-    ),
-    (
-        "receiver-02-despool",
-        "34ae490e3409e3f3f3c63257a6d72c60e73e05383b8dbdec7747856ae514bc83",
-    ),
-    (
-        "recovery-01-sender",
-        "9ae1d3697976dfe61cf7aa3638086d91602b7f28ed41f1af4a6edc0e31b2652b",
-    ),
-    (
-        "recovery-02-despool",
-        "c391334f761c4acb88c0dfb21edaa870ba9d8da51d315dfbc948e337fb71b2a2",
-    ),
-    (
-        "rotation-01-current",
-        "b678f0249923f82c2fdbd3e532209c45aa81921bdbf542ba655056bb5f102705",
-    ),
-    (
-        "rotation-02-lo",
-        "550fdcc7fae3b2f9f8586676cd964e21f265e0bc766d26c455bf816ba52221ab",
-    ),
-    (
-        "sender-failure-01-chd",
-        "52f2b9609a19a966680e063994d2656fd93a89929e5d6a6f46978c9cfd0ddb08",
-    ),
-    (
-        "sender-failure-01-chd",
-        "2b47b825171f2acf95895adb206f79ec65afb4c1126a535866127a1b907ba990",
-    ),
+// Exact raw-payload registry for the synthetic profile. Admission binds to
+// reviewed content, not caller-chosen artifact identifiers.
+const SYNTHETIC_PROFILE_PAYLOADS: &[&str] = &[
+    "e2b8000d9c61a1d8cc8fc5adf67aa09ef18c0ac83aa6c2be82bb31ab96cf7d43",
+    "5076cad377b0161380e205b6da68743f77d9cca3b1ce38be518283f7a9b6b4a3",
+    "0d0f5f0e21da23617b45afeb469cd315bd250c19d61e98ceda4d8982d9b1e8c7",
+    "e6f19320c96b7939a25124bb8bfaa3699e9762c08e6a2f7c86d0290cd98c24a1",
+    "1e16a6a63b19610c91ea714fa74d82328b5d1e64f5d680d43842312c19722530",
+    "46c5657073e106c6543283d2374dd4c16a4018288a27b2fca4f5581bd7dd0a94",
+    "8dfae54db00614bd99b39b77dc7d6fed838be518bc2e7c44045057382303734d",
+    "03b983e6f7282d3c919e46cc44e721521c41f0b32bf7ffd5559d9c95374f954a",
+    "7147bd84db5386ecb685519a9393b26ddd1280ce179ff3bf5acac8c05f9e004a",
+    "60755b460ccc3bd4c77ad30c8bf8b3e0c72091c7e9e05da8061e79c4e1799687",
+    "6fecb3909732f086f2cd3ec0244a345373f6754e5e53e948a20c414ece8a6d49",
+    "12b3a0d0210606312c744e38d34f54c4f4210b8e1def4acab85fbaf05cb023c7",
+    "179bf0e10615d0ffa0a5ec72748e79d6b8ec86e26d285d75b33592c91fbde25e",
+    "6f0813d7bf0309401adaac19ac96fe4b674ab8491d3dc5f581f529c9fa108dcd",
+    "8d08a41bc7d735ecbaae4c8dc18285f1a77b65e30fb3903fa3e83b4d7be40a8b",
+    "efa57e6e8b95133d4fa1be54998eec8959e4c85ad0a28221adff44d93e48ff9f",
+    "34ae490e3409e3f3f3c63257a6d72c60e73e05383b8dbdec7747856ae514bc83",
+    "9ae1d3697976dfe61cf7aa3638086d91602b7f28ed41f1af4a6edc0e31b2652b",
+    "c391334f761c4acb88c0dfb21edaa870ba9d8da51d315dfbc948e337fb71b2a2",
+    "b678f0249923f82c2fdbd3e532209c45aa81921bdbf542ba655056bb5f102705",
+    "550fdcc7fae3b2f9f8586676cd964e21f265e0bc766d26c455bf816ba52221ab",
+    "52f2b9609a19a966680e063994d2656fd93a89929e5d6a6f46978c9cfd0ddb08",
+    "2b47b825171f2acf95895adb206f79ec65afb4c1126a535866127a1b907ba990",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -844,13 +774,10 @@ fn registered_profile_provenance(artifact: &SccmServerArtifactAssessment) -> boo
         });
     artifact.profile_eligible
         && artifact.source_version.as_deref() == Some(SCCM_HIERARCHY_SOURCE_VERSION)
-        && artifact.content_sha256.as_deref().is_some_and(|digest| {
-            SYNTHETIC_PROFILE_PAYLOADS
-                .iter()
-                .any(|(artifact_id, expected)| {
-                    *artifact_id == artifact.artifact_id && *expected == digest
-                })
-        })
+        && artifact
+            .content_sha256
+            .as_deref()
+            .is_some_and(|digest| SYNTHETIC_PROFILE_PAYLOADS.contains(&digest))
         && provenance_ok
         && chrono::DateTime::parse_from_rfc3339(&artifact.collected_at_utc).is_ok()
         && !artifact.rotation_lineage_handle.is_empty()

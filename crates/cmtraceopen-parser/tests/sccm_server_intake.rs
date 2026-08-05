@@ -649,10 +649,10 @@ fn assert_remaining_expected_contracts(
                             .as_str()
                             .expect("synthetic capture host is a string");
                         Value::String(
-                            if current_host == "S01-MP01" {
-                                "S01-CM01"
+                            if current_host == "LAB-MP01" {
+                                "LAB-CM01"
                             } else {
-                                "S01-MP01"
+                                "LAB-MP01"
                             }
                             .to_owned(),
                         )
@@ -982,7 +982,7 @@ fn server_intake_rejects_personal_name_shaped_synthetic_identities() {
 
 #[test]
 fn server_intake_rejects_unicode_and_malformed_synthetic_identities_without_panicking() {
-    for capture_host in ["ALC-CM0１", "S01-CM0é", "S01-CM", "S01-CM000", "S02-CM01"] {
+    for capture_host in ["ALC-CM0１", "LAB-CM0é", "LAB-CM", "LAB-CM000", "DEV-CM01"] {
         assert_mutation_fails_closed_without_panicking(
             "complete-multi-role",
             SccmServerIntakeError::InvalidTopology,
@@ -995,7 +995,7 @@ fn server_intake_rejects_unicode_and_malformed_synthetic_identities_without_pani
         "complete-multi-role",
         SccmServerIntakeError::InvalidTopology,
         |manifest, _payloads| {
-            manifest["topology"]["siteCode"] = Value::String("S0１".to_owned());
+            manifest["topology"]["siteCode"] = Value::String("LＡB".to_owned());
         },
     );
 
@@ -1033,8 +1033,8 @@ fn server_intake_accepts_new_conforming_synthetic_identities() {
     let (manifest_json, mut payloads) = load_bundle("complete-multi-role");
     let mut manifest = manifest_value(&manifest_json);
 
-    manifest["topology"]["siteCode"] = Value::String("S02".to_owned());
-    manifest["topology"]["captureHost"] = Value::String("S02-CM02".to_owned());
+    manifest["topology"]["siteCode"] = Value::String("DEV".to_owned());
+    manifest["topology"]["captureHost"] = Value::String("DEV-CM02".to_owned());
 
     let artifact = &mut manifest["artifacts"][0];
     artifact["artifactId"] = Value::String(synthetic_identity("artifact", 4));
@@ -1674,7 +1674,7 @@ fn server_intake_exercises_role_state_rotation_and_privacy_matrix() {
         .expect("role-aware bundle is assessed");
     assert_eq!(
         complete.topology.capture_host_handle,
-        "synthetic:host:s01-cm01"
+        "synthetic:host:lab-cm01"
     );
     assert_eq!(
         complete.topology.roles_observed,

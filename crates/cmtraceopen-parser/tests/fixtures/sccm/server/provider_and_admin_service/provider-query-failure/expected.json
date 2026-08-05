@@ -2,13 +2,13 @@
   "artifactRequests": [],
   "coverage": [
     {
-      "artifactId": "provider-query-current",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "producerRole": "provider",
       "sourceId": "server-provider",
       "sourceVersion": "5.00.TEST",
       "state": "captured",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -21,31 +21,31 @@
         "coverageGaps": [],
         "evidence": [
           {
-            "artifactId": "provider-query-current",
-            "entryId": "provider-query-current:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+            "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
           {
-            "artifactId": "provider-query-current",
-            "entryId": "provider-query-current:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+            "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
           {
-            "artifactId": "provider-query-current",
-            "entryId": "provider-query-current:3-3",
+            "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+            "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:3-3",
             "lineEnd": 3,
             "lineStart": 3
           },
           {
-            "artifactId": "provider-query-current",
-            "entryId": "provider-query-current:4-4",
+            "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+            "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:4-4",
             "lineEnd": 4,
             "lineStart": 4
           }
         ],
-        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:0b4d32911441b1129ffb0ccc83596503ed18bfff0c884b79598a705cc24354d3",
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:376e093ec1b038c62f9771834e2aa03a4ad3c1dec9b774c55911ebf3a35271d2",
         "nextArtifacts": [],
         "phase": "providerAndAdminService",
         "role": "provider",
@@ -55,8 +55,8 @@
           {
             "kind": "observedFailure",
             "reference": {
-              "artifactId": "provider-query-current",
-              "entryId": "provider-query-current:4-4",
+              "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+              "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:4-4",
               "lineEnd": 4,
               "lineStart": 4
             }
@@ -66,11 +66,11 @@
       },
       "lastSuccessfulPhase": "authenticateOrAuthorize",
       "layer": "provider",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "sourceId": "server-provider",
       "sourceVersion": "5.00.TEST",
-      "subjectId": "provider:cmtraceopen.request.sha256.v1:618f1a429a91316d819f7a982e0efa06caa436f9d980f6fd2734650bf92fb8a7:cmtraceopen.operation.sha256.v1:f8531c63ceea45b588fb4ae3eb63e391a4f8bf6655d93cc2d66d4d4adc53935b:synthetic:host:provider-01:synthetic:subject:provider-01",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "subjectId": "provider:cmtraceopen.request.sha256.v1:618f1a429a91316d819f7a982e0efa06caa436f9d980f6fd2734650bf92fb8a7:cmtraceopen.operation.sha256.v1:f8531c63ceea45b588fb4ae3eb63e391a4f8bf6655d93cc2d66d4d4adc53935b:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "profiles": [
@@ -102,7 +102,7 @@
       "coverageGapArtifactIds": [],
       "key": {
         "confidence": "low",
-        "endpointHandle": "synthetic:subject:provider-01",
+        "endpointHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
         "extractionProfile": {
           "configmgrVersionPrefixes": [
             "5.00.TEST"
@@ -115,7 +115,7 @@
           ]
         },
         "operationHandle": "cmtraceopen.operation.sha256.v1:f8531c63ceea45b588fb4ae3eb63e391a4f8bf6655d93cc2d66d4d4adc53935b",
-        "producerHostHandle": "synthetic:host:provider-01",
+        "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
         "requestHandle": "cmtraceopen.request.sha256.v1:618f1a429a91316d819f7a982e0efa06caa436f9d980f6fd2734650bf92fb8a7"
       },
       "lastSuccessfulPhase": "authenticateOrAuthorize",
@@ -126,13 +126,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "provider-query-current",
-              "entryId": "provider-query-current:1-1",
+              "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+              "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:1-1",
               "lineEnd": 1,
               "lineStart": 1
             }
           ],
-          "observationId": "provider-query-current:1-1-01",
+          "observationId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:1-1-01",
           "phase": "receive",
           "terminal": false
         },
@@ -140,13 +140,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "provider-query-current",
-              "entryId": "provider-query-current:2-2",
+              "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+              "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:2-2",
               "lineEnd": 2,
               "lineStart": 2
             }
           ],
-          "observationId": "provider-query-current:2-2-02",
+          "observationId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:2-2-02",
           "phase": "authenticateOrAuthorize",
           "terminal": false
         },
@@ -154,13 +154,13 @@
           "disposition": "failed",
           "evidence": [
             {
-              "artifactId": "provider-query-current",
-              "entryId": "provider-query-current:3-3",
+              "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+              "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:3-3",
               "lineEnd": 3,
               "lineStart": 3
             }
           ],
-          "observationId": "provider-query-current:3-3-03",
+          "observationId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:3-3-03",
           "phase": "executeProviderOperation",
           "terminal": false
         },
@@ -168,13 +168,13 @@
           "disposition": "failed",
           "evidence": [
             {
-              "artifactId": "provider-query-current",
-              "entryId": "provider-query-current:4-4",
+              "artifactId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8",
+              "entryId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:4-4",
               "lineEnd": 4,
               "lineStart": 4
             }
           ],
-          "observationId": "provider-query-current:4-4-04",
+          "observationId": "synthetic:artifact:sha256.v1:c9b7adb787a29a142403c1f32a45821587bf94ed0809e8713e011a8293a88ca8:4-4-04",
           "phase": "recordOutcome",
           "terminal": true
         }
@@ -186,7 +186,7 @@
       "terminalEvidence": true,
       "timestampOrdering": "usable",
       "topologyCompatibility": "exact",
-      "transactionId": "provider:cmtraceopen.request.sha256.v1:618f1a429a91316d819f7a982e0efa06caa436f9d980f6fd2734650bf92fb8a7:cmtraceopen.operation.sha256.v1:f8531c63ceea45b588fb4ae3eb63e391a4f8bf6655d93cc2d66d4d4adc53935b:synthetic:host:provider-01:synthetic:subject:provider-01"
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:618f1a429a91316d819f7a982e0efa06caa436f9d980f6fd2734650bf92fb8a7:cmtraceopen.operation.sha256.v1:f8531c63ceea45b588fb4ae3eb63e391a4f8bf6655d93cc2d66d4d4adc53935b:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "workflow": "providerAndAdminService"

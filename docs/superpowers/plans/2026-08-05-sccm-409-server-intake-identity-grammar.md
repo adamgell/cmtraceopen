@@ -4,7 +4,7 @@
 
 **Goal:** Remove fixture-specific server-intake identity allowlists while keeping synthetic and production manifests privacy-safe and fail-closed.
 
-**Architecture:** Keep declared source IDs owned by the server source catalog, rather than duplicating them in intake. Synthetic artifact, lineage, path, host, and subject identities use a domain-bound `synthetic:<domain>:sha256.v1:<64 lowercase hex>` contract, so fixture labels cannot become public identities. Synthetic topology uses `S<two digits>` site codes and SCCM role hosts such as `S01-CM01`; production remains opaque-handle-only. Malformed, Unicode, or identity-bearing strings are rejected before public projection.
+**Architecture:** Keep declared source IDs owned by the server source catalog, rather than duplicating them in intake. Synthetic artifact, lineage, path, host, and subject identities use a domain-bound `synthetic:<domain>:sha256.v1:<64 lowercase hex>` contract, so fixture labels cannot become public identities. Synthetic topology uses three-character uppercase site codes and SCCM role hosts such as `LAB-CM01`; the host validator proves ASCII and binds the host site to the declared site before parsing its role/ordinal. Production remains opaque-handle-only. Malformed, Unicode, or identity-bearing strings are rejected before public projection.
 
 **Tech Stack:** Rust, Serde, existing `cmtraceopen-parser` SCCM server catalog/intake modules, Cargo tests, Clippy, rustfmt.
 
@@ -14,7 +14,10 @@
 
 - `crates/cmtraceopen-parser/src/sccm/server/windows/catalog.rs` owns declared server source-ID membership.
 - `crates/cmtraceopen-parser/src/sccm/server/windows/intake.rs` owns generic synthetic/opaque identity validation and topology normalization.
+- `crates/cmtraceopen-parser/src/sccm/server/windows/hierarchy.rs` binds the synthetic hierarchy profile to reviewed payload digests rather than fixture artifact IDs.
+- `crates/cmtraceopen-parser/src/sccm/server/windows/management_point.rs` accepts the new opaque synthetic host namespace without a fixture-host literal.
 - `crates/cmtraceopen-parser/tests/sccm_server_intake.rs` proves generic synthetic acceptance plus rejection of malformed and identity-bearing values.
+- `crates/cmtraceopen-parser/tests/sccm_hierarchy_reducer.rs` proves the opaque fixture identities survive the downstream semantic adapter.
 
 ### Task 1: Prove generic synthetic identities and privacy rejection
 
@@ -107,6 +110,8 @@ fn synthetic_identity(value: &str, domain: &str) -> bool {
 
 Use them for the identity-bearing fields and links. Keep `safe_original_path_marker`, opaque SHA-256 production handles, canonical role/source classification, payload binding, and path-collision checks unchanged.
 
+Migrate committed intake identities and downstream canonical-intake builders to the same contract. Bind the reviewed hierarchy profile to payload digests only, so a new conforming fixture identity does not require a production allowlist edit.
+
 - [x] **Step 3: Run focused tests**
 
 Run: `cargo test -p cmtraceopen-parser --test sccm_server_intake`
@@ -117,18 +122,24 @@ Expected: PASS (66 tests), including accepted generic synthetic values, the four
 
 **Files:**
 - Modify: `crates/cmtraceopen-parser/src/sccm/server/windows/catalog.rs`
+- Modify: `crates/cmtraceopen-parser/src/sccm/server/windows/distribution_point.rs`
+- Modify: `crates/cmtraceopen-parser/src/sccm/server/windows/hierarchy.rs`
 - Modify: `crates/cmtraceopen-parser/src/sccm/server/windows/intake.rs`
+- Modify: `crates/cmtraceopen-parser/src/sccm/server/windows/management_point.rs`
+- Modify: `crates/cmtraceopen-parser/src/sccm/server/windows/site_core.rs`
 - Modify: `crates/cmtraceopen-parser/tests/sccm_server_intake.rs`
+- Modify: downstream canonical-intake builders and exact fixture oracles under `crates/cmtraceopen-parser/tests/`
 - Modify: `docs/superpowers/plans/2026-08-05-sccm-409-server-intake-identity-grammar.md`
-- Modify: `library.md`
 
-- [ ] **Step 1: Format and run targeted verification**
+- [x] **Step 1: Format and run targeted verification**
 
 Run:
 
 ```bash
-rustfmt --check crates/cmtraceopen-parser/src/sccm/server/windows/catalog.rs crates/cmtraceopen-parser/src/sccm/server/windows/intake.rs crates/cmtraceopen-parser/tests/sccm_server_intake.rs
+rustfmt --check $(git diff --name-only -- '*.rs')
 cargo test -p cmtraceopen-parser --test sccm_server_intake
+cargo test -p cmtraceopen-parser --test sccm_hierarchy_reducer
+cargo test -p cmtraceopen-parser --test issue_413_unicode_panics
 cargo test -p cmtraceopen-parser
 cargo clippy -p cmtraceopen-parser --all-targets -- -D warnings
 git diff --check origin/main...HEAD
@@ -136,11 +147,11 @@ git diff --check origin/main...HEAD
 
 Expected: every command exits zero.
 
-- [ ] **Step 2: Commit the isolated change**
+- [x] **Step 2: Commit the isolated change**
 
 ```bash
-git add library.md docs/superpowers/plans/2026-08-05-sccm-409-server-intake-identity-grammar.md crates/cmtraceopen-parser/src/sccm/server/windows/catalog.rs crates/cmtraceopen-parser/src/sccm/server/windows/intake.rs crates/cmtraceopen-parser/tests/sccm_server_intake.rs
-git commit -m "fix(sccm): remove fixture identity allowlists from intake"
+git add docs/superpowers/plans/2026-08-05-sccm-409-server-intake-identity-grammar.md crates/cmtraceopen-parser
+git commit -m "fix(sccm): seal synthetic intake identities"
 ```
 
 ## Self-review

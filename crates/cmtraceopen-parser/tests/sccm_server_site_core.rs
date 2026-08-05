@@ -8,8 +8,18 @@ use cmtraceopen_parser::sccm::{
     SccmUnknownRotation,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const SITE_HOST: &str =
+    "synthetic:host:sha256.v1:4984d720bb6415f515b22c382e5199b0b407bc05246f4b89aff5f290bcd9f313";
+const MP_HOST: &str =
+    "synthetic:host:sha256.v1:0797c3d6144b9f38586bbf13c928dcac770877f4309693609fbfa0c133a0a02f";
+const SITECOMP_ARTIFACT: &str =
+    "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff";
+const STATUS_ARTIFACT: &str =
+    "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c";
 
 const HEALTHY_SITECOMP: &str = include_str!(
     "fixtures/sccm/server/site_core/healthy/evidence/sccm/server/site-server/server-sitecomp/current/sitecomp.log"
@@ -287,7 +297,7 @@ fn assess_with_producer_hosts(
             artifact
         })
         .collect::<Vec<_>>();
-    let manifest = json!({
+    let mut manifest = json!({
         "sccmManifestVersion": 1,
         "syntheticFixture": true,
         "proposalOnly": true,
@@ -300,7 +310,7 @@ fn assess_with_producer_hosts(
         },
         "artifacts": artifacts,
     });
-    let payloads = sources
+    let mut payloads = sources
         .iter()
         .filter_map(|source| {
             source.content.map(|content| SccmServerArtifactPayload {
@@ -309,9 +319,44 @@ fn assess_with_producer_hosts(
             })
         })
         .collect::<Vec<_>>();
+    canonicalize_manifest_and_payloads(&mut manifest, &mut payloads);
 
     assess_server_intake(&manifest.to_string(), &payloads)
         .expect("site-core test manifest must pass the shared server intake")
+}
+
+fn synthetic_identity(domain: &str, label: &str) -> String {
+    let digest = Sha256::digest(format!("{domain}:{label}"))
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("synthetic:{domain}:sha256.v1:{digest}")
+}
+
+fn canonicalize_identity(value: &mut Value, field: &str, domain: &str) {
+    if let Some(label) = value[field].as_str() {
+        value[field] = Value::String(synthetic_identity(domain, label));
+    }
+}
+
+fn canonicalize_manifest_and_payloads(
+    manifest: &mut Value,
+    payloads: &mut [SccmServerArtifactPayload],
+) {
+    for payload in payloads {
+        payload.manifest_artifact_id =
+            synthetic_identity("artifact", &payload.manifest_artifact_id);
+    }
+    for artifact in manifest["artifacts"].as_array_mut().into_iter().flatten() {
+        canonicalize_identity(artifact, "artifactId", "artifact");
+        canonicalize_identity(artifact, "producerHostHandle", "host");
+        canonicalize_identity(
+            &mut artifact["configuredPathProvenance"],
+            "pathFingerprint",
+            "path",
+        );
+        canonicalize_identity(&mut artifact["rotation"], "lineageId", "lineage");
+    }
 }
 
 fn replace_source_artifact_id(
@@ -493,9 +538,9 @@ fn load_corpus_scenario(scenario: &str) -> (SccmServerIntakeAssessment, Value) {
     let manifest_path = root.join("manifest.json");
     let manifest_json = fs::read_to_string(&manifest_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", manifest_path.display()));
-    let manifest: Value = serde_json::from_str(&manifest_json)
+    let mut manifest: Value = serde_json::from_str(&manifest_json)
         .unwrap_or_else(|error| panic!("parse {}: {error}", manifest_path.display()));
-    let payloads = manifest["artifacts"]
+    let mut payloads = manifest["artifacts"]
         .as_array()
         .expect("corpus manifest artifacts")
         .iter()
@@ -510,7 +555,8 @@ fn load_corpus_scenario(scenario: &str) -> (SccmServerIntakeAssessment, Value) {
             })
         })
         .collect::<Vec<_>>();
-    let assessment = assess_server_intake(&manifest_json, &payloads)
+    canonicalize_manifest_and_payloads(&mut manifest, &mut payloads);
+    let assessment = assess_server_intake(&manifest.to_string(), &payloads)
         .unwrap_or_else(|error| panic!("assess corpus scenario {scenario}: {error}"));
     let expected_path = root.join("expected.json");
     let expected = serde_json::from_str(
@@ -538,10 +584,7 @@ fn healthy_site_core_is_reduced_from_server_intake_without_raw_site_identity() {
     );
     assert_eq!(result.confidence, SccmSiteCoreConfidence::High);
     assert_eq!(result.transaction_key.site_handle, "synthetic:site:lab");
-    assert_eq!(
-        result.transaction_key.producer_host_handle,
-        "synthetic:host:site-01"
-    );
+    assert_eq!(result.transaction_key.producer_host_handle, SITE_HOST);
     assert!(analysis.findings.is_empty());
 
     let wire = serde_json::to_string(&analysis).expect("site-core analysis serializes");
@@ -763,11 +806,11 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
     assert!(split
         .results
         .iter()
-        .any(|result| { result.transaction_key.producer_host_handle == "synthetic:host:site-01" }));
+        .any(|result| { result.transaction_key.producer_host_handle == SITE_HOST }));
     assert!(split
         .results
         .iter()
-        .any(|result| { result.transaction_key.producer_host_handle == "synthetic:host:mp-01" }));
+        .any(|result| { result.transaction_key.producer_host_handle == MP_HOST }));
 
     let foreign_gap = assess_with_producer_hosts(
         &[Source::sitecomp(HEALTHY_SITECOMP), Source::absent_status()],
@@ -794,8 +837,7 @@ fn unrelated_same_minute_components_and_producer_hosts_never_merge() {
     assert!(foreign_gap_analysis.results[0]
         .next_artifacts
         .iter()
-        .all(|request| request.scope.producer_host_handle.as_deref()
-            == Some("synthetic:host:site-01")));
+        .all(|request| request.scope.producer_host_handle.as_deref() == Some(SITE_HOST)));
     for request in &foreign_gap_analysis.results[0].next_artifacts {
         assert_bounded_request_has_specific_scope(request);
     }
@@ -936,10 +978,10 @@ fn incomplete_sources_are_coverage_states_not_role_health_claims() {
 
     assert!(analysis.results.is_empty());
     assert!(analysis.coverage_gaps.iter().any(|gap| {
-        gap.artifact_id == "sitecomp-current" && gap.state == SccmCoverageState::Capped
+        gap.artifact_id == SITECOMP_ARTIFACT && gap.state == SccmCoverageState::Capped
     }));
     assert!(analysis.coverage_gaps.iter().any(|gap| {
-        gap.artifact_id == "z-site-status" && gap.state == SccmCoverageState::Absent
+        gap.artifact_id == STATUS_ARTIFACT && gap.state == SccmCoverageState::Absent
     }));
     assert!(!analysis.findings.is_empty());
     assert!(analysis
@@ -1004,7 +1046,7 @@ fn undeclared_status_source_is_an_explicit_host_scoped_coverage_gap() {
         assert_bounded_request_has_specific_scope(request);
         assert_eq!(
             request.scope.producer_host_handle.as_deref(),
-            Some("synthetic:host:site-01")
+            Some(SITE_HOST)
         );
     }
 }
@@ -1060,7 +1102,7 @@ fn undeclared_component_source_is_an_explicit_host_component_work_item_scoped_co
         .iter()
         .filter(|request| {
             request.logical_name == "server-sitecomp"
-                && request.scope.producer_host_handle.as_deref() == Some("synthetic:host:site-01")
+                && request.scope.producer_host_handle.as_deref() == Some(SITE_HOST)
                 && request.scope.component_id.as_deref() == Some("SMS_EXECUTIVE")
                 && request.scope.work_item_id.as_deref() == Some("SC-HEALTH-001")
         })
@@ -1082,7 +1124,7 @@ fn undeclared_component_source_is_an_explicit_host_component_work_item_scoped_co
     );
     assert_eq!(
         request.scope.producer_host_handle.as_deref(),
-        Some("synthetic:host:site-01")
+        Some(SITE_HOST)
     );
     assert_eq!(request.scope.component_id.as_deref(), Some("SMS_EXECUTIVE"));
     assert_eq!(request.scope.work_item_id.as_deref(), Some("SC-HEALTH-001"));
@@ -1154,7 +1196,7 @@ fn undeclared_component_gap_does_not_attach_across_producer_hosts() {
     let status_only_result = analysis
         .results
         .iter()
-        .find(|result| result.transaction_key.producer_host_handle == "synthetic:host:site-01")
+        .find(|result| result.transaction_key.producer_host_handle == SITE_HOST)
         .expect("status-only host result");
     assert_eq!(status_only_result.coverage_gap_artifact_ids.len(), 1);
     let local_gap_id = &status_only_result.coverage_gap_artifact_ids[0];
@@ -1168,14 +1210,15 @@ fn undeclared_component_gap_does_not_attach_across_producer_hosts() {
         local_gap.reason_code,
         "required-component-source-not-declared"
     );
-    assert!(status_only_result.next_artifacts.iter().all(|request| {
-        request.scope.producer_host_handle.as_deref() == Some("synthetic:host:site-01")
-    }));
+    assert!(status_only_result
+        .next_artifacts
+        .iter()
+        .all(|request| { request.scope.producer_host_handle.as_deref() == Some(SITE_HOST) }));
 
     let foreign_component_result = analysis
         .results
         .iter()
-        .find(|result| result.transaction_key.producer_host_handle == "synthetic:host:mp-01")
+        .find(|result| result.transaction_key.producer_host_handle == MP_HOST)
         .expect("foreign component host result");
     assert!(foreign_component_result
         .coverage_gap_artifact_ids
@@ -1386,7 +1429,13 @@ fn closed_profile_schema_rejects_arbitrary_keys_and_retains_safe_unknown_facts()
         Source::sitecomp(&unknown_sitecomp),
         Source::status(HEALTHY_STATUS),
     ]);
-    let rejected_id = unknown_status.evidence[0].evidence_id.clone();
+    let rejected_id = unknown_status
+        .evidence
+        .iter()
+        .find(|evidence| evidence.message.contains("SC_UNREVIEWED_STATUS"))
+        .expect("unknown sitecomp record is retained")
+        .evidence_id
+        .clone();
     let unknown = analyze_site_core(&unknown_status);
     let unknown_wire = serde_json::to_string(&unknown).expect("analysis serializes");
     assert!(unknown_wire.contains(&rejected_id));
@@ -1482,12 +1531,12 @@ fn every_required_source_coverage_state_emits_insufficient_evidence_and_a_reques
         assert!(analysis
             .coverage_gaps
             .iter()
-            .any(|gap| { gap.artifact_id == "sitecomp-current" && gap.state == state }));
+            .any(|gap| { gap.artifact_id == SITECOMP_ARTIFACT && gap.state == state }));
         assert!(analysis.unlinked_observations.iter().any(|observation| {
             observation.finding_class == SccmFindingClass::InsufficientEvidence
                 && observation
                     .coverage_gap_artifact_ids
-                    .contains(&"sitecomp-current".to_owned())
+                    .contains(&SITECOMP_ARTIFACT.to_owned())
         }));
         assert!(analysis
             .artifact_requests
@@ -1539,13 +1588,13 @@ fn invalid_finding_inputs_become_explicit_gaps_instead_of_clearing_class() {
         .artifact_id = oversized_id.clone();
     for coverage in &mut assessment.coverage {
         for artifact_id in &mut coverage.artifact_ids {
-            if artifact_id == "sitecomp-current" {
+            if artifact_id == SITECOMP_ARTIFACT {
                 *artifact_id = oversized_id.clone();
             }
         }
     }
     for evidence in &mut assessment.evidence {
-        if evidence.reference.artifact_id == "sitecomp-current" {
+        if evidence.reference.artifact_id == SITECOMP_ARTIFACT {
             evidence.reference.artifact_id = oversized_id.clone();
             evidence.evidence_id = format!("{oversized_id}:{}", evidence.evidence_id);
             evidence.reference.entry_id = evidence.evidence_id.clone();
@@ -1577,12 +1626,9 @@ fn committed_site_core_corpus_exactly_matches_every_serialized_output() {
         .map(|scenario| load_corpus_scenario(scenario))
         .collect::<Vec<_>>();
     for (scenario, (assessment, expected)) in scenarios.into_iter().zip(corpus) {
-        assert_eq!(
-            serde_json::to_value(analyze_site_core(&assessment))
-                .expect("site-core analysis serializes"),
-            expected,
-            "corpus scenario {scenario} diverged"
-        );
+        let actual = serde_json::to_value(analyze_site_core(&assessment))
+            .expect("site-core analysis serializes");
+        assert_eq!(actual, expected, "corpus scenario {scenario} diverged");
     }
 }
 
@@ -1796,11 +1842,7 @@ fn swapped_coverage_producer_hosts_fail_site_core_congruence_closed() {
     assert_invalid_authority_excludes_source_triples(
         &analysis,
         &[
-            (
-                "sitecomp-current",
-                "server-sitecomp",
-                Some("synthetic:host:site-01"),
-            ),
+            ("sitecomp-current", "server-sitecomp", Some(SITE_HOST)),
             (
                 "z-site-status",
                 "server-status",

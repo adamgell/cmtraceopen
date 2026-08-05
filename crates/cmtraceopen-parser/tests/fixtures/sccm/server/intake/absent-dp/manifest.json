@@ -4,7 +4,7 @@
   "proposalOnly": true,
   "privacy": { "synthetic": true, "rawPaths": "redacted" },
   "bundleRole": "server",
-  "topology": { "captureHost": "S01-CM01", "siteCode": "S01", "rolesObserved": ["siteServer"] },
+  "topology": { "captureHost": "LAB-CM01", "siteCode": "LAB", "rolesObserved": ["siteServer"] },
   "artifacts": [
     { "artifactId": "synthetic:artifact:sha256.v1:08b572c79ca8a7c3f5d9ac3d1f5900ee21e8dc14f9431acbee243d579a4880f5", "producerRole": "siteServer", "producerHostHandle": "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339", "workflowSubject": { "role": "distributionPoint", "basis": "incidentScopeOnly" }, "sourceId": "server-dp-distribution", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_DEFAULT_DP_CANDIDATE", "originalBasename": "distmgr.log", "configuredPathProvenance": { "state": "defaultCandidate", "pathFingerprint": "synthetic:path:sha256.v1:6f8fc72bb6fbe681ce9594ed6727eb5dc54bd53be5e174429c502466459464e3" }, "rotation": { "kind": "current", "lineageId": "synthetic:lineage:sha256.v1:ce486242d5484616648fb9a33cf16549e2146ed970978aca1c798c29daa1e35f" }, "captureState": "absent", "collectedUtc": "2026-07-30T00:04:00Z", "relativePath": null, "bytesCopied": 0 }
   ]

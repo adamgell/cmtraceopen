@@ -5,7 +5,7 @@
   "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
   "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
   "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
-  "coverage": [{"artifactId":"recovery-01-sender","state":"captured"},{"artifactId":"recovery-02-despool","state":"captured"}],
+  "coverage": [{"artifactId":"synthetic:artifact:sha256.v1:22bd8285e739080b41afcbfc19864fc995ef87298c8973a78a906264b73e371d","state":"captured"},{"artifactId":"synthetic:artifact:sha256.v1:3d3258a0caad4a2ecc3d46c1cdbf9af577fef0514e70386fc2a3d47b3b859752","state":"captured"}],
   "transactions": [{
     "transactionId":"hierarchy:msg-recovery-01:LAB:CHD:link-lab-chd",
     "key":{"messageId":"msg-recovery-01","linkId":"link-lab-chd","originSiteCode":"LAB","targetSiteCode":"CHD","confidence":"exact","extractionProfileId":"hierarchy-server-5.00.test-v1"},
@@ -13,11 +13,11 @@
     "state":"incomplete","classification":"insufficientEvidence","confidence":"low","confidenceCeiling":"low",
     "coverageGapArtifactIds":[],
     "observations":[
-      {"observationId":"recovery-01-retry","phase":"send","disposition":"retrying","terminal":false,"evidence":[{"artifactId":"recovery-01-sender","startLine":1,"endLine":1}]},
-      {"observationId":"recovery-02-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"recovery-01-sender","startLine":2,"endLine":2}]},
-      {"observationId":"recovery-03-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"recovery-02-despool","startLine":1,"endLine":1}]},
-      {"observationId":"recovery-04-process","phase":"process","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"recovery-02-despool","startLine":2,"endLine":2}]},
-      {"observationId":"recovery-05-terminal","phase":"healthyOrTerminal","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"recovery-02-despool","startLine":3,"endLine":3}]}
+      {"observationId":"recovery-01-retry","phase":"send","disposition":"retrying","terminal":false,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:22bd8285e739080b41afcbfc19864fc995ef87298c8973a78a906264b73e371d","startLine":1,"endLine":1}]},
+      {"observationId":"recovery-02-send","phase":"send","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:22bd8285e739080b41afcbfc19864fc995ef87298c8973a78a906264b73e371d","startLine":2,"endLine":2}]},
+      {"observationId":"recovery-03-receive","phase":"receive","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:3d3258a0caad4a2ecc3d46c1cdbf9af577fef0514e70386fc2a3d47b3b859752","startLine":1,"endLine":1}]},
+      {"observationId":"recovery-04-process","phase":"process","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:3d3258a0caad4a2ecc3d46c1cdbf9af577fef0514e70386fc2a3d47b3b859752","startLine":2,"endLine":2}]},
+      {"observationId":"recovery-05-terminal","phase":"healthyOrTerminal","disposition":"succeeded","terminal":true,"evidence":[{"artifactId":"synthetic:artifact:sha256.v1:3d3258a0caad4a2ecc3d46c1cdbf9af577fef0514e70386fc2a3d47b3b859752","startLine":3,"endLine":3}]}
     ]
   }],
   "sourceLocalObservations": [],
