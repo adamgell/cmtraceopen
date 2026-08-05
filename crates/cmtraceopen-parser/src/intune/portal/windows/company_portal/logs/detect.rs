@@ -15,10 +15,12 @@ use super::models::{
 };
 
 /// What a single line contributed to the detection decision.
+///
+/// Presence of this value already means the line was a confirmed record
+/// (`classify_line` returns `None` otherwise), so the only variable fact is
+/// whether the app version is in the validated set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompanyPortalLineClassification {
-    /// The line validated against the `V1` field grammar.
-    pub is_record: bool,
     /// The record's app version is one the grammar was derived from.
     pub app_version_is_validated: bool,
 }
@@ -30,7 +32,6 @@ pub struct CompanyPortalLineClassification {
 pub fn classify_line(line: &str) -> Option<CompanyPortalLineClassification> {
     let fields = parse_record_fields(line)?;
     Some(CompanyPortalLineClassification {
-        is_record: true,
         app_version_is_validated: matches!(
             fields.app_version.support,
             CompanyPortalGrammarSupport::Validated

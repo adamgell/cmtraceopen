@@ -242,9 +242,7 @@ jobs:
           key: ${{ runner.os }}-esp-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-esp-cargo-
 
-      # All parser-crate targets, not just esp_diagnostics: the `check` job runs
-      # with working-directory src-tauri, which scopes Cargo to cmtrace-open, so
-      # this is the only place the parser crate's own tests execute.
+      # Run all parser-crate targets on Windows in addition to the Linux checks.
       - name: Test parser crate contracts
         run: cargo test --locked -p cmtraceopen-parser
 

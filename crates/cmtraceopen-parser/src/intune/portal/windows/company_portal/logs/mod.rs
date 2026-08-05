@@ -48,6 +48,8 @@ mod redaction;
 pub use detect::*;
 pub use document::*;
 pub use entries::*;
-pub use grammar::*;
+// Tailing needs the record-start predicate; keep grammar implementation details
+// crate-private so they are not a semver surface.
+pub use grammar::looks_like_record_start;
 pub use models::*;
 pub use redaction::*;

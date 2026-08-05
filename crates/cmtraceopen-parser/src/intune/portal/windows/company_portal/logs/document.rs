@@ -114,9 +114,12 @@ fn build_record(file_name: &str, framed: &FramedRecord<'_>) -> CompanyPortalLogR
         FramedRecordKind::Malformed | FramedRecordKind::Orphaned => CompanyPortalLogRecord {
             record_id,
             line_number: framed.line_number,
-            parse_state: match framed.kind {
+            parse_state: match &framed.kind {
                 FramedRecordKind::Malformed => CompanyPortalParseState::Malformed,
-                _ => CompanyPortalParseState::Orphaned,
+                FramedRecordKind::Orphaned => CompanyPortalParseState::Orphaned,
+                FramedRecordKind::Record(_) => unreachable!(
+                    "Record arm is handled above; Malformed|Orphaned only here"
+                ),
             },
             timestamp: None,
             severity: None,

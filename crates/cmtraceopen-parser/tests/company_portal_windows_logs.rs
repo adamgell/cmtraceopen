@@ -710,8 +710,9 @@ fn portal_logs_nested_configmgr_trace_text_is_never_reinterpreted() {
 
 #[test]
 fn portal_logs_every_fixture_line_survives_into_a_record() {
-    // Lossless-by-construction check across the whole matrix: no non-empty
-    // source line may be dropped.
+    // Lossless-by-construction check across the whole matrix: every non-empty
+    // source line must appear as a complete framed line (not merely as a
+    // substring of some other line), and multiplicity is preserved.
     for (label, content) in [
         ("severity-levels", SEVERITY_LEVELS),
         ("multiline-continuation", MULTILINE),
@@ -727,18 +728,20 @@ fn portal_logs_every_fixture_line_survives_into_a_record() {
     ] {
         let local =
             parse_log_document_preserving_local_values(&local_state_path("Log_1.log"), content);
-        let joined = local
+        let mut remaining: Vec<&str> = local
             .records
             .iter()
-            .map(|record| record.raw_text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+            .flat_map(|record| record.raw_text.lines())
+            .map(str::trim_end)
+            .filter(|line| !line.is_empty())
+            .collect();
 
         for line in content.lines().filter(|line| !line.trim().is_empty()) {
-            assert!(
-                joined.contains(line.trim_end()),
-                "{label}: line was lost: {line}"
-            );
+            let needle = line.trim_end();
+            let Some(index) = remaining.iter().position(|candidate| *candidate == needle) else {
+                panic!("{label}: line was lost (or only matched as a substring): {line}");
+            };
+            remaining.remove(index);
         }
     }
 }
