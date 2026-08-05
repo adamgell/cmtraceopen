@@ -13,10 +13,11 @@ Software Center diagnostics. It intentionally owns only:
 It does **not** add a production reducer, shared SCCM model, source catalog,
 native capture adapter, server fact, cross-side rule, UI, or Windows acceptance
 claim. Every manifest and expected contract is
-`proposedPending318And319`. Production implementation remains blocked on the
-reviewed public contracts from #318 and #319. This branch must also be
-restacked and revalidated after the currently active #318 shared-contract PR
-lands.
+`proposedPending318And319` and every manifest is `proposalOnly: true`. Those
+labels are historical fixture-contract identifiers, not evidence that the
+named dependencies are still open. The current production gate is recorded
+below and remains closed because these source families still lack native,
+versioned production evidence and admission contracts.
 
 ## Capability and ownership gate
 
@@ -250,3 +251,89 @@ formatting/whitespace, and wasm32 compilation. It does not exercise native
 candidate discovery, permissions, Windows layout, ConfigMgr version, Software
 Center filename classes, notification transport, Intune behavior, or live SCCM
 acceptance. Passing this preparation corpus is not an issue-closure condition.
+
+## Current production source-contract gate
+
+Reviewed on 2026-08-05 against current `origin/main` at
+`bba7eea9176cf7ae25d4a417216fb036320b15c3`. This refresh audits and preserves
+the useful no-go decision from legacy PR #486 at
+`83a1eb8a9de66c356b666fe45c36858717f1efbe`; its stale dependency and registry
+observations are superseded by the current-main evidence below.
+
+**Decision: no-go for production support.** The 14 scenarios and 29 Rust tests
+are proposal-only corpus checks. They validate a deterministic synthetic
+schema and its adversarial boundaries; they do not establish production
+capture, parsing, correlation, diagnosis, or Windows acceptance for any of the
+four workflow families.
+
+Current-main evidence:
+
+- all management manifests remain `proposalOnly: true`, use
+  `contractState: proposedPending318And319`, and identify themselves as
+  synthetic fixtures;
+- `SccmArtifactFamily`, the production source catalog, and client intake source
+  groups contain no co-management, scripts, client-notification, or Software
+  Center family;
+- the management mappings and `5.00.TEST.*` extraction profiles exist only in
+  `sccm_client_management_fixture_contract.rs` and its fixture corpus;
+- the registered correlation profiles cover other closed synthetic contracts,
+  not a client-management production profile; and
+- the production client module exposes no client-management analyzer or
+  reducer.
+
+Microsoft's current Configuration Manager log reference lists
+`CoManagementHandler.log`, `Scripts.log`, `CCMNotificationAgent.log`, and the
+per-user `SCClient_*` and `SCNotify_*` filename classes and gives their broad
+purposes. It does not provide the exact versioned record grammar, transaction
+keys, phase transitions, terminal dispositions, or ownership semantics needed
+to admit those sources. The filename reference alone therefore cannot safely
+create a catalog entry or reducer:
+<https://learn.microsoft.com/en-us/intune/configmgr/core/plan-design/hierarchy/log-files>.
+
+Accordingly, CMTrace Open must not claim production support for
+`CoManagementHandler.log`, SCCM `Scripts.log`, client-notification logs, or
+Software Center logs from this corpus. The synthetic fixtures must not be
+promoted, copied into a production profile, or used as native-source evidence.
+
+## Required acquisition split
+
+The four artifact families do not share one lifecycle and must remain separate
+production candidates:
+
+1. **Co-management ownership:** acquire sanitized, independently reviewed
+   `CoManagementHandler.log` logical records for SCCM-owned, Intune-owned,
+   transitioning/shared, contradictory, and unknown-coverage cases from an
+   authorized development client. Record the ConfigMgr version and preserve
+   exact field names, complete CCM framing, offsets, and ordering.
+2. **Scripts execution:** separately acquire policy, execution, and report
+   records that prove the real versioned equivalents of `ScriptId`,
+   `ExecutionId`, `ResourceHandle`, phase, disposition, and terminal result.
+   Cover completed, failed, deferred or incomplete, rotation, malformed, and
+   unrelated-same-time cases.
+3. **Client notification:** separately acquire receive, dispatch/defer, and
+   acknowledgement records with real versioned notification/channel keys.
+   Server BGB evidence stays outside the client reducer.
+4. **Software Center:** keep dynamic `SCClient_*` and `SCNotify_*` files
+   unsupported until native discovery can privacy-safely recognize the
+   per-user filename class and sanitized records establish an observational
+   request/action/outcome contract. UI state and user intent remain out of
+   scope.
+
+Before any one family can become production-supported, its implementation must
+provide:
+
+- a native capture/admission contract with exact basename or bounded
+  filename-class matching, role, rotation, encoding, byte/digest binding, and
+  privacy-safe provenance;
+- an observed ConfigMgr version and exact extraction profile derived from
+  sanitized source records rather than the `5.00.TEST.*` proposal;
+- red tests for lookalike and duplicate keys, incomplete records, invalid
+  offsets, coverage gaps, identity leakage, input reordering, and unrelated
+  same-time evidence;
+- a focused, family-specific reducer with explicit ownership, deferred,
+  insufficient, and terminal states backed only by cited evidence; and
+- an independently inspectable Windows development-client evidence pack.
+
+Only one family should cross that gate at a time. The smallest safe first slice
+is co-management ownership alone; scripts, client notification, and Software
+Center remain independent follow-up decisions.
