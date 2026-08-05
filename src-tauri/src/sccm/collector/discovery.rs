@@ -12,7 +12,23 @@ use super::{SccmDiscoveryIssue, SccmDiscoveryIssueCode};
 use crate::sccm::SccmRole;
 
 #[cfg(any(test, target_os = "windows"))]
-const FIXED_ROLE_QUERY: &str = "$ErrorActionPreference='Stop'; Get-CimInstance -Namespace 'root/cimv2' -ClassName 'Win32_Service' -Filter \"Name='CcmExec' OR Name='SMS_EXECUTIVE' OR Name='SMS_ADMIN_SERVICE' OR Name='WSUSService'\" | Select-Object -ExpandProperty Name | ConvertTo-Json -Compress";
+const FIXED_ROLE_QUERY: &str = "$ErrorActionPreference='Stop'; Get-CimInstance -Namespace 'root/cimv2' -ClassName 'Win32_Service' -Filter \"Name='CcmExec' OR Name='SMS_EXECUTIVE' OR Name='SMS_ADMIN_SERVICE' OR Name='WSUSService'\" | Select-Object Name,PathName | ConvertTo-Json -Compress";
+
+#[cfg(any(test, target_os = "windows"))]
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+struct CimServiceFact {
+    name: String,
+    path_name: Option<String>,
+}
+
+#[cfg(any(test, target_os = "windows"))]
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum CimServiceFacts {
+    One(CimServiceFact),
+    Many(Vec<CimServiceFact>),
+}
 
 #[derive(Debug, Default)]
 pub struct NativeDiscoveryProvider;
@@ -118,12 +134,6 @@ fn discover_native() -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
                 basis: SccmDiscoveryBasis::Registry,
             });
             environment.configmgr_version = key.get_value::<String, _>("ProductVersion").ok();
-            if let Some(path) = client_log_root() {
-                environment.roots.push(SccmCaptureRoot {
-                    role: SccmRole::Client,
-                    path,
-                });
-            }
         }
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             environment.issues.push(SccmDiscoveryIssue {
@@ -206,12 +216,10 @@ fn discover_native() -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
         .output()
     {
         Ok(output) if output.status.success() => {
-            let client_root = client_log_root();
             apply_cim_service_facts(
                 &mut environment,
                 &output.stdout,
                 server_install_root.as_deref(),
-                client_root.as_deref(),
             );
         }
         Ok(output) if !output.status.success() => {
@@ -230,37 +238,23 @@ fn discover_native() -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
     Ok(environment)
 }
 
-#[cfg(target_os = "windows")]
-fn client_log_root() -> Option<std::path::PathBuf> {
-    std::env::var_os("WINDIR")
-        .map(std::path::PathBuf::from)
-        .map(|path| path.join("CCM").join("Logs"))
-}
-
 #[cfg(any(test, target_os = "windows"))]
 fn apply_cim_service_facts(
     environment: &mut PrivateSccmEnvironment,
     output: &[u8],
     server_install_root: Option<&std::path::Path>,
-    allow_listed_client_root: Option<&std::path::Path>,
 ) {
-    #[derive(serde::Deserialize)]
-    #[serde(untagged)]
-    enum ServiceNames {
-        One(String),
-        Many(Vec<String>),
-    }
-
-    let Ok(names) = serde_json::from_slice::<ServiceNames>(output) else {
+    let Ok(facts) = serde_json::from_slice::<CimServiceFacts>(output) else {
         return;
     };
-    let names = match names {
-        ServiceNames::One(name) => vec![name],
-        ServiceNames::Many(names) => names,
+    let facts = match facts {
+        CimServiceFacts::One(fact) => vec![fact],
+        CimServiceFacts::Many(facts) => facts,
     };
+    let client_root = client_root_from_service_facts(&facts);
 
-    for service_name in names.into_iter().collect::<BTreeSet<_>>() {
-        let Some(role) = role_for_cim_service(&service_name) else {
+    for fact in facts {
+        let Some(role) = role_for_cim_service(&fact.name) else {
             continue;
         };
         environment.roles.push(SccmDetectedRole {
@@ -268,7 +262,7 @@ fn apply_cim_service_facts(
             basis: SccmDiscoveryBasis::Cim,
         });
         let path = match role {
-            SccmRole::Client => allow_listed_client_root.map(std::path::Path::to_path_buf),
+            SccmRole::Client => client_root.clone(),
             _ => server_install_root
                 .map(|path| path.join("Logs"))
                 .or_else(|| default_role_root(&role)),
@@ -277,6 +271,101 @@ fn apply_cim_service_facts(
             environment.roots.push(SccmCaptureRoot { role, path });
         }
     }
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn client_root_from_service_output(output: &[u8]) -> Option<std::path::PathBuf> {
+    let facts = serde_json::from_slice::<CimServiceFacts>(output).ok()?;
+    let facts = match facts {
+        CimServiceFacts::One(fact) => vec![fact],
+        CimServiceFacts::Many(facts) => facts,
+    };
+    client_root_from_service_facts(&facts)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn client_root_from_service_facts(facts: &[CimServiceFact]) -> Option<std::path::PathBuf> {
+    let mut ccmexec_count = 0;
+    let mut roots = BTreeSet::new();
+    for fact in facts {
+        if fact.name != "CcmExec" {
+            continue;
+        }
+        ccmexec_count += 1;
+        if let Some(root) = fact
+            .path_name
+            .as_deref()
+            .and_then(client_root_from_service_path)
+        {
+            roots.insert(root);
+        }
+    }
+    (ccmexec_count == 1 && roots.len() == 1)
+        .then(|| roots.into_iter().next())
+        .flatten()
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn client_root_from_service_path(path_name: &str) -> Option<std::path::PathBuf> {
+    let path_name = path_name.trim();
+    if path_name.is_empty() || path_name.chars().any(char::is_control) {
+        return None;
+    }
+
+    let executable = if let Some(stripped) = path_name.strip_prefix('"') {
+        let closing_quote = stripped.find('"')?;
+        let trailing = &stripped[closing_quote + 1..];
+        if (!trailing.is_empty() && !trailing.starts_with(char::is_whitespace))
+            || trailing.contains('"')
+        {
+            return None;
+        }
+        &stripped[..closing_quote]
+    } else {
+        let lower = path_name.to_ascii_lowercase();
+        let executable_end = lower.find(".exe")? + ".exe".len();
+        let trailing = &path_name[executable_end..];
+        if !trailing.is_empty() && !trailing.starts_with(char::is_whitespace) {
+            return None;
+        }
+        &path_name[..executable_end]
+    };
+
+    if executable.contains('/')
+        || executable.contains(r"\\")
+        || executable.contains('"')
+        || executable.len() < 4
+    {
+        return None;
+    }
+    let bytes = executable.as_bytes();
+    if !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' || bytes[2] != b'\\' {
+        return None;
+    }
+
+    let components = executable[3..].split('\\');
+    let mut last = None;
+    for component in components {
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.contains(':')
+            || component.contains('*')
+            || component.contains('?')
+        {
+            return None;
+        }
+        last = Some(component);
+    }
+    if !last.is_some_and(|name| name.eq_ignore_ascii_case("CcmExec.exe")) {
+        return None;
+    }
+
+    let parent_end = executable.rfind('\\')?;
+    Some(std::path::PathBuf::from(format!(
+        "{}\\Logs",
+        &executable[..parent_end]
+    )))
 }
 
 #[cfg(any(test, target_os = "windows"))]
@@ -316,14 +405,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ccmexec_service_without_setup_registry_fact_admits_client_and_fixed_root() {
-        let client_root = PathBuf::from(r"C:\Windows\CCM\Logs");
+    fn ccmexec_service_path_derives_one_sibling_logs_root() {
+        let client_root = PathBuf::from(r"C:\Program Files\SMS_CCM\Logs");
         let mut environment = PrivateSccmEnvironment {
             supported: true,
             ..PrivateSccmEnvironment::default()
         };
 
-        apply_cim_service_facts(&mut environment, br#""CcmExec""#, None, Some(&client_root));
+        apply_cim_service_facts(
+            &mut environment,
+            br#"{"Name":"CcmExec","PathName":"C:\\Program Files\\SMS_CCM\\CcmExec.exe"}"#,
+            None,
+        );
 
         assert_eq!(
             environment.roles,
@@ -342,39 +435,85 @@ mod tests {
     }
 
     #[test]
-    fn similarly_named_or_untrusted_service_output_does_not_admit_client() {
-        for output in [
-            br#""CcmExecHelper""#.as_slice(),
-            br#""CCMEXEC""#.as_slice(),
-            br#"" CcmExec ""#.as_slice(),
-            br#"["NotCcmExec", "CcmExecAgent"]"#.as_slice(),
-            br#"{"Name":"CcmExec"}"#.as_slice(),
-            b"CcmExec".as_slice(),
-        ] {
-            let mut environment = PrivateSccmEnvironment::default();
-            let client_root = PathBuf::from(r"C:\Windows\CCM\Logs");
-            apply_cim_service_facts(&mut environment, output, None, Some(&client_root));
+    fn ccmexec_service_path_accepts_quotes_and_trailing_arguments() {
+        let root = client_root_from_service_output(
+            br#"{"Name":"CcmExec","PathName":"\"C:\\Program Files\\SMS_CCM\\CcmExec.exe\" -service"}"#,
+        );
 
-            assert!(environment.roles.is_empty());
-            assert!(environment.roots.is_empty());
+        assert_eq!(root, Some(PathBuf::from(r"C:\Program Files\SMS_CCM\Logs")));
+    }
+
+    #[test]
+    fn ccmexec_service_path_rejects_wrapper_relative_unc_and_wrong_basename() {
+        for output in [
+            br#"{"Name":"ccmexec","PathName":"C:\\Program Files\\SMS_CCM\\CcmExec.exe"}"#.as_slice(),
+            br#"{"Name":"CcmExec","PathName":"cmd.exe /c C:\\Program Files\\SMS_CCM\\CcmExec.exe"}"#.as_slice(),
+            br#"{"Name":"CcmExec","PathName":"CcmExec.exe"}"#.as_slice(),
+            br#"{"Name":"CcmExec","PathName":"\\\\server\\SMS_CCM\\CcmExec.exe"}"#.as_slice(),
+            br#"{"Name":"CcmExec","PathName":"C:\\Program Files\\SMS_CCM\\Other.exe"}"#.as_slice(),
+            br#"{"Name":"CcmExec","PathName":"C:\\Program Files\\SMS_CCM\\..\\CcmExec.exe"}"#.as_slice(),
+        ] {
+            assert_eq!(client_root_from_service_output(output), None);
         }
     }
 
     #[test]
-    fn ccmexec_service_never_supplies_or_invents_a_client_root() {
+    fn missing_legacy_windir_root_is_not_selected() {
         let mut environment = PrivateSccmEnvironment::default();
 
-        apply_cim_service_facts(&mut environment, br#""CcmExec""#, None, None);
+        apply_cim_service_facts(
+            &mut environment,
+            br#"{"Name":"CcmExec","PathName":"C:\\Program Files\\SMS_CCM\\CcmExec.exe"}"#,
+            None,
+        );
 
-        assert_eq!(environment.roles[0].role, SccmRole::Client);
-        assert!(environment.roots.is_empty());
+        assert_eq!(
+            environment.roots,
+            vec![SccmCaptureRoot {
+                role: SccmRole::Client,
+                path: PathBuf::from(r"C:\Program Files\SMS_CCM\Logs"),
+            }]
+        );
+        assert!(!environment
+            .roots
+            .iter()
+            .any(|root| root.path.to_string_lossy() == r"C:\Windows\CCM\Logs"));
     }
 
     #[test]
-    fn fixed_cim_query_requests_only_allow_listed_service_names() {
+    fn fixed_cim_query_selects_only_exact_service_name_and_path() {
         assert!(FIXED_ROLE_QUERY.contains("Name='CcmExec'"));
-        assert!(FIXED_ROLE_QUERY.contains("Select-Object -ExpandProperty Name"));
-        assert!(!FIXED_ROLE_QUERY.contains("PathName"));
+        assert!(FIXED_ROLE_QUERY.contains("Select-Object Name,PathName"));
+        assert!(FIXED_ROLE_QUERY.contains("PathName"));
         assert!(!FIXED_ROLE_QUERY.contains("StartName"));
+        assert!(!FIXED_ROLE_QUERY.contains("Select-Object -ExpandProperty Name"));
+    }
+
+    #[test]
+    fn serialized_discovery_never_contains_service_path() {
+        let service_path = r"C:\Program Files\SMS_CCM\CcmExec.exe";
+        let value = normalize_public_discovery(SccmEnvironmentDiscovery {
+            supported: true,
+            configmgr_version: None,
+            roles: vec![SccmDetectedRole {
+                role: SccmRole::Client,
+                basis: SccmDiscoveryBasis::Cim,
+            }],
+            sources: Vec::new(),
+            issues: Vec::new(),
+        });
+        let serialized = serde_json::to_string(&value).unwrap();
+        assert!(!serialized.contains(service_path));
+        assert!(!serialized.contains(r"C:\Windows\CCM\Logs"));
+    }
+
+    #[test]
+    fn ccmexec_role_is_retained_when_service_root_is_absent() {
+        let mut environment = PrivateSccmEnvironment::default();
+
+        apply_cim_service_facts(&mut environment, br#"{"Name":"CcmExec"}"#, None);
+
+        assert_eq!(environment.roles[0].role, SccmRole::Client);
+        assert!(environment.roots.is_empty());
     }
 }
