@@ -307,8 +307,11 @@ fn client_root_from_service_facts(facts: &[CimServiceFact]) -> Option<std::path:
 
 #[cfg(any(test, target_os = "windows"))]
 fn client_root_from_service_path(path_name: &str) -> Option<std::path::PathBuf> {
+    if path_name.chars().any(char::is_control) {
+        return None;
+    }
     let path_name = path_name.trim();
-    if path_name.is_empty() || path_name.chars().any(char::is_control) {
+    if path_name.is_empty() {
         return None;
     }
 
@@ -441,6 +444,37 @@ mod tests {
         );
 
         assert_eq!(root, Some(PathBuf::from(r"C:\Program Files\SMS_CCM\Logs")));
+    }
+
+    #[test]
+    fn ccmexec_service_path_rejects_control_whitespace_around_exact_paths() {
+        let executable = r#"C:\Program Files\SMS_CCM\CcmExec.exe"#;
+        for control in ['\t', '\r', '\n'] {
+            for leading in [true, false] {
+                for quoted in [true, false] {
+                    let exact_path = if quoted {
+                        format!(r#""{executable}""#)
+                    } else {
+                        executable.to_owned()
+                    };
+                    let path_name = if leading {
+                        format!("{control}{exact_path}")
+                    } else {
+                        format!("{exact_path}{control}")
+                    };
+                    let output = serde_json::json!({
+                        "Name": "CcmExec",
+                        "PathName": path_name,
+                    });
+
+                    assert_eq!(
+                        client_root_from_service_output(output.to_string().as_bytes()),
+                        None,
+                        "control whitespace must not authorize a root: {control:?}, leading={leading}, quoted={quoted}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
