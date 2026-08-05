@@ -24,7 +24,7 @@ fn iso_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2}):(\d{2})([.,]\d+)?(Z|[+-]\d{2}:?\d{2})?\s*(.*)"
+        r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{1,2}):([0-9]{2}):([0-9]{2})([.,][0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?\s*(.*)"
     ).unwrap()
 })
 }
@@ -34,7 +34,7 @@ fn slash_date_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-        r"^(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})(\.\d+)?(\s*[AaPp][Mm])?\s+(.*)",
+        r"^([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})\s+([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(\s*[AaPp][Mm])?\s+(.*)",
     )
     .unwrap()
     })
@@ -45,7 +45,7 @@ fn syslog_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(.*)"
+        r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+([0-9]{1,2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})\s+(.*)"
     ).unwrap()
 })
 }
@@ -53,7 +53,7 @@ fn syslog_re() -> &'static Regex {
 /// Time-only: 14:30:00.123 message...
 fn time_only_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"^(\d{2}):(\d{2}):(\d{2})([.,]\d+)?\s+(.*)").unwrap())
+    CELL.get_or_init(|| Regex::new(r"^([0-9]{2}):([0-9]{2}):([0-9]{2})([.,][0-9]+)?\s+(.*)").unwrap())
 }
 
 // ---------------------------------------------------------------------------
@@ -555,6 +555,10 @@ fn parse_fractional_millis(frac: Option<&str>) -> u32 {
         Some(s) => {
             // Strip leading '.' or ','
             let digits = s.trim_start_matches(['.', ',']);
+            // Byte-indexed truncate requires ASCII digits (#413).
+            if !digits.is_ascii() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return 0;
+            }
             // Pad or truncate to 3 digits
             let padded = format!("{:0<3}", digits);
             padded[..3].parse::<u32>().unwrap_or(0)
@@ -573,6 +577,10 @@ fn parse_tz_offset(tz: Option<&str>) -> Option<i32> {
             let sign: i32 = if s.starts_with('-') { -1 } else { 1 };
             let digits = s.trim_start_matches(['+', '-']);
             let clean = digits.replace(':', "");
+            // Byte-indexed hour/minute slices require ASCII digits (#413).
+            if !clean.is_ascii() || !clean.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
             if clean.len() >= 4 {
                 let hours: i32 = clean[..2].parse().ok()?;
                 let mins: i32 = clean[2..4].parse().ok()?;
@@ -787,4 +795,24 @@ mod tests {
         // 25:00:00 is not a valid time
         assert!(parse_line("25:00:00 invalid time", DateOrder::MonthFirst).is_none());
     }
+
+    #[test]
+    fn non_ascii_fractional_and_tz_do_not_panic() {
+        // Arabic-Indic fractional seconds and Devanagari timezone digits.
+        let _ = parse_line("14:30:00.١٢ starting", DateOrder::MonthFirst);
+        let _ = parse_line(
+            "2024-01-15T14:30:00.١٢Z Error: connection refused",
+            DateOrder::MonthFirst,
+        );
+        let _ = parse_line(
+            "2024-01-15T14:30:00.123+०१:२३ Error: offset",
+            DateOrder::MonthFirst,
+        );
+        let _ = parse_lines(
+            &["14:30:00.١٢ starting", "2024-01-15T14:30:00.123+०१:२३ x"],
+            "timestamped.log",
+            DateOrder::MonthFirst,
+        );
+    }
+
 }

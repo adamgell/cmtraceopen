@@ -28,12 +28,14 @@ fn ccm_re() -> &'static Regex {
     CELL.get_or_init(|| {
         Regex::new(concat!(
             r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
-            r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<time_tail>\d+(?:[+-]\d+)?)""#,
-            r#"\s+date="(?P<mon>\d{1,2})-(?P<day>\d{1,2})-(?P<yr>\d{4})""#,
+            // ASCII digits only: regex \d matches Unicode Nd and feeds byte-indexed
+            // slices that panic on multi-byte digits (issue #413).
+            r#"<time="(?P<h>[0-9]{1,2}):(?P<m>[0-9]{1,2}):(?P<s>[0-9]{1,2})\.(?P<time_tail>[0-9]+(?:[+-][0-9]+)?)""#,
+            r#"\s+date="(?P<mon>[0-9]{1,2})-(?P<day>[0-9]{1,2})-(?P<yr>[0-9]{4})""#,
             r#"\s+component="(?P<comp>[^"]*)""#,
             r#"\s+context="(?P<context>[^"]*)""#,
-            r#"\s+type="(?P<typ>\d)?""#,
-            r#"\s+thread="(?P<thr>\d+)?""#,
+            r#"\s+type="(?P<typ>[0-9])?""#,
+            r#"\s+thread="(?P<thr>[0-9]+)?""#,
             r#"(?:\s+file="(?P<file>[^"]*)")?>"#,
         ))
         .expect("CCM regex must compile")
@@ -167,6 +169,11 @@ impl CcmParsed {
 }
 
 pub(crate) fn truncate_subsecond_to_millis(value: &str) -> Option<u32> {
+    // Byte-indexed slicing is only valid for ASCII digit runs. Unicode Nd
+    // digits (matched by regex \d) are multi-byte and panic on char boundaries.
+    if !value.is_ascii() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
     if value.len() > 3 {
         value[..3].parse().ok()
     } else {
@@ -227,6 +234,11 @@ fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
         return (&value[..index], Some(&value[index..]));
     }
 
+    // Signless splits use fixed byte offsets; refuse non-ASCII digit runs.
+    if !value.is_ascii() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return (value, None);
+    }
+
     // `%03u%d` with a three-digit offset is the only signless shape the
     // legacy grammar can produce that is not also plain fractional text.
     if value.len() == 6 && signless_offset_is_real(&value[3..]) {
@@ -249,6 +261,11 @@ fn split_legacy_public_time_tail(value: &str) -> Option<(&str, &str)> {
         .position(|byte| matches!(byte, b'+' | b'-'))
     {
         return (index > 0).then_some((&value[..index], &value[index..]));
+    }
+
+    // Final-digit split is byte-indexed; non-ASCII digit tails panic otherwise.
+    if !value.is_ascii() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
     }
 
     let split_at = value.len().checked_sub(1)?;
@@ -1476,5 +1493,49 @@ mod tests {
             CcmTimestampParseState::OffsetMissing
         );
         assert_eq!(timestamp.utc_millis, None);
+    }
+
+    /// Non-ASCII Nd digits in a CCM time tail must not panic (issue #413).
+    ///
+    /// `regex` `\d` matches Unicode decimal digits; byte-indexed splits then
+    /// hit mid-character boundaries. ASCII-only patterns + guards reject these
+    /// tails instead of crashing the pure parser crate.
+    #[test]
+    fn non_ascii_decimal_digit_time_tails_do_not_panic() {
+        let tails = ["١٢٣", "123١", "12١٢", "1234١", "٠", "१२३"];
+        for tail in tails {
+            assert!(
+                truncate_subsecond_to_millis(tail).is_none(),
+                "truncate must refuse non-ASCII tail {tail:?}"
+            );
+            let (fraction, offset) = split_ccm_time_tail(tail);
+            assert_eq!(offset, None, "unsigned non-ASCII tail {tail:?}");
+            assert_eq!(fraction, tail);
+            assert!(
+                split_legacy_public_time_tail(tail).is_none(),
+                "legacy split must refuse non-ASCII tail {tail:?}"
+            );
+
+            let text = format!(
+                concat!(
+                    r#"<![LOG[NonASCII {tail}]LOG]!><time="10:00:00.{tail}" date="07-30-2026" "#,
+                    r#"component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+                ),
+                tail = tail
+            );
+            // Must not panic; non-ASCII fractional text is not a CCM match.
+            let records = scan_logical_records(&text, "PolicyAgent.log");
+            assert!(
+                records.iter().all(|record| {
+                    record.timestamp.ordering_state == CcmTimestampParseState::TimestampMissing
+                }),
+                "non-ASCII tail {tail:?} must not produce a CCM-normalized timestamp"
+            );
+            let (entries, _) = parse_content(&text, "PolicyAgent.log", None);
+            assert!(
+                entries.iter().all(|entry| entry.timestamp.is_none()),
+                "non-ASCII tail {tail:?} must not parse as a CCM timestamp entry"
+            );
+        }
     }
 }

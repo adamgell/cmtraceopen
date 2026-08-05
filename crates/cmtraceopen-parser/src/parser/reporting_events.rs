@@ -18,7 +18,8 @@ fn timestamp_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"^(\d{4})[-/](\d{2})[-/](\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:(?::|\.)(\d{1,7}))?$",
+            // ASCII digits only — \d is Unicode Nd; fractional ms is byte-sliced (#413).
+            r"^([0-9]{4})[-/]([0-9]{2})[-/]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})(?:(?::|\.)([0-9]{1,7}))?$",
         )
         .unwrap()
     })
@@ -181,6 +182,10 @@ fn parse_timestamp(value: &str) -> Option<(i64, String)> {
 fn parse_fractional_millis(value: Option<&str>) -> u32 {
     match value {
         Some(raw) => {
+            // Byte-indexed truncate requires ASCII digits (#413).
+            if !raw.is_ascii() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+                return 0;
+            }
             let padded = format!("{:0<3}", raw);
             padded[..3].parse::<u32>().unwrap_or(0)
         }
@@ -412,4 +417,30 @@ mod tests {
         assert_eq!(entries[3].severity, Severity::Warning);
         assert_eq!(entries[3].line_number, 4);
     }
+
+    #[test]
+    fn non_ascii_fractional_timestamp_does_not_panic() {
+        // Detection path: matches_reporting_events_record calls parse_timestamp.
+        let guid = "{11111111-1111-1111-1111-111111111111}";
+        let fields = [
+            guid,
+            "2024-01-15 08:00:00.١٢",
+            "1",
+            "Software Update",
+            "1",
+            "{22222222-2222-2222-2222-222222222222}",
+            "0x00000000",
+            "Windows Update Agent",
+            "Success",
+            "Installation",
+            "detail",
+        ];
+        let line = fields.join("\t");
+        let _ = matches_reporting_events_record(&line);
+        let _ = parse_lines(
+            &[&line],
+            "C:/Windows/SoftwareDistribution/ReportingEvents.log",
+        );
+    }
+
 }

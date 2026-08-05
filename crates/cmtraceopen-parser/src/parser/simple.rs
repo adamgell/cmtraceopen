@@ -21,8 +21,9 @@ fn meta_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(concat!(
-            r#"<(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})\.(\d+)([+-]?\d+)>"#,
-            r#"(?:<thread=(\d+)(?:\s*\(0x[0-9a-fA-F]+\))?>)?"#,
+            // ASCII digits only — \d is Unicode Nd and byte-sliced ms panics (#413).
+            r#"<([0-9]{1,2})-([0-9]{1,2})-([0-9]{4})\s+([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})\.([0-9]+)([+-]?[0-9]+)>"#,
+            r#"(?:<thread=([0-9]+)(?:\s*\(0x[0-9a-fA-F]+\))?>)?"#,
         ))
         .expect("Simple metadata regex must compile")
     })
@@ -49,11 +50,7 @@ fn parse_line(line: &str) -> Option<SimpleParsed> {
     let m: u32 = caps.get(5)?.as_str().parse().ok()?;
     let s: u32 = caps.get(6)?.as_str().parse().ok()?;
     let ms_str = caps.get(7)?.as_str();
-    let ms: u32 = if ms_str.len() > 3 {
-        ms_str[..3].parse().ok()?
-    } else {
-        ms_str.parse().ok()?
-    };
+    let ms = super::ccm::truncate_subsecond_to_millis(ms_str)?;
     let tz: i32 = caps.get(8)?.as_str().parse().ok()?;
 
     // Thread is optional (captured by the combined regex)
@@ -245,4 +242,13 @@ mod tests {
         let parsed = parse_line(line).expect("should parse");
         assert_eq!(parsed.severity, Severity::Error);
     }
+
+
+    #[test]
+    fn non_ascii_fractional_digits_do_not_panic() {
+        let line = "message$$<Comp><1-1-2024 1:1:1.١٢+0><thread=1 (0x0001)>";
+        let _ = parse_line(line);
+        let _ = parse_lines(&[line], "simple.log");
+    }
+
 }

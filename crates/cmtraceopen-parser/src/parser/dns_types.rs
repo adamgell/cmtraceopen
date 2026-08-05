@@ -147,8 +147,13 @@ fn decode_wire_format(raw: &str) -> String {
                         // Root label — signals end of name.
                         break;
                     }
-                    // Extract exactly `len` bytes for the label.
+                    // Extract exactly `len` bytes for the label when that end
+                    // is a UTF-8 char boundary; otherwise the log text is
+                    // malformed relative to the claimed wire length (#413).
                     let label_end = len.min(after_paren.len());
+                    if !after_paren.is_char_boundary(label_end) {
+                        break;
+                    }
                     let label = &after_paren[..label_end];
                     if !label.is_empty() {
                         labels.push(label.to_string());
@@ -161,8 +166,12 @@ fn decode_wire_format(raw: &str) -> String {
             break;
         }
 
-        // Unexpected character — advance by one to avoid an infinite loop.
-        remaining = &remaining[1..];
+        // Unexpected character — advance by one Unicode scalar, not one byte.
+        // Byte-stepping panics inside multi-byte characters (#413).
+        match remaining.chars().next() {
+            Some(ch) => remaining = &remaining[ch.len_utf8()..],
+            None => break,
+        }
     }
 
     if labels.is_empty() {
@@ -267,4 +276,13 @@ mod tests {
     fn test_decode_empty() {
         assert_eq!(decode_query_name(""), "");
     }
+
+    #[test]
+    fn non_ascii_wire_labels_do_not_panic() {
+        let _ = decode_query_name("é(1)a");
+        let _ = decode_query_name("(1)é");
+        let _ = decode_query_name("(2)éx");
+        let _ = decode_query_name("é");
+    }
+
 }
