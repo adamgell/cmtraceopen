@@ -32,12 +32,14 @@ pub fn discover_environment_with(
 ) -> Result<SccmEnvironmentDiscovery, SccmDiscoveryFailure> {
     let mut private = provider.discover()?;
     normalize_private_roots(&mut private.roots);
+    let advanced_sources = super::advanced_capture::advanced_source_options(&private);
     Ok(normalize_public_discovery(SccmEnvironmentDiscovery {
         supported: private.supported,
         configmgr_version: private.configmgr_version,
         roles: private.roles,
         sources: Vec::new(),
         issues: private.issues,
+        advanced_sources,
     }))
 }
 

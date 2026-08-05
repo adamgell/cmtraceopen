@@ -16,9 +16,9 @@ pub mod intune;
 #[cfg(debug_assertions)]
 mod ipc_bridge;
 #[cfg(feature = "macos-diag")]
-pub mod macos_diag;
-#[cfg(feature = "macos-diag")]
 pub mod jamf;
+#[cfg(feature = "macos-diag")]
+pub mod macos_diag;
 mod menu;
 pub use cmtraceopen_parser::models;
 pub mod parser;
@@ -245,6 +245,12 @@ pub fn run() {
             commands::sccm::discover_sccm_environment,
             #[cfg(feature = "sccm-diagnostics")]
             commands::sccm::capture_sccm_diagnostics,
+            #[cfg(feature = "sccm-diagnostics")]
+            commands::sccm::authorize_sccm_advanced_capture,
+            #[cfg(feature = "sccm-diagnostics")]
+            commands::sccm::capture_sccm_advanced_diagnostics,
+            #[cfg(feature = "sccm-diagnostics")]
+            commands::sccm::cancel_sccm_advanced_capture,
             commands::recent_entries::push_recent_entry,
             commands::recent_entries::clear_recent_entries,
             menu::sync_app_menu_state,
