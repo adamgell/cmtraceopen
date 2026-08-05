@@ -224,6 +224,62 @@ fn advanced_logging_certificate_and_network_records_are_redacted() {
     }
 }
 
+#[test]
+fn direct_log_export_enforces_ipv6_token_boundaries() {
+    let parse = parse_scenario(
+        concat!(
+            "2026-05-12 08:14:22:001 | CompanyPortal | I | 7 | NetworkService | :: start\n",
+            "2026-05-12 08:14:22:002 | CompanyPortal | I | 7 | NetworkService | middle :: value\n",
+            "2026-05-12 08:14:22:003 | CompanyPortal | I | 7 | NetworkService | end ::\n",
+            "2026-05-12 08:14:22:004 | CompanyPortal | I | 7 | NetworkService | bracket [::]\n",
+            "2026-05-12 08:14:22:005 | CompanyPortal | I | 7 | NetworkService | peers ::,2001:db8:0:0:0:0:0:1;fd12:3456:789a:: done\n",
+            "2026-05-12 08:14:22:006 | CompanyPortal | I | 7 | NetworkService | mapped ::ffff:192.0.2.128 done\n",
+            "2026-05-12 08:14:22:007 | CompanyPortal | I | 7 | NetworkService | safe std::__1::basic_string std::process café::babe ::1β _::1 at 08:18:00:104 ratio 3:2 mode:key version 5.2504.0 guid 4b2f9d61-1c53-4c58-8f1a-b0d3e1b5aa77 mac 00:11:22:33:44:55\n",
+        ),
+        "bare-unspecified-ipv6",
+        "CompanyPortal.log",
+    );
+
+    let export = redacted_export_projection(&parse);
+    let messages: Vec<&str> = export
+        .records
+        .iter()
+        .map(|record| record.message.as_str())
+        .collect();
+
+    assert_eq!(messages[0], "[redacted:ip:001] start");
+    assert_eq!(messages[1], "middle [redacted:ip:001] value");
+    assert_eq!(messages[2], "end [redacted:ip:001]");
+    assert_eq!(messages[3], "bracket [[redacted:ip:001]]");
+    assert_eq!(
+        messages[4],
+        "peers [redacted:ip:001],[redacted:ip:002];[redacted:ip:003] done"
+    );
+    for leaked in ["2001:db8:0:0:0:0:0:1", "fd12:3456:789a::", "192.0.2.128"] {
+        assert!(
+            !messages[4..=5].join(" ").contains(leaked),
+            "{leaked} leaked"
+        );
+    }
+
+    let safe = messages[6];
+    for text in [
+        "std::__1::basic_string",
+        "std::process",
+        "café::babe",
+        "::1β",
+        "_::1",
+        "08:18:00:104",
+        "ratio 3:2",
+        "mode:key",
+        "version 5.2504.0",
+    ] {
+        assert!(safe.contains(text), "non-address text changed: {safe}");
+    }
+    assert!(safe.contains("guid [redacted:guid:001]"));
+    assert!(safe.contains("mac [redacted:mac:001]"));
+}
+
 /// A version banner, a timestamp, and a GUID all look address-shaped to a lazy
 /// matcher. Redacting them as network addresses would corrupt evidence the
 /// module promises to preserve losslessly.
