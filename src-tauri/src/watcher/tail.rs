@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cmtraceopen_parser::intune::device::windows::inventory::{
-    self, DeviceInventoryLogDialect, FramedLogicalRecord,
+    self, DeviceInventoryLogDialect, FramedLogicalRecord, MAX_LOGICAL_RECORD_BYTES,
 };
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -15,7 +15,6 @@ use crate::parser::{self, FileEncoding, ResolvedParser};
 const IME_RECORD_START: &str = "<![LOG[";
 const IME_RECORD_ATTRS_START: &str = "]LOG]!><";
 const LOGICAL_RECORD_DEBOUNCE: Duration = Duration::from_millis(250);
-const MAX_PENDING_LOGICAL_RECORD_BYTES: usize = 1024 * 1024;
 
 /// The result of reading new content from a tailed file.
 pub struct TailBatch {
@@ -223,12 +222,7 @@ impl TailReader {
                     .pending_logical_record
                     .take()
                     .map(|pending| pending.content);
-                let framed = inventory::frame_logical_records(
-                    dialect,
-                    prior,
-                    &lines,
-                    MAX_PENDING_LOGICAL_RECORD_BYTES,
-                );
+                let framed = inventory::frame_logical_records(dialect, prior, &lines);
 
                 if let Some(content) = framed.pending_record {
                     self.pending_logical_record = Some(PendingLogicalRecord {
@@ -240,7 +234,7 @@ impl TailReader {
 
                 batch.append(self.parse_logical_records(
                     framed.completed_records,
-                    &selection,
+                    dialect,
                     framed.overflow_count,
                 ));
             }
@@ -318,32 +312,20 @@ impl TailReader {
             return TailBatch::empty(false);
         };
 
-        let mut overflow_count = 0;
-        let records = if fragment.is_empty() {
-            pending
-                .map(|record| vec![FramedLogicalRecord::complete(record.content)])
-                .unwrap_or_default()
+        let pending_content = pending.map(|record| record.content);
+        let framed = if fragment.is_empty() {
+            inventory::frame_logical_records(dialect, pending_content, &[]).flush_pending()
         } else {
             let fragment_lines = [fragment.as_str()];
-            let framed = inventory::frame_logical_records(
-                dialect,
-                pending.map(|record| record.content),
-                &fragment_lines,
-                MAX_PENDING_LOGICAL_RECORD_BYTES,
-            );
-            overflow_count = framed.overflow_count;
-            let mut records = framed.completed_records;
-            // The flush ends the record, so the retained pending text owns its
-            // last physical line the same way a header-terminated record does.
-            records.extend(framed.pending_record.map(FramedLogicalRecord::complete));
-            records
+            inventory::frame_logical_records(dialect, pending_content, &fragment_lines)
+                .flush_pending()
         };
 
         // An empty record is kept rather than dropped. It parses to no entries
         // either way, but a blank line is still a physical line, and dropping
         // the record here would drop the line it accounts for and shift every
         // later line number down by one.
-        self.parse_logical_records(records, &selection, overflow_count)
+        self.parse_logical_records(framed.completed_records, dialect, framed.overflow_count)
     }
 
     fn enforce_unterminated_logical_bound(
@@ -361,7 +343,7 @@ impl TailReader {
             .saturating_add(usize::from(
                 pending_len > 0 && !self.pending_fragment.is_empty(),
             ));
-        if pending_bytes <= MAX_PENDING_LOGICAL_RECORD_BYTES {
+        if pending_bytes <= MAX_LOGICAL_RECORD_BYTES {
             return TailBatch::empty(false);
         }
 
@@ -372,48 +354,39 @@ impl TailReader {
         let fragment = std::mem::take(&mut self.pending_fragment);
         self.pending_fragment_selection = None;
         let fragment_lines = [fragment.as_str()];
-        let framed = inventory::frame_logical_records(
-            dialect,
-            pending,
-            &fragment_lines,
-            MAX_PENDING_LOGICAL_RECORD_BYTES,
-        );
+        let framed = inventory::frame_logical_records(dialect, pending, &fragment_lines);
 
         self.pending_fragment = framed.pending_record.unwrap_or_default();
         if !self.pending_fragment.is_empty() {
             self.pending_fragment_selection = Some((selection.clone(), now));
         }
 
-        self.parse_logical_records(framed.completed_records, selection, framed.overflow_count)
+        self.parse_logical_records(framed.completed_records, dialect, framed.overflow_count)
     }
 
     fn parse_logical_records(
         &mut self,
         records: Vec<FramedLogicalRecord>,
-        selection: &ResolvedParser,
+        dialect: DeviceInventoryLogDialect,
         framing_parse_errors: u32,
     ) -> TailBatch {
         let path_str = self.path.to_string_lossy().to_string();
-        let mut entries = Vec::new();
-        let mut parse_errors = framing_parse_errors;
-
-        for record in records {
-            let parsed =
-                parser::parse_content_with_selection(&record.content, &path_str, selection);
-            let mut record_entries = parsed.entries;
-            self.assign_record_entry_identity(&mut record_entries, record.physical_lines);
-            entries.extend(record_entries);
-            parse_errors = parse_errors.saturating_add(parsed.parse_errors);
-        }
+        let physical_lines = records.iter().fold(0u32, |total, record| {
+            total.saturating_add(record.physical_lines)
+        });
+        let (mut entries, projection_errors) =
+            inventory::parse_framed_records(&path_str, &records, dialect);
+        parser::annotate_error_code_spans(&mut entries);
+        self.assign_framed_entry_identity(&mut entries, physical_lines);
 
         TailBatch {
             entries,
-            parse_errors,
+            parse_errors: framing_parse_errors.saturating_add(projection_errors),
             reset: false,
         }
     }
 
-    /// Number the entries of one logical record, then advance past its lines.
+    /// Number one framed batch's entries, then advance past all of its lines.
     ///
     /// A logical record spans its header plus every continuation beneath it, so
     /// the next record starts at this record's first line plus its physical
@@ -423,7 +396,7 @@ impl TailReader {
     /// and the same file opened. Entries arrive carrying the line they sit on
     /// within the record, which is what the whole-file parse assigns, so they
     /// rebase onto the record's own start line.
-    fn assign_record_entry_identity(&mut self, entries: &mut [LogEntry], physical_lines: u32) {
+    fn assign_framed_entry_identity(&mut self, entries: &mut [LogEntry], physical_lines: u32) {
         let record_start = self.next_line;
         for entry in entries {
             entry.id = self.next_id;
@@ -718,6 +691,85 @@ mod tests {
         assert_eq!(actual.severity, expected.severity);
         assert_eq!(actual.format, expected.format);
         assert_eq!(actual.file_path, expected.file_path);
+    }
+
+    fn inventory_record_with_size(header: &str, total_bytes: usize, suffix: &str) -> String {
+        let fixed_bytes = header.len() + 1 + suffix.len();
+        assert!(fixed_bytes <= total_bytes);
+        format!(
+            "{header}\n{}{suffix}",
+            "x".repeat(total_bytes - fixed_bytes)
+        )
+    }
+
+    fn assert_inventory_tail_matches_initial(
+        test_name: &str,
+        dialect: DeviceInventoryLogDialect,
+        first_record: &str,
+        next_header: &str,
+    ) {
+        let path = unique_test_path(test_name);
+        fs::write(&path, "").expect("should create empty Device Inventory log");
+        let selection = ResolvedParser::intune_device_inventory(dialect);
+        let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
+        let split_at = first_record
+            .find('\n')
+            .expect("test record should have a continuation boundary")
+            + 1;
+        let appends = [
+            first_record[..split_at].to_string(),
+            first_record[split_at..].to_string(),
+            format!("\n{next_header}\n"),
+        ];
+        let mut tailed_entries = Vec::new();
+        let mut tail_errors = 0u32;
+
+        for appended in &appends {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("should reopen Device Inventory log");
+            write!(file, "{appended}").expect("should append Device Inventory content");
+            drop(file);
+
+            let batch = reader
+                .read_new_entries()
+                .expect("Device Inventory tail read should succeed");
+            tailed_entries.extend(batch.entries);
+            tail_errors = tail_errors.saturating_add(batch.parse_errors);
+
+            let retained_bytes = reader
+                .pending_logical_record
+                .as_ref()
+                .map_or(0, |record| record.content.len())
+                .saturating_add(reader.pending_fragment.len())
+                .saturating_add(usize::from(
+                    reader.pending_logical_record.is_some() && !reader.pending_fragment.is_empty(),
+                ));
+            assert!(retained_bytes <= MAX_LOGICAL_RECORD_BYTES);
+        }
+
+        let flushed = reader.flush_pending_logical_record();
+        tailed_entries.extend(flushed.entries);
+        tail_errors = tail_errors.saturating_add(flushed.parse_errors);
+
+        let content = format!("{first_record}\n{next_header}\n");
+        let (opened_entries, opened_errors) =
+            inventory::parse_content(&path.to_string_lossy(), &content, dialect);
+        let projection = |entries: &[LogEntry]| {
+            entries
+                .iter()
+                .map(|entry| (entry.line_number, entry.severity, entry.message.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(tail_errors, opened_errors);
+        assert_eq!(projection(&tailed_entries), projection(&opened_entries));
+        assert!(tailed_entries
+            .iter()
+            .all(|entry| entry.message.len() <= MAX_LOGICAL_RECORD_BYTES));
+
+        fs::remove_file(path).expect("should clean up temp file");
     }
 
     #[test]
@@ -1260,6 +1312,66 @@ mod tests {
     }
 
     #[test]
+    fn test_device_inventory_initial_and_tail_parity_at_exact_and_overflow_limits() {
+        let cases = [
+            (
+                DeviceInventoryLogDialect::Harvester,
+                "7/30/2026 6:00:54 AM [Error] HARVESTER-START",
+                "7/30/2026 6:00:55 AM [Warning] HARVESTER-NEXT",
+                "-HARVESTER-TAIL-SENTINEL",
+            ),
+            (
+                DeviceInventoryLogDialect::InventoryAdaptor,
+                "[Thu Jul 30 13:05:01 2026][8604] - ADAPTOR-START",
+                "[Thu Jul 30 13:05:02 2026][8604] - ADAPTOR-NEXT",
+                "-ADAPTOR-TAIL-SENTINEL",
+            ),
+            (
+                DeviceInventoryLogDialect::RotationFailure,
+                "2026-07-30T13:05:01.1234567-04:00 Failed to rotate ROTATION-START",
+                "2026-07-30T13:05:02.1234567-04:00 ROTATION-NEXT",
+                "-ROTATION-TAIL-SENTINEL",
+            ),
+        ];
+
+        for (dialect, header, next_header, sentinel) in cases {
+            for (label, total_bytes) in [
+                ("exact", MAX_LOGICAL_RECORD_BYTES),
+                ("overflow", MAX_LOGICAL_RECORD_BYTES + 1),
+            ] {
+                let first_record = inventory_record_with_size(header, total_bytes, sentinel);
+                assert_inventory_tail_matches_initial(
+                    &format!("inventory-{dialect:?}-{label}"),
+                    dialect,
+                    &first_record,
+                    next_header,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_device_inventory_initial_and_tail_parity_at_utf8_split_boundary() {
+        let header = "[Thu Jul 30 13:05:01 2026][8604] - UTF8-START";
+        let fixed_prefix_bytes = header.len() + 1;
+        let first_record = format!(
+            "{header}\n{}🧪-UTF8-TAIL-SENTINEL",
+            "x".repeat(MAX_LOGICAL_RECORD_BYTES - fixed_prefix_bytes - 1)
+        );
+        assert_eq!(
+            first_record[..MAX_LOGICAL_RECORD_BYTES - 1].len(),
+            MAX_LOGICAL_RECORD_BYTES - 1
+        );
+
+        assert_inventory_tail_matches_initial(
+            "inventory-utf8-boundary",
+            DeviceInventoryLogDialect::InventoryAdaptor,
+            &first_record,
+            "[Thu Jul 30 13:05:02 2026][8604] - UTF8-NEXT",
+        );
+    }
+
+    #[test]
     fn test_tail_reader_attaches_split_harvester_continuation() {
         // The harvester dialect reports LogicalRecord framing because the
         // initial parse attaches a non-header line to the record above it.
@@ -1414,7 +1526,7 @@ mod tests {
             cmtraceopen_parser::intune::device::windows::inventory::DeviceInventoryLogDialect::InventoryAdaptor,
         );
         let mut reader = TailReader::new(path.clone(), 0, selection, 0, 1);
-        let continuation = "x".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES);
+        let continuation = "x".repeat(MAX_LOGICAL_RECORD_BYTES);
 
         let mut file = OpenOptions::new()
             .append(true)
@@ -1433,7 +1545,7 @@ mod tests {
         assert_eq!(overflow.entries.len(), 1);
         assert_eq!(overflow.parse_errors, 1);
         assert!(
-            overflow.entries[0].message.len() < MAX_PENDING_LOGICAL_RECORD_BYTES,
+            overflow.entries[0].message.len() < MAX_LOGICAL_RECORD_BYTES,
             "emitted overflow record must honor the pending byte bound"
         );
 
@@ -1466,7 +1578,7 @@ mod tests {
             .entries
             .is_empty());
 
-        let continuation = "x".repeat(MAX_PENDING_LOGICAL_RECORD_BYTES);
+        let continuation = "x".repeat(MAX_LOGICAL_RECORD_BYTES);
         let mut file = OpenOptions::new()
             .append(true)
             .open(&path)
@@ -1485,7 +1597,7 @@ mod tests {
             .as_ref()
             .map_or(0, |record| record.content.len())
             + reader.pending_fragment.len();
-        assert!(pending_bytes <= MAX_PENDING_LOGICAL_RECORD_BYTES);
+        assert!(pending_bytes <= MAX_LOGICAL_RECORD_BYTES);
 
         fs::remove_file(path).expect("should clean up temp file");
     }
