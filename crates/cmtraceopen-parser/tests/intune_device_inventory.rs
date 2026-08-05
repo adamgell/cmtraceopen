@@ -19,6 +19,12 @@ const ADAPTOR: &str = "[Thu Jul 30 13:05:01 2026][8604] - Adapter result:\n{\"St
 
 const ROTATION_FAILURE: &str = "2026-07-30T13:05:01.1234567-04:00 Failed to rotate Device Inventory log.\nSystem.IO.IOException: The process cannot access the file.\n   at Synthetic.Inventory.Rotate()";
 
+const PARTIAL_ROTATION_FAILURE_HEADERS: [&str; 3] = [
+    "2026-07-30T13:05:01.1234567-04:00 Failed to rollback transaction.",
+    "2026-07-30T13:05:01.1234567-04:00 Rotation failedover to backup.",
+    "2026-07-30T13:05:01.1234567-04:00 Failed to rotateCredentials.",
+];
+
 #[test]
 fn parses_harvester_headers_with_direct_severity_mapping() {
     let (entries, parse_errors) = parse_content(
@@ -123,6 +129,59 @@ fn rejects_generic_iso_timestamp_content_as_rotation_failure() {
 }
 
 #[test]
+fn generic_failure_prefixes_do_not_identify_rotation_failures() {
+    let generic_failures = [
+        "2026-07-30T13:05:01.1234567-04:00 Failed to load configuration.",
+        "2026-07-30T13:05:01.1234567-04:00 Unhandled exception in service.",
+    ];
+
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in generic_failures {
+            assert_eq!(
+                detect_dialect(path, content),
+                None,
+                "generic failure prefix must not identify rotation for {path}: {content}"
+            );
+        }
+    }
+}
+
+#[test]
+fn partial_rotation_phrases_do_not_identify_rotation_failures() {
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in PARTIAL_ROTATION_FAILURE_HEADERS {
+            assert_eq!(
+                detect_dialect(path, content),
+                None,
+                "partial rotation phrase must not identify rotation for {path}: {content}"
+            );
+        }
+    }
+}
+
+#[test]
+fn registered_rotation_failure_phrases_remain_detectable() {
+    let registered_failures = [
+        "2026-07-30T13:05:01.1234567-04:00 Failed to rotate Device Inventory log.",
+        "2026-07-30T13:05:01.1234567-04:00 Device Inventory rotation failed.",
+        "2026-07-30T13:05:01.1234567-04:00 Failed to roll Device Inventory log.",
+        "2026-07-30T13:05:01.1234567-04:00 FAILED TO ROTATE",
+        "2026-07-30T13:05:01.1234567-04:00 Device Inventory RoTaTiOn FaIlEd   ",
+        "2026-07-30T13:05:01.1234567-04:00 FAILED TO ROLL\tbefore archive.",
+    ];
+
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in registered_failures {
+            assert_eq!(
+                detect_dialect(path, content),
+                Some(DeviceInventoryLogDialect::RotationFailure),
+                "registered rotation phrase must remain detectable for {path}: {content}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_device_inventory_selection_without_a_dialect_degrades_instead_of_panicking() {
     // A Device Inventory selection normally carries the dialect detection
     // resolved. One that does not is malformed, not impossible, and the
@@ -151,10 +210,21 @@ fn detects_rotation_failure_from_exception_evidence_without_the_literal_wording(
     // beneath an ISO-8601 header is sufficient evidence on its own.
     let other_wording = "2026-07-30T13:05:01.1234567-04:00 Could not roll the inventory log over.\nSystem.UnauthorizedAccessException: Access to the path is denied.\n   at Synthetic.Inventory.Rotate()";
 
-    assert_eq!(
-        detect_dialect("unrelated.log", other_wording),
-        Some(DeviceInventoryLogDialect::RotationFailure)
-    );
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        assert_eq!(
+            detect_dialect(path, other_wording),
+            Some(DeviceInventoryLogDialect::RotationFailure)
+        );
+
+        let (result, selection) =
+            parse_with_dispatcher(other_wording, path, other_wording.len() as u64);
+        assert_eq!(selection.parser, ParserKind::IntuneDeviceInventory);
+        assert_eq!(
+            selection.specialization,
+            Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure)
+        );
+        assert_eq!(result.entries[0].severity, Severity::Error);
+    }
 }
 
 #[test]
@@ -190,6 +260,44 @@ fn rotation_severity_ignores_a_generic_keyword_in_a_continuation() {
 
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].severity, Severity::Info);
+}
+
+#[test]
+fn generic_failure_prefixes_do_not_claim_rotation_severity() {
+    let generic_failures = [
+        "2026-07-30T13:05:01.1234567-04:00 Failed to load configuration.",
+        "2026-07-30T13:05:01.1234567-04:00 Unhandled exception in service.",
+    ];
+
+    for content in generic_failures {
+        let (entries, parse_errors) = parse_content(
+            "IntuneDeviceInventory.log",
+            content,
+            DeviceInventoryLogDialect::RotationFailure,
+        );
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].severity, Severity::Info);
+    }
+}
+
+#[test]
+fn partial_rotation_phrases_do_not_claim_rotation_severity() {
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in PARTIAL_ROTATION_FAILURE_HEADERS {
+            let (entries, parse_errors) =
+                parse_content(path, content, DeviceInventoryLogDialect::RotationFailure);
+
+            assert_eq!(parse_errors, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                entries[0].severity,
+                Severity::Info,
+                "partial rotation phrase must stay informational for {path}: {content}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -428,4 +536,48 @@ fn dispatcher_keeps_path_only_and_generic_timestamp_collisions_out_of_device_inv
         ParserImplementation::GenericTimestamped
     );
     assert_eq!(timestamped.parser_selection.specialization, None);
+}
+
+#[test]
+fn dispatcher_keeps_generic_failure_prefixes_out_of_device_inventory() {
+    let generic_failures = [
+        "2026-07-30T13:05:01.1234567-04:00 Failed to load configuration.\n2026-07-30T13:05:02.1234567-04:00 Completed an unrelated service operation.",
+        "2026-07-30T13:05:01.1234567-04:00 Unhandled exception in service.\n2026-07-30T13:05:02.1234567-04:00 Completed an unrelated service operation.",
+    ];
+
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in generic_failures {
+            let (result, selection) = parse_with_dispatcher(content, path, content.len() as u64);
+
+            assert_eq!(selection.parser, ParserKind::Timestamped);
+            assert_eq!(
+                selection.implementation,
+                ParserImplementation::GenericTimestamped
+            );
+            assert_eq!(selection.specialization, None);
+            assert_eq!(result.parser_selection.specialization, None);
+            assert_eq!(result.entries.len(), 2);
+        }
+    }
+}
+
+#[test]
+fn dispatcher_keeps_partial_rotation_phrases_out_of_device_inventory() {
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for header in PARTIAL_ROTATION_FAILURE_HEADERS {
+            let content = format!(
+                "{header}\n2026-07-30T13:05:02.1234567-04:00 Completed an unrelated service operation."
+            );
+            let (result, selection) = parse_with_dispatcher(&content, path, content.len() as u64);
+
+            assert_eq!(selection.parser, ParserKind::Timestamped);
+            assert_eq!(
+                selection.implementation,
+                ParserImplementation::GenericTimestamped
+            );
+            assert_eq!(selection.specialization, None);
+            assert_eq!(result.parser_selection.specialization, None);
+            assert_eq!(result.entries.len(), 2);
+        }
+    }
 }
