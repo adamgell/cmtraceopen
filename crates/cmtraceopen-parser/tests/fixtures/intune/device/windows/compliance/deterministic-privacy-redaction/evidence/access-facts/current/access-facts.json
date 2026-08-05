@@ -1,0 +1,45 @@
+{ "syntheticFixture": "SYNTHETIC FIXTURE - synthetic Intune compliance evidence, no real device data",
+  "complianceInputVersion": 1,
+  "kind": "accessDecisions",
+  "records": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "acc-1",
+          "sourceArtifactId": "access-facts"
+        },
+        "provenance": {
+          "sourceKind": "suppliedFact",
+          "sourceArtifactId": "access-facts",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T11:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T11:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T12:00:00Z",
+        "sensitivity": "restricted",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "decision": "granted",
+      "failureCode": null,
+      "occurredAt": {
+        "rawText": "2026-07-31T11:00:00Z",
+        "originalOffset": null,
+        "normalizedUtc": "2026-07-31T11:00:00Z",
+        "kind": "utc"
+      },
+      "deviceKey": "synthetic-device-0001",
+      "userKey": "synthetic-user-0001",
+      "resource": "synthetic-resource-0003",
+      "namedData": []
+    }
+  ]
+}

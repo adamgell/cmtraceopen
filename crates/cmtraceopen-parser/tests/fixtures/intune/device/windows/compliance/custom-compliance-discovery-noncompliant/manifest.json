@@ -1,0 +1,42 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "custom-compliance-discovery-noncompliant",
+  "workload": "device/windows/compliance",
+  "description": "A custom compliance script ran to completion and reported a noncompliant discovery result, which is a real local verdict.",
+  "generatedAtUtc": "2026-07-31T12:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "device-context",
+      "family": "deviceContext",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "device-context.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/device-context/device-context.json",
+      "relativePath": "evidence/device-context/current/device-context.json",
+      "bytesCopied": 1228,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "custom-compliance",
+      "family": "customCompliance",
+      "sourceKind": "json",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "custom-compliance.json",
+      "sanitizedSourcePath": "SYNTHETIC://compliance/custom-compliance/custom-compliance.json",
+      "relativePath": "evidence/custom-compliance/current/custom-compliance.json",
+      "bytesCopied": 1203,
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

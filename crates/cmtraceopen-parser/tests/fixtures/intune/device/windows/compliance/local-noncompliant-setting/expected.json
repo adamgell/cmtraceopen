@@ -1,0 +1,61 @@
+{
+  "scenario": "local-noncompliant-setting",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "noncompliant",
+    "rationale": "localSettingNoncompliant"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-1"
+      ]
+    },
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/firewallstatus",
+      "scope": "device",
+      "state": "noncompliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-2"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-local-setting-noncompliant",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "evt-2"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a local-noncompliance finding cites only local evaluation evidence"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "available"
+    }
+  ]
+}
