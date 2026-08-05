@@ -4,7 +4,7 @@
 
 **Goal:** Make initial Device Inventory parsing and incremental tailing use one parser-owned, UTF-8-safe, lossless logical-record framing contract with a single 1 MiB production limit.
 
-**Architecture:** The Device Inventory module owns `MAX_LOGICAL_RECORD_BYTES`, incremental framing, explicit final flush, and projection of already-framed records. Initial `parse_content`/`parse_lines` frame and flush before projection; the watcher imports the same limit and projects framed records directly, retaining only debounce, file-fragment, identity, and physical-line rebasing concerns.
+**Architecture:** The Device Inventory module owns `MAX_LOGICAL_RECORD_BYTES`, bounded segment framing, explicit final flush, and projection of already-framed records. Initial `parse_content`/`parse_lines` and tailing stream line starts/continuations through that contract; tailing carries incomplete UTF-8 scalars strictly and never uses time as a semantic record boundary.
 
 **Tech Stack:** Rust, `cmtraceopen-parser`, Tauri watcher, Cargo tests/clippy/fmt, TypeScript compiler.
 
@@ -14,7 +14,7 @@
 
 - Modify `crates/cmtraceopen-parser/src/intune/device/windows/inventory/mod.rs`: define the sole production bound; make framing use it; add explicit flush; replace the unbounded parse path with bounded framing plus framed-record projection.
 - Modify `crates/cmtraceopen-parser/tests/intune_device_inventory.rs`: prove exact limits, lossless UTF-8 splitting, all dialects, line/error semantics, and `parse_content`/`parse_lines` equality.
-- Modify `src-tauri/src/watcher/tail.rs`: import the parser limit, use the shared framer/flush/projector for every tail path, and verify initial-load/tail equality.
+- Modify `src-tauri/src/watcher/tail.rs`: import the parser limit, use strict incremental UTF-8 decoding and bounded line segments, remove debounce completion, and verify initial-load/tail equality.
 - Modify `library.md`: route issue #507 work to this plan.
 
 ### Task 1: Lock the lossless framing contract with parser tests
@@ -189,7 +189,7 @@ Replace watcher-local constant references with `MAX_LOGICAL_RECORD_BYTES`. Asser
 
 - [x] **Step 2: Add an initial-load versus tail harness**
 
-For each dialect, write the same input to an initially empty file in multiple appends (splitting continuations and UTF-8 text across read calls without creating invalid file bytes), collect `TailBatch` entries/errors including explicit debounce flush, and compare against `inventory::parse_content` by these owned fields:
+For each dialect, write the same input to an initially empty file in multiple appends (splitting continuations and UTF-8 text across read calls without creating invalid file bytes), collect `TailBatch` entries/errors including an explicit end-of-input flush, and compare against `inventory::parse_content` by these owned fields:
 
 ```rust
 fn projection(entries: &[LogEntry]) -> Vec<(u32, Severity, String)> {
@@ -278,3 +278,137 @@ gh pr create --base main --head codex/issue-507-lossless-device-inventory-framin
 ```
 
 The PR body must contain `Closes #507`, frozen commit SHA, base SHA `162f1c2985dfa6fdda0bdcc7717232829316c2f2`, validation commands/results, and an evidence pack: target branch/SHA, test viewing conditions, claims, reproduction commands, and out-of-scope frontend behavior. Do not merge.
+
+### Task 6: Lock the critic regressions with red tests
+
+**Files:**
+- Modify: `crates/cmtraceopen-parser/tests/intune_device_inventory.rs`
+- Modify: `src-tauri/src/watcher/tail.rs`
+
+- [x] **Step 1: Add delayed-continuation parity tests for every dialect**
+
+Write a header, read it into the pending logical record, wait longer than the former 250 ms debounce, append a non-header continuation plus a later header, then read and explicitly flush. For Harvester, InventoryAdaptor, and RotationFailure, compare `(line_number, severity, message)` and aggregate parse errors with `inventory::parse_content`; the first entry must still include the delayed continuation.
+
+- [x] **Step 2: Add strict incremental UTF-8 tests**
+
+For `¢`, `€`, and `🧪`, append every incomplete 2-, 3-, and 4-byte prefix in one read and the remaining bytes in the next. Assert no replacement characters, equal open/tail projections, and a carry of at most three bytes. Append `0xFF` in a separate case and assert `read_new_entries` returns an error without advancing `byte_offset`, mutating logical-record state, or decoding as Windows-1252.
+
+- [x] **Step 3: Add huge-line peak-bound tests**
+
+Feed a terminated physical line and an unterminated line larger than three times `MAX_LOGICAL_RECORD_BYTES`, with UTF-8 near boundaries. Assert every completed/pending parser chunk is bounded, reconstruction is byte-identical, overflow counts match initial parsing, and the watcher test-only peak pending observation never exceeds the parser constant.
+
+- [x] **Step 4: Run focused tests and verify the three regressions fail**
+
+Run:
+
+```bash
+cargo test -p cmtraceopen-parser --test intune_device_inventory
+cargo test --manifest-path src-tauri/Cargo.toml --lib watcher::tail
+```
+
+Expected: delayed continuations orphan after the debounce, split UTF-8 falls into Windows-1252, invalid UTF-8 is accepted, and huge fragments exceed the peak invariant.
+
+### Task 7: Bound parser accumulation before append
+
+**Files:**
+- Modify: `crates/cmtraceopen-parser/src/intune/device/windows/inventory/mod.rs`
+- Test: `crates/cmtraceopen-parser/tests/intune_device_inventory.rs`
+
+- [x] **Step 1: Model physical-line segments explicitly**
+
+Add the shared input contract:
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub enum LogicalRecordSegment<'a> {
+    LineStart(&'a str),
+    LineContinuation(&'a str),
+}
+```
+
+`LineStart` performs dialect header recognition and inserts the logical newline before a prior record; `LineContinuation` concatenates bytes onto the same physical line without inventing a newline.
+
+- [x] **Step 2: Append only within remaining capacity**
+
+Change `frame_logical_records` to consume segments and copy at most `MAX_LOGICAL_RECORD_BYTES - pending.len()` bytes at a UTF-8 character boundary. When no scalar fits, emit the current `FramedLogicalRecord::split` before copying that scalar. Never append the whole source segment and split afterward; assert the pending length after every mutation.
+
+- [x] **Step 3: Route complete initial input through segments**
+
+Map every `parse_lines` physical line to `LogicalRecordSegment::LineStart`, call the same framer, then explicitly `flush_pending`. Preserve CRLF normalization, blank continuation semantics, physical-line spans, overflow errors, and the framed projector.
+
+- [ ] **Step 4: Run focused and full parser suites**
+
+Run:
+
+```bash
+cargo test -p cmtraceopen-parser --test intune_device_inventory
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p cmtraceopen-parser
+```
+
+Expected: PASS, including all #506 rotation detection cases and the new peak-bound reconstruction cases.
+
+### Task 8: Make tail decoding and line feeding incremental
+
+**Files:**
+- Modify: `src-tauri/src/watcher/tail.rs`
+
+- [x] **Step 1: Carry incomplete UTF-8 without fallback decoding**
+
+Replace the UTF-16-only `pending_byte` model with a UTF-8 carry of at most three bytes plus the existing UTF-16 odd-byte carry. `String::from_utf8` must distinguish `Utf8Error::error_len() == None` (retain the incomplete suffix) from `Some(_)` (return `AppError` and restore all pre-read state). Do not call the whole-file Windows-1252 fallback from tailing.
+
+- [x] **Step 2: Feed bounded physical-line prefixes into parser segments**
+
+For Device Inventory, avoid `format!("{}{}", pending_fragment, new_text)` and never append an arbitrary slice to `pending_fragment`. Fill the fragment only to `MAX_LOGICAL_RECORD_BYTES`, feed it as `LineStart`, then stream the remainder as `LineContinuation` segments; newline boundaries reset the line-start state. Keep a test-only peak observer updated immediately after every pending mutation.
+
+- [x] **Step 3: Remove wall-clock semantic completion**
+
+Delete `LOGICAL_RECORD_DEBOUNCE`, timestamps from pending state, and time-based calls to `flush_pending_logical_record`. A later header, parser-selection change, stop/disconnect, or explicit flush is a record boundary; elapsed time is not. Keep periodic polling only for discovering bytes.
+
+- [x] **Step 4: Make invalid-byte reads transactional**
+
+On invalid UTF-8, leave `byte_offset`, UTF-8 carry, line-prefix state, pending logical record, entry IDs, and line numbers unchanged. Return a bounded error that identifies invalid UTF-8 without echoing source bytes.
+
+- [x] **Step 5: Run focused watcher tests**
+
+Run:
+
+```bash
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path src-tauri/Cargo.toml --lib watcher::tail
+```
+
+Expected: PASS for delayed continuations, every UTF-8 split, invalid input, huge terminated/unterminated lines, all dialect parity, truncation, and parser-change flush behavior.
+
+### Task 9: Revalidate and update PR #511
+
+**Files:**
+- Modify: `docs/superpowers/plans/2026-08-05-issue-507-lossless-device-inventory-framing.md`
+- Modify: only implementation/test files above if a gate exposes a defect
+
+- [x] **Step 1: Run scoped formatting and diff checks**
+
+```bash
+rustfmt --edition 2021 crates/cmtraceopen-parser/src/intune/device/windows/inventory/mod.rs crates/cmtraceopen-parser/tests/intune_device_inventory.rs src-tauri/src/watcher/tail.rs
+git diff --check
+```
+
+- [ ] **Step 2: Run full Rust and strict lint gates**
+
+```bash
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p cmtraceopen-parser
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path src-tauri/Cargo.toml
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy -p cmtraceopen-parser --all-targets -- -D warnings
+CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+```
+
+- [ ] **Step 3: Run TypeScript gates**
+
+```bash
+npm test -- --run
+npx tsc --noEmit
+```
+
+Expected: PASS. Browser E2E remains out of scope because framing does not change frontend or IPC behavior.
+
+- [ ] **Step 4: Commit, push, and refresh the frozen evidence pack**
+
+Commit the rework, push `codex/issue-507-lossless-device-inventory-framing`, and edit PR #511 so its head SHA, validation results, viewing conditions, claims, and reproduction commands describe the critic fixes. Confirm the PR remains open and unmerged.

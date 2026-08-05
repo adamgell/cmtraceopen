@@ -1,7 +1,7 @@
 use cmtraceopen_parser::{
     intune::device::windows::inventory::{
         detect_dialect, frame_logical_records, parse_content, parse_lines,
-        DeviceInventoryLogDialect, MAX_LOGICAL_RECORD_BYTES,
+        DeviceInventoryLogDialect, LogicalRecordSegment, MAX_LOGICAL_RECORD_BYTES,
     },
     models::log_entry::{
         LogEntry, LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
@@ -394,7 +394,11 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
     let next_header = "7/30/2026 6:00:55 AM [Warning] Second record.";
     let whole_file_content = format!("{header}\n{continuation}\n{next_header}");
 
-    let first = frame_logical_records(DeviceInventoryLogDialect::Harvester, None, &[header]);
+    let first = frame_logical_records(
+        DeviceInventoryLogDialect::Harvester,
+        None,
+        &[LogicalRecordSegment::LineStart(header)],
+    );
     assert!(
         first.completed_records.is_empty(),
         "a harvester header must stay pending until its continuations are known"
@@ -403,7 +407,10 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
     let second = frame_logical_records(
         DeviceInventoryLogDialect::Harvester,
         first.pending_record,
-        &[continuation, next_header],
+        &[
+            LogicalRecordSegment::LineStart(continuation),
+            LogicalRecordSegment::LineStart(next_header),
+        ],
     );
 
     // Each framed record is parsed on its own, exactly as tailing parses it.
@@ -450,7 +457,10 @@ fn logical_record_limit_is_exact_and_lossless() {
     let exact = frame_logical_records(
         DeviceInventoryLogDialect::Harvester,
         None,
-        &[header, &exact_padding],
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&exact_padding),
+        ],
     );
 
     assert!(exact.completed_records.is_empty());
@@ -466,7 +476,10 @@ fn logical_record_limit_is_exact_and_lossless() {
     let overflow = frame_logical_records(
         DeviceInventoryLogDialect::Harvester,
         None,
-        &[header, &overflow_padding],
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&overflow_padding),
+        ],
     )
     .flush_pending();
     let chunks: Vec<&str> = overflow
@@ -493,7 +506,10 @@ fn logical_record_split_is_utf8_safe_and_preserves_every_byte() {
     let framed = frame_logical_records(
         DeviceInventoryLogDialect::InventoryAdaptor,
         None,
-        &[header, &continuation],
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&continuation),
+        ],
     )
     .flush_pending();
     let chunks: Vec<&str> = framed
@@ -567,6 +583,38 @@ fn every_dialect_bounds_oversized_single_lines_and_keeps_parse_entry_points_equa
             .iter()
             .all(|entry| entry.message.len() <= MAX_LOGICAL_RECORD_BYTES));
     }
+}
+
+#[test]
+fn framing_never_builds_an_oversized_pending_record_before_splitting() {
+    let header = "[Thu Jul 30 13:05:01 2026][8604] - PEAK-START";
+    let continuation = format!(
+        "HUGE-LINE-START-{}🧪-HUGE-LINE-TAIL",
+        "x".repeat(MAX_LOGICAL_RECORD_BYTES * 3)
+    );
+    let original = format!("{header}\n{continuation}");
+    let framed = frame_logical_records(
+        DeviceInventoryLogDialect::InventoryAdaptor,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&continuation),
+        ],
+    )
+    .flush_pending();
+    let reconstructed = framed
+        .completed_records
+        .iter()
+        .map(|record| record.content.as_str())
+        .collect::<String>();
+
+    assert!(framed.max_pending_bytes_observed <= MAX_LOGICAL_RECORD_BYTES);
+    assert!(framed
+        .completed_records
+        .iter()
+        .all(|record| record.content.len() <= MAX_LOGICAL_RECORD_BYTES));
+    assert_eq!(reconstructed.as_bytes(), original.as_bytes());
+    assert!(reconstructed.ends_with("🧪-HUGE-LINE-TAIL"));
 }
 
 /// Compare entries by the fields the parse contract owns.

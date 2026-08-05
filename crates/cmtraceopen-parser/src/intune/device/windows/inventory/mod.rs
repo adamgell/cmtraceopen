@@ -27,6 +27,15 @@ pub enum DeviceInventoryLogDialect {
     RotationFailure,
 }
 
+/// A physical-line segment supplied to the logical-record framer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalRecordSegment<'a> {
+    /// The first bytes of a physical line. Header recognition runs here.
+    LineStart(&'a str),
+    /// More bytes from the same physical line, without an inserted newline.
+    LineContinuation(&'a str),
+}
+
 /// A framed Device Inventory logical record and the file span it occupies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FramedLogicalRecord {
@@ -78,6 +87,8 @@ pub struct LogicalRecordFramingResult {
     pub pending_record: Option<String>,
     /// Number of records force-completed because they reached the size bound.
     pub overflow_count: u32,
+    /// Largest pending record length observed during this framing call.
+    pub max_pending_bytes_observed: usize,
 }
 
 impl LogicalRecordFramingResult {
@@ -94,51 +105,95 @@ impl LogicalRecordFramingResult {
 /// Add complete physical lines to a pending Device Inventory logical record.
 ///
 /// Header recognition intentionally stays in this pure parser module so tailing
-/// and whole-file parsing share the same dialect regexes. The caller owns
-/// time-based flushing of `pending_record`.
+/// and whole-file parsing share the same dialect regexes. The caller explicitly
+/// flushes `pending_record` at a real input boundary.
 pub fn frame_logical_records(
     dialect: DeviceInventoryLogDialect,
     mut pending_record: Option<String>,
-    new_lines: &[&str],
+    segments: &[LogicalRecordSegment<'_>],
 ) -> LogicalRecordFramingResult {
     let mut completed_records = Vec::new();
     let mut overflow_count = 0u32;
+    let mut max_pending_bytes_observed = pending_record.as_ref().map_or(0, String::len);
+    assert!(
+        max_pending_bytes_observed <= MAX_LOGICAL_RECORD_BYTES,
+        "logical-record framing state must already be bounded"
+    );
 
-    for raw_line in new_lines {
-        let line = raw_line.trim_end_matches('\r');
-        if is_record_header(dialect, line) {
-            if let Some(record) = pending_record.take() {
-                completed_records.push(FramedLogicalRecord::complete(record));
+    for segment in segments {
+        let (text, starts_line) = match segment {
+            LogicalRecordSegment::LineStart(raw_line) => {
+                let line = raw_line.trim_end_matches('\r');
+                if is_record_header(dialect, line) {
+                    if let Some(record) = pending_record.take() {
+                        completed_records.push(FramedLogicalRecord::complete(record));
+                    }
+                }
+                (line, true)
             }
-        }
+            LogicalRecordSegment::LineContinuation(text) => (*text, false),
+        };
 
-        match pending_record.as_mut() {
-            Some(record) => {
-                record.push('\n');
-                record.push_str(line);
-            }
-            None => pending_record = Some(line.to_string()),
+        let insert_newline = starts_line && pending_record.is_some();
+        if pending_record.is_none() {
+            pending_record = Some(String::new());
         }
-
-        while pending_record
-            .as_ref()
-            .is_some_and(|record| record.len() > MAX_LOGICAL_RECORD_BYTES)
-        {
-            let mut record = pending_record
-                .take()
-                .expect("oversized pending record must exist");
-            let split_at = previous_char_boundary(&record, MAX_LOGICAL_RECORD_BYTES);
-            let remainder = record.split_off(split_at);
-            completed_records.push(FramedLogicalRecord::split(record));
-            overflow_count = overflow_count.saturating_add(1);
-            pending_record = (!remainder.is_empty()).then_some(remainder);
+        if insert_newline {
+            append_bounded(
+                &mut pending_record,
+                "\n",
+                &mut completed_records,
+                &mut overflow_count,
+                &mut max_pending_bytes_observed,
+            );
         }
+        append_bounded(
+            &mut pending_record,
+            text,
+            &mut completed_records,
+            &mut overflow_count,
+            &mut max_pending_bytes_observed,
+        );
     }
 
     LogicalRecordFramingResult {
         completed_records,
         pending_record,
         overflow_count,
+        max_pending_bytes_observed,
+    }
+}
+
+fn append_bounded(
+    pending_record: &mut Option<String>,
+    mut text: &str,
+    completed_records: &mut Vec<FramedLogicalRecord>,
+    overflow_count: &mut u32,
+    max_pending_bytes_observed: &mut usize,
+) {
+    while !text.is_empty() {
+        let record = pending_record.get_or_insert_with(String::new);
+        let available = MAX_LOGICAL_RECORD_BYTES.saturating_sub(record.len());
+        let split_at = previous_char_boundary(text, available);
+
+        if split_at > 0 {
+            record.push_str(&text[..split_at]);
+            *max_pending_bytes_observed = (*max_pending_bytes_observed).max(record.len());
+            debug_assert!(record.len() <= MAX_LOGICAL_RECORD_BYTES);
+            text = &text[split_at..];
+        }
+
+        if !text.is_empty() {
+            let completed = pending_record
+                .take()
+                .expect("bounded append must have a pending record");
+            completed_records.push(FramedLogicalRecord::split(completed));
+            *overflow_count = overflow_count.saturating_add(1);
+        }
+    }
+
+    if pending_record.is_none() {
+        pending_record.replace(String::new());
     }
 }
 
@@ -237,7 +292,11 @@ pub fn parse_lines(
     lines: &[&str],
     dialect: DeviceInventoryLogDialect,
 ) -> (Vec<LogEntry>, u32) {
-    let framed = frame_logical_records(dialect, None, lines).flush_pending();
+    let segments = lines
+        .iter()
+        .map(|line| LogicalRecordSegment::LineStart(line))
+        .collect::<Vec<_>>();
+    let framed = frame_logical_records(dialect, None, &segments).flush_pending();
     let (entries, projection_errors) =
         parse_framed_records(file_path, &framed.completed_records, dialect);
     (
@@ -623,7 +682,7 @@ mod tests {
         let first = frame_logical_records(
             DeviceInventoryLogDialect::InventoryAdaptor,
             None,
-            &[ADAPTOR_HEADER],
+            &[LogicalRecordSegment::LineStart(ADAPTOR_HEADER)],
         );
         assert!(first.completed_records.is_empty());
 
@@ -631,8 +690,8 @@ mod tests {
             DeviceInventoryLogDialect::InventoryAdaptor,
             first.pending_record,
             &[
-                r#"{"Status":200,"Data":{"Example":"value"}}"#,
-                NEXT_ADAPTOR_HEADER,
+                LogicalRecordSegment::LineStart(r#"{"Status":200,"Data":{"Example":"value"}}"#),
+                LogicalRecordSegment::LineStart(NEXT_ADAPTOR_HEADER),
             ],
         );
 
@@ -694,7 +753,10 @@ mod tests {
         let framed = frame_logical_records(
             DeviceInventoryLogDialect::InventoryAdaptor,
             None,
-            &[ADAPTOR_HEADER, &continuation],
+            &[
+                LogicalRecordSegment::LineStart(ADAPTOR_HEADER),
+                LogicalRecordSegment::LineStart(&continuation),
+            ],
         );
 
         assert_eq!(framed.overflow_count, 1);
