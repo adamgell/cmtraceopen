@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "workflow": "siteCore",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "stateChain": [
+    "componentStart",
+    "componentWork",
+    "inboxOrQueue",
+    "statusOrStateProcessing",
+    "healthyOrTerminal"
+  ],
+  "results": [],
+  "unlinkedObservations": [
+    {
+      "observationId": "site-core:observation:v1:11120408c9126ff56585ab7f779a4fa8d13bb6867cf806f3674d16e4e1c9afd6",
+      "state": "parseGap",
+      "findingClass": "insufficientEvidence",
+      "confidence": "none",
+      "evidence": [],
+      "coverageGapArtifactIds": ["z-site-status"],
+      "nextArtifacts": [
+        {
+          "logicalName": "server-status",
+          "role": "siteServer",
+          "reasonCode": "required-source-parse-failed",
+          "candidates": [{ "basename": "statmgr.log", "rotation": "current" }],
+          "maxArtifacts": 1,
+          "scope": {
+            "producerHostHandle": "synthetic:host:site-01",
+            "rotationLineageHandle": "site-status-z"
+          }
+        }
+      ]
+    }
+  ],
+  "coverageGaps": [
+    {
+      "artifactId": "z-site-status",
+      "sourceId": "server-status",
+      "state": "parseFailed",
+      "reasonCode": "required-source-parse-failed",
+      "diagnosticMeaning": "coverageOnly"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "site-core:finding:v1:59627c557b8120023694ee3f871c6a6c989d35cdeab47c081e435543283912f1",
+      "class": "insufficientEvidence",
+      "phase": "siteCoreCoverage",
+      "role": "siteServer",
+      "severity": "Warning",
+      "confidence": "none",
+      "title": "Site core coverage gap",
+      "summary": "The source is incomplete and cannot establish a component outcome.",
+      "evidence": [],
+      "terminalEvidence": [],
+      "coverageGaps": [
+        {
+          "artifactId": "z-site-status",
+          "role": "siteServer",
+          "coverage": "parseFailed"
+        }
+      ],
+      "correlationKeys": [],
+      "nextArtifacts": [
+        {
+          "logicalId": "statmgr",
+          "role": "siteServer",
+          "reason": "Collect the complete statmgr.log file."
+        }
+      ],
+      "subjectId": "site-core:observation:v1:11120408c9126ff56585ab7f779a4fa8d13bb6867cf806f3674d16e4e1c9afd6",
+      "lastSuccessfulPhase": null
+    }
+  ],
+  "artifactRequests": [
+    {
+      "logicalName": "server-status",
+      "role": "siteServer",
+      "reasonCode": "required-source-parse-failed",
+      "candidates": [{ "basename": "statmgr.log", "rotation": "current" }],
+      "maxArtifacts": 1,
+      "scope": {
+        "producerHostHandle": "synthetic:host:site-01",
+        "rotationLineageHandle": "site-status-z"
+      }
+    }
+  ],
+  "crossSideCorrelationPerformed": false
+}

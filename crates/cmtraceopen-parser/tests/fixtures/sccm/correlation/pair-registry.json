@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "1.0.0",
+  "pairs": [
+    {
+      "pairId": "content-distribution-point",
+      "workflow": "contentDistributionPoint",
+      "clientIssue": "#322",
+      "serverIssue": "#329",
+      "state": "ruleValidated",
+      "productionEnabled": true,
+      "ruleValidated": true,
+      "implementationModule": "sccm::correlation",
+      "requiredGuardIds": [
+        "conflicting-exact-key",
+        "incompatible-topology",
+        "invalid-timestamp-offset",
+        "missing-client-counterpart",
+        "missing-server-counterpart",
+        "partial-capture",
+        "redaction-boundary",
+        "reordered-input",
+        "rotation-split",
+        "same-time-no-key",
+        "unknown-extraction-profile",
+        "unrelated-terminal-error",
+        "version-mismatch"
+      ],
+      "blockers": []
+    },
+    {
+      "pairId": "policy-management-point",
+      "workflow": "policyManagementPoint",
+      "clientIssue": "#321",
+      "serverIssue": "#328",
+      "state": "ruleValidated",
+      "productionEnabled": true,
+      "ruleValidated": true,
+      "implementationModule": "sccm::correlation",
+      "requiredGuardIds": [
+        "conflicting-exact-key",
+        "incompatible-topology",
+        "invalid-timestamp-offset",
+        "missing-client-counterpart",
+        "missing-server-counterpart",
+        "partial-capture",
+        "redaction-boundary",
+        "reordered-input",
+        "rotation-split",
+        "same-time-no-key",
+        "unknown-extraction-profile",
+        "unrelated-terminal-error",
+        "version-mismatch"
+      ],
+      "blockers": []
+    },
+    {
+      "pairId": "updates-software-update-point",
+      "workflow": "updatesSoftwareUpdatePoint",
+      "clientIssue": "#323",
+      "serverIssue": "#330",
+      "state": "ruleValidated",
+      "productionEnabled": true,
+      "ruleValidated": true,
+      "implementationModule": "sccm::correlation",
+      "requiredGuardIds": [
+        "conflicting-exact-key",
+        "incompatible-topology",
+        "invalid-timestamp-offset",
+        "missing-client-counterpart",
+        "missing-server-counterpart",
+        "partial-capture",
+        "redaction-boundary",
+        "reordered-input",
+        "rotation-split",
+        "same-time-no-key",
+        "unknown-extraction-profile",
+        "unrelated-terminal-error",
+        "version-mismatch"
+      ],
+      "blockers": []
+    }
+  ]
+}

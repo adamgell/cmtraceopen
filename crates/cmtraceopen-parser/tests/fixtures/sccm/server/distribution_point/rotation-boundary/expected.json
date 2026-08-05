@@ -1,0 +1,36 @@
+{
+  "artifactRequests": [
+    {
+      "logicalId": "distmgr",
+      "reason": "Collect the complete distmgr.log file.",
+      "role": "siteServer"
+    },
+    {
+      "logicalId": "pkgXferMgr",
+      "reason": "Collect the complete PkgXferMgr.log file.",
+      "role": "siteServer"
+    }
+  ],
+  "coverageGaps": [
+    {
+      "artifactIds": [
+        "dp-rotation-01-current-fragment",
+        "dp-rotation-02-lo-fragment"
+      ],
+      "producerRole": "siteServer",
+      "reason": "Captured Distribution Point evidence is incomplete or outside the supported intake profile.",
+      "sourceId": "server-dp-distribution",
+      "state": "captured",
+      "workflowSubjectRole": "distributionPoint"
+    }
+  ],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [],
+  "workflow": "distributionPointContent"
+}

@@ -115,7 +115,10 @@ mod tests {
         // "...05.250Z" before "...05Z" because '.' (0x2E) < 'Z' (0x5A), which
         // inverts chronology; the parsed-instant key must keep 05 before 05.250.
         let entries = vec![
-            (0usize, timeline_entry("timeline|a|b|0", "2026-07-15T12:00:05Z")),
+            (
+                0usize,
+                timeline_entry("timeline|a|b|0", "2026-07-15T12:00:05Z"),
+            ),
             (
                 1usize,
                 timeline_entry("timeline|a|b|1", "2026-07-15T12:00:05.250Z"),

@@ -1,0 +1,35 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "softwareUpdatePoint",
+  "scenario": "metadata-failure",
+  "stateChain": ["configure","synchronize","importOrProcessMetadata","validateWsus","publishAvailability","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"sup-server-5.00.test-v1","validatedRole":"softwareUpdatePoint"},
+  "roleAssessment": {"softwareUpdatePointObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "coverage": [
+    {"artifactId":"metadata-failure-01-wcm","state":"captured"},
+    {"artifactId":"metadata-failure-02-wsync","state":"captured"}
+  ],
+  "transactions": [{
+    "transactionId": "sup:sync-05:LAB:safe:sup:lab-sup-01",
+    "key": {"syncRunId":"sync-05","siteCode":"LAB","supHandle":"safe:sup:lab-sup-01","updateId":null,"kbId":null,"confidence":"exact","extractionProfileId":"sup-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "correlationEligible": true,
+    "state": "failed",
+    "classification": "confirmedFailure",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "lastSuccessfulPhase": "synchronize",
+    "nextSourceId": null,
+    "coverageGapArtifactIds": [],
+    "observations": [
+      {"observationId":"sync-05-01-configure","phase":"configure","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"metadata-failure-01-wcm","startLine":1,"endLine":1}]},
+      {"observationId":"sync-05-02-synchronize","phase":"synchronize","disposition":"succeeded","terminal":false,"evidence":[{"artifactId":"metadata-failure-02-wsync","startLine":1,"endLine":1}]},
+      {"observationId":"sync-05-03-import","phase":"importOrProcessMetadata","disposition":"failed","terminal":true,"evidence":[{"artifactId":"metadata-failure-02-wsync","startLine":2,"endLine":2}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "artifactRequests": [],
+  "clientCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

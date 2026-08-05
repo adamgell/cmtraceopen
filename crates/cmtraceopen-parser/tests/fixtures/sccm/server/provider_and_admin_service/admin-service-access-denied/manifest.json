@@ -1,0 +1,44 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": {
+    "synthetic": true,
+    "rawPaths": "redacted"
+  },
+  "bundleRole": "server",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "siteCode": "LAB",
+    "rolesObserved": [
+      "adminService"
+    ]
+  },
+  "artifacts": [
+    {
+      "artifactId": "coverage-admin-access-denied",
+      "producerRole": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "workflowSubject": {
+        "role": "adminService",
+        "instanceHandle": "synthetic:subject:admin-service-01"
+      },
+      "sourceId": "server-admin-service",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED_ADMIN_SERVICE_ROOT",
+      "originalBasename": "AdminService.log",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:admin-service-primary"
+      },
+      "rotation": {
+        "kind": "current",
+        "lineageId": "admin-service-primary"
+      },
+      "captureState": "accessDenied",
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 0,
+      "collectionDetail": "synthetic permission denial"
+    }
+  ]
+}

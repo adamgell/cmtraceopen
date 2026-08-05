@@ -1,0 +1,59 @@
+[
+  {
+    "artifactId": "client-policy-agent-current",
+    "displayName": "PolicyAgent.log",
+    "originalPath": "C:\\Windows\\CCM\\Logs\\PolicyAgent.log",
+    "host": "LAB-CLIENT-01",
+    "role": "client",
+    "configmgrVersion": "5.00.9128.1007",
+    "collectedAtUtc": "2026-07-30T15:00:00Z",
+    "rotation": {
+      "kind": "current"
+    },
+    "coverage": "captured",
+    "encoding": "utf-8"
+  },
+  {
+    "artifactId": "client-content-transfer-rotation-2",
+    "displayName": "ContentTransferManager.log.2",
+    "originalPath": "C:\\Windows\\CCM\\Logs\\ContentTransferManager.log.2",
+    "host": "LAB-CLIENT-01",
+    "role": "client",
+    "configmgrVersion": "5.00.9128.1007",
+    "collectedAtUtc": "2026-07-30T15:00:00Z",
+    "rotation": {
+      "kind": "numbered",
+      "value": 2
+    },
+    "coverage": "captured",
+    "encoding": "utf-8"
+  },
+  {
+    "artifactId": "client-app-enforcement",
+    "displayName": "AppEnforce.log",
+    "originalPath": "C:\\Windows\\CCM\\Logs\\AppEnforce.log",
+    "host": "LAB-CLIENT-01",
+    "role": "client",
+    "configmgrVersion": "5.00.9128.1007",
+    "collectedAtUtc": "2026-07-30T15:00:00Z",
+    "rotation": {
+      "kind": "current"
+    },
+    "coverage": "absent",
+    "encoding": null
+  },
+  {
+    "artifactId": "client-config-registry",
+    "displayName": "ClientConfigurationRegistry.json",
+    "originalPath": null,
+    "host": "LAB-CLIENT-01",
+    "role": "client",
+    "configmgrVersion": "5.00.9128.1007",
+    "collectedAtUtc": "2026-07-30T15:00:00Z",
+    "rotation": {
+      "kind": "current"
+    },
+    "coverage": "accessDenied",
+    "encoding": null
+  }
+]

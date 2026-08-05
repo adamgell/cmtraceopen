@@ -6,3 +6,5 @@
 # Real-world log fixtures are byte-sensitive (UTF-8 BOM + CRLF); never normalize them.
 src-tauri/tests/fixtures/** -text
 
+# SCCM parser fixtures are byte-sensitive evidence; never normalize them.
+crates/cmtraceopen-parser/tests/fixtures/** -text

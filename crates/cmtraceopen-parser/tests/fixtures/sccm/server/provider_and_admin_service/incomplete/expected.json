@@ -1,0 +1,155 @@
+{
+  "artifactRequests": [
+    {
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerRole": "adminService",
+      "request": {
+        "logicalId": "adminService",
+        "reason": "Collect the complete AdminService.log file.",
+        "role": "adminService"
+      },
+      "sourceVersion": "5.00.TEST",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "incomplete-admin-current",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerRole": "adminService",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "symptom",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "incomplete-admin-current",
+            "entryId": "incomplete-admin-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:b6bc5a43cb150c072701da1e1c4e8ad0a39a0921d4dd10e46528c49390a50ea7",
+        "nextArtifacts": [
+          {
+            "logicalId": "adminService",
+            "reason": "Collect the complete AdminService.log file.",
+            "role": "adminService"
+          }
+        ],
+        "phase": "providerAndAdminService",
+        "role": "adminService",
+        "severity": "Warning",
+        "summary": "Admin Service evidence stops before a valid explicit terminal outcome.",
+        "terminalEvidence": [],
+        "title": "Admin Service insufficient evidence"
+      },
+      "lastSuccessfulPhase": "receive",
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "adminService:cmtraceopen.request.sha256.v1:97a6cea7f46fc765262ee2f57d2e7e016177284ba8374f913746cc43a87621ca:cmtraceopen.operation.sha256.v1:905a8c2e653f8e07d78f0f2dfeab1d71fe77fff7cb18f9f26cf7894b9a7f5fce:synthetic:host:admin-service-01:synthetic:subject:admin-service-01",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "admin-service-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "adminService"
+        ]
+      },
+      "layer": "adminService",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:admin-service-01",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "admin-service-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "adminService"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:905a8c2e653f8e07d78f0f2dfeab1d71fe77fff7cb18f9f26cf7894b9a7f5fce",
+        "producerHostHandle": "synthetic:host:admin-service-01",
+        "requestHandle": "cmtraceopen.request.sha256.v1:97a6cea7f46fc765262ee2f57d2e7e016177284ba8374f913746cc43a87621ca"
+      },
+      "lastSuccessfulPhase": "receive",
+      "layer": "adminService",
+      "nextArtifactRequests": [
+        {
+          "layer": "adminService",
+          "producerHostHandle": "synthetic:host:admin-service-01",
+          "producerRole": "adminService",
+          "request": {
+            "logicalId": "adminService",
+            "reason": "Collect the complete AdminService.log file.",
+            "role": "adminService"
+          },
+          "sourceVersion": "5.00.TEST",
+          "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+        }
+      ],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "incomplete-admin-current",
+              "entryId": "incomplete-admin-current:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "incomplete-admin-current:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        }
+      ],
+      "producerRole": "adminService",
+      "publicSummary": "Admin Service evidence stops before a valid explicit terminal outcome.",
+      "sourceVersion": "5.00.TEST",
+      "state": "incomplete",
+      "terminalEvidence": false,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "adminService:cmtraceopen.request.sha256.v1:97a6cea7f46fc765262ee2f57d2e7e016177284ba8374f913746cc43a87621ca:cmtraceopen.operation.sha256.v1:905a8c2e653f8e07d78f0f2dfeab1d71fe77fff7cb18f9f26cf7894b9a7f5fce:synthetic:host:admin-service-01:synthetic:subject:admin-service-01"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

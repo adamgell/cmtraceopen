@@ -1,0 +1,75 @@
+{
+  "contractState": "proposedPending318And319",
+  "scenario": "notification-deferred",
+  "workflow": "notification",
+  "extractionProfile": {
+    "id": "sccm-client-notification-5.00.test-v1",
+    "versionPrefix": "5.00.TEST.",
+    "selectionState": "selected"
+  },
+  "ownership": {
+    "classification": "SccmOwned",
+    "confidence": "high",
+    "terminalHandoff": false,
+    "workload": "ClientNotification",
+    "evidence": [
+      {
+        "artifactId": "notification-deferred-owner",
+        "startLine": 1,
+        "endLine": 1
+      }
+    ],
+    "coverageGapArtifactIds": []
+  },
+  "coverage": [
+    {
+      "artifactId": "notification-deferred-current",
+      "logicalArtifactId": "client-notification",
+      "state": "captured"
+    },
+    {
+      "artifactId": "notification-deferred-owner",
+      "logicalArtifactId": "client-co-management",
+      "state": "captured"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "notification-deferred-326",
+      "workflow": "notification",
+      "key": {
+        "keyProfileKind": "notificationExact",
+        "extractionProfileId": "sccm-client-notification-5.00.test-v1",
+        "confidence": "exact",
+        "NotificationId": "NOTIFY-326-DEFERRED",
+        "ChannelId": "CHANNEL-326-CLIENT",
+        "ResourceHandle": "safe:resource-326-notification-deferred"
+      },
+      "phase": "DeferOrDispatch",
+      "state": "deferred",
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "lastSuccessfulPhase": "Receive",
+      "evidence": [
+        {
+          "artifactId": "notification-deferred-current",
+          "startLine": 1,
+          "endLine": 2
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifact": {
+        "logicalArtifactId": "client-notification",
+        "reason": "Collect the bounded client notification continuation for the same exact notification key."
+      }
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [],
+  "prohibitedClaims": [
+    "time alone proves causality",
+    "Intune handoff is an Intune failure",
+    "unsupported Software Center source is parsed",
+    "missing coverage proves success or failure"
+  ]
+}

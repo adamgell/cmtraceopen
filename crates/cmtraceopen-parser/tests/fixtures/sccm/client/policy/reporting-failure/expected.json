@@ -1,0 +1,49 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "policy",
+  "scenario": "reporting-failure",
+  "stateChain": ["request","download","persist","schedule","evaluate","report"],
+  "analysisContract": {"independentReducer":true,"consumesOtherReducerOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"policy-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","keyKinds":["assignmentId","policyId","requestId","clientSafeHandle","siteCode","managementPointHostHandle"],"validatedArtifactFamilies":["client-policy-agent","client-policy-state"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-policy-agent","state":"captured"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
+  "artifactProvenance": [
+    {"artifactId":"policy-reporting-agent-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-reporting-scheduler-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-reporting-evaluate-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"policy-reporting-state-current","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions": [{
+    "transactionId": "policy:assignment:17171717-1717-1717-1717-171717171717",
+    "key": {"keyProfileKind":"requestPolicyClientTopology","assignmentId":"17171717-1717-1717-1717-171717171717","policyId":"b0b0b0b0-b0b0-b0b0-b0b0-b0b0b0b0b0b0","requestId":"27171717-1717-1717-1717-171717171717","clientHandle":"safe:client:policy-17","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","managementPointEvidenceKind":"selected","confidence":"exact","extractionProfileId":"policy-client-5.00.test-v1"},
+    "counterpartReadyFact": {"phase":"request","extractionProfileId":"policy-client-5.00.test-v1","evidence":{"artifactId":"policy-reporting-agent-current","startLine":1,"endLine":1}},
+    "phase": "report",
+    "state": "failed",
+    "lastSuccessfulPhase": "evaluate",
+    "classification": "confirmedFailure",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": null,
+    "evidence": [
+      {"artifactId":"policy-reporting-agent-current","startLine":1,"endLine":3},
+      {"artifactId":"policy-reporting-evaluate-current","startLine":1,"endLine":1},
+      {"artifactId":"policy-reporting-scheduler-current","startLine":1,"endLine":1},
+      {"artifactId":"policy-reporting-state-current","startLine":1,"endLine":1}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "findings": [{
+    "findingId": "finding:policy-reporting-failure",
+    "subjectId": "policy:assignment:17171717-1717-1717-1717-171717171717",
+    "class": "confirmedFailure",
+    "phase": "report",
+    "lastSuccessfulPhase": "evaluate",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "nextArtifact": null,
+    "evidence": [{"artifactId":"policy-reporting-state-current","startLine":1,"endLine":1}]
+  }],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"topologyMismatchOwner":"#333","bundleCaptureHostUsedAsManagementPointEvidence":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"],"emittedCounterpartReadyFact":true},
+  "prohibitedClaims": ["management point or server root cause","cross-side correlation or #333 conclusion","device-wide transaction merging"]
+}

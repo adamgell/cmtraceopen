@@ -1,0 +1,162 @@
+{
+  "artifactRequests": [],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "success",
+      "confidence": "medium",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "dp-healthy-01-distmgr",
+          "entryId": "dp-healthy-01-distmgr:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-healthy-01-distmgr",
+          "entryId": "dp-healthy-01-distmgr:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "dp-healthy-02-pkgxfer",
+          "entryId": "dp-healthy-02-pkgxfer:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-healthy-03-provider",
+          "entryId": "dp-healthy-03-provider:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-healthy-03-provider",
+          "entryId": "dp-healthy-03-provider:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-alpha",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:dp-01",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00001",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "makeAvailable",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-healthy-01-distmgr",
+            "entryId": "dp-healthy-01-distmgr:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:00.000",
+            "utcMillis": 1785412800000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-healthy-01-distmgr",
+            "entryId": "dp-healthy-01-distmgr:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:01.000",
+            "utcMillis": 1785412801000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-healthy-02-pkgxfer",
+            "entryId": "dp-healthy-02-pkgxfer:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:02.000",
+            "utcMillis": 1785412802000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-healthy-03-provider",
+            "entryId": "dp-healthy-03-provider:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "validate",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:03.000",
+            "utcMillis": 1785412803000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-healthy-03-provider",
+            "entryId": "dp-healthy-03-provider:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "makeAvailable",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:04.000",
+            "utcMillis": 1785412804000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Success",
+      "state": "succeeded",
+      "stopPhase": null,
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00001:content=content-alpha:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

@@ -1,0 +1,124 @@
+{
+  "artifactRequests": [
+    {
+      "logicalId": "pkgXferMgr",
+      "reason": "Collect the complete PkgXferMgr.log file.",
+      "role": "siteServer"
+    }
+  ],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "dp-backlog-blocked-01-distmgr",
+          "entryId": "dp-backlog-blocked-01-distmgr:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-backlog-blocked-01-distmgr",
+          "entryId": "dp-backlog-blocked-01-distmgr:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "dp-backlog-blocked-02-pkgxfer",
+          "entryId": "dp-backlog-blocked-02-pkgxfer:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        }
+      ],
+      "key": {
+        "contentId": "content-theta",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:dp-01",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00008",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "distribute",
+      "nextArtifact": {
+        "logicalId": "pkgXferMgr",
+        "reason": "Collect the complete PkgXferMgr.log file.",
+        "role": "siteServer"
+      },
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-backlog-blocked-01-distmgr",
+            "entryId": "dp-backlog-blocked-01-distmgr:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:00.000",
+            "utcMillis": 1785412980000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-backlog-blocked-01-distmgr",
+            "entryId": "dp-backlog-blocked-01-distmgr:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:01.000",
+            "utcMillis": 1785412981000
+          }
+        },
+        {
+          "disposition": "blocked",
+          "evidence": {
+            "artifactId": "dp-backlog-blocked-02-pkgxfer",
+            "entryId": "dp-backlog-blocked-02-pkgxfer:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:02.000",
+            "utcMillis": 1785412982000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Warning",
+      "state": "blocked",
+      "stopPhase": "transfer",
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00008:content=content-theta:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

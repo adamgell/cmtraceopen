@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "contradictory",
+  "artifacts": [
+    {"artifactId":"health-contradictory-ccmsetup-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ccmsetup.log","pathFingerprint":"synthetic-root-a-health-contradictory-ccmsetup-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:50:02Z","bytesCopied":516,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"health-contradictory-evaluation-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"CcmEval.log","pathFingerprint":"synthetic-candidate-health-contradictory-evaluation-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:50:01Z","bytesCopied":0,"relativePath":null},
+    {"artifactId":"health-contradictory-identity-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"ClientIDManagerStartup.log","pathFingerprint":"synthetic-candidate-health-contradictory-identity-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:50:02Z","bytesCopied":0,"relativePath":null},
+    {"artifactId":"health-contradictory-location-services-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"LocationServices.log","pathFingerprint":"synthetic-candidate-health-contradictory-location-services-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T01:50:03Z","bytesCopied":0,"relativePath":null}
+  ]
+}

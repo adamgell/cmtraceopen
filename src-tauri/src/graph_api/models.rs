@@ -199,10 +199,7 @@ pub fn classify_graph_permission_candidate(
     // object id is absent or unverifiable on either side so a same-tenant,
     // different-account token can never replace the connected token — even when
     // the optional WAM `UserName` (UPN) is missing for federated/guest accounts.
-    let account_matches = match (
-        current.object_id.as_deref(),
-        candidate.object_id.as_deref(),
-    ) {
+    let account_matches = match (current.object_id.as_deref(), candidate.object_id.as_deref()) {
         (Some(current_oid), Some(candidate_oid)) => current_oid.eq_ignore_ascii_case(candidate_oid),
         _ => false,
     };

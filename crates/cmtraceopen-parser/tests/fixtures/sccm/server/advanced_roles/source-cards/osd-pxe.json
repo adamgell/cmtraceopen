@@ -1,0 +1,82 @@
+{
+  "cardSchemaVersion": "1.0.0",
+  "cardId": "osd-pxe",
+  "cardVersion": "1.0.0",
+  "family": "Operating-system deployment and PXE role diagnostics",
+  "roleScope": [
+    "distributionPointPxe",
+    "siteServer"
+  ],
+  "candidateBasenames": [
+    "smspxe.log"
+  ],
+  "pathClasses": [
+    "configuredRoleLogRoot",
+    "siteServerLogs"
+  ],
+  "rawParserFamily": "ccm",
+  "sourceVersionScope": {
+    "state": "unknown",
+    "allowedPrefixes": []
+  },
+  "capture": {
+    "classification": "optional",
+    "maxBytes": 4194304,
+    "accessPolicy": "leastPrivilegeNoEscalation",
+    "rotationPolicy": {
+      "kinds": [
+        "current",
+        "lo_"
+      ],
+      "maxFiles": 2
+    }
+  },
+  "privacy": {
+    "sensitivity": "high",
+    "classes": [
+      "deviceIdentity",
+      "macAddress",
+      "networkIdentity",
+      "resourceIdentity"
+    ],
+    "redactionRequired": true,
+    "publicProjection": [
+      "captureState",
+      "cardId",
+      "coverageState",
+      "roleScope"
+    ],
+    "rawSensitiveFieldProjection": []
+  },
+  "expectedHealthyEvidence": "A future validated rule must cite an exact PXE request identity, compatible distribution-point topology, and explicit boot-service disposition.",
+  "terminalFailureEvidence": "A future terminal rule must cite an explicit PXE rejection or terminal service error and cannot infer failure from an absent default path.",
+  "correlationPolicy": {
+    "keyState": "unvalidated",
+    "allowedKeyKinds": [],
+    "timeOnlyEligible": false,
+    "topologyRequired": true
+  },
+  "fixtureIds": [],
+  "ownerIssue": "#334",
+  "promotion": {
+    "state": "candidate",
+    "observedEvidenceIds": [],
+    "implementationIssue": null,
+    "productionReducer": null,
+    "deferredReason": null
+  },
+  "semanticPolicy": {
+    "captureGuidanceOnly": true,
+    "canCreateTransactions": false,
+    "canCreateFailureFindings": false
+  },
+  "nextEvidence": [
+    "Record configured PXE-role and path-class provenance from a sanitized authorized server before asserting source availability.",
+    "Design privacy-safe success, rejection, topology-mismatch, rotation, malformed, and incomplete source fixtures."
+  ],
+  "supersession": {
+    "state": "active",
+    "supersedes": [],
+    "supersededBy": null
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "productionOutputSha256": "84244f9832595d4deb2189626c8751baf837ac988883ee3b34dcc04e7f5380c0",
+  "productionAdmissionError": null,
+  "contractState": "proposedPending318And319",
+  "scenario": "remediation-success",
+  "workflow": "compliance",
+  "extractionProfile": {
+    "id": "sccm-client-compliance-5.00.test-v1",
+    "selectionState": "selected",
+    "versionPrefix": "5.00.TEST."
+  },
+  "transactions": [
+    {
+      "transactionId": "compliance-remediated",
+      "workflow": "compliance",
+      "key": {
+        "CiId": "CI-003",
+        "BaselineId": "BASELINE-003",
+        "StateId": "STATE-003",
+        "ResourceHandle": "safe:resource:compliance-003",
+        "keyProfileKind": "complianceExact",
+        "extractionProfileId": "sccm-client-compliance-5.00.test-v1",
+        "confidence": "exact"
+      },
+      "phase": "Report",
+      "state": "remediated",
+      "classification": "success",
+      "confidence": "high",
+      "lastSuccessfulPhase": "Report",
+      "evidence": [
+        {
+          "artifactId": "compliance-remediation-success-report-current",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ],
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null
+    }
+  ],
+  "sourceLocalObservations": [],
+  "coverage": [
+    {
+      "artifactId": "compliance-remediation-success-agent-current",
+      "logicalArtifactId": "client-compliance",
+      "state": "captured"
+    },
+    {
+      "artifactId": "compliance-remediation-success-remediate-current",
+      "logicalArtifactId": "client-compliance",
+      "state": "captured"
+    },
+    {
+      "artifactId": "compliance-remediation-success-report-current",
+      "logicalArtifactId": "client-compliance",
+      "state": "captured"
+    }
+  ],
+  "findings": [],
+  "prohibitedClaims": [
+    "missing or unreadable evidence proves workflow success or failure",
+    "same-minute records are causally related without one exact validated key tuple",
+    "client evidence alone proves a server-side cause",
+    "this preparation corpus is live Windows acceptance"
+  ]
+}

@@ -1,0 +1,219 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "reporting-failure",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": [
+      "client-location-services-shared",
+      "client-policy-state",
+      "client-updates"
+    ]
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-location-services-shared",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-policy-state",
+      "state": "captured"
+    },
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "captured"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-reporting-failure-01-scan",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-reporting-failure-02-sup",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-reporting-failure-03-deployment",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-reporting-failure-04-report",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "updates:update:32300000-0000-0000-0000-000000000009",
+      "key": {
+        "updateId": "32300000-0000-0000-0000-000000000009",
+        "ciId": "CI-UPDATE-09",
+        "contentId": "CONTENT-UPDATE-09",
+        "updateJobId": "JOB-UPDATE-09",
+        "clientHandle": "safe:client:updates-09",
+        "siteCode": "LAB",
+        "supHostHandle": "safe:sup:lab-sup-01",
+        "confidence": "exact",
+        "extractionProfileId": "updates-client-5.00.test-v1"
+      },
+      "phase": "report",
+      "state": "failed",
+      "lastSuccessfulPhase": "reboot",
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "nextArtifact": null,
+      "evidence": [
+        {
+          "artifactId": "updates-reporting-failure-01-scan",
+          "startLine": 1,
+          "endLine": 2
+        },
+        {
+          "artifactId": "updates-reporting-failure-02-sup",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-reporting-failure-03-deployment",
+          "startLine": 1,
+          "endLine": 4
+        },
+        {
+          "artifactId": "updates-reporting-failure-04-report",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {
+      "findingId": "finding:updates:reporting-failure",
+      "subjectId": "updates:update:32300000-0000-0000-0000-000000000009",
+      "class": "confirmedFailure",
+      "phase": "report",
+      "lastSuccessfulPhase": "reboot",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "nextArtifact": null,
+      "evidence": [
+        {
+          "artifactId": "updates-reporting-failure-01-scan",
+          "startLine": 1,
+          "endLine": 2
+        },
+        {
+          "artifactId": "updates-reporting-failure-02-sup",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-reporting-failure-03-deployment",
+          "startLine": 1,
+          "endLine": 4
+        },
+        {
+          "artifactId": "updates-reporting-failure-04-report",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": true,
+    "counterpartReadyFacts": [
+      {
+        "updateId": "32300000-0000-0000-0000-000000000009",
+        "ciId": "CI-UPDATE-09",
+        "contentId": "CONTENT-UPDATE-09",
+        "updateJobId": "JOB-UPDATE-09",
+        "clientHandle": "safe:client:updates-09",
+        "siteCode": "LAB",
+        "supHostHandle": "safe:sup:lab-sup-01",
+        "keyConfidence": "exact",
+        "correlationEligible": false,
+        "timeOnlyEligible": false,
+        "phase": "locateSup",
+        "extractionProfileId": "updates-client-5.00.test-v1",
+        "timestampProvenance": {
+          "normalizedUtc": "2026-07-30T10:00:02.000Z",
+          "utcMillis": 1785405602000,
+          "offsetMinutes": 0,
+          "orderingState": "normalizedUtc"
+        },
+        "evidence": {
+          "artifactId": "updates-reporting-failure-02-sup",
+          "startLine": 1,
+          "endLine": 1
+        }
+      }
+    ]
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

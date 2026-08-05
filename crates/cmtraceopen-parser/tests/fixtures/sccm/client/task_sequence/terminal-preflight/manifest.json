@@ -1,0 +1,10 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "terminal-preflight",
+  "bundle": {"role":"client","workflow":"taskSequence","siteCode":"LAB"},
+  "artifacts": [
+    {"artifactId":"task-sequence-terminal-preflight-smsts-current","designOnlyCatalog":{"entryId":"client-task-sequence-smsts","groupMemberships":["client-task-sequence-smsts"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"smsts.log","sanitizedSourcePath":"SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log","smstsLogPathEvidence":"SYNTHETIC://winpe/Windows/temp/smstslog/smsts.log","pathFingerprint":"synthetic:terminal-preflight:winpe","pathClass":"winpe","rotation":{"kind":"current","fragmentComplete":true},"relocationOrdinal":0,"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T01:40:05Z","bytesCopied":430,"relativePath":"evidence/client-task-sequence-smsts/winpe/current/smsts.log"}
+  ]
+}

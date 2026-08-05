@@ -1,0 +1,30 @@
+{
+  "artifactRequests": [
+    {
+      "logicalId": "smsDpProv",
+      "reason": "Collect the complete SMSDPProv.log file.",
+      "role": "distributionPoint"
+    }
+  ],
+  "coverageGaps": [
+    {
+      "artifactIds": [
+        "dp-malformed-01-provider"
+      ],
+      "producerRole": "distributionPoint",
+      "reason": "Distribution Point source coverage is parseFailed; recollect the declared source without changing its state.",
+      "sourceId": "server-dp-distribution",
+      "state": "parseFailed",
+      "workflowSubjectRole": null
+    }
+  ],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [],
+  "workflow": "distributionPointContent"
+}

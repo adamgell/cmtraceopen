@@ -1,0 +1,1 @@
+<![LOG[SYNTHETIC FIXTURE Family=health Phase=install Disposition=failed Terminal=true ClientGuid=10101010-1010-1010-1010-101010101010 Error=0x80070005]LOG]!><time="01:10:00.000+000" date="07-30-2026" component="ccmsetup" context="" type="3" thread="1" file="ccmsetup.cc:10">

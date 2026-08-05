@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  captureSccmDiagnostics,
+  discoverSccmEnvironment,
   getSafeErrorMessage,
   graphGetAuthStatus,
   graphRequestMissingPermissions,
   openLogFile,
+  revealInFileManager,
 } from "./commands";
 import { readAccessDenied } from "./source-error";
 
@@ -69,6 +72,42 @@ function makeHostileErrorProxy(secretPrefix: string): {
 
 beforeEach(() => {
   vi.mocked(invoke).mockReset();
+});
+
+describe("SCCM product-path IPC boundary", () => {
+  it("invokes discovery and capture without accepting frontend inputs", async () => {
+    const discovery = { supported: true, roles: [], sources: [], issues: [] };
+    const capture = {
+      bundleRoot: "C:\\capture",
+      capturedAtUtc: "2026-08-04T14:30:00Z",
+      roles: [],
+      sources: [],
+      artifactCount: 0,
+      retainedBytes: 0,
+    };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(discovery)
+      .mockResolvedValueOnce(capture)
+      .mockResolvedValueOnce(undefined);
+
+    await expect(discoverSccmEnvironment()).resolves.toBe(discovery);
+    await expect(captureSccmDiagnostics()).resolves.toBe(capture);
+    await expect(revealInFileManager(capture.bundleRoot)).resolves.toBeUndefined();
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      "discover_sccm_environment",
+      undefined,
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      "capture_sccm_diagnostics",
+      undefined,
+    );
+    expect(invoke).toHaveBeenNthCalledWith(3, "reveal_in_file_manager", {
+      path: capture.bundleRoot,
+    });
+  });
 });
 
 describe("Graph permission upgrade IPC boundary", () => {

@@ -1,0 +1,88 @@
+{
+  "artifactRequests": [
+    {
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerRole": "adminService",
+      "request": {
+        "logicalId": "adminService",
+        "reason": "Collect the complete AdminService.log file.",
+        "role": "adminService"
+      },
+      "sourceVersion": "5.00.TEST",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "coverage-admin-parse-failed",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerRole": "adminService",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "state": "parseFailed",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "insufficientEvidence",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [
+          {
+            "artifactId": "coverage-admin-parse-failed",
+            "coverage": "parseFailed",
+            "role": "adminService"
+          }
+        ],
+        "evidence": [],
+        "findingId": "provider-admin-coverage:coverage-admin-parse-failed",
+        "nextArtifacts": [
+          {
+            "logicalId": "adminService",
+            "reason": "Collect the complete AdminService.log file.",
+            "role": "adminService"
+          }
+        ],
+        "phase": "providerAndAdminService",
+        "role": "adminService",
+        "severity": "Warning",
+        "summary": "Admin Service cannot be evaluated because its scoped source is not a complete capture.",
+        "terminalEvidence": [],
+        "title": "Admin Service evidence unavailable"
+      },
+      "lastSuccessfulPhase": null,
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:admin-service-01",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "coverage-admin-parse-failed",
+      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "admin-service-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "adminService"
+        ]
+      },
+      "layer": "adminService",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [],
+  "workflow": "providerAndAdminService"
+}

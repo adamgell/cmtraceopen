@@ -1,0 +1,10 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "scenario": "unknown-profile",
+  "bundle": {"role":"client","workflow":"taskSequence","siteCode":"LAB"},
+  "artifacts": [
+    {"artifactId":"task-sequence-unknown-profile-smsts-current","designOnlyCatalog":{"entryId":"client-task-sequence-smsts","groupMemberships":["client-task-sequence-smsts"]},"role":"client","kind":"ccmLog","captureState":"captured","encoding":"utf-8","collectionLimit":{"byteLimit":4096,"limitApplied":false},"originalBasename":"smsts.log","sanitizedSourcePath":"SYNTHETIC://unknown/observed/smsts.log","smstsLogPathEvidence":"SYNTHETIC://unknown/observed/smsts.log","pathFingerprint":"synthetic:unknown-profile:unknown","pathClass":"unknown","rotation":{"kind":"current","fragmentComplete":true},"relocationOrdinal":0,"sourceVersion":"5.00.UNKNOWN.0000","capturedUtc":"2026-07-30T01:46:05Z","bytesCopied":401,"relativePath":"evidence/client-task-sequence-smsts/unknown/current/smsts.log"}
+  ]
+}

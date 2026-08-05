@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "workflow": "siteCore",
+  "profile": {
+    "id": "sccm-site-core",
+    "version": 1,
+    "stability": "experimental"
+  },
+  "stateChain": [
+    "componentStart",
+    "componentWork",
+    "inboxOrQueue",
+    "statusOrStateProcessing",
+    "healthyOrTerminal"
+  ],
+  "results": [],
+  "unlinkedObservations": [
+    {
+      "observationId": "site-core:observation:v1:451100e2fecf411dab719c39efac17c4a413cc9159154cbf7b8e852b2d5e0d2e",
+      "state": "parseGap",
+      "findingClass": "insufficientEvidence",
+      "confidence": "none",
+      "evidence": [],
+      "coverageGapArtifactIds": ["b-sitecomp"],
+      "nextArtifacts": [
+        {
+          "logicalName": "server-sitecomp",
+          "role": "siteServer",
+          "reasonCode": "required-source-parse-failed",
+          "candidates": [
+            { "basename": "sitecomp.lo_", "rotation": "loUnderscore" }
+          ],
+          "maxArtifacts": 1,
+          "scope": {
+            "producerHostHandle": "synthetic:host:site-01",
+            "rotationLineageHandle": "sitecomp-lab"
+          }
+        }
+      ]
+    },
+    {
+      "observationId": "site-core:observation:v1:e90f28bbfe6504368011dcfad219c8103b931bcaa8e8b599c96c0ea6a04196f1",
+      "state": "parseGap",
+      "findingClass": "insufficientEvidence",
+      "confidence": "none",
+      "evidence": [],
+      "coverageGapArtifactIds": ["sitecomp-current"],
+      "nextArtifacts": [
+        {
+          "logicalName": "server-sitecomp",
+          "role": "siteServer",
+          "reasonCode": "required-source-parse-failed",
+          "candidates": [{ "basename": "sitecomp.log", "rotation": "current" }],
+          "maxArtifacts": 1,
+          "scope": {
+            "producerHostHandle": "synthetic:host:site-01",
+            "rotationLineageHandle": "sitecomp-lab"
+          }
+        }
+      ]
+    }
+  ],
+  "coverageGaps": [
+    {
+      "artifactId": "b-sitecomp",
+      "sourceId": "server-sitecomp",
+      "state": "parseFailed",
+      "reasonCode": "required-source-parse-failed",
+      "diagnosticMeaning": "coverageOnly"
+    },
+    {
+      "artifactId": "sitecomp-current",
+      "sourceId": "server-sitecomp",
+      "state": "parseFailed",
+      "reasonCode": "required-source-parse-failed",
+      "diagnosticMeaning": "coverageOnly"
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "site-core:finding:v1:35ab0d0fc326af948cdbeaa4e8510e8dc467bbfeca4d9de9726a9324871b0812",
+      "class": "insufficientEvidence",
+      "phase": "siteCoreCoverage",
+      "role": "siteServer",
+      "severity": "Warning",
+      "confidence": "none",
+      "title": "Site core coverage gap",
+      "summary": "The source is incomplete and cannot establish a component outcome.",
+      "evidence": [],
+      "terminalEvidence": [],
+      "coverageGaps": [
+        {
+          "artifactId": "b-sitecomp",
+          "role": "siteServer",
+          "coverage": "parseFailed"
+        }
+      ],
+      "correlationKeys": [],
+      "nextArtifacts": [
+        {
+          "logicalId": "sitecomp",
+          "role": "siteServer",
+          "reason": "Collect the complete sitecomp.log file."
+        }
+      ],
+      "subjectId": "site-core:observation:v1:451100e2fecf411dab719c39efac17c4a413cc9159154cbf7b8e852b2d5e0d2e",
+      "lastSuccessfulPhase": null
+    },
+    {
+      "findingId": "site-core:finding:v1:b526eeb6982092da44b2ade2f032b43f33dfb4910bb69b41c0b4c02f7c862a35",
+      "class": "insufficientEvidence",
+      "phase": "siteCoreCoverage",
+      "role": "siteServer",
+      "severity": "Warning",
+      "confidence": "none",
+      "title": "Site core coverage gap",
+      "summary": "The source is incomplete and cannot establish a component outcome.",
+      "evidence": [],
+      "terminalEvidence": [],
+      "coverageGaps": [
+        {
+          "artifactId": "sitecomp-current",
+          "role": "siteServer",
+          "coverage": "parseFailed"
+        }
+      ],
+      "correlationKeys": [],
+      "nextArtifacts": [
+        {
+          "logicalId": "sitecomp",
+          "role": "siteServer",
+          "reason": "Collect the complete sitecomp.log file."
+        }
+      ],
+      "subjectId": "site-core:observation:v1:e90f28bbfe6504368011dcfad219c8103b931bcaa8e8b599c96c0ea6a04196f1",
+      "lastSuccessfulPhase": null
+    }
+  ],
+  "artifactRequests": [
+    {
+      "logicalName": "server-sitecomp",
+      "role": "siteServer",
+      "reasonCode": "required-source-parse-failed",
+      "candidates": [
+        { "basename": "sitecomp.lo_", "rotation": "loUnderscore" }
+      ],
+      "maxArtifacts": 1,
+      "scope": {
+        "producerHostHandle": "synthetic:host:site-01",
+        "rotationLineageHandle": "sitecomp-lab"
+      }
+    },
+    {
+      "logicalName": "server-sitecomp",
+      "role": "siteServer",
+      "reasonCode": "required-source-parse-failed",
+      "candidates": [{ "basename": "sitecomp.log", "rotation": "current" }],
+      "maxArtifacts": 1,
+      "scope": {
+        "producerHostHandle": "synthetic:host:site-01",
+        "rotationLineageHandle": "sitecomp-lab"
+      }
+    }
+  ],
+  "crossSideCorrelationPerformed": false
+}

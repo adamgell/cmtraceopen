@@ -1,0 +1,60 @@
+{
+  "contractState": "proposedPending318And335",
+  "workflow": "managementPoint",
+  "scenario": "iis-supplemental",
+  "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
+  "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "reorderedInputDeterministic": true,
+  "programGateCoverage": ["completed"],
+  "coverage": [
+    {"logicalArtifactId":"server-mp-auth","state":"captured","requiredness":"required"},
+    {"logicalArtifactId":"server-mp-iis","state":"skipped","requiredness":"optionalSupplemental"},
+    {"logicalArtifactId":"server-mp-policy","state":"captured","requiredness":"required"}
+  ],
+  "artifactProvenance": [
+    {"artifactId":"mp-iis-auth-current","captureState":"captured","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:iis-auth","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T06:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-iis-control-current","captureState":"captured","role":"siteServer","workflowSubjectRole":"managementPoint","producer":"SMS_MP_CONTROL_MANAGER","pathFingerprint":"synthetic:iis-role-context","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T06:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-iis-optional-skipped","captureState":"skipped","role":"managementPoint","producer":"IIS-W3C","pathFingerprint":"synthetic:iis-optional-not-requested","pathProvenance":"incidentBundleOptional","sourceVersion":"IIS.TEST.0000","collectedUtc":"2026-07-30T06:00:10Z","encoding":null,"byteLimit":null,"limitApplied":null},
+    {"artifactId":"mp-iis-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:iis-policy-1","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T06:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"mp-iis-registration-current","captureState":"captured","role":"managementPoint","producer":"MP_CliReg","pathFingerprint":"synthetic:iis-registration","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T06:00:10Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "primaryTransactionId": "mp:request:28666666-6666-6666-6666-666666666666",
+  "transactions": [{
+    "transactionId": "mp:request:28666666-6666-6666-6666-666666666666",
+    "key": {"keyProfileKind":"requestPolicyClientTopology","requestId":"28666666-6666-6666-6666-666666666666","policyId":"a8666666-6666-6666-6666-666666666666","clientHandle":"safe:client:mp-iis-06","siteCode":"LAB","managementPointHostHandle":"safe:mp:lab-mp-01","confidence":"exact","extractionProfileId":"mp-server-5.00.test-v1"},
+    "topologyCompatibility": "exact",
+    "observationKeyBinding": {"mode":"inheritImmutableParentTransactionKey","observationKeyFieldAllowed":false,"overrideAllowed":false},
+    "phase": "recordOutcome",
+    "state": "succeeded",
+    "lastSuccessfulPhase": "recordOutcome",
+    "classification": "success",
+    "confidence": "high",
+    "confidenceCeiling": "high",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": null,
+    "evidence": [
+      {"artifactId":"mp-iis-auth-current","startLine":1,"endLine":2},
+      {"artifactId":"mp-iis-policy-current","startLine":1,"endLine":3},
+      {"artifactId":"mp-iis-registration-current","startLine":1,"endLine":1}
+    ],
+    "observations": [
+      {"observationId":"observation:iis:01-receive","phase":"receiveRequest","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 06:00:00.000+000","offsetMinutes":0,"utc":"2026-07-30T06:00:00.000Z"},"evidence":[{"artifactId":"mp-iis-auth-current","startLine":1,"endLine":1}]},
+      {"observationId":"observation:iis:02-authenticate","phase":"authenticate","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 06:00:01.000+000","offsetMinutes":0,"utc":"2026-07-30T06:00:01.000Z"},"evidence":[{"artifactId":"mp-iis-auth-current","startLine":2,"endLine":2}]},
+      {"observationId":"observation:iis:03-register","phase":"registerOrIdentify","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 06:00:02.000+000","offsetMinutes":0,"utc":"2026-07-30T06:00:02.000Z"},"evidence":[{"artifactId":"mp-iis-registration-current","startLine":1,"endLine":1}]},
+      {"observationId":"observation:iis:04-resolve","phase":"resolveLocationOrPolicy","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 06:00:03.000+000","offsetMinutes":0,"utc":"2026-07-30T06:00:03.000Z"},"evidence":[{"artifactId":"mp-iis-policy-current","startLine":1,"endLine":1}]},
+      {"observationId":"observation:iis:05-respond","phase":"respond","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 06:00:04.000+000","offsetMinutes":0,"utc":"2026-07-30T06:00:04.000Z"},"evidence":[{"artifactId":"mp-iis-policy-current","startLine":2,"endLine":2}]},
+      {"observationId":"observation:iis:06-outcome","phase":"recordOutcome","state":"succeeded","classification":"success","timestamp":{"original":"7-30-2026 06:00:05.000+000","offsetMinutes":0,"utc":"2026-07-30T06:00:05.000Z"},"evidence":[{"artifactId":"mp-iis-policy-current","startLine":3,"endLine":3}]}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "contextFacts": [
+    {"factId":"fact:mp-control-role-context","classification":"contextOnly","transactionEligible":false,"correlationEligible":false,"evidence":[{"artifactId":"mp-iis-control-current","startLine":1,"endLine":1}]}
+  ],
+  "findings": [],
+  "arbitraryIisRequired": false,
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"]},
+  "prohibitedClaims": ["arbitrary IIS tree required for analysis","client-side root cause or impact","cross-side correlation or #333 conclusion","management-point role absence from a missing default path","time-only or proximity-only transaction joining"]
+}

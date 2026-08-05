@@ -1,0 +1,29 @@
+{
+  "contractState":"proposedPending318And319",
+  "workflow":"deployment",
+  "scenario":"requirements-failure",
+  "stateChain":["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
+  "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","exitCode","packageId","productCode","requestId"],"validatedArtifactFamilies":["client-app-enforce","client-app-intent","client-content","client-policy-state"]},
+  "reorderedInputDeterministic":true,
+  "coverage":[{"logicalArtifactId":"client-app-intent","state":"captured"}],
+  "artifactProvenance":[{"artifactId":"deployment-requirements-failure-intent-current","bytesCopied":580,"encoding":"utf-8","byteLimit":4096,"limitApplied":false}],
+  "transactions":[{
+    "transactionId":"deployment:assignment:10000000-0000-0000-0000-000000000003",
+    "key":{"keyProfileKind":"assignmentCi","assignmentId":"10000000-0000-0000-0000-000000000003","ciId":"20000000-0000-0000-0000-000000001003","confidence":"exact","extractionProfileId":"deployment-client-5.00.test-v1"},
+    "counterpartReadyFact":null,
+    "phase":"requirements",
+    "state":"failed",
+    "lastSuccessfulPhase":"intent",
+    "classification":"confirmedFailure",
+    "confidence":"high",
+    "confidenceCeiling":"high",
+    "coverageGapArtifactIds":[],
+    "nextArtifact":null,
+    "evidence":[{"artifactId":"deployment-requirements-failure-intent-current","startLine":1,"endLine":2}]
+  }],
+  "sourceLocalObservations":[],
+  "findings":[{"findingId":"deployment-requirements-terminal","class":"confirmedFailure","phase":"requirements","role":"client","confidence":"high","evidence":[{"artifactId":"deployment-requirements-failure-intent-current","startLine":2,"endLine":2}],"coverageGapArtifactIds":[],"nextArtifacts":[],"mustNotClaim":["download failure","distribution point cause","policy output required"]}],
+  "correlationHandoff":{"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"serverCauseClaimed":false,"counterpartReadyKeyKinds":["contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"emittedCounterpartReadyFact":false},
+  "prohibitedClaims":["distribution point or server root cause","time-only content-to-DP correlation","policy output required for deployment behavior"]
+}

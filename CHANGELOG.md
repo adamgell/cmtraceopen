@@ -39,6 +39,16 @@ All notable changes to this project will be documented in this file.
 
 - **Intune Device Inventory log support (#354)**: CMTrace Open now discovers and parses the complete Microsoft Device Inventory Agent log family under `C:\Program Files\Microsoft Device Inventory Agent\Logs` instead of falling back to the generic timestamped or plain-text readers. Three wire formats are recognized by content: the **harvester** dialect (`IntuneInventoryHarvesterLog.log` and its timestamped rotations), where the producer's bracketed `[Information]`/`[Warning]`/`[Error]` level is authoritative and is no longer left in the message or overridden by keyword inference; the **Inventory Adaptor** dialect (`InventoryAdaptor.log` and the literal trailing-underscore `InventoryAdaptor.log_` rotation), which now keeps its timestamp and process ID and holds continuation JSON in the record that introduced it; and a **rotation-failure** dialect, where a .NET exception and its stack trace stay in one logical record. The Device Inventory Agent folder is available from the known-sources menu, folder aggregation includes `.log`, timestamped rotations, and `.log_`, and Windows file association covers the producer's literal `.log_` extension. Real-time tailing preserves logical records across appends.
 
+### Fixed
+
+- **SCCM server coverage topology (#335)**: Normalized server coverage rows now
+  retain optional opaque producer-host and workflow-subject handles, preventing
+  artifacts from distinct physical producers or workflow subjects from
+  collapsing into one row. Site-core analysis also rejects coverage whose
+  topology does not match its artifact membership and emits explicit coverage
+  gaps instead of shaping results from incongruent input. The additive fields
+  remain schema v1 and are omitted from JSON when absent.
+
 ## [1.5.0] - 2026-07-27
 
 ### Added

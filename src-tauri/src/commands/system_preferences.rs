@@ -116,8 +116,7 @@ pub fn set_always_on_top<R: tauri::Runtime>(
     }
 
     if let Some(menu) = app.menu() {
-        if let Some(MenuItemKind::Check(item)) =
-            menu.get(crate::menu::MENU_ID_WINDOW_ALWAYS_ON_TOP)
+        if let Some(MenuItemKind::Check(item)) = menu.get(crate::menu::MENU_ID_WINDOW_ALWAYS_ON_TOP)
         {
             let _ = item.set_checked(enabled);
         }

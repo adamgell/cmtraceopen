@@ -1,0 +1,97 @@
+{
+  "artifactRequests": [],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "dp-distribution-failure-01-distmgr",
+          "entryId": "dp-distribution-failure-01-distmgr:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "dp-distribution-failure-01-distmgr",
+          "entryId": "dp-distribution-failure-01-distmgr:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-beta",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:dp-01",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00002",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "receiveContent",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "dp-distribution-failure-01-distmgr",
+            "entryId": "dp-distribution-failure-01-distmgr:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:02:00.000",
+            "utcMillis": 1785412920000
+          }
+        },
+        {
+          "disposition": "failed",
+          "evidence": {
+            "artifactId": "dp-distribution-failure-01-distmgr",
+            "entryId": "dp-distribution-failure-01-distmgr:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": true,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:02:01.000",
+            "utcMillis": 1785412921000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Error",
+      "state": "failed",
+      "stopPhase": "distribute",
+      "terminalEvidence": [
+        {
+          "artifactId": "dp-distribution-failure-01-distmgr",
+          "entryId": "dp-distribution-failure-01-distmgr:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00002:content=content-beta:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

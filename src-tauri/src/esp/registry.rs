@@ -743,7 +743,11 @@ fn node_cache_contains_hardware_identity(entry: &RegistrySnapshotKey) -> bool {
     })
 }
 
-fn registry_sensitivity(key: &str, value_name: &str, value: &EspObservationValue) -> EspSensitivity {
+fn registry_sensitivity(
+    key: &str,
+    value_name: &str,
+    value: &EspObservationValue,
+) -> EspSensitivity {
     let path_sensitivity = registry_path_sensitivity(key);
     if path_sensitivity != EspSensitivity::Public {
         return path_sensitivity;
