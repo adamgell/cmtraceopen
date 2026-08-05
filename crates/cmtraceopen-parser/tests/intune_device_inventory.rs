@@ -1,7 +1,7 @@
 use cmtraceopen_parser::{
     intune::device::windows::inventory::{
         detect_dialect, frame_logical_records, parse_content, parse_lines,
-        DeviceInventoryLogDialect,
+        DeviceInventoryLogDialect, LogicalRecordSegment, MAX_LOGICAL_RECORD_BYTES,
     },
     models::log_entry::{
         LogEntry, LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
@@ -394,7 +394,11 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
     let next_header = "7/30/2026 6:00:55 AM [Warning] Second record.";
     let whole_file_content = format!("{header}\n{continuation}\n{next_header}");
 
-    let first = frame_logical_records(DeviceInventoryLogDialect::Harvester, None, &[header], 1024);
+    let first = frame_logical_records(
+        DeviceInventoryLogDialect::Harvester,
+        None,
+        &[LogicalRecordSegment::LineStart(header)],
+    );
     assert!(
         first.completed_records.is_empty(),
         "a harvester header must stay pending until its continuations are known"
@@ -403,8 +407,10 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
     let second = frame_logical_records(
         DeviceInventoryLogDialect::Harvester,
         first.pending_record,
-        &[continuation, next_header],
-        1024,
+        &[
+            LogicalRecordSegment::LineStart(continuation),
+            LogicalRecordSegment::LineStart(next_header),
+        ],
     );
 
     // Each framed record is parsed on its own, exactly as tailing parses it.
@@ -441,6 +447,174 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
         incremental[0].1,
         "First recognized record.\ntrailing continuation"
     );
+}
+
+#[test]
+fn logical_record_limit_is_exact_and_lossless() {
+    let header = "7/30/2026 6:00:54 AM [Information] bounded:";
+    let exact_padding = "x".repeat(MAX_LOGICAL_RECORD_BYTES - header.len() - 1);
+    let exact_text = format!("{header}\n{exact_padding}");
+    let exact = frame_logical_records(
+        DeviceInventoryLogDialect::Harvester,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&exact_padding),
+        ],
+    );
+
+    assert!(exact.completed_records.is_empty());
+    assert_eq!(exact.pending_record.as_deref(), Some(exact_text.as_str()));
+    assert_eq!(
+        exact.pending_record.as_ref().unwrap().len(),
+        MAX_LOGICAL_RECORD_BYTES
+    );
+    assert_eq!(exact.overflow_count, 0);
+
+    let overflow_padding = format!("{exact_padding}Z");
+    let overflow_text = format!("{header}\n{overflow_padding}");
+    let overflow = frame_logical_records(
+        DeviceInventoryLogDialect::Harvester,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&overflow_padding),
+        ],
+    )
+    .flush_pending();
+    let chunks: Vec<&str> = overflow
+        .completed_records
+        .iter()
+        .map(|record| record.content.as_str())
+        .collect();
+
+    assert_eq!(overflow.overflow_count, 1);
+    assert!(chunks
+        .iter()
+        .all(|chunk| chunk.len() <= MAX_LOGICAL_RECORD_BYTES));
+    assert_eq!(chunks.concat(), overflow_text);
+    assert!(chunks.concat().ends_with('Z'));
+}
+
+#[test]
+fn logical_record_split_is_utf8_safe_and_preserves_every_byte() {
+    let header = "[Thu Jul 30 13:05:01 2026][8604] - UTF-8 boundary:";
+    let bytes_before_emoji = MAX_LOGICAL_RECORD_BYTES - 1;
+    let padding = "x".repeat(bytes_before_emoji - header.len() - 1);
+    let continuation = format!("{padding}🧪TAIL-SENTINEL");
+    let original = format!("{header}\n{continuation}");
+    let framed = frame_logical_records(
+        DeviceInventoryLogDialect::InventoryAdaptor,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&continuation),
+        ],
+    )
+    .flush_pending();
+    let chunks: Vec<&str> = framed
+        .completed_records
+        .iter()
+        .map(|record| record.content.as_str())
+        .collect();
+
+    assert_eq!(framed.overflow_count, 1);
+    assert!(chunks
+        .iter()
+        .all(|chunk| chunk.len() <= MAX_LOGICAL_RECORD_BYTES));
+    assert_eq!(chunks.concat().as_bytes(), original.as_bytes());
+    assert!(chunks.concat().ends_with("🧪TAIL-SENTINEL"));
+}
+
+#[test]
+fn every_dialect_bounds_oversized_single_lines_and_keeps_parse_entry_points_equal() {
+    let cases = [
+        (
+            DeviceInventoryLogDialect::Harvester,
+            "7/30/2026 6:00:54 AM [Error] HARVESTER-START",
+            Severity::Error,
+        ),
+        (
+            DeviceInventoryLogDialect::InventoryAdaptor,
+            "[Thu Jul 30 13:05:01 2026][8604] - ADAPTOR-START",
+            Severity::Info,
+        ),
+        (
+            DeviceInventoryLogDialect::RotationFailure,
+            "2026-07-30T13:05:01.1234567-04:00 Failed to rotate ROTATION-START",
+            Severity::Error,
+        ),
+    ];
+
+    for (dialect, header, expected_severity) in cases {
+        let oversized = format!(
+            "MULTILINE-START-{}🧪-{}-TAIL-SENTINEL",
+            "x".repeat(MAX_LOGICAL_RECORD_BYTES),
+            match dialect {
+                DeviceInventoryLogDialect::Harvester => "HARVESTER",
+                DeviceInventoryLogDialect::InventoryAdaptor => "ADAPTOR",
+                DeviceInventoryLogDialect::RotationFailure => "ROTATION",
+            }
+        );
+        let next_header = match dialect {
+            DeviceInventoryLogDialect::Harvester => "7/30/2026 6:00:55 AM [Warning] NEXT-RECORD",
+            DeviceInventoryLogDialect::InventoryAdaptor => {
+                "[Thu Jul 30 13:05:02 2026][8604] - NEXT-RECORD"
+            }
+            DeviceInventoryLogDialect::RotationFailure => {
+                "2026-07-30T13:05:02.1234567-04:00 NEXT-RECORD"
+            }
+        };
+        let content = format!("{header}\n{oversized}\n{next_header}");
+        let lines: Vec<&str> = content.lines().collect();
+        let (from_content, content_errors) = parse_content("Device.log", &content, dialect);
+        let (from_lines, line_errors) = parse_lines("Device.log", &lines, dialect);
+
+        assert_eq!(content_errors, 1, "unexpected error count for {dialect:?}");
+        assert_eq!(content_errors, line_errors);
+        assert_eq!(projection(&from_content), projection(&from_lines));
+        assert_eq!(from_content[0].line_number, 1);
+        assert_eq!(from_content[0].severity, expected_severity);
+        assert_eq!(from_content.last().unwrap().line_number, 3);
+        assert!(from_content
+            .iter()
+            .any(|entry| entry.message.contains("TAIL-SENTINEL")));
+        assert!(from_content
+            .iter()
+            .all(|entry| entry.message.len() <= MAX_LOGICAL_RECORD_BYTES));
+    }
+}
+
+#[test]
+fn framing_never_builds_an_oversized_pending_record_before_splitting() {
+    let header = "[Thu Jul 30 13:05:01 2026][8604] - PEAK-START";
+    let continuation = format!(
+        "HUGE-LINE-START-{}🧪-HUGE-LINE-TAIL",
+        "x".repeat(MAX_LOGICAL_RECORD_BYTES * 3)
+    );
+    let original = format!("{header}\n{continuation}");
+    let framed = frame_logical_records(
+        DeviceInventoryLogDialect::InventoryAdaptor,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&continuation),
+        ],
+    )
+    .flush_pending();
+    let reconstructed = framed
+        .completed_records
+        .iter()
+        .map(|record| record.content.as_str())
+        .collect::<String>();
+
+    assert!(framed.max_pending_bytes_observed <= MAX_LOGICAL_RECORD_BYTES);
+    assert!(framed
+        .completed_records
+        .iter()
+        .all(|record| record.content.len() <= MAX_LOGICAL_RECORD_BYTES));
+    assert_eq!(reconstructed.as_bytes(), original.as_bytes());
+    assert!(reconstructed.ends_with("🧪-HUGE-LINE-TAIL"));
 }
 
 /// Compare entries by the fields the parse contract owns.
