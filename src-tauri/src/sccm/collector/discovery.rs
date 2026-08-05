@@ -273,7 +273,7 @@ fn apply_cim_service_facts(
     }
 }
 
-#[cfg(any(test, target_os = "windows"))]
+#[cfg(test)]
 fn client_root_from_service_output(output: &[u8]) -> Option<std::path::PathBuf> {
     let facts = serde_json::from_slice::<CimServiceFacts>(output).ok()?;
     let facts = match facts {
