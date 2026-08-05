@@ -6,7 +6,9 @@ use std::path::{Component, Path};
 use chrono::DateTime;
 use cmtraceopen_parser::sccm::{
     assess_client_intake, SccmArtifact, SccmClientIntakeArtifact, SccmClientIntakeBundle,
-    SccmClientIntakeCaptureGap, SccmRole, SccmRotation, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    SccmClientIntakeCaptureGap, SccmRole, SccmRotation, SccmTaskSequencePathClass,
+    SccmTaskSequenceProvenance, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    SCCM_TASK_SEQUENCE_CLIENT_PATH_EVIDENCE_TOKEN, SCCM_TASK_SEQUENCE_PROVENANCE_VERSION,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -120,6 +122,7 @@ fn manifest_to_client_intake_bundle(
             path_fingerprint: source.path_fingerprint.clone(),
             rotation_lineage: source.rotation_lineage.clone(),
             relative_path: source.relative_path.clone(),
+            task_sequence_provenance: source.task_sequence_provenance.clone(),
             fragment_complete: Some(source.fragment_complete),
             declared_byte_length: None,
             content_sha256: None,
@@ -279,6 +282,7 @@ fn validate_native_manifest_structure(manifest: &SccmBundleManifestV1) -> Result
     let mut artifact_ids = BTreeSet::new();
     let mut relative_paths = BTreeSet::new();
     let mut lineage_bindings = BTreeMap::<String, (String, String)>::new();
+    let mut task_sequence_relocation_bindings = BTreeMap::<(String, u32), String>::new();
     for artifact in &manifest.artifacts {
         validate_native_artifact(manifest, artifact)?;
         if !artifact_ids.insert(artifact.artifact_id.to_ascii_lowercase()) {
@@ -302,6 +306,16 @@ fn validate_native_manifest_structure(manifest: &SccmBundleManifestV1) -> Result
                 &canonical_basename(&artifact.basename),
                 fingerprint,
                 "SCCM rotation lineage crosses physical sources",
+            )?;
+        }
+        if let (Some(provenance), Some(fingerprint)) = (
+            &artifact.task_sequence_provenance,
+            &artifact.path_fingerprint,
+        ) {
+            bind_task_sequence_relocation(
+                &mut task_sequence_relocation_bindings,
+                provenance,
+                fingerprint,
             )?;
         }
     }
@@ -336,6 +350,26 @@ fn validate_native_manifest_structure(manifest: &SccmBundleManifestV1) -> Result
     {
         return Err(AppError::InvalidInput(
             "SCCM manifest capture gaps are not in deterministic order".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn bind_task_sequence_relocation(
+    bindings: &mut BTreeMap<(String, u32), String>,
+    provenance: &SccmTaskSequenceProvenance,
+    fingerprint: &str,
+) -> Result<(), AppError> {
+    let key = (
+        provenance.relocation_lineage.clone(),
+        provenance.relocation_ordinal,
+    );
+    if bindings
+        .insert(key, fingerprint.to_owned())
+        .is_some_and(|existing| existing != fingerprint)
+    {
+        return Err(AppError::InvalidInput(
+            "SCCM Task Sequence relocation crosses physical sources".to_owned(),
         ));
     }
     Ok(())
@@ -400,6 +434,7 @@ fn validate_native_artifact(
             ));
         }
         validate_bound_provenance(artifact, &canonical_basename)?;
+        validate_native_task_sequence_provenance(artifact, &canonical_basename)?;
         let fingerprint = artifact
             .path_fingerprint
             .as_deref()
@@ -439,6 +474,11 @@ fn validate_native_artifact(
             ));
         }
     } else {
+        if artifact.task_sequence_provenance.is_some() {
+            return Err(AppError::InvalidInput(
+                "nonphysical SCCM coverage marker declares Task Sequence provenance".to_owned(),
+            ));
+        }
         if artifact.relative_path.is_some()
             || artifact.bytes_copied != 0
             || artifact.limit_applied.is_some()
@@ -464,6 +504,43 @@ fn validate_native_artifact(
                 "SCCM coverage marker identity is not canonical".to_owned(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_native_task_sequence_provenance(
+    artifact: &SccmManifestArtifact,
+    canonical_basename: &str,
+) -> Result<(), AppError> {
+    if canonical_basename != "smsts.log" {
+        return if artifact.task_sequence_provenance.is_none() {
+            Ok(())
+        } else {
+            Err(AppError::InvalidInput(
+                "non-Task-Sequence SCCM artifact declares Task Sequence provenance".to_owned(),
+            ))
+        };
+    }
+
+    let provenance = artifact.task_sequence_provenance.as_ref().ok_or_else(|| {
+        AppError::InvalidInput("physical Task Sequence artifact lacks provenance".to_owned())
+    })?;
+    let rotation_lineage = required_provenance(&artifact.rotation_lineage)?;
+    let lineage_digest = rotation_lineage
+        .strip_prefix("cmtraceopen.lineage.sha256.v1:")
+        .ok_or_else(|| AppError::InvalidInput("SCCM source provenance is malformed".to_owned()))?;
+    let expected_relocation_lineage =
+        format!("cmtraceopen.task-sequence.relocation.sha256.v1:{lineage_digest}");
+    if provenance.version != SCCM_TASK_SEQUENCE_PROVENANCE_VERSION
+        || provenance.path_class != SccmTaskSequencePathClass::Client
+        || provenance.smsts_log_path_evidence.as_deref()
+            != Some(SCCM_TASK_SEQUENCE_CLIENT_PATH_EVIDENCE_TOKEN)
+        || provenance.relocation_lineage != expected_relocation_lineage
+        || provenance.relocation_ordinal != 0
+    {
+        return Err(AppError::InvalidInput(
+            "SCCM Task Sequence provenance is malformed".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -868,6 +945,7 @@ fn read_legacy_client_intake_bundle(
             path_fingerprint: None,
             rotation_lineage: None,
             relative_path: None,
+            task_sequence_provenance: None,
             fragment_complete: Some(false),
             declared_byte_length: None,
             content_sha256: None,
@@ -939,6 +1017,7 @@ fn legacy_unscoped_artifact(
         root_handle: None,
         path_fingerprint: None,
         rotation_lineage: None,
+        task_sequence_provenance: None,
         relative_path: None,
         basename: format!("sccm-unknown-v1-sha256-{digest}.log"),
         rotation: SccmRotation::Current,

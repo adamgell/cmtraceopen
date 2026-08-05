@@ -34,6 +34,9 @@ const MAX_PATH_IDENTITY_CHARS: usize = 512;
 pub const SCCM_TASK_SEQUENCE_PROVENANCE_VERSION: u16 = 1;
 pub const MAX_SCCM_TASK_SEQUENCE_PATH_EVIDENCE_CHARS: usize = 256;
 pub const MAX_SCCM_TASK_SEQUENCE_RELOCATION_LINEAGE_CHARS: usize = 128;
+/// Closed token for a native client-side `smsts.log` location. It conveys only
+/// the reviewed path class, never a raw machine path.
+pub const SCCM_TASK_SEQUENCE_CLIENT_PATH_EVIDENCE_TOKEN: &str = "synthetic:smsts-path:client";
 const MAX_SYNTHETIC_FINGERPRINT_TOKENS: usize = 10;
 const NATIVE_ARTIFACT_ID_PREFIX_V1: &str = "sccm-artifact:v1:sha256:";
 const OPAQUE_UNSUPPORTED_BASENAME_PREFIX_V1: &str = "sccm-unknown-v1-sha256-";
@@ -2053,6 +2056,9 @@ fn is_safe_task_sequence_relative_path(
 ) -> bool {
     let (path_class, root, rotation_segment, basename) = match body {
         [_, path_class, basename] => (*path_class, None, None, *basename),
+        [_, root, rotation_segment, basename] if is_safe_root_path_segment(root) => {
+            ("client", Some(*root), Some(*rotation_segment), *basename)
+        }
         [_, path_class, rotation_segment, basename] => {
             (*path_class, None, Some(*rotation_segment), *basename)
         }
@@ -2082,6 +2088,9 @@ pub(super) fn task_sequence_path_class_for_relative_path(
         return None;
     };
     match body {
+        ["client-task-sequence-smsts", root, _, _] if is_safe_root_path_segment(root) => {
+            Some(SccmTaskSequencePathClass::Client)
+        }
         ["client-task-sequence-smsts", path_class, ..] => task_sequence_path_class(path_class),
         _ => None,
     }
@@ -2149,7 +2158,7 @@ fn task_sequence_path_class_for_evidence(value: &str) -> Option<SccmTaskSequence
         | "SYNTHETIC://client/CCM/Logs/smstslog/smsts.log"
         | "SYNTHETIC://client/root-a/CCM/Logs/smstslog/smsts.log"
         | "SYNTHETIC://client/root-b/CCM/Logs/smstslog/smsts.log"
-        | "synthetic:smsts-path:client" => Some(SccmTaskSequencePathClass::Client),
+        | SCCM_TASK_SEQUENCE_CLIENT_PATH_EVIDENCE_TOKEN => Some(SccmTaskSequencePathClass::Client),
         "SYNTHETIC://unknown/observed/smsts.log" => Some(SccmTaskSequencePathClass::Unknown),
         "synthetic:smsts-path:unknown" => Some(SccmTaskSequencePathClass::Unknown),
         _ => None,
