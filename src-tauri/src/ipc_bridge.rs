@@ -183,8 +183,11 @@ fn dispatch(body: &str, state: &Arc<BridgeState>) -> String {
             err_json("ESP Graph commands are unavailable through the debug IPC bridge")
         }
 
-        "graph_request_missing_permissions" => {
-            err_json("Graph permission upgrade is unavailable through the debug IPC bridge")
+        "graph_authenticate"
+        | "graph_probe_capability"
+        | "graph_cancel_authentication"
+        | "graph_request_missing_permissions" => {
+            err_json("Microsoft Graph sign-in is unavailable through the debug IPC bridge")
         }
 
         #[cfg(feature = "esp-diagnostics")]
@@ -333,7 +336,7 @@ mod tests {
             let value: serde_json::Value = serde_json::from_str(&response).unwrap();
             assert_eq!(
                 value["error"],
-                "Graph permission upgrade is unavailable through the debug IPC bridge"
+                "Microsoft Graph sign-in is unavailable through the debug IPC bridge"
             );
             assert!(value.get("result").is_none());
         }

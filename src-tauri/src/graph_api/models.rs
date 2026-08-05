@@ -70,7 +70,10 @@ pub const GRAPH_WAM_PERMISSION_REQUEST: GraphWamPermissionRequestContract =
         properties: &[
             ("wam_compat", "2.0"),
             ("prompt", "consent"),
-            ("authority", "https://login.microsoftonline.com/common/"),
+            (
+                "authority",
+                "https://login.microsoftonline.com/organizations/",
+            ),
             ("validateAuthority", "yes"),
         ],
     };
@@ -145,7 +148,48 @@ pub struct GraphAuthStatus {
     pub missing_scopes: Vec<String>,
     pub expires_at: Option<u64>,
     pub capabilities: GraphAuthCapabilities,
-    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphHostCapabilityKind {
+    Available,
+    PersonalAccountOnly,
+    NoOrganizationalAccount,
+    ProviderUnavailable,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphHostCapability {
+    pub kind: GraphHostCapabilityKind,
+}
+
+impl GraphHostCapability {
+    pub const fn new(kind: GraphHostCapabilityKind) -> Self {
+        Self { kind }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphAuthAttemptOutcome {
+    Connected,
+    Cancelled,
+    TimedOut,
+    Unavailable,
+    Failed,
+    Stale,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphAuthAttemptResult {
+    pub outcome: GraphAuthAttemptOutcome,
+    pub status: GraphAuthStatus,
+    pub capability: GraphHostCapability,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -154,6 +198,7 @@ pub enum GraphPermissionUpgradeOutcome {
     Upgraded,
     Unchanged,
     Cancelled,
+    TimedOut,
     Denied,
     Failed,
     Stale,
@@ -242,7 +287,7 @@ pub fn classify_graph_permission_candidate(
 }
 
 impl GraphAuthStatus {
-    pub fn disconnected(error: Option<String>) -> Self {
+    pub fn disconnected() -> Self {
         Self {
             is_authenticated: false,
             user_principal_name: None,
@@ -255,8 +300,34 @@ impl GraphAuthStatus {
                 .collect(),
             expires_at: None,
             capabilities: GraphAuthCapabilities::default(),
-            error,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphTokenProjectionError {
+    MalformedToken,
+    MissingAudience,
+    InvalidAudience,
+    MissingExpiry,
+    ExpiredToken,
+    MissingTenant,
+    TenantMismatch,
+    MissingScopeClaim,
+}
+
+impl fmt::Display for GraphTokenProjectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::MalformedToken => "MalformedToken",
+            Self::MissingAudience => "MissingAudience",
+            Self::InvalidAudience => "InvalidAudience",
+            Self::MissingExpiry => "MissingExpiry",
+            Self::ExpiredToken => "ExpiredToken",
+            Self::MissingTenant => "MissingTenant",
+            Self::TenantMismatch => "TenantMismatch",
+            Self::MissingScopeClaim => "MissingScopeClaim",
+        })
     }
 }
 
@@ -270,49 +341,47 @@ pub fn project_graph_auth_status(
     user_principal_name: Option<&str>,
     wam_tenant_id: Option<&str>,
     now_unix: u64,
-) -> GraphAuthStatus {
-    let reject = |code: &str| GraphAuthStatus::disconnected(Some(code.to_string()));
-
+) -> Result<GraphAuthStatus, GraphTokenProjectionError> {
     if access_token.is_empty() || access_token.len() > MAX_ACCESS_TOKEN_BYTES {
-        return reject("MalformedToken");
+        return Err(GraphTokenProjectionError::MalformedToken);
     }
 
     let mut segments = access_token.split('.');
     let Some(header) = segments.next() else {
-        return reject("MalformedToken");
+        return Err(GraphTokenProjectionError::MalformedToken);
     };
     let Some(payload) = segments.next() else {
-        return reject("MalformedToken");
+        return Err(GraphTokenProjectionError::MalformedToken);
     };
     let Some(signature) = segments.next() else {
-        return reject("MalformedToken");
+        return Err(GraphTokenProjectionError::MalformedToken);
     };
     if header.is_empty() || payload.is_empty() || signature.is_empty() || segments.next().is_some()
     {
-        return reject("MalformedToken");
+        return Err(GraphTokenProjectionError::MalformedToken);
     }
 
     let Ok(payload) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload) else {
-        return reject("MalformedToken");
+        return Err(GraphTokenProjectionError::MalformedToken);
     };
     let Ok(claims) = serde_json::from_slice::<serde_json::Value>(&payload) else {
-        return reject("MalformedToken");
+        return Err(GraphTokenProjectionError::MalformedToken);
     };
 
     let Some(audience) = claims.get("aud").and_then(serde_json::Value::as_str) else {
-        return reject("MissingAudience");
+        return Err(GraphTokenProjectionError::MissingAudience);
     };
     if audience.trim_end_matches('/') != GRAPH_URL_AUDIENCE
         && !audience.eq_ignore_ascii_case(GRAPH_APP_ID_AUDIENCE)
     {
-        return reject("InvalidAudience");
+        return Err(GraphTokenProjectionError::InvalidAudience);
     }
 
     let Some(expires_at) = claims.get("exp").and_then(serde_json::Value::as_u64) else {
-        return reject("MissingExpiry");
+        return Err(GraphTokenProjectionError::MissingExpiry);
     };
     if expires_at <= now_unix {
-        return reject("ExpiredToken");
+        return Err(GraphTokenProjectionError::ExpiredToken);
     }
 
     let Some(token_tenant_id) = claims
@@ -320,13 +389,13 @@ pub fn project_graph_auth_status(
         .and_then(serde_json::Value::as_str)
         .filter(|tenant| !tenant.is_empty())
     else {
-        return reject("MissingTenant");
+        return Err(GraphTokenProjectionError::MissingTenant);
     };
     if wam_tenant_id
         .filter(|tenant| !tenant.is_empty())
         .is_some_and(|tenant| !tenant.eq_ignore_ascii_case(token_tenant_id))
     {
-        return reject("TenantMismatch");
+        return Err(GraphTokenProjectionError::TenantMismatch);
     }
 
     // Authoritative account identity. Present in every authenticated Entra
@@ -340,7 +409,7 @@ pub fn project_graph_auth_status(
         .map(str::to_string);
 
     let Some(scope_claim) = claims.get("scp").and_then(serde_json::Value::as_str) else {
-        return reject("MissingScopeClaim");
+        return Err(GraphTokenProjectionError::MissingScopeClaim);
     };
     let token_scopes: Vec<&str> = scope_claim.split_whitespace().collect();
     let granted_scopes: Vec<String> = GRAPH_DELEGATED_SCOPES
@@ -363,7 +432,7 @@ pub fn project_graph_auth_status(
         .collect();
     let capabilities = GraphAuthCapabilities::from_granted_scopes(&granted_scopes);
 
-    GraphAuthStatus {
+    Ok(GraphAuthStatus {
         is_authenticated: true,
         user_principal_name: user_principal_name.map(str::to_string),
         object_id,
@@ -372,8 +441,7 @@ pub fn project_graph_auth_status(
         missing_scopes,
         expires_at: Some(expires_at),
         capabilities,
-        error: None,
-    }
+    })
 }
 
 /// A resolved app from Graph API.

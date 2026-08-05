@@ -12,7 +12,8 @@ use app_lib::graph_api::client::{
 };
 use app_lib::graph_api::models::{
     classify_graph_permission_candidate, normalize_graph_guid, project_graph_auth_status,
-    GraphAppInfo, GraphAuthCapabilities, GraphAuthStatus, GraphHttpMethod,
+    GraphAppInfo, GraphAuthAttemptOutcome, GraphAuthAttemptResult, GraphAuthCapabilities,
+    GraphAuthStatus, GraphHostCapability, GraphHostCapabilityKind, GraphHttpMethod,
     GraphPermissionCandidateDecision, GraphPermissionUpgradeOutcome, GraphPermissionUpgradeResult,
     GraphResolutionResult, GraphTransportRequest, GraphTransportResponse, GRAPH_DELEGATED_SCOPES,
     GRAPH_SCOPE_REQUEST, GRAPH_WAM_PERMISSION_REQUEST, GRAPH_WAM_PERMISSION_SCOPE_REQUEST,
@@ -88,7 +89,6 @@ fn graph_permission_status_with_oid(
             .collect(),
         expires_at: Some(2_000_000_000),
         capabilities: GraphAuthCapabilities::default(),
-        error: None,
     }
 }
 
@@ -98,6 +98,7 @@ fn graph_permission_upgrade_outcomes_serialize_to_camel_case_wire_values() {
         (GraphPermissionUpgradeOutcome::Upgraded, "\"upgraded\""),
         (GraphPermissionUpgradeOutcome::Unchanged, "\"unchanged\""),
         (GraphPermissionUpgradeOutcome::Cancelled, "\"cancelled\""),
+        (GraphPermissionUpgradeOutcome::TimedOut, "\"timedOut\""),
         (GraphPermissionUpgradeOutcome::Denied, "\"denied\""),
         (GraphPermissionUpgradeOutcome::Failed, "\"failed\""),
         (GraphPermissionUpgradeOutcome::Stale, "\"stale\""),
@@ -106,6 +107,40 @@ fn graph_permission_upgrade_outcomes_serialize_to_camel_case_wire_values() {
             serde_json::to_string(&outcome).expect("outcome should serialize"),
             expected
         );
+    }
+}
+
+#[test]
+fn graph_auth_attempt_contract_serializes_typed_outcomes_without_credentials() {
+    for (outcome, expected) in [
+        (GraphAuthAttemptOutcome::Connected, "\"connected\""),
+        (GraphAuthAttemptOutcome::Cancelled, "\"cancelled\""),
+        (GraphAuthAttemptOutcome::TimedOut, "\"timedOut\""),
+        (GraphAuthAttemptOutcome::Unavailable, "\"unavailable\""),
+        (GraphAuthAttemptOutcome::Failed, "\"failed\""),
+        (GraphAuthAttemptOutcome::Stale, "\"stale\""),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&outcome).expect("outcome should serialize"),
+            expected
+        );
+    }
+
+    let result = GraphAuthAttemptResult {
+        outcome: GraphAuthAttemptOutcome::Unavailable,
+        status: GraphAuthStatus::disconnected(),
+        capability: GraphHostCapability {
+            kind: GraphHostCapabilityKind::PersonalAccountOnly,
+        },
+        message: Some("Microsoft Graph requires a Windows work or school account.".to_string()),
+    };
+    let json = serde_json::to_value(&result).expect("attempt should serialize");
+    assert_eq!(json["outcome"], "unavailable");
+    assert_eq!(json["capability"]["kind"], "personalAccountOnly");
+    assert_eq!(json.as_object().expect("attempt object").len(), 4);
+    let rendered = format!("{json} {result:?}");
+    for forbidden in ["accessToken", "access_token", "Bearer"] {
+        assert!(!rendered.contains(forbidden), "attempt leaked {forbidden}");
     }
 }
 
@@ -138,7 +173,7 @@ fn graph_permission_upgrade_result_is_a_token_free_three_field_contract() {
 }
 
 #[test]
-fn graph_permission_upgrade_command_runs_wam_on_an_initialized_blocking_worker() {
+fn graph_permission_upgrade_command_runs_owned_wam_on_a_blocking_worker() {
     let command_source = include_str!("../src/commands/graph_api.rs");
     let command_start = command_source
         .find("pub async fn graph_request_missing_permissions")
@@ -151,21 +186,21 @@ fn graph_permission_upgrade_command_runs_wam_on_an_initialized_blocking_worker()
 
     assert!(command.contains("state.inner().clone()"));
     assert!(command.contains("tauri::async_runtime::spawn_blocking"));
-    assert!(command.contains("graph_api::request_missing_permissions_on_initialized_worker"));
+    assert!(command.contains("graph_api::request_missing_permissions(&state, hwnd, &lease)"));
 
     let graph_source = include_str!("../src/graph_api.rs");
     let permission_entry = source_section(
         graph_source,
-        "pub fn request_missing_permissions_on_initialized_worker(",
+        "pub fn request_missing_permissions(",
         "/// Get current auth status",
     );
     assert!(permission_entry
-        .contains("wam::acquire_permission_consent_token_on_initialized_worker(hwnd_raw)"));
-    assert!(!permission_entry.contains("wam::acquire_token(hwnd_raw)"));
+        .contains("wam::acquire_permission_consent_token(hwnd_raw, deadline, lease)"));
+    assert!(!permission_entry.contains("wam::acquire_token("));
 
     let permission_worker = source_section(
         graph_source,
-        "pub fn acquire_permission_consent_token_on_initialized_worker(",
+        "pub fn acquire_permission_consent_token(",
         "pub fn acquire_token(",
     );
     assert!(permission_worker.contains("WinRtApartment::initialize()"));
@@ -244,9 +279,10 @@ fn graph_permission_upgrade_command_runs_wam_on_an_initialized_blocking_worker()
     let authenticate = source_section(
         graph_source,
         "pub fn authenticate(",
-        "pub fn request_missing_permissions_on_initialized_worker(",
+        "pub fn request_missing_permissions(",
     );
-    assert!(authenticate.contains("match wam::acquire_token(hwnd_raw)"));
+    assert!(authenticate.contains("match wam::acquire_token(hwnd_raw, deadline, lease)"));
+    assert!(authenticate.contains("probe_host_capability_for_authentication(deadline, lease)"));
     assert!(!authenticate.contains("acquire_permission_consent_token"));
 }
 
@@ -412,7 +448,8 @@ fn graph_auth_status_projects_object_id_from_oid_claim() {
         Some("alice@contoso.example"),
         Some("tenant-a"),
         1_900_000_000,
-    );
+    )
+    .expect("valid Graph token");
     assert!(status.is_authenticated);
     assert_eq!(status.object_id.as_deref(), Some("OID-ALICE"));
 }
@@ -562,7 +599,6 @@ fn platform_boundary_transport_dtos_round_trip_off_windows() {
         missing_scopes: Vec::new(),
         expires_at: Some(2_000_000_000),
         capabilities: GraphAuthCapabilities::all(),
-        error: None,
     };
     let status_json = serde_json::to_string(&status).expect("status should serialize");
     let decoded_status: GraphAuthStatus =
@@ -628,7 +664,10 @@ fn graph_wam_permission_request_requires_explicit_v2_consent() {
         &[
             ("wam_compat", "2.0"),
             ("prompt", "consent"),
-            ("authority", "https://login.microsoftonline.com/common/"),
+            (
+                "authority",
+                "https://login.microsoftonline.com/organizations/",
+            ),
             ("validateAuthority", "yes")
         ]
     );
@@ -654,15 +693,14 @@ fn graph_auth_status_reports_full_and_app_only_capabilities() {
         Some("user@contoso.example"),
         Some("tenant-a"),
         1_900_000_000,
-    );
+    )
+    .expect("valid full Graph token");
     assert!(status.is_authenticated);
     assert_eq!(status.tenant_id.as_deref(), Some("tenant-a"));
     assert_eq!(status.expires_at, Some(2_000_000_000));
     assert_eq!(status.granted_scopes.len(), 5);
     assert!(status.missing_scopes.is_empty());
     assert_eq!(status.capabilities, GraphAuthCapabilities::all());
-    assert_eq!(status.error, None);
-
     let app_only = unsigned_token(serde_json::json!({
         "aud": "00000003-0000-0000-c000-000000000000",
         "tid": "tenant-a",
@@ -674,7 +712,8 @@ fn graph_auth_status_reports_full_and_app_only_capabilities() {
         Some("user@contoso.example"),
         Some("tenant-a"),
         1_900_000_000,
-    );
+    )
+    .expect("valid app-only Graph token");
     assert!(status.is_authenticated);
     assert!(status.capabilities.apps);
     assert!(!status.capabilities.managed_devices);
@@ -688,23 +727,14 @@ fn graph_auth_status_reports_full_and_app_only_capabilities() {
 #[test]
 fn graph_auth_status_rejects_expired_malformed_audience_and_tenant_claims() {
     let assert_rejected = |token: &str, wam_tenant: Option<&str>, expected: &str| {
-        let status = project_graph_auth_status(
+        let error = project_graph_auth_status(
             token,
             Some("user@contoso.example"),
             wam_tenant,
             1_900_000_000,
-        );
-        assert!(!status.is_authenticated);
-        assert!(
-            status
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains(expected)),
-            "unexpected status: {status:?}"
-        );
-        assert!(status.granted_scopes.is_empty());
-        assert_eq!(status.missing_scopes.len(), 5);
-        assert_eq!(status.capabilities, GraphAuthCapabilities::default());
+        )
+        .expect_err("invalid Graph token should be rejected");
+        assert_eq!(error.to_string(), expected);
     };
 
     assert_rejected("not-a-jwt", Some("tenant-a"), "MalformedToken");

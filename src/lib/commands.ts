@@ -721,16 +721,48 @@ export interface GraphAuthCapabilities {
 export interface GraphAuthStatus {
   isAuthenticated: boolean;
   userPrincipalName: string | null;
+  objectId: string | null;
   tenantId: string | null;
   grantedScopes: string[];
   missingScopes: string[];
   expiresAt: number | null;
   capabilities: GraphAuthCapabilities;
-  error: string | null;
+}
+
+export type GraphHostCapabilityKind =
+  | "available"
+  | "personalAccountOnly"
+  | "noOrganizationalAccount"
+  | "providerUnavailable"
+  | "unknown";
+
+export interface GraphHostCapability {
+  kind: GraphHostCapabilityKind;
+}
+
+export type GraphAuthAttemptOutcome =
+  | "connected"
+  | "cancelled"
+  | "timedOut"
+  | "unavailable"
+  | "failed"
+  | "stale";
+
+export interface GraphAuthAttemptResult {
+  outcome: GraphAuthAttemptOutcome;
+  status: GraphAuthStatus;
+  capability: GraphHostCapability;
+  message: string | null;
 }
 
 export type GraphPermissionUpgradeOutcome =
-  "upgraded" | "unchanged" | "cancelled" | "denied" | "failed" | "stale";
+  | "upgraded"
+  | "unchanged"
+  | "cancelled"
+  | "timedOut"
+  | "denied"
+  | "failed"
+  | "stale";
 
 export interface GraphPermissionUpgradeResult {
   outcome: GraphPermissionUpgradeOutcome;
@@ -751,13 +783,30 @@ export interface GraphResolutionResult {
   errors: string[];
 }
 
-export async function graphAuthenticate(): Promise<GraphAuthStatus> {
-  return invokeCommand<GraphAuthStatus>("graph_authenticate");
+export async function graphProbeCapability(): Promise<GraphHostCapability> {
+  return invokeCommand<GraphHostCapability>("graph_probe_capability");
 }
 
-export async function graphRequestMissingPermissions(): Promise<GraphPermissionUpgradeResult> {
+export async function graphAuthenticate(
+  requestId: string,
+): Promise<GraphAuthAttemptResult> {
+  return invokeCommand<GraphAuthAttemptResult>("graph_authenticate", {
+    requestId,
+  });
+}
+
+export async function graphCancelAuthentication(
+  requestId: string,
+): Promise<boolean> {
+  return invokeCommand<boolean>("graph_cancel_authentication", { requestId });
+}
+
+export async function graphRequestMissingPermissions(
+  requestId: string,
+): Promise<GraphPermissionUpgradeResult> {
   return invokeCommand<GraphPermissionUpgradeResult>(
     "graph_request_missing_permissions",
+    { requestId },
   );
 }
 

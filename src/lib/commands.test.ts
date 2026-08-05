@@ -5,6 +5,9 @@ import {
   discoverSccmEnvironment,
   getSafeErrorMessage,
   graphGetAuthStatus,
+  graphAuthenticate,
+  graphCancelAuthentication,
+  graphProbeCapability,
   graphRequestMissingPermissions,
   openLogFile,
   revealInFileManager,
@@ -117,6 +120,7 @@ describe("Graph permission upgrade IPC boundary", () => {
       status: {
         isAuthenticated: true,
         userPrincipalName: "admin@contoso.com",
+        objectId: "00000000-0000-0000-0000-0000000000a1",
         tenantId: "tenant-1",
         grantedScopes: ["DeviceManagementManagedDevices.Read.All"],
         missingScopes: [],
@@ -128,20 +132,43 @@ describe("Graph permission upgrade IPC boundary", () => {
           configuration: false,
           scripts: false,
         },
-        error: null,
       },
       message: null,
     };
     vi.mocked(invoke).mockResolvedValueOnce(result);
 
-    await expect(graphRequestMissingPermissions()).resolves.toBe(result);
+    await expect(
+      graphRequestMissingPermissions("permission-request-1"),
+    ).resolves.toBe(result);
 
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "graph_request_missing_permissions",
-      undefined,
+      { requestId: "permission-request-1" },
     );
+  });
+});
+
+describe("Graph authentication IPC boundary", () => {
+  it("passes request ownership through authenticate and cancellation", async () => {
+    const result = { outcome: "cancelled" };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce({ kind: "available" })
+      .mockResolvedValueOnce(result)
+      .mockResolvedValueOnce(true);
+
+    await expect(graphProbeCapability()).resolves.toEqual({ kind: "available" });
+    await expect(graphAuthenticate("auth-request-1")).resolves.toBe(result);
+    await expect(graphCancelAuthentication("auth-request-1")).resolves.toBe(true);
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "graph_probe_capability", undefined);
+    expect(invoke).toHaveBeenNthCalledWith(2, "graph_authenticate", {
+      requestId: "auth-request-1",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(3, "graph_cancel_authentication", {
+      requestId: "auth-request-1",
+    });
   });
 });
 
