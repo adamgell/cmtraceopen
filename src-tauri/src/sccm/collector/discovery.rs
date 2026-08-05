@@ -1,14 +1,13 @@
 use std::collections::BTreeSet;
 
 use super::{
-    normalize_public_discovery, role_key, PrivateSccmEnvironment, SccmCaptureRoot,
-    SccmDiscoveryFailure, SccmDiscoveryProvider, SccmEnvironmentDiscovery,
+    normalize_public_discovery, role_key, PrivateAdvancedSourceFact, PrivateSccmEnvironment,
+    SccmCaptureRoot, SccmDiscoveryFailure, SccmDiscoveryProvider, SccmEnvironmentDiscovery,
 };
 
 #[cfg(any(test, target_os = "windows"))]
 use super::{SccmDetectedRole, SccmDiscoveryBasis};
 use super::{SccmDiscoveryIssue, SccmDiscoveryIssueCode};
-#[cfg(any(test, target_os = "windows"))]
 use crate::sccm::SccmRole;
 
 #[cfg(any(test, target_os = "windows"))]
@@ -35,8 +34,38 @@ pub struct NativeDiscoveryProvider;
 
 impl SccmDiscoveryProvider for NativeDiscoveryProvider {
     fn discover(&self) -> Result<PrivateSccmEnvironment, SccmDiscoveryFailure> {
-        discover_native()
+        discover_native().map(assemble_native_environment)
     }
+}
+
+fn assemble_native_environment(mut environment: PrivateSccmEnvironment) -> PrivateSccmEnvironment {
+    normalize_private_roots(&mut environment.roots);
+    environment.advanced_source_facts.clear();
+
+    let management_point_observed = environment
+        .roles
+        .iter()
+        .any(|fact| fact.role == SccmRole::ManagementPoint);
+    if management_point_observed {
+        for root in environment
+            .roots
+            .iter()
+            .filter(|root| root.role == SccmRole::ManagementPoint)
+        {
+            environment
+                .advanced_source_facts
+                .push(PrivateAdvancedSourceFact {
+                    source_id: "advanced-client-notification-bgb".to_owned(),
+                    role_scope: "managementPoint".to_owned(),
+                    path_class: "configuredRoleLogRoot".to_owned(),
+                    root: root.path.clone(),
+                    source_version: environment.configmgr_version.clone(),
+                    pxe_enabled: false,
+                });
+        }
+    }
+
+    environment
 }
 
 pub fn discover_environment() -> Result<SccmEnvironmentDiscovery, SccmDiscoveryFailure> {
@@ -405,9 +434,148 @@ fn default_role_root(role: &SccmRole) -> Option<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::Instant;
 
     use super::*;
+    use crate::sccm::collector::{
+        advanced_source_contracts, advanced_source_options, capture_advanced_authorized,
+        SccmAdvancedCapabilityStore, SccmAdvancedCaptureAuthorizationRequest,
+        SccmAdvancedSourceAvailability,
+    };
+    fn observed_role(role: SccmRole) -> SccmDetectedRole {
+        SccmDetectedRole {
+            role,
+            basis: SccmDiscoveryBasis::Registry,
+        }
+    }
+
+    #[test]
+    fn production_assembly_derives_bgb_only_from_matching_management_point_role_and_root() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("BgbServer.log"), b"observed-bgb").unwrap();
+        let environment = assemble_native_environment(PrivateSccmEnvironment {
+            supported: true,
+            configmgr_version: Some("5.00.9141.1000".to_owned()),
+            roles: vec![observed_role(SccmRole::ManagementPoint)],
+            roots: vec![SccmCaptureRoot {
+                role: SccmRole::ManagementPoint,
+                path: root.path().to_owned(),
+            }],
+            ..PrivateSccmEnvironment::default()
+        });
+
+        assert_eq!(environment.advanced_source_facts.len(), 1);
+        assert_eq!(
+            environment.advanced_source_facts[0],
+            PrivateAdvancedSourceFact {
+                source_id: "advanced-client-notification-bgb".to_owned(),
+                role_scope: "managementPoint".to_owned(),
+                path_class: "configuredRoleLogRoot".to_owned(),
+                root: root.path().to_owned(),
+                source_version: Some("5.00.9141.1000".to_owned()),
+                pxe_enabled: false,
+            }
+        );
+
+        let options = advanced_source_options(&environment);
+        assert_eq!(
+            options
+                .iter()
+                .find(|option| option.source_id == "advanced-client-notification-bgb")
+                .unwrap()
+                .availability,
+            SccmAdvancedSourceAvailability::Observed
+        );
+        assert!(options
+            .iter()
+            .filter(|option| option.source_id != "advanced-client-notification-bgb")
+            .all(|option| {
+                option.availability == SccmAdvancedSourceAvailability::OperatorDeclaredCandidate
+            }));
+
+        let contract = advanced_source_contracts()
+            .iter()
+            .find(|contract| contract.source_id == "advanced-client-notification-bgb")
+            .unwrap();
+        let request = SccmAdvancedCaptureAuthorizationRequest {
+            card_id: contract.card_id.to_owned(),
+            card_version: contract.card_version.to_owned(),
+            source_id: contract.source_id.to_owned(),
+            role_scope: "managementPoint".to_owned(),
+            path_class: "configuredRoleLogRoot".to_owned(),
+            expected_source_version: environment.configmgr_version.clone(),
+            selected_root: root.path().to_string_lossy().into_owned(),
+        };
+        let now = Instant::now();
+        let mut store = SccmAdvancedCapabilityStore::default();
+        let capability = store.authorize(&environment, request, now).unwrap();
+        let authorization = store.consume(&capability.capability_handle, now).unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let bundle = output.path().join("bundle");
+        capture_advanced_authorized(authorization, &bundle).unwrap();
+        let manifest = fs::read_to_string(bundle.join("sccm-server-manifest.json")).unwrap();
+        assert!(manifest.contains("\"roleProvenance\": \"observed\""));
+    }
+
+    #[test]
+    fn production_assembly_requires_both_role_and_same_role_root() {
+        let root = tempfile::tempdir().unwrap();
+        for environment in [
+            PrivateSccmEnvironment {
+                supported: true,
+                roots: vec![SccmCaptureRoot {
+                    role: SccmRole::ManagementPoint,
+                    path: root.path().to_owned(),
+                }],
+                ..PrivateSccmEnvironment::default()
+            },
+            PrivateSccmEnvironment {
+                supported: true,
+                roles: vec![observed_role(SccmRole::ManagementPoint)],
+                ..PrivateSccmEnvironment::default()
+            },
+            PrivateSccmEnvironment {
+                supported: true,
+                roles: vec![observed_role(SccmRole::ManagementPoint)],
+                roots: vec![SccmCaptureRoot {
+                    role: SccmRole::SiteServer,
+                    path: root.path().to_owned(),
+                }],
+                ..PrivateSccmEnvironment::default()
+            },
+        ] {
+            assert!(assemble_native_environment(environment)
+                .advanced_source_facts
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn production_assembly_replaces_injected_or_tampered_advanced_facts() {
+        let root = tempfile::tempdir().unwrap();
+        let hostile = tempfile::tempdir().unwrap();
+        let environment = assemble_native_environment(PrivateSccmEnvironment {
+            supported: true,
+            roles: vec![observed_role(SccmRole::SiteServer)],
+            roots: vec![SccmCaptureRoot {
+                role: SccmRole::SiteServer,
+                path: root.path().to_owned(),
+            }],
+            advanced_source_facts: vec![PrivateAdvancedSourceFact {
+                source_id: "advanced-client-notification-bgb".to_owned(),
+                role_scope: "managementPoint".to_owned(),
+                path_class: "configuredRoleLogRoot".to_owned(),
+                root: hostile.path().to_owned(),
+                source_version: Some("forged".to_owned()),
+                pxe_enabled: true,
+            }],
+            ..PrivateSccmEnvironment::default()
+        });
+
+        assert!(environment.advanced_source_facts.is_empty());
+    }
 
     #[test]
     fn ccmexec_service_path_derives_one_sibling_logs_root() {

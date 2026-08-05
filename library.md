@@ -1,6 +1,7 @@
 # CMTrace Open — Workspace Library
 
 - IF integrating SCCM advanced capture PR #500 with current main → read [[docs/superpowers/plans/2026-08-05-sccm-advanced-capture-main-integration.md]]
+- IF reworking SCCM advanced capture PR #500 server-validation gates → read [[docs/superpowers/plans/2026-08-05-sccm-advanced-server-validation-rework.md]]
 - IF implementing or reviewing SCCM issue #409 server intake synthetic identity grammar → read [[docs/superpowers/plans/2026-08-05-sccm-409-server-intake-identity-grammar.md]]
 - IF implementing or reviewing SCCM issue #321 client policy production analysis → read [[docs/superpowers/plans/2026-08-04-sccm-321-policy-production.md]]
 - IF implementing or reviewing SCCM issue #333 client/server production correlation → read [[docs/superpowers/plans/2026-08-04-sccm-333-production-correlation.md]]

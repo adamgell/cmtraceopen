@@ -4,7 +4,8 @@ use std::time::Instant;
 use app_lib::sccm::collector::{
     advanced_source_contracts, capture_advanced_authorized, PrivateAdvancedSourceFact,
     PrivateSccmEnvironment, SccmAdvancedCapabilityStore, SccmAdvancedCaptureAuthorizationRequest,
-    SccmCaptureRoot, SccmDetectedRole, SccmDiscoveryBasis, ADVANCED_CAPTURE_BYTE_LIMIT,
+    SccmCaptureRoot, SccmCollectorError, SccmDetectedRole, SccmDiscoveryBasis,
+    ADVANCED_CAPTURE_BYTE_LIMIT,
 };
 use app_lib::sccm::{SccmCoverageState, SccmRole};
 
@@ -142,6 +143,34 @@ fn operator_declared_missing_candidate_is_unsupported_not_absent() {
     let manifest = fs::read_to_string(bundle.join("sccm-server-manifest.json")).unwrap();
     assert!(manifest.contains("\"captureState\": \"unsupported\""));
     assert!(!manifest.contains("\"captureState\": \"absent\""));
+}
+
+#[test]
+fn hard_link_to_an_external_source_is_rejected_without_copying_bytes() {
+    let external = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let external_file = external.path().join("CloudMgr.log");
+    fs::write(&external_file, b"external-must-not-ship").unwrap();
+    fs::hard_link(&external_file, source.path().join("CloudMgr.log")).unwrap();
+
+    let mut store = SccmAdvancedCapabilityStore::default();
+    let now = Instant::now();
+    let capability = store
+        .authorize(
+            &operator_environment(),
+            request(source.path().to_str().unwrap(), "advanced-cloud-manager"),
+            now,
+        )
+        .unwrap();
+    let authorization = store.consume(&capability.capability_handle, now).unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let bundle = output.path().join("bundle");
+
+    assert_eq!(
+        capture_advanced_authorized(authorization, &bundle),
+        Err(SccmCollectorError::AdvancedAuthorizationRejected)
+    );
+    assert!(!bundle.join("evidence").exists());
 }
 
 #[test]

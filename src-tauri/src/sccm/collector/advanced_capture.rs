@@ -940,12 +940,29 @@ fn prepare_bundle_root(bundle_root: &Path) -> Result<(), SccmCollectorError> {
     Ok(())
 }
 
+#[derive(Debug)]
 enum CopyAdvancedFailure {
     AccessDenied,
     Missing,
     BudgetExhausted,
     Unsafe,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceFileIdentity {
+    volume: u64,
+    file: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpenedSourceFacts {
+    identity: SourceFileIdentity,
+    final_path: PathBuf,
+    len: u64,
+    change_marker: u128,
+    link_count: u64,
+    reparse_point: bool,
 }
 
 fn copy_exact_source(
@@ -964,21 +981,21 @@ fn copy_exact_source(
     {
         return Err(CopyAdvancedFailure::Unsafe);
     }
-    if byte_limit == 0 && metadata.len() > 0 {
-        return Err(CopyAdvancedFailure::BudgetExhausted);
-    }
+    let snapshot_file = open_source_no_follow(source).map_err(map_copy_error)?;
+    let snapshot =
+        opened_source_facts(&snapshot_file, &canonical_source).map_err(map_copy_error)?;
+    drop(snapshot_file);
+
     let mut input = open_source_no_follow(source).map_err(map_copy_error)?;
-    let capped = metadata.len() > byte_limit;
-    let read_limit = metadata.len().min(byte_limit);
-    let mut bytes =
-        Vec::with_capacity(usize::try_from(read_limit).map_err(|_| CopyAdvancedFailure::Failed)?);
-    Read::by_ref(&mut input)
-        .take(read_limit)
-        .read_to_end(&mut bytes)
-        .map_err(map_copy_error)?;
-    if bytes.len() as u64 != read_limit {
-        return Err(CopyAdvancedFailure::Failed);
-    }
+    let opened = opened_source_facts(&input, &canonical_source).map_err(map_copy_error)?;
+    let (bytes, capped) = read_validated_source(
+        &mut input,
+        &snapshot,
+        &opened,
+        canonical_root,
+        &canonical_source,
+        byte_limit,
+    )?;
     fs::create_dir_all(destination.parent().ok_or(CopyAdvancedFailure::Unsafe)?)
         .map_err(map_copy_error)?;
     let mut output = OpenOptions::new()
@@ -991,6 +1008,164 @@ fn copy_exact_source(
         .and_then(|_| output.sync_all())
         .map_err(map_copy_error)?;
     Ok((bytes, capped))
+}
+
+fn read_validated_source<R: Read>(
+    input: &mut R,
+    snapshot: &OpenedSourceFacts,
+    opened: &OpenedSourceFacts,
+    canonical_root: &Path,
+    canonical_source: &Path,
+    byte_limit: u64,
+) -> Result<(Vec<u8>, bool), CopyAdvancedFailure> {
+    validate_opened_source(snapshot, opened, canonical_root, canonical_source)?;
+    if byte_limit == 0 && opened.len > 0 {
+        return Err(CopyAdvancedFailure::BudgetExhausted);
+    }
+
+    let capped = opened.len > byte_limit;
+    let read_limit = opened.len.min(byte_limit);
+    let mut bytes =
+        Vec::with_capacity(usize::try_from(read_limit).map_err(|_| CopyAdvancedFailure::Failed)?);
+    input
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(map_copy_error)?;
+    if bytes.len() as u64 != read_limit {
+        return Err(CopyAdvancedFailure::Failed);
+    }
+    Ok((bytes, capped))
+}
+
+fn validate_opened_source(
+    snapshot: &OpenedSourceFacts,
+    opened: &OpenedSourceFacts,
+    canonical_root: &Path,
+    canonical_source: &Path,
+) -> Result<(), CopyAdvancedFailure> {
+    let expected_parent = canonical_source
+        .parent()
+        .ok_or(CopyAdvancedFailure::Unsafe)?;
+    let snapshot_parent = snapshot
+        .final_path
+        .parent()
+        .ok_or(CopyAdvancedFailure::Unsafe)?;
+    let opened_parent = opened
+        .final_path
+        .parent()
+        .ok_or(CopyAdvancedFailure::Unsafe)?;
+    if snapshot.reparse_point
+        || opened.reparse_point
+        || snapshot.link_count != 1
+        || opened.link_count != 1
+        || snapshot.identity != opened.identity
+        || snapshot.len != opened.len
+        || snapshot.change_marker != opened.change_marker
+        || !source_path_eq(&snapshot.final_path, canonical_source)
+        || !source_path_eq(&opened.final_path, canonical_source)
+        || !source_path_eq(expected_parent, canonical_root)
+        || !source_path_eq(snapshot_parent, canonical_root)
+        || !source_path_eq(opened_parent, canonical_root)
+    {
+        return Err(CopyAdvancedFailure::Unsafe);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn source_path_eq(left: &Path, right: &Path) -> bool {
+    windows_path_key(left) == windows_path_key(right)
+}
+
+#[cfg(windows)]
+fn windows_path_key(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_lowercase()
+}
+
+#[cfg(not(windows))]
+fn source_path_eq(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[cfg(unix)]
+fn opened_source_facts(file: &File, canonical_source: &Path) -> std::io::Result<OpenedSourceFacts> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = file.metadata()?;
+    Ok(OpenedSourceFacts {
+        identity: SourceFileIdentity {
+            volume: metadata.dev(),
+            file: u128::from(metadata.ino()),
+        },
+        final_path: canonical_source.to_owned(),
+        len: metadata.len(),
+        change_marker: ((metadata.mtime() as u64 as u128) << 64)
+            | metadata.mtime_nsec() as u64 as u128,
+        link_count: metadata.nlink(),
+        reparse_point: false,
+    })
+}
+
+#[cfg(windows)]
+fn opened_source_facts(
+    file: &File,
+    _canonical_source: &Path,
+) -> std::io::Result<OpenedSourceFacts> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, GetFinalPathNameByHandleW, BY_HANDLE_FILE_INFORMATION,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_NAME_NORMALIZED, GETFINALPATHNAMEBYHANDLE_FLAGS,
+        VOLUME_NAME_DOS,
+    };
+
+    let handle = HANDLE(file.as_raw_handle());
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    unsafe { GetFileInformationByHandle(handle, &mut information) }
+        .map_err(|_| std::io::Error::last_os_error())?;
+
+    let mut path = vec![0_u16; 32_768];
+    let final_path_flags =
+        GETFINALPATHNAMEBYHANDLE_FLAGS(FILE_NAME_NORMALIZED.0 | VOLUME_NAME_DOS.0);
+    let path_len = unsafe { GetFinalPathNameByHandleW(handle, &mut path, final_path_flags) };
+    if path_len == 0 || path_len as usize >= path.len() {
+        return Err(std::io::Error::last_os_error());
+    }
+    path.truncate(path_len as usize);
+    let final_path = windows_final_path(&String::from_utf16(&path).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid final file path")
+    })?);
+    let file_index =
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
+    let len = (u64::from(information.nFileSizeHigh) << 32) | u64::from(information.nFileSizeLow);
+    let change_marker = (u128::from(information.ftLastWriteTime.dwHighDateTime) << 32)
+        | u128::from(information.ftLastWriteTime.dwLowDateTime);
+
+    Ok(OpenedSourceFacts {
+        identity: SourceFileIdentity {
+            volume: u64::from(information.dwVolumeSerialNumber),
+            file: u128::from(file_index),
+        },
+        final_path,
+        len,
+        change_marker,
+        link_count: u64::from(information.nNumberOfLinks),
+        reparse_point: information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0,
+    })
+}
+
+#[cfg(windows)]
+fn windows_final_path(value: &str) -> PathBuf {
+    if let Some(path) = value.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{path}"))
+    } else if let Some(path) = value.strip_prefix(r"\\?\") {
+        PathBuf::from(path)
+    } else {
+        PathBuf::from(value)
+    }
 }
 
 fn open_source_no_follow(path: &Path) -> std::io::Result<File> {
@@ -1028,4 +1203,148 @@ fn is_reparse_point(metadata: &fs::Metadata) -> bool {
 #[cfg(not(windows))]
 fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, Read};
+
+    use super::*;
+
+    struct CountingReader {
+        reads: usize,
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.reads += 1;
+            let bytes = b"validated";
+            let count = bytes.len().min(buffer.len());
+            buffer[..count].copy_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+    }
+
+    fn facts(path: &str) -> OpenedSourceFacts {
+        OpenedSourceFacts {
+            identity: SourceFileIdentity {
+                volume: 7,
+                file: 11,
+            },
+            final_path: PathBuf::from(path),
+            len: 9,
+            change_marker: 13,
+            link_count: 1,
+            reparse_point: false,
+        }
+    }
+
+    #[test]
+    fn opened_handle_validation_accepts_only_the_stable_expected_file() {
+        let snapshot = facts("/trusted/BgbServer.log");
+        let opened = snapshot.clone();
+        let mut reader = CountingReader { reads: 0 };
+
+        let (bytes, capped) = read_validated_source(
+            &mut reader,
+            &snapshot,
+            &opened,
+            Path::new("/trusted"),
+            Path::new("/trusted/BgbServer.log"),
+            32,
+        )
+        .unwrap();
+
+        assert_eq!(bytes, b"validated");
+        assert!(!capped);
+        assert!(reader.reads > 0);
+    }
+
+    #[test]
+    fn opened_handle_identity_swap_or_file_change_fails_before_reading() {
+        let snapshot = facts("/trusted/BgbServer.log");
+        for opened in [
+            OpenedSourceFacts {
+                identity: SourceFileIdentity {
+                    volume: 7,
+                    file: 12,
+                },
+                ..snapshot.clone()
+            },
+            OpenedSourceFacts {
+                change_marker: 14,
+                ..snapshot.clone()
+            },
+            OpenedSourceFacts {
+                len: 8,
+                ..snapshot.clone()
+            },
+        ] {
+            let mut reader = CountingReader { reads: 0 };
+            assert!(read_validated_source(
+                &mut reader,
+                &snapshot,
+                &opened,
+                Path::new("/trusted"),
+                Path::new("/trusted/BgbServer.log"),
+                32,
+            )
+            .is_err());
+            assert_eq!(reader.reads, 0);
+        }
+    }
+
+    #[test]
+    fn opened_handle_final_path_mismatch_and_root_escape_fail_before_reading() {
+        let snapshot = facts("/trusted/BgbServer.log");
+        for opened in [
+            OpenedSourceFacts {
+                final_path: PathBuf::from("/trusted/swapped.log"),
+                ..snapshot.clone()
+            },
+            OpenedSourceFacts {
+                final_path: PathBuf::from("/external/BgbServer.log"),
+                ..snapshot.clone()
+            },
+        ] {
+            let mut reader = CountingReader { reads: 0 };
+            assert!(read_validated_source(
+                &mut reader,
+                &snapshot,
+                &opened,
+                Path::new("/trusted"),
+                Path::new("/trusted/BgbServer.log"),
+                32,
+            )
+            .is_err());
+            assert_eq!(reader.reads, 0);
+        }
+    }
+
+    #[test]
+    fn opened_handle_hardlink_and_reparse_point_fail_before_reading() {
+        let snapshot = facts("/trusted/BgbServer.log");
+        for opened in [
+            OpenedSourceFacts {
+                link_count: 2,
+                ..snapshot.clone()
+            },
+            OpenedSourceFacts {
+                reparse_point: true,
+                ..snapshot.clone()
+            },
+        ] {
+            let mut reader = CountingReader { reads: 0 };
+            assert!(read_validated_source(
+                &mut reader,
+                &snapshot,
+                &opened,
+                Path::new("/trusted"),
+                Path::new("/trusted/BgbServer.log"),
+                32,
+            )
+            .is_err());
+            assert_eq!(reader.reads, 0);
+        }
+    }
 }
