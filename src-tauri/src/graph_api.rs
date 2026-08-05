@@ -374,34 +374,14 @@ mod windows_impl {
     enum WamAcquisitionFailure {
         Cancelled,
         TimedOut,
-        Denied(AppError),
-        Failed(AppError),
+        Denied,
+        Failed,
     }
-
-    const WAM_USER_INTERACTION_REQUIRED_MESSAGE: &str =
-        "Interactive authentication required. Please sign in to Windows with your Entra ID account first.";
 
     impl From<AppError> for WamAcquisitionFailure {
-        fn from(error: AppError) -> Self {
-            Self::Failed(error)
+        fn from(_error: AppError) -> Self {
+            Self::Failed
         }
-    }
-
-    impl WamAcquisitionFailure {
-        fn into_initial_auth_error(self) -> AppError {
-            match self {
-                Self::Cancelled => {
-                    AppError::Internal("Authentication was cancelled by user.".into())
-                }
-                Self::TimedOut => AppError::Internal("Authentication timed out.".into()),
-                Self::Denied(error) | Self::Failed(error) => error,
-            }
-        }
-    }
-
-    fn wam_provider_legacy_error(error_message: Option<String>) -> AppError {
-        let error_message = error_message.unwrap_or_else(|| "Unknown WAM error".to_string());
-        AppError::Internal(format!("WAM authentication failed: {error_message}"))
     }
 
     fn wam_provider_status_failure(
@@ -409,11 +389,10 @@ mod windows_impl {
         error_message: Option<String>,
     ) -> WamAcquisitionFailure {
         let denied = super::is_wam_consent_denial(error_code, error_message.as_deref());
-        let legacy_error = wam_provider_legacy_error(error_message);
         if denied {
-            WamAcquisitionFailure::Denied(legacy_error)
+            WamAcquisitionFailure::Denied
         } else {
-            WamAcquisitionFailure::Failed(legacy_error)
+            WamAcquisitionFailure::Failed
         }
     }
 
@@ -638,7 +617,6 @@ mod windows_impl {
         fn wait_for_operation<T>(
             operation: &IAsyncOperation<T>,
             deadline: std::time::Instant,
-            stage: &str,
             cancelled: Option<&std::sync::atomic::AtomicBool>,
         ) -> Result<T, WamAcquisitionFailure>
         where
@@ -651,11 +629,7 @@ mod windows_impl {
                     let _ = sender.send(result);
                     Ok(())
                 }))
-                .map_err(|error| {
-                    AppError::Internal(format!(
-                        "WAM {stage} completion registration failed: {error}"
-                    ))
-                })?;
+                .map_err(|_| WamAcquisitionFailure::Failed)?;
 
             loop {
                 if cancelled.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
@@ -671,17 +645,11 @@ mod windows_impl {
 
                 match receiver.recv_timeout(remaining.min(GRAPH_WAM_POLL_INTERVAL)) {
                     Ok(result) => {
-                        return result.map_err(|error| {
-                            WamAcquisitionFailure::Failed(AppError::Internal(format!(
-                                "WAM {stage} failed: {error}"
-                            )))
-                        });
+                        return result.map_err(|_| WamAcquisitionFailure::Failed);
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        return Err(WamAcquisitionFailure::Failed(AppError::Internal(format!(
-                            "WAM {stage} completion channel disconnected."
-                        ))));
+                        return Err(WamAcquisitionFailure::Failed);
                     }
                 }
             }
@@ -700,12 +668,7 @@ mod windows_impl {
                     Ok(operation) => operation,
                     Err(_) => return Ok(GraphAccountEnumeration::ProviderUnavailable),
                 };
-            let provider = match wait_for_operation(
-                &provider_operation,
-                deadline,
-                "provider lookup",
-                cancelled,
-            ) {
+            let provider = match wait_for_operation(&provider_operation, deadline, cancelled) {
                 Ok(provider) => provider,
                 Err(WamAcquisitionFailure::Cancelled) => {
                     return Err(WamAcquisitionFailure::Cancelled)
@@ -713,7 +676,7 @@ mod windows_impl {
                 Err(WamAcquisitionFailure::TimedOut) => {
                     return Err(WamAcquisitionFailure::TimedOut)
                 }
-                Err(WamAcquisitionFailure::Denied(_) | WamAcquisitionFailure::Failed(_)) => {
+                Err(WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed) => {
                     return Ok(GraphAccountEnumeration::ProviderUnavailable)
                 }
             };
@@ -723,12 +686,7 @@ mod windows_impl {
                     Ok(operation) => operation,
                     Err(_) => return Ok(GraphAccountEnumeration::Unknown),
                 };
-            let result = match wait_for_operation(
-                &accounts_operation,
-                deadline,
-                "account discovery",
-                cancelled,
-            ) {
+            let result = match wait_for_operation(&accounts_operation, deadline, cancelled) {
                 Ok(result) => result,
                 Err(WamAcquisitionFailure::Cancelled) => {
                     return Err(WamAcquisitionFailure::Cancelled)
@@ -736,7 +694,7 @@ mod windows_impl {
                 Err(WamAcquisitionFailure::TimedOut) => {
                     return Err(WamAcquisitionFailure::TimedOut)
                 }
-                Err(WamAcquisitionFailure::Denied(_) | WamAcquisitionFailure::Failed(_)) => {
+                Err(WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed) => {
                     return Ok(GraphAccountEnumeration::Unknown)
                 }
             };
@@ -838,7 +796,6 @@ mod windows_impl {
             let provider = wait_for_operation(
                 &provider_operation,
                 deadline,
-                "provider lookup",
                 Some(lease.cancellation_flag()),
             )?;
 
@@ -902,12 +859,7 @@ mod windows_impl {
                 unsafe { interop.RequestTokenForWindowAsync(hwnd, &request) }
                     .map_err(|e| AppError::Internal(format!("WAM token request failed: {e}")))?;
 
-            let result = wait_for_operation(
-                &operation,
-                deadline,
-                "token request",
-                Some(lease.cancellation_flag()),
-            )?;
+            let result = wait_for_operation(&operation, deadline, Some(lease.cancellation_flag()))?;
 
             let status = result
                 .ResponseStatus()
@@ -964,9 +916,7 @@ mod windows_impl {
                 }
                 WebTokenRequestStatus::UserCancel => Err(WamAcquisitionFailure::Cancelled),
                 WebTokenRequestStatus::UserInteractionRequired => {
-                    Err(WamAcquisitionFailure::Denied(AppError::Internal(
-                        WAM_USER_INTERACTION_REQUIRED_MESSAGE.into(),
-                    )))
+                    Err(WamAcquisitionFailure::Denied)
                 }
                 WebTokenRequestStatus::ProviderError => {
                     let provider_error = result.ResponseError().ok();
@@ -978,16 +928,7 @@ mod windows_impl {
                         .map(|message| message.to_string());
                     Err(wam_provider_status_failure(error_code, error_message))
                 }
-                _ => {
-                    let error_message = result
-                        .ResponseError()
-                        .ok()
-                        .and_then(|error| error.ErrorMessage().ok())
-                        .map(|message| message.to_string());
-                    Err(WamAcquisitionFailure::Failed(wam_provider_legacy_error(
-                        error_message,
-                    )))
-                }
+                _ => Err(WamAcquisitionFailure::Failed),
             }
         }
     }
@@ -1305,7 +1246,7 @@ mod windows_impl {
                     Some(GRAPH_PERMISSION_TIMED_OUT_MESSAGE),
                 ));
             }
-            Err(WamAcquisitionFailure::Denied(_)) => {
+            Err(WamAcquisitionFailure::Denied) => {
                 return Ok(retained_permission_upgrade_result(
                     state,
                     generation,
@@ -1313,7 +1254,7 @@ mod windows_impl {
                     Some(GRAPH_PERMISSION_DENIED_MESSAGE),
                 ));
             }
-            Err(WamAcquisitionFailure::Failed(_)) => {
+            Err(WamAcquisitionFailure::Failed) => {
                 return Ok(retained_permission_upgrade_result(
                     state,
                     generation,
@@ -1428,7 +1369,7 @@ mod windows_impl {
     }
 
     /// Authenticate with Graph API via WAM on an off-thread worker.
-    pub fn authenticate(
+    pub(crate) fn authenticate(
         state: &GraphAuthState,
         hwnd_raw: isize,
         lease: &GraphInteractiveOperationLease,
@@ -1465,7 +1406,7 @@ mod windows_impl {
                     Some(GRAPH_AUTH_TIMED_OUT_MESSAGE),
                 )
             }
-            Err(WamAcquisitionFailure::Denied(_) | WamAcquisitionFailure::Failed(_)) => {
+            Err(WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed) => {
                 GraphHostCapability::new(GraphHostCapabilityKind::Unknown)
             }
         };
@@ -1521,7 +1462,7 @@ mod windows_impl {
                 capability,
                 Some(GRAPH_AUTH_TIMED_OUT_MESSAGE),
             ),
-            Err(WamAcquisitionFailure::Denied(_) | WamAcquisitionFailure::Failed(_)) => {
+            Err(WamAcquisitionFailure::Denied | WamAcquisitionFailure::Failed) => {
                 retained_auth_attempt(
                     state,
                     expected_generation,
@@ -1533,7 +1474,7 @@ mod windows_impl {
         }
     }
 
-    pub fn request_missing_permissions(
+    pub(crate) fn request_missing_permissions(
         state: &GraphAuthState,
         hwnd_raw: isize,
         lease: &GraphInteractiveOperationLease,
@@ -2094,87 +2035,43 @@ mod windows_impl {
         }
 
         #[test]
-        fn graph_permission_upgrade_denial_retains_original_token_and_sanitizes_provider_text() {
-            let raw_provider_text = "AADSTS65004: UserDeclinedConsent access_denied";
+        fn graph_permission_upgrade_denial_retains_original_token() {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
             let result = request_missing_permissions_with(&state, None, || {
-                Err(WamAcquisitionFailure::Denied(AppError::Internal(
-                    raw_provider_text.to_string(),
-                )))
+                Err(WamAcquisitionFailure::Denied)
             })
             .expect("provider denial is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Denied);
             assert!(result.message.is_some());
-            assert!(!format!("{result:?}").contains(raw_provider_text));
             assert_eq!(result.status, current_auth_status(&state));
             assert_eq!(stored_token_and_generation(&state), before);
         }
 
         #[test]
-        fn graph_permission_upgrade_provider_failure_retains_original_token_and_sanitizes_message()
-        {
-            let raw_provider_text = "raw-provider-sensitive-text";
+        fn graph_permission_upgrade_provider_failure_retains_original_token() {
             let state = seed_partial_state();
             let before = stored_token_and_generation(&state);
 
             let result = request_missing_permissions_with(&state, None, || {
-                Err(WamAcquisitionFailure::Failed(AppError::Internal(
-                    raw_provider_text.to_string(),
-                )))
+                Err(WamAcquisitionFailure::Failed)
             })
             .expect("provider failure is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Failed);
             assert!(result.message.is_some());
-            assert!(!format!("{result:?}").contains(raw_provider_text));
             assert_eq!(result.status, current_auth_status(&state));
             assert_eq!(stored_token_and_generation(&state), before);
         }
 
         #[test]
-        fn graph_permission_upgrade_provider_status_failure_preserves_legacy_initial_auth_detail() {
-            let raw_provider_text = "provider-specific failure";
-            let error = wam_provider_status_failure(None, Some(raw_provider_text.to_string()))
-                .into_initial_auth_error();
-            assert_eq!(
-                error.to_string(),
-                format!("WAM authentication failed: {raw_provider_text}")
-            );
-
-            let fallback = wam_provider_status_failure(None, None).into_initial_auth_error();
-            assert_eq!(
-                fallback.to_string(),
-                "WAM authentication failed: Unknown WAM error"
-            );
-        }
-
-        #[test]
-        fn graph_permission_upgrade_provider_denial_is_reachable_and_preserves_legacy_detail() {
+        fn graph_permission_upgrade_provider_denial_is_classified_without_exposing_detail() {
             let raw_provider_text = "AADSTS65004: UserDeclinedConsent; OAuth error=access_denied";
             let failure =
                 wam_provider_status_failure(Some(65_004), Some(raw_provider_text.to_string()));
-            assert!(matches!(&failure, WamAcquisitionFailure::Denied(_)));
-
-            let error = failure.into_initial_auth_error();
-            assert_eq!(
-                error.to_string(),
-                format!("WAM authentication failed: {raw_provider_text}")
-            );
-        }
-
-        #[test]
-        fn graph_permission_upgrade_user_interaction_required_preserves_legacy_guidance() {
-            let failure = WamAcquisitionFailure::Denied(AppError::Internal(
-                WAM_USER_INTERACTION_REQUIRED_MESSAGE.into(),
-            ));
-
-            assert_eq!(
-                failure.into_initial_auth_error().to_string(),
-                "Interactive authentication required. Please sign in to Windows with your Entra ID account first."
-            );
+            assert!(matches!(failure, WamAcquisitionFailure::Denied));
         }
 
         #[test]
@@ -2183,7 +2080,7 @@ mod windows_impl {
                 Some(65_005),
                 Some("AADSTS65005: MisconfiguredApplication".to_string()),
             );
-            assert!(matches!(failure, WamAcquisitionFailure::Failed(_)));
+            assert!(matches!(failure, WamAcquisitionFailure::Failed));
         }
 
         #[test]
@@ -2254,15 +2151,12 @@ mod windows_impl {
 
             let result = request_missing_permissions_with(&state, None, || {
                 assert!(state.set_token_if_generation(1, newer));
-                Err(WamAcquisitionFailure::Failed(AppError::Internal(
-                    "raw-provider-sensitive-text".to_string(),
-                )))
+                Err(WamAcquisitionFailure::Failed)
             })
             .expect("stale failure is a structured outcome");
 
             assert_eq!(result.outcome, GraphPermissionUpgradeOutcome::Stale);
             assert_eq!(result.status, newer_status);
-            assert!(!format!("{result:?}").contains("raw-provider-sensitive-text"));
         }
 
         #[cfg(feature = "esp-diagnostics")]
