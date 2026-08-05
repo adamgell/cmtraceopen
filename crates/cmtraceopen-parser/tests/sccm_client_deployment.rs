@@ -225,6 +225,7 @@ fn load_admitted(scenario: &str) -> SccmClientAdmittedEvidence {
             path_fingerprint: Some(path_fingerprint.clone()),
             rotation_lineage: Some(path_fingerprint),
             relative_path: entry["relativePath"].as_str().map(str::to_owned),
+            task_sequence_provenance: None,
             fragment_complete: Some(fragment_complete),
             declared_byte_length: bytes.as_ref().map(|bytes| bytes.len() as u64),
             content_sha256: bytes.as_ref().map(|bytes| sha256(bytes)),
@@ -1113,6 +1114,7 @@ fn try_bundle_from(
                 rotation_segment,
                 basename
             )),
+            task_sequence_provenance: None,
             fragment_complete: Some(true),
             declared_byte_length: Some(bytes.len() as u64),
             content_sha256: Some(sha256(&bytes)),

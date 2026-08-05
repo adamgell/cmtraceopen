@@ -7,11 +7,13 @@ use app_lib::sccm::collector::{
     SccmDiscoveryIssueCode, SccmDiscoveryProvider, MAX_BYTES_PER_SOURCE, MAX_FRAGMENTS_PER_SOURCE,
 };
 use app_lib::sccm::{
-    read_sccm_client_intake_bundle, read_sccm_manifest_or_legacy, SccmCoverageState, SccmRole,
+    read_sccm_client_intake_bundle, read_sccm_manifest_or_legacy, SccmCoverageState,
+    SccmManifestSourceState, SccmRole,
 };
 use cmtraceopen_parser::sccm::server::windows::{
     normalize_server_bundle, SccmServerArtifactPayload, SccmServerIntakeAssessment,
 };
+use cmtraceopen_parser::sccm::SccmTaskSequencePathClass;
 
 #[derive(Clone)]
 struct FakeProvider {
@@ -201,6 +203,74 @@ fn capture_collects_all_supported_client_rotations_and_validates_manifest() {
         .artifacts
         .iter()
         .any(|artifact| artifact.state == app_lib::sccm::SccmManifestSourceState::Absent));
+}
+
+#[test]
+fn native_client_writer_seals_only_physical_task_sequence_rotations() {
+    let logs = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    fs::write(logs.path().join("smsts.log"), b"smsts-current").unwrap();
+    fs::write(logs.path().join("smsts.lo_"), b"smsts-lo").unwrap();
+    fs::write(logs.path().join("PolicyAgent.log"), b"policy-current").unwrap();
+
+    capture(
+        &provider(SccmRole::Client, [logs.path().to_owned()]),
+        bundles.path(),
+        "bundle",
+    );
+    let manifest = read_sccm_manifest_or_legacy(&bundles.path().join("bundle")).unwrap();
+    let task_sequence_physical = manifest
+        .artifacts
+        .iter()
+        .filter(|artifact| {
+            matches!(
+                artifact.state,
+                SccmManifestSourceState::Captured
+                    | SccmManifestSourceState::Capped
+                    | SccmManifestSourceState::ParseFailed
+            ) && artifact
+                .logical_artifact_ids
+                .iter()
+                .any(|id| id == "client-task-sequence-smsts")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(task_sequence_physical.len(), 2);
+    assert!(task_sequence_physical.iter().all(|artifact| {
+        artifact
+            .task_sequence_provenance
+            .as_ref()
+            .is_some_and(|provenance| {
+                provenance.path_class == SccmTaskSequencePathClass::Client
+                    && provenance.smsts_log_path_evidence.as_deref()
+                        == Some("synthetic:smsts-path:client")
+                    && provenance.relocation_ordinal == 0
+            })
+    }));
+    assert_eq!(
+        task_sequence_physical[0]
+            .task_sequence_provenance
+            .as_ref()
+            .unwrap()
+            .relocation_lineage,
+        task_sequence_physical[1]
+            .task_sequence_provenance
+            .as_ref()
+            .unwrap()
+            .relocation_lineage
+    );
+    assert!(manifest.artifacts.iter().all(|artifact| {
+        (matches!(
+            artifact.state,
+            SccmManifestSourceState::Captured
+                | SccmManifestSourceState::Capped
+                | SccmManifestSourceState::ParseFailed
+        ) && artifact
+            .logical_artifact_ids
+            .iter()
+            .any(|id| id == "client-task-sequence-smsts"))
+            || artifact.task_sequence_provenance.is_none()
+    }));
 }
 
 #[test]

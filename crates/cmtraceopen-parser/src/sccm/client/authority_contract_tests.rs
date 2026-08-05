@@ -6,7 +6,7 @@ use super::admission::{
 };
 use super::{
     assess_client_intake, SccmClientIntakeArtifact, SccmClientIntakeBundle,
-    SccmClientIntakeCaptureGap,
+    SccmClientIntakeCaptureGap, SccmTaskSequencePathClass, SccmTaskSequenceProvenance,
 };
 use crate::sccm::{
     extract_keys, normalize_key, SccmArtifact, SccmArtifactFamily, SccmCorrelationKeyKind,
@@ -38,6 +38,7 @@ fn ccm_bytes(message: &str) -> Vec<u8> {
 
 fn source_group(basename: &str) -> &'static str {
     match basename {
+        "smsts.log" => "client-task-sequence-smsts",
         "PolicyAgent.log" => "client-policy-agent",
         "CAS.log" => "client-content",
         "AppIntentEval.log" => "client-app-intent",
@@ -65,10 +66,21 @@ fn artifact(
         .map(|bytes| (Some(bytes.len() as u64), Some(digest(bytes))))
         .unwrap_or((None, None));
     let group = source_group(basename);
-    let relative_path = (physical && group != "unknown")
-        .then(|| format!("evidence/{group}/current/{basename}"))
+    let relative_path = (physical && basename == "smsts.log")
+        .then(|| format!("evidence/{group}/client/current/{basename}"))
+        .or_else(|| {
+            (physical && group != "unknown").then(|| format!("evidence/{group}/current/{basename}"))
+        })
         .or_else(|| {
             (physical && group == "unknown").then(|| format!("evidence/{group}/{basename}"))
+        });
+    let task_sequence_provenance =
+        (physical && basename == "smsts.log").then(|| SccmTaskSequenceProvenance {
+            version: 1,
+            path_class: SccmTaskSequencePathClass::Client,
+            smsts_log_path_evidence: None,
+            relocation_lineage: "synthetic:ts-relocation:authority".to_owned(),
+            relocation_ordinal: 0,
         });
 
     SccmClientIntakeArtifact {
@@ -87,6 +99,7 @@ fn artifact(
         path_fingerprint: physical.then(|| format!("synthetic-{identity}")),
         rotation_lineage: None,
         relative_path,
+        task_sequence_provenance,
         fragment_complete: Some(fragment_complete),
         declared_byte_length,
         content_sha256,
@@ -618,6 +631,33 @@ fn raw_ccm_sibling_gap_still_blocks_ccmsetup_group_readiness() {
 
     assert!(admitted.require_captured_source("client-ccmsetup").is_err());
     assert_eq!(admitted.evidence().expect("valid authority seal").len(), 1);
+}
+
+#[test]
+fn admitted_task_sequence_provenance_is_integrity_sealed() {
+    let bytes = ccm_bytes("Task Sequence authority");
+    let bundle = bundle_with(vec![artifact(
+        "valid",
+        "smsts.log",
+        SccmCoverageState::Captured,
+        true,
+        Some(&bytes),
+    )]);
+    let assessment = assess_client_intake(&bundle).expect("Task Sequence intake is canonical");
+
+    for mutation in 0..4 {
+        let mut admitted = admit_client_evidence(
+            &bundle,
+            &assessment,
+            &[payload("fixture-valid", bytes.clone())],
+        )
+        .expect("Task Sequence evidence is admitted");
+        admitted.test_only_mutate_task_sequence_provenance(mutation);
+        assert!(
+            admitted.verify_integrity().is_err(),
+            "Task Sequence provenance mutation {mutation} must fail closed"
+        );
+    }
 }
 
 #[test]

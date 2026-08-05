@@ -18,6 +18,8 @@ const COLLECTED_AT_UTC: &str = "2026-07-30T15:00:00Z";
 const CONFIGMGR_VERSION: &str = "5.00.TEST.0000";
 const POLICY_BASENAME: &str = "PolicyAgent.log";
 const POLICY_GROUP: &str = "client-policy-agent";
+const TASK_SEQUENCE_BASENAME: &str = "smsts.log";
+const TASK_SEQUENCE_GROUP: &str = "client-task-sequence-smsts";
 const ROOT_HANDLE: &str = "root-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const HOST_HANDLE: &str = concat!(
     "cmtraceopen.host.hmac-sha256.v1:",
@@ -64,6 +66,46 @@ fn rotation_lineage() -> String {
     )
 }
 
+fn task_sequence_source_digest() -> String {
+    let root_digest = ROOT_HANDLE
+        .strip_prefix("root-")
+        .expect("fixture root handle is versioned");
+    sha256(
+        format!("cmtraceopen.sccm.source.v1\0{root_digest}\0{TASK_SEQUENCE_BASENAME}").as_bytes(),
+    )
+}
+
+fn task_sequence_source_handle() -> String {
+    format!(
+        "cmtraceopen.source.sha256.v1:{}",
+        task_sequence_source_digest()
+    )
+}
+
+fn task_sequence_path_fingerprint() -> String {
+    format!("sha256:{}", task_sequence_source_digest())
+}
+
+fn task_sequence_rotation_lineage() -> String {
+    format!(
+        "cmtraceopen.lineage.sha256.v1:{}",
+        sha256(format!("lineage:v1:{}", task_sequence_source_digest()).as_bytes())
+    )
+}
+
+fn task_sequence_provenance() -> Value {
+    json!({
+        "version": 1,
+        "pathClass": "client",
+        "smstsLogPathEvidence": "synthetic:smsts-path:client",
+        "relocationLineage": format!(
+            "cmtraceopen.task-sequence.relocation.sha256.v1:{}",
+            sha256(format!("lineage:v1:{}", task_sequence_source_digest()).as_bytes())
+        ),
+        "relocationOrdinal": 0
+    })
+}
+
 fn rotation_basename(rotation: &SccmRotation) -> String {
     match rotation {
         SccmRotation::Current => POLICY_BASENAME.to_owned(),
@@ -89,6 +131,24 @@ fn relative_path(rotation: &SccmRotation) -> String {
         "evidence/sccm/client/{POLICY_GROUP}/{ROOT_HANDLE}/{}/{}",
         rotation_segment(rotation),
         rotation_basename(rotation)
+    )
+}
+
+fn task_sequence_rotation_basename(rotation: &SccmRotation) -> String {
+    match rotation {
+        SccmRotation::Current => TASK_SEQUENCE_BASENAME.to_owned(),
+        SccmRotation::LoUnderscore => "smsts.lo_".to_owned(),
+        SccmRotation::Numbered(number) => format!("{TASK_SEQUENCE_BASENAME}.{number}"),
+        SccmRotation::Timestamped(timestamp) => format!("{TASK_SEQUENCE_BASENAME}.{timestamp}"),
+        SccmRotation::Unknown(_) => panic!("fixture never uses unknown rotations"),
+    }
+}
+
+fn task_sequence_relative_path(rotation: &SccmRotation) -> String {
+    format!(
+        "evidence/sccm/client/{TASK_SEQUENCE_GROUP}/{ROOT_HANDLE}/{}/{}",
+        rotation_segment(rotation),
+        task_sequence_rotation_basename(rotation)
     )
 }
 
@@ -135,6 +195,81 @@ fn physical_artifact(rotation: SccmRotation, content: &[u8]) -> PhysicalArtifact
         }),
         content: content.to_vec(),
     }
+}
+
+fn task_sequence_physical_artifact(
+    rotation: SccmRotation,
+    content: &[u8],
+) -> PhysicalArtifactFixture {
+    let basename = task_sequence_rotation_basename(&rotation);
+    let fingerprint = task_sequence_path_fingerprint();
+    let artifact_id = format!(
+        "sccm-artifact:v1:sha256:{}",
+        sha256(
+            format!(
+                "artifact:v1:{fingerprint}:{}:{basename}",
+                rotation_segment(&rotation)
+            )
+            .as_bytes()
+        )
+    );
+    PhysicalArtifactFixture {
+        value: json!({
+            "catalogEntryId": catalog_entry_id_for(TASK_SEQUENCE_BASENAME),
+            "logicalArtifactIds": [TASK_SEQUENCE_GROUP],
+            "artifactId": artifact_id,
+            "role": "client",
+            "sourceHandle": task_sequence_source_handle(),
+            "rootHandle": ROOT_HANDLE,
+            "pathFingerprint": fingerprint,
+            "rotationLineage": task_sequence_rotation_lineage(),
+            "taskSequenceProvenance": task_sequence_provenance(),
+            "relativePath": task_sequence_relative_path(&rotation),
+            "basename": basename,
+            "rotation": rotation,
+            "state": "captured",
+            "coverageScope": "source",
+            "bytesCopied": content.len(),
+            "contentSha256": sha256(content),
+            "fragmentComplete": false,
+            "configmgrVersion": CONFIGMGR_VERSION,
+            "collectedAtUtc": COLLECTED_AT_UTC,
+            "encoding": "utf-8"
+        }),
+        content: content.to_vec(),
+    }
+}
+
+fn task_sequence_coverage_marker() -> Value {
+    let fingerprint = task_sequence_path_fingerprint();
+    let basename = TASK_SEQUENCE_BASENAME;
+    json!({
+        "catalogEntryId": catalog_entry_id_for(TASK_SEQUENCE_BASENAME),
+        "logicalArtifactIds": [TASK_SEQUENCE_GROUP],
+        "artifactId": format!(
+            "sccm-artifact:v1:sha256:{}",
+            sha256(
+                format!(
+                    "marker:v1:{}:absent:current:{basename}:{fingerprint}",
+                    catalog_entry_id_for(TASK_SEQUENCE_BASENAME)
+                )
+                .as_bytes()
+            )
+        ),
+        "role": "client",
+        "sourceHandle": task_sequence_source_handle(),
+        "rootHandle": ROOT_HANDLE,
+        "pathFingerprint": fingerprint,
+        "rotationLineage": task_sequence_rotation_lineage(),
+        "basename": basename,
+        "rotation": SccmRotation::Current,
+        "state": "absent",
+        "coverageScope": "source",
+        "bytesCopied": 0,
+        "fragmentComplete": false,
+        "configmgrVersion": CONFIGMGR_VERSION,
+        "collectedAtUtc": COLLECTED_AT_UTC
+    })
 }
 
 fn capture_gap(rotation: SccmRotation, state: &str) -> Value {
@@ -272,6 +407,138 @@ fn validated_v1_reader_projects_one_physical_client_artifact() {
         Some(relative_path(&SccmRotation::Current).as_str())
     );
     assert_eq!(physical.fragment_complete, Some(false));
+}
+
+#[test]
+fn captured_native_task_sequence_projects_sealed_explicit_provenance() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let current = task_sequence_physical_artifact(SccmRotation::Current, b"smsts-current");
+    write_native_bundle(&bundle_root, &[&current], &[]);
+
+    let manifest = read_sccm_manifest_or_legacy(&bundle_root).expect("validated manifest");
+    let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("projected bundle");
+
+    assert_eq!(manifest.artifacts.len(), 1);
+    assert_eq!(
+        manifest.artifacts[0]
+            .task_sequence_provenance
+            .as_ref()
+            .expect("physical smsts manifest artifact is sealed"),
+        &serde_json::from_value(task_sequence_provenance())
+            .expect("fixture Task Sequence provenance is well formed")
+    );
+    assert_eq!(
+        bundle.artifacts[0].task_sequence_provenance,
+        manifest.artifacts[0].task_sequence_provenance,
+        "native projection retains the sealed Task Sequence authority"
+    );
+}
+
+#[test]
+fn native_task_sequence_manifest_rejects_missing_tampered_or_class_mismatched_provenance() {
+    for (label, mutate) in [
+        (
+            "missing",
+            Box::new(|artifact: &mut Value| {
+                artifact
+                    .as_object_mut()
+                    .expect("artifact is an object")
+                    .remove("taskSequenceProvenance");
+            }) as Box<dyn Fn(&mut Value)>,
+        ),
+        (
+            "tampered",
+            Box::new(|artifact: &mut Value| {
+                artifact["taskSequenceProvenance"]["relocationLineage"] = json!(
+                    "cmtraceopen.task-sequence.relocation.sha256.v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                );
+            }),
+        ),
+        (
+            "class-mismatched",
+            Box::new(|artifact: &mut Value| {
+                artifact["taskSequenceProvenance"]["pathClass"] = json!("winpe");
+            }),
+        ),
+    ] {
+        let temp = tempdir().expect("temporary root");
+        let bundle_root = temp.path().join(label);
+        let current = task_sequence_physical_artifact(SccmRotation::Current, b"smsts-current");
+        write_native_bundle(&bundle_root, &[&current], &[]);
+
+        let manifest_path = bundle_root.join(SCCM_MANIFEST_FILE_NAME);
+        let mut manifest: Value = serde_json::from_slice(
+            &fs::read(&manifest_path).expect("read synthetic manifest for mutation"),
+        )
+        .expect("synthetic manifest is JSON");
+        mutate(&mut manifest["artifacts"][0]);
+        fs::write(
+            manifest_path,
+            serde_json::to_vec_pretty(&manifest).expect("serialize tampered manifest"),
+        )
+        .expect("write tampered manifest");
+
+        read_sccm_client_intake_bundle(&bundle_root)
+            .expect_err("malformed native Task Sequence provenance is rejected");
+    }
+}
+
+#[test]
+fn native_task_sequence_coverage_only_marker_has_no_provenance() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    make_private_directory(&bundle_root);
+    let manifest = native_manifest(vec![task_sequence_coverage_marker()], Vec::new());
+    fs::write(
+        bundle_root.join(SCCM_MANIFEST_FILE_NAME),
+        serde_json::to_vec_pretty(&manifest).expect("serialize coverage-only manifest"),
+    )
+    .expect("write coverage-only manifest");
+
+    let manifest = read_sccm_manifest_or_legacy(&bundle_root).expect("validated manifest");
+    let bundle = read_sccm_client_intake_bundle(&bundle_root).expect("projected bundle");
+
+    assert_eq!(manifest.artifacts[0].task_sequence_provenance, None);
+    assert_eq!(bundle.artifacts[0].task_sequence_provenance, None);
+}
+
+#[test]
+fn native_manifest_rejects_task_sequence_provenance_on_non_task_sequence_artifact() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let mut policy = physical_artifact(SccmRotation::Current, b"policy-current");
+    policy.value["taskSequenceProvenance"] = task_sequence_provenance();
+    write_native_bundle(&bundle_root, &[&policy], &[]);
+
+    read_sccm_client_intake_bundle(&bundle_root)
+        .expect_err("non-Task-Sequence artifact cannot claim Task Sequence provenance");
+}
+
+#[test]
+fn native_task_sequence_current_and_lo_rotation_share_a_relocation_without_colliding() {
+    let temp = tempdir().expect("temporary root");
+    let bundle_root = temp.path().join("bundle");
+    let current = task_sequence_physical_artifact(SccmRotation::Current, b"smsts-current");
+    let lo = task_sequence_physical_artifact(SccmRotation::LoUnderscore, b"smsts-lo");
+    write_native_bundle(&bundle_root, &[&current, &lo], &[]);
+
+    let bundle = read_sccm_client_intake_bundle(&bundle_root)
+        .expect("same-root current and .lo_ Task Sequence rotations share one relocation key");
+
+    assert_eq!(bundle.artifacts.len(), 2);
+    assert_eq!(
+        bundle.artifacts[0]
+            .task_sequence_provenance
+            .as_ref()
+            .expect("current provenance")
+            .relocation_lineage,
+        bundle.artifacts[1]
+            .task_sequence_provenance
+            .as_ref()
+            .expect(".lo_ provenance")
+            .relocation_lineage
+    );
 }
 
 #[test]
