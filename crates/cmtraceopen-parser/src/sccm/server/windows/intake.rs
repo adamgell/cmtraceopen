@@ -1032,7 +1032,10 @@ fn normalize_topology(
 ) -> Result<SccmServerTopologyAssessment, SccmServerIntakeError> {
     let site_handle = if manifest.synthetic_fixture {
         if !synthetic_site_code(&manifest.topology.site_code)
-            || !synthetic_capture_host(&manifest.topology.capture_host)
+            || !synthetic_capture_host(
+                &manifest.topology.capture_host,
+                &manifest.topology.site_code,
+            )
         {
             return Err(SccmServerIntakeError::InvalidTopology);
         }
@@ -1110,8 +1113,8 @@ fn normalize_hierarchy_link(
             && link.origin_host_handle != link.target_host_handle
             && synthetic_site_code(&link.origin_site_code)
             && synthetic_site_code(&link.target_site_code)
-            && synthetic_handle(&link.origin_host_handle, "host")
-            && synthetic_handle(&link.target_host_handle, "host")
+            && synthetic_identity(&link.origin_host_handle, "host")
+            && synthetic_identity(&link.target_host_handle, "host")
     } else {
         link.origin_site_code != link.target_site_code
             && link.origin_host_handle != link.target_host_handle
@@ -3034,7 +3037,7 @@ fn source_version_is_profile_eligible(value: &str, synthetic_fixture: bool) -> b
 
 fn safe_manifest_artifact_id(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return synthetic_slug(value);
+        return synthetic_identity(value, "artifact");
     }
     opaque_sha256_handle(value, "cmtraceopen.artifact.sha256.v1:")
 }
@@ -3065,14 +3068,14 @@ fn safe_public_basename(value: &str, synthetic_fixture: bool) -> bool {
 
 fn safe_lineage_id(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return synthetic_slug(value);
+        return synthetic_identity(value, "lineage");
     }
     opaque_sha256_handle(value, "cmtraceopen.lineage.sha256.v1:")
 }
 
 fn safe_path_fingerprint(value: &str, synthetic_fixture: bool) -> bool {
     if synthetic_fixture {
-        return synthetic_path_fingerprint(value);
+        return synthetic_identity(value, "path");
     }
     opaque_sha256_handle(value, "cmtraceopen.path.sha256.v1:")
 }
@@ -3194,77 +3197,46 @@ fn safe_optional_handle(value: Option<&str>, synthetic_fixture: bool, domain: &s
         return true;
     };
     if synthetic_fixture {
-        return synthetic_handle(value, domain)
-            || (domain == "subject" && safe_synthetic_handle(value));
+        return synthetic_identity(value, domain);
     }
     opaque_sha256_handle(value, &format!("cmtraceopen.{domain}.sha256.v1:"))
 }
 
-fn synthetic_slug(value: &str) -> bool {
-    (3..=128).contains(&value.len())
-        && value.contains('-')
-        && !value.starts_with('-')
-        && !value.ends_with('-')
-        && !value.contains("--")
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-}
-
-fn synthetic_numbered_slug(value: &str) -> bool {
-    let Some((_, ordinal)) = value.rsplit_once('-') else {
-        return false;
-    };
-    synthetic_slug(value) && ordinal.len() == 2 && ordinal.bytes().all(|byte| byte.is_ascii_digit())
-}
-
-fn synthetic_handle(value: &str, domain: &str) -> bool {
-    value
-        .strip_prefix(&format!("synthetic:{domain}:"))
-        .is_some_and(synthetic_numbered_slug)
-}
-
-fn safe_synthetic_handle(value: &str) -> bool {
-    let Some((domain, identifier)) = value
-        .strip_prefix("safe:")
-        .and_then(|value| value.split_once(':'))
+fn synthetic_identity(value: &str, domain: &str) -> bool {
+    let Some((actual_domain, digest)) = value
+        .strip_prefix("synthetic:")
+        .and_then(|value| value.split_once(":sha256.v1:"))
     else {
         return false;
     };
-    (2..=16).contains(&domain.len())
-        && domain.bytes().all(|byte| byte.is_ascii_lowercase())
-        && synthetic_numbered_slug(identifier)
-}
-
-fn synthetic_path_fingerprint(value: &str) -> bool {
-    let Some(value) = value.strip_prefix("synthetic:") else {
-        return false;
-    };
-    match value.split_once(':') {
-        Some((scope, identifier)) => {
-            (1..=16).contains(&scope.len())
-                && scope.bytes().all(|byte| byte.is_ascii_lowercase())
-                && synthetic_slug(identifier)
-        }
-        None => synthetic_slug(value),
-    }
+    actual_domain == domain
+        && digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn synthetic_site_code(value: &str) -> bool {
-    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase())
+    matches!(value.as_bytes(), [b'S', first, second] if first.is_ascii_digit() && second.is_ascii_digit())
 }
 
-fn synthetic_capture_host(value: &str) -> bool {
-    let Some((site, role_and_ordinal)) = value.split_once('-') else {
-        return false;
-    };
-    if role_and_ordinal.len() < 3 {
+fn synthetic_capture_host(value: &str, site_code: &str) -> bool {
+    if !value.is_ascii() {
         return false;
     }
-    let (role, ordinal) = role_and_ordinal.split_at(role_and_ordinal.len() - 2);
-    synthetic_site_code(site)
-        && matches!(role, "CM" | "MP" | "DP" | "SUP" | "PROVIDER" | "ADMIN")
-        && ordinal.bytes().all(|byte| byte.is_ascii_digit())
+    let Some(role_and_ordinal) = value
+        .strip_prefix(site_code)
+        .and_then(|value| value.strip_prefix('-'))
+    else {
+        return false;
+    };
+    ["CM", "MP", "DP", "SUP", "PROVIDER", "ADMIN"]
+        .iter()
+        .any(|role| {
+            role_and_ordinal.strip_prefix(role).is_some_and(|ordinal| {
+                ordinal.len() == 2 && ordinal.bytes().all(|byte| byte.is_ascii_digit())
+            })
+        })
 }
 
 fn opaque_sha256_digest<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {

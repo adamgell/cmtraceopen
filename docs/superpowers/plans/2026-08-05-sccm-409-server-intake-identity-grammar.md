@@ -4,7 +4,7 @@
 
 **Goal:** Remove fixture-specific server-intake identity allowlists while keeping synthetic and production manifests privacy-safe and fail-closed.
 
-**Architecture:** Keep declared source IDs owned by the server source catalog, rather than duplicating them in intake. Replace every synthetic fixture identity list in intake with small field-specific closed grammars: structural synthetic artifact/lineage/path tokens, synthetic host/subject handles, and SCCM-shaped synthetic topology. Production remains opaque-handle-only; malformed or identity-bearing strings remain rejected before public projection.
+**Architecture:** Keep declared source IDs owned by the server source catalog, rather than duplicating them in intake. Synthetic artifact, lineage, path, host, and subject identities use a domain-bound `synthetic:<domain>:sha256.v1:<64 lowercase hex>` contract, so fixture labels cannot become public identities. Synthetic topology uses `S<two digits>` site codes and SCCM role hosts such as `S01-CM01`; production remains opaque-handle-only. Malformed, Unicode, or identity-bearing strings are rejected before public projection.
 
 **Tech Stack:** Rust, Serde, existing `cmtraceopen-parser` SCCM server catalog/intake modules, Cargo tests, Clippy, rustfmt.
 
@@ -21,7 +21,7 @@
 **Files:**
 - Modify: `crates/cmtraceopen-parser/tests/sccm_server_intake.rs`
 
-- [ ] **Step 1: Add failing acceptance and rejection cases**
+- [x] **Step 1: Add failing acceptance and rejection cases**
 
 Add one test that mutates a committed synthetic manifest with a new conforming artifact ID, lineage, path fingerprint, producer host, workflow subject, and SCCM-shaped topology; `assess_server_intake` must succeed. Add table-driven mutations that must return `InvalidTopology` or `InvalidArtifact`: bare/user-like identifiers, malformed token separators, non-three-character site code, topology host without a typed two-digit suffix, and malformed synthetic handles.
 
@@ -33,7 +33,7 @@ assert_eq!(
 );
 ```
 
-- [ ] **Step 2: Run the red test**
+- [x] **Step 2: Run the red test**
 
 Run: `cargo test -p cmtraceopen-parser --test sccm_server_intake server_intake_accepts_new_conforming_synthetic_identities`
 
@@ -46,7 +46,7 @@ Expected: FAIL while literal fixture allowlists reject the new conforming values
 - Modify: `crates/cmtraceopen-parser/src/sccm/server/windows/intake.rs`
 - Test: `crates/cmtraceopen-parser/tests/sccm_server_intake.rs`
 
-- [ ] **Step 1: Add catalog membership helper**
+- [x] **Step 1: Add catalog membership helper**
 
 Expose a crate-visible helper that recognizes a source ID in `SERVER_SOURCE_SPECS` or `SERVER_STRUCTURED_SUPPLEMENT_SPEC`; do not restate source strings in intake.
 
@@ -59,7 +59,7 @@ pub(crate) fn is_declared_server_source_id(source_id: &str) -> bool {
 }
 ```
 
-- [ ] **Step 2: Replace the intake source literal match**
+- [x] **Step 2: Replace the intake source literal match**
 
 Make `safe_source_id` call that helper for known IDs and preserve its current opaque-future allowance only for non-synthetic retained-unknown artifacts.
 
@@ -70,7 +70,7 @@ is_declared_server_source_id(value)
         && opaque_sha256_handle(value, "cmtraceopen.source.sha256.v1:"))
 ```
 
-- [ ] **Step 3: Run the focused test**
+- [x] **Step 3: Run the focused test**
 
 Run: `cargo test -p cmtraceopen-parser --test sccm_server_intake`
 
@@ -82,57 +82,36 @@ Expected: PASS; catalogued sources, opaque future sources, and untrusted sources
 - Modify: `crates/cmtraceopen-parser/src/sccm/server/windows/intake.rs`
 - Test: `crates/cmtraceopen-parser/tests/sccm_server_intake.rs`
 
-- [ ] **Step 1: Delete fixture-derived constants and literal matches**
+- [x] **Step 1: Delete fixture-derived constants and literal matches**
 
 Remove `SYNTHETIC_HIERARCHY_*` constants and the literal sets in `safe_manifest_artifact_id`, `safe_lineage_id`, `safe_path_fingerprint`, `safe_optional_handle`, `normalize_topology`, and `normalize_hierarchy_link`.
 
-- [ ] **Step 2: Add bounded field grammars**
+- [x] **Step 2: Add bounded field grammars**
 
-Implement small ASCII validators with no fixture values:
+Implement small ASCII validators with no fixture values. Identity-bearing surfaces accept only domain-bound synthetic SHA-256 tokens; topology is limited to a structural site/role/ordinal grammar and validates ASCII before any byte-sensitive operation.
 
 ```rust
-fn synthetic_slug(value: &str) -> bool {
-    (3..=128).contains(&value.len())
-        && value.contains('-')
-        && !value.starts_with('-')
-        && !value.ends_with('-')
-        && !value.contains("--")
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-        })
-}
-
-fn synthetic_handle(value: &str, domain: &str) -> bool {
+fn synthetic_identity(value: &str, domain: &str) -> bool {
     value
-        .strip_prefix(&format!("synthetic:{domain}:"))
-        .is_some_and(synthetic_numbered_slug)
-}
-
-fn synthetic_site_code(value: &str) -> bool {
-    value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase())
-}
-
-fn synthetic_capture_host(value: &str) -> bool {
-    let Some((site, role_and_ordinal)) = value.split_once('-') else {
-        return false;
-    };
-    if role_and_ordinal.len() < 3 {
-        return false;
-    }
-    let (role, ordinal) = role_and_ordinal.split_at(role_and_ordinal.len() - 2);
-    synthetic_site_code(site)
-        && matches!(role, "CM" | "MP" | "DP" | "SUP" | "PROVIDER" | "ADMIN")
-        && ordinal.bytes().all(|byte| byte.is_ascii_digit())
+        .strip_prefix("synthetic:")
+        .and_then(|value| value.split_once(":sha256.v1:"))
+        .is_some_and(|(actual_domain, digest)| {
+            actual_domain == domain
+                && digest.len() == 64
+                && digest.bytes().all(|byte| {
+                    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                })
+        })
 }
 ```
 
 Use them for the identity-bearing fields and links. Keep `safe_original_path_marker`, opaque SHA-256 production handles, canonical role/source classification, payload binding, and path-collision checks unchanged.
 
-- [ ] **Step 3: Run focused tests**
+- [x] **Step 3: Run focused tests**
 
 Run: `cargo test -p cmtraceopen-parser --test sccm_server_intake`
 
-Expected: PASS, including accepted generic synthetic values and rejected privacy/malformed mutations.
+Expected: PASS (66 tests), including accepted generic synthetic values, the four critic reproductions, and rejected Unicode/malformed mutations without panics.
 
 ### Task 4: Freeze the regression boundary
 
