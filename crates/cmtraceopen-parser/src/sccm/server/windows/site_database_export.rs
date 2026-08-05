@@ -114,9 +114,6 @@ pub fn assess_sccm_site_database_export(
     let preserved = parse_preserved_json(input).map_err(map_preflight_error)?;
     reject_duplicate_object_keys(&preserved).map_err(map_preflight_error)?;
     let root = object_fields(&preserved).ok_or(SccmSiteDatabaseExportError::MalformedDocument)?;
-    if field(root, "snapshots").is_some() {
-        return Err(SccmSiteDatabaseExportError::SnapshotContractViolation);
-    }
     let schema_version = match field(root, "schemaVersion") {
         Some(PreservedJsonValue::Unsigned(found)) => {
             u32::try_from(*found).map_err(|_| SccmSiteDatabaseExportError::MalformedDocument)?
@@ -127,6 +124,9 @@ pub fn assess_sccm_site_database_export(
         return Err(SccmSiteDatabaseExportError::UnsupportedSchemaVersion {
             found: schema_version,
         });
+    }
+    if field(root, "snapshot").is_none() || field(root, "snapshots").is_some() {
+        return Err(SccmSiteDatabaseExportError::SnapshotContractViolation);
     }
 
     let envelope: WireEnvelope = serde_json::from_str(input).map_err(map_wire_error)?;
@@ -342,8 +342,18 @@ struct WireEnvelope {
     capture_state: WireCaptureState,
     authorization: WireAuthorization,
     provenance: WireProvenance,
-    snapshot: Option<WireSnapshot>,
+    snapshot: WireSnapshotMember,
     integrity: WireIntegrity,
+}
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct WireSnapshotMember(Option<WireSnapshot>);
+
+impl WireSnapshotMember {
+    fn as_ref(&self) -> Option<&WireSnapshot> {
+        self.0.as_ref()
+    }
 }
 
 #[derive(Deserialize, Serialize)]

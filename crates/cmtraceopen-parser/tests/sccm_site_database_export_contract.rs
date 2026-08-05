@@ -143,6 +143,19 @@ fn rejects_or_preserves_only_coverage_for_failed_gates() {
         SccmSiteDatabaseExportEvidenceDisposition::CoverageOnly
     );
 
+    let mut denied_without_snapshot = fixture_value("denied");
+    denied_without_snapshot
+        .as_object_mut()
+        .expect("denied fixture root is an object")
+        .remove("snapshot");
+    assert_eq!(
+        assess_sccm_site_database_export(
+            &serde_json::to_vec(&denied_without_snapshot).expect("mutation serializes")
+        ),
+        Err(SccmSiteDatabaseExportError::SnapshotContractViolation),
+        "an access-denied envelope must contain an explicit null snapshot member"
+    );
+
     assert_eq!(
         assess_sccm_site_database_export(&fixture_bytes("malformed")),
         Err(SccmSiteDatabaseExportError::MalformedDocument)
