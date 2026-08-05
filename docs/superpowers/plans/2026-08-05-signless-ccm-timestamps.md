@@ -15,6 +15,7 @@
 - `crates/cmtraceopen-parser/src/parser/ccm.rs` owns CCM structural parsing, timestamp projection, and SCCM timestamp provenance. Remove its legacy public-tail split and compatibility demotion.
 - `crates/cmtraceopen-parser/src/parser/cmtlog.rs` owns CmtLog's relaxed record grammar. Make its optional signed timezone self-delimiting while retaining the ASCII-only structural numeric fields integrated by #413.
 - `crates/cmtraceopen-parser/tests/sccm_spine_contract.rs` owns public CCM projection and SCCM timeline-ordering contract assertions. Replace the pinned wrong public baseline with the corrected semantic table.
+- `crates/cmtraceopen-parser/tests/sccm_client_inventory_compliance_metering_fixture_contract.rs` owns inventory chronology mutation contracts. Change its signless-tail case from accepted recovery ordering to rejected missing timestamp provenance.
 - `library.md` owns workspace routing. Add the condition-first pointer for this implementation plan.
 
 ### Task 1: Pin the corrected public and CmtLog contracts (red)
@@ -72,7 +73,23 @@ fn cmtlog_accepts_signed_offsets_and_rejects_unicode_structural_digits() {
 }
 ```
 
-- [ ] **Step 4: Run the red tests**
+- [ ] **Step 4: Replace the inventory recovery mutation's obsolete signless-offset acceptance**
+
+Rename `independent_review_blocker_recovery_uses_additive_signless_offset_ordering` to `signless_fractional_tail_is_not_usable_recovery_chronology`. Keep its `.000240` mutation, but replace `validate_contract(...).unwrap_or_else(...)` with:
+
+```rust
+assert_rejected_with(
+    "recovery with signless fractional tail",
+    "inventory",
+    "recovery-contradictory",
+    &temporary.root,
+    &manifest,
+    &expected,
+    "normalized additive SCCM timestamp provenance",
+);
+```
+
+- [ ] **Step 5: Run the red tests**
 
 Run: `cargo test -p cmtraceopen-parser --lib parser::cmtlog::tests::signless_fractional_tails_never_become_cmtlog_offsets -- --exact`
 
