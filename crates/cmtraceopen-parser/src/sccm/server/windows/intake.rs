@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 use std::io::{self, Write};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde::de::{Error as _, MapAccess, SeqAccess, Visitor};
+use serde::de::Error as _;
 use serde::ser::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::sccm::json_contract::{
+    field as preserved_field, parse_preserved_json, PreservedJsonValue,
+};
 use crate::sccm::rotation::is_canonical_rotation_timestamp;
 use crate::sccm::{
     classify_artifact_name, normalize_ccm_artifact, SccmArtifact, SccmArtifactFamily,
@@ -960,11 +962,9 @@ fn validate_manifest_bounds(
         }
         if let Some(limit) = &artifact.collection_limit {
             if limit.byte_limit > MAX_SCCM_SERVER_ARTIFACT_BYTES
-                || limit
-                    .file_limit
-                    .is_some_and(|value| {
-                        value == 0 || value > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS as u64
-                    })
+                || limit.file_limit.is_some_and(|value| {
+                    value == 0 || value > MAX_SCCM_SERVER_MANIFEST_ARTIFACTS as u64
+                })
             {
                 return Err(SccmServerIntakeError::ManifestLimitExceeded);
             }
@@ -1360,13 +1360,15 @@ fn normalize_artifact(
     )?;
     let (bytes, capture_provenance) =
         validate_payload_contract(&artifact, relative_path.as_deref(), payload_by_id)?;
-    let collection_limit = artifact.collection_limit.as_ref().map(|limit| {
-        SccmServerCollectionLimit {
-            byte_limit: limit.byte_limit,
-            file_limit: limit.file_limit,
-            limit_applied: limit.limit_applied,
-        }
-    });
+    let collection_limit =
+        artifact
+            .collection_limit
+            .as_ref()
+            .map(|limit| SccmServerCollectionLimit {
+                byte_limit: limit.byte_limit,
+                file_limit: limit.file_limit,
+                limit_applied: limit.limit_applied,
+            });
     let content_sha256 = bytes.map(payload_sha256);
     let profile_eligible = source_version
         .as_deref()
@@ -2178,9 +2180,11 @@ fn validate_payload_contract<'a>(
             }
         }
         SccmCoverageState::ParseFailed => {
-            if artifact.collection_limit.as_ref().is_some_and(|limit| {
-                limit.byte_limit == 0 || limit.limit_applied
-            }) {
+            if artifact
+                .collection_limit
+                .as_ref()
+                .is_some_and(|limit| limit.byte_limit == 0 || limit.limit_applied)
+            {
                 return Err(SccmServerIntakeError::InvalidArtifact);
             }
         }
@@ -2309,9 +2313,7 @@ fn validate_relative_path(
 }
 
 fn is_physical_artifact(artifact: &RawServerArtifact) -> bool {
-    artifact.relative_path.is_some()
-        || artifact.bytes_copied > 0
-        || artifact.encoding.is_some()
+    artifact.relative_path.is_some() || artifact.bytes_copied > 0 || artifact.encoding.is_some()
 }
 
 fn safe_encoding(encoding: &str) -> bool {
@@ -3151,98 +3153,6 @@ fn rotation_sort_key(rotation: Option<&SccmRotation>) -> String {
     }
 }
 
-#[derive(Debug)]
-enum PreservedJsonValue {
-    Unsigned(u64),
-    String(String),
-    Array(Vec<Self>),
-    Object(Vec<(String, Self)>),
-    Other,
-}
-
-struct PreservedJsonValueVisitor;
-
-impl<'de> Visitor<'de> for PreservedJsonValueVisitor {
-    type Value = PreservedJsonValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("any JSON value while preserving duplicate object keys")
-    }
-
-    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Unsigned(value))
-    }
-
-    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        Ok(PreservedJsonValue::String(value.to_owned()))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::String(value))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(PreservedJsonValue::Other)
-    }
-
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(Self)
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::new();
-        while let Some(value) = sequence.next_element()? {
-            values.push(value);
-        }
-        Ok(PreservedJsonValue::Array(values))
-    }
-
-    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut fields = Vec::new();
-        while let Some(name) = map.next_key()? {
-            fields.push((name, map.next_value()?));
-        }
-        Ok(PreservedJsonValue::Object(fields))
-    }
-}
-
-impl<'de> Deserialize<'de> for PreservedJsonValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(PreservedJsonValueVisitor)
-    }
-}
-
 #[derive(Default)]
 struct OpaqueExtensionTotals {
     count: usize,
@@ -3270,7 +3180,7 @@ impl OpaqueExtensionTotals {
 }
 
 fn preflight_server_manifest_extensions(manifest_json: &str) -> Result<(), SccmServerIntakeError> {
-    let document: PreservedJsonValue = serde_json::from_str(manifest_json)
+    let document = parse_preserved_json(manifest_json)
         .map_err(|_| SccmServerIntakeError::MalformedManifest)?;
     let PreservedJsonValue::Object(manifest) = &document else {
         return Err(SccmServerIntakeError::MalformedManifest);
@@ -3356,15 +3266,6 @@ fn validate_unique_object_fields(
         return Err(scope_error);
     }
     Ok(())
-}
-
-fn preserved_field<'a>(
-    object: &'a [(String, PreservedJsonValue)],
-    name: &str,
-) -> Option<&'a PreservedJsonValue> {
-    object
-        .iter()
-        .find_map(|(field, value)| (field == name).then_some(value))
 }
 
 fn validate_preserved_extensions(

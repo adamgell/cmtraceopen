@@ -4,6 +4,7 @@ pub mod correlation;
 mod evidence;
 mod findings;
 mod ingest;
+mod json_contract;
 mod keys;
 pub mod models;
 mod rotation;
