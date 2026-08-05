@@ -4,7 +4,7 @@
   "scenario":"cache-failure",
   "stateChain":["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
   "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"validatedArtifactFamilies":["client-app-intent","client-content"]},
+  "extractionProfile":{"profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"validatedArtifactFamilies":["client-app-intent","client-content"]},
   "reorderedInputDeterministic":true,
   "coverage":[{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"captured"}],
   "artifactProvenance":[

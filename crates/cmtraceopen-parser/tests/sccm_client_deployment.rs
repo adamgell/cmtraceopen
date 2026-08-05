@@ -6,7 +6,7 @@
 //! and compares the reducer output against the declared expectations.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -16,9 +16,8 @@ use cmtraceopen_parser::sccm::{
     SccmClientAdmittedEvidence, SccmClientCapturedPayload, SccmClientIntakeArtifact,
     SccmClientIntakeBundle, SccmConfidence, SccmCoverageState, SccmDeploymentClassification,
     SccmDeploymentConfidence, SccmDeploymentKeyConfidence, SccmDeploymentKeyProfileKind,
-    SccmDeploymentObservationKeyConfidence, SccmDeploymentPhase,
-    SccmDeploymentProfileSelectionState, SccmDeploymentState, SccmFindingClass, SccmRole,
-    SccmRotation, SCCM_DEPLOYMENT_PROFILE_ID,
+    SccmDeploymentObservationKeyConfidence, SccmDeploymentPhase, SccmDeploymentState,
+    SccmFindingClass, SccmRole, SccmRotation, SCCM_DEPLOYMENT_PROFILE_ID,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -104,6 +103,7 @@ fn expected(scenario: &str) -> Value {
     let root = deployment_root().join(scenario);
     let manifest = load_json(&root.join("manifest.json"));
     let mut value = load_json(&root.join("expected.json"));
+    assert_expected_extraction_profile_contract(scenario, &value);
     let artifact_ids = manifest["artifacts"]
         .as_array()
         .expect("manifest artifacts")
@@ -121,6 +121,27 @@ fn expected(scenario: &str) -> Value {
         .collect::<BTreeMap<_, _>>();
     translate_artifact_ids(&mut value, &artifact_ids);
     value
+}
+
+fn assert_expected_extraction_profile_contract(scenario: &str, expected: &Value) {
+    let profile = expected["extractionProfile"]
+        .as_object()
+        .unwrap_or_else(|| panic!("{scenario}: extractionProfile is an object"));
+    let declared_fields = profile.keys().cloned().collect::<BTreeSet<_>>();
+    let consumed_fields = [
+        "profileId",
+        "sourceVersionPrefix",
+        "contentVersionRequired",
+        "keyKinds",
+        "validatedArtifactFamilies",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
+    assert_eq!(
+        declared_fields, consumed_fields,
+        "{scenario}: extractionProfile declares only consumed contract fields"
+    );
 }
 
 fn translate_artifact_ids(value: &mut Value, artifact_ids: &BTreeMap<String, String>) {
@@ -1551,8 +1572,6 @@ fn collect_object_keys(value: &Value, keys: &mut Vec<String>) {
     }
 }
 
-/// Scenarios whose declared `extractionProfile` states what the bundle
-/// actually produced rather than the profile's full capability list.
 const OBSERVED_KEY_KIND_SCENARIOS: [&str; 8] = [
     "bits-transfer-failure",
     "cache-failure",
@@ -2232,35 +2251,6 @@ fn every_equally_terminal_record_is_cited_rather_than_one_elected() {
             "{label}: two conflicting exit codes cannot key the transaction"
         );
     }
-}
-
-fn selection_state_name(state: SccmDeploymentProfileSelectionState) -> &'static str {
-    match state {
-        SccmDeploymentProfileSelectionState::Selected => "selected",
-        SccmDeploymentProfileSelectionState::Unselected => "unselected",
-    }
-}
-
-#[test]
-fn the_extraction_profile_reports_its_selection_state() {
-    for scenario in SCENARIOS {
-        let analysis = analyze_scenario(scenario);
-        let expected = expected(scenario);
-        assert_eq!(
-            selection_state_name(analysis.extraction_profile.selection_state),
-            expected["extractionProfile"]["selectionState"]
-                .as_str()
-                .expect("declared selection state"),
-            "{scenario}: extraction profile selection state"
-        );
-    }
-
-    let mut unprofiled = client_artifact("synthetic-intent", "AppIntentEval.log");
-    unprofiled.configmgr_version = Some("5.00.PROD.9128".to_owned());
-    assert!(
-        try_bundle_from(vec![(unprofiled, intent_content())]).is_err(),
-        "an unregistered profile cannot create deployment analysis authority"
-    );
 }
 
 #[test]

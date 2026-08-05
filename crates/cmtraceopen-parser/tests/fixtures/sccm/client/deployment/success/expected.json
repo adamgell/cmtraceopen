@@ -4,7 +4,7 @@
   "scenario": "success",
   "stateChain": ["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
   "analysisContract": {"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile": {"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","exitCode","packageId","productCode","requestId"],"validatedArtifactFamilies":["client-app-enforce","client-app-intent","client-content","client-policy-state"]},
+  "extractionProfile": {"profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","bitsJobId","ciId","contentId","contentVersion","distributionPointHostHandle","exitCode","packageId","productCode","requestId"],"validatedArtifactFamilies":["client-app-enforce","client-app-intent","client-content","client-policy-state"]},
   "reorderedInputDeterministic": true,
   "coverage": [{"logicalArtifactId":"client-app-enforce","state":"captured"},{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"captured"},{"logicalArtifactId":"client-policy-agent","state":"absent"},{"logicalArtifactId":"client-policy-state","state":"captured"}],
   "artifactProvenance": [

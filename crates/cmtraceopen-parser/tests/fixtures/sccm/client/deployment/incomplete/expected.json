@@ -4,7 +4,7 @@
   "scenario":"incomplete",
   "stateChain":["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
   "analysisContract":{"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
-  "extractionProfile":{"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","ciId"],"validatedArtifactFamilies":["client-app-intent"]},
+  "extractionProfile":{"profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","ciId"],"validatedArtifactFamilies":["client-app-intent"]},
   "reorderedInputDeterministic":true,
   "coverage":[{"logicalArtifactId":"client-app-enforce","state":"capped"},{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"accessDenied"}],
   "artifactProvenance":[
