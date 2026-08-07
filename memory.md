@@ -121,7 +121,7 @@ These directories track the full state of every Claude/Codex agent session as pa
 
 | Tier | Models | Scope | Provider |
 |---|---|---|---|
-| Scaffold | `kimi-k2.7-code`, `deepseek-v4-flash`, `qwen-flash` | Fixture matrices, test boilerplate, doc skeletons — ALWAYS with real anchors in the brief | `custom:api.llmgateway.io` |
+| Scaffold | `kimi-k2.7-code`, `deepseek-v4-flash`, `qwen-flash`, `gpt-5-luna` | Fixture matrices, test boilerplate, doc skeletons — ALWAYS with real anchors in the brief | `custom:api.llmgateway.io` |
 | Mid | `kimi-k3`, `grok-4-20-reasoning` | Parser logic, reducers, diagnostic rules | Same provider |
 | Reasoning | `gpt-5.6-sol`, `claude-opus-4-8` | Diagnostic contracts, cross-side correlation (#333-class), architecture decisions | Default or gateway |
 

@@ -54,7 +54,7 @@ This is a **thin wrapper** that points to the canonical agent files at the repo 
 
 | Tier | Models | Scope |
 |------|--------|-------|
-| Scaffold | `kimi-k2.7-code`, `deepseek-v4-flash`, `qwen-flash` | Fixtures, boilerplate — always anchored |
+| Scaffold | `kimi-k2.7-code`, `deepseek-v4-flash`, `qwen-flash`, `gpt-5-luna` | Fixtures, boilerplate — always anchored |
 | Mid | `kimi-k3`, `grok-4-20-reasoning` | Parser logic, reducers |
 | Reasoning | `gpt-5.6-sol`, `claude-opus-4-8` | Contracts, correlation, architecture |
 

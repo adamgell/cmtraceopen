@@ -40,7 +40,7 @@ These rules come directly from Adam's handoff charter and the Clairvoyance staff
 
 | Tier | Models | Use For |
 |---|---|---|
-| **Scaffold** | `kimi-k2.7-code`, `deepseek-v4-flash`, `qwen-flash` | Fixture matrices, test boilerplate, doc skeletons — ALWAYS anchor with real exemplars from the corpus |
+| **Scaffold** | `kimi-k2.7-code`, `deepseek-v4-flash`, `qwen-flash`, `gpt-5-luna` | Fixture matrices, test boilerplate, doc skeletons — ALWAYS anchor with real exemplars from the corpus |
 | **Mid** | `kimi-k3`, `grok-4-20-reasoning` | Parser logic, reducers, diagnostic rules |
 | **Reasoning** | `gpt-5.6-sol`, `claude-opus-4-8` | Diagnostic contracts, cross-side correlation (#333-class), architecture decisions, charter-level decisions |
 
