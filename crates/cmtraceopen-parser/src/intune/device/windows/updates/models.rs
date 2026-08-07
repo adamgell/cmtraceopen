@@ -353,6 +353,13 @@ pub enum PolicyChainState {
 }
 
 /// Comparison of expected against observed update source.
+///
+/// The three source fields are recorded independently so the report shows the
+/// nuance of *how* the device was pointed at its update service: `expected` is
+/// the operator's intent, `configured` is what policy/registry evidence
+/// declares, and `scanned` is what the update client actually used (from its
+/// own `serviceGuid`). `scanned` and `configured` can legitimately differ, and
+/// neither is collapsed into the other here.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectiveSourceAssessment {
@@ -364,8 +371,18 @@ pub struct EffectiveSourceAssessment {
     /// What the update client actually scanned, from its own `serviceGuid`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scanned: Option<UpdateSource>,
-    /// `None` when either side is unknown; claiming a match from one known side
-    /// would be an assertion, not a comparison.
+    /// Whether the effective source satisfies `expected`.
+    ///
+    /// The effective source is `scanned` when present, else `configured`
+    /// (scanned is what the device really used, so it wins on disagreement).
+    /// `Some(true)`/`Some(false)` is emitted whenever both `expected` and an
+    /// effective source are known — `configured` may be absent and a verdict is
+    /// still produced from `scanned` alone. `None` only when `expected` is
+    /// unknown or no source was observed at all. A `windowsUpdate` scan and a
+    /// `windowsUpdateForBusiness` expectation (or vice versa) count as agreeing
+    /// because both scan the same backend service; the exact `expected`/
+    /// `scanned` values are preserved on this struct so the distinction stays
+    /// visible in the export.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matches_expectation: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

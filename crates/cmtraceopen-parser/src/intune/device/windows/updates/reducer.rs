@@ -740,3 +740,36 @@ fn link_chains(policy: &PolicyChain) -> ChainLinkage {
         evidence,
     }
 }
+
+#[cfg(test)]
+mod sources_agree_tests {
+    use super::*;
+
+    #[test]
+    fn windows_update_and_wufb_are_treated_as_the_same_service() {
+        // They scan the same backend service, so an expectation of one is
+        // satisfied by the other. The exact values stay visible on
+        // EffectiveSourceAssessment, so this is not hidden.
+        assert!(sources_agree(
+            &UpdateSource::WindowsUpdateForBusiness,
+            &UpdateSource::WindowsUpdate
+        ));
+        assert!(sources_agree(
+            &UpdateSource::WindowsUpdate,
+            &UpdateSource::WindowsUpdateForBusiness
+        ));
+    }
+
+    #[test]
+    fn distinct_sources_do_not_agree() {
+        assert!(!sources_agree(
+            &UpdateSource::WindowsUpdateForBusiness,
+            &UpdateSource::Wsus
+        ));
+        assert!(!sources_agree(
+            &UpdateSource::WindowsUpdate,
+            &UpdateSource::MicrosoftStore
+        ));
+        assert!(sources_agree(&UpdateSource::Wsus, &UpdateSource::Wsus));
+    }
+}
