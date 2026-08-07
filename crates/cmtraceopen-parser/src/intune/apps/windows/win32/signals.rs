@@ -171,7 +171,7 @@ win32_regex!(
 );
 win32_regex!(
     installer_completed_re,
-    r"(?i)\binstall(?:ation)?\s+(?:is\s+)?(?:done|complete|completed|finished)\b|\binstaller\s+exited\b|\bprocess\s+exit\s+code\s+is\b"
+    r"(?i)\binstall(?:ation)?\s+(?:is\s+)?(?:done|complete|completed|finished)\b|\binstaller\s+exited\b|\bprocess\s+exit\s+code(?:\s+is)?\b"
 );
 win32_regex!(
     enforcement_started_re,
@@ -197,7 +197,7 @@ win32_regex!(
 // Return/exit/result token written next to an explicit label.
 win32_regex!(
     return_code_re,
-    r"(?i)\b(?:exit\s*code|exitCode|return\s*code|returnCode|result\s*code|resultCode)\b\s*[:=]?\s*(?P<code>-?(?:0x[0-9a-fA-F]+|\d+))"
+    r"(?i)\b(?:exit\s*code|exitCode|return\s*code|returnCode|result\s*code|resultCode)\b\s*(?:is\s*)?[:=]?\s*(?P<code>-?(?:0x[0-9a-fA-F]+|\d+))"
 );
 // Error token written next to an explicit label.
 win32_regex!(
@@ -658,6 +658,15 @@ mod tests {
         let code = result.error_code.expect("code");
         assert_eq!(code.decimal, Some(0));
         assert_eq!(code.raw, "0");
+    }
+
+    #[test]
+    fn process_exit_code_is_captured_with_the_is_separator() {
+        let result = workload(&format!(
+            "[Win32App] Process exit code is 1603 for app with id: {APP}"
+        ));
+        assert_eq!(result.signal, Win32Signal::InstallerCompleted);
+        assert_eq!(result.error_code.expect("code").decimal, Some(1603));
     }
 
     #[test]

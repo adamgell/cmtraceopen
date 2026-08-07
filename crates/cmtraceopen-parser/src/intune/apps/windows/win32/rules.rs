@@ -68,7 +68,15 @@ fn label(transaction: &Win32Transaction) -> String {
 }
 
 fn finding_id(rule: &str, transaction: &Win32Transaction) -> String {
-    format!("win32-{rule}:{}", transaction.key.app_id)
+    format!(
+        "win32-{rule}:{}:{}",
+        transaction.key.app_id,
+        transaction
+            .key
+            .deployment_type_id
+            .as_deref()
+            .unwrap_or("unknown")
+    )
 }
 
 fn phase_label(phase: Option<Win32Phase>) -> String {
@@ -865,8 +873,8 @@ mod tests {
             .into_iter()
             .map(|candidate| candidate.finding_id)
             .collect();
-        assert!(ids.contains(&format!("win32-installer-reported-failure:{APP}")));
-        assert!(ids.contains(&format!("win32-unmapped-return-code:{APP}")));
+        assert!(ids.contains(&format!("win32-installer-reported-failure:{APP}:{DT}")));
+        assert!(ids.contains(&format!("win32-unmapped-return-code:{APP}:{DT}")));
     }
 
     #[test]
@@ -882,7 +890,7 @@ mod tests {
         let findings = derive_findings(&snapshot);
         let success = findings
             .iter()
-            .find(|candidate| candidate.finding_id == format!("win32-succeeded:{APP}"))
+            .find(|candidate| candidate.finding_id == format!("win32-succeeded:{APP}:{DT}"))
             .expect("a successful deployment must be reported");
         assert!(success
             .summary

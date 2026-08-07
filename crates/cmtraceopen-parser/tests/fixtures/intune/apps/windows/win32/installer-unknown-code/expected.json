@@ -21,7 +21,7 @@
       "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
       "executionContext": "unknown",
       "outcome": "installerReportedFailure",
-      "lastConfirmedPhase": "content",
+      "lastConfirmedPhase": "enforcement",
       "confidence": "high",
       "returnCodeRaw": "0x80070643",
       "returnCodeKind": "unmapped",
@@ -35,7 +35,7 @@
   ],
   "findings": [
     {
-      "findingId": "win32-installer-reported-failure:11111111-2222-4333-8444-555555555555",
+      "findingId": "win32-installer-reported-failure:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
       "severity": "error",
       "evidence": [
         {
@@ -46,7 +46,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "win32-unmapped-return-code:11111111-2222-4333-8444-555555555555",
+      "findingId": "win32-unmapped-return-code:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
       "severity": "warning",
       "confidence": "medium",
       "evidence": [

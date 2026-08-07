@@ -97,7 +97,13 @@ fn account_field_re() -> &'static Regex {
 }
 
 fn already_masked(value: &str, kind: &str) -> bool {
-    value.starts_with(&format!("[{kind}:")) && value.ends_with(']')
+    let prefix = format!("[{kind}:");
+    value.len() == prefix.len() + 16 + 1
+        && value.starts_with(&prefix)
+        && value.ends_with(']')
+        && value.as_bytes()[prefix.len()..prefix.len() + 16]
+            .iter()
+            .all(u8::is_ascii_hexdigit)
 }
 
 /// Mask the sensitive spans inside a free-text value.
@@ -272,6 +278,14 @@ mod tests {
         ));
         assert!(redacted.contains(app), "correlation keys must not be lost");
         assert!(redacted.contains("1603"));
+    }
+
+    #[test]
+    fn malformed_mask_tokens_are_not_treated_as_already_masked() {
+        let redacted = redact_text("setup.exe -Command \"[command:0123456789abcdef] /quiet]\"");
+        assert!(!redacted.contains("/quiet"));
+        let redacted = redact_text("RunAsUser = [account:0123456789abcdef0]");
+        assert!(!redacted.contains("0123456789abcdef0"));
     }
 
     #[test]

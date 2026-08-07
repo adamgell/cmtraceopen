@@ -884,6 +884,11 @@ fn apply_installer_completion(
             }
         }
         Win32ReturnCodeKind::Failed | Win32ReturnCodeKind::Unmapped => {
+            // An observed installer exit code proves enforcement completed, even
+            // when the installer reported failure. Failed phases do not advance,
+            // but this is a terminal enforcement result rather than a launch
+            // failure.
+            fold.advance(Win32Phase::Enforcement);
             fold.set(Win32Outcome::InstallerReportedFailure);
         }
     }
