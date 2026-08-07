@@ -18,7 +18,7 @@ Parallel agents may specialize in workload evidence. They must not independently
 4. Turn adversarial review findings into reusable failing fixtures or property tests.
 5. Give parallel agents clear ownership boundaries and escalation rules.
 6. Keep `cmtraceopen-parser` pure Rust and `wasm32-unknown-unknown` compatible.
-7. Introduce the framework incrementally, proving it on one active workload before broad migration.
+7. Introduce the framework incrementally, beginning as a Microsoft Store-driven semantic test kit before extracting any shared runtime helpers.
 
 ## Non-goals
 
@@ -54,6 +54,12 @@ A later stage may consume the output of an earlier stage. It must not bypass an 
 - timestamps can order otherwise-correlated evidence but do not create strong correlation by themselves;
 - malformed, denied, capped, skipped, unsupported, or otherwise non-assessable evidence cannot silently become success/failure evidence;
 - findings cite the observations or coverage gaps that support them.
+
+## Framework v1 boundary
+
+Framework v1 is not a universal reducer, configurable rules engine, or mandatory migration of every workload. It begins with executable semantic tests driven by real Microsoft Store failure modes. Shared runtime helpers are deferred until the Store pilot proves a concept is genuinely reusable.
+
+Evidence and normalization are required **lane phases**, not permanent staff roles: each workload lane produces an evidence card and maps raw artifacts into approved typed observations before reduction. The permanent cross-lane ownership roles are Contract, Adversary, and Integration.
 
 ## Shared semantic contracts
 
@@ -199,11 +205,11 @@ A discovered semantic defect should preferably become a failing fixture/property
 
 Reasoning tier. Owns the normative contracts, ADRs, conformance rules, and cross-lane semantic review. Does not implement workload feature lanes by default.
 
-### Evidence Agent
+### Evidence phase (not a permanent agent)
 
 Produces an evidence card before reducer implementation: source provenance, authoritative fields, identity keys, ordering guarantees, known schema/version bounds, privacy classification, and unsupported assumptions. Real/sanitized evidence anchors are required where project rules require them.
 
-### Normalizer Agent
+### Normalizer phase (not a permanent agent)
 
 Maps raw artifacts into typed observations. It does not choose terminal outcomes. Untyped fields remain raw until a contract explicitly promotes them.
 
@@ -241,7 +247,7 @@ ADRs should contain context, decision, consequences, and concrete invariants/tes
 
 ## Pilot
 
-Use the Microsoft Store evidence lane as the first pilot because it exercises multiple identities, installer families, assignment intent, Windows event evidence, chronology, coverage, findings, and redaction.
+Use the Microsoft Store evidence lane as the first pilot because it exercises multiple identities, installer families, assignment intent, Windows event evidence, chronology, coverage, findings, and redaction. The initial test inventory is recorded in `docs/architecture/reducer-framework-v1-store-inventory.md`.
 
 The pilot should not require the Store PR to adopt speculative framework abstractions. First encode the review-discovered failure modes as conformance/adversarial cases, then extract only helpers proven useful by more than one case or clearly shared by the parser-family contract.
 

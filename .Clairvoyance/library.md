@@ -19,6 +19,7 @@ If no route matches, note the missing topic, write the doc when you learn it, an
 - IF log format reverse engineering → read [[references/REVERSE_ENGINEERING.md]]
 - IF design system / Fluent tokens → read [[docs/design-system/SKILL.md]]
 - IF evidence collection scripts → read [[scripts/collection/README.md]]
+- IF reducer semantics / adversarial review → read [[docs/superpowers/specs/2026-08-07-reducer-framework-v1-design.md]], [[docs/architecture/decisions/README.md]], and [[docs/architecture/reducer-framework-v1-store-inventory.md]]
 - IF parser crate layout / pure domain → read [[crates/cmtraceopen-parser/README.md]]
 - IF loading the CMTrace Open specialist agent → read [[soul.md]] and [[memory.md]]
 

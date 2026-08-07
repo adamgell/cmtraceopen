@@ -20,6 +20,7 @@ Deliverables:
   - identity and correlation;
   - chronology / terminal-state precedence;
   - redaction token scope.
+- Microsoft Store semantic issue inventory grouped by root cause.
 
 Acceptance:
 
@@ -28,7 +29,18 @@ Acceptance:
 - shared semantic questions have one escalation owner;
 - Store/Autopilot/Company Portal agents can identify which rules are global vs workload-local.
 
-## PR 2 — Conformance harness foundation
+## PR 2 — Store-driven semantic test kit
+
+**Purpose:** begin with RED tests for confirmed Microsoft Store semantic risks, not a universal reducer abstraction.
+
+First tests:
+
+- typed assignment intent cannot be overridden by caller-writable `named_data` from package/installer observations;
+- equivalent input permutation cannot change reduction when the source does not define caller order as chronology.
+
+Only after these tests expose the smallest reusable need should a shared helper be considered.
+
+## PR 3 — Conformance harness foundation
 
 **Purpose:** turn the contract into executable invariants.
 
@@ -59,7 +71,7 @@ Acceptance:
 - strict Clippy green;
 - wasm32 check green.
 
-## PR 3 — Microsoft Store adversarial pilot
+## PR 4 — Microsoft Store adversarial pilot
 
 **Purpose:** prove the framework against the current hardest reducer lane.
 
@@ -85,7 +97,7 @@ Acceptance:
 - no terminal outcome from non-assessable evidence;
 - full parser/Clippy/wasm gates green.
 
-## PR 4 — Second-lane proof
+## PR 5 — Second-lane proof
 
 **Purpose:** prove the framework is shared rather than Store-specific.
 
@@ -105,7 +117,7 @@ Acceptance:
 - no cross-workload state machine;
 - exact-head full parser/Clippy/wasm gates green.
 
-## PR 5 — Workflow enforcement
+## PR 6 — Workflow enforcement
 
 **Purpose:** make the improved parallel-agent workflow the default.
 
@@ -127,8 +139,8 @@ Acceptance:
 
 ```text
 CEO / Contract Agent
-  -> Evidence Agent: evidence card
-  -> Normalizer Agent: typed observations + normalization tests
+-> Evidence phase: evidence card
+-> Normalizer phase: typed observations + normalization tests
   -> Reducer Agent: red-first reducer scenario + implementation
   -> Adversary Agent: counterexample fixtures/property cases
   -> Reducer Agent: resolve valid failures
@@ -183,4 +195,4 @@ A reducer is not merge-ready until the reviewer can answer yes to each applicabl
 
 ## Immediate first move
 
-Do not begin with a broad code refactor. Merge PR 1, decide the four ADRs, then build PR 2's smallest conformance harness. Use the Microsoft Store review findings to drive PR 3's first red tests.
+Do not begin with a broad code refactor. Land the governance slice with the four ADRs and Store inventory. Then create the Phase 2 Store RED-test branch for typed intent authority and input-order independence. Do not build a universal conformance harness until those tests prove the smallest reusable shape.
