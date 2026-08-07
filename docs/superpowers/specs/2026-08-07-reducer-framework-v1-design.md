@@ -80,7 +80,7 @@ These should be small functions/enums over existing contracts, not a new paralle
 
 Evidence strength and conclusion confidence are separate concepts.
 
-Recommended evidence-strength lattice:
+The following five levels are a conceptual vocabulary for contracts, reviews, and tests:
 
 ```text
 Authoritative
@@ -90,7 +90,7 @@ Weak
 Untrusted
 ```
 
-A reducer maps workload-specific observations into this shared strength vocabulary. Multiple weak observations do not automatically become authoritative.
+Workload reducers may map observations into these concepts, but Framework v1 does not require a shared evidence-strength enum, envelope, or runtime representation. Multiple weak observations do not automatically become authoritative.
 
 Existing `IntuneFindingConfidence::{Low, Medium, High}` may remain the public finding projection for v1. The framework must document how evidence strength constrains confidence rather than introducing a breaking public confidence model immediately.
 
@@ -257,7 +257,7 @@ After the Store pilot, apply the same conformance suite to Autopilot and Company
 
 - Normative reducer contract is documented and routed from the project knowledge library.
 - Contract/Adversary/Integration agent charters exist and are referenced by the CEO workflow.
-- Initial ADRs are accepted for correlation, chronology, confidence/evidence strength, and redaction.
+- Initial ADRs establish accepted boundaries for correlation, chronology, and confidence/evidence strength; the redaction architecture boundary is accepted while token/equality scope remains provisional.
 - A reusable conformance harness exists in `cmtraceopen-parser`.
 - Microsoft Store passes the agreed conformance/adversarial suite.
 - At least one second reducer demonstrates that the shared helpers are actually reusable.
