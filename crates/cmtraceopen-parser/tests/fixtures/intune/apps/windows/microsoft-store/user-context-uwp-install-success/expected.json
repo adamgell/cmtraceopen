@@ -1,0 +1,63 @@
+{
+  "scenario": "user-context-uwp-install-success",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "state": "installCompleted",
+      "action": "install",
+      "executionContext": "user",
+      "intent": "unknown",
+      "storeProductId": "9WZSYNTH0001",
+      "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+      "displayName": "Synthetic Store App",
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "lastConfirmedPhase": "registration",
+      "confidence": "high",
+      "errorHex": null,
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "ime-log:2",
+        "ime-log:3",
+        "appx-operational:1",
+        "appx-operational:2",
+        "appx-operational:3"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-install-completed",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "appx-operational:1",
+        "appx-operational:2",
+        "appx-operational:3",
+        "ime-log:2",
+        "ime-log:3"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "a package full name and a package family name correlate to one transaction",
+    "the installer family is declared by the deployment scope, not by the channel"
+  ]
+}

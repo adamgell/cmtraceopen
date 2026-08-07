@@ -1,0 +1,58 @@
+{
+  "scenario": "uninstall-success",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "assignments",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "state": "uninstallCompleted",
+      "action": "uninstall",
+      "executionContext": "user",
+      "intent": "uninstall",
+      "storeProductId": "9WZSYNTH0001",
+      "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+      "displayName": "Synthetic Store App",
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "lastConfirmedPhase": "registration",
+      "confidence": "high",
+      "errorHex": null,
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "assignments:1",
+        "appx-operational:1",
+        "appx-operational:2"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-uninstall-completed",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "appx-operational:1",
+        "appx-operational:2",
+        "assignments:1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "an uninstall intent produces an uninstall action, not an install"
+  ]
+}

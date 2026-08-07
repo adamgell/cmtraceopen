@@ -1,0 +1,60 @@
+{
+  "scenario": "acquisition-license-failure",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "store-agent",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "unknown",
+      "familyBasis": "unvalidated",
+      "state": "licenseFailure",
+      "action": "install",
+      "executionContext": "unknown",
+      "intent": "unknown",
+      "storeProductId": "9WZSYNTH0001",
+      "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+      "displayName": null,
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "lastConfirmedPhase": "acquisition",
+      "confidence": "high",
+      "errorHex": "0x803F8001",
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "ime-log:2",
+        "ime-log:3",
+        "store-agent:1",
+        "store-agent:2"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-license-acquisition-failed",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "ime-log:2",
+        "ime-log:3",
+        "store-agent:1",
+        "store-agent:2"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "an unknown installer family before staging is not reported as a gap"
+  ]
+}
