@@ -213,8 +213,9 @@ impl UpdateKey {
     ///
     /// Time proximity is never enough, so this deliberately has no timestamp
     /// input. Two keys join when they share an `update_id`, or when they share a
-    /// `kb_article` and neither carries a *conflicting* `update_id`. A key with
-    /// nothing identified joins nothing, including another empty key.
+    /// `kb_article` and neither carries a *conflicting* `update_id` — and in
+    /// both cases their revisions must agree. A key with nothing identified
+    /// joins nothing, including another empty key.
     pub fn joins(&self, other: &Self) -> bool {
         if !self.is_identified() || !other.is_identified() {
             return false;
@@ -224,7 +225,11 @@ impl UpdateKey {
                 left.eq_ignore_ascii_case(right) && self.revision_agrees(other)
             }
             _ => match (&self.kb_article, &other.kb_article) {
-                (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+                // A KB match alone is not enough: a different revision of the
+                // same KB is a different update, so revision must agree too.
+                (Some(left), Some(right)) => {
+                    left.eq_ignore_ascii_case(right) && self.revision_agrees(other)
+                }
                 _ => false,
             },
         }
@@ -722,6 +727,40 @@ mod tests {
             revision: None,
         };
         assert!(!left.joins(&other_kb));
+    }
+
+    #[test]
+    fn keys_do_not_join_across_revisions_of_the_same_kb() {
+        let left = UpdateKey {
+            update_id: None,
+            kb_article: Some("KB5000001".to_owned()),
+            revision: Some("1".to_owned()),
+        };
+        let right = UpdateKey {
+            update_id: None,
+            kb_article: Some("KB5000001".to_owned()),
+            revision: Some("2".to_owned()),
+        };
+        assert!(
+            !left.joins(&right),
+            "a different revision of the same KB is a different update"
+        );
+
+        // Same KB, same revision still joins.
+        let same = UpdateKey {
+            update_id: None,
+            kb_article: Some("KB5000001".to_owned()),
+            revision: Some("1".to_owned()),
+        };
+        assert!(left.joins(&same));
+
+        // A missing revision does not contradict a present one.
+        let unspecified = UpdateKey {
+            update_id: None,
+            kb_article: Some("KB5000001".to_owned()),
+            revision: None,
+        };
+        assert!(left.joins(&unspecified));
     }
 
     #[test]
