@@ -1,0 +1,27 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "scope-mismatch-device-and-user",
+  "workload": "device/windows/configuration",
+  "description": "The same CSP node targeted in both scopes; the user-scoped command failed.",
+  "generatedAtUtc": "2026-07-31T10:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "family": "eventLog",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "payload": "events",
+      "originalBasename": "Admin.evtx",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "relativePath": "evidence/mdm-admin-channel/current/records.json",
+      "bytesCopied": 3660,
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://mdm-admin-channel/Admin.evtx",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}

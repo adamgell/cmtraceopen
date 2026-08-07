@@ -1,0 +1,44 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "local-success-cloud-failure",
+  "workload": "device/windows/configuration",
+  "description": "The device says the CSP applied the value; the imported Intune row says it failed.",
+  "generatedAtUtc": "2026-07-31T10:00:00Z",
+  "artifacts": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "family": "eventLog",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "payload": "events",
+      "originalBasename": "Admin.evtx",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "relativePath": "evidence/mdm-admin-channel/current/records.json",
+      "bytesCopied": 1874,
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://mdm-admin-channel/Admin.evtx",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    },
+    {
+      "artifactId": "intune-setting-report",
+      "family": "graph",
+      "sourceKind": "graph",
+      "captureState": "captured",
+      "payload": "reports",
+      "originalBasename": "settingStates.json",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "relativePath": "evidence/intune-setting-report/current/records.json",
+      "bytesCopied": 1272,
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://intune-setting-report/settingStates.json",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      }
+    }
+  ]
+}
