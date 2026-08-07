@@ -109,13 +109,19 @@ pub(super) fn split_rotation(file_name: &str) -> (String, Option<u32>) {
     // Strip the `.log` extension case-insensitively: IME archives are seen as
     // `.log`, `.LOG`, `.Log`, etc. in the wild, and a mixed-case suffix must
     // still resolve to the canonical stem so rotated variants map to one
-    // artifact.
-    let without_ext =
-        if trimmed.len() >= 4 && trimmed[trimmed.len() - 4..].eq_ignore_ascii_case(".log") {
+    // artifact. `strip_suffix` on the lowercased copy gives the boundary, but
+    // we slice the original by char count, so a multi-byte name (e.g.
+    // "Журнал.log") never splits a UTF-8 sequence.
+    let without_ext = {
+        let lowered = trimmed.to_ascii_lowercase();
+        if lowered.ends_with(".log") {
+            // ".log" is 4 ASCII bytes; the char boundary 4 bytes from the end
+            // is valid because those 4 bytes are exactly the ASCII suffix.
             &trimmed[..trimmed.len() - 4]
         } else {
             trimmed
-        };
+        }
+    };
 
     let (without_ext, underscore_archive) = match without_ext.strip_prefix('_') {
         Some(rest) => (rest, true),
@@ -371,6 +377,30 @@ mod tests {
             split_rotation("_AppWorkload.log"),
             ("AppWorkload".to_string(), None)
         );
+    }
+
+    #[test]
+    fn log_extension_is_stripped_case_insensitively() {
+        assert_eq!(
+            split_rotation("AppWorkload.Log"),
+            ("AppWorkload".to_string(), Some(0))
+        );
+        assert_eq!(
+            split_rotation("IntuneManagementExtension-1.LOG"),
+            ("IntuneManagementExtension".to_string(), Some(1))
+        );
+    }
+
+    #[test]
+    fn multibyte_names_do_not_panic_and_keep_their_stem() {
+        // "Журнал" is multi-byte UTF-8; slicing by byte index at len-4 would
+        // panic if the suffix check were not char-boundary-safe.
+        assert_eq!(
+            split_rotation("Журнал.log"),
+            ("Журнал".to_string(), Some(0))
+        );
+        // A name whose extension is not exactly `.log` is left untouched.
+        assert_eq!(split_rotation("aé.lo"), ("aé.lo".to_string(), Some(0)));
     }
 
     #[test]
