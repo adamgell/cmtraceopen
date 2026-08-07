@@ -171,6 +171,63 @@ fn missing_sup_topology_role_projects_one_absent_coverage_gap() {
 }
 
 #[test]
+fn observed_sup_role_without_artifacts_projects_one_absent_coverage_gap() {
+    let (mut manifest, mut payloads) = load_manifest_and_payloads("complete-multi-role");
+    let sup_artifact_ids: Vec<String> = manifest["artifacts"]
+        .as_array()
+        .expect("artifacts are an array")
+        .iter()
+        .filter(|artifact| {
+            artifact["sourceId"] == "server-sup-sync" || artifact["sourceId"] == "server-sup-wsus"
+        })
+        .map(|artifact| {
+            artifact["artifactId"]
+                .as_str()
+                .expect("artifact ID is a string")
+                .to_owned()
+        })
+        .collect();
+    assert!(
+        !sup_artifact_ids.is_empty(),
+        "fixture includes SUP artifacts"
+    );
+    manifest["artifacts"]
+        .as_array_mut()
+        .expect("artifacts are an array")
+        .retain(|artifact| {
+            !sup_artifact_ids.iter().any(|id| {
+                id == artifact["artifactId"]
+                    .as_str()
+                    .expect("artifact ID is a string")
+            })
+        });
+    payloads.retain(|payload| !sup_artifact_ids.contains(&payload.manifest_artifact_id));
+    // The role itself stays observed in topology; only its artifacts vanish.
+    assert!(manifest["topology"]["rolesObserved"]
+        .as_array()
+        .expect("rolesObserved is an array")
+        .iter()
+        .any(|role| role == "softwareUpdatePoint"));
+
+    let analysis = analyze_software_update_point(&assess_manifest(&manifest, &payloads));
+
+    assert!(analysis.coverage_rows.is_empty());
+    assert_eq!(analysis.coverage_gaps.len(), 1);
+    let gap = &analysis.coverage_gaps[0];
+    assert_eq!(gap.artifact_id, None);
+    assert_eq!(gap.source_id, "server-sup-sync");
+    assert_eq!(
+        gap.workflow_subject_role,
+        Some(SccmRole::SoftwareUpdatePoint)
+    );
+    assert_eq!(gap.capture_state, SccmCoverageState::Absent);
+    assert_eq!(
+        gap.reason,
+        "Software Update Point role is observed in canonical intake topology, but no SUP sync or WSUS artifact was captured; no outcome is inferred."
+    );
+}
+
+#[test]
 fn sup_analysis_excludes_an_unrelated_management_point_recapture_request() {
     let (mut manifest, mut payloads) = load_manifest_and_payloads("complete-multi-role");
     let management_point = manifest["artifacts"]

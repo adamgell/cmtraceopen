@@ -18,6 +18,8 @@ const SCCM_SOFTWARE_UPDATE_POINT_INTAKE_AUTHORITY_REASON: &str =
     "Canonical server intake authority could not be verified.";
 const SCCM_SOFTWARE_UPDATE_POINT_ROLE_ABSENT_REASON: &str =
     "Canonical intake topology does not report a Software Update Point role; no outcome is inferred.";
+const SCCM_SOFTWARE_UPDATE_POINT_SOURCE_ABSENT_REASON: &str =
+    "Software Update Point role is observed in canonical intake topology, but no SUP sync or WSUS artifact was captured; no outcome is inferred.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,12 +107,16 @@ pub fn analyze_software_update_point(
     coverage_rows
         .sort_by(|left, right| coverage_row_sort_key(left).cmp(&coverage_row_sort_key(right)));
 
-    let coverage_gaps = if coverage_rows.is_empty()
-        && !intake
+    let coverage_gaps = if coverage_rows.is_empty() {
+        let role_observed = intake
             .topology
             .roles_observed
-            .contains(&SccmRole::SoftwareUpdatePoint)
-    {
+            .contains(&SccmRole::SoftwareUpdatePoint);
+        let reason = if role_observed {
+            SCCM_SOFTWARE_UPDATE_POINT_SOURCE_ABSENT_REASON
+        } else {
+            SCCM_SOFTWARE_UPDATE_POINT_ROLE_ABSENT_REASON
+        };
         vec![SccmSoftwareUpdatePointCoverageGap {
             artifact_id: None,
             source_id: SCCM_SOFTWARE_UPDATE_POINT_SYNC_SOURCE_ID.to_owned(),
@@ -121,7 +127,7 @@ pub fn analyze_software_update_point(
             capture_state: SccmCoverageState::Absent,
             rotation_fragment_complete: None,
             profile_eligible: false,
-            reason: SCCM_SOFTWARE_UPDATE_POINT_ROLE_ABSENT_REASON.to_owned(),
+            reason: reason.to_owned(),
         }]
     } else {
         coverage_rows

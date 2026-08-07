@@ -68,8 +68,11 @@ pub struct SccmServerIntakeAssessment {
     pub next_artifact_requests: Vec<SccmArtifactRequest>,
     /// Private integrity binding for the canonical projection that server-role
     /// reducers consume. It is sequence-independent, but every authoritative
-    /// schema, topology, artifact, coverage, evidence, and artifact-request
-    /// field remains bound to the assessment produced by intake.
+    /// schema, topology, artifact, coverage, and evidence field remains bound
+    /// to the assessment produced by intake. Artifact-request binding is
+    /// modulo surrounding whitespace: each request's trimmed reason and the
+    /// total request byte budget are bound, while the exact placement of
+    /// leading/trailing whitespace inside a reason is canonicalized away.
     intake_integrity: SccmServerIntakeIntegrity,
     /// Versioned opaque manifest extensions retained without interpreting them.
     extensions: Vec<SccmServerOpaqueExtension>,
