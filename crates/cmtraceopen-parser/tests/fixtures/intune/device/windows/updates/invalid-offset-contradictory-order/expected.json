@@ -1,0 +1,114 @@
+{
+  "scenario": "invalid-offset-contradictory-order",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events-malformed",
+      "status": "parseFailed"
+    }
+  ],
+  "policyChain": {
+    "state": "applied",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": null,
+      "scanned": null,
+      "matchesExpectation": null
+    }
+  },
+  "updateChain": {
+    "state": "installed",
+    "rebootPending": false,
+    "unkeyedObservationCount": 0,
+    "transactions": [
+      {
+        "key": "KB5000011.1",
+        "state": "installed",
+        "confidence": "low",
+        "orderContradiction": true,
+        "serviceState": null,
+        "corroborated": false
+      }
+    ]
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/applied",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "mdm-814",
+          "sourceArtifactId": "mdm-admin-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/update/installed/KB5000011.1",
+      "severity": "info",
+      "confidence": "low",
+      "evidence": [
+        {
+          "evidenceId": "wu-19",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-44",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/contradictory-order/KB5000011.1",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "wu-19",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-44",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/evidence/coverage-gap/wu-client-events-malformed",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "wu-client-events-malformed"
+      ]
+    }
+  ],
+  "assertions": [
+    "an impossible phase ordering caps the transaction's confidence",
+    "a parseFailed artifact keeps its bytes and reports parseFailed coverage"
+  ]
+}

@@ -1,0 +1,55 @@
+{"_comment": "SYNTHETIC FIXTURE: scan found nothing applicable",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-26",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 201,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 26,
+            "recordId": 201
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 26,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 201,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "updateCount",
+          "value": "0"
+        },
+        {
+          "name": "serviceGuid",
+          "value": "{9482F4B4-E343-43B6-B170-9A65BC822C77}"
+        }
+      ],
+      "message": null
+    }
+  ]
+}

@@ -1,0 +1,165 @@
+{"_comment": "SYNTHETIC FIXTURE: download failure",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-26",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 201,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 26,
+            "recordId": 201
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 26,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 201,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "updateCount",
+          "value": "1"
+        },
+        {
+          "name": "serviceGuid",
+          "value": "{9482F4B4-E343-43B6-B170-9A65BC822C77}"
+        }
+      ],
+      "message": null
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-44",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 202,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 44,
+            "recordId": 202
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:01:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:01:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 44,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 202,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "updateGuid",
+          "value": "{aaaaaaaa-0000-0000-0000-000000000002}"
+        },
+        {
+          "name": "updateRevisionNumber",
+          "value": "1"
+        }
+      ],
+      "message": null
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-31",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 203,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 31,
+            "recordId": 203
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:03:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:03:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 31,
+      "level": "error",
+      "task": null,
+      "keywords": null,
+      "recordId": 203,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "errorCode",
+          "value": "0x80D02002"
+        },
+        {
+          "name": "updateGuid",
+          "value": "{aaaaaaaa-0000-0000-0000-000000000002}"
+        },
+        {
+          "name": "updateRevisionNumber",
+          "value": "1"
+        },
+        {
+          "name": "updateTitle",
+          "value": "2026-07 Cumulative Update for Windows 11 (KB5000002)"
+        }
+      ],
+      "message": null
+    }
+  ]
+}

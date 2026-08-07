@@ -1,0 +1,97 @@
+{
+  "scenario": "policy-applied-update-installed-reboot-complete",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "policy-registry",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    }
+  ],
+  "policyChain": {
+    "state": "applied",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": "windowsUpdateForBusiness",
+      "scanned": "windowsUpdate",
+      "matchesExpectation": true
+    }
+  },
+  "updateChain": {
+    "state": "installed",
+    "rebootPending": false,
+    "unkeyedObservationCount": 1,
+    "transactions": [
+      {
+        "key": "KB5000001.1",
+        "state": "installed",
+        "confidence": "high",
+        "orderContradiction": false,
+        "serviceState": null,
+        "corroborated": false
+      }
+    ]
+  },
+  "linkage": {
+    "state": "sharedUpdateSource"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/applied",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "mdm-814",
+          "sourceArtifactId": "mdm-admin-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/update/installed/KB5000001.1",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "wu-19",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-41",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-43",
+          "sourceArtifactId": "wu-client-events"
+        },
+        {
+          "evidenceId": "wu-44",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a completed restart is represented by an install success with no outstanding restart-required record",
+    "the installed finding cites only Windows Update client records, never the MDM policy record"
+  ]
+}

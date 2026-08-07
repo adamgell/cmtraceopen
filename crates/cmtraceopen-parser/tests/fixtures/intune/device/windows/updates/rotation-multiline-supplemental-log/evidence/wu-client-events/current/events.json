@@ -1,0 +1,118 @@
+{"_comment": "SYNTHETIC FIXTURE: install failure",
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-43",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 201,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 43,
+            "recordId": 201
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:10:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:10:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 43,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 201,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "updateGuid",
+          "value": "{aaaaaaaa-0000-0000-0000-000000000010}"
+        },
+        {
+          "name": "updateRevisionNumber",
+          "value": "1"
+        },
+        {
+          "name": "updateTitle",
+          "value": "2026-07 Cumulative Update for Windows 11 (KB5000010)"
+        }
+      ],
+      "message": null
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "wu-20",
+          "sourceArtifactId": "wu-client-events"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "wu-client-events",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 202,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+            "provider": "Microsoft-Windows-WindowsUpdateClient",
+            "eventId": 20,
+            "recordId": 202
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T01:12:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T01:12:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T03:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-WindowsUpdateClient/Operational",
+      "provider": "Microsoft-Windows-WindowsUpdateClient",
+      "eventId": 20,
+      "level": "error",
+      "task": null,
+      "keywords": null,
+      "recordId": 202,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "errorCode",
+          "value": "0x800F0922"
+        },
+        {
+          "name": "updateGuid",
+          "value": "{aaaaaaaa-0000-0000-0000-000000000010}"
+        },
+        {
+          "name": "updateRevisionNumber",
+          "value": "1"
+        },
+        {
+          "name": "updateTitle",
+          "value": "2026-07 Cumulative Update for Windows 11 (KB5000010)"
+        }
+      ],
+      "message": null
+    }
+  ]
+}

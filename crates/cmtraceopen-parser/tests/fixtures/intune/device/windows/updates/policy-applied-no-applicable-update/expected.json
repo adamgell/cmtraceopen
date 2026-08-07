@@ -1,0 +1,72 @@
+{
+  "scenario": "policy-applied-no-applicable-update",
+  "workload": "device/windows/updates",
+  "coverage": [
+    {
+      "artifactId": "device-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-admin-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "wu-client-events",
+      "status": "available"
+    }
+  ],
+  "policyChain": {
+    "state": "applied",
+    "workloadOwner": "intune",
+    "conflictCount": 0,
+    "effectiveSource": {
+      "expected": "windowsUpdateForBusiness",
+      "configured": null,
+      "scanned": "windowsUpdate",
+      "matchesExpectation": true
+    }
+  },
+  "updateChain": {
+    "state": "noApplicableUpdate",
+    "rebootPending": false,
+    "unkeyedObservationCount": 1,
+    "transactions": []
+  },
+  "linkage": {
+    "state": "notLinked"
+  },
+  "inputCoverage": {
+    "unmappedEventIds": 0,
+    "unknownProviderEvents": 0
+  },
+  "findings": [
+    {
+      "findingId": "intune/windows/updates/policy/applied",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "mdm-814",
+          "sourceArtifactId": "mdm-admin-events"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "intune/windows/updates/update/no-applicable-update",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        {
+          "evidenceId": "wu-26",
+          "sourceArtifactId": "wu-client-events"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "event 26 with updateCount 0 is an applicability statement, not a scan failure",
+    "with no configured-source evidence the chains stay unlinked"
+  ]
+}
