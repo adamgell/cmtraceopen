@@ -20,7 +20,7 @@ use regex::Regex;
 
 use crate::intune::evidence::IntuneSensitivity;
 
-use super::models::{Win32Analysis, Win32Observation};
+use super::models::{Win32Analysis, Win32Observation, Win32Transaction};
 
 /// FNV-1a. Stable across runs and platforms, which `DefaultHasher` is not.
 fn stable_token(kind: &str, value: &str) -> String {
@@ -65,8 +65,17 @@ fn user_path_re() -> &'static Regex {
 fn command_line_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
+        // Two value shapes:
+        //  - quoted: `-"..."` or `-'...'` — the value runs to the closing quote,
+        //    so spaces inside a quoted secret stay masked.
+        //  - unquoted: the value stops at the next whitespace-delimited token,
+        //    so a trailing switch like `/quiet` or `-Log X` after the secret is
+        //    preserved rather than swallowed into the masked span.
+        // Either way the value stops at a line break: a CCM record is one
+        // *logical* record and routinely contains newlines, so anchoring on `$`
+        // would leak a secret inside a multi-line record entirely.
         Regex::new(
-            r"(?i)(?P<flag>[-/](?:Command|EncodedCommand|Password|Secret|ClientSecret|Token|AccessToken|ApiKey|Api[-_]?Key|Credential|Authorization)[\s=:]+)(?P<value>[^\r\n]+)",
+            r"(?i)(?P<flag>[-/](?:Command|EncodedCommand|Password|Secret|ClientSecret|Token|AccessToken|ApiKey|Api[-_]?Key|Credential|Authorization)[\s=:]+)(?P<value>\x22[^\x22\r\n]*\x22|'[^'\r\n]*'|[^\s\r\n]+)",
         )
         .expect("command line regex must compile")
     })
@@ -147,6 +156,24 @@ fn redact_observation(observation: &Win32Observation) -> Win32Observation {
     redacted
 }
 
+/// Mask the log-derived free text a transaction carries.
+///
+/// Requirement names come from the record body and can quote a path, a UPN, or
+/// a command line, so they go through [`redact_text`]. The correlation keys
+/// (`app_id`, `deployment_type_id`, dependency app ids) are identifiers, not
+/// free text, and masking them would break the cross-record correlation the
+/// export exists to show; `next_evidence_request` is a static string with no
+/// record content. Both stay verbatim.
+fn redact_transaction(transaction: &Win32Transaction) -> Win32Transaction {
+    let mut redacted = transaction.clone();
+    redacted.failed_requirements = transaction
+        .failed_requirements
+        .iter()
+        .map(|name| redact_text(name))
+        .collect();
+    redacted
+}
+
 /// Project an analysis into its default-safe export form.
 ///
 /// Everything a transaction is keyed on survives. Only classified-sensitive text
@@ -155,9 +182,11 @@ fn redact_observation(observation: &Win32Observation) -> Win32Observation {
 pub fn redacted_export_projection(analysis: &Win32Analysis) -> Win32Analysis {
     Win32Analysis {
         schema_version: analysis.schema_version,
-        // Transactions carry no free text of their own beyond a caller-supplied
-        // display name, which the caller is responsible for having made safe.
-        transactions: analysis.transactions.clone(),
+        transactions: analysis
+            .transactions
+            .iter()
+            .map(redact_transaction)
+            .collect(),
         observations: analysis
             .observations
             .iter()

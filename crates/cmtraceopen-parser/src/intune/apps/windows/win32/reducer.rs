@@ -29,7 +29,7 @@ use super::models::{
 use super::signals::{classify_record, RecordClassification};
 use super::sources::{
     artifact_coverage, candidate_source_kind, classify_artifact, coverage_family,
-    intune_source_kind, Win32SourceInput,
+    intune_source_kind, split_rotation, Win32SourceInput,
 };
 
 /// Artifacts a complete Win32 bundle is expected to contain.
@@ -385,7 +385,10 @@ pub fn analyze_win32_bundle_with(
     let mut seen_basenames: BTreeSet<String> = BTreeSet::new();
 
     for (artifact_index, input) in inputs.iter().enumerate() {
-        seen_basenames.insert(input.file_name.trim().to_ascii_lowercase());
+        // Normalize through split_rotation so a rotated or prefixed variant of
+        // an expected artifact (AppWorkload-1.log, _AppWorkload.log) resolves to
+        // the same canonical basename the expected-artifact check looks for.
+        seen_basenames.insert(split_rotation(&input.file_name).0.to_ascii_lowercase());
 
         // A supplemental installer artifact is evidence by its identity alone.
         // Its contents are installer stdout/stderr -- unbounded and frequently
@@ -485,8 +488,11 @@ pub fn analyze_win32_bundle_with(
     reconcile_partial_keys(&mut records);
 
     // Supplemental artifacts join a transaction only when a keyed record names
-    // them. Timestamp proximity is explicitly not a join condition.
-    let mut linked_artifacts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    // them. Timestamp proximity is explicitly not a join condition. The map is
+    // keyed by the full transaction identity (app + deployment type + execution
+    // context), not app id alone, so two deployment types of the same app never
+    // pull each other's corroborating artifacts.
+    let mut linked_artifacts: BTreeMap<Win32TransactionKey, BTreeSet<String>> = BTreeMap::new();
     let mut linked_ids: BTreeSet<String> = BTreeSet::new();
     for record in records.iter() {
         let (Some(app), Some(referenced)) = (
@@ -497,7 +503,11 @@ pub fn analyze_win32_bundle_with(
         };
         if let Some(artifact_id) = installer_artifacts.get(&referenced.to_ascii_lowercase()) {
             linked_artifacts
-                .entry(app.clone())
+                .entry(Win32TransactionKey {
+                    app_id: app.clone(),
+                    deployment_type_id: record.resolved_deployment_type_id.clone(),
+                    execution_context: record.resolved_context,
+                })
                 .or_default()
                 .insert(artifact_id.clone());
             linked_ids.insert(artifact_id.clone());
@@ -531,30 +541,15 @@ pub fn analyze_win32_bundle_with(
         }
     }
 
-    let degraded_coverage = coverage_entries
-        .iter()
-        .any(|entry| entry.status != IntuneArtifactStatus::Available);
-
-    let mut transactions: Vec<Win32Transaction> = Vec::new();
-    for (key, indices) in grouped {
-        let corroborating = linked_artifacts
-            .get(&key.app_id)
-            .map(|ids| ids.iter().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        transactions.push(reduce_transaction(
-            key,
-            &indices,
-            &records,
-            options,
-            corroborating,
-            degraded_coverage,
-        ));
-    }
-
     // Expected artifacts the caller never mentioned at all still get a coverage
     // entry, so "we never looked" is not silently reported as "nothing to see".
+    // This runs before degraded_coverage is computed so a missing expected
+    // artifact actually degrades the confidence reduce_transaction receives.
     for expected in EXPECTED_PRIMARY_ARTIFACTS {
-        if seen_basenames.contains(&expected.to_ascii_lowercase()) {
+        // split_rotation returns the stem without its extension; the expected
+        // names carry `.log`, so strip it the same way for the comparison.
+        let expected_stem = split_rotation(expected).0.to_ascii_lowercase();
+        if seen_basenames.contains(&expected_stem) {
             continue;
         }
         coverage_entries.push(IntuneArtifactCoverage {
@@ -565,6 +560,26 @@ pub fn analyze_win32_bundle_with(
             observed_at_utc: String::new(),
             evidence: Vec::new(),
         });
+    }
+
+    let degraded_coverage = coverage_entries
+        .iter()
+        .any(|entry| entry.status != IntuneArtifactStatus::Available);
+
+    let mut transactions: Vec<Win32Transaction> = Vec::new();
+    for (key, indices) in grouped {
+        let corroborating = linked_artifacts
+            .get(&key)
+            .map(|ids| ids.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        transactions.push(reduce_transaction(
+            key,
+            &indices,
+            &records,
+            options,
+            corroborating,
+            degraded_coverage,
+        ));
     }
 
     let unlinked_installer_artifacts = installer_artifacts
@@ -995,7 +1010,10 @@ mod tests {
             transaction.last_confirmed_phase,
             Some(Win32Phase::Reporting)
         );
-        assert_eq!(transaction.confidence, Win32Confidence::High);
+        // Only AppWorkload.log was supplied; the other two expected primary
+        // artifacts (IntuneManagementExtension.log, AppActionProcessor.log) are
+        // absent, so coverage is degraded and confidence is Medium, not High.
+        assert_eq!(transaction.confidence, Win32Confidence::Medium);
         assert_eq!(transaction.next_evidence_request, None);
     }
 

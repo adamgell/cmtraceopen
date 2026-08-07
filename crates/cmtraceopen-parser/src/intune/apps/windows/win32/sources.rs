@@ -106,10 +106,16 @@ const INSTALLER_OUTPUT_EXTENSIONS: &[&str] = &[".msi.log", ".psadt.log", ".burn.
 /// one, and claiming an ordinal would make it indistinguishable from `-1`.
 pub(super) fn split_rotation(file_name: &str) -> (String, Option<u32>) {
     let trimmed = file_name.trim();
-    let without_ext = trimmed
-        .strip_suffix(".log")
-        .or_else(|| trimmed.strip_suffix(".LOG"))
-        .unwrap_or(trimmed);
+    // Strip the `.log` extension case-insensitively: IME archives are seen as
+    // `.log`, `.LOG`, `.Log`, etc. in the wild, and a mixed-case suffix must
+    // still resolve to the canonical stem so rotated variants map to one
+    // artifact.
+    let without_ext =
+        if trimmed.len() >= 4 && trimmed[trimmed.len() - 4..].eq_ignore_ascii_case(".log") {
+            &trimmed[..trimmed.len() - 4]
+        } else {
+            trimmed
+        };
 
     let (without_ext, underscore_archive) = match without_ext.strip_prefix('_') {
         Some(rest) => (rest, true),
