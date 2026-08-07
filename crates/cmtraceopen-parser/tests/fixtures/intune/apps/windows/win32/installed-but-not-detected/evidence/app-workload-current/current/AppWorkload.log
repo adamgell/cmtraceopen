@@ -1,0 +1,6 @@
+<![LOG[SYNTHETIC FIXTURE: generated corpus for issue #357; contains no real tenant, device, user, or token data]LOG]!><time="00:00:00.000+000" date="7-31-2026" component="SyntheticFixture" context="" type="1" thread="1" file="">
+<![LOG[[Win32App] Applicability state for app with id: 11111111-2222-4333-8444-555555555555 = Applicable]LOG]!><time="10:00:05.000+000" date="7-31-2026" component="Win32App" context="" type="1" thread="12" file="">
+<![LOG[[Win32App] Detection state for app with id: 11111111-2222-4333-8444-555555555555 = Not Detected]LOG]!><time="10:00:07.000+000" date="7-31-2026" component="Win32App" context="" type="1" thread="12" file="">
+<![LOG[[Win32App] Download completed for app with id: 11111111-2222-4333-8444-555555555555, content version: 2]LOG]!><time="10:00:20.000+000" date="7-31-2026" component="Win32App" context="" type="1" thread="12" file="">
+<![LOG[[Win32App] Install command line: setup.exe /quiet for app with id: 11111111-2222-4333-8444-555555555555]LOG]!><time="10:00:21.000+000" date="7-31-2026" component="Win32App" context="" type="1" thread="12" file="">
+<![LOG[[Win32App] Installation is done for app with id: 11111111-2222-4333-8444-555555555555, exit code: 0]LOG]!><time="10:00:40.000+000" date="7-31-2026" component="Win32App" context="" type="1" thread="12" file="">

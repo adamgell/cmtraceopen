@@ -1,0 +1,57 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "reporting-failure-after-local-outcome",
+  "workload": "apps/windows/win32",
+  "description": "The install succeeded locally and the status upload failed, so the portal will disagree with the device. The local outcome is preserved.",
+  "artifacts": [
+    {
+      "artifactId": "ime-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "IntuneManagementExtension.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+      "relativePath": "evidence/ime-current/current/IntuneManagementExtension.log",
+      "bytesCopied": 773
+    },
+    {
+      "artifactId": "app-workload-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "AppWorkload.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AppWorkload.log",
+      "relativePath": "evidence/app-workload-current/current/AppWorkload.log",
+      "bytesCopied": 1525
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "AppActionProcessor.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AppActionProcessor.log",
+      "relativePath": "evidence/app-action-processor-current/current/AppActionProcessor.log",
+      "bytesCopied": 464
+    }
+  ]
+}

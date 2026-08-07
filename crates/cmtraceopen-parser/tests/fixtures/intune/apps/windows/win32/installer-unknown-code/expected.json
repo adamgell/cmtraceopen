@@ -1,0 +1,68 @@
+{
+  "scenario": "installer-unknown-code",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "installerReportedFailure",
+      "lastConfirmedPhase": "content",
+      "confidence": "high",
+      "returnCodeRaw": "0x80070643",
+      "returnCodeKind": "unmapped",
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": "the installer-native log named by the install output file record",
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "win32-installer-reported-failure:11111111-2222-4333-8444-555555555555",
+      "severity": "error",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:7",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "win32-unmapped-return-code:11111111-2222-4333-8444-555555555555",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:7",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an unmapped code is a failure whose cause classification stays separate",
+    "the raw token survives in every form it was observed in"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}
