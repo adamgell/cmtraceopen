@@ -170,19 +170,22 @@ fn receipt_state(observations: &[ConfigurationObservation]) -> ConfigurationRece
     ConfigurationReceiptState::NoEvidence
 }
 
-/// Distinct terminal dispositions stated by one side, in a stable order.
+/// Distinct terminal dispositions stated by one side, preserving observation order.
 fn terminal_dispositions(
     observations: &[ConfigurationObservation],
     side: fn(&ConfigurationObservation) -> bool,
 ) -> Vec<ConfigurationDisposition> {
-    let mut seen: Vec<ConfigurationDisposition> = observations
+    let mut seen = Vec::new();
+    for disposition in observations
         .iter()
         .filter(|observation| side(observation))
         .map(|observation| observation.disposition)
         .filter(|disposition| disposition.is_terminal())
-        .collect();
-    seen.sort();
-    seen.dedup();
+    {
+        if !seen.contains(&disposition) {
+            seen.push(disposition);
+        }
+    }
     seen
 }
 
@@ -216,7 +219,7 @@ fn local_state(observations: &[ConfigurationObservation]) -> ConfigurationLocalS
             | ConfigurationDisposition::Pending
             | ConfigurationDisposition::Indeterminate => ConfigurationLocalState::Indeterminate,
         },
-        many => reconcile_multiple_local(many),
+        many => reconcile_multiple_local(many, observations),
     }
 }
 
@@ -227,8 +230,25 @@ fn local_state(observations: &[ConfigurationObservation]) -> ConfigurationLocalS
 /// The same holds for a conflict or supersedence recorded alongside an
 /// application, where the losing write genuinely did happen first. Anything else
 /// is a real disagreement and stays `Contested` so a rule must cite both sides.
-fn reconcile_multiple_local(terminal: &[ConfigurationDisposition]) -> ConfigurationLocalState {
+fn reconcile_multiple_local(
+    terminal: &[ConfigurationDisposition],
+    observations: &[ConfigurationObservation],
+) -> ConfigurationLocalState {
+    let Some(ordered) = ordered_terminal_dispositions(observations) else {
+        return ConfigurationLocalState::Contested;
+    };
     let has = |disposition: ConfigurationDisposition| terminal.contains(&disposition);
+    let applied_precedes = |disposition: ConfigurationDisposition| {
+        ordered
+            .iter()
+            .position(|candidate| *candidate == ConfigurationDisposition::Applied)
+            .zip(
+                ordered
+                    .iter()
+                    .position(|candidate| *candidate == disposition),
+            )
+            .is_some_and(|(applied, terminal)| applied < terminal)
+    };
 
     if has(ConfigurationDisposition::Removed)
         && terminal.iter().all(|d| {
@@ -237,6 +257,7 @@ fn reconcile_multiple_local(terminal: &[ConfigurationDisposition]) -> Configurat
                 ConfigurationDisposition::Removed | ConfigurationDisposition::Applied
             )
         })
+        && applied_precedes(ConfigurationDisposition::Removed)
     {
         return ConfigurationLocalState::Removed;
     }
@@ -247,6 +268,7 @@ fn reconcile_multiple_local(terminal: &[ConfigurationDisposition]) -> Configurat
                 ConfigurationDisposition::Superseded | ConfigurationDisposition::Applied
             )
         })
+        && applied_precedes(ConfigurationDisposition::Superseded)
     {
         return ConfigurationLocalState::Superseded;
     }
@@ -257,10 +279,53 @@ fn reconcile_multiple_local(terminal: &[ConfigurationDisposition]) -> Configurat
                 ConfigurationDisposition::Conflict | ConfigurationDisposition::Applied
             )
         })
+        && applied_precedes(ConfigurationDisposition::Conflict)
     {
         return ConfigurationLocalState::Conflicted;
     }
     ConfigurationLocalState::Contested
+}
+
+/// Return terminal dispositions in their evidence order, when that order is
+/// comparable. Record ordinals and reliable timestamps must describe one artifact;
+/// otherwise a lifecycle conclusion would be inferred from an unordered set.
+fn ordered_terminal_dispositions(
+    observations: &[ConfigurationObservation],
+) -> Option<Vec<ConfigurationDisposition>> {
+    let mut terminal = observations
+        .iter()
+        .filter(|observation| is_device_side(observation) && observation.disposition.is_terminal())
+        .collect::<Vec<_>>();
+    if terminal.len() < 2 || ordering_is_contradictory(observations) {
+        return None;
+    }
+    let artifact = terminal.first()?.evidence_ref.source_artifact_id.as_str();
+    if terminal
+        .iter()
+        .any(|observation| observation.evidence_ref.source_artifact_id != artifact)
+    {
+        return None;
+    }
+    if terminal.iter().any(|observation| {
+        observation.record_id.is_none()
+            || !observation.time_is_reliable
+            || observation.occurred_at_utc.is_none()
+    }) {
+        return None;
+    }
+    terminal.sort_by_key(|observation| observation.record_id);
+    if terminal
+        .windows(2)
+        .any(|pair| pair[0].record_id == pair[1].record_id)
+    {
+        return None;
+    }
+    Some(
+        terminal
+            .iter()
+            .map(|observation| observation.disposition)
+            .collect(),
+    )
 }
 
 fn service_state(observations: &[ConfigurationObservation]) -> ConfigurationServiceState {
@@ -339,6 +404,12 @@ fn resolve(
     };
 
     match (local_conclusion, service_conclusion) {
+        // A service-side removal is represented as reported success. When the
+        // device also says Removed, those statements agree on the lifecycle
+        // outcome rather than contradicting one another.
+        (Some(ConfigurationResolution::Removed), Some(ConfigurationResolution::Applied)) => {
+            ConfigurationResolution::Removed
+        }
         (Some(local), Some(service)) if local != service => ConfigurationResolution::Contradicted,
         (Some(local), _) => local,
         // Service-only evidence is supplemental. It cannot establish that the
@@ -425,4 +496,117 @@ fn ordering_is_contradictory(observations: &[ConfigurationObservation]) -> bool 
         records.sort_by_key(|(record_id, _)| *record_id);
         records.windows(2).any(|pair| pair[0].1 > pair[1].1)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intune::evidence::{
+        IntuneEvidenceRef, IntuneNamedValue, IntuneSensitivity, IntuneSourceKind,
+    };
+
+    fn observation(
+        evidence_id: &str,
+        disposition: ConfigurationDisposition,
+        record_id: Option<u64>,
+        occurred_at_utc: Option<&str>,
+    ) -> ConfigurationObservation {
+        let identity =
+            super::super::identity::resolve_identity(&super::super::identity::IdentityHints {
+                uri: Some("./Device/Vendor/MSFT/Policy/Config/Test"),
+                evidence_id,
+                ..Default::default()
+            });
+        ConfigurationObservation {
+            evidence_ref: IntuneEvidenceRef {
+                evidence_id: evidence_id.to_owned(),
+                source_artifact_id: "test-artifact".to_owned(),
+            },
+            side: ConfigurationEvidenceSide::Device,
+            source_kind: IntuneSourceKind::PlainTextLog,
+            sensitivity: IntuneSensitivity::Public,
+            identity,
+            disposition,
+            event_kind: None,
+            event_id: None,
+            source_id: None,
+            enrollment_id: None,
+            command_type: None,
+            value: None,
+            error: None,
+            winning_source_id: None,
+            superseded_by_source_id: None,
+            occurred_at_utc: occurred_at_utc.map(str::to_owned),
+            time_is_reliable: occurred_at_utc.is_some(),
+            record_id,
+            is_uninterpretable: false,
+            named_data: Vec::<IntuneNamedValue>::new(),
+        }
+    }
+
+    #[test]
+    fn apply_then_remove_is_removed_but_reverse_observation_is_ordered_by_metadata() {
+        let apply = observation(
+            "apply",
+            ConfigurationDisposition::Applied,
+            Some(1),
+            Some("2026-07-31T09:00:00Z"),
+        );
+        let remove = observation(
+            "remove",
+            ConfigurationDisposition::Removed,
+            Some(2),
+            Some("2026-07-31T10:00:00Z"),
+        );
+        assert_eq!(
+            local_state(&[apply.clone(), remove.clone()]),
+            ConfigurationLocalState::Removed
+        );
+        assert_eq!(
+            local_state(&[remove, apply]),
+            ConfigurationLocalState::Removed
+        );
+    }
+
+    #[test]
+    fn contradictory_or_unavailable_order_stays_contested() {
+        let observations = vec![
+            observation(
+                "apply",
+                ConfigurationDisposition::Applied,
+                Some(1),
+                Some("2026-07-31T10:00:00Z"),
+            ),
+            observation(
+                "remove",
+                ConfigurationDisposition::Removed,
+                Some(2),
+                Some("2026-07-31T09:00:00Z"),
+            ),
+        ];
+        assert_eq!(
+            local_state(&observations),
+            ConfigurationLocalState::Contested
+        );
+
+        let unavailable = vec![
+            observation("apply", ConfigurationDisposition::Applied, None, None),
+            observation("remove", ConfigurationDisposition::Removed, None, None),
+        ];
+        assert_eq!(
+            local_state(&unavailable),
+            ConfigurationLocalState::Contested
+        );
+    }
+
+    #[test]
+    fn removed_local_and_reported_success_agree_on_removed_resolution() {
+        assert_eq!(
+            resolve(
+                ConfigurationLocalState::Removed,
+                ConfigurationServiceState::ReportedSuccess,
+            ),
+            ConfigurationResolution::Removed
+        );
+    }
 }
