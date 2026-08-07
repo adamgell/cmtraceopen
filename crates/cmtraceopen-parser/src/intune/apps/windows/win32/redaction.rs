@@ -159,6 +159,21 @@ fn redact_observation(observation: &Win32Observation) -> Win32Observation {
         .file_path
         .as_deref()
         .map(redact_text);
+    // A requirement name is free text quoted from the record body and can carry
+    // a path or UPN; the app/deployment-type/dependency ids are correlation
+    // keys and stay verbatim.
+    redacted.requirement_name = observation.requirement_name.as_deref().map(redact_text);
+    // Retained attributes are uninterpreted record fields; their values are
+    // free text, so mask them. The attribute name is the schema label that
+    // makes the value interpretable and is left intact.
+    redacted.attributes = observation
+        .attributes
+        .iter()
+        .map(|named| crate::intune::evidence::IntuneNamedValue {
+            name: named.name.clone(),
+            value: redact_text(&named.value),
+        })
+        .collect();
     redacted
 }
 
