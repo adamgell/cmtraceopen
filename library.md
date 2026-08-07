@@ -1,5 +1,6 @@
 # CMTrace Open — Workspace Library
 
+- IF loading the CMTrace Open specialist agent → read [[soul.md]] for identity/rules and [[memory.md]] for durable facts
 - IF implementing or reviewing SCCM issue #409 server intake synthetic identity grammar → read [[docs/superpowers/plans/2026-08-05-sccm-409-server-intake-identity-grammar.md]]
 - IF implementing or reviewing Graph API non-blocking WAM authentication for issue #441 → read [[docs/superpowers/plans/2026-08-05-graph-auth-nonblocking.md]]
 - IF reworking Graph API authentication after the PR #512 critic gate → read [[docs/superpowers/plans/2026-08-05-graph-auth-critic-rework.md]]
