@@ -6,6 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Microsoft Store app evidence lane (#358 / #518)**: Evidence-backed Microsoft Store (WinGet/UWP) deployment analysis joining IME intent with Appx/store-agent OS events across 16 scenarios, with typed outcome states, redaction, and negative fixtures that keep store-looking text from inventing store activity.
+- **Windows Autopilot evidence outside ESP (#362 / #450)**: Model Autopilot enrollment evidence beyond the ESP window, adding `event_version` to the shared normalized Windows event contract additively.
+- **Company Portal Windows LocalState logs (#366 / #460)**: Parse `Log_<n>.log` Company Portal files with logical-record framing, aggregate folder tail seeding, and chunk-invariant coexistence with Device Inventory framing.
+- **SCCM bounded advanced server capture (#497 / #500)**: Authorize bounded advanced-role source roots (OSD/PXE, certificate enrollment/PKI, reporting, cloud manager) with normalized capture contracts and budget validation.
+- **Reducer Framework v1 governance (#519)**: Architecture decision records for evidence strength/confidence, identity correlation, chronology/terminal precedence, and redaction scope, plus the Store semantic issue inventory and phased hardening plan.
 - **Administrator restart with source restoration (#384)**: Application-wide restart as administrator on supported Windows builds, restoring open sources after elevation.
 - **Company Portal macOS unified-log evidence (#390)**: Normalize Apple unified-log evidence for Company Portal on macOS so enrollment and portal diagnostics correlate without inventing outcomes.
 - **Intune Device Inventory Agent log family (#397 / #354)**: Discover and parse the full Microsoft Device Inventory Agent log set under Program Files (harvester, Inventory Adaptor, and rotation-failure dialects) with known-sources entry, folder aggregation for `.log` / rotations / `.log_`, and logical-record-aware real-time tailing.
@@ -34,9 +39,11 @@ All notable changes to this project will be documented in this file.
 
 ### Build & CI
 
+- **Windows parser coverage (#460 / #523)**: The ESP Windows CI job now runs the full parser-crate suite on Windows. The widened coverage surfaced and fixed two latent issues: fixture contract tests comparing native path separators against forward-slash manifest paths, and a unit test whose `tauri::test::mock_app()` usage made the whole Windows test executable unloadable (comctl32 v6 import without a manifest).
+- **quick-xml 0.38.4 → 0.41.0 (#471)**: Migrate the EVTX parser to the 0.41 API (`read_text` returning `BytesText`, attribute value normalization) with unchanged entity-handling semantics.
 - **Scoop bucket (#446)**: Bump Scoop manifest packaging to 1.5.1.
 - **chrono floor (#501 / #417)**: Raise the `chrono` dependency floor to 0.4.35 so parser code that needs newer APIs is honest about the minimum version.
-- **GitHub Actions**: Updated `actions/checkout` 4 → 7, `actions/github-script` 7.1.0 → 9.0.0, and `taiki-e/install-action` 2.85.2 → 2.85.5.
+- **GitHub Actions**: Updated `actions/checkout` 4 → 7, `actions/github-script` 7.1.0 → 9.0.0, and `taiki-e/install-action` 2.85.2 → 2.85.7.
 - **Rust crates**: Updated `libc` 0.2.185 → 0.2.189, `tokio` 1.52.1 → 1.53.1, `ureq` 3.2.0 → 3.3.0, and `zip` 4.2.0 → 8.6.0.
 - **JavaScript**: Updated `@tanstack/react-virtual` and grouped frontend dev-dependencies; bumped `postcss` in app and download-metrics tooling.
 
