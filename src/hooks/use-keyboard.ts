@@ -258,6 +258,16 @@ export function useKeyboard() {
           return;
         }
 
+        // A live text selection (e.g. in the Info pane) wins over the
+        // whole-entry fallback: leave the event alone so the WebView's native
+        // copy takes the selection. The clipboard-history mirror re-writes it
+        // through the clipboard plugin so it still reaches Windows clipboard
+        // history (#520).
+        const selectionText = window.getSelection()?.toString().trim() ?? "";
+        if (selectionText.length > 0) {
+          return;
+        }
+
         event.preventDefault();
         const state = useLogStore.getState();
 
