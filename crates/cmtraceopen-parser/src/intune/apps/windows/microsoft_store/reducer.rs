@@ -444,20 +444,92 @@ fn joinable(group: &Group, tokens: &[String], app_id: Option<&String>) -> bool {
         && group.tokens.is_empty()
 }
 
+/// Whether two groups describe the same transaction and may merge.
+///
+/// Mirrors [`joinable`] at the group level: a shared correlation token merges,
+/// a shared app id merges only while both sides are package-identity-free, and
+/// conflicting identities, contexts, or families never merge.
+fn groups_may_merge(left: &Group, right: &Group) -> bool {
+    if identities_conflict(&left.tokens, &right.tokens) {
+        return false;
+    }
+    if !left
+        .execution_context
+        .is_compatible_with(right.execution_context)
+        || !left.installer_family.is_compatible_with(right.installer_family)
+    {
+        return false;
+    }
+    left.tokens.iter().any(|token| right.tokens.contains(token))
+        || (left.tokens.is_empty()
+            && right.tokens.is_empty()
+            && left.app_ids.iter().any(|app| right.app_ids.contains(app)))
+}
+
+/// Merge groups until no two remaining groups may merge.
+///
+/// One observation can bridge two groups — sharing a family-name token with
+/// one and a product-id token with the other. Which group the bridge was
+/// *placed* in is a processing detail; without this fixpoint the other group
+/// stayed a separate transaction, and the split depended on discovery order.
+fn merge_groups_to_fixpoint(groups: &mut Vec<Group>) {
+    loop {
+        let Some((left, right)) = (0..groups.len())
+            .flat_map(|left| ((left + 1)..groups.len()).map(move |right| (left, right)))
+            .find(|&(left, right)| groups_may_merge(&groups[left], &groups[right]))
+        else {
+            return;
+        };
+        let absorbed = groups.remove(right);
+        let target = &mut groups[left];
+        for token in absorbed.tokens {
+            if !target.tokens.contains(&token) {
+                target.tokens.push(token);
+            }
+        }
+        for app in absorbed.app_ids {
+            if !target.app_ids.contains(&app) {
+                target.app_ids.push(app);
+            }
+        }
+        if target.execution_context == StoreExecutionContext::Unknown {
+            target.execution_context = absorbed.execution_context;
+        }
+        if target.installer_family == StoreInstallerFamily::Unknown {
+            target.installer_family = absorbed.installer_family;
+        }
+        target.members.extend(absorbed.members);
+    }
+}
+
 /// Partition observations into transaction groups.
 ///
 /// Runs in two passes. Observations that *declare* an installer family are
 /// placed first, so the groups exist before the ambiguous records are assigned;
 /// without that, whether an IME intent record landed on the per-user or the
 /// provisioned transaction depended on which artifact the caller happened to
-/// supply first. Members and groups are then returned in source order, so
-/// transaction ids and cited evidence do not depend on the pass an observation
+/// supply first.
+///
+/// Within each pass, observations are processed in the canonical order of
+/// their observation ids — identifiers of the evidence itself — so greedy
+/// group discovery does not depend on the order the caller supplied the
+/// artifacts in (ADR-003). Groups are then merged to a fixpoint, and members
+/// and groups are returned in source order, so transaction ids and cited
+/// evidence do not depend on the pass or the discovery order an observation
 /// was placed in.
 fn group_observations(observations: &[StoreObservation]) -> Vec<Vec<usize>> {
     let mut groups: Vec<Group> = Vec::new();
 
+    let mut canonical: Vec<usize> = (0..observations.len()).collect();
+    canonical.sort_by(|&left, &right| {
+        observations[left]
+            .observation_id
+            .cmp(&observations[right].observation_id)
+    });
+
     for declared_pass in [true, false] {
-        for (index, observation) in observations.iter().enumerate() {
+        for &index in &canonical {
+            let observation = &observations[index];
             let declares_family = observation.installer_family != StoreInstallerFamily::Unknown;
             if declares_family != declared_pass {
                 continue;
@@ -512,6 +584,8 @@ fn group_observations(observations: &[StoreObservation]) -> Vec<Vec<usize>> {
             }
         }
     }
+
+    merge_groups_to_fixpoint(&mut groups);
 
     let mut members = groups
         .into_iter()
