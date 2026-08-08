@@ -62,12 +62,17 @@ export function useClipboardHistoryMirror() {
         return;
       }
 
-      writeText(text).catch((error) => {
-        console.error(
-          "[clipboard] failed to mirror copy into clipboard history",
-          { error }
-        );
-      });
+      // The `copy` event fires before the default copy action runs. Defer the
+      // plugin write so it happens after the native copy, ensuring our write is
+      // the one that lands in Windows clipboard history.
+      setTimeout(() => {
+        writeText(text).catch((error) => {
+          console.error(
+            "[clipboard] failed to mirror copy into clipboard history",
+            { error }
+          );
+        });
+      }, 0);
     };
 
     document.addEventListener("copy", handleCopy);
