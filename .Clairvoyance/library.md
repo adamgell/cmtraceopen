@@ -14,6 +14,7 @@ If no route matches, note the missing topic, write the doc when you learn it, an
 - IF reducer semantics / correlation / chronology / confidence / conformance / adversarial review → read [[docs/superpowers/specs/2026-08-07-reducer-framework-v1-design.md]], [[docs/architecture/decisions/README.md]], and [[docs/architecture/reducer-framework-v1-store-inventory.md]]
 - IF planning or sequencing Reducer Framework v1 → read [[docs/superpowers/plans/2026-08-07-reducer-framework-v1.md]]
 - IF cross-lane reducer architecture decision → read [[.Clairvoyance/staff/reducer-contract-charter.md]] and reducer ADRs
+- IF code review of any cmtraceopen change (diff, branch, PR) → read [[.Clairvoyance/staff/code-review-charter.md]] first
 - IF adversarial reducer review / false-story testing → read [[.Clairvoyance/staff/reducer-adversary-charter.md]]
 - IF reducer restack / exact-head conformance verification → read [[.Clairvoyance/staff/reducer-integration-charter.md]]
 - IF log format reverse engineering → read [[references/REVERSE_ENGINEERING.md]]
