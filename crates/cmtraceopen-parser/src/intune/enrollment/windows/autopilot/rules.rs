@@ -10,13 +10,15 @@
 //! the whole MDM bundle" is not an answer when one event ID would do.
 
 use crate::intune::evidence::{
-    IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding, IntuneFindingConfidence,
-    IntuneFindingSeverity, IntuneParseState,
+    IntuneAccessState, IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding,
+    IntuneFindingConfidence, IntuneFindingSeverity, IntuneParseState,
 };
 
 use super::models::*;
 use super::reducer::normalized_evidence;
-use super::sources::AUTOPILOT_EVENT_CHANNEL;
+use super::sources::{
+    is_validated_schema_version, is_validated_windows_build, AUTOPILOT_EVENT_CHANNEL,
+};
 
 /// Derive stable, read-only findings from a snapshot.
 ///
@@ -37,9 +39,11 @@ pub fn derive_findings(snapshot: &AutopilotSnapshot) -> Vec<IntuneFinding> {
     push_retry_deferred(snapshot, &mut findings);
     push_esp_evidence_missing(snapshot, &mut findings);
     push_esp_time_only_candidate(snapshot, &mut findings);
+    push_esp_link_conflicting(snapshot, &mut findings);
     push_esp_linked(snapshot, &mut findings);
     push_unreliable_timestamps(snapshot, &mut findings);
     push_coverage_gaps(snapshot, &mut findings);
+    push_non_assessable_failure_recorded(snapshot, &mut findings);
     push_unclassified_records(snapshot, &mut findings);
     push_completed(snapshot, &mut findings);
 
@@ -54,22 +58,44 @@ fn push_unknown_schema(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFi
         .iter()
         .filter(|document| document.parse_state == IntuneParseState::Unsupported)
         .collect::<Vec<_>>();
-    let build_unvalidated = snapshot.outcome == AutopilotOutcome::UnknownSchema
+    // Either declared capture value can be the one that failed validation.
+    // Gating on `windows_build` alone left a capture that declared only an
+    // unvalidated `autopilotSchemaVersion` with an unexplained `UnknownSchema`
+    // outcome: every terminal rule was suppressed and no finding said why.
+    let capture_unvalidated = snapshot.outcome == AutopilotOutcome::UnknownSchema
         && unsupported.is_empty()
-        && snapshot.capture.windows_build.is_some();
-    if unsupported.is_empty() && !build_unvalidated {
+        && (snapshot.capture.windows_build.is_some()
+            || snapshot.capture.autopilot_schema_version.is_some());
+    if unsupported.is_empty() && !capture_unvalidated {
         return;
     }
 
     let mut summary = if unsupported.is_empty() {
+        let mut offenders = Vec::new();
+        if !is_validated_windows_build(snapshot.capture.windows_build.as_deref()) {
+            offenders.push(format!(
+                "Windows build {}",
+                snapshot
+                    .capture
+                    .windows_build
+                    .as_deref()
+                    .unwrap_or("unknown")
+            ));
+        }
+        if !is_validated_schema_version(snapshot.capture.autopilot_schema_version.as_deref()) {
+            offenders.push(format!(
+                "Autopilot schema version {}",
+                snapshot
+                    .capture
+                    .autopilot_schema_version
+                    .as_deref()
+                    .unwrap_or("unknown")
+            ));
+        }
         format!(
-            "Windows build {} has no validated Autopilot rules in this build, so terminal \
-             semantics are withheld and the evidence is retained raw.",
-            snapshot
-                .capture
-                .windows_build
-                .as_deref()
-                .unwrap_or("unknown")
+            "This build has no validated Autopilot rules for {}, so terminal semantics are \
+             withheld and the evidence is retained raw.",
+            offenders.join(" or ")
         )
     } else {
         format!(
@@ -109,7 +135,7 @@ fn push_unknown_schema(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFi
                 .iter()
                 .map(|document| document.artifact_id.clone())
                 .chain(
-                    build_unvalidated
+                    capture_unvalidated
                         .then(|| {
                             snapshot
                                 .coverage
@@ -510,6 +536,54 @@ fn push_esp_time_only_candidate(snapshot: &AutopilotSnapshot, findings: &mut Vec
     );
 }
 
+/// Explain a `Conflicting` ESP linkage that no recorded conflict covers.
+///
+/// The linkage turns `Conflicting` on two paths. When a single correlation key
+/// resolves to more than one session, `detect_conflicts` records an
+/// [`AutopilotConflictKind::EspSessionIdentifier`] conflict and
+/// `push_contradictory_evidence` already explains it. When *distinct* keys
+/// each resolve cleanly but to *different* sessions, no conflict is recorded;
+/// this rule is what keeps that outcome from being silent.
+fn push_esp_link_conflicting(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFinding>) {
+    if snapshot.esp_linkage.state != AutopilotEspLinkState::Conflicting
+        || snapshot
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.kind == AutopilotConflictKind::EspSessionIdentifier)
+    {
+        return;
+    }
+    push(
+        findings,
+        finding(
+            "autopilot-esp-link-conflicting",
+            IntuneFindingSeverity::Error,
+            IntuneFindingConfidence::High,
+            "The Autopilot evidence matches more than one ESP session",
+            &format!(
+                "Explicit correlation keys bind this Autopilot evidence to {} different ESP \
+                 sessions ({}). A single Autopilot phase produces one session, so no completed \
+                 handoff can be asserted. Two real sessions can exist legitimately -- a reimaged, \
+                 reset, or re-enrolled device provisions more than once -- but this bundle does \
+                 not say which session belongs to this attempt.",
+                snapshot.esp_linkage.esp_session_ids.len(),
+                snapshot.esp_linkage.esp_session_ids.join(", ")
+            ),
+            &[
+                "If the device was reimaged or re-enrolled, both sessions may be real: identify \
+                 the attempt under investigation and analyze its session on its own in the ESP \
+                 workspace."
+                    .to_owned(),
+                "Otherwise re-collect both sides in one pass so the bundle describes a single \
+                 provisioning attempt."
+                    .to_owned(),
+            ],
+            normalized_evidence(snapshot.esp_linkage.evidence.clone()),
+            Vec::new(),
+        ),
+    );
+}
+
 fn push_esp_linked(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFinding>) {
     if snapshot.esp_linkage.state != AutopilotEspLinkState::Linked {
         return;
@@ -629,6 +703,79 @@ fn push_coverage_gaps(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFin
             gaps.iter()
                 .map(|entry| entry.artifact_id.clone())
                 .collect(),
+        ),
+    );
+}
+
+/// Surface a failure that is on the record but not assessable.
+///
+/// ADR-001's direction-aware gate: a capped or unparsed record can prove
+/// nothing -- so the reducer neither completes the enrollment over it nor
+/// turns it into a terminal failure outcome -- but a recorded failure must
+/// never be *silent*. This rule is the surface for that middle state: it names
+/// the record, says why the failure cannot be trusted yet, and asks for the
+/// one artifact that would settle it. Both record shapes are covered: a
+/// report section whose outcome is `Failed`/`Mismatch`, and an event carrying
+/// a documented failure signal ([`AutopilotSignal::is_terminal_failure`]) --
+/// the same two classes whose recorded failure blocks the success branch in
+/// the reducer. Deliberately not gated by `terminal_semantics_withheld`: like
+/// coverage gaps, this describes the bundle, not a cause.
+fn push_non_assessable_failure_recorded(
+    snapshot: &AutopilotSnapshot,
+    findings: &mut Vec<IntuneFinding>,
+) {
+    let recorded = snapshot
+        .observations
+        .iter()
+        .filter(|observation| {
+            observation.context.access_state != IntuneAccessState::Available
+                || observation.context.parse_state != IntuneParseState::Parsed
+        })
+        .filter(|observation| {
+            let failed_section = observation.signal == AutopilotSignal::ReportSection
+                && matches!(
+                    observation.section_outcome,
+                    Some(AutopilotSectionOutcome::Failed) | Some(AutopilotSectionOutcome::Mismatch)
+                );
+            failed_section || observation.signal.is_terminal_failure()
+        })
+        .collect::<Vec<_>>();
+    if recorded.is_empty() {
+        return;
+    }
+    push(
+        findings,
+        finding(
+            "autopilot-non-assessable-failure-recorded",
+            IntuneFindingSeverity::Warning,
+            // Low on purpose: non-assessable evidence cannot support a
+            // confident conclusion in either direction (ADR-001). The finding
+            // exists so the recorded failure blocks success visibly instead of
+            // silently.
+            IntuneFindingConfidence::Low,
+            "A record that could not be fully read recorded a failure",
+            &format!(
+                "{} record(s) whose own capture or parse state is not assessable explicitly \
+                 recorded a failure -- a failed or mismatched report section, or an event \
+                 carrying a documented failure signal. That record cannot prove the failure, but \
+                 it blocks any success conclusion until it is re-collected in a readable form.",
+                recorded.len()
+            ),
+            &[
+                "Re-collect the cited record(s), complete and readable, before trusting any \
+                 success signal from this bundle."
+                    .to_owned(),
+                "Compare the re-collected record's outcome against the sibling assessable \
+                 evidence."
+                    .to_owned(),
+            ],
+            normalized_evidence(
+                recorded
+                    .iter()
+                    .map(|observation| observation.evidence_ref())
+                    .collect(),
+            ),
+            Vec::new(),
         ),
     );
 }

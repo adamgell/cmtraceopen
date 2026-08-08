@@ -111,7 +111,7 @@ fn user_path_re() -> &'static Regex {
 
 /// A hardware hash or similar long opaque blob embedded in free text.
 ///
-/// Bounded at 32 characters so a GUID (32 hex digits plus dashes, matched in
+/// Bounded at 40 characters so a GUID (32 hex digits plus dashes, matched in
 /// runs of at most 12) and an eight-digit HRESULT are both left readable; those
 /// are diagnostic grammar, not identity.
 fn opaque_blob_re() -> &'static Regex {
@@ -201,10 +201,11 @@ pub fn redacted_export_projection(snapshot: &AutopilotSnapshot) -> AutopilotSnap
             .collect();
     }
 
+    // `mask_value` everywhere a whole value is masked: it performs the
+    // trim/lowercase normalization the module contract promises, so the same
+    // identifier masks identically whatever field or casing it arrived in.
     for key in &mut projected.esp_linkage.matched_keys {
-        if !is_token(&key.value) {
-            key.value = stable_token(VALUE_KIND, &key.value);
-        }
+        key.value = mask_value(&key.value);
     }
 
     for entry in &mut projected.coverage {
@@ -230,9 +231,7 @@ fn redact_named_values(values: &mut [IntuneNamedValue]) {
             .iter()
             .any(|key| key.eq_ignore_ascii_case(&value.name))
         {
-            if !is_token(&value.value) {
-                value.value = stable_token(VALUE_KIND, &value.value);
-            }
+            value.value = mask_value(&value.value);
         } else {
             value.value = redact_text(&value.value);
         }
@@ -249,19 +248,9 @@ fn redact_conflict_value(value: &str) -> String {
                 .iter()
                 .any(|key| key.eq_ignore_ascii_case(name)) =>
         {
-            if is_token(raw) {
-                value.to_owned()
-            } else {
-                format!("{name}={}", stable_token(VALUE_KIND, raw))
-            }
+            format!("{name}={}", mask_value(raw))
         }
-        _ => {
-            if is_token(value) {
-                value.to_owned()
-            } else {
-                stable_token(VALUE_KIND, value)
-            }
-        }
+        _ => mask_value(value),
     }
 }
 
@@ -323,6 +312,40 @@ mod tests {
         assert_eq!(
             redact_conflict_value(&format!("serialNumber={token}")),
             format!("serialNumber={token}")
+        );
+    }
+
+    /// Every whole-value masking site must normalize case and surrounding
+    /// space before hashing, or the same identifier arriving in two casings
+    /// would mask to two different tokens and destroy the very correlation the
+    /// projection exists to preserve.
+    #[test]
+    fn whole_value_masking_normalizes_case_and_space_at_every_site() {
+        let canonical = mask_value("abcdabcd-1234-5678-9012-abcdabcdabcd");
+
+        // Named-data values with a sensitive key.
+        let mut values = vec![IntuneNamedValue {
+            name: "entraDeviceId".to_owned(),
+            value: "  ABCDABCD-1234-5678-9012-ABCDABCDABCD  ".to_owned(),
+        }];
+        redact_named_values(&mut values);
+        assert_eq!(values[0].value, canonical);
+
+        // Conflict values, both shapes.
+        assert_eq!(
+            redact_conflict_value("entraDeviceId= ABCDABCD-1234-5678-9012-ABCDABCDABCD "),
+            format!("entraDeviceId={canonical}")
+        );
+        assert_eq!(
+            redact_conflict_value(" ABCDABCD-1234-5678-9012-ABCDABCDABCD "),
+            canonical
+        );
+
+        // The identity-field path already goes through mask_value; the token
+        // must line up with all of the above.
+        assert_eq!(
+            redact_opt(&Some("Abcdabcd-1234-5678-9012-abcdabcdABCD".to_owned())),
+            Some(canonical)
         );
     }
 

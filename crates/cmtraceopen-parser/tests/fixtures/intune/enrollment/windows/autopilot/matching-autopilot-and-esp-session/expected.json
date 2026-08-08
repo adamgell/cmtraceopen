@@ -1,6 +1,7 @@
 {
   "assertions": [
-    "one explicit shared identifier is enough, and is the only thing that is enough"
+    "one explicit shared identifier is enough, and is the only thing that is enough",
+    "the event 153 transition into ProfileState_Available counts as application evidence, not merely retrieval: event 172, its documented failure sibling, reads 'failed to set Autopilot profile as available', so setting the profile available IS the application step and 153-into-Available is its explicit success record; a 172 alongside a 153 reduces to profileApplicationFailure, never completed"
   ],
   "confidence": "high",
   "conflictIds": [],

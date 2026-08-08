@@ -1,4 +1,5 @@
-<!-- SYNTHETIC FIXTURE: an MDM diagnostics report section truncated mid-write -->
-<MdmDiagnosticsReport schemaVersion="1">
-  <Autopilot>
-    <Profile id="11111111-2222-3333-4444-5555
+{"_comment": "SYNTHETIC FIXTURE: a correctly tagged report document whose sections payload was mangled mid-write. The envelope is valid, so this exercises the report-payload contract rather than generic non-JSON rejection.",
+  "autopilotDocument": "autopilot.mdmDiagnosticsReport",
+  "documentVersion": 1,
+  "sections": "<truncated: Profile id=11111111-2222-3333-4444-5555"
+}
