@@ -243,11 +243,19 @@ jobs:
           restore-keys: ${{ runner.os }}-esp-cargo-
 
       # Run all parser-crate targets on Windows in addition to the Linux checks.
+      # The parser steps get their own target dir: sharing one with the
+      # cmtrace-open steps below left the app_lib unit-test exe unloadable
+      # (STATUS_ENTRYPOINT_NOT_FOUND) on cold caches, reproduced on plain main
+      # with only this job widening applied.
       - name: Test parser crate contracts
         run: cargo test --locked -p cmtraceopen-parser
+        env:
+          CARGO_TARGET_DIR: target-parser-win
 
       - name: Clippy parser crate
         run: cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
+        env:
+          CARGO_TARGET_DIR: target-parser-win
 
       - name: Test native ESP diagnostics
         run: cargo test --locked -p cmtrace-open --all-features --test esp_diagnostics_sources
