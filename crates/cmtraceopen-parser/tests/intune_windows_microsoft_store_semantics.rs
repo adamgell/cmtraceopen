@@ -9,26 +9,30 @@
 //! * inventory: `docs/architecture/reducer-framework-v1-store-inventory.md`;
 //! * contracts: `docs/architecture/decisions/ADR-001` through `ADR-004`.
 //!
-//! Tests that fail against the current reducer are marked `#[ignore]` so CI
-//! stays green while recording the real defect; the verbatim failure output is
-//! preserved in each test's doc comment. Production behavior is intentionally
-//! unchanged in this phase. The fixes land in Store pilot Phase 3, which
-//! removes the `#[ignore]` markers.
+//! Phase 2 recorded the three confirmed defects as `#[ignore]`d RED tests with
+//! their verbatim failure output. Phase 3 (this branch) fixed the reducer,
+//! removed the `#[ignore]` markers, and extended this file with the
+//! adversarial pilot: targeted, active coverage for the remaining inventory
+//! clusters — terminal precedence and retries, installer-family isolation,
+//! source classification, evidence degradation, confidence propagation,
+//! permutation/duplication/irrelevant-evidence invariants, and the
+//! provisional redaction equality scope. The RED recordings are kept in the
+//! doc comments as the historical record of what the reducer used to do.
 //!
 //! Inputs are built through the module's public API exactly the way a native
 //! collector would supply them: typed payloads inside `StoreSourceArtifact`,
 //! with observation contexts constructed by the test.
 
 use cmtraceopen_parser::intune::apps::windows::microsoft_store::{
-    analyze_store_bundle, parse_error_code, StoreArtifactPayload, StoreAssignment,
-    StoreAssignmentIntent, StoreDeploymentAction, StoreExecutionContext, StoreInstallerFamily,
-    StoreInstallerOutcome, StorePackageFact, StorePackageIdentity, StoreSourceArtifact,
-    StoreTransactionState,
+    analyze_store_bundle, parse_error_code, redact_text, redacted_export_projection,
+    StoreAnalysis, StoreArtifactPayload, StoreAssignment, StoreAssignmentIntent,
+    StoreDeploymentAction, StoreExecutionContext, StoreInstallerFamily, StoreInstallerOutcome,
+    StorePackageFact, StorePackageIdentity, StoreSourceArtifact, StoreTransactionState,
 };
 use cmtraceopen_parser::intune::evidence::{
-    IntuneAccessState, IntuneArtifactStatus, IntuneEvidenceRef, IntuneNamedValue,
-    IntuneObservationContext, IntuneParseState, IntuneProvenance, IntuneSensitivity,
-    IntuneSourceKind,
+    IntuneAccessState, IntuneArtifactStatus, IntuneEvidenceRef, IntuneFindingConfidence,
+    IntuneNamedValue, IntuneObservationContext, IntuneParseState, IntuneProvenance,
+    IntuneSensitivity, IntuneSourceKind,
 };
 use cmtraceopen_parser::intune::normalized::{NormalizedEventLevel, NormalizedWindowsEvent};
 
@@ -149,7 +153,6 @@ fn appx_event(
 /// package fact arrives after the typed assignment's own entry, so the last
 /// writer wins and the forced `NotTargeted` state override fires.
 #[test]
-#[ignore = "RED (Framework v1 Phase 2): fails against current reducer; fixed in Store pilot Phase 3"]
 fn typed_required_intent_survives_caller_writable_named_data() {
     let assignment = StoreAssignment {
         context: context("assignment", 1, IntuneSourceKind::SuppliedFact),
@@ -226,7 +229,6 @@ fn typed_required_intent_survives_caller_writable_named_data() {
 /// `>=` over members iterated in input order, so whichever terminal record the
 /// caller supplied last silently wins the transaction state (and its error).
 #[test]
-#[ignore = "RED (Framework v1 Phase 2): fails against current reducer; fixed in Store pilot Phase 3"]
 fn equivalent_input_permutation_does_not_change_the_reduction() {
     // Two equal-ranked terminal statements about the same per-user
     // registration. Neither event carries a source timestamp here, and the
@@ -306,7 +308,6 @@ fn equivalent_input_permutation_does_not_change_the_reduction() {
 /// so the identity-free installer outcome lands in the package's group and its
 /// `Win32InstallerFailed` signal becomes the transaction's terminal state.
 #[test]
-#[ignore = "RED (Framework v1 Phase 2): fails against current reducer; fixed in Store pilot Phase 3"]
 fn an_app_id_match_without_package_identity_cannot_drive_a_package_terminal_outcome() {
     let assignment = StoreAssignment {
         context: context("assignment", 1, IntuneSourceKind::SuppliedFact),
@@ -361,4 +362,1315 @@ fn an_app_id_match_without_package_identity_cannot_drive_a_package_terminal_outc
             .map(|transaction| transaction.confidence.clone())
             .unwrap(),
     );
+}
+
+// ═══ Adversarial pilot (Phase 3) ════════════════════════════════════════════
+//
+// Targeted, active coverage for the remaining inventory clusters, exercised
+// over the fixed reducer through the same public API.
+
+/// The order-independent conclusions of an analysis: one canonical line per
+/// transaction, sorted. Transaction ids and presentation order deliberately
+/// follow input order, so invariance is asserted over the conclusions, not
+/// over the serialized vector.
+fn conclusions(analysis: &StoreAnalysis) -> Vec<String> {
+    let mut lines = analysis
+        .transactions
+        .iter()
+        .map(|transaction| {
+            format!(
+                "tokens={:?} app={:?} family={:?} context={:?} state={:?} intent={:?} \
+                 confidence={:?} error={:?}",
+                transaction.identity.correlation_tokens(),
+                transaction.app_id,
+                transaction.installer_family,
+                transaction.execution_context,
+                transaction.state,
+                transaction.intent,
+                transaction.confidence,
+                transaction
+                    .error
+                    .as_ref()
+                    .map(|error| error.hex.clone().unwrap_or_else(|| error.raw.clone())),
+            )
+        })
+        .collect::<Vec<_>>();
+    lines.sort();
+    lines
+}
+
+fn ime_artifact(id: &str, text: &str) -> StoreSourceArtifact {
+    StoreSourceArtifact {
+        artifact_id: id.to_owned(),
+        family: "ime".to_owned(),
+        source_kind: IntuneSourceKind::ImeLog,
+        status: IntuneArtifactStatus::Available,
+        detail: None,
+        observed_at_utc: "2026-07-31T00:00:00Z".to_owned(),
+        file_name: Some("IntuneManagementExtension.log".to_owned()),
+        file_path: None,
+        payload: Some(StoreArtifactPayload::ImeText {
+            text: text.to_owned(),
+        }),
+    }
+}
+
+/// A CCM-framed IME record with a confirming component.
+fn ccm_line(message: &str) -> String {
+    format!(
+        r#"<![LOG[{message}]LOG]!><time="10:15:22.100+000" date="7-31-2026" component="Win32App" context="" type="1" thread="12" file="store.cs:1">"#
+    )
+}
+
+// == Cluster 4: terminal precedence and retries =============================
+//
+// Contract (ADR-003): chronology and retry linkage are separate requirements.
+// Record numbers within the same event-log artifact prove which record was
+// written later; they do not prove the later success belongs to the same
+// operation as the earlier failure. The AppX event grammar's own linkage key
+// is the ETW activity id ("correlates a multi-event operation"): a success
+// replaces a failure only when both records carry the same activity id. A
+// success that is merely later — or that cannot be ordered at all (a supplied
+// inventory fact from another artifact) — must not overwrite the failure.
+
+const ACTIVITY: &str = "cccccccc-dddd-4eee-8fff-000000000001";
+const OTHER_ACTIVITY: &str = "cccccccc-dddd-4eee-8fff-000000000002";
+
+#[test]
+fn a_success_linked_by_activity_id_replaces_the_earlier_failure() {
+    let mut failed = appx_event(
+        "appx",
+        3,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    failed.activity_id = Some(ACTIVITY.to_owned());
+    let mut retried = appx_event(
+        "appx",
+        7,
+        603,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    retried.activity_id = Some(ACTIVITY.to_owned());
+
+    for events in [vec![failed.clone(), retried.clone()], vec![retried, failed]] {
+        let analysis = analyze_store_bundle(&[artifact(
+            "appx",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents { events },
+        )]);
+        assert_eq!(analysis.transactions.len(), 1);
+        assert_eq!(
+            analysis.transactions[0].state,
+            StoreTransactionState::InstallCompleted,
+            "a shared activity id plus source-native order is the explicit \
+             retry linkage ADR-003 requires"
+        );
+        assert!(analysis.transactions[0].error.is_none());
+    }
+}
+
+/// The adversarial case ADR-003 exists for: two attempts with no explicit
+/// link. A failure at record 3 and a success at record 7 in the same artifact
+/// may be two unrelated deployment attempts; record order proves only that
+/// the success was *written* later. Without a shared activity id the failure
+/// must not be silently replaced — the contradiction stays conservative.
+#[test]
+fn a_later_unlinked_success_does_not_replace_a_same_artifact_failure() {
+    let failed = appx_event(
+        "appx",
+        3,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    let later_success = appx_event(
+        "appx",
+        7,
+        603,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+
+    // No activity ids at all, and two *different* activity ids: in neither
+    // shape does the source link the success to the failure.
+    let mut cross_activity_failed = failed.clone();
+    cross_activity_failed.activity_id = Some(ACTIVITY.to_owned());
+    let mut cross_activity_success = later_success.clone();
+    cross_activity_success.activity_id = Some(OTHER_ACTIVITY.to_owned());
+
+    for (failed, success) in [
+        (failed, later_success),
+        (cross_activity_failed, cross_activity_success),
+    ] {
+        for events in [
+            vec![failed.clone(), success.clone()],
+            vec![success.clone(), failed.clone()],
+        ] {
+            let analysis = analyze_store_bundle(&[artifact(
+                "appx",
+                "appxDeployment",
+                IntuneSourceKind::EventLog,
+                StoreArtifactPayload::WindowsEvents { events },
+            )]);
+            assert_eq!(analysis.transactions.len(), 1);
+            let transaction = &analysis.transactions[0];
+            assert_ne!(
+                transaction.state,
+                StoreTransactionState::InstallCompleted,
+                "ADR-003: chronology alone is not retry linkage; an unlinked \
+                 later success must not overwrite the failure"
+            );
+            assert_eq!(
+                transaction.state,
+                StoreTransactionState::InsufficientEvidence,
+                "an unresolved authoritative contradiction stays conservative"
+            );
+            assert_eq!(transaction.confidence, IntuneFindingConfidence::Low);
+            assert_eq!(
+                transaction.evidence.len(),
+                2,
+                "both contradicting records stay visible on the transaction"
+            );
+        }
+    }
+}
+
+/// The mirror image: when the source order says the *failure* came last, the
+/// failure stands, no matter how the caller arranged the vector.
+#[test]
+fn a_source_ordered_late_failure_is_not_hidden_by_an_earlier_success() {
+    let completed = appx_event(
+        "appx",
+        3,
+        603,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let failed_later = appx_event(
+        "appx",
+        7,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+
+    for events in [
+        vec![completed.clone(), failed_later.clone()],
+        vec![failed_later, completed],
+    ] {
+        let analysis = analyze_store_bundle(&[artifact(
+            "appx",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents { events },
+        )]);
+        assert_eq!(analysis.transactions.len(), 1);
+        assert_eq!(
+            analysis.transactions[0].state,
+            StoreTransactionState::RegistrationFailure
+        );
+        assert_eq!(
+            analysis.transactions[0]
+                .error
+                .as_ref()
+                .and_then(|error| error.hex.as_deref()),
+            Some("0x80073CF9")
+        );
+    }
+}
+
+/// Duplicate provenance is the tie the canonical sort cannot break from
+/// `(source_artifact_id, record_number)` alone: two observations carrying the
+/// same artifact and record number but different error tokens would otherwise
+/// leave error selection to caller order. The tie-break must come from the
+/// candidates' own content, so any permutation reports the same error.
+#[test]
+fn tied_provenance_duplicates_select_the_error_deterministically() {
+    let first = appx_event(
+        "appx",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073D01"),
+        ],
+    );
+    let second = appx_event(
+        "appx",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80070005"),
+        ],
+    );
+
+    let mut selected = Vec::new();
+    for events in [vec![first.clone(), second.clone()], vec![second, first]] {
+        let analysis = analyze_store_bundle(&[artifact(
+            "appx",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents { events },
+        )]);
+        assert_eq!(analysis.transactions.len(), 1);
+        assert_eq!(
+            analysis.transactions[0].state,
+            StoreTransactionState::RegistrationFailure
+        );
+        selected.push(
+            analysis.transactions[0]
+                .error
+                .as_ref()
+                .map(|error| error.raw.clone()),
+        );
+    }
+    assert_eq!(
+        selected[0], selected[1],
+        "the reported error must not depend on the caller's input order"
+    );
+    assert_eq!(
+        selected[0].as_deref(),
+        Some("0x80070005"),
+        "the tie-break is canonical over candidate content, not first-seen"
+    );
+}
+
+/// An inventory fact saying "installed" cannot be ordered against a failure
+/// event from another artifact: they share no counter and no clock. The
+/// contradiction is unresolved, so the reduction must stay conservative
+/// (`InsufficientEvidence`, the module's no-single-conclusion state) instead
+/// of letting the ambiguous success overwrite the failure — or the failure
+/// silently swallow the fact.
+#[test]
+fn an_unlinked_success_fact_does_not_overwrite_a_failure_event() {
+    let failed = appx_event(
+        "appx",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    let installed_fact = StorePackageFact {
+        context: context("inventory", 1, IntuneSourceKind::SuppliedFact),
+        identity: StorePackageIdentity {
+            package_family_name: Some(PACKAGE_FAMILY.to_owned()),
+            ..StorePackageIdentity::default()
+        },
+        installer_family: StoreInstallerFamily::UwpUserContext,
+        execution_context: StoreExecutionContext::User,
+        installed: true,
+        provisioned: None,
+        named_data: Vec::new(),
+    };
+
+    let event_artifact = artifact(
+        "appx",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![failed],
+        },
+    );
+    let fact_artifact = artifact(
+        "inventory",
+        "inventory",
+        IntuneSourceKind::SuppliedFact,
+        StoreArtifactPayload::PackageFacts {
+            facts: vec![installed_fact],
+        },
+    );
+
+    let forward = analyze_store_bundle(&[event_artifact.clone(), fact_artifact.clone()]);
+    let reversed = analyze_store_bundle(&[fact_artifact, event_artifact]);
+
+    for analysis in [&forward, &reversed] {
+        assert_eq!(analysis.transactions.len(), 1);
+        let transaction = &analysis.transactions[0];
+        assert_ne!(
+            transaction.state,
+            StoreTransactionState::InstallCompleted,
+            "an unlinked success must not overwrite a failure (ADR-003)"
+        );
+        assert_eq!(
+            transaction.state,
+            StoreTransactionState::InsufficientEvidence,
+            "an unresolved authoritative contradiction stays conservative"
+        );
+        assert_eq!(transaction.confidence, IntuneFindingConfidence::Low);
+        assert_eq!(
+            transaction.evidence.len(),
+            2,
+            "both contradicting records stay visible on the transaction"
+        );
+    }
+    assert_eq!(conclusions(&forward), conclusions(&reversed));
+}
+
+// == Cluster 5: installer-family isolation ==================================
+//
+// Contract: AppX/UWP and Store-Win32 observations about the same product are
+// different installer grammars and stay separate transactions, each with
+// family-appropriate findings; neither failure may inherit the other's
+// terminal semantics or remediation.
+
+#[test]
+fn mixed_appx_and_win32_observations_stay_separate_with_family_appropriate_findings() {
+    let appx_failure = appx_event(
+        "appx",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("StoreProductId", PRODUCT_ID),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    let win32_failure = StoreInstallerOutcome {
+        context: context("installer-outcome", 1, IntuneSourceKind::SuppliedFact),
+        app_id: None,
+        identity: product_identity(),
+        action: StoreDeploymentAction::Install,
+        exit_code: Some(parse_error_code("1603")),
+        succeeded: Some(false),
+        named_data: Vec::new(),
+    };
+
+    let analysis = analyze_store_bundle(&[
+        artifact(
+            "appx",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![appx_failure],
+            },
+        ),
+        artifact(
+            "installer-outcome",
+            "installerOutcomes",
+            IntuneSourceKind::SuppliedFact,
+            StoreArtifactPayload::InstallerOutcomes {
+                outcomes: vec![win32_failure],
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        analysis.transactions.len(),
+        2,
+        "two concrete installer families never merge, even over one product id"
+    );
+    let appx = analysis
+        .transactions
+        .iter()
+        .find(|transaction| transaction.installer_family == StoreInstallerFamily::UwpUserContext)
+        .expect("AppX transaction");
+    let win32 = analysis
+        .transactions
+        .iter()
+        .find(|transaction| transaction.installer_family == StoreInstallerFamily::StoreWin32)
+        .expect("Win32 transaction");
+    assert_eq!(appx.state, StoreTransactionState::RegistrationFailure);
+    assert_eq!(win32.state, StoreTransactionState::InstallerFailure);
+
+    let registration = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-registration-failed")
+        .expect("AppX registration finding");
+    let installer = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-win32-installer-failed")
+        .expect("Win32 installer finding");
+    assert!(
+        registration
+            .evidence
+            .iter()
+            .all(|reference| reference.source_artifact_id == "appx"),
+        "the AppX finding must cite only AppX evidence"
+    );
+    assert!(
+        installer
+            .evidence
+            .iter()
+            .all(|reference| reference.source_artifact_id == "installer-outcome"),
+        "the Win32 finding must cite only installer-native evidence"
+    );
+}
+
+// == Cluster 6: source classification =======================================
+//
+// Contract: an approved provider name pasted next to an archive or otherwise
+// decorated channel is not the OS channel. Such records never become Store
+// evidence, so they cannot manufacture observations, transactions, or
+// terminal outcomes. (Exact/prefix matching itself is pinned by unit tests in
+// `sources.rs`.)
+
+#[test]
+fn an_archive_suffixed_channel_never_becomes_store_evidence() {
+    let mut archived = appx_event(
+        "archive",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    archived.channel = "Microsoft-Windows-AppXDeploymentServer-Archive/Operational".to_owned();
+
+    let analysis = analyze_store_bundle(&[artifact(
+        "archive",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![archived],
+        },
+    )]);
+
+    assert!(
+        analysis.transactions.is_empty(),
+        "an unapproved channel must not drive any terminal outcome"
+    );
+    assert!(analysis.observations.is_empty());
+    assert_eq!(
+        analysis.coverage.len(),
+        1,
+        "the artifact stays declared as coverage"
+    );
+}
+
+// == Cluster 7: evidence degradation ========================================
+//
+// Contract (inventory row 7): an unrecognized dialect and a known record
+// contradicting its own level both degrade confidence, but for distinct,
+// distinctly documented reasons — not one conflated flag.
+
+#[test]
+fn unknown_version_and_level_mismatch_degrade_for_distinct_documented_reasons() {
+    // A recognized provider speaking an unknown dialect.
+    let unknown_dialect = appx_event(
+        "appx-unknown",
+        1,
+        9999,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    // A fully recognized failure id logged at Information level.
+    let contradicting = appx_event(
+        "appx-mismatch",
+        1,
+        404,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", "Fabrikam.OtherApp_8synthh0abcd3"),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+
+    let analysis = analyze_store_bundle(&[
+        artifact(
+            "appx-unknown",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![unknown_dialect],
+            },
+        ),
+        artifact(
+            "appx-mismatch",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![contradicting],
+            },
+        ),
+    ]);
+
+    // Both transactions are degraded to Low confidence...
+    for transaction in &analysis.transactions {
+        assert_eq!(transaction.confidence, IntuneFindingConfidence::Low);
+    }
+    // ...but each for its own documented reason.
+    let unknown = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-unknown-event-version")
+        .expect("unknown-version finding");
+    let mismatch = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-event-level-mismatch")
+        .expect("level-mismatch finding");
+    assert!(unknown
+        .evidence
+        .iter()
+        .all(|reference| reference.source_artifact_id == "appx-unknown"));
+    assert!(mismatch
+        .evidence
+        .iter()
+        .all(|reference| reference.source_artifact_id == "appx-mismatch"));
+
+    // The level was not promoted into evidence: the stated failure stands.
+    let mismatched_transaction = analysis
+        .transactions
+        .iter()
+        .find(|transaction| {
+            transaction.identity.package_family_name.as_deref()
+                == Some("Fabrikam.OtherApp_8synthh0abcd3")
+        })
+        .expect("mismatch transaction");
+    assert_eq!(
+        mismatched_transaction.state,
+        StoreTransactionState::RegistrationFailure
+    );
+}
+
+/// The wire keeps the two degradation causes distinguishable end to end.
+///
+/// A transaction capped at `Low` must say *why* without the consumer replaying
+/// the observations: `unknownVersionObserved` and `levelMismatchObserved` are
+/// both always present on every serialized transaction, exactly as
+/// `unknownVersion` and `levelMismatch` are on every serialized observation.
+/// An outcome finding over the degraded transaction inherits the cap.
+#[test]
+fn both_degradation_causes_stay_distinguishable_on_the_wire() {
+    let unknown_dialect = appx_event(
+        "appx-unknown",
+        1,
+        9999,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let contradicting = appx_event(
+        "appx-mismatch",
+        1,
+        404,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", "Fabrikam.OtherApp_8synthh0abcd3"),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+
+    let analysis = analyze_store_bundle(&[
+        artifact(
+            "appx-unknown",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![unknown_dialect],
+            },
+        ),
+        artifact(
+            "appx-mismatch",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![contradicting],
+            },
+        ),
+    ]);
+
+    let mismatched = analysis
+        .transactions
+        .iter()
+        .find(|transaction| {
+            transaction.identity.package_family_name.as_deref()
+                == Some("Fabrikam.OtherApp_8synthh0abcd3")
+        })
+        .expect("mismatch transaction");
+    assert!(mismatched.level_mismatch_observed);
+    assert!(
+        !mismatched.unknown_version_observed,
+        "the mismatch transaction must not claim the other degradation cause"
+    );
+    let unknown = analysis
+        .transactions
+        .iter()
+        .find(|transaction| {
+            transaction.identity.package_family_name.as_deref() == Some(PACKAGE_FAMILY)
+        })
+        .expect("unknown-dialect transaction");
+    assert!(unknown.unknown_version_observed);
+    assert!(!unknown.level_mismatch_observed);
+
+    // The degraded RegistrationFailure may not surface as a High-confidence
+    // failure finding: the outcome finding inherits the transaction's cap.
+    let failure = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-registration-failed")
+        .expect("registration failure finding");
+    assert_eq!(failure.confidence, IntuneFindingConfidence::Low);
+
+    // Serialization parity: both cause flags are always on the wire, on every
+    // transaction and every observation, so `false` is a statement, not an
+    // absence a consumer must guess about.
+    let serialized = serde_json::to_value(&analysis).expect("analysis serializes");
+    for transaction in serialized["transactions"].as_array().expect("transactions") {
+        for key in ["unknownVersionObserved", "levelMismatchObserved"] {
+            assert!(
+                transaction.get(key).is_some_and(serde_json::Value::is_boolean),
+                "every serialized transaction carries {key}: {transaction}"
+            );
+        }
+    }
+    for observation in serialized["observations"].as_array().expect("observations") {
+        for key in ["unknownVersion", "levelMismatch"] {
+            assert!(
+                observation.get(key).is_some_and(serde_json::Value::is_boolean),
+                "every serialized observation carries {key}: {observation}"
+            );
+        }
+    }
+}
+
+/// The typed route to the same degradation: `NormalizedWindowsEvent` carries
+/// its ETW template version as `event_version`, and an unsupported template
+/// revision means the payload contract these rules were written against no
+/// longer holds. Per ADR-001 non-assessable evidence cannot produce a
+/// terminal conclusion, so a known failure event id under an unsupported
+/// typed version must degrade to unknown-version coverage — never classify
+/// as `RegistrationFailed`.
+#[test]
+fn an_unsupported_typed_event_version_cannot_drive_a_terminal_outcome() {
+    let mut versioned = appx_event(
+        "appx",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    versioned.event_version = Some(2);
+
+    let analysis = analyze_store_bundle(&[artifact(
+        "appx",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![versioned],
+        },
+    )]);
+
+    assert_eq!(analysis.transactions.len(), 1);
+    let transaction = &analysis.transactions[0];
+    assert_ne!(
+        transaction.state,
+        StoreTransactionState::RegistrationFailure,
+        "ADR-001: an unsupported typed event version is non-assessable and \
+         cannot drive a terminal outcome"
+    );
+    assert_eq!(
+        transaction.state,
+        StoreTransactionState::InsufficientEvidence
+    );
+    assert!(transaction.unknown_version_observed);
+    assert_eq!(transaction.confidence, IntuneFindingConfidence::Low);
+    assert!(
+        analysis
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "store-unknown-event-version"),
+        "the unsupported version is surfaced as coverage"
+    );
+    assert!(
+        !analysis
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "store-registration-failed"),
+        "no terminal failure finding from an unsupported version"
+    );
+}
+
+/// Coverage findings must be duplicate-invariant: the same degraded record
+/// supplied twice is one piece of evidence, not two, and its citation list
+/// must be normalized (sorted, de-duplicated) before it is counted or
+/// emitted.
+#[test]
+fn duplicated_degraded_observations_do_not_inflate_coverage_finding_citations() {
+    let unknown_dialect = appx_event(
+        "appx-unknown",
+        1,
+        9999,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let contradicting = appx_event(
+        "appx-mismatch",
+        1,
+        404,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", "Fabrikam.OtherApp_8synthh0abcd3"),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+
+    let analysis = analyze_store_bundle(&[
+        artifact(
+            "appx-unknown",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![unknown_dialect.clone(), unknown_dialect],
+            },
+        ),
+        artifact(
+            "appx-mismatch",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![contradicting.clone(), contradicting],
+            },
+        ),
+    ]);
+
+    let unknown = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-unknown-event-version")
+        .expect("unknown-version finding");
+    assert_eq!(
+        unknown.evidence.len(),
+        1,
+        "the duplicated record is one citation, not two: {:?}",
+        unknown.evidence
+    );
+    assert!(unknown.summary.starts_with("1 record(s)"));
+
+    let mismatch = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-event-level-mismatch")
+        .expect("level-mismatch finding");
+    assert_eq!(
+        mismatch.evidence.len(),
+        1,
+        "the duplicated record is one citation, not two: {:?}",
+        mismatch.evidence
+    );
+    assert!(mismatch.summary.starts_with("1 record(s)"));
+}
+
+// == Cluster 8: confidence propagation ======================================
+//
+// Contract (ADR-001): repetition cannot promote weak evidence, and coverage
+// gaps cannot raise confidence.
+
+#[test]
+fn duplicating_device_only_evidence_cannot_raise_confidence() {
+    let completed = appx_event(
+        "appx",
+        1,
+        603,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let single = analyze_store_bundle(&[artifact(
+        "appx",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![completed.clone()],
+        },
+    )]);
+    // The same statement five more times, from a second copy of the artifact.
+    let mut copy_events = Vec::new();
+    for _ in 0..5 {
+        copy_events.push(completed.clone());
+    }
+    let duplicated = analyze_store_bundle(&[
+        artifact(
+            "appx",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![completed.clone()],
+            },
+        ),
+        artifact(
+            "appx-copy",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: copy_events,
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        single.transactions[0].confidence,
+        IntuneFindingConfidence::Medium,
+        "device evidence without Intune intent is capped below High"
+    );
+    assert_eq!(
+        duplicated.transactions[0].confidence,
+        single.transactions[0].confidence,
+        "ADR-001: duplication cannot promote evidence"
+    );
+    assert_eq!(duplicated.transactions[0].state, single.transactions[0].state);
+}
+
+#[test]
+fn duplicating_degraded_evidence_cannot_lift_the_degradation() {
+    let unknown_dialect = appx_event(
+        "appx",
+        1,
+        9999,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let mut events = Vec::new();
+    for _ in 0..6 {
+        events.push(unknown_dialect.clone());
+    }
+    let analysis = analyze_store_bundle(&[artifact(
+        "appx",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents { events },
+    )]);
+    assert_eq!(analysis.transactions.len(), 1);
+    assert_eq!(
+        analysis.transactions[0].confidence,
+        IntuneFindingConfidence::Low,
+        "six copies of an unassessable record are still unassessable"
+    );
+    assert_eq!(
+        analysis.transactions[0].state,
+        StoreTransactionState::InsufficientEvidence,
+        "no terminal outcome from non-assessable evidence"
+    );
+}
+
+#[test]
+fn coverage_gaps_cannot_raise_confidence() {
+    let completed = appx_event(
+        "appx",
+        1,
+        603,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let event_artifact = artifact(
+        "appx",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![completed],
+        },
+    );
+    let mut missing = artifact(
+        "ime-log",
+        "ime",
+        IntuneSourceKind::ImeLog,
+        StoreArtifactPayload::ImeText {
+            text: String::new(),
+        },
+    );
+    missing.status = IntuneArtifactStatus::Missing;
+    missing.payload = None;
+
+    let without_gap = analyze_store_bundle(std::slice::from_ref(&event_artifact));
+    let with_gap = analyze_store_bundle(&[event_artifact, missing]);
+
+    assert_eq!(
+        with_gap.transactions[0].confidence,
+        without_gap.transactions[0].confidence,
+        "ADR-001: a coverage gap is a gap, not corroboration"
+    );
+    assert!(
+        with_gap
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "store-evidence-coverage-gap"),
+        "the gap itself is reported"
+    );
+}
+
+// == Cluster 9: permutation, duplication, irrelevant evidence ===============
+//
+// Contract (ADR-002/ADR-003 executable invariants), over a realistic bundle:
+// permuting artifacts changes nothing, duplicating an artifact changes no
+// conclusion, and an unrelated package's evidence cannot alter another
+// transaction.
+
+fn realistic_bundle() -> Vec<StoreSourceArtifact> {
+    let assignment = StoreAssignment {
+        context: context("assignment", 1, IntuneSourceKind::SuppliedFact),
+        app_id: Some(APP_ID.to_owned()),
+        identity: StorePackageIdentity {
+            store_product_id: Some(PRODUCT_ID.to_owned()),
+            package_family_name: Some(PACKAGE_FAMILY.to_owned()),
+            ..StorePackageIdentity::default()
+        },
+        intent: StoreAssignmentIntent::Required,
+        target_context: StoreExecutionContext::User,
+        named_data: Vec::new(),
+    };
+    let staged = appx_event(
+        "appx",
+        1,
+        400,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Stage"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let registered = appx_event(
+        "appx",
+        2,
+        603,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let ime = ime_artifact(
+        "ime-log",
+        &format!(
+            "{}\n{}\n",
+            ccm_line(&format!(
+                "Store app AppId={APP_ID} StoreProductId={PRODUCT_ID} is targeted for this device"
+            )),
+            ccm_line(&format!(
+                "Requesting store acquisition for StoreProductId={PRODUCT_ID}"
+            )),
+        ),
+    );
+    vec![
+        artifact(
+            "assignment",
+            "assignments",
+            IntuneSourceKind::SuppliedFact,
+            StoreArtifactPayload::Assignments {
+                assignments: vec![assignment],
+            },
+        ),
+        ime,
+        artifact(
+            "appx",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![staged, registered],
+            },
+        ),
+    ]
+}
+
+#[test]
+fn permuting_a_realistic_bundle_changes_no_conclusion() {
+    let bundle = realistic_bundle();
+    let baseline = analyze_store_bundle(&bundle);
+    assert_eq!(baseline.transactions.len(), 1);
+    assert_eq!(
+        baseline.transactions[0].state,
+        StoreTransactionState::InstallCompleted
+    );
+    assert_eq!(
+        baseline.transactions[0].confidence,
+        IntuneFindingConfidence::High
+    );
+
+    let mut reversed = bundle.clone();
+    reversed.reverse();
+    let mut rotated = bundle.clone();
+    rotated.rotate_left(1);
+    for permutation in [reversed, rotated] {
+        assert_eq!(
+            conclusions(&analyze_store_bundle(&permutation)),
+            conclusions(&baseline),
+            "ADR-003: artifact order is an acquisition detail"
+        );
+    }
+}
+
+#[test]
+fn duplicating_an_artifact_changes_no_conclusion() {
+    let bundle = realistic_bundle();
+    let baseline = analyze_store_bundle(&bundle);
+
+    // A genuinely re-collected copy: same records, but carried by a distinct
+    // artifact whose events cite their own artifact id, so every observation
+    // from the copy has its own `source_artifact_id` and evidence ids. This is
+    // what exercises the cross-artifact reduction path; renaming only the
+    // containing artifact while its events still cite "appx" would collapse
+    // back into the original evidence and test nothing.
+    let mut duplicated = bundle.clone();
+    let copy = artifact(
+        "appx-copy",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![
+                appx_event(
+                    "appx-copy",
+                    1,
+                    400,
+                    NormalizedEventLevel::Information,
+                    &[
+                        ("DeploymentOperation", "Stage"),
+                        ("DeploymentScope", "User"),
+                        ("PackageFamilyName", PACKAGE_FAMILY),
+                    ],
+                ),
+                appx_event(
+                    "appx-copy",
+                    2,
+                    603,
+                    NormalizedEventLevel::Information,
+                    &[
+                        ("DeploymentOperation", "Register"),
+                        ("DeploymentScope", "User"),
+                        ("PackageFamilyName", PACKAGE_FAMILY),
+                    ],
+                ),
+            ],
+        },
+    );
+    duplicated.push(copy);
+
+    assert_eq!(
+        conclusions(&analyze_store_bundle(&duplicated)),
+        conclusions(&baseline),
+        "a re-collected copy of the same evidence adds nothing"
+    );
+}
+
+#[test]
+fn an_unrelated_packages_failure_cannot_alter_another_transaction() {
+    let bundle = realistic_bundle();
+    let baseline = analyze_store_bundle(&bundle);
+
+    let unrelated_failure = appx_event(
+        "appx-unrelated",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", "Fabrikam.OtherApp_8synthh0abcd3"),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    let mut widened = bundle.clone();
+    widened.push(artifact(
+        "appx-unrelated",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![unrelated_failure],
+        },
+    ));
+    let widened_analysis = analyze_store_bundle(&widened);
+
+    // The original transaction's conclusion line is still present, unchanged.
+    let baseline_lines = conclusions(&baseline);
+    let widened_lines = conclusions(&widened_analysis);
+    for line in &baseline_lines {
+        assert!(
+            widened_lines.contains(line),
+            "adding unrelated evidence altered an existing conclusion:\n\
+             missing {line}\nfrom {widened_lines:?}"
+        );
+    }
+    assert_eq!(
+        widened_analysis.transactions.len(),
+        2,
+        "the unrelated failure is its own transaction, not a merge"
+    );
+}
+
+// == Cluster 10: redaction scope (ADR-004, provisional) =====================
+//
+// ADR-004 accepts the architecture boundary but leaves the token/equality
+// scope PROVISIONAL. These tests deliberately do not add or change any token
+// API; they pin the behavior the current implementation actually has so that
+// a future contract change is a visible, reviewed diff.
+//
+// Observed equality scope, as pinned below: the token is a pure function of
+// the masked value alone. The same restricted value therefore yields the same
+// token across observations, artifacts, findings, separate analyses, and
+// separate exports — a *global* equality scope with no caller-controlled key.
+// Per ADR-004 this global scope must not be relied on for cross-artifact,
+// cross-session, or cross-export correlation; it is recorded here, not
+// endorsed.
+
+#[test]
+fn same_scope_redaction_preserves_equality_and_distinct_values_stay_distinct() {
+    let ime = ime_artifact(
+        "ime-log",
+        &format!(
+            "{}\n{}\n{}\n",
+            ccm_line(&format!(
+                "Store app StoreProductId={PRODUCT_ID} is targeted for this device for synthetic.user@example.invalid"
+            )),
+            ccm_line(&format!(
+                "Requesting store acquisition for StoreProductId={PRODUCT_ID} for synthetic.user@example.invalid"
+            )),
+            ccm_line(&format!(
+                "Store app StoreProductId={PRODUCT_ID} is targeted for this device for other.user@example.invalid"
+            )),
+        ),
+    );
+    let analysis = analyze_store_bundle(&[ime]);
+    let export = redacted_export_projection(&analysis);
+
+    let same_token = redact_text("synthetic.user@example.invalid");
+    let other_token = redact_text("other.user@example.invalid");
+    assert_ne!(
+        same_token, other_token,
+        "different restricted values must not accidentally become equal"
+    );
+
+    let masked_messages = export
+        .observations
+        .iter()
+        .filter_map(|observation| observation.message.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        masked_messages
+            .iter()
+            .filter(|message| message.contains(&same_token))
+            .count(),
+        2,
+        "the same value masks to the same token in every record (same-scope \
+         equality preserved): {masked_messages:?}"
+    );
+    assert_eq!(
+        masked_messages
+            .iter()
+            .filter(|message| message.contains(&other_token))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn restricted_values_are_absent_from_the_redacted_export_including_findings() {
+    let ime = ime_artifact(
+        "ime-log",
+        &format!(
+            "{}\n",
+            ccm_line(&format!(
+                r"Store app StoreProductId={PRODUCT_ID} is targeted for synthetic.user@example.invalid payload C:\Users\Synthetic User\AppData\Local\Temp\pkg"
+            )),
+        ),
+    );
+    let analysis = analyze_store_bundle(&[ime]);
+    let export = redacted_export_projection(&analysis);
+    let serialized = serde_json::to_string(&export).expect("export serializes");
+
+    for restricted in ["synthetic.user@example.invalid", "Synthetic User"] {
+        assert!(
+            !serialized.contains(restricted),
+            "restricted value {restricted:?} leaked into the redacted export"
+        );
+    }
+    let findings_only =
+        serde_json::to_string(&export.findings).expect("findings serialize");
+    assert!(!findings_only.contains("synthetic.user@example.invalid"));
+
+    // The correlation grammar survives redaction.
+    assert!(serialized.contains(PRODUCT_ID));
+}
+
+/// Redaction is a projection for export: it must not change any non-sensitive
+/// reducer conclusion within the analysis (ADR-004).
+#[test]
+fn redaction_does_not_alter_reducer_conclusions() {
+    let analysis = analyze_store_bundle(&realistic_bundle());
+    let export = redacted_export_projection(&analysis);
+    assert_eq!(export.transactions, analysis.transactions);
+    assert_eq!(export.coverage, analysis.coverage);
+    assert_eq!(conclusions(&export), conclusions(&analysis));
 }

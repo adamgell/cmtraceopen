@@ -22,6 +22,7 @@
       "hasIntuneIntent": true,
       "hasDeviceEvidence": true,
       "unknownVersionObserved": false,
+      "levelMismatchObserved": false,
       "observations": [
         "ime-log:2",
         "ime-log:3",
@@ -97,6 +98,7 @@
       "action": "install",
       "error": null,
       "unknownVersion": false,
+      "levelMismatch": false,
       "namedData": [],
       "message": "Store app AppId=11111111-2222-4333-8444-555555555555 StoreProductId=9WZSYNTH0001 PackageFamilyName=Contoso.SynthStoreApp_9synth0abcd1h is targeted for this device"
     },
@@ -142,6 +144,7 @@
       "action": "install",
       "error": null,
       "unknownVersion": false,
+      "levelMismatch": false,
       "namedData": [],
       "message": "Requesting store acquisition for StoreProductId=9WZSYNTH0001"
     },
@@ -192,6 +195,7 @@
       "action": "install",
       "error": null,
       "unknownVersion": false,
+      "levelMismatch": false,
       "namedData": [
         {
           "name": "DeploymentOperation",
@@ -259,6 +263,7 @@
       "action": "install",
       "error": null,
       "unknownVersion": false,
+      "levelMismatch": false,
       "namedData": [
         {
           "name": "DeploymentOperation",
@@ -326,6 +331,7 @@
       "action": "install",
       "error": null,
       "unknownVersion": false,
+      "levelMismatch": false,
       "namedData": [
         {
           "name": "DeploymentOperation",

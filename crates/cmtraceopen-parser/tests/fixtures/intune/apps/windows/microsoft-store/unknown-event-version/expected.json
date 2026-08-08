@@ -30,6 +30,7 @@
       "hasIntuneIntent": true,
       "hasDeviceEvidence": true,
       "unknownVersionObserved": true,
+      "levelMismatchObserved": false,
       "nextEvidenceRequest": null,
       "evidence": [
         "ime-log:2",
@@ -52,7 +53,7 @@
     {
       "findingId": "store-install-completed",
       "severity": "info",
-      "confidence": "high",
+      "confidence": "low",
       "evidence": [
         "appx-operational:1",
         "appx-operational:2",

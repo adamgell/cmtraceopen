@@ -14,6 +14,11 @@
 //! keeps a per-user registration from being closed out by a machine-wide
 //! provisioning event.
 //!
+//! A shared Intune app id alone is an Intune-level association, not a package
+//! join (ADR-002): it may group observations only while neither side claims a
+//! package identity, so an identity-free record can never be merged into a
+//! package-identified transaction or drive a package-specific terminal outcome.
+//!
 //! An observation carrying no correlation token stays unkeyed. It remains
 //! visible in [`StoreAnalysis::unkeyed_observations`] and can never terminate
 //! somebody else's transaction.
@@ -121,6 +126,7 @@ fn collect_from_artifact(artifact: &StoreSourceArtifact, observations: &mut Vec<
                     event.context.clone(),
                     StoreEvidenceOrigin::WindowsEvent,
                     classification,
+                    event.activity_id.clone(),
                     event.message.clone(),
                     event.named_data.clone(),
                 );
@@ -224,6 +230,8 @@ fn collect_from_ime_text(
             context,
             StoreEvidenceOrigin::IntuneManagementExtension,
             classification,
+            // The CCM text grammar carries no operation-correlation token.
+            None,
             Some(record.message.clone()),
             Vec::new(),
         );
@@ -243,8 +251,10 @@ fn collect_from_fact(fact: &StorePackageFact, observations: &mut Vec<StoreObserv
         action: StoreDeploymentAction::Unknown,
         installer_family: fact.installer_family,
         family_declared: fact.installer_family != StoreInstallerFamily::Unknown,
+        typed_intent: None,
         error: None,
         unknown_version: false,
+        level_mismatch: false,
         recognized: true,
     };
     push_observation(
@@ -252,6 +262,7 @@ fn collect_from_fact(fact: &StorePackageFact, observations: &mut Vec<StoreObserv
         fact.context.clone(),
         StoreEvidenceOrigin::PackageInventory,
         classification,
+        None,
         None,
         fact.named_data.clone(),
     );
@@ -275,33 +286,24 @@ fn collect_from_assignment(assignment: &StoreAssignment, observations: &mut Vec<
         },
         installer_family: StoreInstallerFamily::Unknown,
         family_declared: false,
+        // The typed field is the only authority for intent. Caller-supplied
+        // named_data on this or any other observation stays visible as raw
+        // metadata but can never state or override an intent (ADR-001).
+        typed_intent: Some(assignment.intent),
         error: None,
         unknown_version: false,
+        level_mismatch: false,
         recognized: true,
     };
-    let mut named_data = assignment.named_data.clone();
-    named_data.push(IntuneNamedValue {
-        name: "IntuneIntent".to_owned(),
-        value: intent_wire(assignment.intent).to_owned(),
-    });
     push_observation(
         observations,
         assignment.context.clone(),
         StoreEvidenceOrigin::IntuneAssignment,
         classification,
         None,
-        named_data,
+        None,
+        assignment.named_data.clone(),
     );
-}
-
-fn intent_wire(intent: StoreAssignmentIntent) -> &'static str {
-    match intent {
-        StoreAssignmentIntent::Required => "required",
-        StoreAssignmentIntent::Available => "available",
-        StoreAssignmentIntent::Uninstall => "uninstall",
-        StoreAssignmentIntent::NotTargeted => "notTargeted",
-        StoreAssignmentIntent::Unknown => "unknown",
-    }
 }
 
 fn collect_from_installer_outcome(
@@ -323,8 +325,10 @@ fn collect_from_installer_outcome(
         // package; that is what makes it installer-native.
         installer_family: StoreInstallerFamily::StoreWin32,
         family_declared: true,
+        typed_intent: None,
         error: outcome.exit_code.clone(),
         unknown_version: false,
+        level_mismatch: false,
         recognized: true,
     };
     push_observation(
@@ -332,6 +336,7 @@ fn collect_from_installer_outcome(
         outcome.context.clone(),
         StoreEvidenceOrigin::InstallerNative,
         classification,
+        None,
         None,
         outcome.named_data.clone(),
     );
@@ -367,6 +372,7 @@ fn push_observation(
     context: IntuneObservationContext,
     origin: StoreEvidenceOrigin,
     classification: StoreClassification,
+    activity_id: Option<String>,
     message: Option<String>,
     named_data: Vec<IntuneNamedValue>,
 ) {
@@ -375,6 +381,7 @@ fn push_observation(
         observation_id,
         context,
         origin,
+        activity_id,
         signal: classification.signal,
         installer_family: classification.installer_family,
         family_basis: if classification.family_declared {
@@ -386,8 +393,10 @@ fn push_observation(
         app_id: classification.app_id,
         execution_context: classification.execution_context,
         action: classification.action,
+        typed_intent: classification.typed_intent,
         error: classification.error,
         unknown_version: classification.unknown_version,
+        level_mismatch: classification.level_mismatch,
         named_data,
         message,
     });
@@ -423,13 +432,82 @@ fn identities_conflict(left: &[String], right: &[String]) -> bool {
 }
 
 /// Whether an observation may join a group.
+///
+/// A shared package correlation token is a join. A shared Intune app id alone
+/// is not: per ADR-002 it is an Intune-level association, at most weak or
+/// moderate, so it may only group observations while *neither* side claims a
+/// package identity. An identity-free record must never be merged into a
+/// package-identified transaction (where its terminal signal would become a
+/// package-specific conclusion), and a package-identified record must never
+/// donate its identity to a group built from identity-free evidence.
 fn joinable(group: &Group, tokens: &[String], app_id: Option<&String>) -> bool {
     if identities_conflict(tokens, &group.tokens) {
         return false;
     }
-    let shares_identifier = tokens.iter().any(|token| group.tokens.contains(token))
-        || app_id.is_some_and(|app| group.app_ids.contains(app));
-    shares_identifier
+    if tokens.iter().any(|token| group.tokens.contains(token)) {
+        return true;
+    }
+    app_id.is_some_and(|app| group.app_ids.contains(app))
+        && tokens.is_empty()
+        && group.tokens.is_empty()
+}
+
+/// Whether two groups describe the same transaction and may merge.
+///
+/// Mirrors [`joinable`] at the group level: a shared correlation token merges,
+/// a shared app id merges only while both sides are package-identity-free, and
+/// conflicting identities, contexts, or families never merge.
+fn groups_may_merge(left: &Group, right: &Group) -> bool {
+    if identities_conflict(&left.tokens, &right.tokens) {
+        return false;
+    }
+    if !left
+        .execution_context
+        .is_compatible_with(right.execution_context)
+        || !left.installer_family.is_compatible_with(right.installer_family)
+    {
+        return false;
+    }
+    left.tokens.iter().any(|token| right.tokens.contains(token))
+        || (left.tokens.is_empty()
+            && right.tokens.is_empty()
+            && left.app_ids.iter().any(|app| right.app_ids.contains(app)))
+}
+
+/// Merge groups until no two remaining groups may merge.
+///
+/// One observation can bridge two groups — sharing a family-name token with
+/// one and a product-id token with the other. Which group the bridge was
+/// *placed* in is a processing detail; without this fixpoint the other group
+/// stayed a separate transaction, and the split depended on discovery order.
+fn merge_groups_to_fixpoint(groups: &mut Vec<Group>) {
+    loop {
+        let Some((left, right)) = (0..groups.len())
+            .flat_map(|left| ((left + 1)..groups.len()).map(move |right| (left, right)))
+            .find(|&(left, right)| groups_may_merge(&groups[left], &groups[right]))
+        else {
+            return;
+        };
+        let absorbed = groups.remove(right);
+        let target = &mut groups[left];
+        for token in absorbed.tokens {
+            if !target.tokens.contains(&token) {
+                target.tokens.push(token);
+            }
+        }
+        for app in absorbed.app_ids {
+            if !target.app_ids.contains(&app) {
+                target.app_ids.push(app);
+            }
+        }
+        if target.execution_context == StoreExecutionContext::Unknown {
+            target.execution_context = absorbed.execution_context;
+        }
+        if target.installer_family == StoreInstallerFamily::Unknown {
+            target.installer_family = absorbed.installer_family;
+        }
+        target.members.extend(absorbed.members);
+    }
 }
 
 /// Partition observations into transaction groups.
@@ -438,14 +516,28 @@ fn joinable(group: &Group, tokens: &[String], app_id: Option<&String>) -> bool {
 /// placed first, so the groups exist before the ambiguous records are assigned;
 /// without that, whether an IME intent record landed on the per-user or the
 /// provisioned transaction depended on which artifact the caller happened to
-/// supply first. Members and groups are then returned in source order, so
-/// transaction ids and cited evidence do not depend on the pass an observation
+/// supply first.
+///
+/// Within each pass, observations are processed in the canonical order of
+/// their observation ids — identifiers of the evidence itself — so greedy
+/// group discovery does not depend on the order the caller supplied the
+/// artifacts in (ADR-003). Groups are then merged to a fixpoint, and members
+/// and groups are returned in source order, so transaction ids and cited
+/// evidence do not depend on the pass or the discovery order an observation
 /// was placed in.
 fn group_observations(observations: &[StoreObservation]) -> Vec<Vec<usize>> {
     let mut groups: Vec<Group> = Vec::new();
 
+    let mut canonical: Vec<usize> = (0..observations.len()).collect();
+    canonical.sort_by(|&left, &right| {
+        observations[left]
+            .observation_id
+            .cmp(&observations[right].observation_id)
+    });
+
     for declared_pass in [true, false] {
-        for (index, observation) in observations.iter().enumerate() {
+        for &index in &canonical {
+            let observation = &observations[index];
             let declares_family = observation.installer_family != StoreInstallerFamily::Unknown;
             if declares_family != declared_pass {
                 continue;
@@ -500,6 +592,8 @@ fn group_observations(observations: &[StoreObservation]) -> Vec<Vec<usize>> {
             }
         }
     }
+
+    merge_groups_to_fixpoint(&mut groups);
 
     let mut members = groups
         .into_iter()
@@ -569,9 +663,9 @@ fn state_for(signal: StoreSignal) -> Option<StoreTransactionState> {
     }
 }
 
-/// Lifecycle rank. A higher-ranked state replaces a lower one; equal ranks
-/// resolve to the later observation, which is how a retry that finally succeeds
-/// lands on its success rather than on its first failure.
+/// Lifecycle rank. A higher-ranked state replaces a lower one. Equal ranks are
+/// resolved by [`resolve_state`], never by the order the caller supplied the
+/// observations in (ADR-003).
 fn state_rank(state: StoreTransactionState) -> u8 {
     match state {
         StoreTransactionState::InsufficientEvidence => 0,
@@ -591,6 +685,122 @@ fn state_rank(state: StoreTransactionState) -> u8 {
     }
 }
 
+/// One observation's statement about the transaction state, with the provenance
+/// needed to order it against other statements.
+struct StateCandidate<'a> {
+    state: StoreTransactionState,
+    error: Option<&'a IntuneErrorCode>,
+    source_artifact_id: &'a str,
+    record_number: Option<u64>,
+    /// The source's own operation-correlation token (the ETW activity id for a
+    /// Windows event). Required linkage for a success to supersede a failure.
+    activity_id: Option<&'a str>,
+    /// True when the observation came from a source whose own record numbering
+    /// is a monotonic write order (an event log's record ids, a CCM log's
+    /// records). Supplied facts carry a caller-chosen record number that states
+    /// nothing about time, so they are never sequenced against anything.
+    sequenced: bool,
+}
+
+/// Whether `later` supersedes `earlier` by the source's own ordering.
+///
+/// Only records from the *same* sequenced source artifact are comparable:
+/// record numbers from two different artifacts, or from supplied facts, share
+/// no clock and no counter. Incomparable records stay ambiguous (ADR-003).
+///
+/// ADR-003 additionally separates chronology from retry linkage: a later
+/// record number proves the success was *written* later, not that it retried
+/// this failure — it may belong to an unrelated deployment attempt for the
+/// same package. The Store event grammar's explicit linkage token is the ETW
+/// activity id (`NormalizedWindowsEvent::activity_id`, "correlates a
+/// multi-event operation"), so a success replaces a failure only when both
+/// records carry the same activity id; without that link the contradiction is
+/// preserved and [`resolve_state`] stays conservative. The gate is
+/// deliberately asymmetric: a later *failure* after a success is not the
+/// retry-success case ADR-003 restricts, and hiding it would suppress a
+/// device-reported failure, so plain source-native chronology still applies
+/// there (and to every same-outcome refinement).
+fn supersedes(later: &StateCandidate<'_>, earlier: &StateCandidate<'_>) -> bool {
+    let source_ordered = later.sequenced
+        && earlier.sequenced
+        && later.source_artifact_id == earlier.source_artifact_id
+        && matches!(
+            (later.record_number, earlier.record_number),
+            (Some(later), Some(earlier)) if later > earlier
+        );
+    if !source_ordered {
+        return false;
+    }
+    if earlier.state.is_failure() && !later.state.is_failure() {
+        return matches!(
+            (later.activity_id, earlier.activity_id),
+            (Some(later), Some(earlier)) if later == earlier
+        );
+    }
+    true
+}
+
+/// Resolve the transaction state from every state-bearing observation at once.
+///
+/// Caller vector order is an acquisition detail, not chronology, so this
+/// resolution must give the same answer for any permutation of the same
+/// observations (ADR-003):
+///
+/// 1. the highest lifecycle rank wins, as before;
+/// 2. within that rank, a record superseded by a later record from the same
+///    sequenced source artifact is dropped — this is what lets an explicitly
+///    ordered retry land on its final outcome instead of its first failure;
+/// 3. if the surviving records still state more than one distinct state, the
+///    evidence is an unresolved authoritative contradiction and the reduction
+///    stays conservative: `InsufficientEvidence` for a single terminal
+///    conclusion, with every contributing observation left visible, rather
+///    than whichever record the caller happened to list last.
+fn resolve_state(
+    candidates: &[StateCandidate<'_>],
+) -> (StoreTransactionState, Option<IntuneErrorCode>) {
+    let Some(top_rank) = candidates
+        .iter()
+        .map(|candidate| state_rank(candidate.state))
+        .max()
+    else {
+        return (StoreTransactionState::InsufficientEvidence, None);
+    };
+    let top: Vec<&StateCandidate<'_>> = candidates
+        .iter()
+        .filter(|candidate| state_rank(candidate.state) == top_rank)
+        .collect();
+    let mut surviving: Vec<&StateCandidate<'_>> = top
+        .iter()
+        .filter(|candidate| !top.iter().any(|other| supersedes(other, candidate)))
+        .copied()
+        .collect();
+    // Canonical evidence order, independent of the caller's input order. The
+    // provenance key alone cannot break a tie between duplicate observations
+    // of the same record, so the error token — the only candidate content
+    // that can still differ once the states are checked equal below — is the
+    // final component; without it, `find_map` would report whichever
+    // duplicate the caller listed first.
+    surviving.sort_by_key(|candidate| {
+        (
+            candidate.source_artifact_id,
+            candidate.record_number,
+            candidate.error.map(|error| error.raw.as_str()),
+        )
+    });
+
+    let state = surviving[0].state;
+    if surviving
+        .iter()
+        .any(|candidate| candidate.state != state)
+    {
+        return (StoreTransactionState::InsufficientEvidence, None);
+    }
+    let error = surviving
+        .iter()
+        .find_map(|candidate| candidate.error.cloned());
+    (state, error)
+}
+
 fn reduce_group(
     index: usize,
     members: &[usize],
@@ -603,12 +813,13 @@ fn reduce_group(
     let mut family_basis = StoreFamilyBasis::Unvalidated;
     let mut action = StoreDeploymentAction::Unknown;
     let mut intent = StoreAssignmentIntent::Unknown;
+    let mut intent_conflict = false;
     let mut last_confirmed_phase: Option<StorePhase> = None;
-    let mut state = StoreTransactionState::InsufficientEvidence;
-    let mut error: Option<IntuneErrorCode> = None;
+    let mut state_candidates: Vec<StateCandidate<'_>> = Vec::new();
     let mut has_intune_intent = false;
     let mut has_device_evidence = false;
     let mut unknown_version_observed = false;
+    let mut level_mismatch_observed = false;
     let mut malformed_contributor = false;
     let mut observation_ids = Vec::with_capacity(members.len());
     let mut evidence = Vec::with_capacity(members.len());
@@ -634,23 +845,27 @@ fn reduce_group(
         if action == StoreDeploymentAction::Unknown {
             action = observation.action;
         }
-        if let Some(value) = observation
-            .named_data
-            .iter()
-            .find(|entry| entry.name == "IntuneIntent")
-        {
-            intent = match value.value.as_str() {
-                "required" => StoreAssignmentIntent::Required,
-                "available" => StoreAssignmentIntent::Available,
-                "uninstall" => StoreAssignmentIntent::Uninstall,
-                "notTargeted" => StoreAssignmentIntent::NotTargeted,
-                _ => StoreAssignmentIntent::Unknown,
-            };
+        // Typed assignment intent is authoritative (ADR-001). It is read only
+        // from the typed field a real assignment carried; a caller-writable
+        // `named_data` pair on a package or installer observation is raw
+        // metadata and can never state or override an intent. Two typed
+        // assignments stating different intents are an unresolved contradiction
+        // and stay `Unknown` rather than letting input order pick a winner.
+        if let Some(typed) = observation.typed_intent {
+            if typed != StoreAssignmentIntent::Unknown {
+                if intent == StoreAssignmentIntent::Unknown && !intent_conflict {
+                    intent = typed;
+                } else if intent != typed {
+                    intent = StoreAssignmentIntent::Unknown;
+                    intent_conflict = true;
+                }
+            }
         }
 
         has_intune_intent |= observation.origin.is_intune_intent();
         has_device_evidence |= observation.origin.is_device_evidence();
         unknown_version_observed |= observation.unknown_version;
+        level_mismatch_observed |= observation.level_mismatch;
         malformed_contributor |= observation.context.parse_state == IntuneParseState::Malformed
             || observation.context.access_state != IntuneAccessState::Available;
 
@@ -662,12 +877,22 @@ fn reduce_group(
         }
 
         if let Some(candidate) = state_for(observation.signal) {
-            if state_rank(candidate) >= state_rank(state) {
-                state = candidate;
-                error.clone_from(&observation.error);
-            }
+            state_candidates.push(StateCandidate {
+                state: candidate,
+                error: observation.error.as_ref(),
+                source_artifact_id: &observation.context.evidence_ref.source_artifact_id,
+                record_number: observation.context.provenance.record_number,
+                activity_id: observation.activity_id.as_deref(),
+                sequenced: matches!(
+                    observation.origin,
+                    StoreEvidenceOrigin::WindowsEvent
+                        | StoreEvidenceOrigin::IntuneManagementExtension
+                ),
+            });
         }
     }
+
+    let (mut state, mut error) = resolve_state(&state_candidates);
 
     if intent == StoreAssignmentIntent::NotTargeted {
         state = StoreTransactionState::NotTargeted;
@@ -689,7 +914,11 @@ fn reduce_group(
         last_confirmed_phase,
         has_intune_intent,
         has_device_evidence,
-        unknown_version_observed || malformed_contributor,
+        // Distinct degradation reasons, one consequence: an unrecognized
+        // dialect, a known record contradicting its own level, and a
+        // malformed or partially readable contributor each independently
+        // cap confidence at Low.
+        unknown_version_observed || level_mismatch_observed || malformed_contributor,
     );
 
     StoreTransaction {
@@ -708,6 +937,7 @@ fn reduce_group(
         has_intune_intent,
         has_device_evidence,
         unknown_version_observed,
+        level_mismatch_observed,
         next_evidence_request: next_evidence_request(
             installer_family,
             state,

@@ -31,6 +31,7 @@ pub fn derive_findings(snapshot: &StoreAnalysis) -> Vec<IntuneFinding> {
     push_license_failure(snapshot, &mut findings);
     push_download_failure(snapshot, &mut findings);
     push_registration_failure(snapshot, &mut findings);
+    push_installer_failure(snapshot, &mut findings);
     push_provisioning_failure(snapshot, &mut findings);
     push_uninstall_failure(snapshot, &mut findings);
     push_no_interactive_user(snapshot, &mut findings);
@@ -40,6 +41,7 @@ pub fn derive_findings(snapshot: &StoreAnalysis) -> Vec<IntuneFinding> {
     push_device_failure_without_intune_intent(snapshot, &mut findings);
     push_ambiguous_display_name(snapshot, &mut findings);
     push_unknown_event_version(snapshot, &mut findings);
+    push_event_level_mismatch(snapshot, &mut findings);
     push_malformed_source(snapshot, &mut findings);
     push_evidence_coverage_gap(snapshot, &mut findings);
     push_install_completed(snapshot, &mut findings);
@@ -129,6 +131,32 @@ fn transactions_in_state(
         .collect()
 }
 
+/// The weakest confidence among the affected transactions.
+///
+/// An outcome-asserting finding (a failure, a completion, a scheduling
+/// condition) claims exactly what its transactions claim, so it may not claim
+/// it more strongly than the reducer did: a transaction capped at `Low` for an
+/// unknown dialect, a level mismatch, or a malformed contributor caps every
+/// finding built on it (ADR-001). Rules that instead describe an evidence gap
+/// or an attribution boundary keep their own deliberate confidence, because
+/// their claim is about what is missing, not about an outcome.
+fn weakest_confidence(transactions: &[&StoreTransaction]) -> IntuneFindingConfidence {
+    fn rank(confidence: &IntuneFindingConfidence) -> u8 {
+        match confidence {
+            IntuneFindingConfidence::Low => 0,
+            IntuneFindingConfidence::Medium => 1,
+            IntuneFindingConfidence::High => 2,
+        }
+    }
+    let mut weakest = IntuneFindingConfidence::High;
+    for transaction in transactions {
+        if rank(&transaction.confidence) < rank(&weakest) {
+            weakest = transaction.confidence.clone();
+        }
+    }
+    weakest
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_finding(
     findings: &mut Vec<IntuneFinding>,
@@ -179,7 +207,7 @@ fn push_license_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFindi
         findings,
         "store-license-acquisition-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Store license or acquisition failed",
         format!(
             "The Store could not acquire a license or entitlement for {}.{}",
@@ -204,7 +232,7 @@ fn push_download_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFind
         findings,
         "store-download-staging-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Package download or staging failed",
         format!(
             "The package payload for {} was never staged on disk, so no registration was attempted.{}",
@@ -232,7 +260,7 @@ fn push_registration_failure(snapshot: &StoreAnalysis, findings: &mut Vec<Intune
         findings,
         "store-registration-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         if win32 {
             "Store-delivered installer reported failure"
         } else {
@@ -252,6 +280,37 @@ fn push_registration_failure(snapshot: &StoreAnalysis, findings: &mut Vec<Intune
     );
 }
 
+/// A Store-delivered Win32 package whose own installer reported failure.
+///
+/// Kept apart from the registration rule because the failing grammar is a
+/// plain Windows installer: AppX dependency/framework remediation does not
+/// apply, and suggesting it here would be the cross-family collapse this
+/// module exists to prevent.
+fn push_installer_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFinding>) {
+    let affected = transactions_in_state(snapshot, StoreTransactionState::InstallerFailure);
+    if affected.is_empty() {
+        return;
+    }
+    push_finding(
+        findings,
+        "store-win32-installer-failed",
+        IntuneFindingSeverity::Error,
+        weakest_confidence(&affected),
+        "Store-delivered Win32 installer reported failure",
+        format!(
+            "The installer for {} ran and reported failure. This is the package's own Windows installer, not an AppX deployment stage.{}",
+            labels(&affected),
+            error_suffix(&affected)
+        ),
+        &[
+            "Read the cited exit code against the installer's own documentation (MSI or setup engine), not against AppX deployment errors",
+            "Collect the installer's own log for the failing run",
+        ],
+        evidence_of(&affected),
+        Vec::new(),
+    );
+}
+
 fn push_provisioning_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFinding>) {
     let affected = transactions_in_state(snapshot, StoreTransactionState::ProvisioningFailure);
     if affected.is_empty() {
@@ -261,7 +320,7 @@ fn push_provisioning_failure(snapshot: &StoreAnalysis, findings: &mut Vec<Intune
         findings,
         "store-provisioning-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Device provisioning of the package failed",
         format!(
             "{} failed while being provisioned for all users on the device. This is a machine-wide operation and does not imply any per-user registration failed.{}",
@@ -286,7 +345,7 @@ fn push_uninstall_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFin
         findings,
         "store-uninstall-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Package removal failed",
         format!(
             "Removal of {} did not complete.{}",
@@ -310,7 +369,7 @@ fn push_no_interactive_user(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneF
         findings,
         "store-no-interactive-user",
         IntuneFindingSeverity::Warning,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "A user-context package had no user to install for",
         format!(
             "{} requires a user context and no interactive user was signed in when it was evaluated. This is a scheduling condition, not an installation failure.",
@@ -499,13 +558,24 @@ fn push_ambiguous_display_name(snapshot: &StoreAnalysis, findings: &mut Vec<Intu
 
 // ── Coverage rules ──────────────────────────────────────────────────────────
 
+/// Canonical citation list: sorted and de-duplicated, so a record supplied
+/// twice is one citation and neither the rendered count nor the citation
+/// order depends on artifact permutation or duplication.
+fn normalized_refs(refs: impl Iterator<Item = IntuneEvidenceRef>) -> Vec<IntuneEvidenceRef> {
+    let mut evidence: Vec<IntuneEvidenceRef> = refs.collect();
+    evidence.sort();
+    evidence.dedup();
+    evidence
+}
+
 fn push_unknown_event_version(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFinding>) {
-    let evidence = snapshot
-        .observations
-        .iter()
-        .filter(|observation| observation.unknown_version)
-        .map(|observation| observation.context.evidence_ref.clone())
-        .collect::<Vec<_>>();
+    let evidence = normalized_refs(
+        snapshot
+            .observations
+            .iter()
+            .filter(|observation| observation.unknown_version)
+            .map(|observation| observation.context.evidence_ref.clone()),
+    );
     if evidence.is_empty() {
         return;
     }
@@ -520,6 +590,40 @@ fn push_unknown_event_version(snapshot: &StoreAnalysis, findings: &mut Vec<Intun
             evidence.len()
         ),
         &["Re-run with a build that recognizes the provider version, or supply the rendered event text"],
+        evidence,
+        Vec::new(),
+    );
+}
+
+/// A *known* event whose level contradicts the outcome its event id states.
+///
+/// Deliberately a separate finding from `store-unknown-event-version`: there
+/// the dialect is unrecognized and nothing was interpreted; here the dialect is
+/// fully understood and the record contradicts itself. Both degrade the
+/// touched transaction's confidence, but for different reasons and with
+/// different remediations, so conflating them would hide which one happened.
+fn push_event_level_mismatch(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFinding>) {
+    let evidence = normalized_refs(
+        snapshot
+            .observations
+            .iter()
+            .filter(|observation| observation.level_mismatch)
+            .map(|observation| observation.context.evidence_ref.clone()),
+    );
+    if evidence.is_empty() {
+        return;
+    }
+    push_finding(
+        findings,
+        "store-event-level-mismatch",
+        IntuneFindingSeverity::Info,
+        IntuneFindingConfidence::High,
+        "A known event's level contradicts its stated outcome",
+        format!(
+            "{} record(s) carry a recognized failure event id but were logged at Information level. The stated outcome was kept and the level was not promoted into evidence; any transaction they touch is reported at reduced confidence.",
+            evidence.len()
+        ),
+        &["Compare the rendered event text with the event id's documented meaning; the export may have altered the level"],
         evidence,
         Vec::new(),
     );
@@ -593,7 +697,7 @@ fn push_install_completed(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFin
         findings,
         "store-install-completed",
         IntuneFindingSeverity::Info,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "A Store app install completed",
         format!("{} completed installation.", labels(&affected)),
         &[],
@@ -611,7 +715,7 @@ fn push_uninstall_completed(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneF
         findings,
         "store-uninstall-completed",
         IntuneFindingSeverity::Info,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "A Store app uninstall completed",
         format!("{} was removed.", labels(&affected)),
         &[],
@@ -647,6 +751,7 @@ mod tests {
             has_intune_intent: true,
             has_device_evidence: true,
             unknown_version_observed: false,
+            level_mismatch_observed: false,
             observations: vec!["appx:1".to_owned()],
             evidence: vec![IntuneEvidenceRef {
                 evidence_id: "appx:1".to_owned(),
@@ -694,6 +799,87 @@ mod tests {
         let count = ids.len();
         ids.dedup();
         assert_eq!(ids.len(), count, "duplicate finding ids: {ids:?}");
+    }
+
+    /// ADR-001: a finding that asserts an outcome may not claim stronger
+    /// confidence than the evidence behind it. Every outcome-asserting rule
+    /// must inherit the weakest confidence among its affected transactions,
+    /// and must still report `High` when nothing was degraded.
+    #[test]
+    fn outcome_findings_inherit_the_weakest_affected_transaction_confidence() {
+        let cases = [
+            (
+                StoreTransactionState::LicenseFailure,
+                "store-license-acquisition-failed",
+            ),
+            (
+                StoreTransactionState::DownloadFailure,
+                "store-download-staging-failed",
+            ),
+            (
+                StoreTransactionState::RegistrationFailure,
+                "store-registration-failed",
+            ),
+            (
+                StoreTransactionState::InstallerFailure,
+                "store-win32-installer-failed",
+            ),
+            (
+                StoreTransactionState::ProvisioningFailure,
+                "store-provisioning-failed",
+            ),
+            (
+                StoreTransactionState::UninstallFailure,
+                "store-uninstall-failed",
+            ),
+            (
+                StoreTransactionState::NoInteractiveUser,
+                "store-no-interactive-user",
+            ),
+            (
+                StoreTransactionState::InstallCompleted,
+                "store-install-completed",
+            ),
+            (
+                StoreTransactionState::UninstallCompleted,
+                "store-uninstall-completed",
+            ),
+        ];
+        for (state, finding_id) in cases {
+            let mut degraded = transaction(state);
+            degraded.confidence = IntuneFindingConfidence::Low;
+            let snapshot = StoreAnalysis {
+                // One intact transaction and one degraded one: the weakest
+                // member decides, not the first or the strongest.
+                transactions: vec![transaction(state), degraded],
+                ..StoreAnalysis::default()
+            };
+            let findings = derive_findings(&snapshot);
+            let finding = findings
+                .iter()
+                .find(|finding| finding.finding_id == finding_id)
+                .unwrap_or_else(|| panic!("{finding_id} must be emitted"));
+            assert_eq!(
+                finding.confidence,
+                IntuneFindingConfidence::Low,
+                "{finding_id} must not overstate degraded evidence"
+            );
+
+            let intact_snapshot = StoreAnalysis {
+                transactions: vec![transaction(state)],
+                ..StoreAnalysis::default()
+            };
+            let intact = derive_findings(&intact_snapshot);
+            let finding = intact
+                .iter()
+                .find(|finding| finding.finding_id == finding_id)
+                .unwrap_or_else(|| panic!("{finding_id} must be emitted"));
+            assert_eq!(
+                finding.confidence,
+                IntuneFindingConfidence::High,
+                "{finding_id} keeps full confidence on intact evidence"
+            );
+        }
     }
 
     #[test]

@@ -20,8 +20,8 @@ use crate::intune::evidence::{IntuneErrorCode, IntuneNamedValue};
 use crate::intune::normalized::{NormalizedEventLevel, NormalizedWindowsEvent};
 
 use super::models::{
-    StoreDeploymentAction, StoreExecutionContext, StoreInstallerFamily, StorePackageIdentity,
-    StoreSignal,
+    StoreAssignmentIntent, StoreDeploymentAction, StoreExecutionContext, StoreInstallerFamily,
+    StorePackageIdentity, StoreSignal,
 };
 use super::sources::{classify_event_source, StoreEventSource};
 
@@ -205,10 +205,18 @@ pub struct StoreClassification {
     pub installer_family: StoreInstallerFamily,
     /// True when the record stated the family rather than leaving it open.
     pub family_declared: bool,
+    /// Intune's typed assignment intent, present only when the record *is* a
+    /// typed assignment. Free-text or caller-writable metadata never sets it:
+    /// per ADR-001, untyped data is not authoritative intent.
+    pub typed_intent: Option<StoreAssignmentIntent>,
     pub error: Option<IntuneErrorCode>,
     /// True when a recognized provider emitted an event id or schema version
     /// this build has no rule for.
     pub unknown_version: bool,
+    /// True when a known event id's stated outcome contradicts the record's
+    /// own level. Distinct from [`Self::unknown_version`]: the dialect is
+    /// understood, the record contradicts itself.
+    pub level_mismatch: bool,
     /// False when the record did not come from a source this leaf recognizes.
     ///
     /// An unrecognized source is not Store evidence at all, so it must not
@@ -227,8 +235,10 @@ impl Default for StoreClassification {
             action: StoreDeploymentAction::Unknown,
             installer_family: StoreInstallerFamily::Unknown,
             family_declared: false,
+            typed_intent: None,
             error: None,
             unknown_version: false,
+            level_mismatch: false,
             recognized: true,
         }
     }
@@ -509,6 +519,21 @@ pub fn classify_event(event: &NormalizedWindowsEvent) -> StoreClassification {
         return classification;
     };
 
+    // The typed template version states which payload contract the record
+    // follows. The event-id table above was written against the baseline
+    // template revisions (0 and 1); a later revision redefines what the
+    // payload's fields mean, so nothing extracted from it is assessable under
+    // these rules. Non-assessable evidence cannot produce a terminal
+    // conclusion (ADR-001): the record degrades to unknown-version coverage,
+    // the same conservative route as an unrecognized event id. This is
+    // deliberately stricter than the named `Version` payload check below —
+    // there the template itself is understood and only a payload detail is
+    // newer, so the stated outcome is kept at reduced confidence.
+    if event.event_version.is_some_and(|version| version > 1) {
+        classification.unknown_version = true;
+        return classification;
+    }
+
     // A payload version beyond the known set is the same problem arriving by a
     // different route.
     if let Some(version) = named(named_data, "Version") {
@@ -525,9 +550,12 @@ pub fn classify_event(event: &NormalizedWindowsEvent) -> StoreClassification {
     classification.signal = signal_for(operation, outcome);
 
     // An event that reports failure without an error code is still a failure,
-    // but the level must never be promoted into one.
+    // but the level must never be promoted into one. A failure id logged at
+    // Information level is a *known* record contradicting itself, which is a
+    // different degradation than an unrecognized dialect, so it is flagged
+    // separately rather than folded into `unknown_version`.
     if outcome == EventOutcome::Failed && event.level == NormalizedEventLevel::Information {
-        classification.unknown_version = true;
+        classification.level_mismatch = true;
     }
 
     classification
@@ -659,8 +687,82 @@ mod tests {
         ));
         assert_eq!(classification.signal, StoreSignal::Unclassified);
         assert!(classification.unknown_version);
+        assert!(
+            !classification.level_mismatch,
+            "an unrecognized dialect is not a level contradiction"
+        );
         // Identity survives so the record stays correlatable.
         assert!(!classification.identity.is_empty());
+    }
+
+    /// A *known* failure id logged at Information level is the record
+    /// contradicting itself, which is a distinct degradation from an
+    /// unrecognized dialect and must be flagged as such (evidence-degradation
+    /// cluster, inventory row 7).
+    #[test]
+    fn a_known_failure_id_at_information_level_is_a_level_mismatch_not_an_unknown_version() {
+        let mut contradictory = event(
+            404,
+            &[
+                ("DeploymentOperation", "Register"),
+                ("DeploymentScope", "User"),
+                ("PackageFamilyName", "Contoso.SynthApp_9abcdef01234h"),
+                ("ErrorCode", "0x80073CF9"),
+            ],
+        );
+        contradictory.level = NormalizedEventLevel::Information;
+        let classification = classify_event(&contradictory);
+        // The stated outcome is kept; the level is never promoted into one.
+        assert_eq!(classification.signal, StoreSignal::RegistrationFailed);
+        assert!(classification.level_mismatch);
+        assert!(
+            !classification.unknown_version,
+            "the dialect is fully recognized; conflating the two reasons would \
+             hide which degradation happened"
+        );
+    }
+
+    /// The typed route to the unknown-version degradation: a known failure
+    /// event id under an unsupported ETW template version is non-assessable
+    /// and must not classify as a failure (ADR-001).
+    #[test]
+    fn an_unsupported_typed_event_version_is_surfaced_not_interpreted() {
+        let mut versioned = event(
+            404,
+            &[
+                ("DeploymentOperation", "Register"),
+                ("DeploymentScope", "User"),
+                ("PackageFamilyName", "Contoso.SynthApp_9abcdef01234h"),
+                ("ErrorCode", "0x80073CF9"),
+            ],
+        );
+        versioned.event_version = Some(2);
+        let classification = classify_event(&versioned);
+        assert_eq!(classification.signal, StoreSignal::Unclassified);
+        assert!(classification.unknown_version);
+        assert!(
+            !classification.level_mismatch,
+            "nothing was interpreted, so nothing can contradict itself"
+        );
+        // Identity survives so the record stays correlatable.
+        assert!(!classification.identity.is_empty());
+
+        // The baseline template revisions stay assessable.
+        for supported in [0, 1] {
+            let mut baseline = event(
+                404,
+                &[
+                    ("DeploymentOperation", "Register"),
+                    ("DeploymentScope", "User"),
+                    ("PackageFamilyName", "Contoso.SynthApp_9abcdef01234h"),
+                    ("ErrorCode", "0x80073CF9"),
+                ],
+            );
+            baseline.event_version = Some(supported);
+            let classification = classify_event(&baseline);
+            assert_eq!(classification.signal, StoreSignal::RegistrationFailed);
+            assert!(!classification.unknown_version);
+        }
     }
 
     #[test]

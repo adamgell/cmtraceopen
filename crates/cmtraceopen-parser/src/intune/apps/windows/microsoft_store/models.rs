@@ -434,10 +434,32 @@ pub struct StoreObservation {
     pub app_id: Option<String>,
     pub execution_context: StoreExecutionContext,
     pub action: StoreDeploymentAction,
+    /// The source's own operation-correlation token — for a Windows event, the
+    /// ETW activity id. This is the only linkage that can tie a success record
+    /// to an earlier failure as one operation: record order alone proves
+    /// chronology, not linkage (ADR-003), so the reducer requires a shared
+    /// activity id before a later success may supersede a failure. Absent for
+    /// sources whose grammar carries no such token (IME text, supplied facts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<String>,
+    /// Intune's typed assignment intent, present only when this observation is
+    /// a typed assignment. This is the authoritative statement of intent: the
+    /// reducer reads intent from here and never from caller-writable
+    /// `named_data` (ADR-001).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_intent: Option<StoreAssignmentIntent>,
     pub error: Option<IntuneErrorCode>,
     /// True when the record came from a recognized provider but an event id or
     /// schema version this build has no rule for.
     pub unknown_version: bool,
+    /// True when a *known* event's level contradicts the outcome its event id
+    /// states (a failure id logged at Information level). Deliberately a
+    /// separate flag from [`Self::unknown_version`]: an unrecognized dialect
+    /// and a self-contradictory known record degrade confidence for distinct
+    /// reasons, and conflating them would hide which one happened. Serialized
+    /// unconditionally, exactly like [`Self::unknown_version`], so `false` is
+    /// a statement rather than an absence.
+    pub level_mismatch: bool,
     #[serde(default)]
     pub named_data: Vec<IntuneNamedValue>,
     /// Verbatim record or rendered event text. Redacted by the export
@@ -467,6 +489,13 @@ pub struct StoreTransaction {
     /// True when device-side OS evidence (event, inventory fact, installer) is present.
     pub has_device_evidence: bool,
     pub unknown_version_observed: bool,
+    /// True when any contributing observation carried
+    /// [`StoreObservation::level_mismatch`]. Kept beside
+    /// [`Self::unknown_version_observed`] with the same always-present shape:
+    /// the two degradations cap confidence identically but for distinct
+    /// reasons, and a consumer reading a `Low` transaction must be able to
+    /// tell which one happened without replaying the observations.
+    pub level_mismatch_observed: bool,
     pub observations: Vec<String>,
     pub evidence: Vec<IntuneEvidenceRef>,
     /// The smallest artifact that would advance this diagnosis.

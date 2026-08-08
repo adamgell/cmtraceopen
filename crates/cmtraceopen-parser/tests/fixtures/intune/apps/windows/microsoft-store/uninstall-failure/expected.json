@@ -30,6 +30,7 @@
       "hasIntuneIntent": true,
       "hasDeviceEvidence": true,
       "unknownVersionObserved": false,
+      "levelMismatchObserved": false,
       "nextEvidenceRequest": null,
       "evidence": [
         "assignments:1",
