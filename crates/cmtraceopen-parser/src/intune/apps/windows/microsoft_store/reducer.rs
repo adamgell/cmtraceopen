@@ -251,6 +251,7 @@ fn collect_from_fact(fact: &StorePackageFact, observations: &mut Vec<StoreObserv
         typed_intent: None,
         error: None,
         unknown_version: false,
+        level_mismatch: false,
         recognized: true,
     };
     push_observation(
@@ -287,6 +288,7 @@ fn collect_from_assignment(assignment: &StoreAssignment, observations: &mut Vec<
         typed_intent: Some(assignment.intent),
         error: None,
         unknown_version: false,
+        level_mismatch: false,
         recognized: true,
     };
     push_observation(
@@ -321,6 +323,7 @@ fn collect_from_installer_outcome(
         typed_intent: None,
         error: outcome.exit_code.clone(),
         unknown_version: false,
+        level_mismatch: false,
         recognized: true,
     };
     push_observation(
@@ -385,6 +388,7 @@ fn push_observation(
         typed_intent: classification.typed_intent,
         error: classification.error,
         unknown_version: classification.unknown_version,
+        level_mismatch: classification.level_mismatch,
         named_data,
         message,
     });
@@ -696,6 +700,7 @@ fn reduce_group(
     let mut has_intune_intent = false;
     let mut has_device_evidence = false;
     let mut unknown_version_observed = false;
+    let mut level_mismatch_observed = false;
     let mut malformed_contributor = false;
     let mut observation_ids = Vec::with_capacity(members.len());
     let mut evidence = Vec::with_capacity(members.len());
@@ -741,6 +746,7 @@ fn reduce_group(
         has_intune_intent |= observation.origin.is_intune_intent();
         has_device_evidence |= observation.origin.is_device_evidence();
         unknown_version_observed |= observation.unknown_version;
+        level_mismatch_observed |= observation.level_mismatch;
         malformed_contributor |= observation.context.parse_state == IntuneParseState::Malformed
             || observation.context.access_state != IntuneAccessState::Available;
 
@@ -788,7 +794,11 @@ fn reduce_group(
         last_confirmed_phase,
         has_intune_intent,
         has_device_evidence,
-        unknown_version_observed || malformed_contributor,
+        // Distinct degradation reasons, one consequence: an unrecognized
+        // dialect, a known record contradicting its own level, and a
+        // malformed or partially readable contributor each independently
+        // cap confidence at Low.
+        unknown_version_observed || level_mismatch_observed || malformed_contributor,
     );
 
     StoreTransaction {
