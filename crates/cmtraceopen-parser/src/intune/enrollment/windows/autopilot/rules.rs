@@ -562,17 +562,20 @@ fn push_esp_link_conflicting(snapshot: &AutopilotSnapshot, findings: &mut Vec<In
             "The Autopilot evidence matches more than one ESP session",
             &format!(
                 "Explicit correlation keys bind this Autopilot evidence to {} different ESP \
-                 sessions ({}). A single Autopilot phase produces one session, so the session \
-                 identity is ambiguous and no completed handoff can be asserted.",
+                 sessions ({}). A single Autopilot phase produces one session, so no completed \
+                 handoff can be asserted. Two real sessions can exist legitimately -- a reimaged, \
+                 reset, or re-enrolled device provisions more than once -- but this bundle does \
+                 not say which session belongs to this attempt.",
                 snapshot.esp_linkage.esp_session_ids.len(),
                 snapshot.esp_linkage.esp_session_ids.join(", ")
             ),
             &[
-                "Re-collect both sides in one pass so the bundle describes a single provisioning \
-                 attempt."
+                "If the device was reimaged or re-enrolled, both sessions may be real: identify \
+                 the attempt under investigation and analyze its session on its own in the ESP \
+                 workspace."
                     .to_owned(),
-                "Confirm the ESP session facts were not assembled from two enrollments of the \
-                 same device."
+                "Otherwise re-collect both sides in one pass so the bundle describes a single \
+                 provisioning attempt."
                     .to_owned(),
             ],
             normalized_evidence(snapshot.esp_linkage.evidence.clone()),

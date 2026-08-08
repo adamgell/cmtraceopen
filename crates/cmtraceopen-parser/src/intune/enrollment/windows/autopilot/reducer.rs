@@ -108,7 +108,12 @@ pub fn reduce_autopilot_bundle(bundle: &AutopilotBundleInput) -> AutopilotSnapsh
         &ingest.sections,
     );
     let confidence = reduce_confidence(outcome, capture_validated, time_basis, &coverage);
-    let next_evidence_requests = next_evidence_requests(outcome, &esp_linkage, &coverage);
+    let next_evidence_requests = next_evidence_requests(
+        outcome,
+        &esp_linkage,
+        !ingest.esp_sessions.is_empty(),
+        &coverage,
+    );
 
     let unclassified_observation_ids = observations
         .iter()
@@ -678,11 +683,21 @@ fn recorded_non_assessable_failure_sections(
 ///
 /// Returned sorted and deduplicated so that "more than one value" is a
 /// reproducible fact rather than an artifact of iteration order.
+///
+/// Distinctness is case-insensitive: the identifiers this feeds -- serials,
+/// GUIDs, tenant domains, device names -- are case-insensitive identities on
+/// Windows, and the redacted export masks the trimmed, lowercased value
+/// (see the redaction module contract). Treating two casings as two values
+/// produced a conflict whose export said "2 distinct values" over two
+/// identical tokens, changing the conclusion under redaction (ADR-004). Each
+/// group is keyed by a deterministic representative casing -- the
+/// lexicographically smallest sighting -- so permuting the input cannot change
+/// the result (ADR-003).
 fn distinct_values(
     observations: &[AutopilotObservation],
     key: &str,
 ) -> BTreeMap<String, Vec<IntuneEvidenceRef>> {
-    let mut values: BTreeMap<String, Vec<IntuneEvidenceRef>> = BTreeMap::new();
+    let mut groups: BTreeMap<String, (String, Vec<IntuneEvidenceRef>)> = BTreeMap::new();
     for observation in observations.iter().filter(|obs| is_assessable(obs)) {
         let Some(value) = observation.named(key) else {
             continue;
@@ -691,12 +706,15 @@ fn distinct_values(
         if value.is_empty() {
             continue;
         }
-        values
-            .entry(value.to_owned())
-            .or_default()
-            .push(observation.evidence_ref());
+        let group = groups
+            .entry(value.to_ascii_lowercase())
+            .or_insert_with(|| (value.to_owned(), Vec::new()));
+        if value < group.0.as_str() {
+            group.0 = value.to_owned();
+        }
+        group.1.push(observation.evidence_ref());
     }
-    values
+    groups.into_values().collect()
 }
 
 fn single_value(observations: &[AutopilotObservation], key: &str) -> Option<String> {
@@ -1562,6 +1580,7 @@ fn reduce_confidence(
 fn next_evidence_requests(
     outcome: AutopilotOutcome,
     esp_linkage: &AutopilotEspLinkage,
+    esp_sessions_supplied: bool,
     coverage: &[IntuneArtifactCoverage],
 ) -> Vec<String> {
     let mut requests: Vec<String> = match outcome {
@@ -1609,7 +1628,18 @@ fn next_evidence_requests(
         AutopilotOutcome::Completed => Vec::new(),
     };
 
-    if esp_linkage.state == AutopilotEspLinkState::TimeOnlyCandidate {
+    // ESP facts were supplied but no explicit key bound them. The request for
+    // a shared identifier is keyed on that situation, not on the linkage state
+    // alone: the time gate can narrow the overlap window and turn
+    // `TimeOnlyCandidate` into `NotObserved`, and the guidance -- go find the
+    // identifier the two sides share -- must survive that downgrade rather
+    // than vanish with it.
+    if esp_sessions_supplied
+        && matches!(
+            esp_linkage.state,
+            AutopilotEspLinkState::TimeOnlyCandidate | AutopilotEspLinkState::NotObserved
+        )
+    {
         requests.push(
             "An enrollment, correlation, or device identifier shared by the Autopilot and ESP evidence"
                 .to_owned(),

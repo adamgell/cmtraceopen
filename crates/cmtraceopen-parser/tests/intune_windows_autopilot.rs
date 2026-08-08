@@ -1225,6 +1225,128 @@ fn a_schema_version_only_unknown_schema_is_explained_by_a_finding() {
     );
 }
 
+/// A case-only difference between two sightings of the same identifier is not
+/// a conflict: serials and GUIDs are case-insensitive identities, and the
+/// redacted export already masks the trimmed, lowercased value, so treating
+/// casings as distinct produced "2 distinct values" rendered as two identical
+/// tokens -- a self-contradictory export (ADR-004: redaction must not change
+/// conclusions within one analysis).
+#[test]
+fn a_case_only_identifier_difference_is_not_a_conflict() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "case-e1", "case-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "SYNTH-5CD1234ABC" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "case-e2", "case-channel", 2, 153, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "synth-5cd1234abc" }]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "case-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    assert!(
+        snapshot.conflicts.is_empty(),
+        "two casings of one serial are one identity, got {:?}",
+        snapshot.conflicts
+    );
+    assert_ne!(snapshot.outcome, AutopilotOutcome::ContradictoryEvidence);
+    assert_eq!(
+        snapshot.identity.serial_number.as_deref(),
+        Some("SYNTH-5CD1234ABC"),
+        "the representative casing must be deterministic"
+    );
+}
+
+/// The control for the test above: genuinely different identifiers still
+/// conflict, and the conflict still reports both values.
+#[test]
+fn genuinely_distinct_identifiers_still_conflict() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "real-e1", "real-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "SYNTH-5CD1234ABC" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "real-e2", "real-channel", 2, 153, "available", "parsed",
+                json!([{ "name": "serialNumber", "value": "SYNTH-5CD9999XYZ" }]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "real-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    let conflict = snapshot
+        .conflicts
+        .iter()
+        .find(|conflict| conflict.conflict_id == "conflicting-serial-number")
+        .expect("two different serials must still conflict");
+    assert_eq!(conflict.values.len(), 2);
+    assert_eq!(snapshot.outcome, AutopilotOutcome::ContradictoryEvidence);
+}
+
+/// When ESP facts exist but share no explicit key, the guidance to go find a
+/// shared identifier must survive whatever the time gate concludes. The
+/// narrowed (assessable-only) overlap window can turn TimeOnlyCandidate into
+/// NotObserved, and losing the next-evidence request with it would hide the
+/// one step that advances the diagnosis.
+#[test]
+fn unlinked_esp_sessions_keep_the_shared_identifier_evidence_request() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "unlinked-e1", "unlinked-channel", 1, 161, "available", "parsed",
+            json!([]), "AutopilotManager retrieve settings succeeded.",
+        )]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [{
+            "sessionId": "esp-session-a",
+            "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "correlationId": null, "activityId": null,
+            "entraDeviceId": null, "managedDeviceId": null,
+            "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+            "evidence": { "evidenceId": "unlinked-esp-a", "sourceArtifactId": "esp-session-facts" }
+        }]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("unlinked-channel", "autopilotEvents", &events),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::NotObserved,
+        "no key and no provable overlap window must stay NotObserved"
+    );
+    assert!(
+        snapshot.next_evidence_requests.iter().any(|request| {
+            request.contains("identifier shared by the Autopilot and ESP evidence")
+        }),
+        "the shared-identifier request must survive the time gate, got {:?}",
+        snapshot.next_evidence_requests
+    );
+}
+
 /// The native-event input path: events supplied directly on the bundle derive
 /// their artifact from the event's own provenance and produce observations
 /// without any document or source coverage entry.

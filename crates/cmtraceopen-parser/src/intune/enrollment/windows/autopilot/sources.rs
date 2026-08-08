@@ -352,20 +352,29 @@ fn iana_zone_re() -> &'static Regex {
 ///
 /// Windows collectors report this form, not an IANA name, so omitting it made
 /// the single most common real input classify as invalid and needlessly
-/// downgraded the time basis. Every Windows time zone identifier ends in
-/// `Time` (`W. Europe Standard Time`, `Coordinated Universal Time`); anchoring
-/// on that suffix is what rejects collector placeholders such as `unknown` or
-/// `not recorded`, which would otherwise pass as a declared timezone and let
+/// downgraded the time basis. The ` Time` suffix anchor covers the common
+/// English registry ids (`W. Europe Standard Time`, `Coordinated Universal
+/// Time`) and rejects most collector placeholders (`unknown`, `not recorded`),
+/// which would otherwise pass as a declared timezone and let
 /// `reduce_esp_linkage` offer a time-only candidate the module contract
-/// forbids. `UTC` and offset forms are covered by `utc_offset_re`. Punctuation
-/// beyond spaces, hyphens, and periods stays excluded, which still rejects an
-/// annotated value like `Pacific Standard Time (device local)`.
+/// forbids. The anchor is deliberately not a claim that every Windows zone id
+/// ends in `Time`: `UTC` and `UTC+12` are registry ids too (covered by
+/// `utc_offset_re`), and a localized `StandardName` will not match -- that
+/// mismatch only degrades the time basis to `Unreliable`, the conservative
+/// direction. Placeholders that happen to end in ` Time` are closed off by
+/// [`WINDOWS_ZONE_PLACEHOLDERS`]. Punctuation beyond spaces, hyphens, and
+/// periods stays excluded, which still rejects an annotated value like
+/// `Pacific Standard Time (device local)`.
 fn windows_zone_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(r"^[A-Za-z][A-Za-z .\-]* Time$").expect("windows zone regex must compile")
     })
 }
+
+/// Collector placeholders that pass the ` Time` shape check but declare no
+/// timezone at all. Compared case-insensitively.
+const WINDOWS_ZONE_PLACEHOLDERS: [&str; 3] = ["Local Time", "Device Local Time", "System Time"];
 
 /// Classify the declared collection timezone.
 ///
@@ -385,10 +394,11 @@ pub fn classify_timezone(timezone: Option<&str>) -> AutopilotTimezoneState {
         && timezone
             .chars()
             .any(|character| character.is_ascii_alphanumeric());
-    if looks_like_offset
-        || iana_zone_re().is_match(timezone)
-        || windows_zone_re().is_match(timezone)
-    {
+    let looks_like_windows_zone = windows_zone_re().is_match(timezone)
+        && !WINDOWS_ZONE_PLACEHOLDERS
+            .iter()
+            .any(|placeholder| placeholder.eq_ignore_ascii_case(timezone));
+    if looks_like_offset || iana_zone_re().is_match(timezone) || looks_like_windows_zone {
         AutopilotTimezoneState::Declared
     } else {
         AutopilotTimezoneState::Invalid
@@ -512,6 +522,12 @@ mod tests {
             "unknown",
             "not recorded",
             "Unavailable",
+            // Placeholders that happen to end in ` Time` and would otherwise
+            // sail through the Windows-zone shape check.
+            "Local Time",
+            "local time",
+            "Device Local Time",
+            "System Time",
         ] {
             assert_eq!(
                 classify_timezone(Some(junk)),
