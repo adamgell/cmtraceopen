@@ -1024,6 +1024,131 @@ fn a_conflicting_esp_linkage_cannot_report_completed() {
     );
 }
 
+/// ADR-003 via ADR-001, the conservative direction for correlation keys: a key
+/// carried only by a non-assessable observation must still be USED to DETECT a
+/// session-identity conflict. Dropping it can shrink the matched-session set
+/// from two to one and collapse Conflicting into Linked into Completed --
+/// exactly the silent upgrade the assessability gate exists to prevent.
+///
+/// This is the capped-key-carrying-observation fixture the corpus lacked: the
+/// first ESP session matches an assessable key, the second matches only a key
+/// on a capped observation.
+#[test]
+fn a_key_on_a_capped_observation_still_detects_a_second_esp_session() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "cap-e1", "cap-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "enrollmentId", "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "cap-e2", "cap-channel", 2, 153, "available", "parsed",
+                json!([]),
+                "AutopilotManager reported the state changed from ProfileState_Available to ProfileState_Provisioned.",
+            ),
+            synthetic_event(
+                "cap-e3", "cap-channel", 3, 161, "capped", "parsed",
+                json!([{ "name": "correlationId", "value": "99999999-8888-7777-6666-555555555555" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+        ]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [
+            {
+                "sessionId": "esp-session-a",
+                "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "correlationId": null, "activityId": null,
+                "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "cap-esp-a", "sourceArtifactId": "esp-session-facts" }
+            },
+            {
+                "sessionId": "esp-session-b",
+                "enrollmentId": null,
+                "correlationId": "99999999-8888-7777-6666-555555555555",
+                "activityId": null, "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:25Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "cap-esp-b", "sourceArtifactId": "esp-session-facts" }
+            }
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("cap-channel", "autopilotEvents", &events),
+        synthetic_source("cap-report", "mdmReport", &esp_handoff_report("cap-report")),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Conflicting,
+        "the capped key's session must still count toward conflict detection"
+    );
+    assert!(
+        snapshot
+            .esp_linkage
+            .esp_session_ids
+            .contains(&"esp-session-b".to_owned()),
+        "the session detected through the capped key must be named"
+    );
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "dropping the capped key must not collapse Conflicting into Completed"
+    );
+    assert_eq!(snapshot.outcome, AutopilotOutcome::ContradictoryEvidence);
+    assert!(snapshot.findings_are_evidence_backed());
+}
+
+/// The other half of the same rule: a linkage whose ONLY explicit key rides a
+/// non-assessable observation may not upgrade to a confident Linked. Detection
+/// may widen (conservative); proof may not.
+#[test]
+fn a_non_assessable_only_key_match_cannot_upgrade_to_linked() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "solo-e1", "solo-channel", 1, 161, "available", "parsed",
+                json!([]), "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "solo-e2", "solo-channel", 2, 161, "capped", "parsed",
+                json!([{ "name": "enrollmentId", "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+        ]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [{
+            "sessionId": "esp-session-a",
+            "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "correlationId": null, "activityId": null,
+            "entraDeviceId": null, "managedDeviceId": null,
+            "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+            "evidence": { "evidenceId": "solo-esp-a", "sourceArtifactId": "esp-session-facts" }
+        }]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("solo-channel", "autopilotEvents", &events),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_ne!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Linked,
+        "a key readable only from a capped record may not prove a link"
+    );
+}
+
 /// A capture that declares only an unvalidated Autopilot schema version (no
 /// Windows build at all) still refuses terminal semantics, and that refusal
 /// must be explained by the unknown-schema finding rather than left silent.

@@ -1133,11 +1133,32 @@ fn session_keys(session: &AutopilotEspSessionFact) -> Vec<AutopilotCorrelationKe
     .collect()
 }
 
+/// Which observations may contribute correlation keys.
+///
+/// The distinction is ADR-001's direction-aware gate applied to session
+/// identity. Keys are the one input where *more* evidence is *more*
+/// conservative: every additional key can only ever widen the set of ESP
+/// sessions the bundle is entangled with, and a wider set means Conflicting,
+/// never a stronger Linked. So conflict DETECTION reads every observation,
+/// while PROOF of a link (the confident `Linked` state, and the `Completed`
+/// outcome behind it) stays restricted to assessable records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AutopilotKeyGate {
+    /// Assessable observations only: these keys may prove a link.
+    Proving,
+    /// Every observation, assessable or not: these keys may only detect
+    /// conflicts and can never upgrade a linkage on their own.
+    Detecting,
+}
+
 /// The explicit keys the Autopilot side of the bundle can offer.
 ///
 /// Deliberately skips [`AutopilotSignal::EspSessionFact`] observations: an ESP
 /// fact matching its own key would be a tautology, not a correlation.
-fn autopilot_keys(observations: &[AutopilotObservation]) -> BTreeSet<AutopilotCorrelationKey> {
+fn autopilot_keys(
+    observations: &[AutopilotObservation],
+    gate: AutopilotKeyGate,
+) -> BTreeSet<AutopilotCorrelationKey> {
     const NAMED_KEYS: [(&str, AutopilotCorrelationKeyKind); 5] = [
         ("enrollmentId", AutopilotCorrelationKeyKind::EnrollmentId),
         ("correlationId", AutopilotCorrelationKeyKind::CorrelationId),
@@ -1151,7 +1172,8 @@ fn autopilot_keys(observations: &[AutopilotObservation]) -> BTreeSet<AutopilotCo
 
     let mut keys = BTreeSet::new();
     for observation in observations.iter().filter(|observation| {
-        is_assessable(observation) && observation.signal != AutopilotSignal::EspSessionFact
+        (gate == AutopilotKeyGate::Detecting || is_assessable(observation))
+            && observation.signal != AutopilotSignal::EspSessionFact
     }) {
         for (name, kind) in NAMED_KEYS {
             let Some(value) = observation.named(name).map(str::trim) else {
@@ -1226,19 +1248,63 @@ fn reduce_esp_linkage(
         };
     }
 
-    let local_keys = autopilot_keys(observations);
+    let proving_keys = autopilot_keys(observations, AutopilotKeyGate::Proving);
+    let detecting_keys = autopilot_keys(observations, AutopilotKeyGate::Detecting);
 
+    // Two match passes over the same sessions. `detected_*` uses every key the
+    // bundle carries, assessable or not, because each extra key can only widen
+    // the entangled-session set (the conservative direction). `matched_*` is
+    // the assessable subset, the only one allowed to prove a link.
     let mut matched_keys = BTreeSet::new();
     let mut matched_sessions = BTreeSet::new();
     let mut evidence = Vec::new();
+    let mut detected_keys = BTreeSet::new();
+    let mut detected_sessions = BTreeSet::new();
+    let mut detection_evidence = Vec::new();
     for session in esp_sessions {
         for key in session_keys(session) {
-            if local_keys.contains(&key) {
-                matched_keys.insert(key);
-                matched_sessions.insert(session.session_id.clone());
-                evidence.push(session.evidence.clone());
+            if detecting_keys.contains(&key) {
+                detected_sessions.insert(session.session_id.clone());
+                detection_evidence.push(session.evidence.clone());
+                if proving_keys.contains(&key) {
+                    matched_keys.insert(key.clone());
+                    matched_sessions.insert(session.session_id.clone());
+                    evidence.push(session.evidence.clone());
+                }
+                detected_keys.insert(key);
             }
         }
+    }
+
+    // A single Autopilot phase can only have produced one ESP session, so keys
+    // resolving to more than one session mean the identity space is ambiguous:
+    // Conflicting, never a silent merge. This check runs on the *detecting*
+    // set on purpose. A key carried only by a capped observation cannot prove
+    // a link, but dropping it here would shrink the session set and collapse
+    // Conflicting into Linked into Completed -- a non-assessable record
+    // silently upgrading the conclusion, which is exactly what ADR-001
+    // forbids.
+    if detected_sessions.len() > 1 {
+        for observation in observations
+            .iter()
+            .filter(|observation| observation.signal != AutopilotSignal::EspSessionFact)
+        {
+            // Non-assessable carriers are cited too: a capped record is the
+            // very evidence of the entanglement this state reports. Citing is
+            // not proving; the state it supports is the conservative one.
+            if session_key_values(&detected_keys)
+                .any(|value| observation_mentions(observation, value))
+            {
+                detection_evidence.push(observation.evidence_ref());
+            }
+        }
+        return AutopilotEspLinkage {
+            state: AutopilotEspLinkState::Conflicting,
+            confidence: IntuneFindingConfidence::High,
+            matched_keys: detected_keys.into_iter().collect(),
+            esp_session_ids: detected_sessions.into_iter().collect(),
+            evidence: normalized_evidence(detection_evidence),
+        };
     }
 
     if matched_keys.is_empty() {
@@ -1280,19 +1346,9 @@ fn reduce_esp_linkage(
         }
     }
 
-    // A single Autopilot phase can only have produced one ESP session.
-    // If matched keys resolve to more than one session, the identity space
-    // is ambiguous; emit Conflicting rather than silently merging them.
-    if matched_sessions.len() > 1 {
-        return AutopilotEspLinkage {
-            state: AutopilotEspLinkState::Conflicting,
-            confidence: IntuneFindingConfidence::High,
-            matched_keys: matched_keys.into_iter().collect(),
-            esp_session_ids: matched_sessions.into_iter().collect(),
-            evidence: normalized_evidence(evidence),
-        };
-    }
-
+    // `matched_sessions` is a subset of `detected_sessions`, and the multi-
+    // session case already returned Conflicting above, so exactly one session
+    // remains here and it was matched by an assessable key.
     AutopilotEspLinkage {
         state: AutopilotEspLinkState::Linked,
         confidence: IntuneFindingConfidence::High,
