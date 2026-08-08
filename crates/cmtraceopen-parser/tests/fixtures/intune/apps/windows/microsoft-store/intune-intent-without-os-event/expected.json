@@ -34,6 +34,7 @@
       "hasIntuneIntent": true,
       "hasDeviceEvidence": false,
       "unknownVersionObserved": false,
+      "levelMismatchObserved": false,
       "nextEvidenceRequest": "Collect Microsoft-Windows-AppXDeploymentServer/Operational and Microsoft-Windows-StoreAgent events for this package",
       "evidence": [
         "ime-log:2"

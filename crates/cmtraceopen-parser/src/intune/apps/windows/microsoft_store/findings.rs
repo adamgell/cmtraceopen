@@ -131,6 +131,32 @@ fn transactions_in_state(
         .collect()
 }
 
+/// The weakest confidence among the affected transactions.
+///
+/// An outcome-asserting finding (a failure, a completion, a scheduling
+/// condition) claims exactly what its transactions claim, so it may not claim
+/// it more strongly than the reducer did: a transaction capped at `Low` for an
+/// unknown dialect, a level mismatch, or a malformed contributor caps every
+/// finding built on it (ADR-001). Rules that instead describe an evidence gap
+/// or an attribution boundary keep their own deliberate confidence, because
+/// their claim is about what is missing, not about an outcome.
+fn weakest_confidence(transactions: &[&StoreTransaction]) -> IntuneFindingConfidence {
+    fn rank(confidence: &IntuneFindingConfidence) -> u8 {
+        match confidence {
+            IntuneFindingConfidence::Low => 0,
+            IntuneFindingConfidence::Medium => 1,
+            IntuneFindingConfidence::High => 2,
+        }
+    }
+    let mut weakest = IntuneFindingConfidence::High;
+    for transaction in transactions {
+        if rank(&transaction.confidence) < rank(&weakest) {
+            weakest = transaction.confidence.clone();
+        }
+    }
+    weakest
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_finding(
     findings: &mut Vec<IntuneFinding>,
@@ -181,7 +207,7 @@ fn push_license_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFindi
         findings,
         "store-license-acquisition-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Store license or acquisition failed",
         format!(
             "The Store could not acquire a license or entitlement for {}.{}",
@@ -206,7 +232,7 @@ fn push_download_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFind
         findings,
         "store-download-staging-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Package download or staging failed",
         format!(
             "The package payload for {} was never staged on disk, so no registration was attempted.{}",
@@ -234,7 +260,7 @@ fn push_registration_failure(snapshot: &StoreAnalysis, findings: &mut Vec<Intune
         findings,
         "store-registration-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         if win32 {
             "Store-delivered installer reported failure"
         } else {
@@ -269,7 +295,7 @@ fn push_installer_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFin
         findings,
         "store-win32-installer-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Store-delivered Win32 installer reported failure",
         format!(
             "The installer for {} ran and reported failure. This is the package's own Windows installer, not an AppX deployment stage.{}",
@@ -294,7 +320,7 @@ fn push_provisioning_failure(snapshot: &StoreAnalysis, findings: &mut Vec<Intune
         findings,
         "store-provisioning-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Device provisioning of the package failed",
         format!(
             "{} failed while being provisioned for all users on the device. This is a machine-wide operation and does not imply any per-user registration failed.{}",
@@ -319,7 +345,7 @@ fn push_uninstall_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFin
         findings,
         "store-uninstall-failed",
         IntuneFindingSeverity::Error,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "Package removal failed",
         format!(
             "Removal of {} did not complete.{}",
@@ -343,7 +369,7 @@ fn push_no_interactive_user(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneF
         findings,
         "store-no-interactive-user",
         IntuneFindingSeverity::Warning,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "A user-context package had no user to install for",
         format!(
             "{} requires a user context and no interactive user was signed in when it was evaluated. This is a scheduling condition, not an installation failure.",
@@ -671,7 +697,7 @@ fn push_install_completed(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFin
         findings,
         "store-install-completed",
         IntuneFindingSeverity::Info,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "A Store app install completed",
         format!("{} completed installation.", labels(&affected)),
         &[],
@@ -689,7 +715,7 @@ fn push_uninstall_completed(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneF
         findings,
         "store-uninstall-completed",
         IntuneFindingSeverity::Info,
-        IntuneFindingConfidence::High,
+        weakest_confidence(&affected),
         "A Store app uninstall completed",
         format!("{} was removed.", labels(&affected)),
         &[],
@@ -725,6 +751,7 @@ mod tests {
             has_intune_intent: true,
             has_device_evidence: true,
             unknown_version_observed: false,
+            level_mismatch_observed: false,
             observations: vec!["appx:1".to_owned()],
             evidence: vec![IntuneEvidenceRef {
                 evidence_id: "appx:1".to_owned(),
@@ -772,6 +799,87 @@ mod tests {
         let count = ids.len();
         ids.dedup();
         assert_eq!(ids.len(), count, "duplicate finding ids: {ids:?}");
+    }
+
+    /// ADR-001: a finding that asserts an outcome may not claim stronger
+    /// confidence than the evidence behind it. Every outcome-asserting rule
+    /// must inherit the weakest confidence among its affected transactions,
+    /// and must still report `High` when nothing was degraded.
+    #[test]
+    fn outcome_findings_inherit_the_weakest_affected_transaction_confidence() {
+        let cases = [
+            (
+                StoreTransactionState::LicenseFailure,
+                "store-license-acquisition-failed",
+            ),
+            (
+                StoreTransactionState::DownloadFailure,
+                "store-download-staging-failed",
+            ),
+            (
+                StoreTransactionState::RegistrationFailure,
+                "store-registration-failed",
+            ),
+            (
+                StoreTransactionState::InstallerFailure,
+                "store-win32-installer-failed",
+            ),
+            (
+                StoreTransactionState::ProvisioningFailure,
+                "store-provisioning-failed",
+            ),
+            (
+                StoreTransactionState::UninstallFailure,
+                "store-uninstall-failed",
+            ),
+            (
+                StoreTransactionState::NoInteractiveUser,
+                "store-no-interactive-user",
+            ),
+            (
+                StoreTransactionState::InstallCompleted,
+                "store-install-completed",
+            ),
+            (
+                StoreTransactionState::UninstallCompleted,
+                "store-uninstall-completed",
+            ),
+        ];
+        for (state, finding_id) in cases {
+            let mut degraded = transaction(state);
+            degraded.confidence = IntuneFindingConfidence::Low;
+            let snapshot = StoreAnalysis {
+                // One intact transaction and one degraded one: the weakest
+                // member decides, not the first or the strongest.
+                transactions: vec![transaction(state), degraded],
+                ..StoreAnalysis::default()
+            };
+            let findings = derive_findings(&snapshot);
+            let finding = findings
+                .iter()
+                .find(|finding| finding.finding_id == finding_id)
+                .unwrap_or_else(|| panic!("{finding_id} must be emitted"));
+            assert_eq!(
+                finding.confidence,
+                IntuneFindingConfidence::Low,
+                "{finding_id} must not overstate degraded evidence"
+            );
+
+            let intact_snapshot = StoreAnalysis {
+                transactions: vec![transaction(state)],
+                ..StoreAnalysis::default()
+            };
+            let intact = derive_findings(&intact_snapshot);
+            let finding = intact
+                .iter()
+                .find(|finding| finding.finding_id == finding_id)
+                .unwrap_or_else(|| panic!("{finding_id} must be emitted"));
+            assert_eq!(
+                finding.confidence,
+                IntuneFindingConfidence::High,
+                "{finding_id} keeps full confidence on intact evidence"
+            );
+        }
     }
 
     #[test]

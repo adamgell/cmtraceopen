@@ -34,6 +34,7 @@
       "hasIntuneIntent": true,
       "hasDeviceEvidence": true,
       "unknownVersionObserved": false,
+      "levelMismatchObserved": false,
       "nextEvidenceRequest": "Collect the AppX deployment scope or package provisioning state to establish the installer family",
       "evidence": [
         "ime-log:2",

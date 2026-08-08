@@ -937,6 +937,7 @@ fn reduce_group(
         has_intune_intent,
         has_device_evidence,
         unknown_version_observed,
+        level_mismatch_observed,
         next_evidence_request: next_evidence_request(
             installer_family,
             state,

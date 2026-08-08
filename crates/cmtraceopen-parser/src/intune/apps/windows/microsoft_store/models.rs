@@ -456,8 +456,9 @@ pub struct StoreObservation {
     /// states (a failure id logged at Information level). Deliberately a
     /// separate flag from [`Self::unknown_version`]: an unrecognized dialect
     /// and a self-contradictory known record degrade confidence for distinct
-    /// reasons, and conflating them would hide which one happened.
-    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    /// reasons, and conflating them would hide which one happened. Serialized
+    /// unconditionally, exactly like [`Self::unknown_version`], so `false` is
+    /// a statement rather than an absence.
     pub level_mismatch: bool,
     #[serde(default)]
     pub named_data: Vec<IntuneNamedValue>,
@@ -488,6 +489,13 @@ pub struct StoreTransaction {
     /// True when device-side OS evidence (event, inventory fact, installer) is present.
     pub has_device_evidence: bool,
     pub unknown_version_observed: bool,
+    /// True when any contributing observation carried
+    /// [`StoreObservation::level_mismatch`]. Kept beside
+    /// [`Self::unknown_version_observed`] with the same always-present shape:
+    /// the two degradations cap confidence identically but for distinct
+    /// reasons, and a consumer reading a `Low` transaction must be able to
+    /// tell which one happened without replaying the observations.
+    pub level_mismatch_observed: bool,
     pub observations: Vec<String>,
     pub evidence: Vec<IntuneEvidenceRef>,
     /// The smallest artifact that would advance this diagnosis.

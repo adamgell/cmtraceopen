@@ -981,6 +981,112 @@ fn unknown_version_and_level_mismatch_degrade_for_distinct_documented_reasons() 
     );
 }
 
+/// The wire keeps the two degradation causes distinguishable end to end.
+///
+/// A transaction capped at `Low` must say *why* without the consumer replaying
+/// the observations: `unknownVersionObserved` and `levelMismatchObserved` are
+/// both always present on every serialized transaction, exactly as
+/// `unknownVersion` and `levelMismatch` are on every serialized observation.
+/// An outcome finding over the degraded transaction inherits the cap.
+#[test]
+fn both_degradation_causes_stay_distinguishable_on_the_wire() {
+    let unknown_dialect = appx_event(
+        "appx-unknown",
+        1,
+        9999,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let contradicting = appx_event(
+        "appx-mismatch",
+        1,
+        404,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", "Fabrikam.OtherApp_8synthh0abcd3"),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+
+    let analysis = analyze_store_bundle(&[
+        artifact(
+            "appx-unknown",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![unknown_dialect],
+            },
+        ),
+        artifact(
+            "appx-mismatch",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![contradicting],
+            },
+        ),
+    ]);
+
+    let mismatched = analysis
+        .transactions
+        .iter()
+        .find(|transaction| {
+            transaction.identity.package_family_name.as_deref()
+                == Some("Fabrikam.OtherApp_8synthh0abcd3")
+        })
+        .expect("mismatch transaction");
+    assert!(mismatched.level_mismatch_observed);
+    assert!(
+        !mismatched.unknown_version_observed,
+        "the mismatch transaction must not claim the other degradation cause"
+    );
+    let unknown = analysis
+        .transactions
+        .iter()
+        .find(|transaction| {
+            transaction.identity.package_family_name.as_deref() == Some(PACKAGE_FAMILY)
+        })
+        .expect("unknown-dialect transaction");
+    assert!(unknown.unknown_version_observed);
+    assert!(!unknown.level_mismatch_observed);
+
+    // The degraded RegistrationFailure may not surface as a High-confidence
+    // failure finding: the outcome finding inherits the transaction's cap.
+    let failure = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-registration-failed")
+        .expect("registration failure finding");
+    assert_eq!(failure.confidence, IntuneFindingConfidence::Low);
+
+    // Serialization parity: both cause flags are always on the wire, on every
+    // transaction and every observation, so `false` is a statement, not an
+    // absence a consumer must guess about.
+    let serialized = serde_json::to_value(&analysis).expect("analysis serializes");
+    for transaction in serialized["transactions"].as_array().expect("transactions") {
+        for key in ["unknownVersionObserved", "levelMismatchObserved"] {
+            assert!(
+                transaction.get(key).is_some_and(serde_json::Value::is_boolean),
+                "every serialized transaction carries {key}: {transaction}"
+            );
+        }
+    }
+    for observation in serialized["observations"].as_array().expect("observations") {
+        for key in ["unknownVersion", "levelMismatch"] {
+            assert!(
+                observation.get(key).is_some_and(serde_json::Value::is_boolean),
+                "every serialized observation carries {key}: {observation}"
+            );
+        }
+    }
+}
+
 /// The typed route to the same degradation: `NormalizedWindowsEvent` carries
 /// its ETW template version as `event_version`, and an unsupported template
 /// revision means the payload contract these rules were written against no
@@ -1372,9 +1478,44 @@ fn duplicating_an_artifact_changes_no_conclusion() {
     let bundle = realistic_bundle();
     let baseline = analyze_store_bundle(&bundle);
 
+    // A genuinely re-collected copy: same records, but carried by a distinct
+    // artifact whose events cite their own artifact id, so every observation
+    // from the copy has its own `source_artifact_id` and evidence ids. This is
+    // what exercises the cross-artifact reduction path; renaming only the
+    // containing artifact while its events still cite "appx" would collapse
+    // back into the original evidence and test nothing.
     let mut duplicated = bundle.clone();
-    let mut copy = bundle[2].clone();
-    copy.artifact_id = "appx-copy".to_owned();
+    let copy = artifact(
+        "appx-copy",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![
+                appx_event(
+                    "appx-copy",
+                    1,
+                    400,
+                    NormalizedEventLevel::Information,
+                    &[
+                        ("DeploymentOperation", "Stage"),
+                        ("DeploymentScope", "User"),
+                        ("PackageFamilyName", PACKAGE_FAMILY),
+                    ],
+                ),
+                appx_event(
+                    "appx-copy",
+                    2,
+                    603,
+                    NormalizedEventLevel::Information,
+                    &[
+                        ("DeploymentOperation", "Register"),
+                        ("DeploymentScope", "User"),
+                        ("PackageFamilyName", PACKAGE_FAMILY),
+                    ],
+                ),
+            ],
+        },
+    );
     duplicated.push(copy);
 
     assert_eq!(

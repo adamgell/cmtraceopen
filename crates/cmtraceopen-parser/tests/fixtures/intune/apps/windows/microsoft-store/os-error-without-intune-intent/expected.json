@@ -30,6 +30,7 @@
       "hasIntuneIntent": false,
       "hasDeviceEvidence": true,
       "unknownVersionObserved": false,
+      "levelMismatchObserved": false,
       "nextEvidenceRequest": "Collect IntuneManagementExtension.log or the app assignment for this package",
       "evidence": [
         "appx-operational:1",
@@ -41,7 +42,7 @@
     {
       "findingId": "store-registration-failed",
       "severity": "error",
-      "confidence": "high",
+      "confidence": "medium",
       "evidence": [
         "appx-operational:1",
         "appx-operational:2"

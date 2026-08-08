@@ -221,6 +221,7 @@ fn assert_transactions(scenario: &str, actual: &Value, expected: &Value) {
             "hasIntuneIntent",
             "hasDeviceEvidence",
             "unknownVersionObserved",
+            "levelMismatchObserved",
             "nextEvidenceRequest",
         ] {
             assert_eq!(got[key], want[key], "{at}: {key}");
