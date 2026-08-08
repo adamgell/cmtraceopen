@@ -484,6 +484,45 @@ fn the_redacted_export_removes_identity_while_preserving_correlation() {
     );
 }
 
+/// The `matched_keys` masking site in `redacted_export_projection` must
+/// normalize case on its own, not by riding on `autopilot_keys` happening to
+/// lowercase first. Both halves of that contract are pinned here: the reducer
+/// hands the projection lowercase key values, and the projection would still
+/// mask a mixed-case value to the same token if it ever received one.
+#[test]
+fn matched_key_masking_normalizes_case_independently_of_the_reducer() {
+    let snapshot = reduce_autopilot_bundle(&bundle("matching-autopilot-and-esp-session"));
+    let raw = snapshot.esp_linkage.matched_keys[0].value.clone();
+
+    // Contract half 1: reducer-produced key values are already lowercased.
+    assert_eq!(
+        raw,
+        raw.to_ascii_lowercase(),
+        "autopilot_keys must lowercase key values before they reach the snapshot"
+    );
+
+    let lower_token = redacted_export_projection(&snapshot).esp_linkage.matched_keys[0]
+        .value
+        .clone();
+    assert!(
+        lower_token.starts_with("[redacted:"),
+        "the matched key must be masked, got {lower_token}"
+    );
+
+    // Contract half 2: the masking loop normalizes on its own. Feed it the
+    // same key in a casing the reducer never produces and the token must not
+    // change -- otherwise the loop is only correct by coincidence.
+    let mut mixed = snapshot.clone();
+    mixed.esp_linkage.matched_keys[0].value = raw.to_ascii_uppercase();
+    let upper_token = redacted_export_projection(&mixed).esp_linkage.matched_keys[0]
+        .value
+        .clone();
+    assert_eq!(
+        lower_token, upper_token,
+        "the same identifier in two casings must mask to one token at the matched_keys site"
+    );
+}
+
 // ── Cross-cutting contract ──────────────────────────────────────────────────
 
 #[test]
