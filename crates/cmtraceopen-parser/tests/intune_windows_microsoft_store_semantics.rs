@@ -225,7 +225,6 @@ fn typed_required_intent_survives_caller_writable_named_data() {
 /// `>=` over members iterated in input order, so whichever terminal record the
 /// caller supplied last silently wins the transaction state (and its error).
 #[test]
-#[ignore = "RED (Framework v1 Phase 2): fails against current reducer; fixed in Store pilot Phase 3"]
 fn equivalent_input_permutation_does_not_change_the_reduction() {
     // Two equal-ranked terminal statements about the same per-user
     // registration. Neither event carries a source timestamp here, and the
