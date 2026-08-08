@@ -23,8 +23,8 @@
       "outcome": "reportingFailed",
       "lastConfirmedPhase": "postEnforcementDetection",
       "confidence": "high",
-      "returnCodeRaw": "0",
-      "returnCodeKind": "success",
+      "returnCodeRaw": null,
+      "returnCodeKind": null,
       "rebootRequired": false,
       "localOutcome": "succeeded",
       "nextEvidenceRequest": "IntuneManagementExtension.log records for the status upload attempt",
@@ -47,7 +47,8 @@
     }
   ],
   "assertions": [
-    "a reporting failure never hides the local outcome underneath it"
+    "a reporting failure never hides the local outcome underneath it",
+    "the outcome was decided by the reporting failure, so the completion's token travels only through the local outcome, not as top-level attribution"
   ],
   "unkeyedObservationCount": 0,
   "fragmentRecords": 0,

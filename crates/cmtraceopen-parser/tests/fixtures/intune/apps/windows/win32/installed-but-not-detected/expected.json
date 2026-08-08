@@ -23,8 +23,8 @@
       "outcome": "installedNotDetected",
       "lastConfirmedPhase": "enforcement",
       "confidence": "high",
-      "returnCodeRaw": "0",
-      "returnCodeKind": "success",
+      "returnCodeRaw": null,
+      "returnCodeKind": null,
       "rebootRequired": false,
       "localOutcome": null,
       "nextEvidenceRequest": "AppActionProcessor.log detection-rule evaluation for this app",
@@ -48,7 +48,8 @@
   ],
   "assertions": [
     "a zero return code is not by itself a successful deployment",
-    "post-enforcement detection outranks the installer's own claim"
+    "post-enforcement detection outranks the installer's own claim",
+    "the outcome was decided by the detection verdict, so the superseded completion's token is not attributed"
   ],
   "unkeyedObservationCount": 0,
   "fragmentRecords": 0,

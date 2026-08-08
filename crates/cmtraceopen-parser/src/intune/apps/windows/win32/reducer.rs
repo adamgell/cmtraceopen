@@ -685,6 +685,42 @@ pub fn analyze_win32_bundle_with(
     }
 }
 
+/// The owned (artifact id, record number, trusted UTC) triple every ordered
+/// statement carries — the one constructor for the sequence data
+/// [`TerminalCandidate`] and [`Clearance`] used to duplicate.
+struct SequenceKey {
+    artifact_id: String,
+    record_number: u32,
+    normalized_utc: Option<String>,
+}
+
+impl SequenceKey {
+    fn of(record: &PendingRecord) -> Self {
+        Self {
+            artifact_id: record.artifact_id.clone(),
+            record_number: record.record_number,
+            normalized_utc: record
+                .timestamp
+                .as_ref()
+                .and_then(|timestamp| timestamp.normalized_utc.clone()),
+        }
+    }
+
+    fn point(&self) -> SequencePoint<'_> {
+        SequencePoint {
+            artifact_id: &self.artifact_id,
+            record_number: self.record_number,
+            normalized_utc: self.normalized_utc.as_deref(),
+        }
+    }
+
+    /// The canonical evidence key: one comparator for every tie-break, so the
+    /// outcome pick and the attribution pick can never disagree (ADR-003).
+    fn canonical(&self) -> (&str, u32) {
+        (self.artifact_id.as_str(), self.record_number)
+    }
+}
+
 /// One record's terminal statement about the transaction, with the provenance
 /// needed to order it against other statements.
 ///
@@ -703,15 +739,20 @@ struct TerminalCandidate {
     /// completions only. `Some` marks this candidate as return-token
     /// attribution material — see [`resolve_outcome`].
     return_code_kind: Option<Win32ReturnCodeKind>,
-    /// Whether this candidate's own code maps to a reboot. Exported only when
-    /// this candidate provides the winning attribution.
-    reboot_required: bool,
-    /// The local outcome a `ReportingFailed` candidate is layered on top of.
-    local_outcome: Option<Win32Outcome>,
-    artifact_id: String,
-    record_number: u32,
-    normalized_utc: Option<String>,
+    sequence: SequenceKey,
     evidence: IntuneEvidenceRef,
+}
+
+impl TerminalCandidate {
+    /// Whether this candidate's own code maps to a reboot. Derived from the
+    /// classified kind rather than stored alongside it, so the two can never
+    /// disagree.
+    fn reboot_required(&self) -> bool {
+        matches!(
+            self.return_code_kind,
+            Some(Win32ReturnCodeKind::SoftReboot | Win32ReturnCodeKind::HardReboot)
+        )
+    }
 }
 
 /// A positive statement that supersedes earlier negative statements of its
@@ -726,19 +767,7 @@ struct TerminalCandidate {
 /// proves nothing about them.
 struct Clearance {
     clears: Win32Signal,
-    artifact_id: String,
-    record_number: u32,
-    normalized_utc: Option<String>,
-}
-
-impl Clearance {
-    fn sequence(&self) -> SequencePoint<'_> {
-        SequencePoint {
-            artifact_id: &self.artifact_id,
-            record_number: self.record_number,
-            normalized_utc: self.normalized_utc.as_deref(),
-        }
-    }
+    sequence: SequenceKey,
 }
 
 /// A point in evidence order that can supersede an earlier candidate.
@@ -746,16 +775,6 @@ struct SequencePoint<'a> {
     artifact_id: &'a str,
     record_number: u32,
     normalized_utc: Option<&'a str>,
-}
-
-impl TerminalCandidate {
-    fn sequence(&self) -> SequencePoint<'_> {
-        SequencePoint {
-            artifact_id: &self.artifact_id,
-            record_number: self.record_number,
-            normalized_utc: self.normalized_utc.as_deref(),
-        }
-    }
 }
 
 /// Whether `later` is explicitly ordered after `earlier`.
@@ -821,9 +840,6 @@ struct Fold {
     /// Positive statements that supersede earlier same-phase failures they are
     /// explicitly ordered after; see [`Clearance`].
     clearances: Vec<Clearance>,
-    /// The last non-reporting terminal outcome seen, in evidence order. This is
-    /// what a reporting failure is layered on top of.
-    latest_local_terminal: Option<Win32Outcome>,
     last_confirmed_phase: Option<Win32Phase>,
     unresolved_dependencies: BTreeSet<String>,
     failed_requirements: BTreeSet<String>,
@@ -838,7 +854,6 @@ impl Fold {
             pending: Win32Outcome::InsufficientEvidence,
             terminals: Vec::new(),
             clearances: Vec::new(),
-            latest_local_terminal: None,
             last_confirmed_phase: None,
             unresolved_dependencies: BTreeSet::new(),
             failed_requirements: BTreeSet::new(),
@@ -865,50 +880,23 @@ impl Fold {
     }
 
     /// Record a terminal statement as a candidate for [`resolve_outcome`].
-    fn push_terminal(&mut self, record: &PendingRecord, outcome: Win32Outcome) {
-        self.push_terminal_with(record, outcome, None, false);
-    }
-
-    /// Record an installer-completion terminal, carrying the classified kind
-    /// and its reboot semantics so the export can be attributed to the
-    /// winning candidate rather than to whichever record folded last.
-    fn push_completion_terminal(
-        &mut self,
-        record: &PendingRecord,
-        outcome: Win32Outcome,
-        kind: Win32ReturnCodeKind,
-        reboot_required: bool,
-    ) {
-        self.push_terminal_with(record, outcome, Some(kind), reboot_required);
-    }
-
-    fn push_terminal_with(
+    ///
+    /// `return_code_kind` is `Some` for installer completions only; it marks
+    /// the candidate as return-token attribution material and carries the
+    /// table's classification of its code.
+    fn push_terminal(
         &mut self,
         record: &PendingRecord,
         outcome: Win32Outcome,
         return_code_kind: Option<Win32ReturnCodeKind>,
-        reboot_required: bool,
     ) {
         debug_assert!(outcome.is_terminal());
-        let local_outcome = if outcome == Win32Outcome::ReportingFailed {
-            self.latest_local_terminal
-        } else {
-            self.latest_local_terminal = Some(outcome);
-            None
-        };
         self.terminals.push(TerminalCandidate {
             outcome,
             signal: record.classification.signal,
             return_code: record.classification.error_code.clone(),
             return_code_kind,
-            reboot_required,
-            local_outcome,
-            artifact_id: record.artifact_id.clone(),
-            record_number: record.record_number,
-            normalized_utc: record
-                .timestamp
-                .as_ref()
-                .and_then(|timestamp| timestamp.normalized_utc.clone()),
+            sequence: SequenceKey::of(record),
             evidence: record.evidence(),
         });
     }
@@ -918,131 +906,187 @@ impl Fold {
     fn push_clearance(&mut self, record: &PendingRecord, clears: Win32Signal) {
         self.clearances.push(Clearance {
             clears,
-            artifact_id: record.artifact_id.clone(),
-            record_number: record.record_number,
-            normalized_utc: record
-                .timestamp
-                .as_ref()
-                .and_then(|timestamp| timestamp.normalized_utc.clone()),
+            sequence: SequenceKey::of(record),
         });
     }
 }
 
-/// What [`resolve_outcome`] concluded from the candidates.
-struct OutcomeResolution {
+/// Everything [`resolve_outcome`] concluded from the candidates, computed in
+/// one pass over one survivor set so no field can disagree with another.
+struct Resolution {
     outcome: Win32Outcome,
     local_outcome: Option<Win32Outcome>,
     superseded_failures: Vec<Win32SupersededFailure>,
-    /// Return-token attribution from the winning completion candidate, never
-    /// from the fold's last write; see [`winning_attribution`].
+    /// Return-token attribution from the completion that decided the outcome,
+    /// never from the fold's last write; `None` when the outcome was decided
+    /// by a non-completion candidate or stayed conservative.
     return_code: Option<IntuneErrorCode>,
     return_code_kind: Option<Win32ReturnCodeKind>,
     reboot_required: bool,
 }
 
-/// The exported return token, kind, and reboot flag belong to the completion
-/// statement the resolution stands on: the completion candidate that no other
-/// completion candidate is explicitly ordered after. A retry-kind completion
-/// (1618) never mints a candidate at all, so it can never clobber the
-/// attribution of the outcome-bearing cycle. When two unordered completions
-/// tie, the canonical (artifact id, record number) maximum keeps the answer
-/// deterministic; a genuine contradiction between them also contradicts the
-/// outcomes, which reports Conflicting and drops the attribution entirely.
-fn winning_attribution(
-    fold: &Fold,
-) -> (
-    Option<IntuneErrorCode>,
-    Option<Win32ReturnCodeKind>,
-    bool,
-) {
-    let completions: Vec<&TerminalCandidate> = fold
-        .terminals
-        .iter()
-        .filter(|candidate| candidate.return_code_kind.is_some())
-        .collect();
-    let winner = (0..completions.len())
-        .filter(|&index| {
-            !completions.iter().enumerate().any(|(other, candidate)| {
-                other != index
-                    && sequenced_after(&candidate.sequence(), &completions[index].sequence())
-            })
-        })
-        .map(|index| completions[index])
-        .max_by(|left, right| {
-            (left.artifact_id.as_str(), left.record_number)
-                .cmp(&(right.artifact_id.as_str(), right.record_number))
-        });
-    match winner {
-        Some(candidate) => (
-            candidate.return_code.clone(),
-            candidate.return_code_kind,
-            candidate.reboot_required,
-        ),
-        None => (None, None, false),
+/// The transitive closure of explicit linkage over one candidate set.
+///
+/// `sequenced_after` is not transitive across its two grammars, so the
+/// pairwise relation is closed first; domination then means "transitively
+/// ordered after, without the reverse holding". Mutually reachable candidates
+/// — a sequencing cycle — are an unresolvable knot: no member of it dominates
+/// another, every member stays a contender, and the contradiction is reported
+/// instead of letting a candidate that merely fell to a non-survivor be
+/// silently erased. Because the condensation of the closed relation is a
+/// partial order, every dominated candidate is dominated by a candidate that
+/// itself survives, so supersession claims always stand on a surviving,
+/// explicitly ordered record.
+struct CandidateOrder {
+    len: usize,
+    reach: Vec<bool>,
+}
+
+impl CandidateOrder {
+    fn new(candidates: &[&TerminalCandidate]) -> Self {
+        let len = candidates.len();
+        let mut reach = vec![false; len * len];
+        for later in 0..len {
+            for earlier in 0..len {
+                if later != earlier
+                    && sequenced_after(
+                        &candidates[later].sequence.point(),
+                        &candidates[earlier].sequence.point(),
+                    )
+                {
+                    reach[later * len + earlier] = true;
+                }
+            }
+        }
+        // Transitive closure over the pairwise linkage.
+        for via in 0..len {
+            for from in 0..len {
+                if reach[from * len + via] {
+                    for to in 0..len {
+                        if reach[via * len + to] {
+                            reach[from * len + to] = true;
+                        }
+                    }
+                }
+            }
+        }
+        Self { len, reach }
+    }
+
+    /// Whether `dominator` is transitively ordered after `candidate` and the
+    /// reverse does not hold (they are not knotted into one cycle).
+    fn dominates(&self, dominator: usize, candidate: usize) -> bool {
+        dominator != candidate
+            && self.reach[dominator * self.len + candidate]
+            && !self.reach[candidate * self.len + dominator]
+    }
+
+    /// Which candidates are superseded by a surviving contender.
+    fn superseded(&self) -> Vec<bool> {
+        (0..self.len)
+            .map(|candidate| (0..self.len).any(|dominator| self.dominates(dominator, candidate)))
+            .collect()
     }
 }
 
-/// Resolve the transaction outcome from every terminal statement at once.
+/// Group superseded failures by (outcome, raw token), in canonical order.
+fn collect_superseded(candidates: &[&TerminalCandidate]) -> Vec<Win32SupersededFailure> {
+    let mut superseded_failures: Vec<Win32SupersededFailure> = Vec::new();
+    for candidate in candidates {
+        let raw = candidate.return_code.as_ref().map(|code| code.raw.as_str());
+        match superseded_failures.iter_mut().find(|entry| {
+            entry.outcome == candidate.outcome
+                && entry.return_code.as_ref().map(|code| code.raw.as_str()) == raw
+        }) {
+            Some(entry) => entry.evidence.push(candidate.evidence.clone()),
+            None => superseded_failures.push(Win32SupersededFailure {
+                outcome: candidate.outcome,
+                return_code: candidate.return_code.clone(),
+                evidence: vec![candidate.evidence.clone()],
+            }),
+        }
+    }
+    for entry in &mut superseded_failures {
+        entry.evidence.sort_by(|left, right| {
+            (left.source_artifact_id.as_str(), left.evidence_id.as_str())
+                .cmp(&(right.source_artifact_id.as_str(), right.evidence_id.as_str()))
+        });
+    }
+    superseded_failures.sort_by(|left, right| {
+        (left.outcome, left.return_code.as_ref().map(|code| &code.raw))
+            .cmp(&(right.outcome, right.return_code.as_ref().map(|code| &code.raw)))
+    });
+    superseded_failures
+}
+
+/// The surviving outcome of a candidate subset, when the subset agrees on one.
 ///
-/// This must give the same answer for any permutation of the same evidence
-/// (ADR-003):
+/// Used for the local outcome underneath a reporting failure: the same
+/// survivorship machinery, run over the non-reporting candidates, so the local
+/// answer is recomputed against survivors and clearances rather than read from
+/// a fold-time snapshot.
+fn surviving_outcome(candidates: &[&TerminalCandidate]) -> Option<Win32Outcome> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let superseded = CandidateOrder::new(candidates).superseded();
+    let mut outcome = None;
+    for (index, candidate) in candidates.iter().enumerate() {
+        if superseded[index] {
+            continue;
+        }
+        match outcome {
+            None => outcome = Some(candidate.outcome),
+            Some(existing) if existing != candidate.outcome => return None,
+            Some(_) => {}
+        }
+    }
+    outcome
+}
+
+/// Resolve the transaction outcome, its attribution, its local outcome, and
+/// its superseded failures from every terminal statement at once — one
+/// survivor set, one comparator, one pass (ADR-003):
 ///
 /// 1. a candidate whose signal a later [`Clearance`] from an ordered position
 ///    supersedes is removed from contention — the retry landed (`ReportFailed`
 ///    cleared by `ReportSubmitted`, `DownloadFailed` by `DownloadCompleted`);
-/// 2. a candidate explicitly ordered before another candidate is superseded by
-///    it, which is what lets a linked retry land on its final outcome;
-/// 3. superseded *failures* — cleared or out-sequenced — survive as
+/// 2. a candidate is superseded only by a *surviving* contender that is
+///    explicitly (transitively) ordered after it — see
+///    [`CandidateOrder`]. A sequencing cycle supersedes nothing:
+///    every member stays a contender, so a candidate that merely fell to a
+///    non-survivor cannot be erased and an independent unordered candidate
+///    cannot silently win over the knot;
+/// 3. superseded *failures* — cleared or dominated by a survivor — survive as
 ///    [`Win32SupersededFailure`] entries: an erased failure is still a proven
-///    failed cycle;
-/// 4. if the surviving candidates state more than one distinct outcome, the
+///    failed cycle. When the outcome stays conservative, only cleared
+///    failures are reported superseded — a clearance is a statement, not a
+///    candidate, so contenders cannot invalidate it — and no contender is
+///    claimed "explicitly ordered" superseded;
+/// 4. if the surviving contenders state more than one distinct outcome, the
 ///    evidence is an unresolved authoritative contradiction and the reduction
 ///    stays conservative — [`Win32Outcome::Conflicting`], never whichever
-///    record the caller happened to list last;
-/// 5. `sequenced_after` is not transitive across its two grammars, so a cycle
-///    can eliminate every candidate: an empty survivor set also reduces to
-///    `Conflicting`, since supersession requires an eliminator that itself
-///    survived.
-fn resolve_outcome(fold: &Fold) -> OutcomeResolution {
-    let (return_code, return_code_kind, reboot_required) = winning_attribution(fold);
-
+///    record the caller happened to list last — and no attribution or local
+///    outcome is asserted;
+/// 5. the exported return token, kind, and reboot flag belong to the
+///    completion that decided the outcome: the earliest-canonical completion
+///    stating the resolved outcome that no differently-concluding candidate
+///    is ordered after. When the outcome was decided by a non-completion
+///    candidate, no token is exported rather than a stale one. The tie-break
+///    is [`SequenceKey::canonical`] — the same comparator the outcome pick
+///    uses;
+/// 6. the local outcome underneath a `ReportingFailed` resolution is the
+///    surviving outcome of the non-reporting candidates, recomputed with the
+///    same machinery rather than snapshotted at fold time.
+fn resolve_outcome(fold: &Fold) -> Resolution {
     let is_cleared = |candidate: &&TerminalCandidate| {
         fold.clearances.iter().any(|clearance| {
             clearance.clears == candidate.signal
-                && sequenced_after(&clearance.sequence(), &candidate.sequence())
+                && sequenced_after(&clearance.sequence.point(), &candidate.sequence.point())
         })
     };
     let (cleared_away, remaining): (Vec<&TerminalCandidate>, Vec<&TerminalCandidate>) =
         fold.terminals.iter().partition(is_cleared);
-
-    let collect_superseded = |candidates: &[&TerminalCandidate]| {
-        let mut superseded_failures: Vec<Win32SupersededFailure> = Vec::new();
-        for candidate in candidates {
-            let raw = candidate.return_code.as_ref().map(|code| code.raw.clone());
-            match superseded_failures.iter_mut().find(|entry| {
-                entry.outcome == candidate.outcome
-                    && entry.return_code.as_ref().map(|code| code.raw.clone()) == raw
-            }) {
-                Some(entry) => entry.evidence.push(candidate.evidence.clone()),
-                None => superseded_failures.push(Win32SupersededFailure {
-                    outcome: candidate.outcome,
-                    return_code: candidate.return_code.clone(),
-                    evidence: vec![candidate.evidence.clone()],
-                }),
-            }
-        }
-        for entry in &mut superseded_failures {
-            entry.evidence.sort_by(|left, right| {
-                (left.source_artifact_id.as_str(), left.evidence_id.as_str())
-                    .cmp(&(right.source_artifact_id.as_str(), right.evidence_id.as_str()))
-            });
-        }
-        superseded_failures.sort_by(|left, right| {
-            (left.outcome, left.return_code.as_ref().map(|code| &code.raw))
-                .cmp(&(right.outcome, right.return_code.as_ref().map(|code| &code.raw)))
-        });
-        superseded_failures
-    };
 
     let cleared_failures: Vec<&TerminalCandidate> = cleared_away
         .iter()
@@ -1050,79 +1094,102 @@ fn resolve_outcome(fold: &Fold) -> OutcomeResolution {
         .filter(|candidate| candidate.outcome.is_failure())
         .collect();
 
+    // No terminal statement survives clearing: the transaction is still in
+    // flight, and only clearable signals (never completions) were seen, so
+    // there is no attribution to export.
     if remaining.is_empty() {
-        return OutcomeResolution {
+        return Resolution {
             outcome: fold.pending,
             local_outcome: None,
             superseded_failures: collect_superseded(&cleared_failures),
-            return_code,
-            return_code_kind,
-            reboot_required,
+            return_code: None,
+            return_code_kind: None,
+            reboot_required: false,
         };
     }
 
-    let survives = |index: usize| {
-        !remaining.iter().enumerate().any(|(other, candidate)| {
-            other != index && sequenced_after(&candidate.sequence(), &remaining[index].sequence())
-        })
-    };
-    let mut surviving: Vec<&TerminalCandidate> = (0..remaining.len())
-        .filter(|&index| survives(index))
-        .map(|index| remaining[index])
-        .collect();
-    // Canonical evidence order, independent of the caller's input order.
-    surviving.sort_by(|left, right| {
-        (left.artifact_id.as_str(), left.record_number)
-            .cmp(&(right.artifact_id.as_str(), right.record_number))
-    });
-
-    // Rule 5: a sequencing cycle emptied the survivor set. Cleared failures
-    // stay superseded — a clearance is a statement, not a candidate, so the
-    // cycle cannot invalidate it — but no cycle member is reported superseded.
-    if surviving.is_empty() {
-        return OutcomeResolution {
-            outcome: Win32Outcome::Conflicting,
-            local_outcome: None,
-            superseded_failures: collect_superseded(&cleared_failures),
-            return_code,
-            return_code_kind,
-            reboot_required,
-        };
-    }
-
-    let superseded: Vec<&TerminalCandidate> = cleared_failures
+    let order = CandidateOrder::new(&remaining);
+    let superseded = order.superseded();
+    let mut surviving: Vec<&TerminalCandidate> = remaining
         .iter()
-        .copied()
-        .chain(
-            (0..remaining.len())
-                .filter(|&index| remaining[index].outcome.is_failure() && !survives(index))
-                .map(|index| remaining[index]),
-        )
+        .enumerate()
+        .filter(|(index, _)| !superseded[*index])
+        .map(|(_, candidate)| *candidate)
         .collect();
-    let superseded_failures = collect_superseded(&superseded);
+    // Canonical evidence order, independent of the caller's input order. The
+    // condensation of the closed linkage always has a maximal contender, so
+    // the survivor set is never empty.
+    surviving.sort_by(|left, right| left.sequence.canonical().cmp(&right.sequence.canonical()));
 
     let outcome = surviving[0].outcome;
     if surviving.iter().any(|candidate| candidate.outcome != outcome) {
-        return OutcomeResolution {
+        // Rule 4: conservative. Rule 3: only cleared failures are reported
+        // superseded, and nothing is attributed.
+        return Resolution {
             outcome: Win32Outcome::Conflicting,
             local_outcome: None,
-            superseded_failures,
-            return_code,
-            return_code_kind,
-            reboot_required,
+            superseded_failures: collect_superseded(&cleared_failures),
+            return_code: None,
+            return_code_kind: None,
+            reboot_required: false,
         };
     }
 
-    OutcomeResolution {
-        outcome,
-        local_outcome: surviving
+    let superseded_failures = collect_superseded(
+        &cleared_failures
             .iter()
-            .rev()
-            .find_map(|candidate| candidate.local_outcome),
+            .copied()
+            .chain(
+                remaining
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, candidate)| superseded[*index] && candidate.outcome.is_failure())
+                    .map(|(_, candidate)| *candidate),
+            )
+            .collect::<Vec<_>>(),
+    );
+
+    // Rule 5: the completion that decided the outcome. A completion stating
+    // the resolved outcome that was only out-sequenced by same-outcome
+    // records (a post-enforcement detection confirming the install) still
+    // carries the decisive token; one that a differently-concluding candidate
+    // is transitively ordered after had its claim overturned and must not
+    // leak its code.
+    let overturned = |index: usize, candidate: &TerminalCandidate| {
+        remaining.iter().enumerate().any(|(other, dominator)| {
+            dominator.outcome != candidate.outcome && order.dominates(other, index)
+        })
+    };
+    let attribution = remaining
+        .iter()
+        .enumerate()
+        .filter(|(index, candidate)| {
+            candidate.return_code_kind.is_some()
+                && candidate.outcome == outcome
+                && !overturned(*index, candidate)
+        })
+        .map(|(_, candidate)| *candidate)
+        .min_by(|left, right| left.sequence.canonical().cmp(&right.sequence.canonical()));
+
+    // Rule 6: recomputed, never snapshotted.
+    let local_outcome = (outcome == Win32Outcome::ReportingFailed)
+        .then(|| {
+            let local: Vec<&TerminalCandidate> = remaining
+                .iter()
+                .copied()
+                .filter(|candidate| candidate.outcome != Win32Outcome::ReportingFailed)
+                .collect();
+            surviving_outcome(&local)
+        })
+        .flatten();
+
+    Resolution {
+        outcome,
+        local_outcome,
         superseded_failures,
-        return_code,
-        return_code_kind,
-        reboot_required,
+        return_code: attribution.and_then(|candidate| candidate.return_code.clone()),
+        return_code_kind: attribution.and_then(|candidate| candidate.return_code_kind),
+        reboot_required: attribution.is_some_and(TerminalCandidate::reboot_required),
     }
 }
 
@@ -1176,21 +1243,10 @@ fn reduce_transaction(
         apply_record(&mut fold, record, &key, options, &linkage);
     }
 
+    // The attribution is the deciding candidate's, computed by resolve_outcome
+    // in the same pass as the outcome — never the fold's last write, and
+    // already absent for a conservative contradiction.
     let resolution = resolve_outcome(&fold);
-    // A conservative contradiction has no single return token: asserting the
-    // code of either side would silently pick the winner the outcome refuses
-    // to pick. Otherwise the attribution is the winning candidate's, computed
-    // by resolve_outcome, never the fold's last write.
-    let (return_code, return_code_kind, reboot_required) =
-        if resolution.outcome == Win32Outcome::Conflicting {
-            (None, None, false)
-        } else {
-            (
-                resolution.return_code.clone(),
-                resolution.return_code_kind,
-                resolution.reboot_required,
-            )
-        };
 
     // An entry scoped to this transaction's deployment type wins; an entry
     // without one applies app-wide. An entry for a *different* deployment type
@@ -1242,9 +1298,9 @@ fn reduce_transaction(
         last_confirmed_phase: fold.last_confirmed_phase,
         outcome: resolution.outcome,
         local_outcome: resolution.local_outcome,
-        return_code,
-        return_code_kind,
-        reboot_required,
+        return_code: resolution.return_code,
+        return_code_kind: resolution.return_code_kind,
+        reboot_required: resolution.reboot_required,
         unresolved_dependencies: fold.unresolved_dependencies.into_iter().collect(),
         failed_requirements: fold.failed_requirements.into_iter().collect(),
         superseded_failures: resolution.superseded_failures,
@@ -1337,24 +1393,24 @@ fn apply_record(
             fold.advance(Win32Phase::Assignment);
             fold.set_pending(Win32Outcome::Assigned);
         }
-        Win32Signal::NotTargeted => fold.push_terminal(record, Win32Outcome::NotTargeted),
+        Win32Signal::NotTargeted => fold.push_terminal(record, Win32Outcome::NotTargeted, None),
         Win32Signal::ApplicabilityPassed => fold.advance(Win32Phase::Applicability),
         Win32Signal::ApplicabilityFailed => {
-            fold.push_terminal(record, Win32Outcome::NotApplicable);
+            fold.push_terminal(record, Win32Outcome::NotApplicable, None);
         }
         Win32Signal::RequirementPassed => fold.advance(Win32Phase::Requirements),
         Win32Signal::RequirementFailed => {
             if let Some(name) = &classification.requirement_name {
                 fold.failed_requirements.insert(name.clone());
             }
-            fold.push_terminal(record, Win32Outcome::RequirementNotMet);
+            fold.push_terminal(record, Win32Outcome::RequirementNotMet, None);
         }
         Win32Signal::DependencyResolved => fold.advance(Win32Phase::Dependencies),
         Win32Signal::DependencyUnresolved => {
             if let Some(dependency) = &classification.dependency_app_id {
                 fold.unresolved_dependencies.insert(dependency.clone());
             }
-            fold.push_terminal(record, Win32Outcome::DependencyUnresolved);
+            fold.push_terminal(record, Win32Outcome::DependencyUnresolved, None);
         }
         // Whether a detection verdict is pre- or post-enforcement is decided by
         // explicit linkage against the transaction's enforcement records (see
@@ -1370,14 +1426,14 @@ fn apply_record(
                 // No enforcement was evidenced at all: the detection alone is
                 // the answer, and it says the app was already present.
                 fold.advance(Win32Phase::PreEnforcementDetection);
-                fold.push_terminal(record, Win32Outcome::DetectedBeforeEnforcement);
+                fold.push_terminal(record, Win32Outcome::DetectedBeforeEnforcement, None);
             } else if linkage
                 .success
                 .iter()
                 .any(|success| sequenced_after(&point, success))
             {
                 fold.advance(Win32Phase::PostEnforcementDetection);
-                fold.push_terminal(record, Win32Outcome::Succeeded);
+                fold.push_terminal(record, Win32Outcome::Succeeded, None);
             } else if linkage
                 .enforcement
                 .iter()
@@ -1398,7 +1454,7 @@ fn apply_record(
                 // enforcement result supersedes this candidate by the same
                 // linkage at resolution time.
                 fold.advance(Win32Phase::PreEnforcementDetection);
-                fold.push_terminal(record, Win32Outcome::DetectedBeforeEnforcement);
+                fold.push_terminal(record, Win32Outcome::DetectedBeforeEnforcement, None);
             }
         }
         Win32Signal::DetectionNotSatisfied => {
@@ -1410,7 +1466,7 @@ fn apply_record(
                 .iter()
                 .any(|success| sequenced_after(&point, success))
             {
-                fold.push_terminal(record, Win32Outcome::InstalledNotDetected);
+                fold.push_terminal(record, Win32Outcome::InstalledNotDetected, None);
             } else if linkage
                 .enforcement
                 .iter()
@@ -1420,7 +1476,7 @@ fn apply_record(
             }
         }
         Win32Signal::ContentUnavailable => {
-            fold.push_terminal(record, Win32Outcome::ContentUnavailable);
+            fold.push_terminal(record, Win32Outcome::ContentUnavailable, None);
         }
         // A stall is trouble in flight, not a proven outcome: the record stays
         // cited evidence, and neither a phase nor a state is claimed from it.
@@ -1437,13 +1493,13 @@ fn apply_record(
         Win32Signal::DownloadFailed
         | Win32Signal::HashValidationFailed
         | Win32Signal::StagingFailed => {
-            fold.push_terminal(record, Win32Outcome::ContentDeliveryFailed);
+            fold.push_terminal(record, Win32Outcome::ContentDeliveryFailed, None);
         }
         Win32Signal::EnforcementStarted => {
             fold.set_pending(Win32Outcome::Enforcing);
         }
         Win32Signal::EnforcementCommandFailed => {
-            fold.push_terminal(record, Win32Outcome::EnforcementCommandFailed);
+            fold.push_terminal(record, Win32Outcome::EnforcementCommandFailed, None);
         }
         Win32Signal::InstallerCompleted => {
             apply_installer_completion(fold, record, key, options);
@@ -1462,7 +1518,7 @@ fn apply_record(
             fold.push_clearance(record, Win32Signal::ReportFailed);
         }
         Win32Signal::ReportFailed => {
-            fold.push_terminal(record, Win32Outcome::ReportingFailed);
+            fold.push_terminal(record, Win32Outcome::ReportingFailed, None);
         }
         Win32Signal::Unclassified => {}
     }
@@ -1487,13 +1543,14 @@ fn apply_installer_completion(
     let kind = classify_return_code(key, code, &options.return_codes);
 
     match kind {
-        Win32ReturnCodeKind::Success => {
+        Win32ReturnCodeKind::Success
+        | Win32ReturnCodeKind::SoftReboot
+        | Win32ReturnCodeKind::HardReboot => {
+            // A reboot-mapped code is a success whose reboot flag is derived
+            // from the kind at attribution time (see
+            // [`TerminalCandidate::reboot_required`]).
             fold.advance(Win32Phase::Enforcement);
-            fold.push_completion_terminal(record, Win32Outcome::Succeeded, kind, false);
-        }
-        Win32ReturnCodeKind::SoftReboot | Win32ReturnCodeKind::HardReboot => {
-            fold.advance(Win32Phase::Enforcement);
-            fold.push_completion_terminal(record, Win32Outcome::Succeeded, kind, true);
+            fold.push_terminal(record, Win32Outcome::Succeeded, Some(kind));
         }
         Win32ReturnCodeKind::Retry => {
             // A retry-kind completion is an in-flight marker: it mints no
@@ -1508,12 +1565,7 @@ fn apply_installer_completion(
             // but this is a terminal enforcement result rather than a launch
             // failure.
             fold.advance(Win32Phase::Enforcement);
-            fold.push_completion_terminal(
-                record,
-                Win32Outcome::InstallerReportedFailure,
-                kind,
-                false,
-            );
+            fold.push_terminal(record, Win32Outcome::InstallerReportedFailure, Some(kind));
         }
     }
 }
@@ -2541,6 +2593,185 @@ mod tests {
         assert!(
             transaction.reboot_required,
             "the reboot flag is derived from the winning 3010 candidate"
+        );
+    }
+
+    #[test]
+    fn a_superseded_reboot_completion_does_not_leak_its_return_code() {
+        // The 3010 completion is superseded by the later Not-Detected verdict,
+        // so the outcome is decided by a non-completion candidate. Exporting
+        // the superseded completion's token would pair an InstalledNotDetected
+        // outcome with a stale success code.
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 3010")),
+            record(&format!("[Win32App] Detection state for app with id: {APP} = Not Detected")),
+        ])]);
+
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.outcome, Win32Outcome::InstalledNotDetected);
+        assert_eq!(
+            transaction.return_code, None,
+            "a superseded completion's token must not be exported"
+        );
+        assert_eq!(transaction.return_code_kind, None);
+        assert!(
+            !transaction.reboot_required,
+            "the reboot flag belongs to the superseded 3010, not to the outcome"
+        );
+    }
+
+    #[test]
+    fn attribution_follows_linkage_not_artifact_id_sort_order() {
+        // The Not-Detected verdict is trusted-later than the 3010 completion,
+        // so it decides the outcome regardless of which artifact id the
+        // detection log carries. The attribution must be dropped with it —
+        // identically for either canonical sort position of the artifact.
+        let result_for = |detection_id: &str| {
+            let enforcement = Win32SourceInput::captured(
+                "aw",
+                "AppWorkload.log",
+                [
+                    record_at("10:00:00.000+000", "7-31-2026", &format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"), 5),
+                    record_at("10:00:10.000+000", "7-31-2026", &format!("[Win32App] Installation is done for app with id: {APP}, exit code: 3010"), 5),
+                ]
+                .concat(),
+            );
+            let detection = Win32SourceInput::captured(
+                detection_id,
+                "AppActionProcessor.log",
+                record_at(
+                    "10:05:00.000+000",
+                    "7-31-2026",
+                    &format!("[Win32App] Detection state for app with id: {APP} = Not Detected"),
+                    5,
+                ),
+            );
+            let analysis = analyze_win32_bundle(&[enforcement, detection]);
+            let transaction = only_transaction(&analysis).clone();
+            (transaction.outcome, transaction.return_code.clone())
+        };
+
+        // "aap" sorts before "aw"; "zz-aap" sorts after it.
+        for detection_id in ["aap", "zz-aap"] {
+            let (outcome, return_code) = result_for(detection_id);
+            assert_eq!(outcome, Win32Outcome::InstalledNotDetected);
+            assert_eq!(
+                return_code, None,
+                "an artifact id is an acquisition detail and must not resurrect \
+                 a superseded completion's token ({detection_id})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cycle_does_not_let_an_independent_candidate_win_or_mint_false_supersessions() {
+        // The three cycle members from the sequencing-cycle test, plus one
+        // offset-less completion in another artifact that nothing orders.
+        // Eliminating a cycle member requires an eliminator that itself
+        // survives; a cycle member that merely fell to another cycle member is
+        // still a contender, so the contradiction is reported instead of the
+        // independent candidate silently winning — and no cycle member may be
+        // claimed "explicitly ordered" superseded.
+        let aw = Win32SourceInput::captured(
+            "aw",
+            "AppWorkload.log",
+            [
+                record_at("10:16:05.000+000", "7-31-2026", &format!("[Win32App] Installation is done for app with id: {APP}, deployment type id: {DT}, exit code: 0"), 5),
+                record_at("10:15:00.000+000", "7-31-2026", &format!("[Win32App] Installation is done for app with id: {APP}, deployment type id: {DT}, exit code: 1603"), 5),
+            ]
+            .concat(),
+        );
+        let ime = Win32SourceInput::captured(
+            "ime",
+            "IntuneManagementExtension.log",
+            record_at(
+                "10:15:30.000+000",
+                "7-31-2026",
+                &format!("[Win32App] Hash mismatch while downloading content for app with id: {APP}"),
+                5,
+            ),
+        );
+        // Offset-less: its UTC form would be the parsing machine's opinion, so
+        // nothing orders it against the cycle members.
+        let extra = Win32SourceInput::captured(
+            "aw-extra",
+            "AppWorkload-1.log",
+            record_at(
+                "09:00:00.000",
+                "7-31-2026",
+                &format!("[Win32App] Installation is done for app with id: {APP}, deployment type id: {DT}, exit code: 0"),
+                5,
+            ),
+        );
+
+        for inputs in [
+            vec![aw.clone(), ime.clone(), extra.clone()],
+            vec![extra, ime, aw],
+        ] {
+            let analysis = analyze_win32_bundle(&inputs);
+            let transaction = only_transaction(&analysis);
+            assert_eq!(
+                transaction.outcome,
+                Win32Outcome::Conflicting,
+                "a cycle member is still a contender; the independent candidate must not win"
+            );
+            assert_eq!(transaction.return_code, None);
+            assert!(
+                transaction.superseded_failures.is_empty(),
+                "no cycle member was superseded by a surviving, explicitly ordered record: {:?}",
+                transaction.superseded_failures
+            );
+        }
+    }
+
+    #[test]
+    fn a_cleared_delivery_failure_leaves_no_stale_local_outcome_under_a_reporting_failure() {
+        // The delivery failure was cleared by the later completed download, so
+        // no local terminal outcome survives underneath the reporting failure.
+        // The fold-time snapshot used to export the cleared failure as the
+        // local outcome.
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Download failed for app with id: {APP}, error code: 0x87D30067")),
+            record(&format!("[Win32App] Download completed for app with id: {APP}")),
+            record(&format!("[Win32App] Failed to send app status to service for app with id: {APP}, error code: 0x80072EE2")),
+        ])]);
+
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.outcome, Win32Outcome::ReportingFailed);
+        assert_eq!(
+            transaction.local_outcome, None,
+            "a cleared failure is not a surviving local outcome"
+        );
+        assert_eq!(transaction.superseded_failures.len(), 1);
+        assert_eq!(
+            transaction.superseded_failures[0].outcome,
+            Win32Outcome::ContentDeliveryFailed,
+            "the cleared failure still really happened and stays visible"
+        );
+    }
+
+    #[test]
+    fn a_reporting_failure_after_a_retry_success_reports_the_surviving_local_outcome() {
+        // The 1603 cycle was superseded by the retry's success, so the local
+        // outcome underneath the reporting failure is the surviving Succeeded,
+        // never the superseded failure.
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603")),
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            record(&format!("[Win32App] Failed to send app status to service for app with id: {APP}, error code: 0x80072EE2")),
+        ])]);
+
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.outcome, Win32Outcome::ReportingFailed);
+        assert_eq!(transaction.local_outcome, Some(Win32Outcome::Succeeded));
+        assert_eq!(transaction.superseded_failures.len(), 1);
+        assert_eq!(
+            transaction.superseded_failures[0].outcome,
+            Win32Outcome::InstallerReportedFailure
         );
     }
 
