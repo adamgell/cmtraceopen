@@ -532,13 +532,24 @@ fn push_ambiguous_display_name(snapshot: &StoreAnalysis, findings: &mut Vec<Intu
 
 // ── Coverage rules ──────────────────────────────────────────────────────────
 
+/// Canonical citation list: sorted and de-duplicated, so a record supplied
+/// twice is one citation and neither the rendered count nor the citation
+/// order depends on artifact permutation or duplication.
+fn normalized_refs(refs: impl Iterator<Item = IntuneEvidenceRef>) -> Vec<IntuneEvidenceRef> {
+    let mut evidence: Vec<IntuneEvidenceRef> = refs.collect();
+    evidence.sort();
+    evidence.dedup();
+    evidence
+}
+
 fn push_unknown_event_version(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFinding>) {
-    let evidence = snapshot
-        .observations
-        .iter()
-        .filter(|observation| observation.unknown_version)
-        .map(|observation| observation.context.evidence_ref.clone())
-        .collect::<Vec<_>>();
+    let evidence = normalized_refs(
+        snapshot
+            .observations
+            .iter()
+            .filter(|observation| observation.unknown_version)
+            .map(|observation| observation.context.evidence_ref.clone()),
+    );
     if evidence.is_empty() {
         return;
     }
@@ -566,12 +577,13 @@ fn push_unknown_event_version(snapshot: &StoreAnalysis, findings: &mut Vec<Intun
 /// touched transaction's confidence, but for different reasons and with
 /// different remediations, so conflating them would hide which one happened.
 fn push_event_level_mismatch(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFinding>) {
-    let evidence = snapshot
-        .observations
-        .iter()
-        .filter(|observation| observation.level_mismatch)
-        .map(|observation| observation.context.evidence_ref.clone())
-        .collect::<Vec<_>>();
+    let evidence = normalized_refs(
+        snapshot
+            .observations
+            .iter()
+            .filter(|observation| observation.level_mismatch)
+            .map(|observation| observation.context.evidence_ref.clone()),
+    );
     if evidence.is_empty() {
         return;
     }

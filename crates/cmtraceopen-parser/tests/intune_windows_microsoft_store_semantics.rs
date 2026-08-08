@@ -424,14 +424,71 @@ fn ccm_line(message: &str) -> String {
 
 // == Cluster 4: terminal precedence and retries =============================
 //
-// Contract (ADR-003): a retry may transition failure into success only when
-// the two records are explicitly ordered by the source's own sequencing —
-// here, monotonic record numbers within the same event-log artifact. A
-// success that cannot be ordered against the failure (a supplied inventory
-// fact from another artifact) is ambiguous and must not overwrite it.
+// Contract (ADR-003): chronology and retry linkage are separate requirements.
+// Record numbers within the same event-log artifact prove which record was
+// written later; they do not prove the later success belongs to the same
+// operation as the earlier failure. The AppX event grammar's own linkage key
+// is the ETW activity id ("correlates a multi-event operation"): a success
+// replaces a failure only when both records carry the same activity id. A
+// success that is merely later — or that cannot be ordered at all (a supplied
+// inventory fact from another artifact) — must not overwrite the failure.
+
+const ACTIVITY: &str = "cccccccc-dddd-4eee-8fff-000000000001";
+const OTHER_ACTIVITY: &str = "cccccccc-dddd-4eee-8fff-000000000002";
 
 #[test]
-fn an_explicitly_ordered_retry_success_replaces_the_earlier_failure() {
+fn a_success_linked_by_activity_id_replaces_the_earlier_failure() {
+    let mut failed = appx_event(
+        "appx",
+        3,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    failed.activity_id = Some(ACTIVITY.to_owned());
+    let mut retried = appx_event(
+        "appx",
+        7,
+        603,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    retried.activity_id = Some(ACTIVITY.to_owned());
+
+    for events in [vec![failed.clone(), retried.clone()], vec![retried, failed]] {
+        let analysis = analyze_store_bundle(&[artifact(
+            "appx",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents { events },
+        )]);
+        assert_eq!(analysis.transactions.len(), 1);
+        assert_eq!(
+            analysis.transactions[0].state,
+            StoreTransactionState::InstallCompleted,
+            "a shared activity id plus source-native order is the explicit \
+             retry linkage ADR-003 requires"
+        );
+        assert!(analysis.transactions[0].error.is_none());
+    }
+}
+
+/// The adversarial case ADR-003 exists for: two attempts with no explicit
+/// link. A failure at record 3 and a success at record 7 in the same artifact
+/// may be two unrelated deployment attempts; record order proves only that
+/// the success was *written* later. Without a shared activity id the failure
+/// must not be silently replaced — the contradiction stays conservative.
+#[test]
+fn a_later_unlinked_success_does_not_replace_a_same_artifact_failure() {
     let failed = appx_event(
         "appx",
         3,
@@ -444,7 +501,7 @@ fn an_explicitly_ordered_retry_success_replaces_the_earlier_failure() {
             ("ErrorCode", "0x80073CF9"),
         ],
     );
-    let retried = appx_event(
+    let later_success = appx_event(
         "appx",
         7,
         603,
@@ -456,24 +513,47 @@ fn an_explicitly_ordered_retry_success_replaces_the_earlier_failure() {
         ],
     );
 
-    for events in [
-        vec![failed.clone(), retried.clone()],
-        vec![retried, failed],
+    // No activity ids at all, and two *different* activity ids: in neither
+    // shape does the source link the success to the failure.
+    let mut cross_activity_failed = failed.clone();
+    cross_activity_failed.activity_id = Some(ACTIVITY.to_owned());
+    let mut cross_activity_success = later_success.clone();
+    cross_activity_success.activity_id = Some(OTHER_ACTIVITY.to_owned());
+
+    for (failed, success) in [
+        (failed, later_success),
+        (cross_activity_failed, cross_activity_success),
     ] {
-        let analysis = analyze_store_bundle(&[artifact(
-            "appx",
-            "appxDeployment",
-            IntuneSourceKind::EventLog,
-            StoreArtifactPayload::WindowsEvents { events },
-        )]);
-        assert_eq!(analysis.transactions.len(), 1);
-        assert_eq!(
-            analysis.transactions[0].state,
-            StoreTransactionState::InstallCompleted,
-            "the later record of the same sequenced source is the explicit \
-             retry linkage ADR-003 requires"
-        );
-        assert!(analysis.transactions[0].error.is_none());
+        for events in [
+            vec![failed.clone(), success.clone()],
+            vec![success.clone(), failed.clone()],
+        ] {
+            let analysis = analyze_store_bundle(&[artifact(
+                "appx",
+                "appxDeployment",
+                IntuneSourceKind::EventLog,
+                StoreArtifactPayload::WindowsEvents { events },
+            )]);
+            assert_eq!(analysis.transactions.len(), 1);
+            let transaction = &analysis.transactions[0];
+            assert_ne!(
+                transaction.state,
+                StoreTransactionState::InstallCompleted,
+                "ADR-003: chronology alone is not retry linkage; an unlinked \
+                 later success must not overwrite the failure"
+            );
+            assert_eq!(
+                transaction.state,
+                StoreTransactionState::InsufficientEvidence,
+                "an unresolved authoritative contradiction stays conservative"
+            );
+            assert_eq!(transaction.confidence, IntuneFindingConfidence::Low);
+            assert_eq!(
+                transaction.evidence.len(),
+                2,
+                "both contradicting records stay visible on the transaction"
+            );
+        }
     }
 }
 
@@ -528,6 +608,69 @@ fn a_source_ordered_late_failure_is_not_hidden_by_an_earlier_success() {
             Some("0x80073CF9")
         );
     }
+}
+
+/// Duplicate provenance is the tie the canonical sort cannot break from
+/// `(source_artifact_id, record_number)` alone: two observations carrying the
+/// same artifact and record number but different error tokens would otherwise
+/// leave error selection to caller order. The tie-break must come from the
+/// candidates' own content, so any permutation reports the same error.
+#[test]
+fn tied_provenance_duplicates_select_the_error_deterministically() {
+    let first = appx_event(
+        "appx",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073D01"),
+        ],
+    );
+    let second = appx_event(
+        "appx",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80070005"),
+        ],
+    );
+
+    let mut selected = Vec::new();
+    for events in [vec![first.clone(), second.clone()], vec![second, first]] {
+        let analysis = analyze_store_bundle(&[artifact(
+            "appx",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents { events },
+        )]);
+        assert_eq!(analysis.transactions.len(), 1);
+        assert_eq!(
+            analysis.transactions[0].state,
+            StoreTransactionState::RegistrationFailure
+        );
+        selected.push(
+            analysis.transactions[0]
+                .error
+                .as_ref()
+                .map(|error| error.raw.clone()),
+        );
+    }
+    assert_eq!(
+        selected[0], selected[1],
+        "the reported error must not depend on the caller's input order"
+    );
+    assert_eq!(
+        selected[0].as_deref(),
+        Some("0x80070005"),
+        "the tie-break is canonical over candidate content, not first-seen"
+    );
 }
 
 /// An inventory fact saying "installed" cannot be ordered against a failure
@@ -836,6 +979,143 @@ fn unknown_version_and_level_mismatch_degrade_for_distinct_documented_reasons() 
         mismatched_transaction.state,
         StoreTransactionState::RegistrationFailure
     );
+}
+
+/// The typed route to the same degradation: `NormalizedWindowsEvent` carries
+/// its ETW template version as `event_version`, and an unsupported template
+/// revision means the payload contract these rules were written against no
+/// longer holds. Per ADR-001 non-assessable evidence cannot produce a
+/// terminal conclusion, so a known failure event id under an unsupported
+/// typed version must degrade to unknown-version coverage — never classify
+/// as `RegistrationFailed`.
+#[test]
+fn an_unsupported_typed_event_version_cannot_drive_a_terminal_outcome() {
+    let mut versioned = appx_event(
+        "appx",
+        1,
+        404,
+        NormalizedEventLevel::Error,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+    versioned.event_version = Some(2);
+
+    let analysis = analyze_store_bundle(&[artifact(
+        "appx",
+        "appxDeployment",
+        IntuneSourceKind::EventLog,
+        StoreArtifactPayload::WindowsEvents {
+            events: vec![versioned],
+        },
+    )]);
+
+    assert_eq!(analysis.transactions.len(), 1);
+    let transaction = &analysis.transactions[0];
+    assert_ne!(
+        transaction.state,
+        StoreTransactionState::RegistrationFailure,
+        "ADR-001: an unsupported typed event version is non-assessable and \
+         cannot drive a terminal outcome"
+    );
+    assert_eq!(
+        transaction.state,
+        StoreTransactionState::InsufficientEvidence
+    );
+    assert!(transaction.unknown_version_observed);
+    assert_eq!(transaction.confidence, IntuneFindingConfidence::Low);
+    assert!(
+        analysis
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "store-unknown-event-version"),
+        "the unsupported version is surfaced as coverage"
+    );
+    assert!(
+        !analysis
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "store-registration-failed"),
+        "no terminal failure finding from an unsupported version"
+    );
+}
+
+/// Coverage findings must be duplicate-invariant: the same degraded record
+/// supplied twice is one piece of evidence, not two, and its citation list
+/// must be normalized (sorted, de-duplicated) before it is counted or
+/// emitted.
+#[test]
+fn duplicated_degraded_observations_do_not_inflate_coverage_finding_citations() {
+    let unknown_dialect = appx_event(
+        "appx-unknown",
+        1,
+        9999,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("PackageFamilyName", PACKAGE_FAMILY),
+        ],
+    );
+    let contradicting = appx_event(
+        "appx-mismatch",
+        1,
+        404,
+        NormalizedEventLevel::Information,
+        &[
+            ("DeploymentOperation", "Register"),
+            ("DeploymentScope", "User"),
+            ("PackageFamilyName", "Fabrikam.OtherApp_8synthh0abcd3"),
+            ("ErrorCode", "0x80073CF9"),
+        ],
+    );
+
+    let analysis = analyze_store_bundle(&[
+        artifact(
+            "appx-unknown",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![unknown_dialect.clone(), unknown_dialect],
+            },
+        ),
+        artifact(
+            "appx-mismatch",
+            "appxDeployment",
+            IntuneSourceKind::EventLog,
+            StoreArtifactPayload::WindowsEvents {
+                events: vec![contradicting.clone(), contradicting],
+            },
+        ),
+    ]);
+
+    let unknown = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-unknown-event-version")
+        .expect("unknown-version finding");
+    assert_eq!(
+        unknown.evidence.len(),
+        1,
+        "the duplicated record is one citation, not two: {:?}",
+        unknown.evidence
+    );
+    assert!(unknown.summary.starts_with("1 record(s)"));
+
+    let mismatch = analysis
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "store-event-level-mismatch")
+        .expect("level-mismatch finding");
+    assert_eq!(
+        mismatch.evidence.len(),
+        1,
+        "the duplicated record is one citation, not two: {:?}",
+        mismatch.evidence
+    );
+    assert!(mismatch.summary.starts_with("1 record(s)"));
 }
 
 // == Cluster 8: confidence propagation ======================================

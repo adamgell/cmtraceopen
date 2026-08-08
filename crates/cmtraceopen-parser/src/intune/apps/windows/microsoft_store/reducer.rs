@@ -126,6 +126,7 @@ fn collect_from_artifact(artifact: &StoreSourceArtifact, observations: &mut Vec<
                     event.context.clone(),
                     StoreEvidenceOrigin::WindowsEvent,
                     classification,
+                    event.activity_id.clone(),
                     event.message.clone(),
                     event.named_data.clone(),
                 );
@@ -229,6 +230,8 @@ fn collect_from_ime_text(
             context,
             StoreEvidenceOrigin::IntuneManagementExtension,
             classification,
+            // The CCM text grammar carries no operation-correlation token.
+            None,
             Some(record.message.clone()),
             Vec::new(),
         );
@@ -259,6 +262,7 @@ fn collect_from_fact(fact: &StorePackageFact, observations: &mut Vec<StoreObserv
         fact.context.clone(),
         StoreEvidenceOrigin::PackageInventory,
         classification,
+        None,
         None,
         fact.named_data.clone(),
     );
@@ -297,6 +301,7 @@ fn collect_from_assignment(assignment: &StoreAssignment, observations: &mut Vec<
         StoreEvidenceOrigin::IntuneAssignment,
         classification,
         None,
+        None,
         assignment.named_data.clone(),
     );
 }
@@ -332,6 +337,7 @@ fn collect_from_installer_outcome(
         StoreEvidenceOrigin::InstallerNative,
         classification,
         None,
+        None,
         outcome.named_data.clone(),
     );
 }
@@ -366,6 +372,7 @@ fn push_observation(
     context: IntuneObservationContext,
     origin: StoreEvidenceOrigin,
     classification: StoreClassification,
+    activity_id: Option<String>,
     message: Option<String>,
     named_data: Vec<IntuneNamedValue>,
 ) {
@@ -374,6 +381,7 @@ fn push_observation(
         observation_id,
         context,
         origin,
+        activity_id,
         signal: classification.signal,
         installer_family: classification.installer_family,
         family_basis: if classification.family_declared {
@@ -684,6 +692,9 @@ struct StateCandidate<'a> {
     error: Option<&'a IntuneErrorCode>,
     source_artifact_id: &'a str,
     record_number: Option<u64>,
+    /// The source's own operation-correlation token (the ETW activity id for a
+    /// Windows event). Required linkage for a success to supersede a failure.
+    activity_id: Option<&'a str>,
     /// True when the observation came from a source whose own record numbering
     /// is a monotonic write order (an event log's record ids, a CCM log's
     /// records). Supplied facts carry a caller-chosen record number that states
@@ -696,14 +707,37 @@ struct StateCandidate<'a> {
 /// Only records from the *same* sequenced source artifact are comparable:
 /// record numbers from two different artifacts, or from supplied facts, share
 /// no clock and no counter. Incomparable records stay ambiguous (ADR-003).
+///
+/// ADR-003 additionally separates chronology from retry linkage: a later
+/// record number proves the success was *written* later, not that it retried
+/// this failure — it may belong to an unrelated deployment attempt for the
+/// same package. The Store event grammar's explicit linkage token is the ETW
+/// activity id (`NormalizedWindowsEvent::activity_id`, "correlates a
+/// multi-event operation"), so a success replaces a failure only when both
+/// records carry the same activity id; without that link the contradiction is
+/// preserved and [`resolve_state`] stays conservative. The gate is
+/// deliberately asymmetric: a later *failure* after a success is not the
+/// retry-success case ADR-003 restricts, and hiding it would suppress a
+/// device-reported failure, so plain source-native chronology still applies
+/// there (and to every same-outcome refinement).
 fn supersedes(later: &StateCandidate<'_>, earlier: &StateCandidate<'_>) -> bool {
-    later.sequenced
+    let source_ordered = later.sequenced
         && earlier.sequenced
         && later.source_artifact_id == earlier.source_artifact_id
         && matches!(
             (later.record_number, earlier.record_number),
             (Some(later), Some(earlier)) if later > earlier
-        )
+        );
+    if !source_ordered {
+        return false;
+    }
+    if earlier.state.is_failure() && !later.state.is_failure() {
+        return matches!(
+            (later.activity_id, earlier.activity_id),
+            (Some(later), Some(earlier)) if later == earlier
+        );
+    }
+    true
 }
 
 /// Resolve the transaction state from every state-bearing observation at once.
@@ -740,8 +774,19 @@ fn resolve_state(
         .filter(|candidate| !top.iter().any(|other| supersedes(other, candidate)))
         .copied()
         .collect();
-    // Canonical evidence order, independent of the caller's input order.
-    surviving.sort_by_key(|candidate| (candidate.source_artifact_id, candidate.record_number));
+    // Canonical evidence order, independent of the caller's input order. The
+    // provenance key alone cannot break a tie between duplicate observations
+    // of the same record, so the error token — the only candidate content
+    // that can still differ once the states are checked equal below — is the
+    // final component; without it, `find_map` would report whichever
+    // duplicate the caller listed first.
+    surviving.sort_by_key(|candidate| {
+        (
+            candidate.source_artifact_id,
+            candidate.record_number,
+            candidate.error.map(|error| error.raw.as_str()),
+        )
+    });
 
     let state = surviving[0].state;
     if surviving
@@ -837,6 +882,7 @@ fn reduce_group(
                 error: observation.error.as_ref(),
                 source_artifact_id: &observation.context.evidence_ref.source_artifact_id,
                 record_number: observation.context.provenance.record_number,
+                activity_id: observation.activity_id.as_deref(),
                 sequenced: matches!(
                     observation.origin,
                     StoreEvidenceOrigin::WindowsEvent

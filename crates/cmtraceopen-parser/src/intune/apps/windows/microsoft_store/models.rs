@@ -434,6 +434,14 @@ pub struct StoreObservation {
     pub app_id: Option<String>,
     pub execution_context: StoreExecutionContext,
     pub action: StoreDeploymentAction,
+    /// The source's own operation-correlation token — for a Windows event, the
+    /// ETW activity id. This is the only linkage that can tie a success record
+    /// to an earlier failure as one operation: record order alone proves
+    /// chronology, not linkage (ADR-003), so the reducer requires a shared
+    /// activity id before a later success may supersede a failure. Absent for
+    /// sources whose grammar carries no such token (IME text, supplied facts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<String>,
     /// Intune's typed assignment intent, present only when this observation is
     /// a typed assignment. This is the authoritative statement of intent: the
     /// reducer reads intent from here and never from caller-writable

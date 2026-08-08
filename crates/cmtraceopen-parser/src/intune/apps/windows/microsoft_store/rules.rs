@@ -519,6 +519,21 @@ pub fn classify_event(event: &NormalizedWindowsEvent) -> StoreClassification {
         return classification;
     };
 
+    // The typed template version states which payload contract the record
+    // follows. The event-id table above was written against the baseline
+    // template revisions (0 and 1); a later revision redefines what the
+    // payload's fields mean, so nothing extracted from it is assessable under
+    // these rules. Non-assessable evidence cannot produce a terminal
+    // conclusion (ADR-001): the record degrades to unknown-version coverage,
+    // the same conservative route as an unrecognized event id. This is
+    // deliberately stricter than the named `Version` payload check below —
+    // there the template itself is understood and only a payload detail is
+    // newer, so the stated outcome is kept at reduced confidence.
+    if event.event_version.is_some_and(|version| version > 1) {
+        classification.unknown_version = true;
+        return classification;
+    }
+
     // A payload version beyond the known set is the same problem arriving by a
     // different route.
     if let Some(version) = named(named_data, "Version") {
@@ -705,6 +720,49 @@ mod tests {
             "the dialect is fully recognized; conflating the two reasons would \
              hide which degradation happened"
         );
+    }
+
+    /// The typed route to the unknown-version degradation: a known failure
+    /// event id under an unsupported ETW template version is non-assessable
+    /// and must not classify as a failure (ADR-001).
+    #[test]
+    fn an_unsupported_typed_event_version_is_surfaced_not_interpreted() {
+        let mut versioned = event(
+            404,
+            &[
+                ("DeploymentOperation", "Register"),
+                ("DeploymentScope", "User"),
+                ("PackageFamilyName", "Contoso.SynthApp_9abcdef01234h"),
+                ("ErrorCode", "0x80073CF9"),
+            ],
+        );
+        versioned.event_version = Some(2);
+        let classification = classify_event(&versioned);
+        assert_eq!(classification.signal, StoreSignal::Unclassified);
+        assert!(classification.unknown_version);
+        assert!(
+            !classification.level_mismatch,
+            "nothing was interpreted, so nothing can contradict itself"
+        );
+        // Identity survives so the record stays correlatable.
+        assert!(!classification.identity.is_empty());
+
+        // The baseline template revisions stay assessable.
+        for supported in [0, 1] {
+            let mut baseline = event(
+                404,
+                &[
+                    ("DeploymentOperation", "Register"),
+                    ("DeploymentScope", "User"),
+                    ("PackageFamilyName", "Contoso.SynthApp_9abcdef01234h"),
+                    ("ErrorCode", "0x80073CF9"),
+                ],
+            );
+            baseline.event_version = Some(supported);
+            let classification = classify_event(&baseline);
+            assert_eq!(classification.signal, StoreSignal::RegistrationFailed);
+            assert!(!classification.unknown_version);
+        }
     }
 
     #[test]
