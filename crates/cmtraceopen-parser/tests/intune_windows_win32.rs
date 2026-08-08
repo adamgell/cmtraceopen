@@ -658,6 +658,75 @@ fn the_privacy_fixture_redacts_deterministically() {
 
 // ── Cross-cutting contract ──────────────────────────────────────────────────
 
+/// Referential integrity over the whole corpus: every cited evidence id
+/// resolves to a real observation, and every cited coverage gap resolves to a
+/// real coverage entry. A dangling citation is an uncheckable claim.
+#[test]
+fn every_cited_evidence_id_resolves() {
+    for scenario in SCENARIOS {
+        let (analysis, ..) = load(scenario);
+        let observation_ids: BTreeSet<&str> = analysis
+            .observations
+            .iter()
+            .map(|observation| observation.observation_id.as_str())
+            .collect();
+        let coverage_ids: BTreeSet<&str> = analysis
+            .coverage
+            .artifacts
+            .iter()
+            .map(|entry| entry.artifact_id.as_str())
+            .collect();
+
+        for transaction in &analysis.transactions {
+            for reference in &transaction.evidence {
+                assert!(
+                    observation_ids.contains(reference.evidence_id.as_str()),
+                    "{scenario}: transaction cites unknown evidence {}",
+                    reference.evidence_id
+                );
+            }
+            for observation in &transaction.observations {
+                assert!(
+                    observation_ids.contains(observation.as_str()),
+                    "{scenario}: transaction lists unknown observation {observation}"
+                );
+            }
+            for superseded in &transaction.superseded_failures {
+                for reference in &superseded.evidence {
+                    assert!(
+                        observation_ids.contains(reference.evidence_id.as_str()),
+                        "{scenario}: superseded failure cites unknown evidence {}",
+                        reference.evidence_id
+                    );
+                }
+            }
+        }
+        for unkeyed in &analysis.unkeyed_observations {
+            assert!(
+                observation_ids.contains(unkeyed.as_str()),
+                "{scenario}: unkeyed list names unknown observation {unkeyed}"
+            );
+        }
+        for finding in derive_findings(&analysis) {
+            for reference in &finding.evidence {
+                assert!(
+                    observation_ids.contains(reference.evidence_id.as_str()),
+                    "{scenario}: finding {} cites unknown evidence {}",
+                    finding.finding_id,
+                    reference.evidence_id
+                );
+            }
+            for gap in &finding.coverage_gap_ids {
+                assert!(
+                    coverage_ids.contains(gap.as_str()),
+                    "{scenario}: finding {} cites unknown coverage gap {gap}",
+                    finding.finding_id
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn the_redacted_export_projection_is_idempotent() {
     let (analysis, ..) = load("privacy-redaction");

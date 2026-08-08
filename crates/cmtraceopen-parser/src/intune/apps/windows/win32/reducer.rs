@@ -42,6 +42,15 @@ const EXPECTED_PRIMARY_ARTIFACTS: [&str; 3] = [
     "AppActionProcessor.log",
 ];
 
+/// Upper bound on framed records read from one artifact.
+///
+/// An adversarial or corrupted artifact must not be able to make the reduction
+/// retain unbounded state. Records beyond the cap are dropped and the artifact
+/// is reported as `Capped` in coverage, which degrades coverage exactly like a
+/// caller-declared truncation — the absence of a signal past the cap proves
+/// nothing. IME's own rotation policy keeps real artifacts far below this.
+const MAX_RECORDS_PER_ARTIFACT: usize = 100_000;
+
 /// Optional caller-supplied context for a reduction.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Win32AnalysisOptions {
@@ -65,17 +74,28 @@ const DEFAULT_RETURN_CODES: [(i64, Win32ReturnCodeKind); 5] = [
 ];
 
 fn classify_return_code(
-    app_id: &str,
+    key: &Win32TransactionKey,
     code: &IntuneErrorCode,
     table: &[Win32ReturnCodeMapping],
 ) -> Win32ReturnCodeKind {
     let Some(decimal) = code.decimal else {
         return Win32ReturnCodeKind::Unmapped;
     };
-    if let Some(mapping) = table
-        .iter()
-        .find(|mapping| mapping.app_id == app_id && mapping.code == decimal)
-    {
+    // Intune configures the table per deployment type, so an entry scoped to
+    // this transaction's deployment type wins over an app-wide entry.
+    let matches_app = |mapping: &&Win32ReturnCodeMapping| {
+        mapping.app_id == key.app_id && mapping.code == decimal
+    };
+    let scoped = table.iter().filter(matches_app).find(|mapping| {
+        mapping.deployment_type_id.is_some()
+            && mapping.deployment_type_id == key.deployment_type_id
+    });
+    if let Some(mapping) = scoped.or_else(|| {
+        table
+            .iter()
+            .filter(matches_app)
+            .find(|mapping| mapping.deployment_type_id.is_none())
+    }) {
         return mapping.kind;
     }
     DEFAULT_RETURN_CODES
@@ -354,6 +374,9 @@ fn to_observation(record: &PendingRecord) -> Win32Observation {
         context: record.context(),
         source_kind: record.source_kind,
         signal: record.classification.signal,
+        enforcement_shaped_but_unmatched: record.classification.enforcement_shaped_but_unmatched
+            || (record.classification.signal == Win32Signal::InstallerCompleted
+                && record.classification.error_code.is_none()),
         app_id: record.resolved_app_id.clone(),
         deployment_type_id: record.resolved_deployment_type_id.clone(),
         content_version: record.classification.content_version.clone(),
@@ -409,11 +432,14 @@ pub fn analyze_win32_bundle_with(
             continue;
         }
 
-        let lines = if input.has_content() {
+        let mut lines = if input.has_content() {
             parse_ime_content(&input.content)
         } else {
             Vec::new()
         };
+        let capped_by_analyzer = lines.len() > MAX_RECORDS_PER_ARTIFACT;
+        lines.truncate(MAX_RECORDS_PER_ARTIFACT);
+
         let components: Vec<Option<String>> =
             lines.iter().map(|line| line.component.clone()).collect();
         let source_kind = classify_artifact(input, &components);
@@ -426,7 +452,15 @@ pub fn analyze_win32_bundle_with(
                      excluded from reduction"
                 )
             });
-        coverage_entries.push(artifact_coverage(input, source_kind, detail));
+        let mut entry = artifact_coverage(input, source_kind, detail);
+        if capped_by_analyzer {
+            entry.status = IntuneArtifactStatus::Capped;
+            entry.detail = Some(format!(
+                "record count exceeded the analyzer bound of {MAX_RECORDS_PER_ARTIFACT}; \
+                 records past the bound were not read"
+            ));
+        }
+        coverage_entries.push(entry);
 
         // An artifact only satisfies the expected-artifact check when it is
         // usable evidence of its kind: readable content whose records confirmed
@@ -488,7 +522,8 @@ pub fn analyze_win32_bundle_with(
                 source_kind,
                 access_state: input.access_state.clone(),
                 captured_at_utc: input.captured_at_utc.clone().unwrap_or_default(),
-                record_number: (record_index + 1) as u32,
+                record_number: u32::try_from(record_index + 1)
+                    .expect("record index is bounded by MAX_RECORDS_PER_ARTIFACT"),
                 line_number: line.line_number,
                 thread: line.thread,
                 timestamp: build_timestamp(line),
@@ -916,10 +951,24 @@ fn reduce_transaction(
             )
         };
 
+    // An entry scoped to this transaction's deployment type wins; an entry
+    // without one applies app-wide. An entry for a *different* deployment type
+    // of the same app must never label this transaction.
     let metadata = options
         .metadata
         .iter()
-        .find(|entry| entry.app_id == key.app_id);
+        .filter(|entry| entry.app_id == key.app_id)
+        .find(|entry| {
+            entry.deployment_type_id.is_some()
+                && entry.deployment_type_id == key.deployment_type_id
+        })
+        .or_else(|| {
+            options
+                .metadata
+                .iter()
+                .filter(|entry| entry.app_id == key.app_id)
+                .find(|entry| entry.deployment_type_id.is_none())
+        });
 
     // Only a deployment type some record *stated* — itself or through its own
     // execution block — counts toward confidence. One reconcile_partial_keys
@@ -1152,7 +1201,7 @@ fn apply_installer_completion(
         return;
     };
 
-    let kind = classify_return_code(&key.app_id, &code, &options.return_codes);
+    let kind = classify_return_code(key, &code, &options.return_codes);
     fold.return_code = Some(code);
     fold.return_code_kind = Some(kind);
 
@@ -1192,6 +1241,16 @@ fn apply_installer_completion(
 ///
 /// `deployment_type_observed` is true only when a record stated the deployment
 /// type; a key completed by inference is deliberately excluded (ADR-001).
+///
+/// Capped artifacts: a complete framed record inside a truncated artifact is
+/// authentic evidence — truncation removes records, it does not corrupt the
+/// ones that framed, and fragments are excluded at framing time. A capped
+/// artifact may therefore still prove a terminal outcome, including
+/// `Succeeded`. What it can never do is prove one at High confidence: the
+/// missing tail is a coverage gap, `degraded_coverage` is true whenever any
+/// artifact is capped, and the demotion below applies (ADR-001: coverage gaps
+/// cannot raise confidence; non-assessable evidence is a different case and
+/// never reaches a terminal outcome at all).
 fn confidence_for(
     outcome: Win32Outcome,
     deployment_type_observed: bool,
@@ -1375,6 +1434,7 @@ mod tests {
         let options = Win32AnalysisOptions {
             return_codes: vec![Win32ReturnCodeMapping {
                 app_id: APP.to_owned(),
+                deployment_type_id: None,
                 code: 1603,
                 kind: Win32ReturnCodeKind::Success,
             }],
@@ -1663,6 +1723,81 @@ mod tests {
             .artifacts
             .iter()
             .any(|entry| entry.artifact_id == "expected:AppWorkload.log"));
+    }
+
+    #[test]
+    fn a_capped_artifact_proves_a_terminal_outcome_only_at_demoted_confidence() {
+        // Decision (ADR-001, documented at confidence_for): framed records in
+        // a truncated artifact are authentic evidence, so the terminal outcome
+        // stands -- but the missing tail is a coverage gap, so High is
+        // unreachable.
+        let mut capped = workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+        ]);
+        capped.access_state = IntuneAccessState::Capped;
+        let analysis = analyze_win32_bundle(&[
+            capped,
+            confirmed_filler("ime", "IntuneManagementExtension.log"),
+            confirmed_filler("aap", "AppActionProcessor.log"),
+        ]);
+
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
+        assert_eq!(
+            transaction.confidence,
+            Win32Confidence::Medium,
+            "a capped artifact must cap confidence below High"
+        );
+    }
+
+    #[test]
+    fn a_deployment_type_scoped_return_code_entry_wins_over_an_app_wide_one() {
+        let options = Win32AnalysisOptions {
+            return_codes: vec![
+                Win32ReturnCodeMapping {
+                    app_id: APP.to_owned(),
+                    deployment_type_id: None,
+                    code: 7,
+                    kind: Win32ReturnCodeKind::Failed,
+                },
+                Win32ReturnCodeMapping {
+                    app_id: APP.to_owned(),
+                    deployment_type_id: Some(DT.to_owned()),
+                    code: 7,
+                    kind: Win32ReturnCodeKind::Success,
+                },
+            ],
+            ..Win32AnalysisOptions::default()
+        };
+        let analysis = analyze_win32_bundle_with(
+            &[workload(&[
+                record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+                record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 7")),
+            ])],
+            &options,
+        );
+        assert_eq!(only_transaction(&analysis).outcome, Win32Outcome::Succeeded);
+    }
+
+    #[test]
+    fn metadata_scoped_to_another_deployment_type_never_labels_this_one() {
+        let options = Win32AnalysisOptions {
+            metadata: vec![Win32AppMetadata {
+                app_id: APP.to_owned(),
+                display_name: Some("Other deployment type".to_owned()),
+                deployment_type_id: Some(OTHER.to_owned()),
+                ..Win32AppMetadata::default()
+            }],
+            ..Win32AnalysisOptions::default()
+        };
+        let analysis = analyze_win32_bundle_with(
+            &[workload(&[record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            ))])],
+            &options,
+        );
+        assert_eq!(only_transaction(&analysis).display_name, None);
     }
 
     #[test]

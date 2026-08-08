@@ -35,7 +35,7 @@
   ],
   "findings": [
     {
-      "findingId": "win32-installer-reported-failure:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "findingId": "win32-installer-reported-failure:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
       "severity": "error",
       "evidence": [
         {
@@ -46,7 +46,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "win32-unmapped-return-code:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "findingId": "win32-unmapped-return-code:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
       "severity": "warning",
       "confidence": "medium",
       "evidence": [

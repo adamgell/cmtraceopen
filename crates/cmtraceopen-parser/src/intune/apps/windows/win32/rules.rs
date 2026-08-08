@@ -19,7 +19,8 @@ use crate::intune::evidence::{
 };
 
 use super::models::{
-    Win32Analysis, Win32Outcome, Win32Phase, Win32ReturnCodeKind, Win32Signal, Win32Transaction,
+    Win32Analysis, Win32ExecutionContext, Win32Outcome, Win32Phase, Win32ReturnCodeKind,
+    Win32Signal, Win32Transaction,
 };
 
 /// Derive stable, read-only diagnostic findings from a reduced snapshot.
@@ -70,9 +71,22 @@ fn label(transaction: &Win32Transaction) -> String {
         .unwrap_or_else(|| transaction.key.app_id.clone())
 }
 
+/// A transaction-scoped finding id: the static kebab-case rule name, then the
+/// full transaction key.
+///
+/// The key includes the execution context because System and User deployments
+/// of the same app and deployment type are distinct transactions; omitting it
+/// collided their findings. The rule segment stays static kebab-case like the
+/// family's coverage ids (`win32-coverage-missing-artifact`), and every key
+/// segment is lowercase, so the whole id is one consistent grammar.
 fn finding_id(rule: &str, transaction: &Win32Transaction) -> String {
+    let context = match transaction.key.execution_context {
+        Win32ExecutionContext::System => "system",
+        Win32ExecutionContext::User => "user",
+        Win32ExecutionContext::Unknown => "unknown",
+    };
     format!(
-        "win32-{rule}:{}:{}",
+        "win32-{rule}:{}:{}:{context}",
         transaction.key.app_id,
         transaction
             .key
@@ -253,14 +267,14 @@ fn push_unknown_vocabulary(snapshot: &Win32Analysis, findings: &mut Vec<IntuneFi
     if !snapshot.coverage.unknown_vocabulary_observed {
         return;
     }
+    // Cite exactly the records that raised the flag. Citing every unclassified
+    // record dragged unrelated lines (another workload's PowerShell noise, an
+    // idle heartbeat) into the finding as if they evidenced an unknown
+    // enforcement grammar.
     let evidence = snapshot
         .observations
         .iter()
-        .filter(|observation| {
-            observation.signal == Win32Signal::Unclassified
-                || (observation.signal == Win32Signal::InstallerCompleted
-                    && observation.error_code.is_none())
-        })
+        .filter(|observation| observation.enforcement_shaped_but_unmatched)
         .map(|observation| observation.context.evidence_ref.clone())
         .collect::<Vec<_>>();
     push(
@@ -965,8 +979,8 @@ mod tests {
             .into_iter()
             .map(|candidate| candidate.finding_id)
             .collect();
-        assert!(ids.contains(&format!("win32-installer-reported-failure:{APP}:{DT}")));
-        assert!(ids.contains(&format!("win32-unmapped-return-code:{APP}:{DT}")));
+        assert!(ids.contains(&format!("win32-installer-reported-failure:{APP}:{DT}:unknown")));
+        assert!(ids.contains(&format!("win32-unmapped-return-code:{APP}:{DT}:unknown")));
     }
 
     #[test]
@@ -982,7 +996,7 @@ mod tests {
         let findings = derive_findings(&snapshot);
         let success = findings
             .iter()
-            .find(|candidate| candidate.finding_id == format!("win32-succeeded:{APP}:{DT}"))
+            .find(|candidate| candidate.finding_id == format!("win32-succeeded:{APP}:{DT}:unknown"))
             .expect("a successful deployment must be reported");
         assert!(success
             .summary

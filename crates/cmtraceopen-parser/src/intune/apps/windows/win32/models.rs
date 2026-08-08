@@ -163,10 +163,17 @@ pub enum Win32ReturnCodeKind {
 /// Intune lets an administrator remap return codes per deployment type, so a
 /// code that means failure on one app can mean success on another. Callers pass
 /// the app's configured table; without one the documented defaults apply.
+///
+/// `deployment_type_id` scopes an entry to one deployment type of the app, the
+/// same granularity Intune configures the table at. An entry without one
+/// applies to every deployment type of the app; an exact deployment-type match
+/// always wins over an app-wide entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Win32ReturnCodeMapping {
     pub app_id: String,
+    #[serde(default)]
+    pub deployment_type_id: Option<String>,
     pub code: i64,
     pub kind: Win32ReturnCodeKind,
 }
@@ -206,6 +213,12 @@ pub struct Win32Observation {
     pub intent: Win32Intent,
     /// A return/exit/error token exactly as the record wrote it.
     pub error_code: Option<IntuneErrorCode>,
+    /// True when the record looked like Win32 enforcement but matched no rule,
+    /// or matched a completion whose code could not be read. These are the
+    /// records the unknown-vocabulary coverage flag is built from, carried per
+    /// observation so a finding can cite exactly them.
+    #[serde(default)]
+    pub enforcement_shaped_but_unmatched: bool,
     /// Fields retained without interpretation, so typing one later is a widening
     /// change rather than a re-parse.
     pub attributes: Vec<IntuneNamedValue>,
@@ -398,9 +411,10 @@ pub struct Win32Coverage {
 ///
 /// This is an immutable snapshot: [`super::derive_findings`] reads it and
 /// returns findings, and never mutates it.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Win32Analysis {
+    #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     pub transactions: Vec<Win32Transaction>,
     pub observations: Vec<Win32Observation>,
@@ -408,6 +422,25 @@ pub struct Win32Analysis {
     /// transaction; they are surfaced so the gap stays visible.
     pub unkeyed_observations: Vec<String>,
     pub coverage: Win32Coverage,
+}
+
+fn default_schema_version() -> u32 {
+    WIN32_SCHEMA_VERSION
+}
+
+impl Default for Win32Analysis {
+    /// An empty analysis still carries the current schema version: a
+    /// `Default`-built value with `schema_version: 0` would deserialize-round-
+    /// trip as an invalid, never-emitted version.
+    fn default() -> Self {
+        Self {
+            schema_version: WIN32_SCHEMA_VERSION,
+            transactions: Vec::new(),
+            observations: Vec::new(),
+            unkeyed_observations: Vec::new(),
+            coverage: Win32Coverage::default(),
+        }
+    }
 }
 
 impl Win32Analysis {

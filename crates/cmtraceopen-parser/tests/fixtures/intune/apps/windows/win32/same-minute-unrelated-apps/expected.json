@@ -52,7 +52,7 @@
   "disjointObservations": true,
   "findings": [
     {
-      "findingId": "win32-succeeded:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "findingId": "win32-succeeded:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
       "severity": "info",
       "evidence": [
         {
@@ -63,7 +63,7 @@
       "coverageGapIds": []
     },
     {
-      "findingId": "win32-installer-reported-failure:22222222-3333-4444-8555-666666666666:bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+      "findingId": "win32-installer-reported-failure:22222222-3333-4444-8555-666666666666:bbbbbbbb-cccc-4ddd-8eee-ffffffffffff:unknown",
       "severity": "error",
       "evidence": [
         {
