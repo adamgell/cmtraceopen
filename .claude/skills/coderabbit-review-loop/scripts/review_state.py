@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch thread-aware PR review state and summarize Copilot review cycles."""
+"""Fetch thread-aware PR review state and summarize CodeRabbit review cycles."""
 
 from __future__ import annotations
 
@@ -125,35 +125,45 @@ def fetch(owner: str, repo: str, number: int) -> dict[str, Any]:
     assert metadata is not None
     reviews = list({review["id"]: review for review in reviews}.values())
     threads = list({thread["id"]: thread for thread in threads}.values())
-    copilot_reviews = [
+    coderabbit_reviews = [
         review for review in reviews
-        if is_copilot(review.get("author")) and review.get("submittedAt") is not None
+        if is_coderabbit(review.get("author")) and review.get("submittedAt") is not None
     ]
-    copilot_reviews.sort(key=lambda review: review.get("submittedAt") or "")
+    coderabbit_reviews.sort(key=lambda review: review.get("submittedAt") or "")
     unresolved = [thread for thread in threads if not thread["isResolved"]]
-    unresolved_copilot = [thread for thread in unresolved if thread_has_copilot(thread)]
+    unresolved_coderabbit = [
+        thread for thread in unresolved if thread_has_coderabbit(thread)
+    ]
+    latest = coderabbit_reviews[-1] if coderabbit_reviews else None
+    approved_at_head = bool(
+        latest
+        and latest.get("state") == "APPROVED"
+        and (latest.get("commit") or {}).get("oid") == metadata["head_sha"]
+    )
 
     return {
         "pull_request": metadata,
         "summary": {
             "review_count": len(reviews),
-            "copilot_review_count": len(copilot_reviews),
+            "coderabbit_review_count": len(coderabbit_reviews),
             "unresolved_thread_count": len(unresolved),
-            "unresolved_copilot_thread_count": len(unresolved_copilot),
-            "latest_copilot_review": copilot_reviews[-1] if copilot_reviews else None,
+            "unresolved_coderabbit_thread_count": len(unresolved_coderabbit),
+            "latest_coderabbit_review": latest,
+            "latest_coderabbit_review_state": latest.get("state") if latest else None,
+            "approved_at_head": approved_at_head,
         },
         "unresolved_threads": unresolved,
         "reviews": reviews,
     }
 
 
-def is_copilot(author: dict[str, Any] | None) -> bool:
-    return "copilot" in (author or {}).get("login", "").lower()
+def is_coderabbit(author: dict[str, Any] | None) -> bool:
+    return "coderabbit" in (author or {}).get("login", "").lower()
 
 
-def thread_has_copilot(thread: dict[str, Any]) -> bool:
+def thread_has_coderabbit(thread: dict[str, Any]) -> bool:
     return any(
-        is_copilot(comment.get("author"))
+        is_coderabbit(comment.get("author"))
         for comment in thread["comments"]["nodes"]
     )
 

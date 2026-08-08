@@ -35,12 +35,14 @@ UPSTREAM_LICENSE_DECLARATION = (
 )
 REPOSITORY_LEVEL_CHANGES = (
     "SKILL.md uses a repository-relative invocation and an explicit --repo/--pr "
-    "example; the reviewer-request command is formatted on one line; downstream "
-    "regression tests cover the maintained script."
+    "example; on 2026-08-08 the skill was retargeted from GitHub Copilot to "
+    "CodeRabbit with an approval-at-head clean-cycle gate and an explicit "
+    "no-merge terminus; downstream regression tests cover the maintained script."
 )
 SCRIPT_CHANGES = (
     "base-repository URL parsing and pending-review filtering, including prefixed "
-    "enterprise pull-request URLs."
+    "enterprise pull-request URLs; reviewer targeting retargeted to coderabbitai "
+    "with approval-at-head summary fields."
 )
 MIT_LICENSE_SECTIONS = (
     "MIT License\n",
@@ -109,14 +111,14 @@ class CurrentPullRequestTests(unittest.TestCase):
         self.assertEqual(current, ("base-owner", "base-repo", 42))
 
 
-class CopilotReviewSummaryTests(unittest.TestCase):
-    def test_pending_copilot_review_does_not_count_as_submitted(self) -> None:
+class CodeRabbitReviewSummaryTests(unittest.TestCase):
+    def test_pending_coderabbit_review_does_not_count_as_submitted(self) -> None:
         pending = {
             "id": "pending",
             "state": "PENDING",
             "body": "",
             "submittedAt": None,
-            "author": {"login": "copilot-pull-request-reviewer"},
+            "author": {"login": "coderabbitai"},
             "commit": None,
         }
 
@@ -127,16 +129,18 @@ class CopilotReviewSummaryTests(unittest.TestCase):
         ):
             summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
 
-        self.assertEqual(summary["copilot_review_count"], 0)
-        self.assertIsNone(summary["latest_copilot_review"])
+        self.assertEqual(summary["coderabbit_review_count"], 0)
+        self.assertIsNone(summary["latest_coderabbit_review"])
+        self.assertIsNone(summary["latest_coderabbit_review_state"])
+        self.assertFalse(summary["approved_at_head"])
 
-    def test_latest_copilot_review_ignores_pending_review(self) -> None:
+    def test_latest_coderabbit_review_ignores_pending_review(self) -> None:
         submitted = {
             "id": "submitted",
-            "state": "COMMENTED",
+            "state": "CHANGES_REQUESTED",
             "body": "Review complete",
-            "submittedAt": "2026-08-01T12:00:00Z",
-            "author": {"login": "copilot-pull-request-reviewer"},
+            "submittedAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "coderabbitai"},
             "commit": {"oid": "b" * 40},
         }
         pending = {
@@ -144,7 +148,7 @@ class CopilotReviewSummaryTests(unittest.TestCase):
             "state": "PENDING",
             "body": "",
             "submittedAt": None,
-            "author": {"login": "copilot-pull-request-reviewer"},
+            "author": {"login": "coderabbitai"},
             "commit": None,
         }
 
@@ -156,11 +160,55 @@ class CopilotReviewSummaryTests(unittest.TestCase):
             result = review_state.fetch("base-owner", "base-repo", 42)
 
         self.assertEqual(result["summary"]["review_count"], 2)
-        self.assertEqual(result["summary"]["copilot_review_count"], 1)
+        self.assertEqual(result["summary"]["coderabbit_review_count"], 1)
         self.assertEqual(
-            result["summary"]["latest_copilot_review"],
+            result["summary"]["latest_coderabbit_review"],
             submitted,
         )
+        self.assertEqual(
+            result["summary"]["latest_coderabbit_review_state"],
+            "CHANGES_REQUESTED",
+        )
+        self.assertFalse(result["summary"]["approved_at_head"])
+
+    def test_approved_at_head_requires_head_anchor(self) -> None:
+        stale_approval = {
+            "id": "stale",
+            "state": "APPROVED",
+            "body": "lgtm",
+            "submittedAt": "2026-08-08T12:00:00Z",
+            "author": {"login": "coderabbitai"},
+            "commit": {"oid": "b" * 40},
+        }
+
+        with patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response([stale_approval]),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertEqual(summary["latest_coderabbit_review_state"], "APPROVED")
+        self.assertFalse(summary["approved_at_head"])
+
+    def test_approved_at_head_true_when_anchored_to_head(self) -> None:
+        head_approval = {
+            "id": "head",
+            "state": "APPROVED",
+            "body": "lgtm",
+            "submittedAt": "2026-08-08T13:00:00Z",
+            "author": {"login": "coderabbitai"},
+            "commit": {"oid": "a" * 40},
+        }
+
+        with patch.object(
+            review_state,
+            "run_json",
+            return_value=graphql_response([head_approval]),
+        ):
+            summary = review_state.fetch("base-owner", "base-repo", 42)["summary"]
+
+        self.assertTrue(summary["approved_at_head"])
 
 
 class ProvenanceTests(unittest.TestCase):
@@ -169,7 +217,7 @@ class ProvenanceTests(unittest.TestCase):
         skill_text = SKILL_PATH.read_text(encoding="utf-8")
         license_text = LICENSE_PATH.read_text(encoding="utf-8")
 
-        license_marker = "Third-party attribution for gh-copilot-review-loop\n"
+        license_marker = "Third-party attribution for coderabbit-review-loop\n"
         skill_marker = "## Provenance\n"
         self.assertIn(license_marker, license_text)
         self.assertIn(skill_marker, skill_text)
