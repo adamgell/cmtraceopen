@@ -243,6 +243,7 @@ fn collect_from_fact(fact: &StorePackageFact, observations: &mut Vec<StoreObserv
         action: StoreDeploymentAction::Unknown,
         installer_family: fact.installer_family,
         family_declared: fact.installer_family != StoreInstallerFamily::Unknown,
+        typed_intent: None,
         error: None,
         unknown_version: false,
         recognized: true,
@@ -275,33 +276,22 @@ fn collect_from_assignment(assignment: &StoreAssignment, observations: &mut Vec<
         },
         installer_family: StoreInstallerFamily::Unknown,
         family_declared: false,
+        // The typed field is the only authority for intent. Caller-supplied
+        // named_data on this or any other observation stays visible as raw
+        // metadata but can never state or override an intent (ADR-001).
+        typed_intent: Some(assignment.intent),
         error: None,
         unknown_version: false,
         recognized: true,
     };
-    let mut named_data = assignment.named_data.clone();
-    named_data.push(IntuneNamedValue {
-        name: "IntuneIntent".to_owned(),
-        value: intent_wire(assignment.intent).to_owned(),
-    });
     push_observation(
         observations,
         assignment.context.clone(),
         StoreEvidenceOrigin::IntuneAssignment,
         classification,
         None,
-        named_data,
+        assignment.named_data.clone(),
     );
-}
-
-fn intent_wire(intent: StoreAssignmentIntent) -> &'static str {
-    match intent {
-        StoreAssignmentIntent::Required => "required",
-        StoreAssignmentIntent::Available => "available",
-        StoreAssignmentIntent::Uninstall => "uninstall",
-        StoreAssignmentIntent::NotTargeted => "notTargeted",
-        StoreAssignmentIntent::Unknown => "unknown",
-    }
 }
 
 fn collect_from_installer_outcome(
@@ -323,6 +313,7 @@ fn collect_from_installer_outcome(
         // package; that is what makes it installer-native.
         installer_family: StoreInstallerFamily::StoreWin32,
         family_declared: true,
+        typed_intent: None,
         error: outcome.exit_code.clone(),
         unknown_version: false,
         recognized: true,
@@ -386,6 +377,7 @@ fn push_observation(
         app_id: classification.app_id,
         execution_context: classification.execution_context,
         action: classification.action,
+        typed_intent: classification.typed_intent,
         error: classification.error,
         unknown_version: classification.unknown_version,
         named_data,
@@ -603,6 +595,7 @@ fn reduce_group(
     let mut family_basis = StoreFamilyBasis::Unvalidated;
     let mut action = StoreDeploymentAction::Unknown;
     let mut intent = StoreAssignmentIntent::Unknown;
+    let mut intent_conflict = false;
     let mut last_confirmed_phase: Option<StorePhase> = None;
     let mut state = StoreTransactionState::InsufficientEvidence;
     let mut error: Option<IntuneErrorCode> = None;
@@ -634,18 +627,21 @@ fn reduce_group(
         if action == StoreDeploymentAction::Unknown {
             action = observation.action;
         }
-        if let Some(value) = observation
-            .named_data
-            .iter()
-            .find(|entry| entry.name == "IntuneIntent")
-        {
-            intent = match value.value.as_str() {
-                "required" => StoreAssignmentIntent::Required,
-                "available" => StoreAssignmentIntent::Available,
-                "uninstall" => StoreAssignmentIntent::Uninstall,
-                "notTargeted" => StoreAssignmentIntent::NotTargeted,
-                _ => StoreAssignmentIntent::Unknown,
-            };
+        // Typed assignment intent is authoritative (ADR-001). It is read only
+        // from the typed field a real assignment carried; a caller-writable
+        // `named_data` pair on a package or installer observation is raw
+        // metadata and can never state or override an intent. Two typed
+        // assignments stating different intents are an unresolved contradiction
+        // and stay `Unknown` rather than letting input order pick a winner.
+        if let Some(typed) = observation.typed_intent {
+            if typed != StoreAssignmentIntent::Unknown {
+                if intent == StoreAssignmentIntent::Unknown && !intent_conflict {
+                    intent = typed;
+                } else if intent != typed {
+                    intent = StoreAssignmentIntent::Unknown;
+                    intent_conflict = true;
+                }
+            }
         }
 
         has_intune_intent |= observation.origin.is_intune_intent();

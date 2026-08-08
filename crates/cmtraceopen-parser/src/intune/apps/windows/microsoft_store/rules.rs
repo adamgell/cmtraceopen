@@ -20,8 +20,8 @@ use crate::intune::evidence::{IntuneErrorCode, IntuneNamedValue};
 use crate::intune::normalized::{NormalizedEventLevel, NormalizedWindowsEvent};
 
 use super::models::{
-    StoreDeploymentAction, StoreExecutionContext, StoreInstallerFamily, StorePackageIdentity,
-    StoreSignal,
+    StoreAssignmentIntent, StoreDeploymentAction, StoreExecutionContext, StoreInstallerFamily,
+    StorePackageIdentity, StoreSignal,
 };
 use super::sources::{classify_event_source, StoreEventSource};
 
@@ -205,6 +205,10 @@ pub struct StoreClassification {
     pub installer_family: StoreInstallerFamily,
     /// True when the record stated the family rather than leaving it open.
     pub family_declared: bool,
+    /// Intune's typed assignment intent, present only when the record *is* a
+    /// typed assignment. Free-text or caller-writable metadata never sets it:
+    /// per ADR-001, untyped data is not authoritative intent.
+    pub typed_intent: Option<StoreAssignmentIntent>,
     pub error: Option<IntuneErrorCode>,
     /// True when a recognized provider emitted an event id or schema version
     /// this build has no rule for.
@@ -227,6 +231,7 @@ impl Default for StoreClassification {
             action: StoreDeploymentAction::Unknown,
             installer_family: StoreInstallerFamily::Unknown,
             family_declared: false,
+            typed_intent: None,
             error: None,
             unknown_version: false,
             recognized: true,
