@@ -414,7 +414,6 @@ pub struct Win32Coverage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Win32Analysis {
-    #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     pub transactions: Vec<Win32Transaction>,
     pub observations: Vec<Win32Observation>,
@@ -422,10 +421,6 @@ pub struct Win32Analysis {
     /// transaction; they are surfaced so the gap stays visible.
     pub unkeyed_observations: Vec<String>,
     pub coverage: Win32Coverage,
-}
-
-fn default_schema_version() -> u32 {
-    WIN32_SCHEMA_VERSION
 }
 
 impl Default for Win32Analysis {
