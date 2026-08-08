@@ -1,0 +1,20 @@
+{"_comment": "SYNTHETIC FIXTURE: one ESP session sharing only the Entra device id",
+  "autopilotDocument": "autopilot.espSession",
+  "documentVersion": 1,
+  "sessions": [
+    {
+      "sessionId": "esp-session-0002",
+      "enrollmentId": null,
+      "correlationId": null,
+      "activityId": null,
+      "entraDeviceId": "abcdabcd-1234-5678-9012-abcdabcdabcd",
+      "managedDeviceId": null,
+      "startedAtUtc": "2026-07-31T09:00:20Z",
+      "phase": "deviceSetup",
+      "evidence": {
+        "evidenceId": "esp-s1",
+        "sourceArtifactId": "esp-session-facts"
+      }
+    }
+  ]
+}

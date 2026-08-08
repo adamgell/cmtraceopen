@@ -57,6 +57,7 @@ pub struct NormalizedWindowsEvent {
     pub keywords: Option<String>,
     pub record_id: Option<u64>,
     pub activity_id: Option<String>,
+    pub event_version: Option<u32>,
     pub named_data: Vec<IntuneNamedValue>,
     pub message: Option<String>,
 }
@@ -153,6 +154,7 @@ mod tests {
             keywords: None,
             record_id: Some(7),
             activity_id: None,
+            event_version: None,
             named_data: vec![IntuneNamedValue {
                 name: "NodeUri".to_owned(),
                 value: "./Device/Vendor/MSFT/Policy".to_owned(),

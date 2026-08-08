@@ -797,6 +797,7 @@ mod tests {
             keywords: None,
             record_id: None,
             activity_id: None,
+            event_version: None,
             named_data: vec![
                 crate::intune::evidence::IntuneNamedValue {
                     name: "SettingUri".to_owned(),

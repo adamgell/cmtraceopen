@@ -575,6 +575,7 @@ mod tests {
             keywords: None,
             record_id: Some(1),
             activity_id: None,
+            event_version: None,
             named_data: named_data
                 .iter()
                 .map(|(name, value)| IntuneNamedValue {

@@ -1,0 +1,313 @@
+{"_comment": "SYNTHETIC FIXTURE: user-driven Autopilot channel, happy path",
+  "autopilotDocument": "autopilot.events",
+  "documentVersion": 1,
+  "events": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e1",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 160,
+            "recordId": 1
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:01Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:01Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 160,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 1,
+      "activityId": null,
+      "namedData": [],
+      "message": "AutopilotRetrieveSettings beginning acquisition."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e2",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 2,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 164,
+            "recordId": 2
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:02Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:02Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 164,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 2,
+      "activityId": null,
+      "namedData": [],
+      "message": "AutopilotManager determined Internet is available to attempt policy download."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e3",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 3,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 161,
+            "recordId": 3
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:09Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:09Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 161,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 3,
+      "activityId": null,
+      "namedData": [
+        {
+          "name": "profileId",
+          "value": "11111111-2222-3333-4444-555555555555"
+        },
+        {
+          "name": "profileName",
+          "value": "Synthetic User-Driven"
+        },
+        {
+          "name": "deploymentProfileType",
+          "value": "userDriven"
+        }
+      ],
+      "message": "AutopilotManager retrieve settings succeeded."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e4",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 4,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 111,
+            "recordId": 4
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:10Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:10Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 111,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 4,
+      "activityId": null,
+      "namedData": [],
+      "message": "AutopilotRetrieveSettings succeeded."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e5",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 5,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 153,
+            "recordId": 5
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:11Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:11Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 153,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 5,
+      "activityId": null,
+      "namedData": [],
+      "message": "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e6",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 6,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 109,
+            "recordId": 6
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:12Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:12Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 109,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 6,
+      "activityId": null,
+      "namedData": [],
+      "message": "AutopilotGetOobeSettingsOverride succeeded: OOBE setting = AUTOPILOT_OOBE_SETTINGS_AAD_JOIN_ONLY; state = enabled."
+    },
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ap-e7",
+          "sourceArtifactId": "autopilot-channel"
+        },
+        "provenance": {
+          "sourceKind": "eventLog",
+          "sourceArtifactId": "autopilot-channel",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 7,
+          "registry": null,
+          "event": {
+            "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+            "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+            "eventId": 103,
+            "recordId": 7
+          }
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:00:13Z",
+          "originalOffset": "+00:00",
+          "normalizedUtc": "2026-07-31T09:00:13Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T09:30:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "channel": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider/Autopilot",
+      "provider": "Microsoft-Windows-ModernDeployment-Diagnostics-Provider",
+      "eventId": 103,
+      "level": "information",
+      "task": null,
+      "keywords": null,
+      "recordId": 7,
+      "activityId": null,
+      "namedData": [],
+      "message": "AutopilotGetPolicyStringByName succeeded: policy name = CloudAssignedTenantDomain; policy value = contoso.example."
+    }
+  ]
+}
