@@ -245,6 +245,22 @@ jobs:
       - name: Test ESP parser contracts
         run: cargo test --locked -p cmtraceopen-parser --test esp_diagnostics
 
+      # TEMPORARY probe: dump the import table of main's app_lib unit-test exe
+      # for comparison against the PR #460 branch's failing exe (issue #523).
+      - name: Dump app_lib imports (probe)
+        shell: pwsh
+        run: |
+          cargo test --locked -p cmtrace-open --all-features --no-run
+          $exe = Get-ChildItem src-tauri/target/debug/deps/app_lib-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          Write-Host "=== exe: $($exe.FullName) $($exe.Length) bytes ==="
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -find "**\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          & $dumpbin /imports $exe.FullName
+          Write-Host "=== direct launch attempt ==="
+          & $exe.FullName --list *> launch-output.txt; $code = $LASTEXITCODE
+          Write-Host "exit code: $code"
+          exit 0
+
       - name: Test native ESP diagnostics
         run: cargo test --locked -p cmtrace-open --all-features --test esp_diagnostics_sources
 
