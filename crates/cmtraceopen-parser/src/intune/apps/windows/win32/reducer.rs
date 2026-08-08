@@ -843,6 +843,10 @@ struct Fold {
     last_confirmed_phase: Option<Win32Phase>,
     unresolved_dependencies: BTreeSet<String>,
     failed_requirements: BTreeSet<String>,
+    /// `DetectionNotSatisfied` records that explicit linkage could place
+    /// neither before nor after enforcement; see
+    /// [`Win32Transaction::unlinked_detection_observations`].
+    unlinked_detection_observations: Vec<String>,
     unknown_vocabulary: bool,
     intent: Win32Intent,
     content_version: Option<String>,
@@ -857,6 +861,7 @@ impl Fold {
             last_confirmed_phase: None,
             unresolved_dependencies: BTreeSet::new(),
             failed_requirements: BTreeSet::new(),
+            unlinked_detection_observations: Vec::new(),
             unknown_vocabulary: false,
             intent: Win32Intent::Unknown,
             content_version: None,
@@ -1310,7 +1315,15 @@ fn reduce_transaction(
             .iter()
             .map(|&index| records[index].evidence())
             .collect(),
-        next_evidence_request: next_evidence_request(resolution.outcome),
+        next_evidence_request: next_evidence_request(
+            resolution.outcome,
+            !fold.unlinked_detection_observations.is_empty(),
+        ),
+        unlinked_detection_observations: {
+            let mut observations = fold.unlinked_detection_observations;
+            observations.sort();
+            observations
+        },
         key,
     }
 }
@@ -1473,7 +1486,22 @@ fn apply_record(
                 .all(|enforcement| sequenced_after(enforcement, &point))
             {
                 fold.advance(Win32Phase::PreEnforcementDetection);
+            } else if !linkage
+                .enforcement
+                .iter()
+                .any(|enforcement| sequenced_after(&point, enforcement))
+            {
+                // Provably neither before nor after enforcement: the verdict
+                // cannot mint InstalledNotDetected without proof (ADR-003),
+                // but a clean Succeeded must not silently swallow it either.
+                // The record is surfaced on the transaction so the finding
+                // and the next-evidence request can name it.
+                fold.unlinked_detection_observations
+                    .push(record.observation_id());
             }
+            // Otherwise: explicitly ordered after some (non-success)
+            // enforcement record. That placement is consistent with the
+            // enforcement result and claims nothing on its own.
         }
         Win32Signal::ContentUnavailable => {
             fold.push_terminal(record, Win32Outcome::ContentUnavailable, None);
@@ -1611,7 +1639,12 @@ fn confidence_for(
 }
 
 /// The smallest artifact that would advance this diagnosis.
-fn next_evidence_request(outcome: Win32Outcome) -> Option<String> {
+///
+/// Keyed on more than the outcome alone: a settled outcome that coexists with
+/// an unplaceable `DetectionNotSatisfied` record (`unlinked_detection`) still
+/// has an open question, and the request names the linkage evidence — trusted
+/// timestamps or a shared journal — that would place the verdict.
+fn next_evidence_request(outcome: Win32Outcome, unlinked_detection: bool) -> Option<String> {
     let request = match outcome {
         Win32Outcome::InsufficientEvidence => {
             "AppWorkload.log and IntuneManagementExtension.log covering this app's check-in"
@@ -1645,7 +1678,17 @@ fn next_evidence_request(outcome: Win32Outcome) -> Option<String> {
         Win32Outcome::NotTargeted
         | Win32Outcome::NotApplicable
         | Win32Outcome::DetectedBeforeEnforcement
-        | Win32Outcome::Succeeded => return None,
+        | Win32Outcome::Succeeded => {
+            if unlinked_detection {
+                return Some(
+                    "a capture whose records carry their own UTC offsets, or a single \
+                     AppWorkload.log/AppActionProcessor.log journal, so the Not Detected \
+                     record can be ordered against enforcement"
+                        .to_owned(),
+                );
+            }
+            return None;
+        }
     };
     Some(request.to_owned())
 }
@@ -2594,6 +2637,74 @@ mod tests {
             transaction.reboot_required,
             "the reboot flag is derived from the winning 3010 candidate"
         );
+    }
+
+    #[test]
+    fn an_unplaceable_not_detected_record_is_surfaced_instead_of_a_silent_succeeded() {
+        // The detection artifact's records cannot be sequenced against the
+        // offset-less enforcement records, so the Not-Detected verdict can
+        // neither confirm nor contradict the exit-0 completion. The outcome
+        // stays Succeeded — InstalledNotDetected is never minted without
+        // proof — but the transaction must carry the unplaced record and ask
+        // for the linkage evidence that would resolve it.
+        let enforcement = workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Install command line: setup.exe /quiet for app with id: {APP}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+        ]);
+        let detection = Win32SourceInput::captured(
+            "aap",
+            "AppActionProcessor.log",
+            record(&format!(
+                "[Win32App] Detection state for app with id: {APP} = Not Detected"
+            )),
+        );
+
+        let analysis = analyze_win32_bundle(&[enforcement, detection]);
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
+        assert_eq!(
+            transaction.unlinked_detection_observations,
+            vec!["aap:1".to_owned()],
+            "the unplaceable Not-Detected record must stay visible"
+        );
+        assert!(
+            transaction.next_evidence_request.is_some(),
+            "a success contradicted by unplaceable evidence must name what would resolve it"
+        );
+
+        let findings = super::super::findings::derive_findings(&analysis);
+        assert!(
+            findings.iter().any(|finding| {
+                finding.finding_id
+                    == format!("win32-unlinked-detection-failure:{APP}:{DT}:unknown")
+                    && finding
+                        .evidence
+                        .iter()
+                        .any(|reference| reference.evidence_id == "aap:1")
+            }),
+            "the unlinked-detection finding must fire and cite the record: {:?}",
+            findings
+                .iter()
+                .map(|finding| finding.finding_id.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_provably_placed_not_detected_record_is_not_flagged_as_unlinked() {
+        // Same artifact, so the journal's own record order places the
+        // detection before enforcement: nothing is unlinked and a clean
+        // success asks for nothing further.
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Detection state for app with id: {APP} = Not Detected")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+        ])]);
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
+        assert!(transaction.unlinked_detection_observations.is_empty());
+        assert_eq!(transaction.next_evidence_request, None);
     }
 
     #[test]

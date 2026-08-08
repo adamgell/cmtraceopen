@@ -46,6 +46,7 @@ pub fn derive_findings(snapshot: &Win32Analysis) -> Vec<IntuneFinding> {
         push_unmapped_return_code(transaction, &mut findings);
         push_installer_failed_but_detected(snapshot, transaction, &mut findings);
         push_installed_not_detected(transaction, &mut findings);
+        push_unlinked_detection_failure(snapshot, transaction, &mut findings);
         push_reporting_failed(transaction, &mut findings);
         push_deferred(transaction, &mut findings);
         push_unresolved(transaction, &mut findings);
@@ -729,6 +730,55 @@ fn push_installed_not_detected(transaction: &Win32Transaction, findings: &mut Ve
                     .to_owned(),
             ],
             all_evidence(transaction),
+            Vec::new(),
+        ),
+    );
+}
+
+/// A Not-Detected verdict that explicit linkage could not place.
+///
+/// The reducer never mints `InstalledNotDetected` without proof, but a record
+/// stating the app is absent must not be swallowed by a clean success either:
+/// this rule keeps the unresolved contradiction visible and the transaction's
+/// next-evidence request names the linkage evidence that would settle it.
+fn push_unlinked_detection_failure(
+    snapshot: &Win32Analysis,
+    transaction: &Win32Transaction,
+    findings: &mut Vec<IntuneFinding>,
+) {
+    if transaction.unlinked_detection_observations.is_empty() {
+        return;
+    }
+    let evidence = snapshot
+        .observations
+        .iter()
+        .filter(|observation| {
+            transaction
+                .unlinked_detection_observations
+                .contains(&observation.observation_id)
+        })
+        .map(|observation| observation.context.evidence_ref.clone())
+        .collect::<Vec<_>>();
+    push(
+        findings,
+        finding(
+            finding_id("unlinked-detection-failure", transaction),
+            IntuneFindingSeverity::Warning,
+            IntuneFindingConfidence::Medium,
+            "A Not-Detected verdict could not be ordered against enforcement",
+            format!(
+                "{} has a detection record stating the app was not detected, and nothing in the \
+                 evidence proves whether it ran before or after enforcement. It is reported here \
+                 rather than silently dropped or promoted to a diagnosis.{}",
+                label(transaction),
+                provenance_sentence(transaction)
+            ),
+            vec![
+                "Collect a capture whose records carry their own UTC offsets, or a single \
+                 journal containing both the detection and the enforcement records"
+                    .to_owned(),
+            ],
+            evidence,
             Vec::new(),
         ),
     );

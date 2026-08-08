@@ -378,6 +378,19 @@ pub struct Win32Transaction {
     /// its token, and the records that proved it (ADR-003 retry semantics).
     #[serde(default)]
     pub superseded_failures: Vec<Win32SupersededFailure>,
+    /// Observation ids of `DetectionNotSatisfied` records that could not be
+    /// placed before or after this transaction's enforcement by explicit
+    /// linkage.
+    ///
+    /// An unplaceable Not-Detected verdict never mints
+    /// [`Win32Outcome::InstalledNotDetected`] — that would be a diagnosis
+    /// without proof — but it must not vanish either: a clean `Succeeded`
+    /// with a contradicting record silently dropped would overstate the
+    /// evidence. The ids here feed the `win32-unlinked-detection-failure`
+    /// finding and the next-evidence request naming the linkage evidence that
+    /// would resolve the placement.
+    #[serde(default)]
+    pub unlinked_detection_observations: Vec<String>,
     /// Supplemental installer artifacts keyed to this transaction.
     pub corroborating_artifacts: Vec<String>,
     pub confidence: Win32Confidence,
