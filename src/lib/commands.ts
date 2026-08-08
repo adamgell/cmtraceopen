@@ -44,6 +44,8 @@ import type {
 } from "../workspaces/esp-diagnostics/types";
 import type {
   SccmCaptureResult,
+  SccmAdvancedCaptureAuthorizationRequest,
+  SccmAdvancedCaptureCapability,
   SccmEnvironmentDiscovery,
 } from "../workspaces/sccm/types";
 
@@ -521,6 +523,31 @@ export async function discoverSccmEnvironment(): Promise<SccmEnvironmentDiscover
 
 export async function captureSccmDiagnostics(): Promise<SccmCaptureResult> {
   return invokeCommand<SccmCaptureResult>("capture_sccm_diagnostics");
+}
+
+export async function authorizeSccmAdvancedCapture(
+  request: SccmAdvancedCaptureAuthorizationRequest,
+): Promise<SccmAdvancedCaptureCapability> {
+  return invokeCommand<SccmAdvancedCaptureCapability>(
+    "authorize_sccm_advanced_capture",
+    { request },
+  );
+}
+
+export async function captureSccmAdvancedDiagnostics(
+  capabilityHandle: string,
+): Promise<SccmCaptureResult> {
+  return invokeCommand<SccmCaptureResult>("capture_sccm_advanced_diagnostics", {
+    capabilityHandle,
+  });
+}
+
+export async function cancelSccmAdvancedCapture(
+  capabilityHandle: string,
+): Promise<void> {
+  return invokeCommand<void>("cancel_sccm_advanced_capture", {
+    capabilityHandle,
+  });
 }
 
 export async function revealInFileManager(path: string): Promise<void> {

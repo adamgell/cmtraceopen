@@ -566,3 +566,106 @@
     transition: none;
   }
 }
+
+.sccm-advanced-panel {
+  border: 1px solid var(--colorNeutralStroke1);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--colorBrandBackground) 7%, transparent) 1px, transparent 1px),
+    var(--colorNeutralBackground1);
+  background-size: 24px 100%;
+}
+
+.sccm-advanced-intro {
+  max-width: 78ch;
+  margin: 0;
+  padding: 0 18px 16px;
+  color: var(--colorNeutralForeground2);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.sccm-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1px;
+  border-top: 1px solid var(--colorNeutralStroke2);
+  background: var(--colorNeutralStroke2);
+}
+
+.sccm-advanced-source {
+  display: grid;
+  min-height: 184px;
+  align-content: start;
+  gap: 12px;
+  padding: 16px;
+  background: var(--colorNeutralBackground1);
+  border-top: 3px solid var(--colorPaletteMarigoldBorderActive);
+}
+
+.sccm-advanced-source--observed {
+  border-top-color: var(--colorPaletteGreenBorderActive);
+}
+
+.sccm-advanced-source--blocked {
+  border-top-color: var(--colorNeutralStrokeDisabled);
+  opacity: 0.72;
+}
+
+.sccm-advanced-source strong,
+.sccm-advanced-card-id {
+  display: block;
+}
+
+.sccm-advanced-source strong {
+  margin-top: 5px;
+  font-family: var(--fontFamilyMonospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sccm-advanced-card-id {
+  color: var(--colorNeutralForeground3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sccm-advanced-provenance {
+  min-height: 38px;
+  margin: 0;
+  color: var(--colorNeutralForeground1);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.sccm-advanced-limit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sccm-advanced-limit span {
+  padding: 3px 6px;
+  color: var(--colorNeutralForeground2);
+  background: var(--colorNeutralBackground3);
+  font-family: var(--fontFamilyMonospace);
+  font-size: 10px;
+}
+
+.sccm-advanced-source button {
+  justify-self: start;
+  margin-top: auto;
+}
+
+.sccm-capability-pending {
+  display: block;
+  padding: 9px 16px;
+  color: var(--colorPaletteGreenForeground1);
+  background: var(--colorPaletteGreenBackground1);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

@@ -64,6 +64,7 @@ evtx = { version = "=0.12.2", optional = true }
 quick-xml = { version = "0.41", optional = true }
 glob = "0.3"
 sha2 = "0.11"
+getrandom = "0.3"
 tempfile = { version = "3", optional = true }
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
@@ -141,6 +142,14 @@ required-features = ["sccm-diagnostics"]
 
 [[test]]
 name = "sccm_native_collection"
+required-features = ["sccm-diagnostics"]
+
+[[test]]
+name = "sccm_advanced_ipc"
+required-features = ["sccm-diagnostics"]
+
+[[test]]
+name = "sccm_advanced_server_capture"
 required-features = ["sccm-diagnostics"]
 
 [[bench]]

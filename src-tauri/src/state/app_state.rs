@@ -8,6 +8,8 @@ use std::sync::Mutex;
 use crate::esp::session::{EspSessionError, EspSessionManager};
 use crate::models::log_entry::LogEntry;
 use crate::parser::ResolvedParser;
+#[cfg(feature = "sccm-diagnostics")]
+use crate::sccm::collector::SccmAdvancedCapabilityStore;
 use crate::timeline::store::Timeline;
 use crate::watcher::tail::TailSession;
 
@@ -38,6 +40,8 @@ pub struct AppState {
     pub initial_elevation_restore: Mutex<Option<String>>,
     /// Active unified multi-file timelines keyed by timeline id.
     pub timelines: Mutex<HashMap<String, Timeline>>,
+    #[cfg(feature = "sccm-diagnostics")]
+    pub sccm_advanced_capabilities: Mutex<SccmAdvancedCapabilityStore>,
     /// Installed during Tauri setup and taken during application shutdown so
     /// its worker and AppHandle-backed event sink cannot outlive the runtime.
     #[cfg(feature = "esp-diagnostics")]
@@ -61,6 +65,8 @@ impl AppState {
             initial_workspace: Mutex::new(initial_workspace),
             initial_elevation_restore: Mutex::new(initial_elevation_restore),
             timelines: Mutex::new(HashMap::new()),
+            #[cfg(feature = "sccm-diagnostics")]
+            sccm_advanced_capabilities: Mutex::new(SccmAdvancedCapabilityStore::default()),
             #[cfg(feature = "esp-diagnostics")]
             esp_session_manager: Mutex::new(None),
         }

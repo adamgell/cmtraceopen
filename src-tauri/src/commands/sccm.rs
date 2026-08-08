@@ -1,14 +1,17 @@
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
-use tauri::Manager;
+use tauri::{Manager, State};
 
 use crate::error::AppError;
 use crate::sccm::collector::{
-    capture_discovered_environment, discover_capture_environment, discover_environment_with,
-    NativeDiscoveryProvider, SccmCaptureResult, SccmCollectorError, SccmDiscoveryProvider,
-    SccmEnvironmentDiscovery,
+    capture_advanced_authorized, capture_discovered_environment, discover_capture_environment,
+    discover_environment_with, NativeDiscoveryProvider, SccmAdvancedCapabilityStore,
+    SccmAdvancedCaptureAuthorizationRequest, SccmAdvancedCaptureCapability, SccmCaptureResult,
+    SccmCollectorError, SccmDiscoveryProvider, SccmEnvironmentDiscovery,
 };
+use crate::state::app_state::AppState;
 
 fn collector_error(error: SccmCollectorError) -> AppError {
     AppError::Analysis(error.code().to_owned())
@@ -53,12 +56,101 @@ pub fn capture_sccm_diagnostics(app: tauri::AppHandle) -> Result<SccmCaptureResu
     capture_with_provider(&NativeDiscoveryProvider, &cache_root)
 }
 
+pub(crate) fn authorize_advanced_with_provider(
+    provider: &dyn SccmDiscoveryProvider,
+    store: &mut SccmAdvancedCapabilityStore,
+    request: SccmAdvancedCaptureAuthorizationRequest,
+    now: Instant,
+) -> Result<SccmAdvancedCaptureCapability, AppError> {
+    let environment = provider
+        .discover()
+        .map_err(|_| AppError::Analysis("discoveryFailed".to_owned()))?;
+    store
+        .authorize(&environment, request, now)
+        .map_err(collector_error)
+}
+
+pub(crate) fn capture_advanced_with_store(
+    store: &mut SccmAdvancedCapabilityStore,
+    cache_root: &Path,
+    capability_handle: &str,
+    now: Instant,
+) -> Result<SccmCaptureResult, AppError> {
+    let authorization = store
+        .consume(capability_handle, now)
+        .map_err(collector_error)?;
+    let collection_root = cache_root.join("sccm");
+    fs::create_dir_all(&collection_root)
+        .map_err(|_| collector_error(SccmCollectorError::DestinationUnavailable))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&collection_root, fs::Permissions::from_mode(0o700))
+            .map_err(|_| collector_error(SccmCollectorError::DestinationUnavailable))?;
+    }
+    let bundle_root = collection_root.join(uuid::Uuid::new_v4().to_string());
+    match capture_advanced_authorized(authorization, &bundle_root) {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let _ = fs::remove_dir_all(&bundle_root);
+            Err(collector_error(error))
+        }
+    }
+}
+
+#[tauri::command]
+pub fn authorize_sccm_advanced_capture(
+    state: State<'_, AppState>,
+    request: SccmAdvancedCaptureAuthorizationRequest,
+) -> Result<SccmAdvancedCaptureCapability, AppError> {
+    let mut store = state
+        .sccm_advanced_capabilities
+        .lock()
+        .map_err(|_| collector_error(SccmCollectorError::AdvancedAuthorizationRejected))?;
+    authorize_advanced_with_provider(
+        &NativeDiscoveryProvider,
+        &mut store,
+        request,
+        Instant::now(),
+    )
+}
+
+#[tauri::command]
+pub fn capture_sccm_advanced_diagnostics(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    capability_handle: String,
+) -> Result<SccmCaptureResult, AppError> {
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|_| collector_error(SccmCollectorError::DestinationUnavailable))?;
+    let mut store = state
+        .sccm_advanced_capabilities
+        .lock()
+        .map_err(|_| collector_error(SccmCollectorError::AdvancedCapabilityUnavailable))?;
+    capture_advanced_with_store(&mut store, &cache_root, &capability_handle, Instant::now())
+}
+
+#[tauri::command]
+pub fn cancel_sccm_advanced_capture(
+    state: State<'_, AppState>,
+    capability_handle: String,
+) -> Result<(), AppError> {
+    let mut store = state
+        .sccm_advanced_capabilities
+        .lock()
+        .map_err(|_| collector_error(SccmCollectorError::AdvancedCapabilityUnavailable))?;
+    store.cancel(&capability_handle, Instant::now());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sccm::collector::{
-        PrivateSccmEnvironment, SccmCaptureRoot, SccmDetectedRole, SccmDiscoveryBasis,
-        SccmDiscoveryFailure,
+        PrivateSccmEnvironment, SccmCaptureRoot, SccmCaptureRootOrigin, SccmDetectedRole,
+        SccmDiscoveryBasis, SccmDiscoveryFailure,
     };
     use crate::sccm::SccmRole;
 
@@ -106,6 +198,7 @@ mod tests {
                 roots: vec![SccmCaptureRoot {
                     role: SccmRole::Client,
                     path: logs.path().to_owned(),
+                    origin: SccmCaptureRootOrigin::ServiceExecutableDirectory,
                 }],
                 ..PrivateSccmEnvironment::default()
             },
@@ -131,6 +224,7 @@ mod tests {
                 roots: vec![SccmCaptureRoot {
                     role: SccmRole::Client,
                     path: cache.path().join("private-sentinel"),
+                    origin: SccmCaptureRootOrigin::ServiceExecutableDirectory,
                 }],
                 ..PrivateSccmEnvironment::default()
             },

@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
   captureSccmDiagnostics,
+  authorizeSccmAdvancedCapture,
+  cancelSccmAdvancedCapture,
+  captureSccmAdvancedDiagnostics,
   discoverSccmEnvironment,
   getSafeErrorMessage,
   graphGetAuthStatus,
@@ -131,6 +134,56 @@ describe("SCCM product-path IPC boundary", () => {
     expect(invoke).toHaveBeenNthCalledWith(3, "reveal_in_file_manager", {
       path: capture.bundleRoot,
     });
+  });
+
+  it("keeps advanced authorization closed and capability-only after authorize", async () => {
+    const request = {
+      cardId: "osd-pxe",
+      cardVersion: "1.0.0",
+      sourceId: "advanced-osd-pxe",
+      roleScope: "distributionPointPxe",
+      pathClass: "configuredRoleLogRoot",
+      expectedSourceVersion: "5.00.9141.1000",
+      selectedRoot: "C:\\private-root",
+    };
+    const capability = {
+      capabilityHandle: `cmtraceopen.capture-capability.sha256.v1:${"a".repeat(64)}`,
+      cardId: request.cardId,
+      cardVersion: request.cardVersion,
+      sourceId: request.sourceId,
+      roleScope: request.roleScope,
+      pathClass: request.pathClass,
+      sourceVersion: request.expectedSourceVersion,
+    };
+    const result = { bundleRoot: "C:\\bundle", sources: [] };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(capability)
+      .mockResolvedValueOnce(result)
+      .mockResolvedValueOnce(undefined);
+
+    await expect(authorizeSccmAdvancedCapture(request)).resolves.toBe(capability);
+    await expect(
+      captureSccmAdvancedDiagnostics(capability.capabilityHandle),
+    ).resolves.toBe(result);
+    await expect(
+      cancelSccmAdvancedCapture(capability.capabilityHandle),
+    ).resolves.toBeUndefined();
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "authorize_sccm_advanced_capture", {
+      request,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      "capture_sccm_advanced_diagnostics",
+      { capabilityHandle: capability.capabilityHandle },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(3, "cancel_sccm_advanced_capture", {
+      capabilityHandle: capability.capabilityHandle,
+    });
+    expect(invoke).not.toHaveBeenCalledWith(
+      "capture_sccm_advanced_diagnostics",
+      expect.objectContaining({ selectedRoot: expect.anything() }),
+    );
   });
 });
 
