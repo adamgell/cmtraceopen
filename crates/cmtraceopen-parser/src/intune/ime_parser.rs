@@ -79,14 +79,20 @@ pub fn parse_ime_content(content: &str) -> Vec<ImeLine> {
     parsed.entries.into_iter().map(|entry| entry.line).collect()
 }
 
-/// Parse at most `limit` logical records, stopping the scan at the bound.
+/// Parse at most `limit` entries — framed records and fragments both count
+/// toward the bound — stopping entry production there.
 ///
-/// The scan frames one record past the bound so the caller can distinguish
-/// "exactly `limit` records" from "records past the bound existed", then
+/// The scan frames one entry past the bound so the caller can distinguish
+/// "exactly `limit` entries" from "entries past the bound existed", then
 /// discards the sentinel; the returned bool reports the latter. Record
 /// framing, fragment collection, and the fallback line parser all stop at the
-/// bound, so a pathologically large artifact costs bounded framing work
-/// instead of being fully parsed and truncated afterwards.
+/// bound, so a pathologically large artifact costs bounded per-entry work and
+/// allocation instead of being fully parsed and truncated afterwards.
+///
+/// What is *not* bounded: the newline index built for exact line numbers
+/// ([`build_line_starts`]) performs one O(bytes) scan over the whole input
+/// before framing starts, so the bound caps entry materialization, not that
+/// single linear pass.
 pub fn parse_ime_content_bounded(content: &str, limit: usize) -> (Vec<ImeLine>, bool) {
     let parsed = parse_ime_records(content, limit.saturating_add(1));
     let mut lines: Vec<ImeLine> = parsed
@@ -208,8 +214,12 @@ struct ParsedImeChunk {
     parse_errors: u32,
 }
 
-/// `max_entries` bounds every entry-producing path so a caller with a record
-/// cap pays bounded framing work; pass `usize::MAX` for an unbounded parse.
+/// `max_entries` bounds every entry-producing path — framed records,
+/// fragments, and fallback lines all count — so a caller with a cap pays
+/// bounded per-entry work; pass `usize::MAX` for an unbounded parse. The
+/// [`build_line_starts`] newline index below is the one deliberate exception:
+/// it scans the full input once (O(bytes)) so every produced entry carries an
+/// exact line number.
 fn parse_ime_records(content: &str, max_entries: usize) -> ParsedImeChunk {
     let line_starts = build_line_starts(content);
     let mut entries = Vec::with_capacity(line_starts.len().min(max_entries));

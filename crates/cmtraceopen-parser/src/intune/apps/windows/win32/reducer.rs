@@ -43,11 +43,14 @@ const EXPECTED_PRIMARY_ARTIFACTS: [&str; 3] = [
     "AppActionProcessor.log",
 ];
 
-/// Upper bound on framed records read from one artifact.
+/// Upper bound on entries — framed records *and* fragments both count — read
+/// from one artifact.
 ///
 /// An adversarial or corrupted artifact must not be able to make the reduction
-/// retain unbounded state or pay unbounded framing time. Framing stops at the
-/// cap — records past the bound are genuinely not read — and the artifact is
+/// retain unbounded state. Entry production stops at the cap — framed records
+/// and fragments past the bound are genuinely not materialized, though the
+/// parser's single O(bytes) newline scan for line numbering still touches the
+/// whole input (see [`parse_ime_content_bounded`]) — and the artifact is
 /// reported as `Capped` in coverage, which degrades coverage exactly like a
 /// caller-declared truncation: the absence of a signal past the cap proves
 /// nothing. IME's own rotation policy keeps real artifacts far below this.
@@ -490,22 +493,6 @@ pub fn analyze_win32_bundle_with(
             lines.iter().map(|line| line.component.clone()).collect();
         let source_kind = classify_artifact(input, &components);
         let candidate = candidate_source_kind(input);
-        let detail = (source_kind == Win32SourceKind::Unknown
-            && candidate != Win32SourceKind::Unknown)
-            .then(|| {
-                format!(
-                    "named like {candidate:?} but its records did not confirm it; \
-                     excluded from reduction"
-                )
-            });
-        let mut entry = artifact_coverage(input, source_kind, detail);
-        if capped_by_analyzer {
-            entry.status = IntuneArtifactStatus::Capped;
-            entry.detail = Some(format!(
-                "record count exceeded the analyzer bound of {MAX_RECORDS_PER_ARTIFACT}; \
-                 records past the bound were not read"
-            ));
-        }
         // Readable bytes whose records failed content confirmation are not
         // usable evidence of anything, so the coverage entry must not
         // advertise them as Available. ParseFailed is the honest status —
@@ -513,11 +500,40 @@ pub fn analyze_win32_bundle_with(
         // the downgrade through this one entry is what lets
         // `degraded_coverage`, the unusable-artifact finding, and confidence
         // all read the same answer.
-        if input.has_content()
+        let content_misclassified = input.has_content()
             && source_kind == Win32SourceKind::Unknown
-            && candidate != Win32SourceKind::Unknown
-        {
-            entry.status = IntuneArtifactStatus::ParseFailed;
+            && candidate != Win32SourceKind::Unknown;
+        let detail = content_misclassified.then(|| {
+            format!(
+                "named like {candidate:?} but its records did not confirm it; \
+                 excluded from reduction"
+            )
+        });
+        let mut entry = artifact_coverage(input, source_kind, detail);
+        // When the analyzer bound and the confirmation failure both apply,
+        // ParseFailed dominates — an unconfirmed prefix is not usable
+        // evidence of the declared kind regardless of the unread tail — and
+        // the one detail states both facts so status and detail cannot
+        // disagree.
+        match (capped_by_analyzer, content_misclassified) {
+            (true, true) => {
+                entry.status = IntuneArtifactStatus::ParseFailed;
+                entry.detail = Some(format!(
+                    "named like {candidate:?} but its records did not confirm it, and its \
+                     framed-record and fragment count exceeded the analyzer bound of \
+                     {MAX_RECORDS_PER_ARTIFACT}; the readable prefix is excluded from \
+                     reduction and entries past the bound were not read"
+                ));
+            }
+            (true, false) => {
+                entry.status = IntuneArtifactStatus::Capped;
+                entry.detail = Some(format!(
+                    "framed-record and fragment count exceeded the analyzer bound of \
+                     {MAX_RECORDS_PER_ARTIFACT}; entries past the bound were not read"
+                ));
+            }
+            (false, true) => entry.status = IntuneArtifactStatus::ParseFailed,
+            (false, false) => {}
         }
         coverage_entries.push(entry);
 
@@ -3045,6 +3061,42 @@ mod tests {
         );
         assert_eq!(transaction.confidence, baseline.transactions[0].confidence);
         assert!(transaction.superseded_failures.is_empty());
+    }
+
+    #[test]
+    fn a_capped_misclassified_artifact_reports_one_reconciled_status_and_detail() {
+        // Both degradations apply at once: the entry count exceeded the
+        // analyzer bound AND the readable prefix never confirmed the declared
+        // kind. ParseFailed is the dominant status — an unconfirmed prefix is
+        // not usable evidence regardless of the unread tail — and the detail
+        // must state both facts instead of pairing one status with the other
+        // fact's explanation.
+        let mut content = String::with_capacity((MAX_RECORDS_PER_ARTIFACT + 1) * 6);
+        for _ in 0..=MAX_RECORDS_PER_ARTIFACT {
+            content.push_str("noise\n");
+        }
+        let analysis = analyze_win32_bundle(&[Win32SourceInput::captured(
+            "aw",
+            "AppWorkload.log",
+            content,
+        )]);
+
+        let entry = analysis
+            .coverage
+            .artifacts
+            .iter()
+            .find(|entry| entry.artifact_id == "aw")
+            .expect("the artifact keeps its coverage entry");
+        assert_eq!(entry.status, IntuneArtifactStatus::ParseFailed);
+        let detail = entry.detail.as_deref().expect("a reconciled detail");
+        assert!(
+            detail.contains("did not confirm"),
+            "the detail must state the confirmation failure: {detail:?}"
+        );
+        assert!(
+            detail.contains("bound"),
+            "the detail must state the cap too: {detail:?}"
+        );
     }
 
     #[test]
