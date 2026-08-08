@@ -7,6 +7,7 @@ use quick_xml::encoding::Decoder;
 use quick_xml::events::{BytesDecl, BytesRef, BytesStart, Event};
 use quick_xml::name::QName;
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 #[cfg(target_os = "windows")]
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -616,7 +617,9 @@ fn has_valid_xml_declaration(declaration: &BytesDecl<'_>, decoder: Decoder) -> b
         let Ok(attribute) = attribute else {
             return false;
         };
-        let Ok(value) = attribute.decode_and_unescape_value(decoder) else {
+        let Ok(value) =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+        else {
             return false;
         };
         match attribute.key.as_ref() {
@@ -669,7 +672,9 @@ fn has_valid_xml_attributes(start: &BytesStart<'_>, decoder: Decoder) -> bool {
         let Ok(attribute) = attribute else {
             return false;
         };
-        let Ok(value) = attribute.decode_and_unescape_value(decoder) else {
+        let Ok(value) =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+        else {
             return false;
         };
         if !value.chars().all(is_legal_xml_10_character) {
@@ -699,6 +704,7 @@ fn ordered_event_data(xml: &str) -> Option<Vec<EventLogProperty>> {
                 let name = xml_start_attribute(&start, "Name", reader.decoder())
                     .unwrap_or_else(|| format!("Data[{}]", properties.len()));
                 let value = reader.read_text(QName(b"Data")).ok()?;
+                let value = value.decode().ok()?;
                 properties.push(EventLogProperty {
                     name,
                     value: decode_esp_xml_text(value.trim()),
@@ -745,18 +751,24 @@ fn esp_system_fields(xml: &str) -> Option<EspSystemFields> {
                 if is_direct_system_path(&path) {
                     match name.as_slice() {
                         b"EventID" => {
-                            let value = reader.read_text(QName(b"EventID")).ok()?.into_owned();
+                            let value =
+                                reader.read_text(QName(b"EventID")).ok()?.decode().ok()?.into_owned();
                             fields.event_id.get_or_insert(value);
                             continue;
                         }
                         b"Channel" => {
-                            let value = reader.read_text(QName(b"Channel")).ok()?.into_owned();
+                            let value =
+                                reader.read_text(QName(b"Channel")).ok()?.decode().ok()?.into_owned();
                             fields.channel.get_or_insert(value);
                             continue;
                         }
                         b"EventRecordID" => {
-                            let value =
-                                reader.read_text(QName(b"EventRecordID")).ok()?.into_owned();
+                            let value = reader
+                                .read_text(QName(b"EventRecordID"))
+                                .ok()?
+                                .decode()
+                                .ok()?
+                                .into_owned();
                             fields.record_id.get_or_insert(value);
                             continue;
                         }
@@ -826,7 +838,7 @@ fn xml_element_text(xml: &str, element: &str) -> Option<String> {
                 return reader
                     .read_text(QName(element.as_bytes()))
                     .ok()
-                    .map(|value| value.into_owned());
+                    .and_then(|value| value.decode().ok().map(|text| text.into_owned()));
             }
             Event::Empty(start) if start.name().as_ref() == element.as_bytes() => {
                 return Some(String::new());
@@ -845,7 +857,11 @@ fn xml_start_attribute(
     start.attributes().find_map(|attribute| {
         let attribute = attribute.ok()?;
         (attribute.key.as_ref() == attribute_name.as_bytes())
-            .then(|| attribute.decode_and_unescape_value(decoder).ok())
+            .then(|| {
+                attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder)
+                    .ok()
+            })
             .flatten()
             .map(|value| value.into_owned())
     })
