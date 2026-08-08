@@ -434,6 +434,12 @@ pub struct StoreObservation {
     pub app_id: Option<String>,
     pub execution_context: StoreExecutionContext,
     pub action: StoreDeploymentAction,
+    /// Intune's typed assignment intent, present only when this observation is
+    /// a typed assignment. This is the authoritative statement of intent: the
+    /// reducer reads intent from here and never from caller-writable
+    /// `named_data` (ADR-001).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_intent: Option<StoreAssignmentIntent>,
     pub error: Option<IntuneErrorCode>,
     /// True when the record came from a recognized provider but an event id or
     /// schema version this build has no rule for.

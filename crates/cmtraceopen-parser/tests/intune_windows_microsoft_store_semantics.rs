@@ -149,7 +149,6 @@ fn appx_event(
 /// package fact arrives after the typed assignment's own entry, so the last
 /// writer wins and the forced `NotTargeted` state override fires.
 #[test]
-#[ignore = "RED (Framework v1 Phase 2): fails against current reducer; fixed in Store pilot Phase 3"]
 fn typed_required_intent_survives_caller_writable_named_data() {
     let assignment = StoreAssignment {
         context: context("assignment", 1, IntuneSourceKind::SuppliedFact),
