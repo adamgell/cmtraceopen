@@ -52,6 +52,16 @@ Use temporary, replaceable private naming rather than pretending the codename is
 
 Before the first external production release, review and migrate any codename-based repository, package, service, cloud-resource, or update-channel names that would expose or permanently bind the internal codename.
 
+## Program execution documents
+
+The accepted identity stack is implemented through:
+
+- [`project-theseus-program-charter.md`](./project-theseus-program-charter.md)
+- [`project-theseus-milestone-roadmap.md`](./project-theseus-milestone-roadmap.md)
+- [`project-theseus-repository-skeleton.md`](./project-theseus-repository-skeleton.md)
+- [`project-theseus-execution-backlog.md`](./project-theseus-execution-backlog.md)
+- [`project-theseus-index.md`](./project-theseus-index.md)
+
 ## Controlling rule
 
 > Project Theseus names the internal program. Adam Gell signs the startup binaries. A new organization owns the commercial repositories. The public product name remains an open decision.
