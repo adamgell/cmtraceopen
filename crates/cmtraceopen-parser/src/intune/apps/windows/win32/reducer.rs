@@ -129,6 +129,11 @@ struct PendingRecord {
     classification: RecordClassification,
     resolved_app_id: Option<String>,
     resolved_deployment_type_id: Option<String>,
+    /// True when `resolved_deployment_type_id` was filled by bundle-wide
+    /// uniqueness inference rather than stated by the record or its own
+    /// execution block. Inferred key components complete the key but are not
+    /// observed evidence, so they never count toward confidence (ADR-001).
+    deployment_type_inferred: bool,
     resolved_context: Win32ExecutionContext,
 }
 
@@ -329,6 +334,7 @@ fn reconcile_partial_keys(records: &mut [PendingRecord]) {
             if let Some(types) = types_by_app.get(&app) {
                 if types.len() == 1 {
                     record.resolved_deployment_type_id = types.iter().next().cloned();
+                    record.deployment_type_inferred = true;
                 }
             }
         }
@@ -385,11 +391,6 @@ pub fn analyze_win32_bundle_with(
     let mut seen_basenames: BTreeSet<String> = BTreeSet::new();
 
     for (artifact_index, input) in inputs.iter().enumerate() {
-        // Normalize through split_rotation so a rotated or prefixed variant of
-        // an expected artifact (AppWorkload-1.log, _AppWorkload.log) resolves to
-        // the same canonical basename the expected-artifact check looks for.
-        seen_basenames.insert(split_rotation(&input.file_name).0.to_ascii_lowercase());
-
         // A supplemental installer artifact is evidence by its identity alone.
         // Its contents are installer stdout/stderr -- unbounded and frequently
         // sensitive -- so it is registered, never parsed. The check runs before
@@ -426,6 +427,23 @@ pub fn analyze_win32_bundle_with(
                 )
             });
         coverage_entries.push(artifact_coverage(input, source_kind, detail));
+
+        // An artifact only satisfies the expected-artifact check when it is
+        // usable evidence of its kind: readable content whose records confirmed
+        // the candidate, or a caller-declared gap whose own coverage entry
+        // already expresses the absence. A zero-byte capture or a
+        // content-misclassified file must leave the gap open — coverage gaps
+        // cannot raise confidence (ADR-001). The stem is normalized through
+        // split_rotation so a rotated or prefixed variant (AppWorkload-1.log,
+        // _AppWorkload.log) resolves to the same canonical basename.
+        let usable = if input.has_content() {
+            source_kind != Win32SourceKind::Unknown
+        } else {
+            input.access_state != IntuneAccessState::Available
+        };
+        if usable {
+            seen_basenames.insert(split_rotation(&input.file_name).0.to_ascii_lowercase());
+        }
 
         for (record_index, line) in lines.iter().enumerate() {
             let fragment = is_fragment(line);
@@ -478,6 +496,7 @@ pub fn analyze_win32_bundle_with(
                 is_fragment: fragment,
                 resolved_app_id: classification.app_id.clone(),
                 resolved_deployment_type_id: classification.deployment_type_id.clone(),
+                deployment_type_inferred: false,
                 resolved_context: classification.execution_context,
                 classification,
             });
@@ -556,7 +575,9 @@ pub fn analyze_win32_bundle_with(
             artifact_id: format!("expected:{expected}"),
             family: coverage_family(Win32SourceKind::AppWorkload).to_owned(),
             status: IntuneArtifactStatus::Missing,
-            detail: Some(format!("{expected} was not supplied to the analyzer")),
+            detail: Some(format!(
+                "no usable {expected} was supplied to the analyzer"
+            )),
             observed_at_utc: String::new(),
             evidence: Vec::new(),
         });
@@ -900,9 +921,18 @@ fn reduce_transaction(
         .iter()
         .find(|entry| entry.app_id == key.app_id);
 
+    // Only a deployment type some record *stated* — itself or through its own
+    // execution block — counts toward confidence. One reconcile_partial_keys
+    // filled in from bundle-wide uniqueness completes the key without
+    // strengthening the evidence (ADR-001).
+    let deployment_type_observed = ordered.iter().any(|&index| {
+        records[index].resolved_deployment_type_id.is_some()
+            && !records[index].deployment_type_inferred
+    });
+
     let confidence = confidence_for(
         resolution.outcome,
-        &key,
+        deployment_type_observed,
         fold.unknown_vocabulary,
         degraded_coverage,
         !corroborating_artifacts.is_empty(),
@@ -1157,9 +1187,12 @@ fn apply_installer_completion(
 /// It is not a judgement about the cause: an unmapped return code proves the
 /// installer failed just as strongly as a mapped one, and the fact that its
 /// meaning is unknown is reported by the finding, not by demoting the outcome.
+///
+/// `deployment_type_observed` is true only when a record stated the deployment
+/// type; a key completed by inference is deliberately excluded (ADR-001).
 fn confidence_for(
     outcome: Win32Outcome,
-    key: &Win32TransactionKey,
+    deployment_type_observed: bool,
     unknown_vocabulary: bool,
     degraded_coverage: bool,
     corroborated: bool,
@@ -1167,7 +1200,7 @@ fn confidence_for(
     if unknown_vocabulary || !outcome.is_terminal() {
         return Win32Confidence::Low;
     }
-    let base = if key.deployment_type_id.is_some() || corroborated {
+    let base = if deployment_type_observed || corroborated {
         Win32Confidence::High
     } else {
         Win32Confidence::Medium
@@ -1522,6 +1555,163 @@ mod tests {
         let transaction = only_transaction(&analysis);
         assert_eq!(transaction.outcome, Win32Outcome::ReportingFailed);
         assert_eq!(transaction.local_outcome, Some(Win32Outcome::Succeeded));
+    }
+
+    // ── Coverage honesty (ADR-001) ─────────────────────────────────────────
+
+    /// A minimal confirmed record for an expected artifact, so a test can hold
+    /// coverage complete while it varies one artifact of interest.
+    fn confirmed_filler(artifact_id: &str, file_name: &str) -> Win32SourceInput {
+        Win32SourceInput::captured(
+            artifact_id,
+            file_name,
+            record("[Win32App] Cleaning up the staging directory"),
+        )
+    }
+
+    #[test]
+    fn an_empty_expected_artifact_does_not_close_its_coverage_gap() {
+        // A zero-byte AppWorkload.log proves nothing about the phases it alone
+        // records. Its file name must not satisfy the expected-artifact check,
+        // and confidence must stay degraded (ADR-001: coverage gaps cannot
+        // raise confidence).
+        let analysis = analyze_win32_bundle(&[
+            Win32SourceInput::captured(
+                "ime",
+                "IntuneManagementExtension.log",
+                [
+                    record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+                    record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+                ]
+                .concat(),
+            ),
+            Win32SourceInput::captured("aw", "AppWorkload.log", ""),
+            confirmed_filler("aap", "AppActionProcessor.log"),
+        ]);
+
+        assert!(
+            analysis
+                .coverage
+                .artifacts
+                .iter()
+                .any(|entry| entry.artifact_id == "expected:AppWorkload.log"
+                    && entry.status == IntuneArtifactStatus::Missing),
+            "an empty artifact must leave the expected-artifact gap open: {:?}",
+            analysis
+                .coverage
+                .artifacts
+                .iter()
+                .map(|entry| (&entry.artifact_id, &entry.status))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            only_transaction(&analysis).confidence,
+            Win32Confidence::Medium,
+            "degraded coverage must cap confidence"
+        );
+    }
+
+    #[test]
+    fn a_content_misclassified_artifact_does_not_close_its_coverage_gap() {
+        // A file named AppWorkload.log whose records did not confirm it is not
+        // usable AppWorkload evidence; the gap and the degradation must both
+        // survive.
+        let unrelated = "<![LOG[unrelated CCM traffic]LOG]!><time=\"10:00:00.000+000\" \
+             date=\"7-31-2026\" component=\"CcmExec\" context=\"\" type=\"1\" thread=\"5\" \
+             file=\"\">\n"
+            .to_owned();
+        let analysis = analyze_win32_bundle(&[
+            Win32SourceInput::captured(
+                "ime",
+                "IntuneManagementExtension.log",
+                [
+                    record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+                    record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+                ]
+                .concat(),
+            ),
+            Win32SourceInput::captured("aw", "AppWorkload.log", unrelated),
+            confirmed_filler("aap", "AppActionProcessor.log"),
+        ]);
+
+        assert!(analysis
+            .coverage
+            .artifacts
+            .iter()
+            .any(|entry| entry.artifact_id == "expected:AppWorkload.log"));
+        assert_eq!(only_transaction(&analysis).confidence, Win32Confidence::Medium);
+    }
+
+    #[test]
+    fn a_declared_unreadable_expected_artifact_still_closes_the_synthesized_gap() {
+        // The caller-declared entry already expresses this gap with better
+        // fidelity (its own artifact id and access state), and it degrades
+        // coverage by itself; a second synthesized entry would double-count it.
+        let analysis = analyze_win32_bundle(&[
+            confirmed_filler("ime", "IntuneManagementExtension.log"),
+            Win32SourceInput::unreadable(
+                "aw",
+                "AppWorkload.log",
+                IntuneAccessState::PermissionDenied,
+            ),
+            confirmed_filler("aap", "AppActionProcessor.log"),
+        ]);
+        assert!(!analysis
+            .coverage
+            .artifacts
+            .iter()
+            .any(|entry| entry.artifact_id == "expected:AppWorkload.log"));
+    }
+
+    #[test]
+    fn an_inferred_deployment_type_cannot_promote_confidence_to_high() {
+        // The System-context transaction only has a deployment type because
+        // reconcile_partial_keys inferred it from bundle-wide uniqueness. An
+        // inferred key component is not observed evidence, so the base
+        // confidence stays Medium (ADR-001) even with full coverage.
+        let analysis = analyze_win32_bundle(&[
+            Win32SourceInput::captured(
+                "ime",
+                "IntuneManagementExtension.log",
+                record(&format!(
+                    "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT} in user context"
+                )),
+            ),
+            Win32SourceInput::captured(
+                "aw",
+                "AppWorkload.log",
+                record(&format!(
+                    "[Win32App] Installation is done for app with id: {APP}, exit code: 0 in system context"
+                )),
+            ),
+            confirmed_filler("aap", "AppActionProcessor.log"),
+        ]);
+
+        let inferred = analysis
+            .transactions
+            .iter()
+            .find(|transaction| {
+                transaction.key.execution_context == Win32ExecutionContext::System
+            })
+            .expect("the system-context transaction exists");
+        assert_eq!(
+            inferred.key.deployment_type_id.as_deref(),
+            Some(DT),
+            "the inference itself still completes the key"
+        );
+        assert_eq!(
+            inferred.confidence,
+            Win32Confidence::Medium,
+            "an inferred key component must not count as an observed one"
+        );
+
+        let observed = analysis
+            .transactions
+            .iter()
+            .find(|transaction| transaction.key.execution_context == Win32ExecutionContext::User)
+            .expect("the user-context transaction exists");
+        assert_eq!(observed.confidence, Win32Confidence::Low,
+            "non-terminal outcome stays low regardless");
     }
 
     // ── Terminal precedence, retry linkage, and order independence ─────────
