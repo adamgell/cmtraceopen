@@ -111,22 +111,24 @@ fn msi_property_re() -> &'static Regex {
 /// the end of the line — the same shape as the path rule — never by
 /// whitespace: Windows account display forms contain spaces
 /// (`CONTOSO\John Doe`), and bounding on whitespace exported the second half
-/// of the name verbatim. The leading `[` exclusion keeps the projection
-/// idempotent.
+/// of the name verbatim.
 fn account_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         // The `pre` guard stops the field vocabulary matching *inside* an
         // existing replacement token: `[upn:…]` and `[account:…]` contain the
         // words `upn`/`account` followed by `:`, and without the guard a second
-        // pass re-masked the token itself. The value's first character excludes
-        // whitespace only; a value *beginning* with an emitted token — the UPN
-        // rule runs first, so `UserName: [upn:…] is retrying` is routine — is
-        // preserved by the `starts_with_token` guard in the closure, which
-        // still lets a malformed token-lookalike be masked rather than
-        // trusted.
+        // pass re-masked the token itself.
+        //
+        // The value's two alternatives are the leading-`[` rule: a
+        // bracket-prefixed value only fires when it is token-*shaped*
+        // (`[kind:hex…]`), so bracketed prose like `[not signed in]` never
+        // matches and survives verbatim. A token-shaped match is then split
+        // by the closure: a well-formed token is preserved (with its tail
+        // masked — see `split_leading_token`), while a malformed
+        // token-lookalike is masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22][^,;\r\n\x22]*)",
+            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>\[[A-Za-z]+:[0-9a-fA-F]+\][^,;\r\n\x22]*|[^\s,;\r\n\x22\[][^,;\r\n\x22]*)",
         )
         .expect("account field regex must compile")
     })
@@ -140,11 +142,11 @@ fn account_field_re() -> &'static Regex {
 fn host_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        // A value that begins with an emitted token (with or without a
-        // trailing fragment) must not be re-hashed, or the stable `[host:…]`
-        // token is destroyed on the second pass; the `starts_with_token`
-        // guard in the closure preserves it while a malformed token-lookalike
-        // is still masked rather than trusted.
+        // A value that begins with an emitted token must not be re-hashed, or
+        // the stable `[host:…]` token is destroyed on the second pass; the
+        // closure preserves the token and masks any non-token fragment glued
+        // after it (`preserve_token_mask_tail`), while a malformed
+        // token-lookalike is still masked rather than trusted.
         Regex::new(
             r"(?i)(?P<field>\b(?:ComputerName|MachineName|HostName|DeviceName)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22]+)",
         )
@@ -190,22 +192,10 @@ fn sid_re() -> &'static Regex {
     })
 }
 
-/// Whether a value *begins* with a well-formed replacement token.
-///
-/// The UPN rule runs before the field rules, so a field value routinely
-/// arrives as an emitted token followed by prose (`[upn:…] is retrying`).
-/// Re-hashing token-plus-prose would destroy the stable token — breaking
-/// cross-record correlation — and swallow the prose with it, so such values
-/// are preserved whole. A malformed token-lookalike does not qualify and is
-/// still masked rather than trusted.
-fn starts_with_token(value: &str) -> bool {
-    let Some(rest) = value.strip_prefix('[') else {
-        return false;
-    };
-    let Some(end) = rest.find(']') else {
-        return false;
-    };
-    let Some((kind, hash)) = rest[..end].split_once(':') else {
+/// Whether `kind:hash` is a well-formed token body — the one validity rule
+/// [`starts_with_token`] and [`already_masked`] share.
+fn is_token_body(body: &str) -> bool {
+    let Some((kind, hash)) = body.split_once(':') else {
         return false;
     };
     !kind.is_empty()
@@ -214,22 +204,61 @@ fn starts_with_token(value: &str) -> bool {
         && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Whether a value *begins* with a well-formed replacement token.
+///
+/// The UPN rule runs before the field rules, so a field value routinely
+/// arrives as an emitted token followed by more text. Re-hashing token-plus-
+/// tail would destroy the stable token — breaking cross-record correlation —
+/// so the token itself is preserved and only the tail is masked (see
+/// [`split_leading_token`]). A malformed token-lookalike does not qualify and
+/// is still masked rather than trusted.
+fn starts_with_token(value: &str) -> bool {
+    value
+        .strip_prefix('[')
+        .and_then(|rest| rest.find(']').map(|end| &rest[..end]))
+        .is_some_and(is_token_body)
+}
+
 /// Whether a value is already a replacement token (optionally quoted), so
 /// re-masking cannot hash a token and break idempotence.
 fn already_masked(value: &str) -> bool {
-    let inner = value
+    value
         .trim_matches(|c| c == '\x22' || c == '\'')
-        .trim_end();
-    let Some(rest) = inner.strip_prefix('[') else {
-        return false;
-    };
-    let Some((kind, hash)) = rest.strip_suffix(']').and_then(|body| body.split_once(':')) else {
-        return false;
-    };
-    !kind.is_empty()
-        && kind.chars().all(|c| c.is_ascii_lowercase())
-        && hash.len() == 16
-        && hash.bytes().all(|b| b.is_ascii_hexdigit())
+        .trim_end()
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .is_some_and(is_token_body)
+}
+
+/// Split a value that begins with a well-formed token into the token and the
+/// remainder.
+///
+/// The remainder is where the pre-existing trailing-identity leak lived: a
+/// value like `[upn:…] (aka CONTOSO\jsmith.adm)` was returned verbatim to
+/// protect the token, and the identity after it leaked. Callers preserve the
+/// token and mask the non-empty remainder — deterministic over-masking of a
+/// trailing fragment is safe where under-masking a second identity is not,
+/// the same trade the `-Command` rule makes. A remainder that is itself a
+/// token (a previous pass's tail mask) is left alone for idempotence.
+fn split_leading_token(value: &str) -> Option<(&str, &str)> {
+    if !starts_with_token(value) {
+        return None;
+    }
+    let end = value.find(']').expect("starts_with_token proved a closing bracket") + 1;
+    Some(value.split_at(end))
+}
+
+/// The preserved-token projection of a field value: keep the leading token,
+/// mask a non-empty tail with `kind`, and leave an already-masked tail alone.
+/// Returns `None` when the value does not begin with a well-formed token.
+fn preserve_token_mask_tail(value: &str, kind: &str) -> Option<String> {
+    let (token, rest) = split_leading_token(value)?;
+    let rest_trimmed = rest.trim_start();
+    if rest_trimmed.is_empty() || starts_with_token(rest_trimmed) || already_masked(rest_trimmed) {
+        return Some(value.to_owned());
+    }
+    let lead = &rest[..rest.len() - rest_trimmed.len()];
+    Some(format!("{token}{lead}{}", stable_token(kind, rest_trimmed)))
 }
 
 /// Mask the sensitive spans inside a free-text value.
@@ -258,8 +287,11 @@ pub fn redact_text(value: &str) -> String {
 
     let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
         let value = &caps["value"];
-        if already_masked(value) || starts_with_token(value) {
+        if already_masked(value) {
             return format!("{}{}", &caps["field"], value);
+        }
+        if let Some(projected) = preserve_token_mask_tail(value, "host") {
+            return format!("{}{}", &caps["field"], projected);
         }
         format!("{}{}", &caps["field"], stable_token("host", value))
     });
@@ -272,8 +304,11 @@ pub fn redact_text(value: &str) -> String {
         // Trailing whitespace is prose spacing, not part of the account name.
         let value = caps["value"].trim_end();
         let trailing = &caps["value"][value.len()..];
-        if already_masked(value) || starts_with_token(value) {
+        if already_masked(value) {
             return format!("{}{}{}{}", &caps["pre"], &caps["field"], value, trailing);
+        }
+        if let Some(projected) = preserve_token_mask_tail(value, "account") {
+            return format!("{}{}{}{}", &caps["pre"], &caps["field"], projected, trailing);
         }
         format!(
             "{}{}{}{}",
@@ -381,15 +416,48 @@ mod tests {
     }
 
     #[test]
-    fn an_account_value_starting_with_a_token_keeps_the_token_and_the_prose() {
+    fn an_account_value_starting_with_a_token_keeps_the_token_and_masks_the_tail() {
         // The UPN rule runs first, so the account field's value begins with an
-        // emitted token followed by prose. Re-hashing token+prose together
-        // would destroy the stable token (breaking cross-record correlation)
-        // and swallow the prose.
-        let once = redact_text("UserName: adele.vance@contoso.example is retrying");
+        // emitted token. Re-hashing token+tail together would destroy the
+        // stable token (breaking cross-record correlation) — but returning
+        // the whole value verbatim leaked whatever identity followed the
+        // token. The token survives and the tail is masked.
+        let once = redact_text(r"UserName: adele.vance@contoso.example (aka CONTOSO\jsmith.adm)");
         assert!(once.contains("[upn:"), "got {once:?}");
-        assert!(once.ends_with(" is retrying"), "got {once:?}");
+        assert!(
+            !once.contains("jsmith"),
+            "the trailing identity must be masked: {once:?}"
+        );
         assert_eq!(once, redact_text(&once), "and it must stay idempotent");
+    }
+
+    #[test]
+    fn a_bracketed_prose_account_value_is_not_hashed_whole() {
+        // "[not signed in]" is prose, not a token; hashing it whole destroyed
+        // an ordinary status message. The account rule must not fire on a
+        // bracket-prefixed value unless it begins with a well-formed token.
+        let text = "Account: [not signed in] - deferring enforcement";
+        let redacted = redact_text(text);
+        assert_eq!(redacted, text, "bracketed prose must survive verbatim");
+        assert_eq!(redacted, redact_text(&redacted));
+    }
+
+    #[test]
+    fn a_host_value_starting_with_a_token_masks_its_trailing_fragment() {
+        let masked = redact_text("ComputerName: DESKTOP-AB12CD");
+        let token_start = masked.find("[host:").expect("token");
+        let token = &masked[token_start..token_start + "[host:0123456789abcdef]".len()];
+        let with_tail = format!("{masked}.fragment");
+        let redacted_tail = redact_text(&with_tail);
+        assert!(
+            redacted_tail.contains(token),
+            "{token:?} must survive in {redacted_tail:?}"
+        );
+        assert!(
+            !redacted_tail.contains(".fragment"),
+            "the trailing fragment glued to a token is masked: {redacted_tail:?}"
+        );
+        assert_eq!(redacted_tail, redact_text(&redacted_tail));
     }
 
     #[test]
