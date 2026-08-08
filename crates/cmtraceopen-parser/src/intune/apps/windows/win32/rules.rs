@@ -47,6 +47,8 @@ pub fn derive_findings(snapshot: &Win32Analysis) -> Vec<IntuneFinding> {
         push_reporting_failed(transaction, &mut findings);
         push_deferred(transaction, &mut findings);
         push_unresolved(transaction, &mut findings);
+        push_conflicting(transaction, &mut findings);
+        push_superseded_failures(transaction, &mut findings);
         push_succeeded(transaction, &mut findings);
     }
 
@@ -782,6 +784,86 @@ fn push_unresolved(transaction: &Win32Transaction, findings: &mut Vec<IntuneFind
             ),
             vec!["Collect the artifact named in the next-evidence request".to_owned()],
             all_evidence(transaction),
+            Vec::new(),
+        ),
+    );
+}
+
+/// Two equal-authority terminal statements that nothing in the evidence orders.
+///
+/// Per ADR-003 the reduction refuses to pick a winner; this finding is where
+/// the refusal becomes visible instead of a silent `InsufficientEvidence`.
+fn push_conflicting(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
+    if transaction.outcome != Win32Outcome::Conflicting {
+        return;
+    }
+    push(
+        findings,
+        finding(
+            finding_id("conflicting-terminal-outcomes", transaction),
+            IntuneFindingSeverity::Warning,
+            IntuneFindingConfidence::Low,
+            "The evidence states contradictory terminal outcomes that cannot be ordered",
+            format!(
+                "{} has records of equal authority claiming different terminal outcomes, and no \
+                 shared record order or trusted timestamps prove which came later. No winner is \
+                 asserted.{}",
+                label(transaction),
+                provenance_sentence(transaction)
+            ),
+            vec![
+                "Collect every rotation of the artifact in one capture so a single source orders \
+                 the check-ins"
+                    .to_owned(),
+            ],
+            all_evidence(transaction),
+            Vec::new(),
+        ),
+    );
+}
+
+/// A proven failure that a later, explicitly linked record superseded.
+///
+/// Retry semantics per ADR-003: the linked later outcome is the transaction's
+/// answer, but the failed enforcement cycle really happened and stays visible.
+fn push_superseded_failures(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
+    if transaction.superseded_failures.is_empty() {
+        return;
+    }
+    let outcomes = transaction
+        .superseded_failures
+        .iter()
+        .map(|entry| match &entry.return_code {
+            Some(code) => format!("{:?} ({})", entry.outcome, code.raw),
+            None => format!("{:?}", entry.outcome),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let evidence = transaction
+        .superseded_failures
+        .iter()
+        .flat_map(|entry| entry.evidence.iter().cloned())
+        .collect::<Vec<_>>();
+    push(
+        findings,
+        finding(
+            finding_id("superseded-failure", transaction),
+            IntuneFindingSeverity::Warning,
+            transaction.confidence.clone(),
+            "An earlier enforcement cycle failed before the current outcome",
+            format!(
+                "{} reached its current outcome after at least one proven failure that a later, \
+                 explicitly ordered record superseded: {outcomes}. The failure is retained as \
+                 evidence of a real failed cycle, not erased by the retry.{}",
+                label(transaction),
+                provenance_sentence(transaction)
+            ),
+            vec![
+                "Check whether the earlier failure recurs across devices before treating the \
+                 retry success as the steady state"
+                    .to_owned(),
+            ],
+            evidence,
             Vec::new(),
         ),
     );

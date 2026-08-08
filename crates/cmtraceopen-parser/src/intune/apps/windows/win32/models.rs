@@ -256,6 +256,14 @@ pub enum Win32Outcome {
     /// A local outcome was reached and reporting it to the service failed.
     ReportingFailed,
     Succeeded,
+    /// Two records of equal authority stated contradictory terminal outcomes
+    /// and nothing in the evidence orders one after the other.
+    ///
+    /// Per ADR-003 an unresolved authoritative contradiction stays conservative
+    /// rather than letting whichever record the caller supplied last win. This
+    /// is an unresolved state, not a terminal one: the missing artifact is the
+    /// one that would prove which statement came later.
+    Conflicting,
 }
 
 impl Win32Outcome {
@@ -304,6 +312,20 @@ impl Win32Outcome {
 /// derived from it are directly comparable.
 pub type Win32Confidence = crate::intune::evidence::IntuneFindingConfidence;
 
+/// A proven terminal failure that a later, explicitly linked record superseded.
+///
+/// Retry semantics per ADR-003: a linked later success may replace an earlier
+/// failure as the transaction outcome, but the failure is evidence of a real
+/// failed enforcement cycle and must stay visible rather than be erased.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Win32SupersededFailure {
+    pub outcome: Win32Outcome,
+    /// The failing return/error token, when the superseded record carried one.
+    pub return_code: Option<IntuneErrorCode>,
+    pub evidence: Vec<IntuneEvidenceRef>,
+}
+
 /// One reduced Win32 app deployment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -332,6 +354,11 @@ pub struct Win32Transaction {
     pub unresolved_dependencies: Vec<String>,
     /// Requirement rules this deployment was proven to have failed.
     pub failed_requirements: Vec<String>,
+    /// Proven terminal failures that a later, explicitly linked record
+    /// superseded. Never empty silently: each entry keeps the failing outcome,
+    /// its token, and the records that proved it (ADR-003 retry semantics).
+    #[serde(default)]
+    pub superseded_failures: Vec<Win32SupersededFailure>,
     /// Supplemental installer artifacts keyed to this transaction.
     pub corroborating_artifacts: Vec<String>,
     pub confidence: Win32Confidence,

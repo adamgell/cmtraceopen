@@ -23,8 +23,8 @@ use crate::intune::ime_parser::{parse_ime_content, ImeLine};
 use super::models::{
     Win32Analysis, Win32AppMetadata, Win32Confidence, Win32Coverage, Win32ExecutionContext,
     Win32Intent, Win32Observation, Win32Outcome, Win32Phase, Win32ReturnCodeKind,
-    Win32ReturnCodeMapping, Win32Signal, Win32SourceKind, Win32Transaction, Win32TransactionKey,
-    WIN32_SCHEMA_VERSION,
+    Win32ReturnCodeMapping, Win32Signal, Win32SourceKind, Win32SupersededFailure,
+    Win32Transaction, Win32TransactionKey, WIN32_SCHEMA_VERSION,
 };
 use super::signals::{classify_record, RecordClassification};
 use super::sources::{
@@ -85,22 +85,22 @@ fn classify_return_code(
         .unwrap_or(Win32ReturnCodeKind::Unmapped)
 }
 
-/// Lifecycle rank. A candidate replaces the current outcome when its rank is at
-/// least as high, so the later of two equally ranked records wins.
-fn outcome_rank(outcome: Win32Outcome) -> u8 {
+/// Lifecycle rank for the *in-flight* states.
+///
+/// Only non-terminal states are ever resolved by rank: a policy receipt, an
+/// enforcement start, and a scheduled retry are progress markers, and the
+/// furthest one describes the deployment best. Terminal statements are
+/// equal-authority candidates resolved by [`resolve_outcome`] using a source's
+/// own ordering, never by a rank ladder that would let an unlinked success
+/// absorb a proven failure (ADR-003).
+fn pending_rank(outcome: Win32Outcome) -> u8 {
     match outcome {
-        Win32Outcome::InsufficientEvidence => 0,
         Win32Outcome::Assigned => 1,
-        Win32Outcome::NotTargeted | Win32Outcome::NotApplicable => 2,
-        Win32Outcome::RequirementNotMet | Win32Outcome::DependencyUnresolved => 3,
-        Win32Outcome::DetectedBeforeEnforcement
-        | Win32Outcome::ContentUnavailable
-        | Win32Outcome::ContentDeliveryFailed => 4,
-        Win32Outcome::Enforcing => 5,
-        Win32Outcome::Deferred => 6,
-        Win32Outcome::EnforcementCommandFailed | Win32Outcome::InstallerReportedFailure => 7,
-        Win32Outcome::InstalledNotDetected | Win32Outcome::Succeeded => 8,
-        Win32Outcome::ReportingFailed => 9,
+        Win32Outcome::Enforcing => 2,
+        Win32Outcome::Deferred => 3,
+        // `InsufficientEvidence` and every other variant either is the fold's
+        // starting point or never flows through the pending state.
+        _ => 0,
     }
 }
 
@@ -603,10 +603,81 @@ pub fn analyze_win32_bundle_with(
     }
 }
 
+/// One record's terminal statement about the transaction, with the provenance
+/// needed to order it against other statements.
+///
+/// Mirrors the Store pilot's `StateCandidate`: terminal outcomes are
+/// equal-authority claims, ordered only by the source's own record numbers or
+/// by timestamps the records themselves stated. Caller vector order is never
+/// consulted (ADR-003).
+struct TerminalCandidate {
+    outcome: Win32Outcome,
+    /// The failing/succeeding token this record itself carried, if any.
+    return_code: Option<IntuneErrorCode>,
+    /// The local outcome a `ReportingFailed` candidate is layered on top of.
+    local_outcome: Option<Win32Outcome>,
+    artifact_id: String,
+    record_number: u32,
+    normalized_utc: Option<String>,
+    evidence: IntuneEvidenceRef,
+}
+
+/// A point in evidence order that can supersede an earlier candidate.
+struct SequencePoint<'a> {
+    artifact_id: &'a str,
+    record_number: u32,
+    normalized_utc: Option<&'a str>,
+}
+
+impl TerminalCandidate {
+    fn sequence(&self) -> SequencePoint<'_> {
+        SequencePoint {
+            artifact_id: &self.artifact_id,
+            record_number: self.record_number,
+            normalized_utc: self.normalized_utc.as_deref(),
+        }
+    }
+}
+
+/// Whether `later` is explicitly ordered after `earlier`.
+///
+/// Two linkages exist and nothing else counts (ADR-003):
+///
+/// * the same artifact's own record numbers — a CCM log is the agent's
+///   append-ordered journal, so a later record in the same file is proven to
+///   have been written after an earlier one, across enforcement-cycle
+///   boundaries included;
+/// * strictly later trusted timestamps — a UTC value is only present when the
+///   record stated its own offset, so comparing two of them compares evidence,
+///   not the parsing machine's clock. Equal timestamps prove nothing.
+///
+/// Records in different artifacts without trusted timestamps share no clock
+/// and no counter, so they stay incomparable and a contradiction between them
+/// stays conservative.
+fn sequenced_after(later: &SequencePoint<'_>, earlier: &SequencePoint<'_>) -> bool {
+    if later.artifact_id == earlier.artifact_id {
+        return later.record_number > earlier.record_number;
+    }
+    matches!(
+        (later.normalized_utc, earlier.normalized_utc),
+        (Some(later), Some(earlier)) if later > earlier
+    )
+}
+
 /// Everything the fold over one transaction's records accumulates.
 struct Fold {
-    outcome: Win32Outcome,
-    local_outcome: Option<Win32Outcome>,
+    /// Furthest in-flight state, resolved by [`pending_rank`]. Used only when
+    /// no terminal candidate exists at all.
+    pending: Win32Outcome,
+    /// Every terminal statement, kept for [`resolve_outcome`].
+    terminals: Vec<TerminalCandidate>,
+    /// `ReportSubmitted` records. Each one clears a `ReportingFailed` candidate
+    /// it is explicitly ordered after: the retry upload landing is the source's
+    /// own statement that the transient failure was superseded.
+    report_clearances: Vec<(String, u32, Option<String>)>,
+    /// The last non-reporting terminal outcome seen, in evidence order. This is
+    /// what a reporting failure is layered on top of.
+    latest_local_terminal: Option<Win32Outcome>,
     last_confirmed_phase: Option<Win32Phase>,
     return_code: Option<IntuneErrorCode>,
     return_code_kind: Option<Win32ReturnCodeKind>,
@@ -623,8 +694,10 @@ struct Fold {
 impl Fold {
     fn new() -> Self {
         Self {
-            outcome: Win32Outcome::InsufficientEvidence,
-            local_outcome: None,
+            pending: Win32Outcome::InsufficientEvidence,
+            terminals: Vec::new(),
+            report_clearances: Vec::new(),
+            latest_local_terminal: None,
             last_confirmed_phase: None,
             return_code: None,
             return_code_kind: None,
@@ -646,10 +719,148 @@ impl Fold {
         });
     }
 
-    fn set(&mut self, candidate: Win32Outcome) {
-        if outcome_rank(candidate) >= outcome_rank(self.outcome) {
-            self.outcome = candidate;
+    /// Record an in-flight state. The furthest one wins; a terminal candidate
+    /// always outranks all of them at resolution time.
+    fn set_pending(&mut self, candidate: Win32Outcome) {
+        debug_assert!(!candidate.is_terminal());
+        if pending_rank(candidate) >= pending_rank(self.pending) {
+            self.pending = candidate;
         }
+    }
+
+    /// Record a terminal statement as a candidate for [`resolve_outcome`].
+    fn push_terminal(&mut self, record: &PendingRecord, outcome: Win32Outcome) {
+        debug_assert!(outcome.is_terminal());
+        let local_outcome = if outcome == Win32Outcome::ReportingFailed {
+            self.latest_local_terminal
+        } else {
+            self.latest_local_terminal = Some(outcome);
+            None
+        };
+        self.terminals.push(TerminalCandidate {
+            outcome,
+            return_code: record.classification.error_code.clone(),
+            local_outcome,
+            artifact_id: record.artifact_id.clone(),
+            record_number: record.record_number,
+            normalized_utc: record
+                .timestamp
+                .as_ref()
+                .and_then(|timestamp| timestamp.normalized_utc.clone()),
+            evidence: record.evidence(),
+        });
+    }
+}
+
+/// What [`resolve_outcome`] concluded from the candidates.
+struct OutcomeResolution {
+    outcome: Win32Outcome,
+    local_outcome: Option<Win32Outcome>,
+    superseded_failures: Vec<Win32SupersededFailure>,
+}
+
+/// Resolve the transaction outcome from every terminal statement at once.
+///
+/// This must give the same answer for any permutation of the same evidence
+/// (ADR-003):
+///
+/// 1. a `ReportingFailed` candidate that a later `ReportSubmitted` from an
+///    ordered position supersedes is dropped — the retry upload landed;
+/// 2. a candidate explicitly ordered before another candidate is superseded by
+///    it, which is what lets a linked retry land on its final outcome;
+/// 3. superseded *failures* survive as [`Win32SupersededFailure`] entries: an
+///    erased failure is still a proven failed enforcement cycle;
+/// 4. if the surviving candidates state more than one distinct outcome, the
+///    evidence is an unresolved authoritative contradiction and the reduction
+///    stays conservative — [`Win32Outcome::Conflicting`], never whichever
+///    record the caller happened to list last.
+fn resolve_outcome(fold: &Fold) -> OutcomeResolution {
+    let cleared: Vec<&TerminalCandidate> = fold
+        .terminals
+        .iter()
+        .filter(|candidate| {
+            candidate.outcome != Win32Outcome::ReportingFailed
+                || !fold.report_clearances.iter().any(|(artifact, record, utc)| {
+                    sequenced_after(
+                        &SequencePoint {
+                            artifact_id: artifact,
+                            record_number: *record,
+                            normalized_utc: utc.as_deref(),
+                        },
+                        &candidate.sequence(),
+                    )
+                })
+        })
+        .collect();
+
+    if cleared.is_empty() {
+        return OutcomeResolution {
+            outcome: fold.pending,
+            local_outcome: None,
+            superseded_failures: Vec::new(),
+        };
+    }
+
+    let survives = |index: usize| {
+        !cleared.iter().enumerate().any(|(other, candidate)| {
+            other != index && sequenced_after(&candidate.sequence(), &cleared[index].sequence())
+        })
+    };
+    let mut surviving: Vec<&TerminalCandidate> = (0..cleared.len())
+        .filter(|&index| survives(index))
+        .map(|index| cleared[index])
+        .collect();
+    // Canonical evidence order, independent of the caller's input order.
+    surviving.sort_by(|left, right| {
+        (left.artifact_id.as_str(), left.record_number)
+            .cmp(&(right.artifact_id.as_str(), right.record_number))
+    });
+
+    let mut superseded_failures: Vec<Win32SupersededFailure> = Vec::new();
+    for candidate in (0..cleared.len())
+        .filter(|&index| cleared[index].outcome.is_failure() && !survives(index))
+        .map(|index| cleared[index])
+    {
+        let raw = candidate.return_code.as_ref().map(|code| code.raw.clone());
+        match superseded_failures.iter_mut().find(|entry| {
+            entry.outcome == candidate.outcome
+                && entry.return_code.as_ref().map(|code| code.raw.clone()) == raw
+        }) {
+            Some(entry) => entry.evidence.push(candidate.evidence.clone()),
+            None => superseded_failures.push(Win32SupersededFailure {
+                outcome: candidate.outcome,
+                return_code: candidate.return_code.clone(),
+                evidence: vec![candidate.evidence.clone()],
+            }),
+        }
+    }
+    for entry in &mut superseded_failures {
+        entry.evidence.sort_by(|left, right| {
+            (left.source_artifact_id.as_str(), left.evidence_id.as_str())
+                .cmp(&(right.source_artifact_id.as_str(), right.evidence_id.as_str()))
+        });
+    }
+    superseded_failures.sort_by(|left, right| {
+        (left.outcome, left.return_code.as_ref().map(|code| &code.raw))
+            .cmp(&(right.outcome, right.return_code.as_ref().map(|code| &code.raw)))
+    });
+
+    let outcome = surviving[0].outcome;
+    if surviving.iter().any(|candidate| candidate.outcome != outcome) {
+        return OutcomeResolution {
+            outcome: Win32Outcome::Conflicting,
+            local_outcome: None,
+            superseded_failures,
+        };
+    }
+
+    OutcomeResolution {
+        outcome,
+        local_outcome: surviving
+            .iter()
+            .rev()
+            .find_map(|candidate| candidate.local_outcome),
+        superseded_failures,
     }
 }
 
@@ -669,13 +880,28 @@ fn reduce_transaction(
         apply_record(&mut fold, record, &key, options);
     }
 
+    let resolution = resolve_outcome(&fold);
+    // A conservative contradiction has no single return token: asserting the
+    // code of either side would silently pick the winner the outcome refuses
+    // to pick.
+    let (return_code, return_code_kind, reboot_required) =
+        if resolution.outcome == Win32Outcome::Conflicting {
+            (None, None, false)
+        } else {
+            (
+                fold.return_code.clone(),
+                fold.return_code_kind,
+                fold.reboot_required,
+            )
+        };
+
     let metadata = options
         .metadata
         .iter()
         .find(|entry| entry.app_id == key.app_id);
 
     let confidence = confidence_for(
-        fold.outcome,
+        resolution.outcome,
         &key,
         fold.unknown_vocabulary,
         degraded_coverage,
@@ -694,32 +920,41 @@ fn reduce_transaction(
             .map(|&index| records[index].observation_id())
             .collect(),
         last_confirmed_phase: fold.last_confirmed_phase,
-        outcome: fold.outcome,
-        local_outcome: fold.local_outcome,
-        return_code: fold.return_code.clone(),
-        return_code_kind: fold.return_code_kind,
-        reboot_required: fold.reboot_required,
+        outcome: resolution.outcome,
+        local_outcome: resolution.local_outcome,
+        return_code,
+        return_code_kind,
+        reboot_required,
         unresolved_dependencies: fold.unresolved_dependencies.into_iter().collect(),
         failed_requirements: fold.failed_requirements.into_iter().collect(),
+        superseded_failures: resolution.superseded_failures,
         corroborating_artifacts,
         confidence,
         evidence: ordered
             .iter()
             .map(|&index| records[index].evidence())
             .collect(),
-        next_evidence_request: next_evidence_request(fold.outcome),
+        next_evidence_request: next_evidence_request(resolution.outcome),
         key,
     }
 }
 
-/// Ordering decides which record terminates a transaction, so it has to be
-/// defensible.
+/// Ordering feeds the fold's phase reasoning, so it has to be defensible --
+/// and it must never consult the position an artifact happened to occupy in
+/// the caller's vector, which is an acquisition detail (ADR-003).
 ///
-/// When every record in this transaction stated its own UTC offset, real time is
-/// the better order and is used. Otherwise we fall back to source order, because
-/// the alternative -- a UTC value derived from the parsing machine's timezone --
-/// is not evidence. Source order means artifact order as the caller supplied it,
-/// so a caller spanning a rotation is expected to pass rotations oldest first.
+/// When every record in this transaction stated its own UTC offset, real time
+/// is the order, with the canonical artifact id and the source's own record
+/// number as tie-breaks. Otherwise records are ordered by (artifact id, record
+/// number): within one artifact that is the source's own append order, and
+/// across artifacts it is arbitrary but *canonical*, so permuting the input
+/// vector cannot change any conclusion.
+///
+/// Per-record timestamp trust is deliberately all-or-nothing here: mixing
+/// trusted timestamps with untrusted positions yields a partial order, and any
+/// total sort over a partial order smuggles in an arbitrary tie-break that
+/// would then decide phase semantics. Outcome resolution does use per-record
+/// linkage -- see [`sequenced_after`] -- where a partial order is safe.
 fn order_records(indices: &[usize], records: &[PendingRecord]) -> Vec<usize> {
     let mut ordered = indices.to_vec();
     let all_trustworthy = ordered.iter().all(|&index| {
@@ -738,14 +973,23 @@ fn order_records(indices: &[usize], records: &[PendingRecord]) -> Vec<usize> {
                         .as_ref()
                         .and_then(|timestamp| timestamp.normalized_utc.clone())
                         .unwrap_or_default(),
-                    records[index].artifact_index,
+                    records[index].artifact_id.clone(),
                     records[index].record_number,
                 )
             };
             sort_key(left).cmp(&sort_key(right))
         });
     } else {
-        ordered.sort_by_key(|&index| (records[index].artifact_index, records[index].record_number));
+        ordered.sort_by(|&left, &right| {
+            (
+                records[left].artifact_id.as_str(),
+                records[left].record_number,
+            )
+                .cmp(&(
+                    records[right].artifact_id.as_str(),
+                    records[right].record_number,
+                ))
+        });
     }
     ordered
 }
@@ -770,32 +1014,34 @@ fn apply_record(
     match classification.signal {
         Win32Signal::AppPolicyReceived => {
             fold.advance(Win32Phase::Assignment);
-            fold.set(Win32Outcome::Assigned);
+            fold.set_pending(Win32Outcome::Assigned);
         }
-        Win32Signal::NotTargeted => fold.set(Win32Outcome::NotTargeted),
+        Win32Signal::NotTargeted => fold.push_terminal(record, Win32Outcome::NotTargeted),
         Win32Signal::ApplicabilityPassed => fold.advance(Win32Phase::Applicability),
-        Win32Signal::ApplicabilityFailed => fold.set(Win32Outcome::NotApplicable),
+        Win32Signal::ApplicabilityFailed => {
+            fold.push_terminal(record, Win32Outcome::NotApplicable);
+        }
         Win32Signal::RequirementPassed => fold.advance(Win32Phase::Requirements),
         Win32Signal::RequirementFailed => {
             if let Some(name) = &classification.requirement_name {
                 fold.failed_requirements.insert(name.clone());
             }
-            fold.set(Win32Outcome::RequirementNotMet);
+            fold.push_terminal(record, Win32Outcome::RequirementNotMet);
         }
         Win32Signal::DependencyResolved => fold.advance(Win32Phase::Dependencies),
         Win32Signal::DependencyUnresolved => {
             if let Some(dependency) = &classification.dependency_app_id {
                 fold.unresolved_dependencies.insert(dependency.clone());
             }
-            fold.set(Win32Outcome::DependencyUnresolved);
+            fold.push_terminal(record, Win32Outcome::DependencyUnresolved);
         }
         Win32Signal::DetectionSatisfied => {
             if !fold.seen_enforcement {
                 fold.advance(Win32Phase::PreEnforcementDetection);
-                fold.set(Win32Outcome::DetectedBeforeEnforcement);
+                fold.push_terminal(record, Win32Outcome::DetectedBeforeEnforcement);
             } else if fold.installer_succeeded {
                 fold.advance(Win32Phase::PostEnforcementDetection);
-                fold.set(Win32Outcome::Succeeded);
+                fold.push_terminal(record, Win32Outcome::Succeeded);
             }
             // Detected after an installer failure is a contradiction the
             // evidence does not resolve. The reported return code stays the
@@ -806,42 +1052,53 @@ fn apply_record(
             if !fold.seen_enforcement {
                 fold.advance(Win32Phase::PreEnforcementDetection);
             } else if fold.installer_succeeded {
-                fold.set(Win32Outcome::InstalledNotDetected);
+                fold.push_terminal(record, Win32Outcome::InstalledNotDetected);
             }
         }
-        Win32Signal::ContentUnavailable => fold.set(Win32Outcome::ContentUnavailable),
+        Win32Signal::ContentUnavailable => {
+            fold.push_terminal(record, Win32Outcome::ContentUnavailable);
+        }
         Win32Signal::DownloadStarted => {}
         Win32Signal::DownloadCompleted => fold.advance(Win32Phase::Content),
         Win32Signal::DownloadFailed
         | Win32Signal::HashValidationFailed
-        | Win32Signal::StagingFailed => fold.set(Win32Outcome::ContentDeliveryFailed),
+        | Win32Signal::StagingFailed => {
+            fold.push_terminal(record, Win32Outcome::ContentDeliveryFailed);
+        }
         Win32Signal::EnforcementStarted => {
             fold.seen_enforcement = true;
-            fold.set(Win32Outcome::Enforcing);
+            fold.set_pending(Win32Outcome::Enforcing);
         }
         Win32Signal::EnforcementCommandFailed => {
             fold.seen_enforcement = true;
-            fold.set(Win32Outcome::EnforcementCommandFailed);
+            fold.push_terminal(record, Win32Outcome::EnforcementCommandFailed);
         }
         Win32Signal::InstallerCompleted => {
             fold.seen_enforcement = true;
-            apply_installer_completion(fold, classification, key, options);
+            apply_installer_completion(fold, record, key, options);
         }
         Win32Signal::RetryScheduled => {
-            // A retry after a proven terminal outcome does not erase it. Only a
-            // deployment that had not settled yet becomes deferred.
-            if !fold.outcome.is_terminal() {
-                fold.set(Win32Outcome::Deferred);
-            }
+            // A retry is an in-flight marker. It can never erase a proven
+            // terminal outcome -- terminal candidates always outrank the
+            // pending state -- and it can never mask a failure recorded after
+            // it, because the failure is its own candidate.
+            fold.set_pending(Win32Outcome::Deferred);
         }
-        Win32Signal::ReportSubmitted => fold.advance(Win32Phase::Reporting),
+        Win32Signal::ReportSubmitted => {
+            fold.advance(Win32Phase::Reporting);
+            // The source's own statement that a status upload landed. It
+            // clears any reporting failure it is explicitly ordered after.
+            fold.report_clearances.push((
+                record.artifact_id.clone(),
+                record.record_number,
+                record
+                    .timestamp
+                    .as_ref()
+                    .and_then(|timestamp| timestamp.normalized_utc.clone()),
+            ));
+        }
         Win32Signal::ReportFailed => {
-            if fold.outcome != Win32Outcome::InsufficientEvidence
-                && fold.outcome != Win32Outcome::ReportingFailed
-            {
-                fold.local_outcome = Some(fold.outcome);
-            }
-            fold.set(Win32Outcome::ReportingFailed);
+            fold.push_terminal(record, Win32Outcome::ReportingFailed);
         }
         Win32Signal::Unclassified => {}
     }
@@ -849,16 +1106,17 @@ fn apply_record(
 
 fn apply_installer_completion(
     fold: &mut Fold,
-    classification: &RecordClassification,
+    record: &PendingRecord,
     key: &Win32TransactionKey,
     options: &Win32AnalysisOptions,
 ) {
+    let classification = &record.classification;
     let Some(code) = classification.error_code.clone() else {
         // A completion we matched but whose code we could not read cannot claim
         // success or failure. It leaves the deployment enforcing and raises the
         // unknown-vocabulary flag set at framing time.
         fold.unknown_vocabulary = true;
-        fold.set(Win32Outcome::Enforcing);
+        fold.set_pending(Win32Outcome::Enforcing);
         return;
     };
 
@@ -870,18 +1128,17 @@ fn apply_installer_completion(
         Win32ReturnCodeKind::Success => {
             fold.advance(Win32Phase::Enforcement);
             fold.installer_succeeded = true;
-            fold.set(Win32Outcome::Succeeded);
+            fold.reboot_required = false;
+            fold.push_terminal(record, Win32Outcome::Succeeded);
         }
         Win32ReturnCodeKind::SoftReboot | Win32ReturnCodeKind::HardReboot => {
             fold.advance(Win32Phase::Enforcement);
             fold.installer_succeeded = true;
             fold.reboot_required = true;
-            fold.set(Win32Outcome::Succeeded);
+            fold.push_terminal(record, Win32Outcome::Succeeded);
         }
         Win32ReturnCodeKind::Retry => {
-            if !fold.outcome.is_terminal() {
-                fold.set(Win32Outcome::Deferred);
-            }
+            fold.set_pending(Win32Outcome::Deferred);
         }
         Win32ReturnCodeKind::Failed | Win32ReturnCodeKind::Unmapped => {
             // An observed installer exit code proves enforcement completed, even
@@ -889,7 +1146,8 @@ fn apply_installer_completion(
             // but this is a terminal enforcement result rather than a launch
             // failure.
             fold.advance(Win32Phase::Enforcement);
-            fold.set(Win32Outcome::InstallerReportedFailure);
+            fold.reboot_required = false;
+            fold.push_terminal(record, Win32Outcome::InstallerReportedFailure);
         }
     }
 }
@@ -945,6 +1203,10 @@ fn next_evidence_request(outcome: Win32Outcome) -> Option<String> {
         Win32Outcome::ReportingFailed => {
             "IntuneManagementExtension.log records for the status upload attempt"
         }
+        Win32Outcome::Conflicting => {
+            "a single capture containing every AppWorkload.log rotation, so the conflicting \
+             check-ins can be ordered by one source"
+        }
         Win32Outcome::RequirementNotMet => "AppActionProcessor.log requirement-rule evaluation",
         Win32Outcome::DependencyUnresolved => {
             "AppWorkload.log records for the dependency app's own deployment"
@@ -972,8 +1234,15 @@ mod tests {
     }
 
     fn record_on_thread(message: &str, thread: u32) -> String {
+        record_at("10:00:00.000+000", "7-31-2026", message, thread)
+    }
+
+    /// A record at an explicit time. Passing a time without an offset yields a
+    /// record whose UTC form is untrusted, which is how offset-less evidence is
+    /// simulated.
+    fn record_at(time: &str, date: &str, message: &str, thread: u32) -> String {
         format!(
-            "<![LOG[{message}]LOG]!><time=\"10:00:00.000+000\" date=\"7-31-2026\" \
+            "<![LOG[{message}]LOG]!><time=\"{time}\" date=\"{date}\" \
              component=\"Win32App\" context=\"\" type=\"1\" thread=\"{thread}\" file=\"\">\n"
         )
     }
@@ -1253,6 +1522,250 @@ mod tests {
         let transaction = only_transaction(&analysis);
         assert_eq!(transaction.outcome, Win32Outcome::ReportingFailed);
         assert_eq!(transaction.local_outcome, Some(Win32Outcome::Succeeded));
+    }
+
+    // ── Terminal precedence, retry linkage, and order independence ─────────
+    //
+    // These pin the ADR-003 shape the Store pilot proved out: caller vector
+    // order is an acquisition detail, terminal statements are equal-authority
+    // candidates ordered only by a source's own record numbers or by trusted
+    // timestamps, and an unresolved contradiction stays conservative.
+
+    #[test]
+    fn a_linked_later_success_supersedes_a_failure_but_the_failure_survives() {
+        // Two enforcement cycles in ONE artifact: the log's own record order is
+        // explicit retry linkage, so the later success is the outcome -- and the
+        // proven failure must survive as a superseded entry, never vanish.
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603")),
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+        ])]);
+
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
+        assert_eq!(
+            transaction.return_code.as_ref().map(|code| code.raw.as_str()),
+            Some("0")
+        );
+        assert_eq!(transaction.superseded_failures.len(), 1);
+        let superseded = &transaction.superseded_failures[0];
+        assert_eq!(superseded.outcome, Win32Outcome::InstallerReportedFailure);
+        assert_eq!(
+            superseded.return_code.as_ref().map(|code| code.raw.as_str()),
+            Some("1603")
+        );
+        assert!(!superseded.evidence.is_empty());
+    }
+
+    #[test]
+    fn an_unorderable_success_in_another_artifact_cannot_overwrite_a_failure() {
+        // Same trusted timestamp in two different artifacts: neither record can
+        // be proven later than the other, so per ADR-003 the contradiction is
+        // reported instead of an arbitrary winner -- in either input order.
+        let failure = Win32SourceInput::captured(
+            "aw-old",
+            "AppWorkload-1.log",
+            [
+                record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+                record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603")),
+            ]
+            .concat(),
+        );
+        let success = Win32SourceInput::captured(
+            "aw-new",
+            "AppWorkload.log",
+            [
+                record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+                record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            ]
+            .concat(),
+        );
+
+        for inputs in [
+            vec![failure.clone(), success.clone()],
+            vec![success, failure],
+        ] {
+            let analysis = analyze_win32_bundle(&inputs);
+            let transaction = only_transaction(&analysis);
+            assert_eq!(
+                transaction.outcome,
+                Win32Outcome::Conflicting,
+                "an unordered contradiction must stay conservative"
+            );
+            assert_eq!(transaction.return_code, None);
+            assert_eq!(transaction.confidence, Win32Confidence::Low);
+        }
+    }
+
+    #[test]
+    fn offsetless_records_across_artifacts_cannot_be_sequenced_either() {
+        // Without an embedded offset the UTC form is the parsing machine's
+        // opinion, not evidence, so two artifacts stay unordered.
+        let failure = Win32SourceInput::captured(
+            "aw-old",
+            "AppWorkload-1.log",
+            [
+                record_at("10:00:00.000", "7-27-2026", &format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"), 5),
+                record_at("10:00:01.000", "7-27-2026", &format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603"), 5),
+            ]
+            .concat(),
+        );
+        let success = Win32SourceInput::captured(
+            "aw-new",
+            "AppWorkload.log",
+            [
+                record_at("10:00:00.000", "7-31-2026", &format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"), 5),
+                record_at("10:00:01.000", "7-31-2026", &format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0"), 5),
+            ]
+            .concat(),
+        );
+
+        for inputs in [
+            vec![failure.clone(), success.clone()],
+            vec![success, failure],
+        ] {
+            let analysis = analyze_win32_bundle(&inputs);
+            assert_eq!(
+                only_transaction(&analysis).outcome,
+                Win32Outcome::Conflicting
+            );
+        }
+    }
+
+    #[test]
+    fn a_trusted_strictly_later_cycle_in_another_artifact_is_explicit_linkage() {
+        // Both artifacts state their own offsets and do not overlap in time, so
+        // real time orders them (ADR-003 permits timestamps whose semantics are
+        // known). The later success wins; the Monday failure survives as a
+        // superseded entry instead of silently vanishing.
+        let monday = Win32SourceInput::captured(
+            "aw-old",
+            "AppWorkload-1.log",
+            [
+                record_at("16:03:00.000+000", "7-27-2026", &format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"), 5),
+                record_at("16:03:10.000+000", "7-27-2026", &format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603"), 5),
+            ]
+            .concat(),
+        );
+        let friday = Win32SourceInput::captured(
+            "aw-new",
+            "AppWorkload.log",
+            [
+                record_at("09:00:00.000+000", "7-31-2026", &format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"), 5),
+                record_at("09:00:10.000+000", "7-31-2026", &format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0"), 5),
+            ]
+            .concat(),
+        );
+
+        for inputs in [
+            vec![monday.clone(), friday.clone()],
+            vec![friday, monday],
+        ] {
+            let analysis = analyze_win32_bundle(&inputs);
+            let transaction = only_transaction(&analysis);
+            assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
+            assert_eq!(transaction.superseded_failures.len(), 1);
+            assert_eq!(
+                transaction.superseded_failures[0].outcome,
+                Win32Outcome::InstallerReportedFailure
+            );
+        }
+    }
+
+    #[test]
+    fn a_report_submitted_after_a_reporting_failure_clears_it() {
+        // The same artifact's own record order proves the retry upload landed,
+        // so the transient failure must not remain the outcome.
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            record(&format!("[Win32App] Failed to send app status to service for app with id: {APP}, error code: 0x80072EE2")),
+            record(&format!("[Win32App] App status report was sent to service successfully for app with id: {APP}")),
+        ])]);
+        let transaction = only_transaction(&analysis);
+        assert_eq!(transaction.outcome, Win32Outcome::Succeeded);
+        assert_eq!(transaction.local_outcome, None);
+        assert_eq!(
+            transaction.last_confirmed_phase,
+            Some(Win32Phase::Reporting)
+        );
+    }
+
+    #[test]
+    fn a_scheduled_retry_cannot_mask_a_later_content_failure() {
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Will retry app with id: {APP} at the next check-in")),
+            record(&format!("[Win32App] Hash mismatch for app with id: {APP}")),
+        ])]);
+        assert_eq!(
+            only_transaction(&analysis).outcome,
+            Win32Outcome::ContentDeliveryFailed,
+            "a deferral noted before the failure must not outrank the failure"
+        );
+    }
+
+    #[test]
+    fn permuting_the_input_vector_changes_no_conclusion() {
+        let ime = Win32SourceInput::captured(
+            "ime",
+            "IntuneManagementExtension.log",
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}, intent = Required"
+            )),
+        );
+        let aw = Win32SourceInput::captured(
+            "aw",
+            "AppWorkload.log",
+            [
+                record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+                record(&format!("[Win32App] Install output file: D:\\IMECache\\Contoso-Setup.msi.log for app with id: {APP}")),
+                record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603")),
+            ]
+            .concat(),
+        );
+        let msi = Win32SourceInput::captured("msi", "Contoso-Setup.msi.log", "MSI (s) failed");
+        let bundle = vec![ime, aw, msi];
+
+        let baseline = analyze_win32_bundle(&bundle);
+        let mut reversed = bundle.clone();
+        reversed.reverse();
+        let mut rotated = bundle.clone();
+        rotated.rotate_left(1);
+
+        for permutation in [reversed, rotated] {
+            let permuted = analyze_win32_bundle(&permutation);
+            assert_eq!(
+                serde_json::to_value(&permuted.transactions).expect("serialize"),
+                serde_json::to_value(&baseline.transactions).expect("serialize"),
+                "ADR-003: caller vector order must not change any conclusion"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicating_an_artifact_changes_no_conclusion() {
+        let aw = workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+        ]);
+        let mut copy = aw.clone();
+        copy.artifact_id = "aw-copy".to_owned();
+        copy.file_name = "AppWorkload-1.log".to_owned();
+
+        let baseline = analyze_win32_bundle(std::slice::from_ref(&aw));
+        let duplicated = analyze_win32_bundle(&[aw, copy]);
+
+        let transaction = only_transaction(&duplicated);
+        assert_eq!(
+            transaction.outcome,
+            baseline.transactions[0].outcome,
+            "a re-collected copy of the same evidence adds nothing"
+        );
+        assert_eq!(transaction.confidence, baseline.transactions[0].confidence);
+        assert!(transaction.superseded_failures.is_empty());
     }
 
     #[test]
