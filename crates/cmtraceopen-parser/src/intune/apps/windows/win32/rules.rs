@@ -447,7 +447,13 @@ pub fn classify_record(
 
     result.signal = classify_signal(message, &mut result);
 
-    if result.signal == Win32Signal::Unclassified && looks_like_enforcement(message) {
+    // A template line is bookkeeping for the unknown-vocabulary heuristic
+    // too: its Event: field quotes enforcement wording on every healthy
+    // bundle, and flagging it would demote them all to low confidence.
+    if result.signal == Win32Signal::Unclassified
+        && !is_state_transition_template(message)
+        && looks_like_enforcement(message)
+    {
         result.enforcement_shaped_but_unmatched = true;
     }
 
@@ -472,6 +478,17 @@ fn file_name_of(path: &str) -> String {
 /// rule first would report the app as present at exactly the moment the evidence
 /// says it is absent.
 fn classify_signal(message: &str, result: &mut RecordClassification) -> Win32Signal {
+    // The shared transition-template gate runs before EVERY rule, matching
+    // download_stats' own composition, where from_message returns None
+    // outright for a template line. IME's state-machine bookkeeping quotes
+    // the vocabulary of every phase in its To:/Event: fields (`… To: Hash
+    // Mismatch With Event: Hash Validation Failed.`, `… To: Install Done
+    // With Event: Installation is done.`) without stating any of it, and
+    // gating only the download rules let a template line mint hash, staging,
+    // installer, and detection signals out of bookkeeping.
+    if is_state_transition_template(message) {
+        return Win32Signal::Unclassified;
+    }
     if not_targeted_re().is_match(message) {
         return Win32Signal::NotTargeted;
     }
@@ -500,13 +517,9 @@ fn classify_signal(message: &str, result: &mut RecordClassification) -> Win32Sig
         result.error_code = extract_failure_code(message);
         return Win32Signal::ContentUnavailable;
     }
-    // The shared transition-template gate is checked before the download
-    // vocabulary, exactly as `download_stats` itself composes it: IME's
-    // state-machine bookkeeping quotes the download phrases (`… With Event:
-    // Download Failed.`) without being a download statement, and reading one
-    // as evidence minted terminal content failures out of template lines.
-    let download_statement =
-        !is_state_transition_template(message) && download_vocabulary_re().is_match(message);
+    // Template lines already returned above, so the download-shape gate is
+    // purely about vocabulary here.
+    let download_statement = download_vocabulary_re().is_match(message);
     // The shared failure vocabulary carries bare words (`cancelled`,
     // `aborted`) that are only download statements on a download-shaped line,
     // so it is gated by the shared download vocabulary — the same composition
@@ -793,6 +806,52 @@ mod tests {
             .signal,
             Win32Signal::Unclassified
         );
+    }
+
+    #[test]
+    fn transition_templates_are_bookkeeping_for_every_rule_not_just_downloads() {
+        // The template gate must run before ANY content/hash/staging/installer/
+        // detection rule, exactly as download_stats composes it (from_message
+        // returns None outright for a template line): the state machine's
+        // To:/Event: fields quote the vocabulary of every phase, and reading
+        // one as evidence minted terminal outcomes out of bookkeeping.
+        let templates = [
+            // Hash vocabulary in both the To: field and the Event: field.
+            format!(
+                "Adding new state transition - From: Download In Progress To: \
+                 Hash Mismatch With Event: Hash Validation Failed for app with id: {APP}."
+            ),
+            // Installer-completion vocabulary.
+            format!(
+                "Adding new state transition - From: Install In Progress To: \
+                 Install Done With Event: Installation is done for app with id: {APP}."
+            ),
+            // Staging vocabulary in the To: field.
+            format!(
+                "Adding new state transition - From: Download Complete To: \
+                 Staging Failed With Event: Staging of content failed for app with id: {APP}."
+            ),
+            // Detection vocabulary in the To: field.
+            "Adding new state transition - From: Detection In Progress To: \
+             App Is Not Detected With Event: Detection rules were not satisfied."
+                .to_owned(),
+        ];
+        for template in &templates {
+            let result = workload(template);
+            assert_eq!(
+                result.signal,
+                Win32Signal::Unclassified,
+                "template line must not classify: {template:?}"
+            );
+            assert!(
+                !result.enforcement_shaped_but_unmatched,
+                "template line is bookkeeping, not unknown vocabulary: {template:?}"
+            );
+            assert!(
+                result.error_code.is_none(),
+                "template line must not carry a failure code: {template:?}"
+            );
+        }
     }
 
     #[test]
