@@ -34,12 +34,12 @@
 //!
 //! | Module | Responsibility |
 //! |---|---|
-//! | [`models`] | the public types, all built on [`crate::intune::evidence`] |
-//! | [`sources`] | which artifact a file is, and what its coverage status is |
-//! | [`signals`] | what one framed record said |
-//! | [`reducer`] | keying and reduction into an immutable snapshot |
-//! | [`rules`] | [`derive_findings`], one `push_*` rule at a time |
-//! | [`redaction`] | the deterministic default-safe export projection |
+//! | `models` | the public types, all built on [`crate::intune::evidence`] |
+//! | `sources` | which artifact a file is, and what its coverage status is |
+//! | `rules` | classification: what one framed record said |
+//! | `reducer` | keying and reduction into an immutable snapshot |
+//! | `findings` | [`derive_findings`], one `push_*` rule at a time |
+//! | `redaction` | the deterministic default-safe export projection |
 //!
 //! # Relationship to the older IME modules
 //!
@@ -51,7 +51,7 @@
 //! the content-download phrases are consumed from `download_stats` and the GUID
 //! shape from `guid_registry`, so one grammar owns each set of words. Where a
 //! primitive is deliberately not reused (the retry vocabulary), the reason is
-//! documented at the call site in [`signals`].
+//! documented at the call site in `rules`.
 //!
 //! ```
 //! use cmtraceopen_parser::intune::apps::windows::win32::{
@@ -88,16 +88,19 @@
 //! }
 //! ```
 
-pub mod models;
-pub mod redaction;
-pub mod reducer;
-pub mod rules;
-pub mod signals;
-pub mod sources;
+// Private modules with one curated public surface, matching the family shape.
+// Every name below is reachable at exactly one path (`win32::Name`); the
+// previous `pub mod` layout published every item at two paths.
+mod findings;
+mod models;
+mod redaction;
+mod reducer;
+mod rules;
+mod sources;
 
+pub use findings::derive_findings;
 pub use models::*;
 pub use redaction::{redact_text, redacted_export_projection};
 pub use reducer::{analyze_win32_bundle, analyze_win32_bundle_with, Win32AnalysisOptions};
-pub use rules::derive_findings;
-pub use signals::{classify_record, RecordClassification};
+pub use rules::{classify_record, RecordClassification};
 pub use sources::{candidate_source_kind, classify_artifact, Win32SourceInput};

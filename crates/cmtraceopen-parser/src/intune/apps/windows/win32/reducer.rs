@@ -26,7 +26,7 @@ use super::models::{
     Win32ReturnCodeMapping, Win32Signal, Win32SourceKind, Win32SupersededFailure,
     Win32Transaction, Win32TransactionKey, WIN32_SCHEMA_VERSION,
 };
-use super::signals::{classify_record, RecordClassification};
+use super::rules::{classify_record, RecordClassification};
 use super::sources::{
     artifact_coverage, candidate_source_kind, classify_artifact, coverage_family,
     intune_source_kind, split_rotation, Win32SourceInput,

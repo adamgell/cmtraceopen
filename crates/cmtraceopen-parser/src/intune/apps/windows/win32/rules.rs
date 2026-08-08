@@ -1,1043 +1,915 @@
-//! Findings derived from an immutable [`Win32Analysis`] snapshot.
+//! Record-level classification for Win32 app deployment evidence.
 //!
-//! Each rule is one private `push_*` function that reads the snapshot and emits
-//! nothing unless its triggering evidence is present. Every finding therefore
-//! cites at least one [`IntuneEvidenceRef`] or at least one coverage-gap id;
-//! [`IntuneFinding::is_evidence_backed`] is the invariant, and the contract test
-//! asserts it over the whole corpus.
+//! Every rule here answers one question about one record: what did this line
+//! *say*? Nothing in this module decides an outcome, merges records, or infers a
+//! value that is not written down. That is the reducer's job, and it only gets
+//! to work from what these rules could actually prove.
 //!
-//! Severity, confidence, and cause classification are deliberately independent.
-//! An unmapped installer return code is a high-severity failure reported at
-//! medium confidence, because the deployment definitely failed and the *reason*
-//! is not in the evidence. Collapsing the two would make an honest "it failed,
-//! and I cannot tell you why" impossible to express.
+//! Two deliberate exclusions:
+//!
+//! * `AgentExecutor` records are never classified into a Win32 signal. That log
+//!   is the platform-script analyzer's primary source; a PowerShell installer
+//!   invoked for a Win32 app corroborates a transaction that was already keyed
+//!   from IME evidence, and may not mint one on its own.
+//! * A record whose component does not belong to the Win32 app workload yields
+//!   no identifiers at all, so another workload sharing the primary IME log can
+//!   never contribute an app id.
 
-use crate::intune::apps::windows::common::redact_text;
-use crate::intune::evidence::{
-    IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding, IntuneFindingConfidence,
-    IntuneFindingSeverity,
+use std::sync::OnceLock;
+
+use regex::Regex;
+
+// One grammar owns each shared vocabulary: the GUID shape belongs to
+// `guid_registry`, and the content-download phrases (started / completed /
+// failed / stalled) belong to `download_stats`. This module composes those
+// primitives instead of keeping parallel copies that can drift (issue #357's
+// one-behavior-owner requirement).
+use crate::intune::download_stats::{
+    download_complete_re, download_failed_re, download_re as download_vocabulary_re,
+    download_stall_re, download_start_re,
 };
+use crate::intune::evidence::{IntuneErrorCode, IntuneNamedValue};
+use crate::intune::guid_registry::GUID_PATTERN;
 
-use super::models::{
-    Win32Analysis, Win32ExecutionContext, Win32Outcome, Win32Phase, Win32ReturnCodeKind,
-    Win32Signal, Win32Transaction,
-};
+use super::models::{Win32ExecutionContext, Win32Intent, Win32Signal, Win32SourceKind};
 
-/// Derive stable, read-only diagnostic findings from a reduced snapshot.
-pub fn derive_findings(snapshot: &Win32Analysis) -> Vec<IntuneFinding> {
-    let mut findings = Vec::new();
+const GUID: &str = GUID_PATTERN;
 
-    push_missing_artifacts(snapshot, &mut findings);
-    push_unusable_artifacts(snapshot, &mut findings);
-    push_unknown_vocabulary(snapshot, &mut findings);
-    push_fragmented_records(snapshot, &mut findings);
-    push_unkeyed_signals(snapshot, &mut findings);
-    push_unlinked_installer_artifacts(snapshot, &mut findings);
-
-    for transaction in &snapshot.transactions {
-        push_not_targeted(transaction, &mut findings);
-        push_not_applicable(transaction, &mut findings);
-        push_requirement_not_met(transaction, &mut findings);
-        push_dependency_unresolved(transaction, &mut findings);
-        push_already_detected(transaction, &mut findings);
-        push_content_failure(transaction, &mut findings);
-        push_enforcement_command_failed(transaction, &mut findings);
-        push_installer_reported_failure(transaction, &mut findings);
-        push_unmapped_return_code(transaction, &mut findings);
-        push_installer_failed_but_detected(snapshot, transaction, &mut findings);
-        push_installed_not_detected(transaction, &mut findings);
-        push_reporting_failed(transaction, &mut findings);
-        push_deferred(transaction, &mut findings);
-        push_unresolved(transaction, &mut findings);
-        push_conflicting(transaction, &mut findings);
-        push_superseded_failures(transaction, &mut findings);
-        push_succeeded(transaction, &mut findings);
-    }
-
-    findings
+fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
+    cell.get_or_init(|| Regex::new(pattern).expect("win32 regex must compile"))
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-/// A stable, human-readable label for a transaction.
-///
-/// The caller-supplied display name is used when present; otherwise the app id.
-/// Nothing is ever inferred from log text, which is where real app names would
-/// arrive alongside real tenant data.
-fn label(transaction: &Win32Transaction) -> String {
-    transaction
-        .display_name
-        .clone()
-        .unwrap_or_else(|| transaction.key.app_id.clone())
-}
-
-/// A transaction-scoped finding id: the static kebab-case rule name, then the
-/// full transaction key.
-///
-/// The key includes the execution context because System and User deployments
-/// of the same app and deployment type are distinct transactions; omitting it
-/// collided their findings. The rule segment stays static kebab-case like the
-/// family's coverage ids (`win32-coverage-missing-artifact`), and every key
-/// segment is lowercase, so the whole id is one consistent grammar.
-fn finding_id(rule: &str, transaction: &Win32Transaction) -> String {
-    let context = match transaction.key.execution_context {
-        Win32ExecutionContext::System => "system",
-        Win32ExecutionContext::User => "user",
-        Win32ExecutionContext::Unknown => "unknown",
-    };
-    format!(
-        "win32-{rule}:{}:{}:{context}",
-        transaction.key.app_id,
-        transaction
-            .key
-            .deployment_type_id
-            .as_deref()
-            .unwrap_or("unknown")
-    )
-}
-
-fn phase_label(phase: Option<Win32Phase>) -> String {
-    match phase {
-        Some(phase) => format!("{phase:?}"),
-        None => "no phase confirmed".to_owned(),
-    }
-}
-
-/// The sentence every transaction-scoped finding ends with.
-///
-/// Epic #356 requires a finding to identify the last confirmed phase *and* the
-/// next requested artifact; building it in one place is what stops a rule
-/// forgetting half of it.
-fn provenance_sentence(transaction: &Win32Transaction) -> String {
-    let phase = phase_label(transaction.last_confirmed_phase);
-    match &transaction.next_evidence_request {
-        Some(request) => {
-            format!(" Last confirmed phase: {phase}. Next evidence requested: {request}.")
+macro_rules! win32_regex {
+    ($name:ident, $pattern:expr) => {
+        fn $name() -> &'static Regex {
+            static CELL: OnceLock<Regex> = OnceLock::new();
+            re(&CELL, $pattern)
         }
-        None => format!(" Last confirmed phase: {phase}."),
+    };
+    ($name:ident, fmt $pattern:expr) => {
+        fn $name() -> &'static Regex {
+            static CELL: OnceLock<Regex> = OnceLock::new();
+            re(&CELL, &format!($pattern, guid = GUID))
+        }
+    };
+}
+
+// ── Identifier extraction ───────────────────────────────────────────────────
+
+win32_regex!(
+    app_id_re,
+    fmt r"(?i)\b(?:win32\s*)?app(?:lication)?\s*(?:with\s+)?id\s*[:=]\s*\{{?(?P<app>{guid})\}}?"
+);
+win32_regex!(
+    app_id_field_re,
+    fmt r"(?i)\bAppId\s*[:=]\s*\{{?(?P<app>{guid})\}}?"
+);
+win32_regex!(
+    app_bare_re,
+    fmt r"(?i)\b(?:win32\s+)?app\s+\{{?(?P<app>{guid})\}}?"
+);
+win32_regex!(
+    deployment_type_re,
+    fmt r"(?i)\b(?:deployment\s*type|DeploymentType)\s*(?:with\s+)?id\s*[:=]\s*\{{?(?P<dt>{guid})\}}?"
+);
+win32_regex!(
+    dependency_re,
+    fmt r"(?i)\bdependency\s+(?:app\s+)?(?:with\s+)?(?:id\s*[:=]\s*)?\{{?(?P<dep>{guid})\}}?"
+);
+win32_regex!(
+    content_version_re,
+    r"(?i)\bcontent\s*version\s*[:=]\s*(?P<version>[0-9]+)"
+);
+win32_regex!(
+    requirement_name_re,
+    r"(?i)\brequirement\s+rule\s+'(?P<name>[^']+)'"
+);
+win32_regex!(
+    context_field_re,
+    r"(?i)\b(?:ExecutionContext|RunAsAccount|RunAsUser|TargetType|context)\s*[:=]\s*(?P<context>system|user|device)\b"
+);
+win32_regex!(
+    context_phrase_re,
+    r"(?i)\bin\s+(?P<context>system|user|device)\s+context\b"
+);
+win32_regex!(
+    intent_re,
+    r"(?i)\bintent\s*[:=]\s*(?P<intent>required|available|uninstall|availableWithoutEnrollment)\b"
+);
+
+// ── Signal vocabulary ───────────────────────────────────────────────────────
+
+win32_regex!(
+    policy_received_re,
+    r"(?i)\b(?:processing|processed|received)\s+(?:the\s+)?app\s+policy\b|\bapp\s+policy\s+received\b|\bget\s+app\s+policies\b"
+);
+win32_regex!(
+    not_targeted_re,
+    r"(?i)\bno\s+longer\s+(?:targeted|assigned)\b|\bnot\s+targeted\b|\bremoved\s+from\s+targeting\b"
+);
+// IME writes the subject id *between* the field name and its value
+// (`Applicability state for app with id: X = Applicable`), so the bounded lazy
+// gap is what lets one rule cover both that shape and the compact one. It is
+// bounded rather than open-ended so a long record cannot make the value of one
+// field bind to the name of another.
+win32_regex!(
+    applicability_failed_re,
+    r"(?i)\bapplicability\s+(?:state|result)\b[^\r\n]{0,160}?\bnot\s*applicable\b|\bis\s+not\s+applicable\b"
+);
+win32_regex!(
+    applicability_passed_re,
+    r"(?i)\bapplicability\s+(?:state|result)\b[^\r\n]{0,160}?[:=]\s*applicable\b|\bis\s+applicable\b"
+);
+win32_regex!(
+    requirement_failed_re,
+    r"(?i)\brequirement\s+rules?\s+(?:check\s+)?(?:failed|not\s+met|not\s+satisfied)\b|\brequirement\s+rule\s+'[^']*'\s+(?:check\s+)?failed\b"
+);
+win32_regex!(
+    requirement_passed_re,
+    r"(?i)\brequirement\s+rules?\s+(?:check\s+)?(?:passed|met|satisfied)\b"
+);
+// Same bounded-gap shape as the applicability rules: a dependency record names
+// the dependency id, then the parent app id, and only then its verdict. The
+// negative rule is evaluated first, so `not installed` never reaches the
+// positive one.
+win32_regex!(
+    dependency_unresolved_re,
+    r"(?i)\bdependenc(?:y|ies)\b[^\r\n]{0,160}?\b(?:not\s+(?:resolved|satisfied|met|installed)|unresolved|failed|missing)\b|\bblocked\s+by\s+(?:a\s+)?dependency\b"
+);
+win32_regex!(
+    dependency_resolved_re,
+    r"(?i)\bdependenc(?:y|ies)\b[^\r\n]{0,160}?\b(?:resolved|satisfied|met|installed)\b"
+);
+// The negative rule is always evaluated first; see `classify_signal`. Reversing
+// them would report the app as present at exactly the moment the evidence says
+// it is absent, because `Not Detected` contains `Detected`.
+win32_regex!(
+    detection_not_satisfied_re,
+    r"(?i)\bdetection\s+(?:state|result)\b[^\r\n]{0,160}?\bnot\s+detected\b|\bapp\s+is\s+not\s+detected\b|\bdetection\s+rules?\s+(?:were\s+|was\s+)?not\s+satisfied\b"
+);
+win32_regex!(
+    detection_satisfied_re,
+    r"(?i)\bdetection\s+(?:state|result)\b[^\r\n]{0,160}?[:=]\s*detected\b|\bapp\s+is\s+detected\b|\bdetection\s+rules?\s+(?:were\s+|was\s+)?satisfied\b"
+);
+win32_regex!(
+    content_unavailable_re,
+    r"(?i)\bno\s+content\s+(?:is\s+)?available\b|\bcontent\s+(?:is\s+)?not\s+available\b|\bcontent\s+version\s+[^\r\n]*?\bnot\s+found\b"
+);
+win32_regex!(
+    hash_failed_re,
+    r"(?i)\bhash\s+(?:validation|check|verification)\s+failed\b|\bhash\s+mismatch\b"
+);
+win32_regex!(
+    staging_failed_re,
+    r"(?i)\b(?:staging|extraction|decryption)\s+(?:of\s+[^\r\n]*?)?failed\b|\bfailed\s+to\s+(?:stage|extract|decrypt|unzip)\b"
+);
+// The download started/completed/failed/stalled phrases are consumed from
+// `download_stats` (see the imports at the top). The completion phrase
+// `content downloaded successfully` is the one IME wording the shared
+// vocabulary does not carry, so it is kept as a local *addition*, not a copy.
+win32_regex!(
+    download_completed_local_re,
+    r"(?i)\bcontent\s+downloaded\s+successfully\b"
+);
+// `Downloading content` is a progressive form the shared start vocabulary
+// (which anchors on starting/queued/resuming verbs) does not carry.
+win32_regex!(download_started_local_re, r"(?i)\bdownloading\s+content\b");
+win32_regex!(
+    enforcement_command_failed_re,
+    r"(?i)\bfail(?:ed|ure)\s+to\s+(?:create|start|launch|spawn)\s+(?:the\s+)?(?:process|installer|install\s+command)\b"
+);
+win32_regex!(
+    installer_completed_re,
+    r"(?i)\binstall(?:ation)?\s+(?:is\s+)?(?:done|complete|completed|finished)\b|\binstaller\s+exited\b|\bprocess\s+exit\s+code(?:\s+is)?\b"
+);
+win32_regex!(
+    enforcement_started_re,
+    r"(?i)\binstall(?:ation)?\s+command\s+line\b|\bstart(?:ing|ed)?\s+(?:the\s+)?install(?:ation)?\b|\blaunch(?:ing|ed)?\s+(?:the\s+)?installer\b|\bexecut(?:ing|ed)\s+(?:the\s+)?install\s+command\b"
+);
+win32_regex!(
+    retry_re,
+    r"(?i)\bwill\s+retry\b|\bretrying\b|\bschedul(?:ed|ing)\s+a\s+retry\b|\bdeferr(?:ed|ing)\b|\bnext\s+retry\s+(?:at|in)\b"
+);
+win32_regex!(
+    report_failed_re,
+    r"(?i)\bfail(?:ed|ure)\s+to\s+(?:send|report|upload)\s+(?:the\s+)?(?:app\s+)?(?:status|result|report)\b|\b(?:status|result)\s+report\s+failed\b"
+);
+win32_regex!(
+    report_submitted_re,
+    r"(?i)\b(?:status|result|app\s+status)\s+(?:report\s+)?(?:was\s+)?sent\s+to\s+(?:the\s+)?service\s+successfully\b|\breported\s+app\s+status\s+successfully\b"
+);
+win32_regex!(
+    report_sending_re,
+    r"(?i)\bsend(?:ing)?\s+(?:the\s+)?(?:app\s+)?(?:status|result)\s+to\s+(?:the\s+)?service\b"
+);
+
+// Return/exit/result token written next to an explicit label.
+win32_regex!(
+    return_code_re,
+    r"(?i)\b(?:exit\s*code|exitCode|return\s*code|returnCode|result\s*code|resultCode)\b\s*(?:is\s*)?[:=]?\s*(?P<code>-?(?:0x[0-9a-fA-F]+|\d+))"
+);
+// Error token written next to an explicit label.
+win32_regex!(
+    error_code_re,
+    r"(?i)\b(?:error\s*code|errorCode|hresult|HRESULT|error)\b\s*[:=]?\s*(?P<code>-?(?:0x[0-9a-fA-F]+|\d+))"
+);
+
+// Outcome vocabulary used only by the unknown-version heuristic.
+//
+// Matched on word boundaries. A substring test would treat an ordinary
+// `/quiet` command line or an `Installer.exe` file name as an unrecognised
+// outcome and demote a healthy bundle to low confidence.
+win32_regex!(
+    unknown_outcome_re,
+    r"(?i)\b(?:exit|exits|exited|complete|completed|fail|fails|failed|failure|finish|finished|done|terminated|abort|aborted)\b"
+);
+
+// A supplemental installer artifact named inside a keyed record.
+//
+// This is the only way an MSI/PSADT/Burn/EXE artifact joins a transaction.
+// Matching on timestamp proximity is explicitly not supported.
+// The value stops at whitespace unless it is quoted. Running to the end of the
+// line instead swallowed the trailing `for app with id: …` clause into the path,
+// so the artifact name never matched and the artifact never linked.
+win32_regex!(
+    output_file_re,
+    r#"(?i)\b(?:output|log)\s+file\s*[:=]\s*(?P<path>"[^"\r\n]+"|[^\s,;]+)"#
+);
+
+// ── Classification ──────────────────────────────────────────────────────────
+
+/// Everything one record could prove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordClassification {
+    pub signal: Win32Signal,
+    pub app_id: Option<String>,
+    pub deployment_type_id: Option<String>,
+    pub content_version: Option<String>,
+    pub dependency_app_id: Option<String>,
+    pub requirement_name: Option<String>,
+    pub execution_context: Win32ExecutionContext,
+    pub intent: Win32Intent,
+    pub error_code: Option<IntuneErrorCode>,
+    pub attributes: Vec<IntuneNamedValue>,
+    /// A supplemental artifact file name this record referenced.
+    pub referenced_output_file: Option<String>,
+    /// True when the record looks like Win32 enforcement but matched no rule.
+    /// The reducer turns this into a coverage flag, never an outcome.
+    pub enforcement_shaped_but_unmatched: bool,
+    /// False when the record belongs to another workload sharing the same log.
+    pub in_scope: bool,
+}
+
+impl RecordClassification {
+    fn empty() -> Self {
+        Self {
+            signal: Win32Signal::Unclassified,
+            app_id: None,
+            deployment_type_id: None,
+            content_version: None,
+            dependency_app_id: None,
+            requirement_name: None,
+            execution_context: Win32ExecutionContext::Unknown,
+            intent: Win32Intent::Unknown,
+            error_code: None,
+            attributes: Vec::new(),
+            referenced_output_file: None,
+            enforcement_shaped_but_unmatched: false,
+            in_scope: false,
+        }
+    }
+
+    /// Does this record name an app, and therefore anchor a transaction?
+    pub fn is_key_bearing(&self) -> bool {
+        self.app_id.is_some()
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn finding(
-    finding_id: String,
-    severity: IntuneFindingSeverity,
-    confidence: IntuneFindingConfidence,
-    title: &str,
-    summary: String,
-    recommended_checks: Vec<String>,
-    evidence: Vec<IntuneEvidenceRef>,
-    coverage_gap_ids: Vec<String>,
-) -> IntuneFinding {
-    IntuneFinding {
-        finding_id,
-        severity,
-        confidence,
-        title: title.to_owned(),
-        summary,
-        recommended_checks,
-        evidence,
-        coverage_gap_ids,
-    }
-}
-
-/// Push a finding only when it actually cites something.
+/// Parse a raw token into every form it was observed in.
 ///
-/// The guard is the last line of defence for the epic-wide rule that a finding
-/// backed by neither evidence nor a coverage gap is an assertion, not a
-/// diagnosis. A rule whose evidence collection came back empty is a bug, and
-/// dropping the finding is strictly better than exporting an uncited claim.
+/// The hex view is only rendered for values that fit the unsigned 32-bit window
+/// operators expect. A value outside it gets no hex form: truncating would print
+/// a different number than the log recorded.
+pub(super) fn parse_code(raw: &str) -> IntuneErrorCode {
+    let trimmed = raw.trim();
+    let (negative, digits) = match trimmed.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed),
+    };
+
+    let (decimal, hex) = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        let value = i64::from_str_radix(hex, 16).ok();
+        (
+            value.map(|v| if negative { -v } else { v }),
+            Some(format!("0x{}", hex.to_ascii_uppercase())),
+        )
+    } else {
+        let value = digits
+            .parse::<i64>()
+            .ok()
+            .map(|v| if negative { -v } else { v });
+        let hex = value
+            .and_then(|v| {
+                u32::try_from(v)
+                    .ok()
+                    .or_else(|| i32::try_from(v).ok().map(|v| v as u32))
+            })
+            .map(|v| format!("0x{v:08X}"));
+        (value, hex)
+    };
+
+    IntuneErrorCode {
+        raw: trimmed.to_owned(),
+        decimal,
+        hex,
+    }
+}
+
+/// Components whose records belong to the Win32 app workload.
 ///
-/// Every summary passes through the shared redaction grammar here, at the one
-/// choke point all rules share. Rules splice log-derived free text (failed
-/// requirement names, return tokens) into their summaries, and findings are
-/// exported alongside the redacted analysis; a raw restricted value must not
-/// reach an export through a finding when the observation it came from is
-/// masked (ADR-004). Titles and recommended checks are static strings with no
-/// record content.
-fn push(findings: &mut Vec<IntuneFinding>, mut candidate: IntuneFinding) {
-    if candidate.is_evidence_backed() {
-        candidate.summary = redact_text(&candidate.summary);
-        findings.push(candidate);
-    }
-}
-
-/// Evidence refs for the records in a transaction that carried a given signal.
-fn evidence_for_signal(
-    snapshot: &Win32Analysis,
-    transaction: &Win32Transaction,
-    predicate: impl Fn(Win32Signal) -> bool,
-) -> Vec<IntuneEvidenceRef> {
-    snapshot
-        .observations
-        .iter()
-        .filter(|observation| {
-            transaction
-                .observations
-                .contains(&observation.observation_id)
-                && predicate(observation.signal)
-        })
-        .map(|observation| observation.context.evidence_ref.clone())
-        .collect()
-}
-
-/// The transaction's own evidence, which is always non-empty by construction.
-fn all_evidence(transaction: &Win32Transaction) -> Vec<IntuneEvidenceRef> {
-    transaction.evidence.clone()
-}
-
-// ── Coverage rules ──────────────────────────────────────────────────────────
-
-fn push_missing_artifacts(snapshot: &Win32Analysis, findings: &mut Vec<IntuneFinding>) {
-    let gaps: Vec<String> = snapshot
-        .coverage
-        .artifacts
-        .iter()
-        .filter(|entry| entry.status == IntuneArtifactStatus::Missing)
-        .map(|entry| entry.artifact_id.clone())
-        .collect();
-    if gaps.is_empty() {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            "win32-coverage-missing-artifact".to_owned(),
-            IntuneFindingSeverity::Info,
-            IntuneFindingConfidence::High,
-            "Expected Win32 app evidence was not collected",
-            format!(
-                "{} expected artifact(s) were absent from the bundle, so any phase they alone \
-                 record cannot be evaluated.",
-                gaps.len()
-            ),
-            vec![
-                "Collect the named artifacts from the IME log directory and re-run the analysis"
-                    .to_owned(),
-            ],
-            Vec::new(),
-            gaps,
-        ),
-    );
-}
-
-fn push_unusable_artifacts(snapshot: &Win32Analysis, findings: &mut Vec<IntuneFinding>) {
-    let gaps: Vec<String> = snapshot
-        .coverage
-        .artifacts
-        .iter()
-        .filter(|entry| {
-            matches!(
-                entry.status,
-                IntuneArtifactStatus::PermissionDenied
-                    | IntuneArtifactStatus::Capped
-                    | IntuneArtifactStatus::ParseFailed
-                    | IntuneArtifactStatus::Skipped
-                    | IntuneArtifactStatus::Unsupported
-            )
-        })
-        .map(|entry| entry.artifact_id.clone())
-        .collect();
-    if gaps.is_empty() {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            "win32-coverage-unusable-artifact".to_owned(),
-            IntuneFindingSeverity::Warning,
-            IntuneFindingConfidence::High,
-            "Some Win32 app evidence was collected but could not be used",
-            format!(
-                "{} artifact(s) were truncated, denied, skipped, or could not be parsed. The \
-                 absence of a signal in them proves nothing.",
-                gaps.len()
-            ),
-            vec![
-                "Re-collect the named artifacts from an elevated context and without truncation"
-                    .to_owned(),
-            ],
-            Vec::new(),
-            gaps,
-        ),
-    );
-}
-
-fn push_unknown_vocabulary(snapshot: &Win32Analysis, findings: &mut Vec<IntuneFinding>) {
-    if !snapshot.coverage.unknown_vocabulary_observed {
-        return;
-    }
-    // Cite exactly the records that raised the flag. Citing every unclassified
-    // record dragged unrelated lines (another workload's PowerShell noise, an
-    // idle heartbeat) into the finding as if they evidenced an unknown
-    // enforcement grammar.
-    let evidence = snapshot
-        .observations
-        .iter()
-        .filter(|observation| observation.enforcement_shaped_but_unmatched)
-        .map(|observation| observation.context.evidence_ref.clone())
-        .collect::<Vec<_>>();
-    push(
-        findings,
-        finding(
-            "win32-unknown-enforcement-vocabulary".to_owned(),
-            IntuneFindingSeverity::Warning,
-            IntuneFindingConfidence::Medium,
-            "An enforcement record did not match any known IME phrasing",
-            "At least one record looked like Win32 enforcement but matched no rule, which is how \
-             an unrecognised IME version presents. Affected deployments are reported at low \
-             confidence rather than guessed."
-                .to_owned(),
-            vec!["Check the IME agent version against the supported log grammar".to_owned()],
-            evidence,
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_fragmented_records(snapshot: &Win32Analysis, findings: &mut Vec<IntuneFinding>) {
-    if snapshot.coverage.fragment_records == 0 {
-        return;
-    }
-    let evidence = snapshot
-        .observations
-        .iter()
-        .filter(|observation| {
-            observation.context.parse_state == crate::intune::evidence::IntuneParseState::Malformed
-        })
-        .map(|observation| observation.context.evidence_ref.clone())
-        .collect::<Vec<_>>();
-    push(
-        findings,
-        finding(
-            "win32-rotation-fragment".to_owned(),
-            IntuneFindingSeverity::Info,
-            IntuneFindingConfidence::High,
-            "A logical record was split across a rotation boundary",
-            format!(
-                "{} physical-line fragment(s) could not be framed into a complete record and were \
-                 therefore excluded from every transaction.",
-                snapshot.coverage.fragment_records
-            ),
-            vec![
-                "Supply the adjacent IME log rotation so the split record can be framed".to_owned(),
-            ],
-            evidence,
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_unkeyed_signals(snapshot: &Win32Analysis, findings: &mut Vec<IntuneFinding>) {
-    if snapshot.unkeyed_observations.is_empty() {
-        return;
-    }
-    let evidence = snapshot
-        .observations
-        .iter()
-        .filter(|observation| {
-            snapshot
-                .unkeyed_observations
-                .contains(&observation.observation_id)
-        })
-        .map(|observation| observation.context.evidence_ref.clone())
-        .collect::<Vec<_>>();
-    push(
-        findings,
-        finding(
-            "win32-unkeyed-signal".to_owned(),
-            IntuneFindingSeverity::Info,
-            IntuneFindingConfidence::High,
-            "Some records carried a signal but named no app",
-            format!(
-                "{} record(s) could not be keyed to an app. They are reported here rather than \
-                 attached to the nearest deployment in time.",
-                snapshot.unkeyed_observations.len()
-            ),
-            vec!["Supply the adjacent IME log rotation so these records can be keyed".to_owned()],
-            evidence,
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_unlinked_installer_artifacts(snapshot: &Win32Analysis, findings: &mut Vec<IntuneFinding>) {
-    if snapshot.coverage.unlinked_installer_artifacts.is_empty() {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            "win32-unlinked-installer-artifact".to_owned(),
-            IntuneFindingSeverity::Info,
-            IntuneFindingConfidence::High,
-            "A supplemental installer artifact could not be keyed to a deployment",
-            "No keyed record named these artifacts, and a supplemental artifact is never joined \
-             to a deployment by timestamp alone."
-                .to_owned(),
-            vec![
-                "Supply the AppWorkload.log records that name the installer output file".to_owned(),
-            ],
-            Vec::new(),
-            snapshot.coverage.unlinked_installer_artifacts.clone(),
-        ),
-    );
-}
-
-// ── Transaction rules ───────────────────────────────────────────────────────
-
-fn push_not_targeted(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::NotTargeted {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            finding_id("not-targeted", transaction),
-            IntuneFindingSeverity::Info,
-            transaction.confidence.clone(),
-            "The app is no longer targeted at this device",
-            format!(
-                "{} was removed from targeting, so no enforcement was attempted.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec!["Confirm the assignment in the Intune portal".to_owned()],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_not_applicable(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::NotApplicable {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            finding_id("not-applicable", transaction),
-            IntuneFindingSeverity::Info,
-            transaction.confidence.clone(),
-            "The app was evaluated as not applicable",
-            format!(
-                "{} did not pass applicability, so no content was acquired and no installer ran.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Compare the deployment type's applicability criteria with the device's platform \
-                 and architecture"
-                    .to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_requirement_not_met(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::RequirementNotMet {
-        return;
-    }
-    let rules = if transaction.failed_requirements.is_empty() {
-        "an unnamed requirement rule".to_owned()
-    } else {
-        transaction.failed_requirements.join(", ")
+/// The primary IME log is shared by every workload. `PowerShell` records are
+/// platform scripts and `HealthScripts` records are remediations; classifying
+/// either here would invent a Win32 transaction out of another workload's
+/// evidence.
+fn component_is_in_scope(source_kind: Win32SourceKind, component: Option<&str>) -> bool {
+    let expected: &[&str] = match source_kind {
+        Win32SourceKind::IntuneManagementExtension | Win32SourceKind::AppWorkload => {
+            &["Win32App", "AppWorkload"]
+        }
+        Win32SourceKind::AppActionProcessor => &["AppActionProcessor", "Win32App"],
+        // AgentExecutor is the platform-script analyzer's primary source and
+        // InstallerOutput contents are never parsed at all.
+        _ => return false,
     };
-    push(
-        findings,
-        finding(
-            finding_id("requirement-not-met", transaction),
-            IntuneFindingSeverity::Warning,
-            transaction.confidence.clone(),
-            "A requirement rule blocked the deployment",
-            format!(
-                "{} stopped at requirement evaluation: {rules}.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec!["Re-evaluate the named requirement rule against this device".to_owned()],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
+    component.is_some_and(|component| {
+        expected
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(component))
+    })
 }
 
-fn push_dependency_unresolved(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::DependencyUnresolved {
-        return;
+fn capture_lower(caps: Option<regex::Captures<'_>>, group: &str) -> Option<String> {
+    caps.and_then(|caps| caps.name(group).map(|m| m.as_str().to_ascii_lowercase()))
+}
+
+fn extract_context(message: &str) -> Win32ExecutionContext {
+    let captured = context_field_re()
+        .captures(message)
+        .or_else(|| context_phrase_re().captures(message));
+    match capture_lower(captured, "context").as_deref() {
+        // Intune writes the machine context as either `system` or `device`
+        // depending on the record; both mean the same thing here.
+        Some("system") | Some("device") => Win32ExecutionContext::System,
+        Some("user") => Win32ExecutionContext::User,
+        _ => Win32ExecutionContext::Unknown,
     }
-    let dependencies = if transaction.unresolved_dependencies.is_empty() {
-        "an unnamed dependency".to_owned()
-    } else {
-        transaction.unresolved_dependencies.join(", ")
+}
+
+fn extract_intent(message: &str) -> Win32Intent {
+    match capture_lower(intent_re().captures(message), "intent").as_deref() {
+        Some("required") => Win32Intent::Required,
+        Some("uninstall") => Win32Intent::Uninstall,
+        Some("available") | Some("availablewithoutenrollment") => Win32Intent::Available,
+        _ => Win32Intent::Unknown,
+    }
+}
+
+/// Pull the app id out of a record.
+///
+/// The dependency span is removed first. `Dependency app with id: X for app with
+/// id: Y` otherwise resolves the *dependency* as the app, which would attach the
+/// blocked deployment's evidence to the app it is waiting on.
+fn extract_app_id(message: &str, dependency_span: Option<(usize, usize)>) -> Option<String> {
+    let without_dependency = match dependency_span {
+        Some((start, end)) => {
+            let mut owned = String::with_capacity(message.len());
+            owned.push_str(&message[..start]);
+            owned.push(' ');
+            owned.push_str(&message[end..]);
+            owned
+        }
+        None => message.to_owned(),
     };
-    push(
-        findings,
-        finding(
-            finding_id("dependency-unresolved", transaction),
-            IntuneFindingSeverity::Error,
-            transaction.confidence.clone(),
-            "A dependency blocked the deployment",
-            format!(
-                "{} is waiting on {dependencies}.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Analyse the dependency app's own deployment before re-testing this one".to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
 
-fn push_already_detected(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::DetectedBeforeEnforcement {
-        return;
+    for pattern in [app_id_field_re(), app_id_re(), app_bare_re()] {
+        if let Some(app) = capture_lower(pattern.captures(&without_dependency), "app") {
+            return Some(app);
+        }
     }
-    push(
-        findings,
-        finding(
-            finding_id("already-detected", transaction),
-            IntuneFindingSeverity::Info,
-            transaction.confidence.clone(),
-            "Detection was already satisfied, so no installer ran",
-            format!(
-                "{} was detected before enforcement, which is a successful no-op rather than a \
-                 skipped install.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Confirm the detection rule matches the intended version, not merely any version"
-                    .to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
+    None
 }
 
-fn push_content_failure(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    let (rule, title, summary) = match transaction.outcome {
-        Win32Outcome::ContentUnavailable => (
-            "content-unavailable",
-            "No usable content was available for this app",
-            "the service reported no usable content for the requested version",
-        ),
-        Win32Outcome::ContentDeliveryFailed => (
-            "content-delivery-failed",
-            "Content download, hash validation, or staging failed",
-            "content acquisition failed before any installer could run",
-        ),
-        _ => return,
-    };
-    push(
-        findings,
-        finding(
-            finding_id(rule, transaction),
-            IntuneFindingSeverity::Error,
-            transaction.confidence.clone(),
-            title,
-            format!(
-                "{}: {summary}.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Check Delivery Optimization and the content version referenced by the assignment"
-                    .to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
+/// Classify one already-framed logical record.
+pub fn classify_record(
+    source_kind: Win32SourceKind,
+    component: Option<&str>,
+    message: &str,
+) -> RecordClassification {
+    let mut result = RecordClassification::empty();
 
-fn push_enforcement_command_failed(
-    transaction: &Win32Transaction,
-    findings: &mut Vec<IntuneFinding>,
-) {
-    if transaction.outcome != Win32Outcome::EnforcementCommandFailed {
-        return;
+    // Identifiers are only extracted from a *confirmed*, in-scope Win32 source.
+    // Without this gate a file that merely happens to be named `AppWorkload.log`
+    // could mint a transaction from any line containing a GUID.
+    if !component_is_in_scope(source_kind, component) {
+        return result;
     }
-    push(
-        findings,
-        finding(
-            finding_id("enforcement-command-failed", transaction),
-            IntuneFindingSeverity::Error,
-            transaction.confidence.clone(),
-            "The install command could not be launched",
-            format!(
-                "{} never reached the installer: the enforcement command itself failed to start, \
-                 so there is no return code to interpret.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Verify the install command line, its working directory, and the execution context"
-                    .to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
+    result.in_scope = true;
 
-fn push_installer_reported_failure(
-    transaction: &Win32Transaction,
-    findings: &mut Vec<IntuneFinding>,
-) {
-    if transaction.outcome != Win32Outcome::InstallerReportedFailure {
-        return;
-    }
-    let token = transaction
-        .return_code
+    let dependency_match = dependency_re().captures(message);
+    let dependency_span = dependency_match
         .as_ref()
-        .map(|code| code.raw.clone())
-        .unwrap_or_else(|| "an unreported code".to_owned());
-    push(
-        findings,
-        finding(
-            finding_id("installer-reported-failure", transaction),
-            IntuneFindingSeverity::Error,
-            transaction.confidence.clone(),
-            "The installer ran and reported a failure",
-            format!(
-                "{} reached enforcement and the installer returned {token}. The return code is an \
-                 execution outcome, not a root cause.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Read the installer-native log for this run before acting on the return code"
-                    .to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
-
-/// A code outside the supplied return-code table.
-///
-/// Reported separately and at medium confidence: the failure itself is
-/// well-evidenced, but the analyzer refuses to assign the token a meaning that
-/// is not in the evidence or in the app's configured table.
-fn push_unmapped_return_code(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.return_code_kind != Some(Win32ReturnCodeKind::Unmapped) {
-        return;
-    }
-    let Some(code) = &transaction.return_code else {
-        return;
-    };
-    let hex = code
-        .hex
+        .and_then(|caps| caps.get(0))
+        .map(|m| (m.start(), m.end()));
+    result.dependency_app_id = dependency_match
         .as_ref()
-        .map(|hex| format!(" ({hex})"))
-        .unwrap_or_default();
-    push(
-        findings,
-        finding(
-            finding_id("unmapped-return-code", transaction),
-            IntuneFindingSeverity::Warning,
-            IntuneFindingConfidence::Medium,
-            "The installer's return code is not in the app's return-code table",
-            format!(
-                "{} returned {}{hex}, which neither the supplied table nor Intune's documented \
-                 defaults classify. No meaning is asserted for it here.{}",
-                label(transaction),
-                code.raw,
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Add the observed code to the deployment type's return-code table if it is \
-                 expected"
-                    .to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
+        .and_then(|caps| caps.name("dep"))
+        .map(|m| m.as_str().to_ascii_lowercase());
+
+    result.app_id = extract_app_id(message, dependency_span);
+    result.deployment_type_id = capture_lower(deployment_type_re().captures(message), "dt");
+    result.content_version = content_version_re()
+        .captures(message)
+        .and_then(|caps| caps.name("version"))
+        .map(|m| m.as_str().to_owned());
+    result.requirement_name = requirement_name_re()
+        .captures(message)
+        .and_then(|caps| caps.name("name"))
+        .map(|m| m.as_str().to_owned());
+    result.execution_context = extract_context(message);
+    result.intent = extract_intent(message);
+    result.referenced_output_file = output_file_re()
+        .captures(message)
+        .and_then(|caps| caps.name("path"))
+        .map(|m| file_name_of(m.as_str().trim()));
+
+    result.signal = classify_signal(message, &mut result);
+
+    if result.signal == Win32Signal::Unclassified && looks_like_enforcement(message) {
+        result.enforcement_shaped_but_unmatched = true;
+    }
+
+    result
 }
 
-/// The installer reported failure and detection then found the app present.
+/// The trailing path segment of a referenced artifact.
 ///
-/// The reducer deliberately keeps the return code as the stronger claim rather
-/// than silently upgrading the deployment to success; this rule makes the
-/// contradiction visible instead of hiding it.
-fn push_installer_failed_but_detected(
-    snapshot: &Win32Analysis,
-    transaction: &Win32Transaction,
-    findings: &mut Vec<IntuneFinding>,
-) {
-    if transaction.outcome != Win32Outcome::InstallerReportedFailure {
-        return;
-    }
-    let evidence = evidence_for_signal(snapshot, transaction, |signal| {
-        signal == Win32Signal::DetectionSatisfied
-    });
-    if evidence.is_empty() {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            finding_id("installer-failed-but-detected", transaction),
-            IntuneFindingSeverity::Warning,
-            IntuneFindingConfidence::Medium,
-            "The installer reported failure but detection found the app present",
-            format!(
-                "{} has contradictory evidence: a failing return code and a satisfied detection \
-                 rule. Neither is discarded here.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Confirm whether the detection rule is broad enough to match a partial install"
-                    .to_owned(),
-            ],
-            evidence,
-            Vec::new(),
-        ),
-    );
+/// Only the file name is kept: the directory half is where profile names live,
+/// and the name alone is what keys the supplemental artifact.
+fn file_name_of(path: &str) -> String {
+    path.rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(path)
+        .trim_matches('"')
+        .to_owned()
 }
 
-fn push_installed_not_detected(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::InstalledNotDetected {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            finding_id("installed-not-detected", transaction),
-            IntuneFindingSeverity::Error,
-            transaction.confidence.clone(),
-            "The installer succeeded but detection still fails",
-            format!(
-                "{} enforced successfully and post-enforcement detection remained unsatisfied. \
-                 The device will keep retrying and the app will keep reporting as failed.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Compare the detection rule with what the installer actually wrote to disk or the \
-                 registry"
-                    .to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_reporting_failed(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::ReportingFailed {
-        return;
-    }
-    let local = match transaction.local_outcome {
-        Some(outcome) => format!("The local outcome was {outcome:?}"),
-        None => "No local outcome was evidenced before the upload attempt".to_owned(),
-    };
-    push(
-        findings,
-        finding(
-            finding_id("reporting-failed", transaction),
-            IntuneFindingSeverity::Warning,
-            transaction.confidence.clone(),
-            "The local outcome could not be reported to the service",
-            format!(
-                "{} finished locally and the status upload failed, so the portal will disagree \
-                 with the device. {local}.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec!["Check device connectivity and proxy configuration for the IME".to_owned()],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_deferred(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::Deferred {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            finding_id("deferred", transaction),
-            IntuneFindingSeverity::Info,
-            IntuneFindingConfidence::Low,
-            "The deployment was deferred and has no terminal outcome yet",
-            format!(
-                "{} scheduled a retry and the supplied evidence contains no result after it. This \
-                 is an unresolved state, not a failure.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec!["Collect the IME log rotation covering the next retry window".to_owned()],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_unresolved(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if !matches!(
-        transaction.outcome,
-        Win32Outcome::InsufficientEvidence | Win32Outcome::Assigned | Win32Outcome::Enforcing
-    ) {
-        return;
-    }
-    push(
-        findings,
-        finding(
-            finding_id("unresolved", transaction),
-            IntuneFindingSeverity::Info,
-            IntuneFindingConfidence::Low,
-            "The deployment has no terminal outcome in the supplied evidence",
-            format!(
-                "{} is reported as {:?}. No conclusion is drawn about whether it succeeded.{}",
-                label(transaction),
-                transaction.outcome,
-                provenance_sentence(transaction)
-            ),
-            vec!["Collect the artifact named in the next-evidence request".to_owned()],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
-}
-
-/// Two equal-authority terminal statements that nothing in the evidence orders.
+/// Order matters here, and every negative rule precedes its positive twin.
 ///
-/// Per ADR-003 the reduction refuses to pick a winner; this finding is where
-/// the refusal becomes visible instead of a silent `InsufficientEvidence`.
-fn push_conflicting(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::Conflicting {
-        return;
+/// `Detection state = Not Detected` contains `Detected`; checking the positive
+/// rule first would report the app as present at exactly the moment the evidence
+/// says it is absent.
+fn classify_signal(message: &str, result: &mut RecordClassification) -> Win32Signal {
+    if not_targeted_re().is_match(message) {
+        return Win32Signal::NotTargeted;
     }
-    push(
-        findings,
-        finding(
-            finding_id("conflicting-terminal-outcomes", transaction),
-            IntuneFindingSeverity::Warning,
-            IntuneFindingConfidence::Low,
-            "The evidence states contradictory terminal outcomes that cannot be ordered",
-            format!(
-                "{} has records of equal authority claiming different terminal outcomes, and no \
-                 shared record order or trusted timestamps prove which came later. No winner is \
-                 asserted.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Collect every rotation of the artifact in one capture so a single source orders \
-                 the check-ins"
-                    .to_owned(),
-            ],
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
+    if applicability_failed_re().is_match(message) {
+        return Win32Signal::ApplicabilityFailed;
+    }
+    if requirement_failed_re().is_match(message) {
+        return Win32Signal::RequirementFailed;
+    }
+    if dependency_unresolved_re().is_match(message) {
+        return Win32Signal::DependencyUnresolved;
+    }
+    if hash_failed_re().is_match(message) {
+        result.error_code = extract_failure_code(message);
+        return Win32Signal::HashValidationFailed;
+    }
+    if staging_failed_re().is_match(message) {
+        result.error_code = extract_failure_code(message);
+        return Win32Signal::StagingFailed;
+    }
+    // Content-unavailable is checked before the shared download-failed
+    // vocabulary: the shared alternation includes `content not found`, and the
+    // more specific no-usable-content diagnosis must win over the generic
+    // delivery failure.
+    if content_unavailable_re().is_match(message) {
+        result.error_code = extract_failure_code(message);
+        return Win32Signal::ContentUnavailable;
+    }
+    // The shared failure vocabulary carries bare words (`cancelled`,
+    // `aborted`) that are only download statements on a download-shaped line,
+    // so it is gated by the shared download vocabulary — the same composition
+    // `download_stats` itself uses.
+    if download_vocabulary_re().is_match(message) && download_failed_re().is_match(message) {
+        result.error_code = extract_failure_code(message);
+        return Win32Signal::DownloadFailed;
+    }
+    if enforcement_command_failed_re().is_match(message) {
+        result.error_code = extract_failure_code(message);
+        return Win32Signal::EnforcementCommandFailed;
+    }
+    if report_failed_re().is_match(message) {
+        result.error_code = extract_failure_code(message);
+        return Win32Signal::ReportFailed;
+    }
+    if report_submitted_re().is_match(message) {
+        return Win32Signal::ReportSubmitted;
+    }
+    // "Sending app status to service" is the attempt, not the success.
+    if report_sending_re().is_match(message) {
+        return Win32Signal::Unclassified;
+    }
+    if installer_completed_re().is_match(message) {
+        result.error_code = return_code_re()
+            .captures(message)
+            .and_then(|caps| caps.name("code"))
+            .map(|m| parse_code(m.as_str()));
+        return Win32Signal::InstallerCompleted;
+    }
+    if detection_not_satisfied_re().is_match(message) {
+        return Win32Signal::DetectionNotSatisfied;
+    }
+    if detection_satisfied_re().is_match(message) {
+        return Win32Signal::DetectionSatisfied;
+    }
+    if applicability_passed_re().is_match(message) {
+        return Win32Signal::ApplicabilityPassed;
+    }
+    if requirement_passed_re().is_match(message) {
+        return Win32Signal::RequirementPassed;
+    }
+    if dependency_resolved_re().is_match(message) {
+        return Win32Signal::DependencyResolved;
+    }
+    if (download_vocabulary_re().is_match(message) && download_complete_re().is_match(message))
+        || download_completed_local_re().is_match(message)
+    {
+        return Win32Signal::DownloadCompleted;
+    }
+    if download_vocabulary_re().is_match(message) && download_stall_re().is_match(message) {
+        return Win32Signal::DownloadStalled;
+    }
+    if (download_vocabulary_re().is_match(message) && download_start_re().is_match(message))
+        || download_started_local_re().is_match(message)
+    {
+        return Win32Signal::DownloadStarted;
+    }
+    if enforcement_started_re().is_match(message) {
+        return Win32Signal::EnforcementStarted;
+    }
+    // `download_stats::appworkload_retry_re` is deliberately NOT reused here:
+    // its alternation folds `retry exhausted` and `failed … retry` — statements
+    // about a retry *ending* — into the same bucket as a retry being scheduled.
+    // For statistics that conflation is harmless; for a transaction outcome,
+    // classifying an exhausted retry as `RetryScheduled` would report a
+    // deployment as deferred at the exact moment the agent gave up.
+    if retry_re().is_match(message) {
+        return Win32Signal::RetryScheduled;
+    }
+    if policy_received_re().is_match(message) {
+        result.attributes = policy_attributes(message);
+        return Win32Signal::AppPolicyReceived;
+    }
+    Win32Signal::Unclassified
 }
 
-/// A proven failure that a later, explicitly linked record superseded.
+/// Prefer an explicit error label, falling back to a return-code label.
+fn extract_failure_code(message: &str) -> Option<IntuneErrorCode> {
+    error_code_re()
+        .captures(message)
+        .or_else(|| return_code_re().captures(message))
+        .and_then(|caps| caps.name("code").map(|m| parse_code(m.as_str())))
+}
+
+/// Retain policy fields we do not model yet, so typing one later is a widening
+/// change rather than a re-parse.
+fn policy_attributes(message: &str) -> Vec<IntuneNamedValue> {
+    let mut attributes = Vec::new();
+    if let Some(version) = content_version_re()
+        .captures(message)
+        .and_then(|caps| caps.name("version"))
+    {
+        attributes.push(IntuneNamedValue {
+            name: "contentVersion".to_owned(),
+            value: version.as_str().to_owned(),
+        });
+    }
+    attributes
+}
+
+/// Enforcement-shaped but unmatched: mentions installation plus an outcome word.
 ///
-/// Retry semantics per ADR-003: the linked later outcome is the transaction's
-/// answer, but the failed enforcement cycle really happened and stays visible.
-fn push_superseded_failures(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.superseded_failures.is_empty() {
-        return;
-    }
-    let outcomes = transaction
-        .superseded_failures
-        .iter()
-        .map(|entry| match &entry.return_code {
-            Some(code) => format!("{:?} ({})", entry.outcome, code.raw),
-            None => format!("{:?}", entry.outcome),
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let evidence = transaction
-        .superseded_failures
-        .iter()
-        .flat_map(|entry| entry.evidence.iter().cloned())
-        .collect::<Vec<_>>();
-    push(
-        findings,
-        finding(
-            finding_id("superseded-failure", transaction),
-            IntuneFindingSeverity::Warning,
-            transaction.confidence.clone(),
-            "An earlier enforcement cycle failed before the current outcome",
-            format!(
-                "{} reached its current outcome after at least one proven failure that a later, \
-                 explicitly ordered record superseded: {outcomes}. The failure is retained as \
-                 evidence of a real failed cycle, not erased by the retry.{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            vec![
-                "Check whether the earlier failure recurs across devices before treating the \
-                 retry success as the steady state"
-                    .to_owned(),
-            ],
-            evidence,
-            Vec::new(),
-        ),
-    );
-}
-
-fn push_succeeded(transaction: &Win32Transaction, findings: &mut Vec<IntuneFinding>) {
-    if transaction.outcome != Win32Outcome::Succeeded {
-        return;
-    }
-    let reboot = if transaction.reboot_required {
-        " A restart is pending, so the app is installed but not yet fully applied."
-    } else {
-        ""
-    };
-    push(
-        findings,
-        finding(
-            finding_id("succeeded", transaction),
-            IntuneFindingSeverity::Info,
-            transaction.confidence.clone(),
-            "The deployment completed successfully",
-            format!(
-                "{} reached a successful outcome.{reboot}{}",
-                label(transaction),
-                provenance_sentence(transaction)
-            ),
-            Vec::new(),
-            all_evidence(transaction),
-            Vec::new(),
-        ),
-    );
+/// This is how an unrecognised IME version shows up. The vocabulary is
+/// deliberately narrow so a healthy bundle is never demoted.
+fn looks_like_enforcement(message: &str) -> bool {
+    let lowered = message.to_ascii_lowercase();
+    (lowered.contains("install") || lowered.contains("enforcement"))
+        && unknown_outcome_re().is_match(message)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intune::apps::windows::win32::{analyze_win32_bundle, Win32SourceInput};
 
     const APP: &str = "11111111-2222-4333-8444-555555555555";
+    const DEP: &str = "99999999-8888-4777-8666-555555555555";
     const DT: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
-    fn record(message: &str) -> String {
-        format!(
-            "<![LOG[{message}]LOG]!><time=\"10:00:00.000+000\" date=\"7-31-2026\" \
-             component=\"Win32App\" context=\"\" type=\"1\" thread=\"5\" file=\"\">\n"
-        )
-    }
-
-    fn analyze(messages: &[String]) -> Win32Analysis {
-        analyze_win32_bundle(&[Win32SourceInput::captured(
-            "aw",
-            "AppWorkload.log",
-            messages.concat(),
-        )])
+    fn workload(message: &str) -> RecordClassification {
+        classify_record(Win32SourceKind::AppWorkload, Some("Win32App"), message)
     }
 
     #[test]
-    fn every_finding_cites_evidence_or_a_coverage_gap() {
-        let snapshot = analyze(&[
-            record(&format!(
-                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
-            )),
-            record(&format!(
-                "[Win32App] Installation is done for app with id: {APP}, exit code: 0x80070643"
-            )),
-        ]);
-        let findings = derive_findings(&snapshot);
-        assert!(!findings.is_empty());
-        for candidate in &findings {
-            assert!(
-                candidate.is_evidence_backed(),
-                "{} cites nothing",
-                candidate.finding_id
-            );
-        }
+    fn app_id_is_extracted_and_normalised() {
+        let result = workload(&format!(
+            "[Win32App] Processing app policy for app with id: {}",
+            APP.to_ascii_uppercase()
+        ));
+        assert_eq!(result.app_id.as_deref(), Some(APP));
+        assert_eq!(result.signal, Win32Signal::AppPolicyReceived);
+        assert!(result.is_key_bearing());
     }
 
     #[test]
-    fn an_unmapped_code_produces_a_failure_and_a_separate_unmapped_finding() {
-        let snapshot = analyze(&[
-            record(&format!(
-                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
-            )),
-            record(&format!(
-                "[Win32App] Installation is done for app with id: {APP}, exit code: 0x80070643"
-            )),
-        ]);
-        let ids: Vec<String> = derive_findings(&snapshot)
-            .into_iter()
-            .map(|candidate| candidate.finding_id)
-            .collect();
-        assert!(ids.contains(&format!("win32-installer-reported-failure:{APP}:{DT}:unknown")));
-        assert!(ids.contains(&format!("win32-unmapped-return-code:{APP}:{DT}:unknown")));
+    fn a_dependency_guid_never_becomes_the_app_id() {
+        // Otherwise the blocked deployment's evidence attaches to the app it is
+        // waiting on, which is the wrong app entirely.
+        let result = workload(&format!(
+            "[Win32App] Dependency app with id: {DEP} for app with id: {APP} is not installed"
+        ));
+        assert_eq!(result.app_id.as_deref(), Some(APP));
+        assert_eq!(result.dependency_app_id.as_deref(), Some(DEP));
+        assert_eq!(result.signal, Win32Signal::DependencyUnresolved);
     }
 
     #[test]
-    fn a_successful_deployment_still_names_its_last_confirmed_phase() {
-        let snapshot = analyze(&[
-            record(&format!(
-                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
-            )),
-            record(&format!(
-                "[Win32App] Installation is done for app with id: {APP}, exit code: 0"
-            )),
-        ]);
-        let findings = derive_findings(&snapshot);
-        let success = findings
-            .iter()
-            .find(|candidate| candidate.finding_id == format!("win32-succeeded:{APP}:{DT}:unknown"))
-            .expect("a successful deployment must be reported");
-        assert!(success
-            .summary
-            .contains("Last confirmed phase: Enforcement"));
+    fn deployment_type_is_a_separate_identifier() {
+        let result = workload(&format!(
+            "[Win32App] app with id: {APP}, deployment type id: {DT}, content version: 3"
+        ));
+        assert_eq!(result.deployment_type_id.as_deref(), Some(DT));
+        assert_eq!(result.content_version.as_deref(), Some("3"));
     }
 
     #[test]
-    fn finding_summaries_pass_through_the_redaction_grammar() {
-        // Rules splice log-derived free text into summaries; a requirement
-        // name quoting an identity must arrive masked (ADR-004: raw restricted
-        // values must not appear in exported findings).
-        let snapshot = analyze(&[
-            record(&format!(
-                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
-            )),
-            record(&format!(
-                "[Win32App] Requirement rule 'Profile present for adele.vance@contoso.example' \
-                 check failed for app with id: {APP}"
-            )),
-        ]);
-        let findings = derive_findings(&snapshot);
-        assert!(!findings.is_empty());
-        for finding in &findings {
-            assert!(
-                !finding.summary.contains("adele.vance"),
-                "{} leaked an identity: {}",
-                finding.finding_id,
-                finding.summary
-            );
-        }
-        // The masking must not have destroyed the diagnostic keys.
-        assert!(findings
-            .iter()
-            .any(|finding| finding.summary.contains(APP)));
+    fn not_detected_is_never_read_as_detected() {
+        let result = workload(&format!(
+            "[Win32App] Detection state for app with id: {APP} = Not Detected"
+        ));
+        assert_eq!(result.signal, Win32Signal::DetectionNotSatisfied);
     }
 
     #[test]
-    fn findings_are_deterministic_across_repeated_derivations() {
-        let snapshot = analyze(&[record(&format!(
-            "[Win32App] Processing app policy for app with id: {APP}"
-        ))]);
-        assert_eq!(derive_findings(&snapshot), derive_findings(&snapshot));
+    fn detected_is_recognised() {
+        let result = workload(&format!(
+            "[Win32App] Detection state for app with id: {APP} = Detected"
+        ));
+        assert_eq!(result.signal, Win32Signal::DetectionSatisfied);
+    }
+
+    #[test]
+    fn not_applicable_outranks_applicable() {
+        let result = workload(&format!(
+            "[Win32App] app with id: {APP} is not applicable to this device"
+        ));
+        assert_eq!(result.signal, Win32Signal::ApplicabilityFailed);
+    }
+
+    #[test]
+    fn installer_completion_captures_a_zero_code() {
+        let result = workload(&format!(
+            "[Win32App] Installation is done for app with id: {APP}, exit code: 0"
+        ));
+        assert_eq!(result.signal, Win32Signal::InstallerCompleted);
+        let code = result.error_code.expect("code");
+        assert_eq!(code.decimal, Some(0));
+        assert_eq!(code.raw, "0");
+    }
+
+    #[test]
+    fn process_exit_code_is_captured_with_the_is_separator() {
+        let result = workload(&format!(
+            "[Win32App] Process exit code is 1603 for app with id: {APP}"
+        ));
+        assert_eq!(result.signal, Win32Signal::InstallerCompleted);
+        assert_eq!(result.error_code.expect("code").decimal, Some(1603));
+    }
+
+    #[test]
+    fn installer_completion_keeps_a_hex_code_verbatim() {
+        let result = workload(&format!(
+            "[Win32App] Installation completed for app with id: {APP}, exit code: 0x80070643"
+        ));
+        let code = result.error_code.expect("code");
+        assert_eq!(code.raw, "0x80070643");
+        assert_eq!(code.hex.as_deref(), Some("0x80070643"));
+        assert_eq!(code.decimal, Some(0x8007_0643));
+    }
+
+    #[test]
+    fn an_out_of_range_code_gets_no_truncated_hex_view() {
+        let code = parse_code("4294967297");
+        assert_eq!(code.decimal, Some(4_294_967_297));
+        assert_eq!(code.hex, None);
+    }
+
+    #[test]
+    fn a_negative_code_survives_round_trip() {
+        let code = parse_code("-2147024891");
+        assert_eq!(code.decimal, Some(-2_147_024_891));
+        assert_eq!(code.raw, "-2147024891");
+    }
+
+    #[test]
+    fn the_shared_download_vocabulary_is_consumed_not_duplicated() {
+        // Stall/timeout phrasing comes straight from download_stats and is now
+        // recognized instead of falling into Unclassified (one-behavior-owner,
+        // issue #357). It is deliberately not a terminal statement.
+        assert_eq!(
+            workload(&format!(
+                "[Win32App] Content download timed out for app with id: {APP}"
+            ))
+            .signal,
+            Win32Signal::DownloadStalled
+        );
+        // The shared failure vocabulary's bare words only count on a
+        // download-shaped line.
+        assert_eq!(
+            workload(&format!(
+                "[Win32App] Content download cancelled for app with id: {APP}"
+            ))
+            .signal,
+            Win32Signal::DownloadFailed
+        );
+        assert_eq!(
+            workload("[Win32App] User cancelled the completion dialog").signal,
+            Win32Signal::Unclassified
+        );
+        // The more specific no-usable-content diagnosis wins over the generic
+        // delivery failure even though the shared alternation matches both.
+        assert_eq!(
+            workload(&format!(
+                "[Win32App] Content version 5 not found while starting the download for app with id: {APP}"
+            ))
+            .signal,
+            Win32Signal::ContentUnavailable
+        );
+    }
+
+    #[test]
+    fn hash_failure_outranks_a_generic_download_line() {
+        let result = workload(&format!(
+            "[Win32App] Hash mismatch while downloading content for app with id: {APP}, error code: 0x87D30067"
+        ));
+        assert_eq!(result.signal, Win32Signal::HashValidationFailed);
+        assert_eq!(
+            result.error_code.expect("code").hex.as_deref(),
+            Some("0x87D30067")
+        );
+    }
+
+    #[test]
+    fn sending_a_report_is_not_the_same_as_having_sent_it() {
+        let result = workload(&format!(
+            "[Win32App] Sending app status to service for app with id: {APP}"
+        ));
+        assert_eq!(result.signal, Win32Signal::Unclassified);
+    }
+
+    #[test]
+    fn report_success_and_failure_are_separate_signals() {
+        assert_eq!(
+            workload("[Win32App] App status report was sent to service successfully").signal,
+            Win32Signal::ReportSubmitted
+        );
+        assert_eq!(
+            workload("[Win32App] Failed to send app status to service, error code: 0x80072ee2")
+                .signal,
+            Win32Signal::ReportFailed
+        );
+    }
+
+    #[test]
+    fn a_platform_script_record_in_the_shared_ime_log_is_out_of_scope() {
+        let result = classify_record(
+            Win32SourceKind::IntuneManagementExtension,
+            Some("PowerShell"),
+            &format!("[PowerShell] Processing app policy for app with id: {APP}"),
+        );
+        assert!(!result.in_scope);
+        assert_eq!(result.app_id, None);
+        assert_eq!(result.signal, Win32Signal::Unclassified);
+    }
+
+    #[test]
+    fn agent_executor_records_never_mint_a_win32_signal() {
+        let result = classify_record(
+            Win32SourceKind::AgentExecutor,
+            Some("AgentExecutor"),
+            &format!("Installation is done for app with id: {APP}, exit code: 1603"),
+        );
+        assert!(!result.in_scope);
+        assert_eq!(result.app_id, None);
+    }
+
+    #[test]
+    fn an_unconfirmed_artifact_yields_no_identifiers_at_all() {
+        let result = classify_record(
+            Win32SourceKind::Unknown,
+            Some("Win32App"),
+            &format!("Installation is done for app with id: {APP}, exit code: 0"),
+        );
+        assert_eq!(result.app_id, None);
+        assert!(!result.is_key_bearing());
+    }
+
+    #[test]
+    fn a_record_without_a_component_cannot_produce_a_signal() {
+        let result = classify_record(
+            Win32SourceKind::AppWorkload,
+            None,
+            &format!("Installation is done for app with id: {APP}, exit code: 0"),
+        );
+        assert_eq!(result.signal, Win32Signal::Unclassified);
+        assert_eq!(result.app_id, None);
+    }
+
+    #[test]
+    fn unrecognised_enforcement_wording_is_flagged_for_coverage_not_guessed() {
+        let result = workload(&format!(
+            "[Win32App] Install pipeline for app with id: {APP} terminated in an unexpected condition"
+        ));
+        assert_eq!(result.signal, Win32Signal::Unclassified);
+        assert!(result.enforcement_shaped_but_unmatched);
+    }
+
+    #[test]
+    fn ordinary_records_are_not_flagged_as_unknown_vocabulary() {
+        assert!(
+            !workload("[Win32App] Cleaning up the staging directory")
+                .enforcement_shaped_but_unmatched
+        );
+        assert!(
+            !workload(&format!(
+                "[Win32App] Install command line: setup.exe /quiet for app with id: {APP}"
+            ))
+            .enforcement_shaped_but_unmatched
+        );
+    }
+
+    #[test]
+    fn execution_context_is_read_from_a_field_or_a_phrase() {
+        assert_eq!(
+            workload("[Win32App] ExecutionContext = System").execution_context,
+            Win32ExecutionContext::System
+        );
+        assert_eq!(
+            workload("[Win32App] Enforcing the app in user context").execution_context,
+            Win32ExecutionContext::User
+        );
+        assert_eq!(
+            workload("[Win32App] Cleaning up").execution_context,
+            Win32ExecutionContext::Unknown
+        );
+    }
+
+    #[test]
+    fn intent_is_retained_when_stated() {
+        assert_eq!(
+            workload("[Win32App] App policy received, intent = Required").intent,
+            Win32Intent::Required
+        );
+    }
+
+    #[test]
+    fn a_referenced_output_file_is_reduced_to_its_name() {
+        let result = workload(&format!(
+            r"[Win32App] Install output file: C:\Windows\IMECache\{APP}\Contoso-Setup.msi.log"
+        ));
+        assert_eq!(
+            result.referenced_output_file.as_deref(),
+            Some("Contoso-Setup.msi.log")
+        );
+    }
+
+    #[test]
+    fn requirement_rule_name_is_captured_with_its_failure() {
+        let result = workload(&format!(
+            "[Win32App] Requirement rule 'Minimum OS build' check failed for app with id: {APP}"
+        ));
+        assert_eq!(result.signal, Win32Signal::RequirementFailed);
+        assert_eq!(result.requirement_name.as_deref(), Some("Minimum OS build"));
+    }
+
+    #[test]
+    fn not_targeted_is_distinct_from_not_applicable() {
+        let result = workload(&format!(
+            "[Win32App] app with id: {APP} is no longer targeted to this device"
+        ));
+        assert_eq!(result.signal, Win32Signal::NotTargeted);
     }
 }
