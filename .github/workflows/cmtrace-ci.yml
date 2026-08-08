@@ -249,28 +249,6 @@ jobs:
       - name: Clippy parser crate
         run: cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
 
-      # TEMPORARY (#460 loader diagnosis): the app_lib unit-test exe dies with
-      # STATUS_ENTRYPOINT_NOT_FOUND on this branch. Build it without running,
-      # then dump its import table and the DLLs beside it so the unresolvable
-      # import is visible in the log. Remove once the root cause is fixed.
-      - name: Diagnose app_lib imports (temporary)
-        shell: pwsh
-        run: |
-          cargo test --locked -p cmtrace-open --all-features --no-run
-          $exe = Get-ChildItem src-tauri/target/debug/deps/app_lib-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          Write-Host "=== exe: $($exe.FullName) $($exe.Length) bytes ==="
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $dumpbin = & $vswhere -latest -find "**\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
-          Write-Host "=== dumpbin: $dumpbin ==="
-          & $dumpbin /imports $exe.FullName
-          Write-Host "=== DLLs in deps ==="
-          Get-ChildItem src-tauri/target/debug/deps -Filter *.dll | ForEach-Object { "$($_.Name) $($_.Length) $($_.VersionInfo.FileVersion)" }
-          Write-Host "=== direct launch attempt ==="
-          & $exe.FullName --list *> launch-output.txt; $code = $LASTEXITCODE
-          Get-Content launch-output.txt | Select-Object -First 20
-          Write-Host "exit code: $code"
-          exit 0
-
       - name: Test native ESP diagnostics
         run: cargo test --locked -p cmtrace-open --all-features --test esp_diagnostics_sources
 
