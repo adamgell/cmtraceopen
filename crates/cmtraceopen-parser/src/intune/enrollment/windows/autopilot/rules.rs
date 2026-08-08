@@ -16,7 +16,9 @@ use crate::intune::evidence::{
 
 use super::models::*;
 use super::reducer::normalized_evidence;
-use super::sources::AUTOPILOT_EVENT_CHANNEL;
+use super::sources::{
+    is_validated_schema_version, is_validated_windows_build, AUTOPILOT_EVENT_CHANNEL,
+};
 
 /// Derive stable, read-only findings from a snapshot.
 ///
@@ -37,6 +39,7 @@ pub fn derive_findings(snapshot: &AutopilotSnapshot) -> Vec<IntuneFinding> {
     push_retry_deferred(snapshot, &mut findings);
     push_esp_evidence_missing(snapshot, &mut findings);
     push_esp_time_only_candidate(snapshot, &mut findings);
+    push_esp_link_conflicting(snapshot, &mut findings);
     push_esp_linked(snapshot, &mut findings);
     push_unreliable_timestamps(snapshot, &mut findings);
     push_coverage_gaps(snapshot, &mut findings);
@@ -54,22 +57,44 @@ fn push_unknown_schema(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFi
         .iter()
         .filter(|document| document.parse_state == IntuneParseState::Unsupported)
         .collect::<Vec<_>>();
-    let build_unvalidated = snapshot.outcome == AutopilotOutcome::UnknownSchema
+    // Either declared capture value can be the one that failed validation.
+    // Gating on `windows_build` alone left a capture that declared only an
+    // unvalidated `autopilotSchemaVersion` with an unexplained `UnknownSchema`
+    // outcome: every terminal rule was suppressed and no finding said why.
+    let capture_unvalidated = snapshot.outcome == AutopilotOutcome::UnknownSchema
         && unsupported.is_empty()
-        && snapshot.capture.windows_build.is_some();
-    if unsupported.is_empty() && !build_unvalidated {
+        && (snapshot.capture.windows_build.is_some()
+            || snapshot.capture.autopilot_schema_version.is_some());
+    if unsupported.is_empty() && !capture_unvalidated {
         return;
     }
 
     let mut summary = if unsupported.is_empty() {
+        let mut offenders = Vec::new();
+        if !is_validated_windows_build(snapshot.capture.windows_build.as_deref()) {
+            offenders.push(format!(
+                "Windows build {}",
+                snapshot
+                    .capture
+                    .windows_build
+                    .as_deref()
+                    .unwrap_or("unknown")
+            ));
+        }
+        if !is_validated_schema_version(snapshot.capture.autopilot_schema_version.as_deref()) {
+            offenders.push(format!(
+                "Autopilot schema version {}",
+                snapshot
+                    .capture
+                    .autopilot_schema_version
+                    .as_deref()
+                    .unwrap_or("unknown")
+            ));
+        }
         format!(
-            "Windows build {} has no validated Autopilot rules in this build, so terminal \
-             semantics are withheld and the evidence is retained raw.",
-            snapshot
-                .capture
-                .windows_build
-                .as_deref()
-                .unwrap_or("unknown")
+            "This build has no validated Autopilot rules for {}, so terminal semantics are \
+             withheld and the evidence is retained raw.",
+            offenders.join(" or ")
         )
     } else {
         format!(
@@ -109,7 +134,7 @@ fn push_unknown_schema(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFi
                 .iter()
                 .map(|document| document.artifact_id.clone())
                 .chain(
-                    build_unvalidated
+                    capture_unvalidated
                         .then(|| {
                             snapshot
                                 .coverage
@@ -503,6 +528,51 @@ fn push_esp_time_only_candidate(snapshot: &AutopilotSnapshot, findings: &mut Vec
                  identifier."
                     .to_owned(),
                 "Compare the Entra device id recorded by each side.".to_owned(),
+            ],
+            normalized_evidence(snapshot.esp_linkage.evidence.clone()),
+            Vec::new(),
+        ),
+    );
+}
+
+/// Explain a `Conflicting` ESP linkage that no recorded conflict covers.
+///
+/// The linkage turns `Conflicting` on two paths. When a single correlation key
+/// resolves to more than one session, `detect_conflicts` records an
+/// [`AutopilotConflictKind::EspSessionIdentifier`] conflict and
+/// `push_contradictory_evidence` already explains it. When *distinct* keys
+/// each resolve cleanly but to *different* sessions, no conflict is recorded;
+/// this rule is what keeps that outcome from being silent.
+fn push_esp_link_conflicting(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFinding>) {
+    if snapshot.esp_linkage.state != AutopilotEspLinkState::Conflicting
+        || snapshot
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.kind == AutopilotConflictKind::EspSessionIdentifier)
+    {
+        return;
+    }
+    push(
+        findings,
+        finding(
+            "autopilot-esp-link-conflicting",
+            IntuneFindingSeverity::Error,
+            IntuneFindingConfidence::High,
+            "The Autopilot evidence matches more than one ESP session",
+            &format!(
+                "Explicit correlation keys bind this Autopilot evidence to {} different ESP \
+                 sessions ({}). A single Autopilot phase produces one session, so the session \
+                 identity is ambiguous and no completed handoff can be asserted.",
+                snapshot.esp_linkage.esp_session_ids.len(),
+                snapshot.esp_linkage.esp_session_ids.join(", ")
+            ),
+            &[
+                "Re-collect both sides in one pass so the bundle describes a single provisioning \
+                 attempt."
+                    .to_owned(),
+                "Confirm the ESP session facts were not assembled from two enrollments of the \
+                 same device."
+                    .to_owned(),
             ],
             normalized_evidence(snapshot.esp_linkage.evidence.clone()),
             Vec::new(),
