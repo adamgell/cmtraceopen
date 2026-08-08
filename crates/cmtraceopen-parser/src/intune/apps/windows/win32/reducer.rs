@@ -11,6 +11,7 @@
 //! fragments, unmatched rotation tails, and supplemental installer artifacts
 //! nothing referenced. None of them can terminate somebody else's deployment.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::intune::evidence::{
@@ -399,12 +400,55 @@ pub fn analyze_win32_bundle(inputs: &[Win32SourceInput]) -> Win32Analysis {
     analyze_win32_bundle_with(inputs, &Win32AnalysisOptions::default())
 }
 
+/// Give the second and later holders of a duplicated artifact id a
+/// disambiguating suffix (`id#2`, `id#3`, …), mirroring the Store sibling's
+/// `unique_observation_id`.
+///
+/// The artifact id is the analyzer's journal identity: `sequenced_after`
+/// compares record numbers *within* one artifact id, and observation ids are
+/// `artifact_id:record_number`. A caller supplying two files under one id
+/// would otherwise fuse them into one journal — record numbers restart per
+/// file, so cross-file record-number supersession is invented ordering — and
+/// their observation ids would collide. The common all-unique case borrows;
+/// only a bundle that actually duplicates an id pays for the copy. Suffixed
+/// ids appear in coverage and provenance exactly as synthesized.
+fn disambiguate_artifact_ids(inputs: &[Win32SourceInput]) -> Cow<'_, [Win32SourceInput]> {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    if inputs
+        .iter()
+        .all(|input| seen.insert(input.artifact_id.as_str()))
+    {
+        return Cow::Borrowed(inputs);
+    }
+    let mut owned = inputs.to_vec();
+    let mut taken: BTreeSet<String> = BTreeSet::new();
+    for input in &mut owned {
+        if taken.insert(input.artifact_id.clone()) {
+            continue;
+        }
+        let mut suffix = 2u32;
+        loop {
+            let candidate = format!("{}#{suffix}", input.artifact_id);
+            if taken.insert(candidate.clone()) {
+                input.artifact_id = candidate;
+                break;
+            }
+            suffix += 1;
+        }
+    }
+    Cow::Owned(owned)
+}
+
 /// Reduce a supplied Win32 app bundle with caller-supplied metadata and return
 /// codes.
 pub fn analyze_win32_bundle_with(
     inputs: &[Win32SourceInput],
     options: &Win32AnalysisOptions,
 ) -> Win32Analysis {
+    // Duplicate caller artifact ids are disambiguated before anything reads
+    // them; see [`disambiguate_artifact_ids`].
+    let inputs = disambiguate_artifact_ids(inputs);
+    let inputs: &[Win32SourceInput] = &inputs;
     let mut coverage_entries: Vec<IntuneArtifactCoverage> = Vec::new();
     let mut records: Vec<PendingRecord> = Vec::new();
     let mut unclassified_records = 0u32;
@@ -3001,6 +3045,55 @@ mod tests {
         );
         assert_eq!(transaction.confidence, baseline.transactions[0].confidence);
         assert!(transaction.superseded_failures.is_empty());
+    }
+
+    #[test]
+    fn two_inputs_sharing_an_artifact_id_are_not_one_journal() {
+        // A caller-supplied duplicate id must not fuse two files: record
+        // numbers restart per file, so comparing them across files invents
+        // supersession, and observation ids collide. The second holder gets a
+        // disambiguating suffix at ingestion, like the Store sibling's
+        // unique_observation_id.
+        let first = Win32SourceInput::captured(
+            "aw",
+            "AppWorkload.log",
+            [
+                record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+                record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603")),
+            ]
+            .concat(),
+        );
+        let second = Win32SourceInput::captured(
+            "aw",
+            "AppWorkload-1.log",
+            record(&format!(
+                "[Win32App] Installation is done for app with id: {APP}, deployment type id: {DT}, exit code: 0"
+            )),
+        );
+
+        let analysis = analyze_win32_bundle(&[first, second]);
+        let transaction = only_transaction(&analysis);
+        assert_eq!(
+            transaction.outcome,
+            Win32Outcome::Conflicting,
+            "two files must stay incomparable; one journal's record numbers must not \
+             supersede the other's"
+        );
+        let ids: BTreeSet<&str> = analysis
+            .observations
+            .iter()
+            .map(|observation| observation.observation_id.as_str())
+            .collect();
+        assert_eq!(
+            ids.len(),
+            analysis.observations.len(),
+            "observation ids must not collide: {:?}",
+            analysis
+                .observations
+                .iter()
+                .map(|observation| observation.observation_id.as_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
