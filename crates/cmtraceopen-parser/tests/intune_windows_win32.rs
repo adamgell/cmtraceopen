@@ -26,16 +26,20 @@ use support::{load_json, mutated, scenario_names, validate_scenario, Failures};
 
 /// The scenario matrix issue #357 requires, pinned so that adding or removing a
 /// scenario is a deliberate, compile-visible change rather than a silent drift.
-const SCENARIOS: [&str; 16] = [
+const SCENARIOS: [&str; 20] = [
     "already-installed-detection",
     "complete-success",
     "dependency-failure",
+    "enforcement-command-failed",
     "hash-or-staging-failure",
     "incomplete-bundle-missing-appworkload",
     "installed-but-not-detected",
     "installer-known-nonzero-code",
     "installer-unknown-code",
+    "insufficient-evidence",
     "no-usable-content",
+    "not-applicable",
+    "not-targeted",
     "privacy-redaction",
     "reporting-failure-after-local-outcome",
     "requirement-failure",
@@ -543,6 +547,51 @@ fn an_unknown_return_code_reports_the_failure_without_asserting_a_cause() {
 #[test]
 fn a_zero_return_code_next_to_a_failing_detection_rule_is_not_success() {
     assert_scenario("installed-but-not-detected");
+}
+
+#[test]
+fn removal_from_targeting_is_a_terminal_answer_not_a_gap() {
+    let analysis = assert_scenario("not-targeted");
+    let transaction = &analysis.transactions[0];
+    assert!(transaction.outcome.is_terminal());
+    assert!(
+        transaction.next_evidence_request.is_none(),
+        "a settled non-deployment asks for nothing further"
+    );
+}
+
+#[test]
+fn not_applicable_is_terminal_and_distinct_from_not_targeted() {
+    let not_applicable = assert_scenario("not-applicable");
+    let not_targeted = assert_scenario("not-targeted");
+    assert!(not_applicable.transactions[0].outcome.is_terminal());
+    assert_ne!(
+        not_applicable.transactions[0].outcome,
+        not_targeted.transactions[0].outcome
+    );
+}
+
+#[test]
+fn a_failed_launch_is_terminal_with_no_return_code_to_interpret() {
+    let analysis = assert_scenario("enforcement-command-failed");
+    let transaction = &analysis.transactions[0];
+    assert!(transaction.outcome.is_terminal());
+    assert!(
+        transaction.return_code.is_none(),
+        "the installer never ran, so no return token may be asserted"
+    );
+}
+
+#[test]
+fn identity_alone_stays_insufficient_evidence_with_a_next_request() {
+    let analysis = assert_scenario("insufficient-evidence");
+    let transaction = &analysis.transactions[0];
+    assert!(!transaction.outcome.is_terminal());
+    assert!(
+        transaction.next_evidence_request.is_some(),
+        "an unresolved reduction must name the artifact that would advance it"
+    );
+    assert!(transaction.last_confirmed_phase.is_none());
 }
 
 #[test]
