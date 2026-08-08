@@ -31,6 +31,7 @@ pub fn derive_findings(snapshot: &StoreAnalysis) -> Vec<IntuneFinding> {
     push_license_failure(snapshot, &mut findings);
     push_download_failure(snapshot, &mut findings);
     push_registration_failure(snapshot, &mut findings);
+    push_installer_failure(snapshot, &mut findings);
     push_provisioning_failure(snapshot, &mut findings);
     push_uninstall_failure(snapshot, &mut findings);
     push_no_interactive_user(snapshot, &mut findings);
@@ -40,6 +41,7 @@ pub fn derive_findings(snapshot: &StoreAnalysis) -> Vec<IntuneFinding> {
     push_device_failure_without_intune_intent(snapshot, &mut findings);
     push_ambiguous_display_name(snapshot, &mut findings);
     push_unknown_event_version(snapshot, &mut findings);
+    push_event_level_mismatch(snapshot, &mut findings);
     push_malformed_source(snapshot, &mut findings);
     push_evidence_coverage_gap(snapshot, &mut findings);
     push_install_completed(snapshot, &mut findings);
@@ -246,6 +248,37 @@ fn push_registration_failure(snapshot: &StoreAnalysis, findings: &mut Vec<Intune
         &[
             "Compare the cited deployment record with the package's dependency and framework versions",
             "Confirm the installer family before applying AppX-specific remediation",
+        ],
+        evidence_of(&affected),
+        Vec::new(),
+    );
+}
+
+/// A Store-delivered Win32 package whose own installer reported failure.
+///
+/// Kept apart from the registration rule because the failing grammar is a
+/// plain Windows installer: AppX dependency/framework remediation does not
+/// apply, and suggesting it here would be the cross-family collapse this
+/// module exists to prevent.
+fn push_installer_failure(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFinding>) {
+    let affected = transactions_in_state(snapshot, StoreTransactionState::InstallerFailure);
+    if affected.is_empty() {
+        return;
+    }
+    push_finding(
+        findings,
+        "store-win32-installer-failed",
+        IntuneFindingSeverity::Error,
+        IntuneFindingConfidence::High,
+        "Store-delivered Win32 installer reported failure",
+        format!(
+            "The installer for {} ran and reported failure. This is the package's own Windows installer, not an AppX deployment stage.{}",
+            labels(&affected),
+            error_suffix(&affected)
+        ),
+        &[
+            "Read the cited exit code against the installer's own documentation (MSI or setup engine), not against AppX deployment errors",
+            "Collect the installer's own log for the failing run",
         ],
         evidence_of(&affected),
         Vec::new(),
@@ -520,6 +553,39 @@ fn push_unknown_event_version(snapshot: &StoreAnalysis, findings: &mut Vec<Intun
             evidence.len()
         ),
         &["Re-run with a build that recognizes the provider version, or supply the rendered event text"],
+        evidence,
+        Vec::new(),
+    );
+}
+
+/// A *known* event whose level contradicts the outcome its event id states.
+///
+/// Deliberately a separate finding from `store-unknown-event-version`: there
+/// the dialect is unrecognized and nothing was interpreted; here the dialect is
+/// fully understood and the record contradicts itself. Both degrade the
+/// touched transaction's confidence, but for different reasons and with
+/// different remediations, so conflating them would hide which one happened.
+fn push_event_level_mismatch(snapshot: &StoreAnalysis, findings: &mut Vec<IntuneFinding>) {
+    let evidence = snapshot
+        .observations
+        .iter()
+        .filter(|observation| observation.level_mismatch)
+        .map(|observation| observation.context.evidence_ref.clone())
+        .collect::<Vec<_>>();
+    if evidence.is_empty() {
+        return;
+    }
+    push_finding(
+        findings,
+        "store-event-level-mismatch",
+        IntuneFindingSeverity::Info,
+        IntuneFindingConfidence::High,
+        "A known event's level contradicts its stated outcome",
+        format!(
+            "{} record(s) carry a recognized failure event id but were logged at Information level. The stated outcome was kept and the level was not promoted into evidence; any transaction they touch is reported at reduced confidence.",
+            evidence.len()
+        ),
+        &["Compare the rendered event text with the event id's documented meaning; the export may have altered the level"],
         evidence,
         Vec::new(),
     );

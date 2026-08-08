@@ -213,6 +213,10 @@ pub struct StoreClassification {
     /// True when a recognized provider emitted an event id or schema version
     /// this build has no rule for.
     pub unknown_version: bool,
+    /// True when a known event id's stated outcome contradicts the record's
+    /// own level. Distinct from [`Self::unknown_version`]: the dialect is
+    /// understood, the record contradicts itself.
+    pub level_mismatch: bool,
     /// False when the record did not come from a source this leaf recognizes.
     ///
     /// An unrecognized source is not Store evidence at all, so it must not
@@ -234,6 +238,7 @@ impl Default for StoreClassification {
             typed_intent: None,
             error: None,
             unknown_version: false,
+            level_mismatch: false,
             recognized: true,
         }
     }
@@ -530,9 +535,12 @@ pub fn classify_event(event: &NormalizedWindowsEvent) -> StoreClassification {
     classification.signal = signal_for(operation, outcome);
 
     // An event that reports failure without an error code is still a failure,
-    // but the level must never be promoted into one.
+    // but the level must never be promoted into one. A failure id logged at
+    // Information level is a *known* record contradicting itself, which is a
+    // different degradation than an unrecognized dialect, so it is flagged
+    // separately rather than folded into `unknown_version`.
     if outcome == EventOutcome::Failed && event.level == NormalizedEventLevel::Information {
-        classification.unknown_version = true;
+        classification.level_mismatch = true;
     }
 
     classification
@@ -664,8 +672,39 @@ mod tests {
         ));
         assert_eq!(classification.signal, StoreSignal::Unclassified);
         assert!(classification.unknown_version);
+        assert!(
+            !classification.level_mismatch,
+            "an unrecognized dialect is not a level contradiction"
+        );
         // Identity survives so the record stays correlatable.
         assert!(!classification.identity.is_empty());
+    }
+
+    /// A *known* failure id logged at Information level is the record
+    /// contradicting itself, which is a distinct degradation from an
+    /// unrecognized dialect and must be flagged as such (evidence-degradation
+    /// cluster, inventory row 7).
+    #[test]
+    fn a_known_failure_id_at_information_level_is_a_level_mismatch_not_an_unknown_version() {
+        let mut contradictory = event(
+            404,
+            &[
+                ("DeploymentOperation", "Register"),
+                ("DeploymentScope", "User"),
+                ("PackageFamilyName", "Contoso.SynthApp_9abcdef01234h"),
+                ("ErrorCode", "0x80073CF9"),
+            ],
+        );
+        contradictory.level = NormalizedEventLevel::Information;
+        let classification = classify_event(&contradictory);
+        // The stated outcome is kept; the level is never promoted into one.
+        assert_eq!(classification.signal, StoreSignal::RegistrationFailed);
+        assert!(classification.level_mismatch);
+        assert!(
+            !classification.unknown_version,
+            "the dialect is fully recognized; conflating the two reasons would \
+             hide which degradation happened"
+        );
     }
 
     #[test]
