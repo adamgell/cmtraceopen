@@ -188,11 +188,14 @@ struct DocumentEnvelope {
 /// document produces a precise coverage fact rather than a parse error that
 /// looks like corruption.
 pub fn detect_document(content: &str) -> AutopilotDocumentDetection {
+    // The detail stays a stable reducer-authored sentence: it flows into
+    // golden-asserted finding summaries, and serde_json does not guarantee its
+    // error `Display` output across releases.
     let envelope: DocumentEnvelope = match serde_json::from_str(content) {
         Ok(envelope) => envelope,
-        Err(error) => {
+        Err(_) => {
             return AutopilotDocumentDetection::Malformed {
-                detail: format!("content is not a JSON object: {error}"),
+                detail: "content is not a JSON object".to_owned(),
             }
         }
     };
@@ -349,13 +352,18 @@ fn iana_zone_re() -> &'static Regex {
 ///
 /// Windows collectors report this form, not an IANA name, so omitting it made
 /// the single most common real input classify as invalid and needlessly
-/// downgraded the time basis. Punctuation beyond spaces, hyphens, and periods
-/// is excluded, which is what still rejects an annotated value like
-/// `Pacific Standard Time (device local)`.
+/// downgraded the time basis. Every Windows time zone identifier ends in
+/// `Time` (`W. Europe Standard Time`, `Coordinated Universal Time`); anchoring
+/// on that suffix is what rejects collector placeholders such as `unknown` or
+/// `not recorded`, which would otherwise pass as a declared timezone and let
+/// `reduce_esp_linkage` offer a time-only candidate the module contract
+/// forbids. `UTC` and offset forms are covered by `utc_offset_re`. Punctuation
+/// beyond spaces, hyphens, and periods stays excluded, which still rejects an
+/// annotated value like `Pacific Standard Time (device local)`.
 fn windows_zone_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"^[A-Za-z][A-Za-z .\-]{2,}$").expect("windows zone regex must compile")
+        Regex::new(r"^[A-Za-z][A-Za-z .\-]* Time$").expect("windows zone regex must compile")
     })
 }
 
@@ -490,10 +498,20 @@ mod tests {
             classify_timezone(Some("Pacific Standard Time")),
             AutopilotTimezoneState::Declared
         );
+        assert_eq!(
+            classify_timezone(Some("W. Europe Standard Time")),
+            AutopilotTimezoneState::Declared
+        );
         for junk in [
             "Pacific Standard Time (device local)",
             "Pacific Standard Time?",
             "??",
+            // Collector placeholders: a plausible-looking word is not a
+            // declared timezone, and treating it as one raised confidence and
+            // enabled the time-only ESP candidate the contract forbids.
+            "unknown",
+            "not recorded",
+            "Unavailable",
         ] {
             assert_eq!(
                 classify_timezone(Some(junk)),
