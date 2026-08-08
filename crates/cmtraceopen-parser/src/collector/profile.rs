@@ -209,10 +209,7 @@ mod tests {
     fn filter_by_macos_jamf_yields_jamf_items_only() {
         let mut profile = CollectionProfile::embedded();
         profile.filter_by_families(&["macos-jamf".to_string()]);
-        assert!(
-            profile.total_items() >= 7,
-            "should have at least 5 logs + 2 commands"
-        );
+        assert!(profile.total_items() >= 7, "should have at least 5 logs + 2 commands");
         for item in &profile.logs {
             assert_eq!(item.family, "macos-jamf");
         }

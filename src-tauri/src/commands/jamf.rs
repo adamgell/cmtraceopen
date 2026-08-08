@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use crate::error::AppError;
 use crate::jamf::models::{
-    JamfConnectEvent, JamfEnvironment, JamfLogScanResult, JamfPolicyLogResult, JamfProfilesResult,
-    JamfSelfServiceEvent,
+    JamfConnectEvent, JamfEnvironment, JamfLogScanResult, JamfPolicyLogResult,
+    JamfProfilesResult, JamfSelfServiceEvent,
 };
 use crate::jamf::paths;
 use crate::macos_diag::environment::scan_log_directory;

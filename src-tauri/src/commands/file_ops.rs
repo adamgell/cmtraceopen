@@ -697,7 +697,8 @@ mod tests {
         let dir = create_temp_dir("file-ops-denied");
         let locked = dir.join("locked");
         fs::create_dir(&locked).expect("create locked dir");
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("drop permissions");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+            .expect("drop permissions");
 
         let result = list_log_folder(locked.to_string_lossy().to_string());
 
@@ -726,7 +727,8 @@ mod tests {
         let dir = create_temp_dir("file-ops-denied-file");
         let locked = dir.join("locked.log");
         fs::write(&locked, "2026-07-31 log line").expect("write log");
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("drop permissions");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+            .expect("drop permissions");
 
         let error = super::classify_open_failure(
             locked.to_string_lossy().as_ref(),
@@ -760,9 +762,7 @@ mod tests {
 
         // The file opens fine, so the parser's own message survives and no
         // elevation offer can be produced.
-        assert!(
-            matches!(error, crate::error::AppError::Internal(reason) if reason == "unsupported format")
-        );
+        assert!(matches!(error, crate::error::AppError::Internal(reason) if reason == "unsupported format"));
     }
 
     /// A folder reaching the file lane must be classified by its kind, never by

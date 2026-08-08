@@ -9,10 +9,7 @@ fn collect_environment_does_not_panic() {
     // An installed binary does not guarantee `jamf version` succeeds (it can
     // fail or time out), so only the inverse is a real invariant.
     if !env.jamf_installed {
-        assert!(
-            env.jamf_version.is_none(),
-            "version reported without a binary"
-        );
+        assert!(env.jamf_version.is_none(), "version reported without a binary");
     }
 }
 

@@ -1,9 +1,9 @@
-pub mod connect;
-pub mod detect;
 pub mod models;
 pub mod paths;
-pub mod policy_log;
-pub mod profiles;
-pub mod self_service;
 pub mod text;
 pub mod time;
+pub mod detect;
+pub mod policy_log;
+pub mod self_service;
+pub mod connect;
+pub mod profiles;

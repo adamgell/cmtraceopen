@@ -111,8 +111,9 @@ impl Serialize for ElevationCommandError {
         match self {
             Self::InvalidRequest { reason } => map.serialize_entry("reason", reason)?,
             Self::Relaunch { source } => map.serialize_entry("source", source)?,
-            Self::AlreadyInProgress | Self::TicketUnavailable | Self::StateDirectoryUnavailable => {
-            }
+            Self::AlreadyInProgress
+            | Self::TicketUnavailable
+            | Self::StateDirectoryUnavailable => {}
         }
         map.end()
     }
@@ -367,9 +368,10 @@ mod tests {
     #[test]
     fn ticket_operations_run_on_the_blocking_pool() {
         let caller = thread::current().id();
-        let worker =
-            tauri::async_runtime::block_on(run_blocking_operation(|| thread::current().id()))
-                .expect("blocking worker completes");
+        let worker = tauri::async_runtime::block_on(run_blocking_operation(|| {
+            thread::current().id()
+        }))
+        .expect("blocking worker completes");
 
         assert_ne!(worker, caller, "ticket I/O must leave the calling thread");
     }
@@ -420,7 +422,10 @@ mod tests {
             .write(true)
             .open(&path)
             .expect("open ticket")
-            .set_times(FileTimes::new().set_modified(SystemTime::now() + Duration::from_secs(60)))
+            .set_times(
+                FileTimes::new()
+                    .set_modified(SystemTime::now() + Duration::from_secs(60)),
+            )
             .expect("set future mtime");
 
         let abandoned = ticket_for(
@@ -556,8 +561,7 @@ mod tests {
             let json = serde_json::to_value(&error).expect("serialize");
 
             assert_eq!(
-                json["message"],
-                expected,
+                json["message"], expected,
                 "{} lost its message",
                 error.kind()
             );

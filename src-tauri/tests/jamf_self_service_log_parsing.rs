@@ -28,10 +28,7 @@ fn parses_real_selfservice_log_shapes() {
 
     // API chatter is one action with the endpoint as the item.
     assert_eq!(events[4].action, "request");
-    assert_eq!(
-        events[4].item_name.as_deref(),
-        Some("updateDevicePushToken")
-    );
+    assert_eq!(events[4].item_name.as_deref(), Some("updateDevicePushToken"));
 
     assert_eq!(events[7].action, "warning");
     assert!(events[7]
@@ -40,10 +37,7 @@ fn parses_real_selfservice_log_shapes() {
         .is_some_and(|m| m.starts_with("A customized icon")));
 
     // Binary requests are the user-side operations.
-    let triggers: Vec<&_> = events
-        .iter()
-        .filter(|e| e.action == "triggerPolicy")
-        .collect();
+    let triggers: Vec<&_> = events.iter().filter(|e| e.action == "triggerPolicy").collect();
     assert_eq!(triggers.len(), 2);
     assert_eq!(events.iter().filter(|e| e.action == "doRecon").count(), 1);
 }

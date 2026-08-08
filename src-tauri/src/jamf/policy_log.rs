@@ -234,11 +234,7 @@ fn classify(
         return (
             JamfPolicyTrigger::Other("install".to_string()),
             None,
-            Some(
-                pkg.trim_end_matches("...")
-                    .trim_end_matches('.')
-                    .to_string(),
-            ),
+            Some(pkg.trim_end_matches("...").trim_end_matches('.').to_string()),
             JamfPolicyResult::InProgress,
         );
     }

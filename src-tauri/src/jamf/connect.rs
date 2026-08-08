@@ -31,7 +31,9 @@ fn user_regex() -> &'static Regex {
 fn idp_regex() -> &'static Regex {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"provider=(?P<idp>\w+)").expect("static regex must compile"))
+    RE.get_or_init(|| {
+        Regex::new(r"provider=(?P<idp>\w+)").expect("static regex must compile")
+    })
 }
 
 pub fn parse_connect_log_impl(path: &Path) -> Result<Vec<JamfConnectEvent>, AppError> {

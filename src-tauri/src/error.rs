@@ -266,10 +266,7 @@ mod tests {
 
     #[test]
     fn access_denied_without_a_path_serializes_a_null_path() {
-        let value = payload(AppError::access_denied(
-            SourceOperation::WorkspaceAction,
-            None,
-        ));
+        let value = payload(AppError::access_denied(SourceOperation::WorkspaceAction, None));
 
         assert_eq!(value["kind"], "accessDenied");
         assert!(value["path"].is_null());
@@ -351,7 +348,10 @@ mod tests {
         ] {
             let message = AppError::access_denied(operation, None).to_string();
             for os in ["Windows", "macOS", "Linux"] {
-                assert!(!message.contains(os), "{operation:?} names {os}: {message}");
+                assert!(
+                    !message.contains(os),
+                    "{operation:?} names {os}: {message}"
+                );
             }
         }
     }
