@@ -1,0 +1,71 @@
+{
+  "scenario": "intune-intent-without-os-event",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "missing"
+    },
+    {
+      "artifactId": "store-agent",
+      "status": "missing"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "unknown",
+      "familyBasis": "unvalidated",
+      "state": "insufficientEvidence",
+      "action": "install",
+      "executionContext": "unknown",
+      "intent": "unknown",
+      "storeProductId": "9WZSYNTH0001",
+      "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+      "displayName": null,
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "lastConfirmedPhase": "targeted",
+      "confidence": "low",
+      "errorHex": null,
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": false,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": "Collect Microsoft-Windows-AppXDeploymentServer/Operational and Microsoft-Windows-StoreAgent events for this package",
+      "evidence": [
+        "ime-log:2"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-intent-without-device-evidence",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [
+        "ime-log:2"
+      ],
+      "coverageGapIds": [
+        "appx-operational",
+        "store-agent"
+      ]
+    },
+    {
+      "findingId": "store-evidence-coverage-gap",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "appx-operational",
+        "store-agent"
+      ]
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "a missing event channel never becomes an Intune failure"
+  ]
+}

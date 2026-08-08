@@ -1,0 +1,58 @@
+{
+  "scenario": "download-staging-failure",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "state": "downloadFailure",
+      "action": "install",
+      "executionContext": "user",
+      "intent": "unknown",
+      "storeProductId": "9WZSYNTH0001",
+      "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+      "displayName": null,
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "lastConfirmedPhase": "staging",
+      "confidence": "high",
+      "errorHex": "0x80070070",
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "ime-log:2",
+        "appx-operational:1",
+        "appx-operational:2"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-download-staging-failed",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "appx-operational:1",
+        "appx-operational:2",
+        "ime-log:2"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "a staging failure is never reported as a registration failure"
+  ]
+}
