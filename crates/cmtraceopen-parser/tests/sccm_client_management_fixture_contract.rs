@@ -100,6 +100,12 @@ fn scenario_names() -> Vec<String> {
     names
 }
 
+/// Manifests reference evidence with forward slashes on every platform, so
+/// filesystem-derived relative paths must be normalized before comparison.
+fn normalize_manifest_relative_path(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 fn walk_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     if !root.exists() {
         return Ok(Vec::new());
@@ -1181,10 +1187,11 @@ fn validate_contract(
     let actual_files = walk_files(&scenario_root.join("evidence"))?
         .into_iter()
         .map(|path| {
-            path.strip_prefix(scenario_root)
+            let relative_path = path
+                .strip_prefix(scenario_root)
                 .expect("walk root is below scenario")
-                .to_string_lossy()
-                .into_owned()
+                .to_string_lossy();
+            normalize_manifest_relative_path(&relative_path)
         })
         .collect::<BTreeSet<_>>();
     if actual_files != referenced_files {

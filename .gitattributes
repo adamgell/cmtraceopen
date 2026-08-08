@@ -6,5 +6,9 @@
 # Real-world log fixtures are byte-sensitive (UTF-8 BOM + CRLF); never normalize them.
 src-tauri/tests/fixtures/** -text
 
-# SCCM parser fixtures are byte-sensitive evidence; never normalize them.
-crates/cmtraceopen-parser/tests/fixtures/** -text
+# Parser-crate fixtures encode BOM, CRLF, and UTF-16LE deliberately; the tests
+# assert on the decoded bytes, so a checkout must not rewrite line endings and
+# `git diff --check` must not read a deliberate CR as trailing whitespace.
+# Covers Company Portal, SCCM, and other pure-parser evidence corpora.
+crates/cmtraceopen-parser/tests/fixtures/** -text -whitespace
+src-tauri/tests/corpus/company_portal/** -text -whitespace

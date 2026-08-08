@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useLogStore } from "../stores/log-store";
 import { startTail, stopTail, pauseTail, resumeTail } from "../lib/commands";
-import type { TailPayload } from "../types/log";
+import { parseTailPayload } from "../lib/tail-payload-validation";
 
 /**
  * Hook that manages the file-tail lifecycle:
@@ -15,13 +15,29 @@ export function useFileWatcher() {
   const openFilePath = useLogStore((s) => s.openFilePath);
   const sourceOpenMode = useLogStore((s) => s.sourceOpenMode);
   const aggregateFiles = useLogStore((s) => s.aggregateFiles);
+  const aggregateTailGeneration = useLogStore(
+    (s) => s.aggregateTailGeneration,
+  );
   const formatDetected = useLogStore((s) => s.formatDetected);
   const isPaused = useLogStore((s) => s.isPaused);
   const appendEntries = useLogStore((s) => s.appendEntries);
+  const amendEntry = useLogStore((s) => s.amendEntry);
   const appendAggregateEntries = useLogStore((s) => s.appendAggregateEntries);
+  const amendAggregateEntry = useLogStore((s) => s.amendAggregateEntry);
+  const observeAggregateTailLine = useLogStore((s) => s.observeAggregateTailLine);
+  const recordAggregateTailParseErrors = useLogStore(
+    (s) => s.recordAggregateTailParseErrors,
+  );
   const resetEntries = useLogStore((s) => s.resetEntries);
   const resetAggregateEntries = useLogStore((s) => s.resetAggregateEntries);
   const setParserSelection = useLogStore((s) => s.setParserSelection);
+  const setTotalLines = useLogStore((s) => s.setTotalLines);
+  const aggregateTailKey = JSON.stringify(
+    [
+      aggregateTailGeneration,
+      aggregateFiles.map(({ filePath, byteOffset }) => [filePath, byteOffset]),
+    ],
+  );
 
   // Start/stop tailing when file changes
   useEffect(() => {
@@ -50,15 +66,13 @@ export function useFileWatcher() {
     if (!openFilePath || !formatDetected) return;
 
     const byteOffset = useLogStore.getState().byteOffset;
+    const totalLines = useLogStore.getState().totalLines;
     const currentEntries = useLogStore.getState().entries;
     const nextId =
       currentEntries.length > 0
         ? currentEntries[currentEntries.length - 1].id + 1
         : 0;
-    const nextLine =
-      currentEntries.length > 0
-        ? currentEntries[currentEntries.length - 1].lineNumber + 1
-        : 1;
+    const nextLine = totalLines + 1;
 
     startTail(openFilePath, formatDetected, byteOffset, nextId, nextLine).catch(
       (err) => console.error("Failed to start tail:", err)
@@ -69,7 +83,7 @@ export function useFileWatcher() {
         console.error("Failed to stop tail:", err)
       );
     };
-  }, [aggregateFiles, formatDetected, openFilePath, sourceOpenMode]);
+  }, [aggregateTailKey, formatDetected, openFilePath, sourceOpenMode]);
 
   // Handle pause/resume
   useEffect(() => {
@@ -102,8 +116,21 @@ export function useFileWatcher() {
 
   // Listen for new tail entries from the Rust backend
   useEffect(() => {
-    const unlisten = listen<TailPayload>("tail-new-entries", (event) => {
-      const { entries: newEntries, filePath, parserSelection, reset } = event.payload;
+    const unlisten = listen<unknown>("tail-new-entries", (event) => {
+      const payload = parseTailPayload(event.payload);
+      if (!payload) {
+        console.error("Ignored invalid tail payload from the backend");
+        return;
+      }
+      const {
+        amendments,
+        entries: newEntries,
+        filePath,
+        observedThroughLine,
+        parseErrors,
+        parserSelection,
+        reset,
+      } = payload;
       const state = useLogStore.getState();
 
       if (state.sourceOpenMode === "aggregate-folder") {
@@ -113,18 +140,34 @@ export function useFileWatcher() {
           return;
         }
 
+        if (parseErrors > 0) {
+          recordAggregateTailParseErrors(filePath, parseErrors);
+          console.warn(
+            `Tail parsing reported ${parseErrors} coverage gap(s) for ${filePath}`,
+          );
+        }
+
         // A truncation reset must clear stale entries even when the fresh read
         // is empty, so it cannot be gated behind the empty-batch guard below.
         if (reset) {
           resetAggregateEntries(filePath, newEntries);
+          if (observedThroughLine !== null) {
+            observeAggregateTailLine(filePath, observedThroughLine);
+          }
           return;
         }
 
-        if (newEntries.length === 0) {
-          return;
+        for (const amendment of amendments) {
+          amendAggregateEntry(filePath, amendment);
         }
 
-        appendAggregateEntries(filePath, newEntries);
+        if (newEntries.length > 0) {
+          appendAggregateEntries(filePath, newEntries);
+        }
+
+        if (observedThroughLine !== null) {
+          observeAggregateTailLine(filePath, observedThroughLine);
+        }
         return;
       }
 
@@ -134,30 +177,52 @@ export function useFileWatcher() {
         return;
       }
 
+      if (parseErrors > 0) {
+        console.warn(
+          `Tail parsing reported ${parseErrors} coverage gap(s) for ${filePath}`,
+        );
+      }
+
       if (parserSelection) {
         setParserSelection(parserSelection);
       }
 
       if (reset) {
         resetEntries(newEntries);
+        if (observedThroughLine !== null) {
+          setTotalLines(observedThroughLine);
+        }
         return;
       }
 
-      if (newEntries.length === 0) {
-        return;
+      for (const amendment of amendments) {
+        amendEntry(amendment);
       }
 
-      appendEntries(newEntries);
+      if (newEntries.length > 0) {
+        appendEntries(newEntries);
+      }
+
+      if (observedThroughLine !== null) {
+        setTotalLines(
+          Math.max(useLogStore.getState().totalLines, observedThroughLine),
+        );
+      }
     });
 
     return () => {
       unlisten.then((fn) => fn());
     };
   }, [
+    amendAggregateEntry,
+    amendEntry,
     appendAggregateEntries,
     appendEntries,
+    observeAggregateTailLine,
+    recordAggregateTailParseErrors,
     resetAggregateEntries,
     resetEntries,
     setParserSelection,
+    setTotalLines,
   ]);
 }

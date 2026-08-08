@@ -242,8 +242,12 @@ jobs:
           key: ${{ runner.os }}-esp-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-esp-cargo-
 
-      - name: Test ESP parser contracts
-        run: cargo test --locked -p cmtraceopen-parser --test esp_diagnostics
+      # Run all parser-crate targets on Windows in addition to the Linux checks.
+      - name: Test parser crate contracts
+        run: cargo test --locked -p cmtraceopen-parser
+
+      - name: Clippy parser crate
+        run: cargo clippy --locked -p cmtraceopen-parser --all-targets -- -D warnings
 
       - name: Test native ESP diagnostics
         run: cargo test --locked -p cmtrace-open --all-features --test esp_diagnostics_sources

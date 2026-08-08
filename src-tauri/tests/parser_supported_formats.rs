@@ -6,7 +6,7 @@ use app_lib::parser::ResolvedParser;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const DECLARED_PARSER_KINDS: [ParserKind; 21] = [
+const DECLARED_PARSER_KINDS: [ParserKind; 22] = [
     ParserKind::Ccm,
     ParserKind::Simple,
     ParserKind::Timestamped,
@@ -28,6 +28,7 @@ const DECLARED_PARSER_KINDS: [ParserKind; 21] = [
     ParserKind::DnsDebug,
     ParserKind::DnsAudit,
     ParserKind::CmtLog,
+    ParserKind::CompanyPortal,
 ];
 
 fn contract_name(kind: ParserKind) -> &'static str {
@@ -53,6 +54,7 @@ fn contract_name(kind: ParserKind) -> &'static str {
         ParserKind::DnsDebug => "dns_debug",
         ParserKind::DnsAudit => "dns_audit",
         ParserKind::CmtLog => "cmtlog",
+        ParserKind::CompanyPortal => "company_portal",
     }
 }
 
@@ -490,6 +492,40 @@ fn text_contract_cmtlog() {
     assert_eq!(result.entries[2].entry_kind, Some(EntryKind::Iteration));
     assert_eq!(result.entries[3].severity, Severity::Success);
     assert_eq!(result.entries[3].whatif, Some(true));
+}
+
+#[test]
+fn text_contract_company_portal() {
+    let (result, selection) = parse_fixture("company_portal/clean/Log_1.log");
+    assert_selection(
+        &selection,
+        ParserKind::CompanyPortal,
+        ParserImplementation::CompanyPortal,
+        RecordFraming::LogicalRecord,
+    );
+    assert_eq!(result.format_detected, LogFormat::Timestamped);
+    assert_eq!(result.parse_errors, 0);
+    assert_eq!(result.entries.len(), 3);
+    assert_eq!(result.entries[0].component.as_deref(), Some("App Catalog"));
+    assert_eq!(result.entries[1].severity, Severity::Warning);
+    assert_eq!(result.entries[2].severity, Severity::Error);
+    assert_eq!(
+        result.entries[0].timestamp_display.as_deref(),
+        Some("2026-05-04 08:12:31.441")
+    );
+    // Field 5 is a sequence, not a thread id; it must never populate a thread.
+    assert!(result.entries[0].thread.is_none());
+}
+
+#[test]
+fn company_portal_detection_requires_record_structure_not_just_the_file_name() {
+    // The exact LocalState file name with an unrelated UWP package's records.
+    let selection = detect_fixture("company_portal/negative/Log_1.log");
+    assert_eq!(selection.parser, ParserKind::Timestamped);
+    assert_eq!(
+        selection.implementation,
+        ParserImplementation::GenericTimestamped
+    );
 }
 
 #[test]

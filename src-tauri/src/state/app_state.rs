@@ -6,19 +6,19 @@ use std::sync::Mutex;
 
 #[cfg(feature = "esp-diagnostics")]
 use crate::esp::session::{EspSessionError, EspSessionManager};
-use crate::models::log_entry::LogEntry;
 use crate::parser::ResolvedParser;
 #[cfg(feature = "sccm-diagnostics")]
 use crate::sccm::collector::SccmAdvancedCapabilityStore;
 use crate::timeline::store::Timeline;
-use crate::watcher::tail::TailSession;
+use crate::watcher::tail::{InitialLogicalRecord, TailSession};
 
 #[allow(dead_code)]
 /// Represents a currently open log file.
 pub struct OpenFile {
     pub path: PathBuf,
-    pub entries: Vec<LogEntry>,
     pub parser_selection: ResolvedParser,
+    /// One-shot, bounded handoff from initial parsing to the first tail session.
+    pub initial_logical_record: Option<InitialLogicalRecord>,
     /// Current byte offset for tail tracking
     pub byte_offset: u64,
 }

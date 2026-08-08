@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useLogStore, getCachedTabSnapshot, setCachedTabSnapshot, clearAllTabSnapshots } from "./log-store";
-import type { LogEntry } from "../types/log";
+import type { LogEntry, TailEntryAmendment } from "../types/log";
 
 function makeEntry(overrides: Partial<LogEntry> & { id: number }): LogEntry {
   return {
@@ -65,6 +65,201 @@ describe("log-store", () => {
     });
   });
 
+  describe("amendEntry", () => {
+    const firstAmendment: TailEntryAmendment = {
+      entryId: 0,
+      entryLineNumber: 1,
+      continuationStartLine: 2,
+      continuationEndLine: 2,
+      messageUtf16Start: 14,
+      messageSuffix: "\nrequest failed with 0x80070005",
+      errorCodeSpans: [
+        {
+          start: 35,
+          end: 45,
+          codeHex: "0x80070005",
+          codeDecimal: "-2147024891",
+          description: "Access is denied.",
+          category: "Win32",
+        },
+      ],
+    };
+
+    const secondAmendment: TailEntryAmendment = {
+      entryId: 0,
+      entryLineNumber: 1,
+      continuationStartLine: 3,
+      continuationEndLine: 3,
+      messageUtf16Start: 45,
+      messageSuffix: "\nretry scheduled",
+      errorCodeSpans: [],
+    };
+
+    it("amends every continuation-owned field without changing identity or selection", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({
+          id: 0,
+          lineNumber: 1,
+          message: "[Sync] started",
+          errorCodeSpans: [],
+        }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+      useLogStore.getState().selectEntry(0);
+
+      useLogStore.getState().amendEntry(firstAmendment);
+
+      const state = useLogStore.getState();
+      expect(state.entries).toHaveLength(1);
+      expect(state.entries[0].id).toBe(0);
+      expect(state.entries[0].lineNumber).toBe(1);
+      expect(state.entries[0].message).toBe(
+        "[Sync] started\nrequest failed with 0x80070005",
+      );
+      expect(state.entries[0].errorCodeSpans).toEqual(firstAmendment.errorCodeSpans);
+      expect(state.selectedId).toBe(0);
+      expect(state.totalLines).toBe(2);
+    });
+
+    it("ignores duplicate and stale reordered physical ranges", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry(firstAmendment);
+      useLogStore.getState().amendEntry(secondAmendment);
+      useLogStore.getState().amendEntry(firstAmendment);
+
+      expect(useLogStore.getState().entries[0].message).toBe(
+        "[Sync] started\nrequest failed with 0x80070005\nretry scheduled",
+      );
+      expect(useLogStore.getState().totalLines).toBe(3);
+    });
+
+    it("rejects a future range until its expected predecessor is present", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...secondAmendment,
+        messageUtf16Start: 14,
+      });
+      expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
+
+      useLogStore.getState().amendEntry(firstAmendment);
+      expect(useLogStore.getState().entries[0].message).toBe(
+        "[Sync] started\nrequest failed with 0x80070005",
+      );
+      expect(useLogStore.getState().totalLines).toBe(2);
+    });
+
+    it("rejects suffixes that are not anchored to a new physical line", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        messageSuffix: "request failed\n",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
+
+    it("rejects error spans outside the amended message", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        errorCodeSpans: [
+          {
+            ...firstAmendment.errorCodeSpans[0],
+            end: 4_096,
+          },
+        ],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
+
+    it("accepts a suffix that spans its declared physical range", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        continuationEndLine: 3,
+        messageSuffix: "\nfirst\nsecond",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe(
+        "[Sync] started\nfirst\nsecond",
+      );
+      expect(useLogStore.getState().totalLines).toBe(3);
+    });
+
+    it("rejects a suffix whose line count disagrees with its physical range", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        continuationEndLine: 4,
+        messageSuffix: "\nfirst\nsecond",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe("[Sync] started");
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
+
+    it("ignores an amendment whose entry id is not present", () => {
+      const entries = [
+        makeEntry({ id: 0, lineNumber: 1, message: "[Sync] started" }),
+      ];
+      const aggregateFiles = [
+        {
+          filePath: "/test.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ];
+      useLogStore.getState().setEntries(entries);
+      useLogStore.getState().setAggregateFiles(aggregateFiles);
+      useLogStore.getState().setTotalLines(1);
+      const listener = vi.fn();
+      const unsubscribe = useLogStore.subscribe(listener);
+
+      useLogStore.getState().amendEntry({
+        ...firstAmendment,
+        entryId: 99,
+      });
+
+      unsubscribe();
+      expect(listener).not.toHaveBeenCalled();
+      expect(useLogStore.getState().entries).toBe(entries);
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
+  });
+
   describe("resetEntries (tail truncation)", () => {
     it("replaces the whole view with the fresh read and resets totalLines", () => {
       useLogStore.getState().setEntries([makeEntry({ id: 1 }), makeEntry({ id: 2 })]);
@@ -117,6 +312,302 @@ describe("log-store", () => {
       expect(aEntries).toHaveLength(1);
       expect(aEntries[0].message).toBe("rotated-a");
       expect(useLogStore.getState().totalLines).toBe(2);
+    });
+
+    it("seeds the reset file count from the highest fresh physical line", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, filePath: "/a.log", lineNumber: 5 }),
+        makeEntry({ id: 2, filePath: "/b.log", lineNumber: 1 }),
+      ]);
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 5,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(6);
+
+      useLogStore
+        .getState()
+        .resetAggregateEntries("/a.log", [
+          makeEntry({ id: 99, filePath: "/a.log", lineNumber: 4 }),
+        ]);
+
+      expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(4);
+      expect(useLogStore.getState().totalLines).toBe(5);
+    });
+  });
+
+  describe("appendAggregateEntries", () => {
+    it("derives aggregate counts from each file's highest observed entry line", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, filePath: "/a.log", lineNumber: 1 }),
+        makeEntry({ id: 2, filePath: "/b.log", lineNumber: 1 }),
+      ]);
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(2);
+
+      useLogStore
+        .getState()
+        .appendAggregateEntries("/a.log", [
+          makeEntry({ id: 0, filePath: "/a.log", lineNumber: 3 }),
+        ]);
+
+      expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(3);
+      expect(useLogStore.getState().totalLines).toBe(4);
+    });
+
+    it("ignores rows for an untracked file once aggregate metadata exists", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 1, filePath: "/a.log", lineNumber: 1 }),
+      ]);
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(1);
+      const entries = useLogStore.getState().entries;
+      const aggregateFiles = useLogStore.getState().aggregateFiles;
+
+      useLogStore.getState().appendAggregateEntries("/missing.log", [
+        makeEntry({ id: 0, filePath: "/missing.log", lineNumber: 2 }),
+      ]);
+
+      expect(useLogStore.getState().entries).toBe(entries);
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+      expect(useLogStore.getState().totalLines).toBe(1);
+    });
+  });
+
+  describe("observeAggregateTailLine", () => {
+    it("does not publish state for untracked or already-observed lines", () => {
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 3,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(3);
+      const aggregateFiles = useLogStore.getState().aggregateFiles;
+      const listener = vi.fn();
+      const unsubscribe = useLogStore.subscribe(listener);
+
+      useLogStore.getState().observeAggregateTailLine("/missing.log", 99);
+      useLogStore.getState().observeAggregateTailLine("/a.log", 3);
+
+      unsubscribe();
+      expect(listener).not.toHaveBeenCalled();
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+      expect(useLogStore.getState().totalLines).toBe(3);
+    });
+
+    it("advances the tracked file total and the derived overall total", () => {
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 3,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 2,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(5);
+
+      useLogStore.getState().observeAggregateTailLine("/a.log", 7);
+
+      expect(useLogStore.getState().aggregateFiles).toMatchObject([
+        { filePath: "/a.log", totalLines: 7 },
+        { filePath: "/b.log", totalLines: 2 },
+      ]);
+      expect(useLogStore.getState().totalLines).toBe(9);
+    });
+  });
+
+  describe("recordAggregateTailParseErrors", () => {
+    it("adds new coverage gaps only to tracked aggregate files", () => {
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 3,
+          parseErrors: 1,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 2,
+          parseErrors: 2,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+
+      useLogStore.getState().recordAggregateTailParseErrors("/a.log", 3);
+
+      expect(useLogStore.getState().aggregateFiles).toMatchObject([
+        { filePath: "/a.log", parseErrors: 4 },
+        { filePath: "/b.log", parseErrors: 2 },
+      ]);
+      const aggregateFiles = useLogStore.getState().aggregateFiles;
+      useLogStore.getState().recordAggregateTailParseErrors("/missing.log", 5);
+      useLogStore.getState().recordAggregateTailParseErrors("/a.log", 0);
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+    });
+  });
+
+  describe("amendAggregateEntry", () => {
+    it("amends the matching file and physical line while preserving its merged display id", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 4, filePath: "/a.log", lineNumber: 1, message: "[Sync] started" }),
+        makeEntry({ id: 5, filePath: "/b.log", lineNumber: 1, message: "unrelated" }),
+      ]);
+      useLogStore.getState().setAggregateFiles([
+        {
+          filePath: "/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+        {
+          filePath: "/b.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ]);
+      useLogStore.getState().setTotalLines(2);
+
+      useLogStore.getState().amendAggregateEntry("/a.log", {
+        entryId: 0,
+        entryLineNumber: 1,
+        continuationStartLine: 2,
+        continuationEndLine: 2,
+        messageUtf16Start: 14,
+        messageSuffix: "\nrequest failed",
+        errorCodeSpans: [],
+      });
+      useLogStore.getState().amendAggregateEntry("/a.log", {
+        entryId: 0,
+        entryLineNumber: 1,
+        continuationStartLine: 2,
+        continuationEndLine: 2,
+        messageUtf16Start: 14,
+        messageSuffix: "\nrequest failed",
+        errorCodeSpans: [],
+      });
+
+      const entries = useLogStore.getState().entries;
+      expect(entries.find((entry) => entry.filePath === "/a.log")).toMatchObject({
+        id: 4,
+        lineNumber: 1,
+        message: "[Sync] started\nrequest failed",
+      });
+      expect(entries.find((entry) => entry.filePath === "/b.log")).toMatchObject({
+        id: 5,
+        message: "unrelated",
+      });
+      expect(useLogStore.getState().aggregateFiles[0].totalLines).toBe(2);
+      expect(useLogStore.getState().totalLines).toBe(3);
+    });
+
+    it("keeps a physical total when aggregate file metadata is unavailable", () => {
+      useLogStore.getState().setEntries([
+        makeEntry({ id: 4, filePath: "/a.log", lineNumber: 1, message: "[Sync] started" }),
+      ]);
+      useLogStore.getState().setTotalLines(1);
+
+      useLogStore.getState().amendAggregateEntry("/a.log", {
+        entryId: 0,
+        entryLineNumber: 1,
+        continuationStartLine: 2,
+        continuationEndLine: 2,
+        messageUtf16Start: 14,
+        messageSuffix: "\nrequest failed",
+        errorCodeSpans: [],
+      });
+
+      expect(useLogStore.getState().entries[0].message).toBe(
+        "[Sync] started\nrequest failed",
+      );
+      expect(useLogStore.getState().totalLines).toBe(2);
+    });
+
+    it("ignores an amendment whose file path has no matching entry", () => {
+      const entries = [
+        makeEntry({ id: 4, filePath: "/a.log", lineNumber: 1, message: "[Sync] started" }),
+      ];
+      const aggregateFiles = [
+        {
+          filePath: "/a.log",
+          totalLines: 1,
+          parseErrors: 0,
+          fileSize: 100,
+          byteOffset: 100,
+        },
+      ];
+      useLogStore.getState().setEntries(entries);
+      useLogStore.getState().setAggregateFiles(aggregateFiles);
+      useLogStore.getState().setTotalLines(1);
+      const listener = vi.fn();
+      const unsubscribe = useLogStore.subscribe(listener);
+
+      useLogStore.getState().amendAggregateEntry("/missing.log", {
+        entryId: 0,
+        entryLineNumber: 1,
+        continuationStartLine: 2,
+        continuationEndLine: 2,
+        messageUtf16Start: 14,
+        messageSuffix: "\nrequest failed",
+        errorCodeSpans: [],
+      });
+
+      unsubscribe();
+      expect(listener).not.toHaveBeenCalled();
+      expect(useLogStore.getState().entries).toBe(entries);
+      expect(useLogStore.getState().aggregateFiles).toBe(aggregateFiles);
+      expect(useLogStore.getState().totalLines).toBe(1);
     });
   });
 

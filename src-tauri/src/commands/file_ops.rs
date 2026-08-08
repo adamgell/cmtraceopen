@@ -13,6 +13,7 @@ use crate::models::log_entry::{
 };
 use crate::parser;
 use crate::state::app_state::{AppState, OpenFile};
+use crate::watcher::tail::InitialLogicalRecord;
 
 use super::bundle_ops::{collect_files_recursive, detect_evidence_bundle_metadata};
 use super::known_sources::KnownSourcePathKind;
@@ -157,6 +158,8 @@ pub fn open_log_file(
         Ok(value) => value,
         Err(reason) => return Err(classify_open_failure(&path, reason)),
     };
+    let initial_logical_record =
+        InitialLogicalRecord::from_parse_result(&result, &parser_selection);
 
     // Store in AppState so tail parsing reuses the same backend parser selection.
     let mut open_files = state
@@ -167,8 +170,8 @@ pub fn open_log_file(
         PathBuf::from(&path),
         OpenFile {
             path: PathBuf::from(&path),
-            entries: vec![], // entries live in the frontend
             parser_selection,
+            initial_logical_record,
             byte_offset: result.byte_offset,
         },
     );
@@ -296,12 +299,14 @@ pub fn parse_files_batch(
     for item in results {
         match item {
             Ok((result, parser_selection, path)) => {
+                let initial_logical_record =
+                    InitialLogicalRecord::from_parse_result(&result, &parser_selection);
                 open_files.insert(
                     PathBuf::from(&path),
                     OpenFile {
                         path: PathBuf::from(&path),
-                        entries: vec![],
                         parser_selection,
+                        initial_logical_record,
                         byte_offset: result.byte_offset,
                     },
                 );
@@ -330,6 +335,19 @@ pub fn open_log_folder_aggregate(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<AggregateParseResult, crate::error::AppError> {
+    open_log_folder_aggregate_impl(path, &state)
+}
+
+/// Command body, split from the `#[tauri::command]` wrapper so unit tests can
+/// drive it with a plain `AppState`. Constructing a `tauri::State` in tests
+/// needs `tauri::test::mock_app()`, and on Windows that statically anchors the
+/// runtime's windowing stack (comctl32 v6's `TaskDialogIndirect`, menus, DWM)
+/// into the unit-test exe, which has no comctl32-v6 manifest and therefore
+/// fails to load with STATUS_ENTRYPOINT_NOT_FOUND before any test runs.
+fn open_log_folder_aggregate_impl(
+    path: String,
+    state: &AppState,
+) -> Result<AggregateParseResult, crate::error::AppError> {
     let listing = list_log_folder(path.clone())?;
     let file_entries: Vec<&FolderEntry> = listing
         .entries
@@ -356,6 +374,7 @@ pub fn open_log_folder_aggregate(
                 continue;
             }
         };
+        let final_entry_line_number = result.entries.last().map(|entry| entry.line_number);
 
         total_lines = total_lines.saturating_add(result.total_lines);
         parse_errors = parse_errors.saturating_add(result.parse_errors);
@@ -369,8 +388,11 @@ pub fn open_log_folder_aggregate(
         });
         open_file_states.push((
             PathBuf::from(&result.file_path),
+            result.file_path.clone(),
             parser_selection,
             result.byte_offset,
+            result.total_lines,
+            final_entry_line_number,
         ));
     }
 
@@ -386,20 +408,46 @@ pub fn open_log_folder_aggregate(
         entry.id = index as u64;
     }
 
-    let mut open_files = state
-        .open_files
-        .lock()
-        .map_err(|e| crate::error::AppError::State(e.to_string()))?;
-    for (path_buf, parser_selection, byte_offset) in open_file_states {
-        open_files.insert(
-            path_buf.clone(),
-            OpenFile {
-                path: path_buf,
-                entries: vec![],
-                parser_selection,
-                byte_offset,
-            },
-        );
+    {
+        let aggregate_entry_lookup = index_aggregate_entries(&aggregate_entries)?;
+
+        let mut open_files = state
+            .open_files
+            .lock()
+            .map_err(|e| crate::error::AppError::State(e.to_string()))?;
+        for (
+            path_buf,
+            file_path,
+            parser_selection,
+            byte_offset,
+            file_total_lines,
+            final_entry_line_number,
+        ) in open_file_states
+        {
+            let initial_logical_record = if InitialLogicalRecord::supports_parser(&parser_selection)
+            {
+                final_entry_line_number
+                    .and_then(|line_number| {
+                        aggregate_entry_lookup
+                            .get(&(file_path.as_str(), line_number))
+                            .copied()
+                    })
+                    .and_then(|entry| {
+                        InitialLogicalRecord::from_entry(entry, file_total_lines, &parser_selection)
+                    })
+            } else {
+                None
+            };
+            open_files.insert(
+                path_buf.clone(),
+                OpenFile {
+                    path: path_buf,
+                    parser_selection,
+                    initial_logical_record,
+                    byte_offset,
+                },
+            );
+        }
     }
 
     Ok(AggregateParseResult {
@@ -673,9 +721,28 @@ fn compare_aggregate_entries(
     }
 }
 
+fn index_aggregate_entries(
+    entries: &[LogEntry],
+) -> Result<std::collections::HashMap<(&str, u32), &LogEntry>, crate::error::AppError> {
+    let mut lookup = std::collections::HashMap::new();
+    for entry in entries {
+        if lookup
+            .insert((entry.file_path.as_str(), entry.line_number), entry)
+            .is_some()
+        {
+            return Err(crate::error::AppError::Internal(format!(
+                "duplicate aggregate entry for {} at physical line {}",
+                entry.file_path, entry.line_number
+            )));
+        }
+    }
+    Ok(lookup)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::list_log_folder;
+    use super::{index_aggregate_entries, list_log_folder, open_log_folder_aggregate_impl};
+    use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -697,8 +764,7 @@ mod tests {
         let dir = create_temp_dir("file-ops-denied");
         let locked = dir.join("locked");
         fs::create_dir(&locked).expect("create locked dir");
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
-            .expect("drop permissions");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("drop permissions");
 
         let result = list_log_folder(locked.to_string_lossy().to_string());
 
@@ -727,8 +793,7 @@ mod tests {
         let dir = create_temp_dir("file-ops-denied-file");
         let locked = dir.join("locked.log");
         fs::write(&locked, "2026-07-31 log line").expect("write log");
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
-            .expect("drop permissions");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).expect("drop permissions");
 
         let error = super::classify_open_failure(
             locked.to_string_lossy().as_ref(),
@@ -762,7 +827,79 @@ mod tests {
 
         // The file opens fine, so the parser's own message survives and no
         // elevation offer can be produced.
-        assert!(matches!(error, crate::error::AppError::Internal(reason) if reason == "unsupported format"));
+        assert!(
+            matches!(error, crate::error::AppError::Internal(reason) if reason == "unsupported format")
+        );
+    }
+
+    #[test]
+    fn aggregate_tail_seed_uses_the_frontend_visible_entry_id() {
+        let dir = create_temp_dir("file-ops-aggregate-tail-seed");
+        let later_path = dir.join("Log_1.log");
+        let earlier_path = dir.join("Log_2.log");
+        fs::write(
+            &later_path,
+            "2026-05-04T08:12:32.0020000Z  INFO      Event       None        1    \
+             1a2b3c4d-0001-4000-8000-000000000001  12-0-0  [App Catalog] later\n",
+        )
+        .expect("write later Company Portal log");
+        fs::write(
+            &earlier_path,
+            "2026-05-04T08:12:31.4410000Z  INFO      Event       None        0    \
+             1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [App Catalog] earlier\n",
+        )
+        .expect("write earlier Company Portal log");
+
+        // A plain AppState, not tauri::test::mock_app(): building a mock app
+        // statically anchors the runtime's windowing stack into the unit-test
+        // exe, which cannot load on Windows (no comctl32-v6 manifest).
+        let state = AppState::default();
+        let result = open_log_folder_aggregate_impl(dir.to_string_lossy().to_string(), &state)
+            .expect("open aggregate folder");
+        let later_path = later_path.to_string_lossy();
+        let visible_entry_id = result
+            .entries
+            .iter()
+            .find(|entry| entry.file_path == later_path)
+            .expect("later aggregate entry")
+            .id;
+        let stored_seed_id = state
+            .open_files
+            .lock()
+            .expect("open files lock")
+            .get(PathBuf::from(later_path.as_ref()).as_path())
+            .and_then(|open_file| open_file.initial_logical_record.as_ref())
+            .expect("later aggregate tail seed")
+            .entry_id_for_test();
+
+        fs::remove_dir_all(&dir).expect("remove temp aggregate folder");
+
+        assert_eq!(visible_entry_id, 1, "fixture must reorder the later record");
+        assert_eq!(stored_seed_id, visible_entry_id);
+    }
+
+    #[test]
+    fn aggregate_tail_seed_index_rejects_duplicate_source_lines() {
+        let dir = create_temp_dir("file-ops-aggregate-duplicate-seed");
+        let path = dir.join("Log_1.log");
+        fs::write(
+            &path,
+            "2026-05-04T08:12:31.4410000Z  INFO      Event       None        0    \
+             1a2b3c4d-0001-4000-8000-000000000002  12-0-0  [App Catalog] entry\n",
+        )
+        .expect("write Company Portal log");
+        let (result, _) = crate::parser::parse_file(path.to_string_lossy().as_ref())
+            .expect("parse Company Portal log");
+        let entry = result.entries.first().expect("parsed entry").clone();
+        let entries = [entry.clone(), entry];
+
+        let error = index_aggregate_entries(&entries).expect_err("duplicate key must fail");
+
+        fs::remove_dir_all(&dir).expect("remove temp aggregate folder");
+        assert!(
+            matches!(error, crate::error::AppError::Internal(message) if message.contains("duplicate aggregate entry")),
+            "duplicate source coordinates must fail clearly"
+        );
     }
 
     /// A folder reaching the file lane must be classified by its kind, never by

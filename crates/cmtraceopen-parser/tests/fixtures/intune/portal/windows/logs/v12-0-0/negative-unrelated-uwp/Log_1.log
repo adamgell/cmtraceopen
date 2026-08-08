@@ -1,0 +1,3 @@
+2026-05-04T08:12:31.4410000Z  INFO  Startup  Foreground  0  Shell  1.2.3  session started
+2026-05-04T08:12:32.0020000Z  WARN  Startup  Foreground  1  Shell  1.2.3  tile refresh deferred
+2026-05-04T08:12:33.7710000Z  INFO  Shutdown  Background  2  Shell  1.2.3  session ended

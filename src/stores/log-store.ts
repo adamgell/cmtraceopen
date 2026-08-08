@@ -9,6 +9,7 @@ import type {
   LogFormat,
   LogSource,
   ParserSelectionInfo,
+  TailEntryAmendment,
 } from "../types/log";
 import {
   type ColumnId,
@@ -88,6 +89,54 @@ export interface ParserSelectionDisplay {
 
 const UNGROUPED_TOOLBAR_GROUP_ID = "ungrouped";
 const UNGROUPED_TOOLBAR_GROUP_LABEL = "Other Sources";
+
+function canApplyTailAmendment(
+  entry: LogEntry,
+  amendment: TailEntryAmendment,
+): boolean {
+  const expectedContinuationStartLine =
+    entry.lineNumber + entry.message.split("\n").length;
+  if (
+    amendment.messageSuffix.length === 0 ||
+    !amendment.messageSuffix.startsWith("\n") ||
+    amendment.entryLineNumber !== entry.lineNumber ||
+    amendment.continuationStartLine !== expectedContinuationStartLine ||
+    amendment.continuationEndLine < amendment.continuationStartLine ||
+    entry.message.length !== amendment.messageUtf16Start
+  ) {
+    return false;
+  }
+
+  const physicalLineCount =
+    amendment.continuationEndLine - amendment.continuationStartLine + 1;
+  const suffixLineCount = amendment.messageSuffix.split("\n").length - 1;
+  const amendedMessageLength =
+    amendment.messageUtf16Start + amendment.messageSuffix.length;
+  return (
+    suffixLineCount === physicalLineCount &&
+    amendment.errorCodeSpans.every(
+      (span) =>
+        span.start >= amendment.messageUtf16Start &&
+        span.end > span.start &&
+        span.end <= amendedMessageLength,
+    )
+  );
+}
+
+function applyTailAmendment(
+  entry: LogEntry,
+  amendment: TailEntryAmendment,
+): LogEntry {
+  return {
+    ...entry,
+    message: entry.message + amendment.messageSuffix,
+    errorCodeSpans: [
+      ...(entry.errorCodeSpans ?? []),
+      ...amendment.errorCodeSpans,
+    ],
+  };
+}
+
 const LAST_SORT_ORDER = Number.MAX_SAFE_INTEGER;
 
 /**
@@ -284,6 +333,8 @@ function getParserLabel(parser: ParserSelectionInfo["parser"]): string {
       return "DNS Audit (EVTX)";
     case "cmtLog":
       return "CmtLog";
+    case "companyPortal":
+      return "Company Portal";
   }
 }
 
@@ -327,6 +378,8 @@ function getImplementationLabel(
       return "DNS audit EVTX parser";
     case "cmtLog":
       return "CmtLog parser";
+    case "companyPortal":
+      return "Company Portal Windows log parser";
   }
 }
 
@@ -525,6 +578,8 @@ interface LogState {
   selectedSourceFilePath: string | null;
   /** Included files when the active source is loaded as an aggregate folder stream. */
   aggregateFiles: AggregateParsedFileResult[];
+  /** Changes only when an aggregate source is explicitly loaded or replaced. */
+  aggregateTailGeneration: number;
   /** User-visible source loading/selection state. */
   sourceStatus: SourceStatus;
   highlightText: string;
@@ -562,6 +617,8 @@ interface LogState {
   hasFindSession: () => boolean;
   setEntries: (entries: LogEntry[]) => void;
   appendEntries: (entries: LogEntry[]) => void;
+  /** Append a validated bounded suffix to an incomplete rendered record. */
+  amendEntry: (amendment: TailEntryAmendment) => void;
   /** Replace the single-file view after a tailed file was truncated/rotated. */
   resetEntries: (entries: LogEntry[]) => void;
   selectEntry: (id: number | null) => void;
@@ -589,6 +646,12 @@ interface LogState {
   setFindUseRegex: (useRegex: boolean) => void;
   recomputeFindMatches: () => void;
   appendAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
+  /** Append a validated suffix while preserving an aggregate row's display id. */
+  amendAggregateEntry: (filePath: string, amendment: TailEntryAmendment) => void;
+  /** Advance one aggregate file's authoritative physical line count. */
+  observeAggregateTailLine: (filePath: string, lineNumber: number) => void;
+  /** Accumulate incremental parser/framing coverage gaps for one aggregate file. */
+  recordAggregateTailParseErrors: (filePath: string, parseErrors: number) => void;
   /** Replace one file's entries in an aggregate stream after it was truncated/rotated. */
   resetAggregateEntries: (filePath: string, entries: LogEntry[]) => void;
   findNext: (trigger: string) => void;
@@ -713,6 +776,7 @@ export const useLogStore = create<LogState>((set, get) => ({
   knownSourceToolbarFamilies: [],
   selectedSourceFilePath: null,
   aggregateFiles: [],
+  aggregateTailGeneration: 0,
   sourceStatus: {
     kind: "idle",
     message: "Ready",
@@ -767,6 +831,34 @@ export const useLogStore = create<LogState>((set, get) => ({
     }));
     recomputeAndSetMatches();
   },
+  amendEntry: (amendment) => {
+    let amendmentApplied = false;
+    set((state) => {
+      const entryIndex = state.entries.findIndex(
+        (entry) =>
+          entry.id === amendment.entryId &&
+          canApplyTailAmendment(entry, amendment),
+      );
+      if (entryIndex < 0) {
+        return state;
+      }
+
+      amendmentApplied = true;
+      const entries = [...state.entries];
+      entries[entryIndex] = applyTailAmendment(entries[entryIndex], amendment);
+      return {
+        entries,
+        totalLines: Math.max(
+          state.totalLines,
+          amendment.continuationEndLine,
+        ),
+        guidNameMap: buildGuidNameMap(entries),
+      };
+    });
+    if (amendmentApplied) {
+      recomputeAndSetMatches();
+    }
+  },
   resetEntries: (newEntries) => {
     // The tailed file was truncated/rotated: `newEntries` are a fresh read from
     // the start of the file, so replace the whole view instead of appending.
@@ -785,6 +877,13 @@ export const useLogStore = create<LogState>((set, get) => ({
   },
   appendAggregateEntries: (filePath, newEntries) => {
     set((state) => {
+      if (
+        state.aggregateFiles.length > 0 &&
+        !state.aggregateFiles.some((file) => file.filePath === filePath)
+      ) {
+        return state;
+      }
+
       const nextId = state.entries.reduce(
         (maxId, entry) => Math.max(maxId, entry.id),
         -1
@@ -798,14 +897,117 @@ export const useLogStore = create<LogState>((set, get) => ({
       const entries = [...state.entries, ...entriesWithIds].sort((left, right) =>
         compareMergedLogEntries(left, right, fileOrder)
       );
+      const highestLine = newEntries.reduce(
+        (maximum, entry) => Math.max(maximum, entry.lineNumber),
+        0,
+      );
+      const aggregateFiles = state.aggregateFiles.map((file) =>
+        file.filePath === filePath
+          ? { ...file, totalLines: Math.max(file.totalLines, highestLine) }
+          : file,
+      );
 
       return {
         entries,
-        totalLines: state.totalLines + entriesWithIds.length,
+        aggregateFiles,
+        totalLines:
+          aggregateFiles.length > 0
+            ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0)
+            : state.totalLines + entriesWithIds.length,
         guidNameMap: mergeGuidNameMap(state.guidNameMap, newEntries),
       };
     });
     recomputeAndSetMatches();
+  },
+  amendAggregateEntry: (filePath, amendment) => {
+    let amendmentApplied = false;
+    set((state) => {
+      const entryIndex = state.entries.findIndex(
+        (entry) =>
+          entry.filePath === filePath &&
+          canApplyTailAmendment(entry, amendment),
+      );
+      if (entryIndex < 0) {
+        return state;
+      }
+
+      amendmentApplied = true;
+      const amendedEntry = applyTailAmendment(
+        state.entries[entryIndex],
+        amendment,
+      );
+      const entries = [...state.entries];
+      entries[entryIndex] = amendedEntry;
+      const isTrackedFile = state.aggregateFiles.some(
+        (file) => file.filePath === filePath,
+      );
+      const aggregateFiles = isTrackedFile
+        ? state.aggregateFiles.map((file) =>
+            file.filePath === filePath
+              ? {
+                  ...file,
+                  totalLines: Math.max(
+                    file.totalLines,
+                    amendment.continuationEndLine,
+                  ),
+                }
+              : file,
+          )
+        : state.aggregateFiles;
+      return {
+        entries,
+        aggregateFiles,
+        totalLines: isTrackedFile
+          ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0)
+          : Math.max(state.totalLines, amendment.continuationEndLine),
+        guidNameMap: mergeGuidNameMap(state.guidNameMap, [amendedEntry]),
+      };
+    });
+    if (amendmentApplied) {
+      recomputeAndSetMatches();
+    }
+  },
+  observeAggregateTailLine: (filePath, lineNumber) => {
+    set((state) => {
+      const targetFile = state.aggregateFiles.find(
+        (file) => file.filePath === filePath,
+      );
+      if (!targetFile || lineNumber <= targetFile.totalLines) {
+        return state;
+      }
+
+      const aggregateFiles = state.aggregateFiles.map((file) =>
+        file.filePath === filePath ? { ...file, totalLines: lineNumber } : file,
+      );
+      return {
+        aggregateFiles,
+        totalLines: aggregateFiles.reduce(
+          (sum, file) => sum + file.totalLines,
+          0,
+        ),
+      };
+    });
+  },
+  recordAggregateTailParseErrors: (filePath, parseErrors) => {
+    set((state) => {
+      if (!Number.isSafeInteger(parseErrors) || parseErrors <= 0) {
+        return state;
+      }
+      const targetFile = state.aggregateFiles.find(
+        (file) => file.filePath === filePath,
+      );
+      if (!targetFile) {
+        return state;
+      }
+
+      return {
+        aggregateFiles: state.aggregateFiles.map((file) =>
+          file.filePath === filePath
+            ? { ...file, parseErrors: file.parseErrors + parseErrors }
+            : file,
+        ),
+      };
+    });
   },
   resetAggregateEntries: (filePath, newEntries) => {
     // One file in the aggregate stream was truncated/rotated: drop its stale
@@ -825,10 +1027,23 @@ export const useLogStore = create<LogState>((set, get) => ({
       const entries = [...remaining, ...entriesWithIds].sort((left, right) =>
         compareMergedLogEntries(left, right, fileOrder)
       );
+      const highestLine = newEntries.reduce(
+        (maximum, entry) => Math.max(maximum, entry.lineNumber),
+        0,
+      );
+      const aggregateFiles = state.aggregateFiles.map((file) =>
+        file.filePath === filePath
+          ? { ...file, totalLines: highestLine }
+          : file,
+      );
 
       return {
         entries,
-        totalLines: entries.length,
+        aggregateFiles,
+        totalLines:
+          aggregateFiles.length > 0
+            ? aggregateFiles.reduce((sum, file) => sum + file.totalLines, 0)
+            : entries.length,
         guidNameMap: buildGuidNameMap(entries),
         selectedId:
           state.selectedId !== null &&
@@ -849,7 +1064,11 @@ export const useLogStore = create<LogState>((set, get) => ({
   setParserSelection: (selection) => set({ parserSelection: selection }),
   setTotalLines: (count) => set({ totalLines: count }),
   setSourceOpenMode: (mode) => set({ sourceOpenMode: mode }),
-  setAggregateFiles: (files) => set({ aggregateFiles: files }),
+  setAggregateFiles: (files) =>
+    set((state) => ({
+      aggregateFiles: files,
+      aggregateTailGeneration: state.aggregateTailGeneration + 1,
+    })),
   setOpenFilePath: (path) =>
     set({ openFilePath: path, selectedSourceFilePath: path }),
   setActiveSource: (source) => set({ activeSource: source }),
@@ -923,6 +1142,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       openFilePath: null,
       selectedSourceFilePath: null,
       aggregateFiles: [],
+      aggregateTailGeneration: 0,
       activeColumns: DEFAULT_COLUMNS,
       byteOffset: 0,
       guidNameMap: {},
@@ -951,6 +1171,7 @@ export const useLogStore = create<LogState>((set, get) => ({
       knownSourceToolbarFamilies: [],
       selectedSourceFilePath: null,
       aggregateFiles: [],
+      aggregateTailGeneration: 0,
       activeColumns: DEFAULT_COLUMNS,
       sourceStatus: {
         kind: "idle",

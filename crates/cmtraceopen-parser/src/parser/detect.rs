@@ -21,6 +21,7 @@ use super::{
     timestamped::{self, DateOrder},
 };
 use crate::intune::device::windows::inventory::{self, DeviceInventoryLogDialect};
+use crate::intune::portal::windows::company_portal::logs as company_portal_logs;
 use crate::models::log_entry::{
     DateFieldOrder, LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
     ParserSelectionInfo, ParserSpecialization, RecordFraming,
@@ -293,6 +294,39 @@ impl ResolvedParser {
         )
     }
 
+    /// Company Portal Windows LocalState log, confirmed on an app version the
+    /// record grammar was derived from.
+    pub fn company_portal() -> Self {
+        Self::new(
+            ParserKind::CompanyPortal,
+            ParserImplementation::CompanyPortal,
+            ParserProvenance::Dedicated,
+            ParseQuality::Structured,
+            RecordFraming::LogicalRecord,
+            DateOrder::default(),
+            None,
+        )
+    }
+
+    /// Company Portal Windows LocalState log whose records match the layout but
+    /// report an app version the grammar was not derived from.
+    ///
+    /// The records are still read with the only grammar that exists rather than
+    /// guessing a different one, but the selection is marked `Heuristic` so the
+    /// UI does not present it as a validated read. The parsed evidence document
+    /// carries the matching `Experimental` / low-confidence markers.
+    pub fn company_portal_experimental() -> Self {
+        Self::new(
+            ParserKind::CompanyPortal,
+            ParserImplementation::CompanyPortal,
+            ParserProvenance::Heuristic,
+            ParseQuality::Structured,
+            RecordFraming::LogicalRecord,
+            DateOrder::default(),
+            None,
+        )
+    }
+
     pub fn cmtlog() -> Self {
         Self::new(
             ParserKind::CmtLog,
@@ -373,6 +407,7 @@ impl ResolvedParser {
             ParserImplementation::DnsDebug => LogFormat::DnsDebug,
             ParserImplementation::DnsAudit => LogFormat::DnsAudit,
             ParserImplementation::CmtLog => LogFormat::CmtLog,
+            ParserImplementation::CompanyPortal => LogFormat::Timestamped,
         }
     }
 
@@ -494,7 +529,7 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let reporting_events_path_hint = path_lower.ends_with("reportingevents.log")
         || path_lower.contains("/softwaredistribution/reportingevents.log")
         || path_lower.contains("\\softwaredistribution\\reportingevents.log");
-    let ime_file_name = path_lower.rsplit(['/', '\\']).next().unwrap_or("");
+    let path_file_name = path_lower.rsplit(['/', '\\']).next().unwrap_or("");
     let ime_path_hint = [
         "agentexecutor",
         "appactionprocessor",
@@ -504,7 +539,14 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
         "intunemanagementextension",
     ]
     .iter()
-    .any(|prefix| ime_file_name.starts_with(prefix));
+    .any(|prefix| path_file_name.starts_with(prefix));
+
+    // `Log_<n>.log` belongs to every UWP package that wants it, so this hint
+    // only nominates a candidate — the decision arm still requires records that
+    // carry a GUID activity id and a dash-separated app-version triple.
+    let company_portal_path_hint =
+        company_portal_logs::is_company_portal_log_file_name(path_file_name)
+            || path_lower.contains("microsoft.companyportal_8wekyb3d8bbwe");
 
     let dhcp_path_hint = path_lower.contains("dhcpsrvlog")
         || path_lower.contains("dhcpv6srvlog")
@@ -534,6 +576,8 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
     let mut secureboot_log_count = 0u32;
     let mut dns_debug_count = 0u32;
     let mut cmtlog_count = 0u32;
+    let mut company_portal_count = 0u32;
+    let mut company_portal_validated_count = 0u32;
     let mut timestamp_count = 0;
     let mut has_day_first = false;
 
@@ -569,6 +613,12 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
             timestamp_count += 1;
         } else if secureboot_log::matches_secureboot_log_record(line.trim()) {
             secureboot_log_count += 1;
+            timestamp_count += 1;
+        } else if let Some(observation) = company_portal_logs::classify_line(line.trim_end()) {
+            company_portal_count += 1;
+            if observation.app_version_is_validated {
+                company_portal_validated_count += 1;
+            }
             timestamp_count += 1;
         } else if dhcp::matches_dhcp_record(line.trim()) {
             dhcp_count += 1;
@@ -634,6 +684,14 @@ pub fn detect_parser(path: &str, content: &str) -> ResolvedParser {
             DateOrder::MonthFirst
         };
         ResolvedParser::dns_debug(dns_date_order)
+    } else if (company_portal_path_hint && company_portal_count >= 1) || company_portal_count >= 2 {
+        // An app version outside the validated set still parses with the only
+        // grammar there is, but the selection says so.
+        if company_portal_validated_count == company_portal_count {
+            ResolvedParser::company_portal()
+        } else {
+            ResolvedParser::company_portal_experimental()
+        }
     } else if (intune_macos_path_hint && intune_macos_count >= 1) || intune_macos_count >= 2 {
         ResolvedParser::intune_macos()
     } else if msi_count >= 2 {
@@ -952,6 +1010,123 @@ Message two $$<Comp2><01-01-2024 08:00:01.000+000><thread=200>"#;
         assert_eq!(detected.implementation, ParserImplementation::DnsDebug);
         assert_eq!(detected.record_framing, RecordFraming::LogicalRecord);
         assert_eq!(detected.parse_quality, ParseQuality::Structured);
+    }
+
+    /// `%LOCALAPPDATA%\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState`.
+    const COMPANY_PORTAL_LOCALSTATE: &str = "C:/Users/adele.vance/AppData/Local/Packages/Microsoft.CompanyPortal_8wekyb3d8bbwe/LocalState";
+
+    #[test]
+    fn test_detect_company_portal_from_path_and_content() {
+        let content = "2024-11-15T16:50:07.2850341Z  INFO  Event        None                      0  1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Configuration Manager Trace Listener] 15/11/2024 16:50:07: SCClient Information: 1: Getting all instances of CCM_Application\n\
+             2024-11-15T16:50:08.1120000Z  ERROR  Event        None                      1  4f2b18a9-6c3d-4e91-b8a7-0d5e2c9f7143  12-0-0  [App Install] request rejected";
+
+        let detected = detect_parser(&format!("{COMPANY_PORTAL_LOCALSTATE}/Log_1.log"), content);
+        let info = detected.to_info();
+
+        assert_eq!(detected.parser, ParserKind::CompanyPortal);
+        assert_eq!(detected.implementation, ParserImplementation::CompanyPortal);
+        assert_eq!(detected.provenance, ParserProvenance::Dedicated);
+        assert_eq!(detected.parse_quality, ParseQuality::Structured);
+        assert_eq!(detected.record_framing, RecordFraming::LogicalRecord);
+        assert_eq!(detected.compatibility_format(), LogFormat::Timestamped);
+        assert_eq!(info.date_order, None);
+        assert_eq!(info.specialization, None);
+    }
+
+    #[test]
+    fn test_detect_company_portal_bridge_log_shares_the_grammar() {
+        let content = "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [ConfigMgr Bridge] querying CCM_Application";
+
+        let detected = detect_parser(
+            &format!("{COMPANY_PORTAL_LOCALSTATE}/Log.ConfigurationManagerBridge_1.log"),
+            content,
+        );
+
+        assert_eq!(detected.parser, ParserKind::CompanyPortal);
+    }
+
+    #[test]
+    fn test_detect_company_portal_from_content_without_path_hint() {
+        let content = "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n\
+             2024-11-15T16:50:08.1120000Z  INFO  Event  None  1  1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] complete";
+
+        let detected = detect_parser("C:/Temp/exported-portal-log.txt", content);
+
+        assert_eq!(detected.parser, ParserKind::CompanyPortal);
+    }
+
+    #[test]
+    fn test_one_company_portal_record_without_path_hint_stays_generic() {
+        let content = "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started";
+
+        let detected = detect_parser("C:/Temp/unrelated.log", content);
+
+        assert_ne!(detected.parser, ParserKind::CompanyPortal);
+    }
+
+    #[test]
+    fn test_detect_company_portal_downgrades_unknown_app_version() {
+        let content = "2026-02-03T09:15:00.1230000Z  INFO  Event  None  0  1487dc30-3bb0-46bf-98ee-76771bd9953e  13-4-2  [Sync] started";
+
+        let detected = detect_parser(&format!("{COMPANY_PORTAL_LOCALSTATE}/Log_1.log"), content);
+
+        assert_eq!(detected.parser, ParserKind::CompanyPortal);
+        assert_eq!(detected.provenance, ParserProvenance::Heuristic);
+    }
+
+    #[test]
+    fn test_detect_company_portal_downgrades_mixed_app_versions() {
+        let content = "2024-11-15T16:50:07.2850341Z  INFO  Event  None  0  1487dc30-3bb0-46bf-98ee-76771bd9953e  12-0-0  [Sync] started\n\
+             2026-02-03T09:15:00.1230000Z  INFO  Event  None  1  1487dc30-3bb0-46bf-98ee-76771bd9953e  13-4-2  [Sync] complete";
+
+        let detected = detect_parser(&format!("{COMPANY_PORTAL_LOCALSTATE}/Log_1.log"), content);
+
+        assert_eq!(detected.parser, ParserKind::CompanyPortal);
+        assert_eq!(detected.provenance, ParserProvenance::Heuristic);
+    }
+
+    #[test]
+    fn test_unrelated_uwp_log_file_does_not_false_positive() {
+        // Same file name, same package layout, aligned columns, ISO timestamps
+        // — and still refused, because field 6 is not a GUID and field 7 is not
+        // a dash-separated version triple.
+        let content = "2026-05-04T08:12:31.4410000Z  INFO  Startup  Foreground  0  Shell  1.2.3  session started\n\
+             2026-05-04T08:12:32.0020000Z  WARN   Startup  Foreground  1  Shell  1.2.3  tile refresh deferred";
+
+        let detected = detect_parser(
+            "C:/Users/adele.vance/AppData/Local/Packages/Contoso.SampleApp_1a2b3c4d5e6f7/LocalState/Log_1.log",
+            content,
+        );
+
+        assert_eq!(detected.parser, ParserKind::Timestamped);
+        assert_eq!(
+            detected.implementation,
+            ParserImplementation::GenericTimestamped
+        );
+    }
+
+    #[test]
+    fn test_generic_timestamped_in_company_portal_path_does_not_false_positive() {
+        let content = "2026-05-04 08:12:31.441 Service started\n\
+                        2026-05-04 08:12:32.002 Service ready";
+
+        let detected = detect_parser(&format!("{COMPANY_PORTAL_LOCALSTATE}/Log_1.log"), content);
+
+        assert_eq!(detected.parser, ParserKind::Timestamped);
+    }
+
+    #[test]
+    fn test_ime_ccm_log_inside_localstate_stays_ccm() {
+        let content = r#"<![LOG[Starting Win32App processing]LOG]!><time="16:50:07.2850341" date="11-15-2024" component="AppWorkload" context="" type="1" thread="9" file="">
+<![LOG[Processing complete]LOG]!><time="16:50:08.1120000" date="11-15-2024" component="AppWorkload" context="" type="1" thread="9" file="">"#;
+
+        let detected = detect_parser(
+            &format!("{COMPANY_PORTAL_LOCALSTATE}/IntuneManagementExtension.log"),
+            content,
+        );
+
+        assert_eq!(detected.parser, ParserKind::Ccm);
+        assert_eq!(detected.specialization, Some(ParserSpecialization::Ime));
     }
 
     #[test]
