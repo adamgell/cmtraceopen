@@ -561,9 +561,9 @@ fn state_for(signal: StoreSignal) -> Option<StoreTransactionState> {
     }
 }
 
-/// Lifecycle rank. A higher-ranked state replaces a lower one; equal ranks
-/// resolve to the later observation, which is how a retry that finally succeeds
-/// lands on its success rather than on its first failure.
+/// Lifecycle rank. A higher-ranked state replaces a lower one. Equal ranks are
+/// resolved by [`resolve_state`], never by the order the caller supplied the
+/// observations in (ADR-003).
 fn state_rank(state: StoreTransactionState) -> u8 {
     match state {
         StoreTransactionState::InsufficientEvidence => 0,
@@ -583,6 +583,85 @@ fn state_rank(state: StoreTransactionState) -> u8 {
     }
 }
 
+/// One observation's statement about the transaction state, with the provenance
+/// needed to order it against other statements.
+struct StateCandidate<'a> {
+    state: StoreTransactionState,
+    error: Option<&'a IntuneErrorCode>,
+    source_artifact_id: &'a str,
+    record_number: Option<u64>,
+    /// True when the observation came from a source whose own record numbering
+    /// is a monotonic write order (an event log's record ids, a CCM log's
+    /// records). Supplied facts carry a caller-chosen record number that states
+    /// nothing about time, so they are never sequenced against anything.
+    sequenced: bool,
+}
+
+/// Whether `later` supersedes `earlier` by the source's own ordering.
+///
+/// Only records from the *same* sequenced source artifact are comparable:
+/// record numbers from two different artifacts, or from supplied facts, share
+/// no clock and no counter. Incomparable records stay ambiguous (ADR-003).
+fn supersedes(later: &StateCandidate<'_>, earlier: &StateCandidate<'_>) -> bool {
+    later.sequenced
+        && earlier.sequenced
+        && later.source_artifact_id == earlier.source_artifact_id
+        && matches!(
+            (later.record_number, earlier.record_number),
+            (Some(later), Some(earlier)) if later > earlier
+        )
+}
+
+/// Resolve the transaction state from every state-bearing observation at once.
+///
+/// Caller vector order is an acquisition detail, not chronology, so this
+/// resolution must give the same answer for any permutation of the same
+/// observations (ADR-003):
+///
+/// 1. the highest lifecycle rank wins, as before;
+/// 2. within that rank, a record superseded by a later record from the same
+///    sequenced source artifact is dropped — this is what lets an explicitly
+///    ordered retry land on its final outcome instead of its first failure;
+/// 3. if the surviving records still state more than one distinct state, the
+///    evidence is an unresolved authoritative contradiction and the reduction
+///    stays conservative: `InsufficientEvidence` for a single terminal
+///    conclusion, with every contributing observation left visible, rather
+///    than whichever record the caller happened to list last.
+fn resolve_state(
+    candidates: &[StateCandidate<'_>],
+) -> (StoreTransactionState, Option<IntuneErrorCode>) {
+    let Some(top_rank) = candidates
+        .iter()
+        .map(|candidate| state_rank(candidate.state))
+        .max()
+    else {
+        return (StoreTransactionState::InsufficientEvidence, None);
+    };
+    let top: Vec<&StateCandidate<'_>> = candidates
+        .iter()
+        .filter(|candidate| state_rank(candidate.state) == top_rank)
+        .collect();
+    let mut surviving: Vec<&StateCandidate<'_>> = top
+        .iter()
+        .filter(|candidate| !top.iter().any(|other| supersedes(other, candidate)))
+        .copied()
+        .collect();
+    // Canonical evidence order, independent of the caller's input order.
+    surviving.sort_by_key(|candidate| (candidate.source_artifact_id, candidate.record_number));
+
+    let state = surviving[0].state;
+    if surviving
+        .iter()
+        .any(|candidate| candidate.state != state)
+    {
+        return (StoreTransactionState::InsufficientEvidence, None);
+    }
+    let error = surviving
+        .iter()
+        .find_map(|candidate| candidate.error.cloned());
+    (state, error)
+}
+
 fn reduce_group(
     index: usize,
     members: &[usize],
@@ -597,8 +676,7 @@ fn reduce_group(
     let mut intent = StoreAssignmentIntent::Unknown;
     let mut intent_conflict = false;
     let mut last_confirmed_phase: Option<StorePhase> = None;
-    let mut state = StoreTransactionState::InsufficientEvidence;
-    let mut error: Option<IntuneErrorCode> = None;
+    let mut state_candidates: Vec<StateCandidate<'_>> = Vec::new();
     let mut has_intune_intent = false;
     let mut has_device_evidence = false;
     let mut unknown_version_observed = false;
@@ -658,12 +736,21 @@ fn reduce_group(
         }
 
         if let Some(candidate) = state_for(observation.signal) {
-            if state_rank(candidate) >= state_rank(state) {
-                state = candidate;
-                error.clone_from(&observation.error);
-            }
+            state_candidates.push(StateCandidate {
+                state: candidate,
+                error: observation.error.as_ref(),
+                source_artifact_id: &observation.context.evidence_ref.source_artifact_id,
+                record_number: observation.context.provenance.record_number,
+                sequenced: matches!(
+                    observation.origin,
+                    StoreEvidenceOrigin::WindowsEvent
+                        | StoreEvidenceOrigin::IntuneManagementExtension
+                ),
+            });
         }
     }
+
+    let (mut state, mut error) = resolve_state(&state_candidates);
 
     if intent == StoreAssignmentIntent::NotTargeted {
         state = StoreTransactionState::NotTargeted;
