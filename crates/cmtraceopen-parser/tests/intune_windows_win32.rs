@@ -931,8 +931,14 @@ fn a_probe_leaking_into_a_descriptor_output_field_is_detected() {
     )
     .expect("write expected");
 
+    let probes: Vec<String> = manifest["privacyProbes"]
+        .as_array()
+        .expect("probes")
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .collect();
     let mut failures = Failures::new();
-    support::validate_descriptor_privacy("privacy-redaction", &scratch, &mut failures);
+    support::validate_descriptor_privacy("privacy-redaction", &scratch, &probes, &mut failures);
     std::fs::remove_dir_all(&scratch).ok();
     assert!(
         failures
@@ -940,6 +946,54 @@ fn a_probe_leaking_into_a_descriptor_output_field_is_detected() {
             .iter()
             .any(|entry| entry.contains("Windows SID")),
         "a probe leaking outside the declaration fields must be flagged, got {:?}",
+        failures.entries()
+    );
+}
+
+/// Only declared probe strings are exempt from the descriptor scan. A needle
+/// that is not a probe used to be hidden by removing the whole
+/// `redactionMustNotContain` array before scanning; sensitive-shaped material
+/// smuggled in as an unasserted needle must stay detectable.
+#[test]
+fn a_non_probe_needle_carrying_forbidden_material_is_rejected() {
+    let root = corpus().join("privacy-redaction");
+    let manifest = load_json(&root.join("manifest.json"));
+    let expected = load_json(&root.join("expected.json"));
+    let mut corrupted = expected.clone();
+    corrupted["redactionMustNotContain"]
+        .as_array_mut()
+        .expect("needle array")
+        .push(json!("C:\\Users\\Not A Probe\\secret.txt"));
+
+    let scratch =
+        std::env::temp_dir().join(format!("win32-non-probe-needle-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("scratch dir");
+    std::fs::write(
+        scratch.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).expect("manifest serializes"),
+    )
+    .expect("write manifest");
+    std::fs::write(
+        scratch.join("expected.json"),
+        serde_json::to_string_pretty(&corrupted).expect("expected serializes"),
+    )
+    .expect("write expected");
+
+    let probes: Vec<String> = manifest["privacyProbes"]
+        .as_array()
+        .expect("probes")
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .collect();
+    let mut failures = Failures::new();
+    support::validate_descriptor_privacy("privacy-redaction", &scratch, &probes, &mut failures);
+    std::fs::remove_dir_all(&scratch).ok();
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("forbidden fixture material")),
+        "a non-probe needle with forbidden material must be rejected, got {:?}",
         failures.entries()
     );
 }

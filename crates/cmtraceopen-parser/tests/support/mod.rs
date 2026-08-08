@@ -246,7 +246,7 @@ pub fn validate_scenario(
     validate_evidence_closure(scenario, scenario_root, &referenced, &mut failures);
     validate_expected_coverage(scenario, manifest, expected, &mut failures);
     validate_findings_are_evidence_backed(scenario, expected, &mut failures);
-    validate_descriptor_privacy(scenario, scenario_root, &mut failures);
+    validate_descriptor_privacy(scenario, scenario_root, &probes, &mut failures);
 
     failures
 }
@@ -337,13 +337,20 @@ fn strip_privacy_probes(contents: &str, probes: &[String]) -> String {
 /// gets typed by mistake: `sanitizedSourcePath`, `displayName`, and finding
 /// summaries. Scanning only the evidence left the likeliest leak unchecked.
 ///
-/// Probe material is *not* stripped here: only the two declaration fields that
-/// exist to carry probe text (`privacyProbes` in the manifest,
-/// `redactionMustNotContain` in the expectations) are removed before the scan.
-/// A probe appearing in any other descriptor field — an expected output, an
-/// assertion, a sanitized path — is a leak in the asserted outputs and must
-/// stay detectable, which a whole-descriptor substring strip silently hid.
-pub fn validate_descriptor_privacy(scenario: &str, scenario_root: &Path, failures: &mut Failures) {
+/// Probe exemption is entry-precise: only the *declared probe strings* are
+/// removed from within the two declaration arrays (`privacyProbes` in the
+/// manifest, `redactionMustNotContain` in the expectations) before the scan.
+/// A needle that is not a declared probe stays subject to the prohibition
+/// scan — removing the whole array silently exempted sensitive-shaped needles
+/// nothing had asserted as probes. A probe appearing in any *other* descriptor
+/// field — an expected output, an assertion, a sanitized path — is a leak in
+/// the asserted outputs and stays detectable too.
+pub fn validate_descriptor_privacy(
+    scenario: &str,
+    scenario_root: &Path,
+    probes: &[String],
+    failures: &mut Failures,
+) {
     for (descriptor, declaration_field) in [
         ("manifest.json", "privacyProbes"),
         ("expected.json", "redactionMustNotContain"),
@@ -353,8 +360,15 @@ pub fn validate_descriptor_privacy(scenario: &str, scenario_root: &Path, failure
             Ok(contents) => {
                 let scanned = match serde_json::from_str::<Value>(&contents) {
                     Ok(mut value) => {
-                        if let Some(object) = value.as_object_mut() {
-                            object.remove(declaration_field);
+                        if let Some(entries) = value
+                            .get_mut(declaration_field)
+                            .and_then(Value::as_array_mut)
+                        {
+                            entries.retain(|entry| {
+                                entry
+                                    .as_str()
+                                    .is_none_or(|needle| !probes.iter().any(|probe| probe == needle))
+                            });
                         }
                         serde_json::to_string_pretty(&value)
                             .expect("descriptor JSON reserializes")
