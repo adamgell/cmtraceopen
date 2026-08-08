@@ -35,9 +35,12 @@ fn upn_re() -> &'static Regex {
 
 /// The profile segment of a user path, in either slash direction.
 ///
-/// The separator may be doubled. These logs embed JSON payloads, and a Windows
-/// path inside one arrives JSON-escaped as `C:\\Users\\Someone`; requiring a
-/// single separator let every such path through unmasked.
+/// Both profile roots are covered: `Users` and the legacy
+/// `Documents and Settings`, which still appears in installer logs via
+/// junction-resolved paths and older tooling. The separator may be doubled.
+/// These logs embed JSON payloads, and a Windows path inside one arrives
+/// JSON-escaped as `C:\\Users\\Someone`; requiring a single separator let
+/// every such path through unmasked.
 fn user_path_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -49,7 +52,7 @@ fn user_path_re() -> &'static Regex {
         // The leading `[` exclusion is what makes the projection idempotent:
         // an already-masked `[user:...]` segment must not be masked again.
         Regex::new(
-            r"(?i)(?P<prefix>[\\/]{1,2}Users[\\/]{1,2})(?P<user>[^\\/\r\n\x22\[][^\\/\r\n\x22]*)",
+            r"(?i)(?P<prefix>[\\/]{1,2}(?:Users|Documents and Settings)[\\/]{1,2})(?P<user>[^\\/\r\n\x22\[][^\\/\r\n\x22]*)",
         )
         .expect("user path regex must compile")
     })
@@ -117,10 +120,11 @@ fn account_field_re() -> &'static Regex {
         // existing replacement token: `[upn:…]` and `[account:…]` contain the
         // words `upn`/`account` followed by `:`, and without the guard a second
         // pass re-masked the token itself. The value's first character excludes
-        // whitespace, so the regex cannot backtrack into a position where the
-        // value starts just before a token; a value that *is* a well-formed
-        // token is skipped by the `already_masked` guard in the closure, which
-        // still lets a malformed token-lookalike be masked rather than trusted.
+        // whitespace only; a value *beginning* with an emitted token — the UPN
+        // rule runs first, so `UserName: [upn:…] is retrying` is routine — is
+        // preserved by the `starts_with_token` guard in the closure, which
+        // still lets a malformed token-lookalike be masked rather than
+        // trusted.
         Regex::new(
             r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22][^,;\r\n\x22]*)",
         )
@@ -136,6 +140,11 @@ fn account_field_re() -> &'static Regex {
 fn host_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
+        // A value that begins with an emitted token (with or without a
+        // trailing fragment) must not be re-hashed, or the stable `[host:…]`
+        // token is destroyed on the second pass; the `starts_with_token`
+        // guard in the closure preserves it while a malformed token-lookalike
+        // is still masked rather than trusted.
         Regex::new(
             r"(?i)(?P<field>\b(?:ComputerName|MachineName|HostName|DeviceName)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22]+)",
         )
@@ -179,6 +188,30 @@ fn sid_re() -> &'static Regex {
     CELL.get_or_init(|| {
         Regex::new(r"\bS-1-\d+(?:-\d+){2,}").expect("sid regex must compile")
     })
+}
+
+/// Whether a value *begins* with a well-formed replacement token.
+///
+/// The UPN rule runs before the field rules, so a field value routinely
+/// arrives as an emitted token followed by prose (`[upn:…] is retrying`).
+/// Re-hashing token-plus-prose would destroy the stable token — breaking
+/// cross-record correlation — and swallow the prose with it, so such values
+/// are preserved whole. A malformed token-lookalike does not qualify and is
+/// still masked rather than trusted.
+fn starts_with_token(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix('[') else {
+        return false;
+    };
+    let Some(end) = rest.find(']') else {
+        return false;
+    };
+    let Some((kind, hash)) = rest[..end].split_once(':') else {
+        return false;
+    };
+    !kind.is_empty()
+        && kind.chars().all(|c| c.is_ascii_lowercase())
+        && hash.len() == 16
+        && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Whether a value is already a replacement token (optionally quoted), so
@@ -225,7 +258,7 @@ pub fn redact_text(value: &str) -> String {
 
     let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
         let value = &caps["value"];
-        if already_masked(value) {
+        if already_masked(value) || starts_with_token(value) {
             return format!("{}{}", &caps["field"], value);
         }
         format!("{}{}", &caps["field"], stable_token("host", value))
@@ -239,7 +272,7 @@ pub fn redact_text(value: &str) -> String {
         // Trailing whitespace is prose spacing, not part of the account name.
         let value = caps["value"].trim_end();
         let trailing = &caps["value"][value.len()..];
-        if already_masked(value) {
+        if already_masked(value) || starts_with_token(value) {
             return format!("{}{}{}{}", &caps["pre"], &caps["field"], value, trailing);
         }
         format!(
@@ -345,6 +378,51 @@ mod tests {
         assert!(!redacted.contains("Doe"), "got {redacted:?}");
         assert!(redacted.starts_with("RunAsUser = "));
         assert!(redacted.ends_with(", session 2"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn an_account_value_starting_with_a_token_keeps_the_token_and_the_prose() {
+        // The UPN rule runs first, so the account field's value begins with an
+        // emitted token followed by prose. Re-hashing token+prose together
+        // would destroy the stable token (breaking cross-record correlation)
+        // and swallow the prose.
+        let once = redact_text("UserName: adele.vance@contoso.example is retrying");
+        assert!(once.contains("[upn:"), "got {once:?}");
+        assert!(once.ends_with(" is retrying"), "got {once:?}");
+        assert_eq!(once, redact_text(&once), "and it must stay idempotent");
+    }
+
+    #[test]
+    fn a_host_value_starting_with_a_token_is_not_rehashed() {
+        let masked = redact_text("ComputerName: DESKTOP-AB12CD");
+        assert!(masked.contains("[host:"), "got {masked:?}");
+        let twice = redact_text(&masked);
+        assert_eq!(masked, twice);
+        // A token with a trailing fragment must not be folded into a new hash:
+        // the exact original token has to survive, tail and all.
+        let token_start = masked.find("[host:").expect("token");
+        let token = &masked[token_start..token_start + "[host:0123456789abcdef]".len()];
+        let with_tail = format!("{masked}!");
+        let redacted_tail = redact_text(&with_tail);
+        assert!(
+            redacted_tail.contains(token),
+            "{token:?} must survive in {redacted_tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_documents_and_settings_profile_path_is_masked() {
+        let redacted = redact_text(r"C:\Documents and Settings\adele.vance\a.ps1");
+        assert!(!redacted.contains("adele.vance"), "got {redacted:?}");
+        assert!(redacted.ends_with(r"\a.ps1"), "got {redacted:?}");
+
+        // The JSON-escaped form arrives with doubled separators, exactly like
+        // the Users root.
+        let escaped =
+            redact_text(r#"{"Path":"C:\\Documents and Settings\\John Doe\\AppData"}"#);
+        assert!(!escaped.contains("John"), "got {escaped:?}");
+        assert!(!escaped.contains("Doe"), "got {escaped:?}");
+        assert!(escaped.contains("AppData"), "got {escaped:?}");
     }
 
     #[test]
