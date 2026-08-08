@@ -826,6 +826,7 @@ fn an_event_naming_no_resource_contributes_nothing() {
             provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider"
                 .to_owned(),
             event_id: 208,
+            event_version: None,
             level: NormalizedEventLevel::Information,
             task: None,
             keywords: None,
