@@ -1,0 +1,40 @@
+{
+  "scenario": "malformed-mdm-report",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "status": "parseFailed"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/update/allowautoupdate",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
+      "displayName": null,
+      "receipt": "commandReceived",
+      "local": "indeterminate",
+      "service": "noEvidence",
+      "resolution": "insufficientEvidence",
+      "sourceIds": [],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": null,
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": true,
+      "evidenceIds": [
+        "rpt-malformed"
+      ]
+    }
+  ],
+  "findingIds": [
+    "configuration-uninterpretable-evidence",
+    "configuration-unreadable-artifacts"
+  ],
+  "assertions": [
+    "a malformed row contributes no outcome but is still cited",
+    "parseFailed coverage keeps the artifact distinct from a missing one"
+  ]
+}

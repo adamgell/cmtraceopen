@@ -1,0 +1,44 @@
+{"_marker": "SYNTHETIC FIXTURE - normalized configuration report rows, no real device data",
+  "reports": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rpt-unsupported",
+          "sourceArtifactId": "mdm-diagnostic-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-diagnostic-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T09:16:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T09:16:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T10:00:00Z",
+        "sensitivity": "public",
+        "parseState": "unsupported",
+        "accessState": "available"
+      },
+      "settingUri": "./Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
+      "settingId": null,
+      "policyId": null,
+      "displayName": null,
+      "outcome": "unknown",
+      "value": null,
+      "error": null,
+      "namedData": [
+        {
+          "name": "SchemaVersion",
+          "value": "9"
+        }
+      ]
+    }
+  ]
+}

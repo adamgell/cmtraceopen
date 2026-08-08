@@ -1,0 +1,47 @@
+{
+  "scenario": "event-only-evidence",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "status": "skipped"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/deliveryoptimization/dodownloadmode",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/DeliveryOptimization/DODownloadMode",
+      "displayName": null,
+      "receipt": "cspProcessed",
+      "local": "applied",
+      "service": "noEvidence",
+      "resolution": "applied",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": "2",
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "evidenceIds": [
+        "evt-applied"
+      ]
+    }
+  ],
+  "findingIds": [
+    "configuration-device-only-evidence",
+    "configuration-uncollected-artifacts",
+    "configuration-applied"
+  ],
+  "assertions": [
+    "a skipped artifact is a coverage gap, not an absence of the setting",
+    "event evidence alone is enough to state what the CSP did"
+  ]
+}

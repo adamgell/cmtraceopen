@@ -1,0 +1,45 @@
+{
+  "scenario": "unknown-report-schema",
+  "workload": "device/windows/configuration",
+  "coverage": [
+    {
+      "artifactId": "mdm-admin-channel",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-diagnostic-report",
+      "status": "unsupported"
+    }
+  ],
+  "settings": [
+    {
+      "key": "device|uri:device/vendor/msft/policy/config/update/allowautoupdate",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
+      "displayName": null,
+      "receipt": "commandReceived",
+      "local": "indeterminate",
+      "service": "noEvidence",
+      "resolution": "insufficientEvidence",
+      "sourceIds": [],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": null,
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": true,
+      "evidenceIds": [
+        "evt-unknown-id",
+        "rpt-unsupported"
+      ]
+    }
+  ],
+  "findingIds": [
+    "configuration-uninterpretable-evidence",
+    "configuration-unreadable-artifacts"
+  ],
+  "assertions": [
+    "an unrecognized event id names the resource without claiming an outcome",
+    "an unsupported schema is retained rather than discarded"
+  ]
+}
