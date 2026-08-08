@@ -679,6 +679,34 @@ fn recorded_non_assessable_failure_sections(
         })
 }
 
+/// Iterate the *non-assessable* observations that explicitly recorded a
+/// documented failure signal.
+///
+/// The event-side companion of
+/// [`recorded_non_assessable_failure_sections`], with the same direction-aware
+/// contract: a capped or unparsed event cannot PROVE the failure -- which is
+/// why [`signal_observations`] and every other consumer stay gated on
+/// [`is_assessable`], and why none of these observations ever produce a
+/// terminal failure outcome -- but a failure that IS on the record must still
+/// BLOCK a success conclusion. Consumers may only move the result in the
+/// conservative direction.
+///
+/// The class is [`AutopilotSignal::is_terminal_failure`]: exactly the signals
+/// that would produce a terminal failure outcome if they were assessable
+/// (171, 172, 807, 809, 815, 908). That symmetry is the rule -- any record
+/// strong enough to fail the enrollment when readable is strong enough to
+/// block its success when unreadable. `ProfilePolicyNotFound` (100) stays out
+/// for the same reason the section iterator excludes `NotFound`/`Retrying`:
+/// it is documented as transient, not a recorded failure.
+fn recorded_non_assessable_failure_observations(
+    observations: &[AutopilotObservation],
+) -> impl Iterator<Item = &AutopilotObservation> {
+    observations
+        .iter()
+        .filter(|observation| !is_assessable(observation))
+        .filter(|observation| observation.signal.is_terminal_failure())
+}
+
 /// Collect the distinct values a named key takes across every source.
 ///
 /// Returned sorted and deduplicated so that "more than one value" is a
@@ -1514,10 +1542,15 @@ fn reduce_outcome(
         // reduction: the bundle cannot support success while a failure is on
         // record, and cannot prove the failure while its record is
         // non-assessable. The recorded failure is surfaced by its own finding
-        // rather than silently swallowed.
+        // rather than silently swallowed. The gate is symmetric across both
+        // record shapes: a report section that recorded Failed/Mismatch, and
+        // an event carrying a documented failure signal.
         if recorded_non_assessable_failure_sections(sections)
             .next()
             .is_some()
+            || recorded_non_assessable_failure_observations(observations)
+                .next()
+                .is_some()
         {
             return AutopilotOutcome::InsufficientEvidence;
         }

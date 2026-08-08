@@ -709,14 +709,17 @@ fn push_coverage_gaps(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFin
 
 /// Surface a failure that is on the record but not assessable.
 ///
-/// ADR-001's direction-aware gate: a capped or unparsed section can prove
+/// ADR-001's direction-aware gate: a capped or unparsed record can prove
 /// nothing -- so the reducer neither completes the enrollment over it nor
 /// turns it into a terminal failure outcome -- but a recorded failure must
 /// never be *silent*. This rule is the surface for that middle state: it names
-/// the section, says why the failure cannot be trusted yet, and asks for the
-/// one artifact that would settle it. Deliberately not gated by
-/// `terminal_semantics_withheld`: like coverage gaps, this describes the
-/// bundle, not a cause.
+/// the record, says why the failure cannot be trusted yet, and asks for the
+/// one artifact that would settle it. Both record shapes are covered: a
+/// report section whose outcome is `Failed`/`Mismatch`, and an event carrying
+/// a documented failure signal ([`AutopilotSignal::is_terminal_failure`]) --
+/// the same two classes whose recorded failure blocks the success branch in
+/// the reducer. Deliberately not gated by `terminal_semantics_withheld`: like
+/// coverage gaps, this describes the bundle, not a cause.
 fn push_non_assessable_failure_recorded(
     snapshot: &AutopilotSnapshot,
     findings: &mut Vec<IntuneFinding>,
@@ -724,16 +727,17 @@ fn push_non_assessable_failure_recorded(
     let recorded = snapshot
         .observations
         .iter()
-        .filter(|observation| observation.signal == AutopilotSignal::ReportSection)
         .filter(|observation| {
             observation.context.access_state != IntuneAccessState::Available
                 || observation.context.parse_state != IntuneParseState::Parsed
         })
         .filter(|observation| {
-            matches!(
-                observation.section_outcome,
-                Some(AutopilotSectionOutcome::Failed) | Some(AutopilotSectionOutcome::Mismatch)
-            )
+            let failed_section = observation.signal == AutopilotSignal::ReportSection
+                && matches!(
+                    observation.section_outcome,
+                    Some(AutopilotSectionOutcome::Failed) | Some(AutopilotSectionOutcome::Mismatch)
+                );
+            failed_section || observation.signal.is_terminal_failure()
         })
         .collect::<Vec<_>>();
     if recorded.is_empty() {
@@ -749,19 +753,20 @@ fn push_non_assessable_failure_recorded(
             // exists so the recorded failure blocks success visibly instead of
             // silently.
             IntuneFindingConfidence::Low,
-            "A section that could not be fully read recorded a failure",
+            "A record that could not be fully read recorded a failure",
             &format!(
-                "{} report section(s) whose own capture or parse state is not assessable \
-                 explicitly recorded a failed or mismatched outcome. That record cannot prove the \
-                 failure, but it blocks any success conclusion until the section is re-collected \
-                 in a readable form.",
+                "{} record(s) whose own capture or parse state is not assessable explicitly \
+                 recorded a failure -- a failed or mismatched report section, or an event \
+                 carrying a documented failure signal. That record cannot prove the failure, but \
+                 it blocks any success conclusion until it is re-collected in a readable form.",
                 recorded.len()
             ),
             &[
-                "Re-collect the cited report section(s), complete and readable, before trusting \
-                 any success signal from this bundle."
+                "Re-collect the cited record(s), complete and readable, before trusting any \
+                 success signal from this bundle."
                     .to_owned(),
-                "Compare the re-collected section's outcome against the sibling event evidence."
+                "Compare the re-collected record's outcome against the sibling assessable \
+                 evidence."
                     .to_owned(),
             ],
             normalized_evidence(

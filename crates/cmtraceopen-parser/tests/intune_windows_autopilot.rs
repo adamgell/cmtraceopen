@@ -959,6 +959,115 @@ fn an_assessable_failed_section_still_produces_the_terminal_failure() {
     );
 }
 
+/// ADR-001, direction-aware, event side: the same class as the capped-failed-
+/// section fixture above, but the recorded failure arrives as a capped EVENT
+/// (172, `ProfileApplicationFailed`) instead of a report section. The
+/// assessable success path (161 + 153-into-Available + an assessable
+/// espHandoff section) must not complete the enrollment over it.
+#[test]
+fn a_recorded_failure_on_a_non_assessable_event_blocks_success() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "evtblocked-e1", "evtblocked-channel", 1, 161, "available", "parsed",
+                json!([]), "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "evtblocked-e2", "evtblocked-channel", 2, 153, "available", "parsed",
+                json!([]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+            synthetic_event(
+                "evtblocked-failure", "evtblocked-channel", 3, 172, "capped", "parsed",
+                json!([]), "Failed to set the Autopilot profile as available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("evtblocked-channel", "autopilotEvents", &events),
+        synthetic_source(
+            "evtblocked-report",
+            "mdmReport",
+            &esp_handoff_report("evtblocked-report"),
+        ),
+    ]));
+
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "a recorded failure on a capped event must block a completed outcome"
+    );
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::InsufficientEvidence,
+        "non-assessable evidence proves neither the failure nor the success (ADR-001)"
+    );
+    assert_ne!(
+        wire(&snapshot.confidence),
+        json!("high"),
+        "a success-path bundle carrying a recorded failure may not be presented at high confidence"
+    );
+    let finding = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "autopilot-non-assessable-failure-recorded")
+        .unwrap_or_else(|| {
+            panic!(
+                "the recorded-but-unassessable failure must never be silent, got {:?}",
+                snapshot
+                    .findings
+                    .iter()
+                    .map(|finding| finding.finding_id.as_str())
+                    .collect::<Vec<_>>()
+            )
+        });
+    assert_eq!(wire(&finding.confidence), json!("low"));
+    assert!(
+        finding
+            .evidence
+            .iter()
+            .any(|evidence| evidence.evidence_id == "evtblocked-failure"),
+        "the finding must cite the capped event that recorded the failure"
+    );
+    assert!(snapshot.findings_are_evidence_backed());
+}
+
+/// The symmetric control: the same event 172, assessable, is the real terminal
+/// failure. The new event-side gate must not swallow it into a blocked
+/// success, and the non-assessable finding must not fire.
+#[test]
+fn an_assessable_failed_event_still_produces_the_terminal_failure() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "evtterm-e1", "evtterm-channel", 1, 161, "available", "parsed",
+                json!([]), "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "evtterm-failure", "evtterm-channel", 2, 172, "available", "parsed",
+                json!([]), "Failed to set the Autopilot profile as available.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "evtterm-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+    assert_eq!(snapshot.outcome, AutopilotOutcome::ProfileApplicationFailure);
+    assert!(
+        !snapshot
+            .findings
+            .iter()
+            .any(|finding| finding.finding_id == "autopilot-non-assessable-failure-recorded"),
+        "an assessable failure is not a non-assessable one"
+    );
+}
+
 /// ADR-001, same class: a non-assessable record carrying identity keys must
 /// not inflate the phase to `IdentityObserved` through the evidence list.
 #[test]
