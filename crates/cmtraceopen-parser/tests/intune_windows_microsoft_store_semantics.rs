@@ -304,7 +304,6 @@ fn equivalent_input_permutation_does_not_change_the_reduction() {
 /// so the identity-free installer outcome lands in the package's group and its
 /// `Win32InstallerFailed` signal becomes the transaction's terminal state.
 #[test]
-#[ignore = "RED (Framework v1 Phase 2): fails against current reducer; fixed in Store pilot Phase 3"]
 fn an_app_id_match_without_package_identity_cannot_drive_a_package_terminal_outcome() {
     let assignment = StoreAssignment {
         context: context("assignment", 1, IntuneSourceKind::SuppliedFact),
