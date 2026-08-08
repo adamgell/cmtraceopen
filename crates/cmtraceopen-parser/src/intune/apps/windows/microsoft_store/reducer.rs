@@ -14,6 +14,11 @@
 //! keeps a per-user registration from being closed out by a machine-wide
 //! provisioning event.
 //!
+//! A shared Intune app id alone is an Intune-level association, not a package
+//! join (ADR-002): it may group observations only while neither side claims a
+//! package identity, so an identity-free record can never be merged into a
+//! package-identified transaction or drive a package-specific terminal outcome.
+//!
 //! An observation carrying no correlation token stays unkeyed. It remains
 //! visible in [`StoreAnalysis::unkeyed_observations`] and can never terminate
 //! somebody else's transaction.
@@ -415,13 +420,24 @@ fn identities_conflict(left: &[String], right: &[String]) -> bool {
 }
 
 /// Whether an observation may join a group.
+///
+/// A shared package correlation token is a join. A shared Intune app id alone
+/// is not: per ADR-002 it is an Intune-level association, at most weak or
+/// moderate, so it may only group observations while *neither* side claims a
+/// package identity. An identity-free record must never be merged into a
+/// package-identified transaction (where its terminal signal would become a
+/// package-specific conclusion), and a package-identified record must never
+/// donate its identity to a group built from identity-free evidence.
 fn joinable(group: &Group, tokens: &[String], app_id: Option<&String>) -> bool {
     if identities_conflict(tokens, &group.tokens) {
         return false;
     }
-    let shares_identifier = tokens.iter().any(|token| group.tokens.contains(token))
-        || app_id.is_some_and(|app| group.app_ids.contains(app));
-    shares_identifier
+    if tokens.iter().any(|token| group.tokens.contains(token)) {
+        return true;
+    }
+    app_id.is_some_and(|app| group.app_ids.contains(app))
+        && tokens.is_empty()
+        && group.tokens.is_empty()
 }
 
 /// Partition observations into transaction groups.
