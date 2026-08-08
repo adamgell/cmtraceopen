@@ -18,7 +18,7 @@ use crate::intune::evidence::{
     IntuneEvidenceRef, IntuneObservationContext, IntuneParseState, IntuneProvenance,
     IntuneSensitivity, IntuneTimestamp, IntuneTimestampKind,
 };
-use crate::intune::ime_parser::{parse_ime_content, ImeLine};
+use crate::intune::ime_parser::{parse_ime_content_bounded, ImeLine};
 
 use super::models::{
     Win32Analysis, Win32AppMetadata, Win32Confidence, Win32Coverage, Win32ExecutionContext,
@@ -45,9 +45,10 @@ const EXPECTED_PRIMARY_ARTIFACTS: [&str; 3] = [
 /// Upper bound on framed records read from one artifact.
 ///
 /// An adversarial or corrupted artifact must not be able to make the reduction
-/// retain unbounded state. Records beyond the cap are dropped and the artifact
-/// is reported as `Capped` in coverage, which degrades coverage exactly like a
-/// caller-declared truncation — the absence of a signal past the cap proves
+/// retain unbounded state or pay unbounded framing time. Framing stops at the
+/// cap — records past the bound are genuinely not read — and the artifact is
+/// reported as `Capped` in coverage, which degrades coverage exactly like a
+/// caller-declared truncation: the absence of a signal past the cap proves
 /// nothing. IME's own rotation policy keeps real artifacts far below this.
 const MAX_RECORDS_PER_ARTIFACT: usize = 100_000;
 
@@ -409,8 +410,11 @@ pub fn analyze_win32_bundle_with(
     let mut unclassified_records = 0u32;
     let mut fragment_records = 0u32;
     let mut unknown_vocabulary_observed = false;
-    // File name -> artifact id, for supplemental installer artifacts.
-    let mut installer_artifacts: BTreeMap<String, String> = BTreeMap::new();
+    // File name -> every artifact id supplied under it. Two inputs may
+    // legitimately carry the same basename (one Setup.msi.log per capture), and
+    // a record that names only the basename cannot tell them apart, so all
+    // candidates are kept and a reference only links when it is unambiguous.
+    let mut installer_artifacts: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut seen_basenames: BTreeSet<String> = BTreeSet::new();
 
     for (artifact_index, input) in inputs.iter().enumerate() {
@@ -425,20 +429,18 @@ pub fn analyze_win32_bundle_with(
                 Win32SourceKind::InstallerOutput,
                 Some("supplemental installer artifact; contents are not parsed".to_owned()),
             ));
-            installer_artifacts.insert(
-                input.file_name.trim().to_ascii_lowercase(),
-                input.artifact_id.clone(),
-            );
+            installer_artifacts
+                .entry(input.file_name.trim().to_ascii_lowercase())
+                .or_default()
+                .push(input.artifact_id.clone());
             continue;
         }
 
-        let mut lines = if input.has_content() {
-            parse_ime_content(&input.content)
+        let (lines, capped_by_analyzer) = if input.has_content() {
+            parse_ime_content_bounded(&input.content, MAX_RECORDS_PER_ARTIFACT)
         } else {
-            Vec::new()
+            (Vec::new(), false)
         };
-        let capped_by_analyzer = lines.len() > MAX_RECORDS_PER_ARTIFACT;
-        lines.truncate(MAX_RECORDS_PER_ARTIFACT);
 
         let components: Vec<Option<String>> =
             lines.iter().map(|line| line.component.clone()).collect();
@@ -459,6 +461,19 @@ pub fn analyze_win32_bundle_with(
                 "record count exceeded the analyzer bound of {MAX_RECORDS_PER_ARTIFACT}; \
                  records past the bound were not read"
             ));
+        }
+        // Readable bytes whose records failed content confirmation are not
+        // usable evidence of anything, so the coverage entry must not
+        // advertise them as Available. ParseFailed is the honest status —
+        // collected, but not interpretable as its declared kind — and routing
+        // the downgrade through this one entry is what lets
+        // `degraded_coverage`, the unusable-artifact finding, and confidence
+        // all read the same answer.
+        if input.has_content()
+            && source_kind == Win32SourceKind::Unknown
+            && candidate != Win32SourceKind::Unknown
+        {
+            entry.status = IntuneArtifactStatus::ParseFailed;
         }
         coverage_entries.push(entry);
 
@@ -555,7 +570,14 @@ pub fn analyze_win32_bundle_with(
         ) else {
             continue;
         };
-        if let Some(artifact_id) = installer_artifacts.get(&referenced.to_ascii_lowercase()) {
+        // A reference links only when it is unambiguous: with two supplied
+        // artifacts under one basename, corroborating either would be a guess,
+        // so neither links and every candidate stays visible in
+        // `unlinked_installer_artifacts`.
+        if let Some([artifact_id]) = installer_artifacts
+            .get(&referenced.to_ascii_lowercase())
+            .map(Vec::as_slice)
+        {
             linked_artifacts
                 .entry(Win32TransactionKey {
                     app_id: app.clone(),
@@ -638,11 +660,15 @@ pub fn analyze_win32_bundle_with(
         ));
     }
 
-    let unlinked_installer_artifacts = installer_artifacts
+    // Sorted so the report is canonical regardless of input vector order
+    // (ADR-003), including between two artifacts sharing one basename.
+    let mut unlinked_installer_artifacts: Vec<String> = installer_artifacts
         .values()
+        .flatten()
         .filter(|artifact_id| !linked_ids.contains(*artifact_id))
         .cloned()
         .collect();
+    unlinked_installer_artifacts.sort();
 
     Win32Analysis {
         schema_version: WIN32_SCHEMA_VERSION,
@@ -1813,6 +1839,82 @@ mod tests {
             .iter()
             .any(|entry| entry.artifact_id == "expected:AppWorkload.log"));
         assert_eq!(only_transaction(&analysis).confidence, Win32Confidence::Medium);
+    }
+
+    #[test]
+    fn a_content_misclassified_artifact_is_not_reported_available() {
+        // AppWorkload-1.log was readable, but its records are another
+        // component's traffic: the reduction refuses to use it, so coverage
+        // must not advertise it as Available. The downgrade flows through the
+        // one coverage answer, so degraded_coverage, the unusable-artifact
+        // finding, and confidence all agree.
+        let unrelated = "<![LOG[unrelated CCM traffic]LOG]!><time=\"10:00:00.000+000\" \
+             date=\"7-31-2026\" component=\"CcmExec\" context=\"\" type=\"1\" thread=\"5\" \
+             file=\"\">\n"
+            .to_owned();
+        let analysis = analyze_win32_bundle(&[
+            workload(&[
+                record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+                record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0")),
+            ]),
+            Win32SourceInput::captured("aw-1", "AppWorkload-1.log", unrelated),
+            confirmed_filler("ime", "IntuneManagementExtension.log"),
+            confirmed_filler("aap", "AppActionProcessor.log"),
+        ]);
+
+        let entry = analysis
+            .coverage
+            .artifacts
+            .iter()
+            .find(|entry| entry.artifact_id == "aw-1")
+            .expect("the misclassified artifact keeps its coverage entry");
+        assert_eq!(
+            entry.status,
+            IntuneArtifactStatus::ParseFailed,
+            "readable bytes that failed content confirmation are not Available evidence"
+        );
+
+        let findings = super::super::findings::derive_findings(&analysis);
+        assert!(
+            findings.iter().any(|finding| {
+                finding.finding_id == "win32-coverage-unusable-artifact"
+                    && finding.coverage_gap_ids.iter().any(|gap| gap == "aw-1")
+            }),
+            "the unusable-artifact finding must cite the downgraded coverage entry"
+        );
+        assert_eq!(
+            only_transaction(&analysis).confidence,
+            Win32Confidence::Medium,
+            "an unusable artifact is a coverage gap and must cap confidence"
+        );
+    }
+
+    #[test]
+    fn same_basename_installer_artifacts_never_collapse_or_link_ambiguously() {
+        // Two supplied captures can legitimately contain a Setup.msi.log each.
+        // A record that names only the basename cannot tell them apart, so
+        // neither may corroborate the transaction, and both must stay visible
+        // instead of one silently overwriting the other.
+        let aw = workload(&[
+            record(&format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}")),
+            record(&format!("[Win32App] Install output file: D:\\IMECache\\Setup.msi.log for app with id: {APP}")),
+            record(&format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603")),
+        ]);
+        let first = Win32SourceInput::captured("msi-a", "Setup.msi.log", "MSI (s) failed");
+        let second = Win32SourceInput::captured("msi-b", "Setup.msi.log", "MSI (s) ok");
+
+        let analysis = analyze_win32_bundle(&[aw, first, second]);
+        let transaction = only_transaction(&analysis);
+        assert!(
+            transaction.corroborating_artifacts.is_empty(),
+            "an ambiguous basename reference must not corroborate anything: {:?}",
+            transaction.corroborating_artifacts
+        );
+        assert_eq!(
+            analysis.coverage.unlinked_installer_artifacts,
+            vec!["msi-a".to_owned(), "msi-b".to_owned()],
+            "every supplied installer artifact must stay accounted for"
+        );
     }
 
     #[test]
