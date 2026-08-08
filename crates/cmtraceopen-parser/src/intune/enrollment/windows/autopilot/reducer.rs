@@ -257,7 +257,11 @@ impl Ingest {
     /// Parse a detected document's payload.
     ///
     /// `Err` carries why the payload could not be read, so the caller can
-    /// record a malformed document instead of an empty supported one.
+    /// record a malformed document instead of an empty supported one. The
+    /// detail is a stable reducer-authored sentence and deliberately excludes
+    /// `serde_json`'s error text: that text flows into golden-asserted finding
+    /// summaries, and serde_json does not guarantee its `Display` output
+    /// across releases.
     fn absorb_payload(
         &mut self,
         source: &AutopilotSourceInput,
@@ -268,7 +272,7 @@ impl Ingest {
         match kind {
             AutopilotDocumentKind::Events => {
                 let document = serde_json::from_str::<AutopilotEventsDocument>(content)
-                    .map_err(|error| format!("events payload could not be read: {error}"))?;
+                    .map_err(|_| "events payload could not be read".to_owned())?;
                 if document.channel_complete == Some(false) {
                     self.incomplete_artifacts.insert(source.artifact_id.clone());
                 }
@@ -283,7 +287,7 @@ impl Ingest {
             }
             AutopilotDocumentKind::DiagnosticsReport | AutopilotDocumentKind::IdentityFacts => {
                 let document = serde_json::from_str::<AutopilotReportDocument>(content)
-                    .map_err(|error| format!("report payload could not be read: {error}"))?;
+                    .map_err(|_| "report payload could not be read".to_owned())?;
                 for section in &document.sections {
                     let observation = observation_from_section(section);
                     ids.push(observation.observation_id.clone());
@@ -293,7 +297,7 @@ impl Ingest {
             }
             AutopilotDocumentKind::EspSession => {
                 let document = serde_json::from_str::<AutopilotEspSessionDocument>(content)
-                    .map_err(|error| format!("ESP session payload could not be read: {error}"))?;
+                    .map_err(|_| "ESP session payload could not be read".to_owned())?;
                 for session in &document.sessions {
                     let observation = observation_from_esp_session(session);
                     ids.push(observation.observation_id.clone());
@@ -585,9 +589,25 @@ fn sort_time(observation: &AutopilotObservation, basis: AutopilotTimeBasis) -> O
 
 /// An observation is assessable only when its record was fully available and
 /// parsed. Malformed or access-denied records carry no semantic signal.
+///
+/// Every reduction path that turns a record into state, evidence, a phase, a
+/// correlation key, or a time bound must pass through this gate (ADR-001:
+/// non-assessable evidence cannot produce a terminal conclusion). The one
+/// deliberate exception is [`time_basis`], where an *unfiltered* scan is the
+/// conservative direction: a non-assessable record with an unnormalized
+/// timestamp downgrades the basis, and gating it would upgrade it.
 fn is_assessable(observation: &AutopilotObservation) -> bool {
     observation.context.access_state == IntuneAccessState::Available
         && observation.context.parse_state == IntuneParseState::Parsed
+}
+
+/// A report section is assessable under the same rule as an observation: its
+/// own declared context must be fully available and parsed. Sections arrive
+/// inside a parsed document, but each one still carries a caller-declared
+/// context, and a section declared unreadable proves nothing.
+fn is_assessable_section(section: &AutopilotReportSection) -> bool {
+    section.context.access_state == IntuneAccessState::Available
+        && section.context.parse_state == IntuneParseState::Parsed
 }
 
 fn signal_observations(
@@ -603,12 +623,17 @@ fn has_signal(observations: &[AutopilotObservation], signal: AutopilotSignal) ->
     signal_observations(observations, signal).next().is_some()
 }
 
+/// Iterate the assessable sections of one kind. The gate lives here so no
+/// individual caller can forget it.
 fn sections_of<'a>(
     sections: &'a [AutopilotReportSection],
     kind: &AutopilotSectionKind,
 ) -> impl Iterator<Item = &'a AutopilotReportSection> {
     let kind = kind.clone();
-    sections.iter().filter(move |section| section.kind == kind)
+    sections
+        .iter()
+        .filter(|section| is_assessable_section(section))
+        .filter(move |section| section.kind == kind)
 }
 
 /// Collect the distinct values a named key takes across every source.
@@ -640,8 +665,11 @@ fn single_value(observations: &[AutopilotObservation], key: &str) -> Option<Stri
     let values = distinct_values(observations, key);
     let mut keys = values.into_keys();
     let first = keys.next()?;
-    // More than one distinct value is a conflict, reported separately. Picking
-    // one here would hide it.
+    // More than one distinct value never picks a winner. Only `profileId`,
+    // `serialNumber`, and `entraDeviceId` disagreements are additionally
+    // reported as conflicts by `detect_conflicts`; the remaining keys
+    // (`deviceName` legitimately changes mid-provisioning, and the rest lack a
+    // validated single-value contract) just collapse to `None` here.
     if keys.next().is_some() {
         return None;
     }
@@ -692,9 +720,10 @@ fn reduce_identity(
         state = merge_registration_state(state, AutopilotRegistrationState::Mismatch);
     }
     for observation in observations.iter().filter(|observation| {
-        IDENTITY_KEYS
-            .iter()
-            .any(|key| observation.named(key).is_some())
+        is_assessable(observation)
+            && IDENTITY_KEYS
+                .iter()
+                .any(|key| observation.named(key).is_some())
     }) {
         evidence.push(observation.evidence_ref());
     }
@@ -740,7 +769,7 @@ fn reduce_profile(
     let mut error: Option<IntuneErrorCode> = None;
     let mut last_state_token = None;
 
-    for observation in observations {
+    for observation in observations.iter().filter(|obs| is_assessable(obs)) {
         match observation.signal {
             AutopilotSignal::ProfileAcquisitionStarted
             | AutopilotSignal::ProfilePolicyNotFound
@@ -757,6 +786,12 @@ fn reduce_profile(
             AutopilotSignal::ProfileStateChanged => {
                 evidence.push(observation.evidence_ref());
                 let token = extract_profile_state(observation.message.as_deref());
+                // `ProfileState_Available` deliberately counts as application
+                // evidence, not merely retrieval. Event 172 -- the documented
+                // failure sibling of this transition -- reads "failed to set
+                // Autopilot profile as available": setting the profile
+                // available IS the application step, so the transition into
+                // `Available` is its explicit success record.
                 if matches!(
                     token,
                     Some(AutopilotProfileStateToken::Available)
@@ -999,8 +1034,11 @@ fn detect_conflicts(
 
     // A report section that explicitly reports a mismatch is a conflict the
     // collector already detected; carrying it here keeps the two paths uniform.
+    // Gated like every other path: an unreadable section cannot assert a
+    // mismatch any more than it can assert a success.
     for section in sections
         .iter()
+        .filter(|section| is_assessable_section(section))
         .filter(|section| section.outcome == AutopilotSectionOutcome::Mismatch)
     {
         conflicts.push(AutopilotConflict {
@@ -1074,10 +1112,9 @@ fn autopilot_keys(observations: &[AutopilotObservation]) -> BTreeSet<AutopilotCo
     ];
 
     let mut keys = BTreeSet::new();
-    for observation in observations
-        .iter()
-        .filter(|observation| observation.signal != AutopilotSignal::EspSessionFact)
-    {
+    for observation in observations.iter().filter(|observation| {
+        is_assessable(observation) && observation.signal != AutopilotSignal::EspSessionFact
+    }) {
         for (name, kind) in NAMED_KEYS {
             let Some(value) = observation.named(name).map(str::trim) else {
                 continue;
@@ -1197,10 +1234,9 @@ fn reduce_esp_linkage(
         };
     }
 
-    for observation in observations
-        .iter()
-        .filter(|observation| observation.signal != AutopilotSignal::EspSessionFact)
-    {
+    for observation in observations.iter().filter(|observation| {
+        is_assessable(observation) && observation.signal != AutopilotSignal::EspSessionFact
+    }) {
         if session_key_values(&matched_keys).any(|value| observation_mentions(observation, value)) {
             evidence.push(observation.evidence_ref());
         }
@@ -1241,6 +1277,7 @@ fn has_time_overlap(
 ) -> bool {
     let ap_times: Vec<&str> = observations
         .iter()
+        .filter(|obs| is_assessable(obs))
         .filter_map(|obs| {
             obs.context
                 .source_timestamp
@@ -1361,6 +1398,12 @@ fn reduce_outcome(
             AutopilotEspLinkState::EvidenceMissing => {
                 AutopilotOutcome::HandoffReachedEspEvidenceMissing
             }
+            // Matched explicitly rather than through `conflicts`: the
+            // multiple-matched-sessions path records no `AutopilotConflict`,
+            // so relying on the conflicts gate above would let an ambiguous
+            // session identity fall through to `Completed` (ADR-003:
+            // unresolved authoritative contradictions stay conservative).
+            AutopilotEspLinkState::Conflicting => AutopilotOutcome::ContradictoryEvidence,
             _ => AutopilotOutcome::Completed,
         };
     }
