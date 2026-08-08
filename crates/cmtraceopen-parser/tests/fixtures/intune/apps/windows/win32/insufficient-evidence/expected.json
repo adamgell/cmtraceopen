@@ -1,0 +1,57 @@
+{
+  "scenario": "insufficient-evidence",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "system",
+      "outcome": "insufficientEvidence",
+      "lastConfirmedPhase": null,
+      "confidence": "low",
+      "returnCodeRaw": null,
+      "returnCodeKind": null,
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": "AppWorkload.log and IntuneManagementExtension.log covering this app's check-in",
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "win32-unresolved:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:system",
+      "severity": "info",
+      "confidence": "low",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:2",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "identity alone never becomes a verdict",
+    "the unresolved finding names the smallest artifact that would advance the diagnosis"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}

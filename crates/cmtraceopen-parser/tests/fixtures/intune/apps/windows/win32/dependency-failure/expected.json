@@ -1,0 +1,57 @@
+{
+  "scenario": "dependency-failure",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-current",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "dependencyUnresolved",
+      "lastConfirmedPhase": "requirements",
+      "confidence": "high",
+      "returnCodeRaw": null,
+      "returnCodeKind": null,
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": "AppWorkload.log records for the dependency app's own deployment",
+      "unresolvedDependencies": [
+        "99999999-8888-4777-8666-555555555555"
+      ],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "win32-dependency-unresolved:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
+      "severity": "error",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:4",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "the dependency GUID is reported as a dependency, never as the app id"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}

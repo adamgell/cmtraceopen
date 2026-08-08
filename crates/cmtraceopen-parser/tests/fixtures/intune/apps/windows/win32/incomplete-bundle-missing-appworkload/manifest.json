@@ -1,0 +1,57 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "incomplete-bundle-missing-appworkload",
+  "workload": "apps/windows/win32",
+  "description": "AppWorkload.log and AppActionProcessor.log were looked for and were absent, so every phase they alone record is a coverage gap rather than a negative result.",
+  "artifacts": [
+    {
+      "artifactId": "ime-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "IntuneManagementExtension.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+      "relativePath": "evidence/ime-current/current/IntuneManagementExtension.log",
+      "bytesCopied": 510
+    },
+    {
+      "artifactId": "app-workload-absent",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "absent",
+      "originalBasename": "AppWorkload.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": null,
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0
+    },
+    {
+      "artifactId": "app-action-processor-absent",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "absent",
+      "originalBasename": "AppActionProcessor.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": null,
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}

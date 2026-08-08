@@ -1,0 +1,57 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "same-minute-unrelated-apps",
+  "workload": "apps/windows/win32",
+  "description": "Two unrelated apps are processed on one thread within the same minute. Identity, not time proximity, decides which records belong together.",
+  "artifacts": [
+    {
+      "artifactId": "ime-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "IntuneManagementExtension.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/IntuneManagementExtension.log",
+      "relativePath": "evidence/ime-current/current/IntuneManagementExtension.log",
+      "bytesCopied": 791
+    },
+    {
+      "artifactId": "app-workload-current",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "originalBasename": "AppWorkload.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": "utf-8",
+      "sanitizedSourcePath": "SYNTHETIC://ime/AppWorkload.log",
+      "relativePath": "evidence/app-workload-current/current/AppWorkload.log",
+      "bytesCopied": 1118
+    },
+    {
+      "artifactId": "app-action-processor-absent",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "absent",
+      "originalBasename": "AppActionProcessor.log",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "capturedUtc": "2026-07-31T12:00:00Z",
+      "encoding": null,
+      "sanitizedSourcePath": null,
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}

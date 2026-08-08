@@ -1,0 +1,72 @@
+{
+  "scenario": "privacy-redaction",
+  "workload": "apps/windows/win32",
+  "coverage": [
+    {
+      "artifactId": "ime-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-workload-current",
+      "status": "available"
+    },
+    {
+      "artifactId": "app-action-processor-absent",
+      "status": "missing"
+    }
+  ],
+  "transactions": [
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "user",
+      "outcome": "succeeded",
+      "lastConfirmedPhase": "enforcement",
+      "confidence": "medium",
+      "returnCodeRaw": "0",
+      "returnCodeKind": "success",
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": null,
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
+    }
+  ],
+  "redactionMustNotContain": [
+    "hunter2",
+    "win32.user@example.invalid",
+    "win32.user",
+    "synthhunter2",
+    "Probe User",
+    "C:\\Users\\Probe User\\AppData\\Local\\Temp\\contoso-setup.log",
+    "SYNTH-DESKTOP01",
+    "S-1-5-21-397955417-626881126-188441444-1010"
+  ],
+  "redactionMustContain": [
+    "11111111-2222-4333-8444-555555555555",
+    "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+  ],
+  "findings": [
+    {
+      "findingId": "win32-succeeded:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:user",
+      "severity": "info",
+      "evidence": [
+        {
+          "evidenceId": "app-workload-current:3",
+          "sourceArtifactId": "app-workload-current"
+        }
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "raw user and execution context is redacted by default",
+    "space-containing account names, MSI-property secrets, SIDs, device names, and profile paths are redacted",
+    "derived findings are scanned with the same needles as the projection",
+    "the app and deployment-type ids survive redaction"
+  ],
+  "unkeyedObservationCount": 0,
+  "fragmentRecords": 0,
+  "unknownVocabularyObserved": false
+}
