@@ -117,10 +117,12 @@ fn account_field_re() -> &'static Regex {
         // existing replacement token: `[upn:…]` and `[account:…]` contain the
         // words `upn`/`account` followed by `:`, and without the guard a second
         // pass re-masked the token itself. The value's first character excludes
-        // whitespace as well as `[`, so the regex cannot backtrack into a
-        // position where the value starts just before a token.
+        // whitespace, so the regex cannot backtrack into a position where the
+        // value starts just before a token; a value that *is* a well-formed
+        // token is skipped by the `already_masked` guard in the closure, which
+        // still lets a malformed token-lookalike be masked rather than trusted.
         Regex::new(
-            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22\[][^,;\r\n\x22]*)",
+            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22][^,;\r\n\x22]*)",
         )
         .expect("account field regex must compile")
     })
@@ -135,7 +137,7 @@ fn host_field_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?P<field>\b(?:ComputerName|MachineName|HostName|DeviceName)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22\[]+)",
+            r"(?i)(?P<field>\b(?:ComputerName|MachineName|HostName|DeviceName)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22]+)",
         )
         .expect("host field regex must compile")
     })

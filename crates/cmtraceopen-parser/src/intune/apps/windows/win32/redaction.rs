@@ -6,144 +6,22 @@
 //! the app/deployment-type ids a transaction is keyed on -- because removing
 //! those would destroy the correlation the export exists to show.
 //!
-//! Masking is a pure function of the masked text, so the same input always
-//! produces the same token and two records that mentioned the same user still
-//! visibly mention the same user. The projection is idempotent: a replacement
-//! token cannot itself match a rule.
+//! The masking grammar itself lives in
+//! [`crate::intune::apps::windows::common::redact_text`], the single owner all
+//! Intune Windows analyzers share (as `scripts` does). This module owns only
+//! the *projection*: which Win32 fields are classified sensitive is a property
+//! of this analyzer's contract, not of the shared grammar. A local fork of the
+//! rules previously reintroduced a fixed JSON-escaped-path bug here; one owner
+//! is the fix for that class.
 //!
 //! Only values classified [`IntuneSensitivity::Sensitive`] are masked. A record
 //! the analyzer marked public is exported verbatim.
 
-use std::sync::OnceLock;
-
-use regex::Regex;
-
 use crate::intune::evidence::IntuneSensitivity;
 
+pub use crate::intune::apps::windows::common::redact_text;
+
 use super::models::{Win32Analysis, Win32Observation, Win32Transaction};
-
-/// FNV-1a. Stable across runs and platforms, which `DefaultHasher` is not.
-fn stable_token(kind: &str, value: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("[{kind}:{hash:016x}]")
-}
-
-fn upn_re() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-            .expect("UPN regex must compile")
-    })
-}
-
-/// The profile segment of a user path, in either slash direction.
-///
-/// The segment is bounded by the path separator, a quote, or the end of the
-/// line, not by whitespace: Windows permits spaces in profile directory names,
-/// and bounding on whitespace masks only the first word. The leading `[`
-/// exclusion is what makes the projection idempotent, because an already-masked
-/// segment must not be masked again.
-fn user_path_re() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(
-            r"(?i)(?P<prefix>[\\/](?:Users|Documents and Settings)[\\/])(?P<user>[^\\/\r\n\x22\[][^\\/\r\n\x22]*)",
-        )
-        .expect("user path regex must compile")
-    })
-}
-
-/// A credential or command value supplied inline after a flag.
-///
-/// The value stops at a line break rather than at the end of the string: a CCM
-/// record is one *logical* record and routinely contains newlines, so anchoring
-/// on `$` would leak a secret inside a multi-line record entirely.
-fn command_line_re() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        // Two value shapes:
-        //  - quoted: `-"..."` or `-'...'` — the value runs to the closing quote,
-        //    so spaces inside a quoted secret stay masked.
-        //  - unquoted: the value stops at the next whitespace-delimited token,
-        //    so a trailing switch like `/quiet` or `-Log X` after the secret is
-        //    preserved rather than swallowed into the masked span.
-        // Either way the value stops at a line break: a CCM record is one
-        // *logical* record and routinely contains newlines, so anchoring on `$`
-        // would leak a secret inside a multi-line record entirely.
-        Regex::new(
-            r"(?i)(?P<flag>[-/](?:Command|EncodedCommand|Password|Secret|ClientSecret|Token|AccessToken|ApiKey|Api[-_]?Key|Credential|Authorization)[\s=:]+)(?P<value>\x22[^\x22\r\n]*\x22|'[^'\r\n]*'|[^\s\r\n]+)",
-        )
-        .expect("command line regex must compile")
-    })
-}
-
-/// An account named in an explicit field.
-///
-/// `RunAsUser = CONTOSO\jsmith` carries an identity that neither the UPN rule
-/// nor the path rule matches, and it is exactly the "raw execution context" the
-/// output contract requires to be redacted by default.
-fn account_field_re() -> &'static Regex {
-    static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(
-            r"(?i)(?P<field>\b(?:RunAsUser|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>[^\s,;\r\n]+)",
-        )
-        .expect("account field regex must compile")
-    })
-}
-
-fn already_masked(value: &str, kind: &str) -> bool {
-    let prefix = format!("[{kind}:");
-    value.len() == prefix.len() + 16 + 1
-        && value.starts_with(&prefix)
-        && value.ends_with(']')
-        && value.as_bytes()[prefix.len()..prefix.len() + 16]
-            .iter()
-            .all(u8::is_ascii_hexdigit)
-}
-
-/// Mask the sensitive spans inside a free-text value.
-pub fn redact_text(value: &str) -> String {
-    let masked = upn_re().replace_all(value, |caps: &regex::Captures<'_>| {
-        stable_token("upn", &caps[0])
-    });
-
-    let masked = user_path_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        // Trailing whitespace is not part of the profile name; keeping it out of
-        // the hashed value means `\Users\John Doe ` and `\Users\John Doe` still
-        // resolve to the same user.
-        let user = caps["user"].trim_end();
-        let trailing = &caps["user"][user.len()..];
-        format!(
-            "{}{}{}",
-            &caps["prefix"],
-            stable_token("user", user),
-            trailing
-        )
-    });
-
-    let masked = account_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
-        let value = &caps["value"];
-        if already_masked(value, "account") || already_masked(value, "upn") {
-            return format!("{}{}", &caps["field"], value);
-        }
-        format!("{}{}", &caps["field"], stable_token("account", value))
-    });
-
-    command_line_re()
-        .replace_all(&masked, |caps: &regex::Captures<'_>| {
-            let value = caps["value"].trim_end();
-            if already_masked(value, "command") {
-                return format!("{}{}", &caps["flag"], value);
-            }
-            format!("{}{}", &caps["flag"], stable_token("command", value))
-        })
-        .into_owned()
-}
 
 fn redact_observation(observation: &Win32Observation) -> Win32Observation {
     if observation.context.sensitivity == IntuneSensitivity::Public {
@@ -255,10 +133,27 @@ mod tests {
     }
 
     #[test]
+    fn a_json_escaped_profile_path_is_masked() {
+        // The local fork lacked the shared module's `[\\/]{1,2}` JSON-escape
+        // handling, so a path inside an embedded JSON payload leaked. Pinned
+        // here so the fork can never silently come back.
+        let redacted = redact_text(r#"{"LogPath":"C:\\Users\\John Doe\\AppData\\Local"}"#);
+        assert!(!redacted.contains("John"), "got {redacted:?}");
+        assert!(!redacted.contains("Doe"), "got {redacted:?}");
+    }
+
+    #[test]
     fn an_account_field_is_masked_even_without_an_at_sign() {
         let redacted = redact_text(r"RunAsUser = CONTOSO\jsmith");
         assert!(!redacted.contains("jsmith"), "got {redacted:?}");
         assert!(redacted.starts_with("RunAsUser = "));
+    }
+
+    #[test]
+    fn an_account_name_containing_a_space_is_fully_masked() {
+        let redacted = redact_text(r"RunAsUser = CONTOSO\John Doe, session 2");
+        assert!(!redacted.contains("John"), "got {redacted:?}");
+        assert!(!redacted.contains("Doe"), "got {redacted:?}");
     }
 
     #[test]
@@ -275,6 +170,12 @@ mod tests {
                 "{flag} leaked its value: {redacted:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_msi_property_credential_is_masked_without_any_sigil() {
+        let redacted = redact_text("msiexec /i app.msi PASSWORD=hunter2 /qn");
+        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
     }
 
     #[test]

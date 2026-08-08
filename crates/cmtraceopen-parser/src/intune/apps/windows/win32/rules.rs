@@ -12,6 +12,7 @@
 //! is not in the evidence. Collapsing the two would make an honest "it failed,
 //! and I cannot tell you why" impossible to express.
 
+use crate::intune::apps::windows::common::redact_text;
 use crate::intune::evidence::{
     IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding, IntuneFindingConfidence,
     IntuneFindingSeverity,
@@ -132,8 +133,17 @@ fn finding(
 /// backed by neither evidence nor a coverage gap is an assertion, not a
 /// diagnosis. A rule whose evidence collection came back empty is a bug, and
 /// dropping the finding is strictly better than exporting an uncited claim.
-fn push(findings: &mut Vec<IntuneFinding>, candidate: IntuneFinding) {
+///
+/// Every summary passes through the shared redaction grammar here, at the one
+/// choke point all rules share. Rules splice log-derived free text (failed
+/// requirement names, return tokens) into their summaries, and findings are
+/// exported alongside the redacted analysis; a raw restricted value must not
+/// reach an export through a finding when the observation it came from is
+/// masked (ADR-004). Titles and recommended checks are static strings with no
+/// record content.
+fn push(findings: &mut Vec<IntuneFinding>, mut candidate: IntuneFinding) {
     if candidate.is_evidence_backed() {
+        candidate.summary = redact_text(&candidate.summary);
         findings.push(candidate);
     }
 }
@@ -977,6 +987,36 @@ mod tests {
         assert!(success
             .summary
             .contains("Last confirmed phase: Enforcement"));
+    }
+
+    #[test]
+    fn finding_summaries_pass_through_the_redaction_grammar() {
+        // Rules splice log-derived free text into summaries; a requirement
+        // name quoting an identity must arrive masked (ADR-004: raw restricted
+        // values must not appear in exported findings).
+        let snapshot = analyze(&[
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] Requirement rule 'Profile present for adele.vance@contoso.example' \
+                 check failed for app with id: {APP}"
+            )),
+        ]);
+        let findings = derive_findings(&snapshot);
+        assert!(!findings.is_empty());
+        for finding in &findings {
+            assert!(
+                !finding.summary.contains("adele.vance"),
+                "{} leaked an identity: {}",
+                finding.finding_id,
+                finding.summary
+            );
+        }
+        // The masking must not have destroyed the diagnostic keys.
+        assert!(findings
+            .iter()
+            .any(|finding| finding.summary.contains(APP)));
     }
 
     #[test]

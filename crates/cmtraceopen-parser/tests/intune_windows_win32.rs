@@ -419,6 +419,11 @@ fn assert_redaction(
 ) {
     let redacted = redacted_export_projection(analysis);
     let text = serde_json::to_string(&redacted).expect("redacted analysis serializes");
+    // Findings are part of the exported surface and must be as clean as the
+    // projection itself: rules splice log-derived free text into summaries,
+    // so the scan covers them too (ADR-004).
+    let findings =
+        serde_json::to_string(&derive_findings(analysis)).expect("findings serialize");
 
     for needle in expected["redactionMustNotContain"]
         .as_array()
@@ -428,6 +433,9 @@ fn assert_redaction(
         let needle = needle.as_str().expect("needle");
         failures.require(!text.contains(needle), || {
             format!("{scenario}: redacted export still contains {needle:?}")
+        });
+        failures.require(!findings.contains(needle), || {
+            format!("{scenario}: derived findings still contain {needle:?}")
         });
     }
     for needle in expected["redactionMustContain"]
@@ -690,6 +698,30 @@ fn the_serialized_analysis_is_camel_case_and_stable() {
 /// The shared harness must reject a corpus that lies about itself, and this
 /// corpus in particular. Proving it on one of *these* fixtures is what keeps the
 /// binding meaningful here rather than only in the skeleton's own tests.
+/// A privacy probe is only ever an *asserted* leak: the harness must reject a
+/// probe that no `redactionMustNotContain` needle covers, because that probe
+/// would be sensitive-shaped fixture material nothing proves redacted.
+#[test]
+fn a_privacy_probe_without_a_redaction_assertion_is_rejected() {
+    let root = corpus().join("privacy-redaction");
+    let manifest = load_json(&root.join("manifest.json"));
+    let expected = load_json(&root.join("expected.json"));
+    let corrupted = mutated(
+        &manifest,
+        "/privacyProbes/0",
+        json!("S-1-5-21-999999999-888888888-777777777-1001"),
+    );
+    let failures = validate_scenario("privacy-redaction", &root, &corrupted, &expected);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("not covered by any")),
+        "an unasserted probe must be rejected, got {:?}",
+        failures.entries()
+    );
+}
+
 #[test]
 fn a_coverage_status_contradicting_the_capture_state_is_rejected() {
     let root = corpus().join("incomplete-bundle-missing-appworkload");

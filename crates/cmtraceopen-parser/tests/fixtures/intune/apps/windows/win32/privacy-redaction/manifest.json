@@ -3,7 +3,11 @@
   "syntheticFixture": true,
   "scenario": "privacy-redaction",
   "workload": "apps/windows/win32",
-  "description": "A record quoting a synthetic UPN, an execution account, and an inline credential. The export projection masks all three and keeps every correlation key.",
+  "description": "Records quoting a synthetic UPN, an execution account with a space in its name, an inline credential, an MSI-property secret, a Windows SID, a device name, and a profile path. The export projection masks every one of them, in observations and in derived findings, and keeps every correlation key.",
+  "privacyProbes": [
+    "S-1-5-21-397955417-626881126-188441444-1010",
+    "C:\\Users\\Probe User\\AppData\\Local\\Temp\\contoso-setup.log"
+  ],
   "artifacts": [
     {
       "artifactId": "ime-current",
@@ -35,7 +39,7 @@
       "encoding": "utf-8",
       "sanitizedSourcePath": "SYNTHETIC://ime/AppWorkload.log",
       "relativePath": "evidence/app-workload-current/current/AppWorkload.log",
-      "bytesCopied": 737
+      "bytesCopied": 1778
     },
     {
       "artifactId": "app-action-processor-absent",
