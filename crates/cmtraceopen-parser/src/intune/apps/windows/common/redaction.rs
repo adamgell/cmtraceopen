@@ -69,14 +69,132 @@ fn user_path_re() -> &'static Regex {
 /// * The flag vocabulary covers credential-bearing switches, not just
 ///   `-Command`. A launch record reading `-Password hunter2` is exactly as
 ///   sensitive as an inline command and was previously exported verbatim.
+/// * The sigil may be `-` or `/`. Installer command lines use the slash form
+///   (`/Password hunter2`) as often as the dash form.
+///
+/// The value deliberately runs to the end of the line rather than the next
+/// token: a `-Command` value is multi-token by nature, and over-masking a
+/// trailing switch is safe where under-masking a second secret token is not.
 fn command_line_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"(?i)(?P<flag>-(?:Command|EncodedCommand|Password|Secret|ClientSecret|Token|AccessToken|ApiKey|Api[-_]?Key|Credential|Authorization)[\s:=]+)(?P<value>[^\r\n]+)",
+            r"(?i)(?P<flag>[-/](?:Command|EncodedCommand|Password|Secret|ClientSecret|Token|AccessToken|ApiKey|Api[-_]?Key|Credential|Authorization)[\s:=]+)(?P<value>[^\r\n]+)",
         )
         .expect("command line regex must compile")
     })
+}
+
+/// An MSI-property-style credential: `PASSWORD=hunter2` with no sigil at all.
+///
+/// `msiexec` product lines pass secrets as public properties, and nothing in
+/// that shape carries a `-` or `/` for the flag rule to anchor on. The property
+/// name vocabulary is deliberately credential-shaped only, so an ordinary
+/// property like `INSTALLDIR=` stays visible.
+fn msi_property_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"(?P<property>\b(?i:PASSWORD|PWD|PASSPHRASE|LICENSEKEY|LICENSE_KEY|PRODUCTKEY|PRODUCT_KEY|SERIALKEY|SERIAL|APIKEY|API_KEY|TOKEN|SECRET|CLIENTSECRET|CLIENT_SECRET)=)(?P<value>\x22[^\x22\r\n]*\x22|'[^'\r\n]*'|[^\s\r\n]+)",
+        )
+        .expect("msi property regex must compile")
+    })
+}
+
+/// An account named in an explicit field.
+///
+/// `RunAsUser = CONTOSO\jsmith` carries an identity that neither the UPN rule
+/// nor the path rule matches. The value is bounded by a delimiter, a quote, or
+/// the end of the line — the same shape as the path rule — never by
+/// whitespace: Windows account display forms contain spaces
+/// (`CONTOSO\John Doe`), and bounding on whitespace exported the second half
+/// of the name verbatim. The leading `[` exclusion keeps the projection
+/// idempotent.
+fn account_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        // The `pre` guard stops the field vocabulary matching *inside* an
+        // existing replacement token: `[upn:…]` and `[account:…]` contain the
+        // words `upn`/`account` followed by `:`, and without the guard a second
+        // pass re-masked the token itself. The value's first character excludes
+        // whitespace as well as `[`, so the regex cannot backtrack into a
+        // position where the value starts just before a token.
+        Regex::new(
+            r"(?i)(?P<pre>^|[^\[])(?P<field>\b(?:RunAsUser|RunAsAccount|UserName|UserPrincipalName|LoggedOnUser|Account|UserId|Upn)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22\[][^,;\r\n\x22]*)",
+        )
+        .expect("account field regex must compile")
+    })
+}
+
+/// A hostname named in an explicit field, or the server segment of a UNC path.
+///
+/// Free-standing hostnames are indistinguishable from ordinary words, so only
+/// the anchored shapes are masked: a device-name field, and the first segment
+/// after a UNC `\\` (single or JSON-escaped separators, like the path rule).
+fn host_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"(?i)(?P<field>\b(?:ComputerName|MachineName|HostName|DeviceName)\s*[:=]\s*)(?P<value>[^\s,;\r\n\x22\[]+)",
+        )
+        .expect("host field regex must compile")
+    })
+}
+
+fn unc_host_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        // The prefix must not follow a drive-colon: `C:\\Users` is a
+        // JSON-escaped local path, not a UNC root. Start-of-text or a
+        // separator character anchors a real `\\server` (or its JSON-escaped
+        // `\\\\server` form).
+        Regex::new(
+            r#"(?P<prefix>(?:^|[\s\x22'=,;(])[\\]{2,4})(?P<host>[^\s\\/\x22'\[,;.][^\s\\/\x22',;]*)"#,
+        )
+        .expect("unc host regex must compile")
+    })
+}
+
+/// A tenant id named in an explicit field. GUIDs in general are correlation
+/// keys (app ids, deployment types) and must survive; only the field-anchored
+/// tenant shape is an organization identifier.
+fn tenant_field_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r"(?i)(?P<field>\b(?:AAD)?Tenant\s*Id\s*[:=]\s*)(?P<value>\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?)",
+        )
+        .expect("tenant field regex must compile")
+    })
+}
+
+/// A Windows security identifier, anywhere in the text.
+///
+/// The `S-1-…` shape is unambiguous enough to mask without an anchor, and a
+/// SID identifies a user or machine exactly as strongly as a UPN does.
+fn sid_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(r"\bS-1-\d+(?:-\d+){2,}").expect("sid regex must compile")
+    })
+}
+
+/// Whether a value is already a replacement token (optionally quoted), so
+/// re-masking cannot hash a token and break idempotence.
+fn already_masked(value: &str) -> bool {
+    let inner = value
+        .trim_matches(|c| c == '\x22' || c == '\'')
+        .trim_end();
+    let Some(rest) = inner.strip_prefix('[') else {
+        return false;
+    };
+    let Some((kind, hash)) = rest.strip_suffix(']').and_then(|body| body.split_once(':')) else {
+        return false;
+    };
+    !kind.is_empty()
+        && kind.chars().all(|c| c.is_ascii_lowercase())
+        && hash.len() == 16
+        && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Mask the sensitive spans inside a free-text value.
@@ -99,15 +217,59 @@ pub fn redact_text(value: &str) -> String {
         )
     });
 
-    command_line_re()
+    let masked = tenant_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        format!("{}{}", &caps["field"], stable_token("tenant", &caps["value"]))
+    });
+
+    let masked = host_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        let value = &caps["value"];
+        if already_masked(value) {
+            return format!("{}{}", &caps["field"], value);
+        }
+        format!("{}{}", &caps["field"], stable_token("host", value))
+    });
+
+    let masked = unc_host_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        format!("{}{}", &caps["prefix"], stable_token("host", &caps["host"]))
+    });
+
+    let masked = account_field_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        // Trailing whitespace is prose spacing, not part of the account name.
+        let value = caps["value"].trim_end();
+        let trailing = &caps["value"][value.len()..];
+        if already_masked(value) {
+            return format!("{}{}{}{}", &caps["pre"], &caps["field"], value, trailing);
+        }
+        format!(
+            "{}{}{}{}",
+            &caps["pre"],
+            &caps["field"],
+            stable_token("account", value),
+            trailing
+        )
+    });
+
+    let masked = msi_property_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        let value = &caps["value"];
+        if already_masked(value) {
+            return format!("{}{}", &caps["property"], value);
+        }
+        format!("{}{}", &caps["property"], stable_token("secret", value))
+    });
+
+    let masked = command_line_re().replace_all(&masked, |caps: &regex::Captures<'_>| {
+        let value = caps["value"].trim_end();
+        // Already masked: re-masking would hash the token and break
+        // idempotence.
+        if already_masked(value) {
+            return format!("{}{}", &caps["flag"], value);
+        }
+        format!("{}{}", &caps["flag"], stable_token("command", value))
+    });
+
+    sid_re()
         .replace_all(&masked, |caps: &regex::Captures<'_>| {
-            let value = caps["value"].trim_end();
-            // Already masked: re-masking would hash the token and break
-            // idempotence.
-            if value.starts_with("[command:") && value.ends_with(']') {
-                return format!("{}{}", &caps["flag"], value);
-            }
-            format!("{}{}", &caps["flag"], stable_token("command", value))
+            stable_token("sid", &caps[0])
         })
         .into_owned()
 }
@@ -149,5 +311,88 @@ mod tests {
         let redacted = redact_text(r"C:\Users\adele.vance\a.ps1");
         assert!(!redacted.contains("adele.vance"));
         assert!(redacted.ends_with(r"\a.ps1"));
+    }
+
+    #[test]
+    fn a_slash_sigil_credential_flag_is_masked() {
+        let redacted = redact_text("setup.exe /Password hunter2 /quiet");
+        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn an_msi_property_credential_without_a_sigil_is_masked() {
+        for text in [
+            "msiexec /i app.msi PASSWORD=hunter2 /qn",
+            "msiexec /i app.msi LICENSEKEY=ABCD-1234-EFGH",
+            "msiexec /i app.msi PWD=\"multi word secret\" /qn",
+        ] {
+            let redacted = redact_text(text);
+            assert!(!redacted.contains("hunter2"), "{text} -> {redacted}");
+            assert!(!redacted.contains("ABCD-1234"), "{text} -> {redacted}");
+            assert!(!redacted.contains("multi word secret"), "{text} -> {redacted}");
+        }
+        // An ordinary property is not credential-shaped and stays visible.
+        let benign = redact_text("msiexec /i app.msi INSTALLDIR=C:\\App /qn");
+        assert!(benign.contains("INSTALLDIR=C:\\App"), "got {benign:?}");
+    }
+
+    #[test]
+    fn an_account_field_value_containing_a_space_is_fully_masked() {
+        let redacted = redact_text(r"RunAsUser = CONTOSO\John Doe, session 2");
+        assert!(!redacted.contains("John"), "got {redacted:?}");
+        assert!(!redacted.contains("Doe"), "got {redacted:?}");
+        assert!(redacted.starts_with("RunAsUser = "));
+        assert!(redacted.ends_with(", session 2"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn a_windows_sid_is_masked_anywhere() {
+        let redacted = redact_text("Granting access to S-1-5-21-397955417-626881126-188441444-1010 done");
+        assert!(!redacted.contains("397955417"), "got {redacted:?}");
+        assert!(redacted.contains("done"));
+        // Well-known machine SIDs with fewer sub-authorities identify nobody
+        // and stay visible.
+        assert!(redact_text("running as S-1-5-18").contains("S-1-5-18"));
+    }
+
+    #[test]
+    fn a_device_name_field_and_a_unc_host_are_masked() {
+        let field = redact_text("ComputerName: DESKTOP-AB12CD");
+        assert!(!field.contains("DESKTOP-AB12CD"), "got {field:?}");
+
+        let unc = redact_text(r"copying from \\FILESRV01\share\pkg.msi");
+        assert!(!unc.contains("FILESRV01"), "got {unc:?}");
+        assert!(unc.contains(r"\share\pkg.msi"), "got {unc:?}");
+
+        let escaped = redact_text(r#"{"source":"\\\\FILESRV01\\share"}"#);
+        assert!(!escaped.contains("FILESRV01"), "got {escaped:?}");
+    }
+
+    #[test]
+    fn a_drive_rooted_path_is_not_mistaken_for_a_unc_host() {
+        let redacted = redact_text(r#"{"Path":"C:\\ProgramData\\App"}"#);
+        assert!(redacted.contains("ProgramData"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn a_tenant_id_field_is_masked_but_bare_guids_survive() {
+        let app = "11111111-2222-4333-8444-555555555555";
+        let tenant = "99999999-8888-4777-8666-555555555555";
+        let redacted = redact_text(&format!(
+            "TenantId: {tenant} processing app with id: {app}"
+        ));
+        assert!(!redacted.contains(tenant), "got {redacted:?}");
+        assert!(
+            redacted.contains(app),
+            "correlation keys must survive: {redacted:?}"
+        );
+    }
+
+    #[test]
+    fn the_extended_projection_is_idempotent() {
+        let once = redact_text(
+            r"ComputerName: DESKTOP-AB12CD RunAsUser = CONTOSO\John Doe, S-1-5-21-397955417-626881126-188441444-1010 ran msiexec PASSWORD=hunter2 from \\FILESRV01\share for adele.vance@contoso.example TenantId: 99999999-8888-4777-8666-555555555555",
+        );
+        assert_eq!(once, redact_text(&once));
     }
 }
