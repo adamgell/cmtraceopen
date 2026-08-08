@@ -11,8 +11,11 @@ All notable changes to this project will be documented in this file.
 - **Intune Device Inventory Agent log family (#397 / #354)**: Discover and parse the full Microsoft Device Inventory Agent log set under Program Files (harvester, Inventory Adaptor, and rotation-failure dialects) with known-sources entry, folder aggregation for `.log` / rotations / `.log_`, and logical-record-aware real-time tailing.
 - **Company Portal iOS/iPadOS Console exports (#402)**: Parse imported Console plain-text diagnostics for Company Portal on iOS/iPadOS with fail-closed empty attribution cells and overflow-safe column handling.
 - **Windows device compliance analyzer (#364 / #495)**: Pure-parser four-phase compliance model (local evaluation → aggregate → reporting → access) with 16-scenario fixtures, privacy redaction, and conservative access-only findings that never promote Conditional Access denials into local setting verdicts.
-- **Native SCCM diagnostics path (#319, #490 and related)**: Native client evidence admission, discovery/normalization, and diagnostics workspace foundations for ConfigMgr client and server workflows—including site-core, management point, distribution point, software update point, hierarchy/replication, task-sequence provenance sealing, client health/policy/deployment/updates/inventory-compliance-metering analysis, and bounded database export coverage contracts (#493–#499, #443–#459, #494, #498, #499).
+- **Native SCCM diagnostics path (#319, #490 and related)**: Native client evidence admission, discovery/normalization, and diagnostics workspace foundations for ConfigMgr client and server workflows—including site-core, management point, distribution point, software update point, hierarchy/replication, task-sequence provenance sealing, client health/policy/deployment/updates/inventory-compliance-metering analysis, and bounded database export coverage contracts (#493–#499, #443–#459, #494, #498, #499), plus bounded advanced server capture (#500).
 - **Non-blocking Microsoft Graph WAM authentication (#441 / #512)**: Enable Graph without freezing the UI; explicit Sign in, host capability fast-fail (personal MSA / missing org account / provider unavailable), cancellable interactive auth, and retention of the Entra interactive path for real consent.
+- **Windows Autopilot evidence parser outside ESP (#362 / #450)**: Standalone Autopilot snapshot/outcome/phase model with ESP-linkage correlation, evidence-backed findings, and a 15-scenario fixture matrix, independent of the ESP Diagnostics workspace.
+- **Company Portal Windows LocalState logs (#366 / #460)**: Parse `%LOCALAPPDATA%\Packages\Microsoft.CompanyPortal_8wekyb3d8bbwe\LocalState\Log_<n>.log` and sibling bridge logs, version-scoped to the single published Company Portal 12-0-0 record with confidence downgraded for unverified app versions.
+- **Microsoft Store app evidence lane (#358 / #518)**: UWP user-context, provisioned UWP, and Store Win32 installer families for Intune app deployments, with coverage states, evidence-backed findings, and 17 synthetic fixtures.
 
 ### Changed
 
@@ -21,6 +24,8 @@ All notable changes to this project will be documented in this file.
 - **SCCM client log capture (#494)**: Capture client logs beside `CcmExec` so health and related workflows still see evidence when service naming alone would miss the client.
 - **SCCM intake authority (#508 and related)**: Remove fixture identity allowlists from production intake; bind client/server analysis to sealed intake, topology, chronology, and coverage-gap contracts rather than synthetic identity shortcuts.
 - **Agent / contributor docs (#448)**: Expand agent-facing repository guidance for multi-lane SCCM and Intune work.
+- **Reducer Framework v1 governance (#519)**: Establish the architecture, ADRs (evidence strength/confidence, identity correlation, chronology terminal precedence, redaction scope), and contract/adversary/integration charters that govern how evidence-folding reducer modules—including the Microsoft Store lane and Autopilot parser above—are designed and reviewed.
+- **Agent tooling and contributor scaffolding (#516)**: Add a CMTrace Open specialist agent skill and rebuild the Clairvoyance staff org (charters, shared memory index) used for agent-assisted contributions.
 
 ### Fixed
 
@@ -39,6 +44,9 @@ All notable changes to this project will be documented in this file.
 - **GitHub Actions**: Updated `actions/checkout` 4 → 7, `actions/github-script` 7.1.0 → 9.0.0, and `taiki-e/install-action` 2.85.2 → 2.85.5.
 - **Rust crates**: Updated `libc` 0.2.185 → 0.2.189, `tokio` 1.52.1 → 1.53.1, `ureq` 3.2.0 → 3.3.0, and `zip` 4.2.0 → 8.6.0.
 - **JavaScript**: Updated `@tanstack/react-virtual` and grouped frontend dev-dependencies; bumped `postcss` in app and download-metrics tooling.
+- **Rust crates**: Updated `quick-xml` 0.38.4 → 0.41.0 (#471) and `time` 0.3.54 → 0.3.55 (#515).
+- **GitHub Actions**: Updated `taiki-e/install-action` 2.85.5 → 2.85.7 (#514).
+- **Funding**: Added a GitHub Sponsors link to `.github/FUNDING.yml`.
 
 ## [1.5.1] - 2026-08-02
 
