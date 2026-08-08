@@ -85,8 +85,10 @@ fn appworkload_install_re() -> &'static Regex {
 fn appworkload_retry_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r#"(?i)(?:retry|retrying|reattempt|will\s+retry|attempt\s+\d+\s+of\s+\d+)"#)
-            .unwrap()
+        Regex::new(
+            r#"(?i)(?:retry|retrying|reattempt|will\s+retry|attempt\s+[0-9]+\s+of\s+[0-9]+)"#,
+        )
+        .unwrap()
     })
 }
 fn appworkload_stall_re() -> &'static Regex {
@@ -148,7 +150,7 @@ fn sidecar_script_mid_re() -> &'static Regex {
 }
 fn sidecar_exitcode_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r#"(?i)powershell\s+exitcode:\s*(\d+)"#).unwrap())
+    CELL.get_or_init(|| Regex::new(r#"(?i)powershell\s+exitcode:\s*([0-9]+)"#).unwrap())
 }
 fn policy_eval_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -270,7 +272,7 @@ fn error_code_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r#"(?i)(?:error\s*(?:code)?|exit\s*code(?:\s+of\s+the\s+script)?|hresult|hr|result|return\s*code)\s*(?:is|[=:])\s*(0x[0-9a-fA-F]+|-?\d+)"#,
+        r#"(?i)(?:error\s*(?:code)?|exit\s*code(?:\s+of\s+the\s+script)?|hresult|hr|result|return\s*code)\s*(?:is|[=:])\s*(0x[0-9a-fA-F]+|-?[0-9]+)"#,
     )
     .unwrap()
 })
@@ -278,7 +280,8 @@ fn error_code_re() -> &'static Regex {
 fn exit_code_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r#"(?i)exit\s*code(?:\s+of\s+the\s+script)?\s*(?:is|[=:])\s*(-?\d+)"#).unwrap()
+        Regex::new(r#"(?i)exit\s*code(?:\s+of\s+the\s+script)?\s*(?:is|[=:])\s*(-?[0-9]+)"#)
+            .unwrap()
     })
 }
 fn pending_re() -> &'static Regex {
@@ -329,7 +332,7 @@ fn client_health_heartbeat_failure_re() -> &'static Regex {
 fn client_cert_local_machine_count_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r#"(?i)MDM certs found in LocalMachine count:\s*(\d+)"#).unwrap()
+        Regex::new(r#"(?i)MDM certs found in LocalMachine count:\s*([0-9]+)"#).unwrap()
     })
 }
 fn client_cert_failure_re() -> &'static Regex {
@@ -373,7 +376,7 @@ fn win32_app_inventory_delta_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r#"(?i)computing delta inventory\.\.\.done\.\s*add count\s*=\s*(\d+),\s*modify count\s*=\s*(\d+),\s*delete count\s*=\s*(\d+)"#,
+        r#"(?i)computing delta inventory\.\.\.done\.\s*add count\s*=\s*([0-9]+),\s*modify count\s*=\s*([0-9]+),\s*delete count\s*=\s*([0-9]+)"#,
     )
     .unwrap()
 })

@@ -61,7 +61,8 @@ fn canonical_intake_adapter_derives_assessed_mp_evidence_and_fails_closed() {
     assert!(analysis.source_local_observations[0]
         .evidence
         .iter()
-        .all(|reference| reference.artifact_id == "mp-policy-current"));
+        .all(|reference| reference.artifact_id
+            == "synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53"));
 
     let mut capped = assessment;
     capped.artifacts[0].state = SccmCoverageState::Capped;

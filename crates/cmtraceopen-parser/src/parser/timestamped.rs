@@ -24,7 +24,7 @@ fn iso_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{1,2}):(\d{2}):(\d{2})([.,]\d+)?(Z|[+-]\d{2}:?\d{2})?\s*(.*)"
+        r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{1,2}):([0-9]{2}):([0-9]{2})([.,][0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?\s*(.*)"
     ).unwrap()
 })
 }
@@ -34,7 +34,7 @@ fn slash_date_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-        r"^(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})(\.\d+)?(\s*[AaPp][Mm])?\s+(.*)",
+        r"^([0-9]{1,2})/([0-9]{1,2})/([0-9]{4})\s+([0-9]{1,2}):([0-9]{2}):([0-9]{2})(\.[0-9]+)?(\s*[AaPp][Mm])?\s+(.*)",
     )
     .unwrap()
     })
@@ -45,7 +45,7 @@ fn syslog_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(.*)"
+        r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+([0-9]{1,2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})\s+(.*)"
     ).unwrap()
 })
 }
@@ -53,7 +53,9 @@ fn syslog_re() -> &'static Regex {
 /// Time-only: 14:30:00.123 message...
 fn time_only_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| Regex::new(r"^(\d{2}):(\d{2}):(\d{2})([.,]\d+)?\s+(.*)").unwrap())
+    CELL.get_or_init(|| {
+        Regex::new(r"^([0-9]{2}):([0-9]{2}):([0-9]{2})([.,][0-9]+)?\s+(.*)").unwrap()
+    })
 }
 
 // ---------------------------------------------------------------------------

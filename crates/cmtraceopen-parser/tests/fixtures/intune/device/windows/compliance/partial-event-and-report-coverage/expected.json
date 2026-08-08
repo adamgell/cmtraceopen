@@ -1,0 +1,76 @@
+{
+  "scenario": "partial-event-and-report-coverage",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "compliant",
+    "rationale": "allEvaluatedSettingsCompliant"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "rpt-1"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-source-missing",
+      "severity": "warning",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "custom-compliance",
+        "mdm-events",
+        "mdm-report",
+        "service-facts"
+      ]
+    },
+    {
+      "findingId": "compliance-device-compliant",
+      "severity": "info",
+      "confidence": "medium",
+      "evidence": [
+        "rpt-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a clean result over incomplete coverage is reported at reduced confidence",
+    "absent, capped, denied, and skipped sources are each their own coverage state"
+  ],
+  "coverage": [
+    {
+      "artifactId": "custom-compliance",
+      "status": "permissionDenied"
+    },
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "missing"
+    },
+    {
+      "artifactId": "mdm-report",
+      "status": "capped"
+    },
+    {
+      "artifactId": "service-facts",
+      "status": "skipped"
+    }
+  ]
+}

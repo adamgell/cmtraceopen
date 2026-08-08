@@ -21,20 +21,20 @@
       "contentVersionMismatch": false,
       "evidence": [
         {
-          "artifactId": "dp-transfer-deferred-01-distmgr",
-          "entryId": "dp-transfer-deferred-01-distmgr:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:1f5a3a673eac5bc2580d9adc89d4efb039628894342568bda67423712feb0976",
+          "entryId": "synthetic:artifact:sha256.v1:1f5a3a673eac5bc2580d9adc89d4efb039628894342568bda67423712feb0976:1-1",
           "lineEnd": 1,
           "lineStart": 1
         },
         {
-          "artifactId": "dp-transfer-deferred-01-distmgr",
-          "entryId": "dp-transfer-deferred-01-distmgr:2-2",
+          "artifactId": "synthetic:artifact:sha256.v1:1f5a3a673eac5bc2580d9adc89d4efb039628894342568bda67423712feb0976",
+          "entryId": "synthetic:artifact:sha256.v1:1f5a3a673eac5bc2580d9adc89d4efb039628894342568bda67423712feb0976:2-2",
           "lineEnd": 2,
           "lineStart": 2
         },
         {
-          "artifactId": "dp-transfer-deferred-02-pkgxfer",
-          "entryId": "dp-transfer-deferred-02-pkgxfer:1-1",
+          "artifactId": "synthetic:artifact:sha256.v1:baf95ddfa4243c8848b9a89f0e8ef769354e78b7a07648b0b046cd698ade27d2",
+          "entryId": "synthetic:artifact:sha256.v1:baf95ddfa4243c8848b9a89f0e8ef769354e78b7a07648b0b046cd698ade27d2:1-1",
           "lineEnd": 1,
           "lineStart": 1
         }
@@ -42,7 +42,7 @@
       "key": {
         "contentId": "content-iota",
         "contentVersion": 1,
-        "distributionPointHandle": "synthetic:subject:dp-01",
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
         "extractionProfileId": "dp-server-5.00.test-v1",
         "extractionProfileVersion": 1,
         "packageId": "LAB00009",
@@ -59,8 +59,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-transfer-deferred-01-distmgr",
-            "entryId": "dp-transfer-deferred-01-distmgr:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:1f5a3a673eac5bc2580d9adc89d4efb039628894342568bda67423712feb0976",
+            "entryId": "synthetic:artifact:sha256.v1:1f5a3a673eac5bc2580d9adc89d4efb039628894342568bda67423712feb0976:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -77,8 +77,8 @@
         {
           "disposition": "succeeded",
           "evidence": {
-            "artifactId": "dp-transfer-deferred-01-distmgr",
-            "entryId": "dp-transfer-deferred-01-distmgr:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:1f5a3a673eac5bc2580d9adc89d4efb039628894342568bda67423712feb0976",
+            "entryId": "synthetic:artifact:sha256.v1:1f5a3a673eac5bc2580d9adc89d4efb039628894342568bda67423712feb0976:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
@@ -95,8 +95,8 @@
         {
           "disposition": "deferred",
           "evidence": {
-            "artifactId": "dp-transfer-deferred-02-pkgxfer",
-            "entryId": "dp-transfer-deferred-02-pkgxfer:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:baf95ddfa4243c8848b9a89f0e8ef769354e78b7a07648b0b046cd698ade27d2",
+            "entryId": "synthetic:artifact:sha256.v1:baf95ddfa4243c8848b9a89f0e8ef769354e78b7a07648b0b046cd698ade27d2:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
@@ -117,7 +117,7 @@
       "state": "deferred",
       "stopPhase": "transfer",
       "terminalEvidence": [],
-      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00009:content=content-iota:content-version=1:dp=synthetic:subject:dp-01:profile=dp-server-5.00.test-v1:profile-version=1"
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00009:content=content-iota:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
     }
   ],
   "workflow": "distributionPointContent"

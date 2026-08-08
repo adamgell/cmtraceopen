@@ -1,0 +1,40 @@
+{
+  "scenario": "custom-compliance-script-failure",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "evaluationError",
+    "rationale": "customComplianceScriptFailed"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-custom-script-failed",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "cst-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a script execution failure is never reported as a noncompliant device"
+  ],
+  "coverage": [
+    {
+      "artifactId": "custom-compliance",
+      "status": "available"
+    },
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    }
+  ]
+}

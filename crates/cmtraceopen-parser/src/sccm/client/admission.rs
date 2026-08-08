@@ -31,12 +31,9 @@ use crate::sccm::{
 
 use super::{
     assess_client_intake,
-    intake::{
-        is_safe_artifact_id, is_supported_encoding, source_matches_group,
-        task_sequence_path_class_for_relative_path,
-    },
+    intake::{is_safe_artifact_id, is_supported_encoding, source_matches_group},
     SccmClientIntakeAssessment, SccmClientIntakeBundle, SccmClientIntakeError,
-    SccmClientIntakeFragment, SccmTaskSequencePathClass, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
+    SccmClientIntakeFragment, SccmTaskSequenceProvenance, MAX_SCCM_CLIENT_INTAKE_ARTIFACTS,
     TASK_SEQUENCE_TEST_PROFILE_ID, TASK_SEQUENCE_TEST_VERSION,
 };
 
@@ -115,7 +112,7 @@ pub(crate) struct SccmClientAdmittedSourceArtifact {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct SccmClientAdmittedTaskSequenceSource {
-    pub(crate) path_class: SccmTaskSequencePathClass,
+    pub(crate) provenance: Option<SccmTaskSequenceProvenance>,
     pub(crate) rotation: SccmRotation,
     pub(crate) coverage: SccmCoverageState,
     pub(crate) fragment_complete: Option<bool>,
@@ -322,6 +319,22 @@ impl SccmClientAdmittedEvidence {
             .next()
             .expect("test admission has one source authority");
         source.physical = !source.physical;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_only_mutate_task_sequence_provenance(&mut self, mutation: u8) {
+        let provenance = self
+            .task_sequence_sources
+            .values_mut()
+            .find_map(|source| source.provenance.as_mut())
+            .expect("test admission has Task Sequence provenance");
+        match mutation {
+            0 => provenance.path_class = super::SccmTaskSequencePathClass::Unknown,
+            1 => provenance.smsts_log_path_evidence = Some("synthetic:forged".to_owned()),
+            2 => provenance.relocation_lineage.push_str("-forged"),
+            3 => provenance.relocation_ordinal = provenance.relocation_ordinal.saturating_add(1),
+            _ => panic!("unsupported Task Sequence provenance mutation"),
+        }
     }
 
     #[cfg(test)]
@@ -541,15 +554,10 @@ pub fn admit_client_evidence(
         .into_iter()
         .flat_map(|group| &group.fragments)
         .map(|fragment| {
-            let path_class = fragment
-                .relative_path
-                .as_deref()
-                .and_then(task_sequence_path_class_for_relative_path)
-                .unwrap_or(SccmTaskSequencePathClass::Unknown);
             (
                 fragment.artifact_id.clone(),
                 SccmClientAdmittedTaskSequenceSource {
-                    path_class,
+                    provenance: fragment.task_sequence_provenance.clone(),
                     rotation: fragment.rotation.clone(),
                     coverage: fragment.coverage.clone(),
                     fragment_complete: fragment.fragment_complete,

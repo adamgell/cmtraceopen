@@ -1,0 +1,70 @@
+{
+  "scenario": "user-targeted-policy-not-evaluated",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "noUserSession",
+  "aggregate": {
+    "state": "compliant",
+    "rationale": "allEvaluatedSettingsCompliant"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "unknown",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "rpt-1"
+      ]
+    },
+    {
+      "groupingToken": "uri:./user/vendor/msft/policy/result/devicelock/minimumpasswordlength",
+      "scope": "user",
+      "state": "notEvaluated",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "rpt-2"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-user-scoped-not-evaluated",
+      "severity": "info",
+      "confidence": "medium",
+      "evidence": [
+        "rpt-2"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "compliance-device-compliant",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "rpt-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "an unevaluated user-scoped setting is info-severity coverage, never an error"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-report",
+      "status": "available"
+    }
+  ]
+}

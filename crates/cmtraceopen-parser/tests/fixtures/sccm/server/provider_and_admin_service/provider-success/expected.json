@@ -2,13 +2,13 @@
   "artifactRequests": [],
   "coverage": [
     {
-      "artifactId": "provider-success-current",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "artifactId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "producerRole": "provider",
       "sourceId": "server-provider",
       "sourceVersion": "5.00.TEST",
       "state": "captured",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -42,7 +42,7 @@
       "coverageGapArtifactIds": [],
       "key": {
         "confidence": "low",
-        "endpointHandle": "synthetic:subject:provider-01",
+        "endpointHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
         "extractionProfile": {
           "configmgrVersionPrefixes": [
             "5.00.TEST"
@@ -55,7 +55,7 @@
           ]
         },
         "operationHandle": "cmtraceopen.operation.sha256.v1:d7887edd39e359767a86999e1312648ebc17a6c9813b172f03883914bc334a7f",
-        "producerHostHandle": "synthetic:host:provider-01",
+        "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
         "requestHandle": "cmtraceopen.request.sha256.v1:8e30a49c634a05e538c508d53fe5699ab3e52ce078e500e64a5322c1593f40f4"
       },
       "lastSuccessfulPhase": "recordOutcome",
@@ -66,13 +66,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "provider-success-current",
-              "entryId": "provider-success-current:1-1",
+              "artifactId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4",
+              "entryId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:1-1",
               "lineEnd": 1,
               "lineStart": 1
             }
           ],
-          "observationId": "provider-success-current:1-1-01",
+          "observationId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:1-1-01",
           "phase": "receive",
           "terminal": false
         },
@@ -80,13 +80,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "provider-success-current",
-              "entryId": "provider-success-current:2-2",
+              "artifactId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4",
+              "entryId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:2-2",
               "lineEnd": 2,
               "lineStart": 2
             }
           ],
-          "observationId": "provider-success-current:2-2-02",
+          "observationId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:2-2-02",
           "phase": "authenticateOrAuthorize",
           "terminal": false
         },
@@ -94,13 +94,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "provider-success-current",
-              "entryId": "provider-success-current:3-3",
+              "artifactId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4",
+              "entryId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:3-3",
               "lineEnd": 3,
               "lineStart": 3
             }
           ],
-          "observationId": "provider-success-current:3-3-03",
+          "observationId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:3-3-03",
           "phase": "executeProviderOperation",
           "terminal": false
         },
@@ -108,13 +108,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "provider-success-current",
-              "entryId": "provider-success-current:4-4",
+              "artifactId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4",
+              "entryId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:4-4",
               "lineEnd": 4,
               "lineStart": 4
             }
           ],
-          "observationId": "provider-success-current:4-4-04",
+          "observationId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:4-4-04",
           "phase": "respond",
           "terminal": false
         },
@@ -122,13 +122,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "provider-success-current",
-              "entryId": "provider-success-current:5-5",
+              "artifactId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4",
+              "entryId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:5-5",
               "lineEnd": 5,
               "lineStart": 5
             }
           ],
-          "observationId": "provider-success-current:5-5-05",
+          "observationId": "synthetic:artifact:sha256.v1:1335ea801287b9d73389e0040b44dc84690aed29bcda27faaebfa79ea85eaea4:5-5-05",
           "phase": "recordOutcome",
           "terminal": true
         }
@@ -140,7 +140,7 @@
       "terminalEvidence": true,
       "timestampOrdering": "usable",
       "topologyCompatibility": "exact",
-      "transactionId": "provider:cmtraceopen.request.sha256.v1:8e30a49c634a05e538c508d53fe5699ab3e52ce078e500e64a5322c1593f40f4:cmtraceopen.operation.sha256.v1:d7887edd39e359767a86999e1312648ebc17a6c9813b172f03883914bc334a7f:synthetic:host:provider-01:synthetic:subject:provider-01"
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:8e30a49c634a05e538c508d53fe5699ab3e52ce078e500e64a5322c1593f40f4:cmtraceopen.operation.sha256.v1:d7887edd39e359767a86999e1312648ebc17a6c9813b172f03883914bc334a7f:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "workflow": "providerAndAdminService"

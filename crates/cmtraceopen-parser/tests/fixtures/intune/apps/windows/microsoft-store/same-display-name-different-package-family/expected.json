@@ -1,0 +1,102 @@
+{
+  "scenario": "same-display-name-different-package-family",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "assignments",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "state": "installCompleted",
+      "action": "install",
+      "executionContext": "user",
+      "intent": "required",
+      "storeProductId": "9WZSYNTH0002",
+      "packageFamilyName": "Contoso.SynthViewer_9synth0abcd2h",
+      "displayName": "Synthetic Viewer",
+      "appId": "22222222-3333-4444-8555-666666666666",
+      "lastConfirmedPhase": "registration",
+      "confidence": "high",
+      "errorHex": null,
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "assignments:1",
+        "appx-operational:1"
+      ]
+    },
+    {
+      "transactionId": "store-02",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "state": "registrationFailure",
+      "action": "install",
+      "executionContext": "user",
+      "intent": "required",
+      "storeProductId": "9WZSYNTH0003",
+      "packageFamilyName": "Fabrikam.SynthViewer_8synth0abcd3h",
+      "displayName": "Synthetic Viewer",
+      "appId": "33333333-4444-4555-8666-777777777777",
+      "lastConfirmedPhase": "registration",
+      "confidence": "high",
+      "errorHex": "0x80073CF9",
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "assignments:2",
+        "appx-operational:2"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-registration-failed",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "appx-operational:2",
+        "assignments:2"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "store-ambiguous-display-name",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "appx-operational:1",
+        "appx-operational:2",
+        "assignments:1",
+        "assignments:2"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "store-install-completed",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "appx-operational:1",
+        "assignments:1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "a shared display name never merges two package families"
+  ]
+}

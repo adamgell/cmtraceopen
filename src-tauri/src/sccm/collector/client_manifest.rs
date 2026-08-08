@@ -2,7 +2,10 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
 
-use cmtraceopen_parser::sccm::SCCM_DIAGNOSTICS_SCHEMA_VERSION;
+use cmtraceopen_parser::sccm::{
+    SccmTaskSequencePathClass, SccmTaskSequenceProvenance, SCCM_DIAGNOSTICS_SCHEMA_VERSION,
+    SCCM_TASK_SEQUENCE_CLIENT_PATH_EVIDENCE_TOKEN, SCCM_TASK_SEQUENCE_PROVENANCE_VERSION,
+};
 
 use crate::sccm::contract::{
     catalog_entry_id, compare_manifest_artifacts, compare_manifest_capture_gaps,
@@ -96,6 +99,19 @@ pub(super) fn write_and_validate_client_manifest(
                 root_handle: Some(captured.root_handle),
                 path_fingerprint: Some(path_fingerprint),
                 rotation_lineage: Some(format!("cmtraceopen.lineage.sha256.v1:{lineage_digest}")),
+                task_sequence_provenance: (canonical_basename == "smsts.log").then(|| {
+                    SccmTaskSequenceProvenance {
+                        version: SCCM_TASK_SEQUENCE_PROVENANCE_VERSION,
+                        path_class: SccmTaskSequencePathClass::Client,
+                        smsts_log_path_evidence: Some(
+                            SCCM_TASK_SEQUENCE_CLIENT_PATH_EVIDENCE_TOKEN.to_owned(),
+                        ),
+                        relocation_lineage: format!(
+                            "cmtraceopen.task-sequence.relocation.sha256.v1:{lineage_digest}"
+                        ),
+                        relocation_ordinal: 0,
+                    }
+                }),
                 relative_path: Some(captured.relative_path),
                 basename: physical_name,
                 rotation: captured.rotation,
@@ -170,6 +186,7 @@ pub(super) fn write_and_validate_client_manifest(
                 root_handle: Some(record.root_handle),
                 path_fingerprint: Some(path_fingerprint),
                 rotation_lineage: Some(lineage),
+                task_sequence_provenance: None,
                 relative_path: None,
                 basename: physical_name,
                 rotation: record.rotation,

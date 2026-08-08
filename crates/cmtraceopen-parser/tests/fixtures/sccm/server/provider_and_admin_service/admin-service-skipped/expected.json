@@ -2,7 +2,7 @@
   "artifactRequests": [
     {
       "layer": "adminService",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "producerRole": "adminService",
       "request": {
         "logicalId": "adminService",
@@ -10,18 +10,18 @@
         "role": "adminService"
       },
       "sourceVersion": null,
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "coverage": [
     {
-      "artifactId": "coverage-admin-skipped",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "artifactId": "synthetic:artifact:sha256.v1:6d50e660bbeb213d13489a41090a042b224e72afd17913d86178eca011ef792f",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "producerRole": "adminService",
       "sourceId": "server-admin-service",
       "sourceVersion": null,
       "state": "skipped",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -33,13 +33,13 @@
         "correlationKeys": [],
         "coverageGaps": [
           {
-            "artifactId": "coverage-admin-skipped",
+            "artifactId": "synthetic:artifact:sha256.v1:6d50e660bbeb213d13489a41090a042b224e72afd17913d86178eca011ef792f",
             "coverage": "skipped",
             "role": "adminService"
           }
         ],
         "evidence": [],
-        "findingId": "provider-admin-coverage:coverage-admin-skipped",
+        "findingId": "provider-admin-coverage:synthetic:artifact:sha256.v1:6d50e660bbeb213d13489a41090a042b224e72afd17913d86178eca011ef792f",
         "nextArtifacts": [
           {
             "logicalId": "adminService",
@@ -56,11 +56,11 @@
       },
       "lastSuccessfulPhase": null,
       "layer": "adminService",
-      "producerHostHandle": "synthetic:host:admin-service-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
       "sourceId": "server-admin-service",
       "sourceVersion": null,
-      "subjectId": "coverage-admin-skipped",
-      "workflowSubjectHandle": "synthetic:subject:admin-service-01"
+      "subjectId": "synthetic:artifact:sha256.v1:6d50e660bbeb213d13489a41090a042b224e72afd17913d86178eca011ef792f",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
     }
   ],
   "profiles": [

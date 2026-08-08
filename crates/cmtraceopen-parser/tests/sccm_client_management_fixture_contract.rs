@@ -2705,23 +2705,23 @@ fn additive_timestamp_and_capture_chronology_mutations_fail_closed() {
         accepted.push("seven-digit fractional tail treated as offset");
     }
 
-    let signless_offset =
-        copy_scenario_to_temporary_root("script-success", "signless-offset-ordering");
-    let signless_path = signless_offset
+    let signless_fraction =
+        copy_scenario_to_temporary_root("script-success", "signless-fraction-rejection");
+    let signless_path = signless_fraction
         .root
         .join("evidence/client-scripts/current/Scripts.log");
     replace_in_file(&signless_path, "11:00:01.000+000", "14:00:01.000240");
     replace_in_file(&signless_path, "11:00:02.000+000", "14:00:02.000240");
     replace_in_file(&signless_path, "11:00:03.000+000", "14:00:03.000240");
-    let manifest = load_json(&signless_offset.root.join("manifest.json"));
-    let expected = load_json(&signless_offset.root.join("expected.json"));
+    let manifest = load_json(&signless_fraction.root.join("manifest.json"));
+    let expected = load_json(&signless_fraction.root.join("expected.json"));
     if mutation_was_accepted(
         "script-success",
-        &signless_offset.root,
+        &signless_fraction.root,
         &manifest,
         &expected,
     ) {
-        accepted.push("signless offset chronology");
+        accepted.push("signless fraction chronology");
     }
 
     let (scenario_root, mut manifest, expected) = load_contract("script-success");

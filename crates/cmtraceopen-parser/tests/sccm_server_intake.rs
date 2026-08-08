@@ -138,8 +138,25 @@ fn intake_scenarios() -> Vec<String> {
     scenarios
 }
 
+#[test]
+fn server_intake_fixture_inventory_excludes_obsolete_database_placeholder() {
+    let fixtures = std::fs::read_dir(intake_root())
+        .expect("intake fixture root is readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert!(
+        !fixtures.contains("unsupported-db-supplement"),
+        "database exports use the explicit v1 contract, never generic server intake"
+    );
+}
+
 fn opaque_handle(prefix: &str, ordinal: usize) -> String {
     format!("{prefix}{ordinal:064x}")
+}
+
+fn synthetic_identity(domain: &str, ordinal: usize) -> String {
+    opaque_handle(&format!("synthetic:{domain}:sha256.v1:"), ordinal)
 }
 
 fn bounded_manifest(
@@ -325,6 +342,23 @@ fn assert_unsafe_mutation_is_rejected(
             panic!("unsafe manifest mutation was accepted");
         }
     }
+}
+
+fn assert_mutation_fails_closed_without_panicking(
+    scenario: &str,
+    expected: SccmServerIntakeError,
+    mutate: impl FnOnce(&mut Value, &mut Vec<SccmServerArtifactPayload>),
+) {
+    let (manifest_json, mut payloads) = load_bundle(scenario);
+    let mut manifest = manifest_value(&manifest_json);
+    mutate(&mut manifest, &mut payloads);
+    let manifest_json = serialize_manifest(&manifest);
+
+    let actual = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assess_server_intake(&manifest_json, &payloads)
+    }));
+    assert!(actual.is_ok(), "untrusted intake must not panic");
+    assert_eq!(actual.expect("panic result was checked"), Err(expected));
 }
 
 fn artifact_json<'a>(assessment: &'a Value, artifact_id: &str) -> &'a Value {
@@ -844,7 +878,7 @@ fn server_intake_gap_requests_use_exact_shared_catalog_artifacts() {
 }
 
 #[test]
-fn server_intake_does_not_request_unknown_or_non_ccm_sources() {
+fn server_intake_does_not_request_non_ccm_sources() {
     let (iis_manifest, iis_payloads) = load_bundle("skipped-iis");
     let mut denied_iis = manifest_value(&iis_manifest);
     denied_iis["artifacts"][0]["captureState"] = Value::String("accessDenied".to_owned());
@@ -854,14 +888,6 @@ fn server_intake_does_not_request_unknown_or_non_ccm_sources() {
     assert!(
         iis.next_artifact_requests.is_empty(),
         "a non-CCM group has no shared catalog artifact request"
-    );
-
-    let (unknown_manifest, unknown_payloads) = load_bundle("unsupported-db-supplement");
-    let unknown = assess_server_intake(&unknown_manifest, &unknown_payloads)
-        .expect("unknown coverage remains assessable");
-    assert!(
-        unknown.next_artifact_requests.is_empty(),
-        "an unknown source has no shared catalog artifact request"
     );
 }
 
@@ -911,6 +937,122 @@ fn server_intake_rejects_identity_bearing_public_inputs() {
 }
 
 #[test]
+fn server_intake_rejects_personal_name_shaped_synthetic_identities() {
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::UnexpectedPayload,
+        |manifest, payloads| {
+            manifest["artifacts"][0]["artifactId"] = Value::String("alice-smith".to_owned());
+            payloads[0].manifest_artifact_id = "alice-smith".to_owned();
+        },
+    );
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::InvalidArtifact,
+        |manifest, _payloads| {
+            manifest["artifacts"][0]["producerHostHandle"] =
+                Value::String("synthetic:host:alice-smith-01".to_owned());
+        },
+    );
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::InvalidArtifact,
+        |manifest, _payloads| {
+            manifest["artifacts"][2]["workflowSubject"]["instanceHandle"] =
+                Value::String("synthetic:subject:alice-smith-01".to_owned());
+        },
+    );
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::InvalidArtifact,
+        |manifest, _payloads| {
+            manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"] =
+                Value::String("synthetic:path:alice-smith".to_owned());
+        },
+    );
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::InvalidArtifact,
+        |manifest, _payloads| {
+            manifest["artifacts"][0]["rotation"]["lineageId"] =
+                Value::String("alice-smith".to_owned());
+        },
+    );
+}
+
+#[test]
+fn server_intake_rejects_unicode_and_malformed_synthetic_identities_without_panicking() {
+    for capture_host in ["ALC-CM0１", "LAB-CM0é", "LAB-CM", "LAB-CM000", "DEV-CM01"] {
+        assert_mutation_fails_closed_without_panicking(
+            "complete-multi-role",
+            SccmServerIntakeError::InvalidTopology,
+            |manifest, _payloads| {
+                manifest["topology"]["captureHost"] = Value::String(capture_host.to_owned());
+            },
+        );
+    }
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::InvalidTopology,
+        |manifest, _payloads| {
+            manifest["topology"]["siteCode"] = Value::String("LＡB".to_owned());
+        },
+    );
+
+    let unicode_artifact = "synthetic:artifact:sha256.v1:000000000000000000000000000000000000000000000000000000000000000１";
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::UnexpectedPayload,
+        |manifest, payloads| {
+            manifest["artifacts"][0]["artifactId"] = Value::String(unicode_artifact.to_owned());
+            payloads[0].manifest_artifact_id = unicode_artifact.to_owned();
+        },
+    );
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::InvalidArtifact,
+        |manifest, _payloads| {
+            manifest["artifacts"][0]["producerHostHandle"] = Value::String(
+                "synthetic:host:sha256.v1:000000000000000000000000000000000000000000000000000000000000000g"
+                    .to_owned(),
+            );
+        },
+    );
+    assert_mutation_fails_closed_without_panicking(
+        "complete-multi-role",
+        SccmServerIntakeError::InvalidArtifact,
+        |manifest, _payloads| {
+            manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"] =
+                Value::String("synthetic:path:sha256.v1:0000".to_owned());
+        },
+    );
+}
+
+#[test]
+fn server_intake_accepts_new_conforming_synthetic_identities() {
+    let (manifest_json, mut payloads) = load_bundle("complete-multi-role");
+    let mut manifest = manifest_value(&manifest_json);
+
+    manifest["topology"]["siteCode"] = Value::String("DEV".to_owned());
+    manifest["topology"]["captureHost"] = Value::String("DEV-CM02".to_owned());
+
+    let artifact = &mut manifest["artifacts"][0];
+    artifact["artifactId"] = Value::String(synthetic_identity("artifact", 4));
+    artifact["producerHostHandle"] = Value::String(synthetic_identity("host", 4));
+    artifact["configuredPathProvenance"]["pathFingerprint"] =
+        Value::String(synthetic_identity("path", 4));
+    artifact["rotation"]["lineageId"] = Value::String(synthetic_identity("lineage", 4));
+    manifest["artifacts"][2]["workflowSubject"]["instanceHandle"] =
+        Value::String(synthetic_identity("subject", 4));
+    payloads[0].manifest_artifact_id = synthetic_identity("artifact", 4);
+
+    assert!(
+        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_ok(),
+        "a structurally synthetic identity must not require a production-source edit"
+    );
+}
+
+#[test]
 fn server_intake_reserves_windows_equivalent_paths_and_fingerprints() {
     let (manifest_json, payloads) = load_bundle("collision-same-basename-configured-roots");
     let accepted =
@@ -953,7 +1095,7 @@ fn server_intake_rejects_mp_produced_mpcontrol_without_workflow_subject() {
         .as_array_mut()
         .expect("artifacts are an array")
         .iter_mut()
-        .find(|artifact| artifact["artifactId"] == "mp-policy-current")
+        .find(|artifact| artifact["artifactId"] == "synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53")
         .expect("MP policy artifact is present");
     artifact["originalBasename"] = Value::String("mpcontrol.log".to_owned());
     artifact["relativePath"] = Value::String(
@@ -974,10 +1116,13 @@ fn server_intake_accepts_site_server_mpcontrol_with_management_point_subject() {
         .as_array_mut()
         .expect("artifacts are an array")
         .iter_mut()
-        .find(|artifact| artifact["artifactId"] == "mp-policy-current")
+        .find(|artifact| artifact["artifactId"] == "synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53")
         .expect("MP policy artifact is present");
     artifact["producerRole"] = Value::String("siteServer".to_owned());
-    artifact["producerHostHandle"] = Value::String("synthetic:host:site-01".to_owned());
+    artifact["producerHostHandle"] = Value::String(
+        "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339"
+            .to_owned(),
+    );
     artifact["workflowSubject"] = json!({ "role": "managementPoint" });
     artifact["originalBasename"] = Value::String("mpcontrol.log".to_owned());
     artifact["relativePath"] = Value::String(
@@ -990,7 +1135,7 @@ fn server_intake_accepts_site_server_mpcontrol_with_management_point_subject() {
     let mpcontrol = assessment
         .artifacts
         .iter()
-        .find(|artifact| artifact.artifact_id == "mp-policy-current")
+        .find(|artifact| artifact.artifact_id == "synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53")
         .expect("MP control artifact is retained");
     assert_eq!(mpcontrol.producer_role, SccmRole::SiteServer);
     assert_eq!(
@@ -1024,10 +1169,14 @@ fn server_intake_scopes_canonical_identity_to_producer_host() {
     let fingerprint =
         manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
     let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
-    manifest["artifacts"][0]["producerHostHandle"] =
-        Value::String("synthetic:host:site-01".to_owned());
-    manifest["artifacts"][1]["producerHostHandle"] =
-        Value::String("synthetic:host:mp-01".to_owned());
+    manifest["artifacts"][0]["producerHostHandle"] = Value::String(
+        "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339"
+            .to_owned(),
+    );
+    manifest["artifacts"][1]["producerHostHandle"] = Value::String(
+        "synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f"
+            .to_owned(),
+    );
     manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
     manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
 
@@ -1040,7 +1189,7 @@ fn server_intake_scopes_canonical_identity_to_producer_host() {
             .iter()
             .map(|artifact| artifact.producer_host_handle.as_deref())
             .collect::<Vec<_>>(),
-        vec![Some("synthetic:host:mp-01"), Some("synthetic:host:site-01"),],
+        vec![Some("synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f"), Some("synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339"),],
         "producer-host provenance orders otherwise-equal artifacts before caller ids",
     );
 
@@ -1065,8 +1214,10 @@ fn server_intake_coverage_binds_each_row_to_its_producer_host() {
     let fingerprint =
         manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
     let lineage = manifest["artifacts"][0]["rotation"]["lineageId"].clone();
-    manifest["artifacts"][0]["producerHostHandle"] =
-        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][0]["producerHostHandle"] = Value::String(
+        "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339"
+            .to_owned(),
+    );
     manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
     manifest["artifacts"][1]["rotation"]["lineageId"] = lineage;
 
@@ -1078,19 +1229,19 @@ fn server_intake_coverage_binds_each_row_to_its_producer_host() {
         json!([
             {
                 "producerRole": "managementPoint",
-                "producerHostHandle": "synthetic:host:mp-01",
+                "producerHostHandle": "synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f",
                 "workflowSubjectRole": null,
                 "sourceId": "server-mp-policy",
                 "state": "captured",
-                "artifactIds": ["mp-policy-root-b-current"],
+                "artifactIds": ["synthetic:artifact:sha256.v1:b117cc48fba84a0cef85a662fdba0009e1d2723edc6b51af457d829cfa09e7c8"],
             },
             {
                 "producerRole": "managementPoint",
-                "producerHostHandle": "synthetic:host:site-01",
+                "producerHostHandle": "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339",
                 "workflowSubjectRole": null,
                 "sourceId": "server-mp-policy",
                 "state": "captured",
-                "artifactIds": ["mp-policy-root-a-current"],
+                "artifactIds": ["synthetic:artifact:sha256.v1:721420190054ad85f091f558f77cd4e6e54b50da9426b7d979f7edcda7970b78"],
             },
         ]),
         "coverage membership must retain the physical producer that supplied each artifact",
@@ -1116,8 +1267,10 @@ fn server_intake_scopes_path_fingerprint_lineage_to_producer_host() {
     let mut manifest = manifest_value(&manifest_json);
     let fingerprint =
         manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"].clone();
-    manifest["artifacts"][1]["producerHostHandle"] =
-        Value::String("synthetic:host:site-01".to_owned());
+    manifest["artifacts"][1]["producerHostHandle"] = Value::String(
+        "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339"
+            .to_owned(),
+    );
     manifest["artifacts"][1]["configuredPathProvenance"]["pathFingerprint"] = fingerprint;
 
     let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
@@ -1156,8 +1309,8 @@ fn server_intake_scopes_canonical_identity_to_workflow_subject() {
     let (manifest_json, payloads) = load_bundle("complete-multi-role");
     let mut manifest = manifest_value(&manifest_json);
     manifest["artifacts"][2]["workflowSubject"]["instanceHandle"] =
-        Value::String("synthetic:subject:dp-02".to_owned());
-    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-01", true);
+        Value::String("synthetic:subject:sha256.v1:b7f6d3e42b018582c500e7f0abcbb3d976bc45df22eb889e14c5e8b58902a299".to_owned());
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:sha256.v1:303b321cad551bed85d9b6d366165e1cb287c824090779eadea5673cbeeacf33", true);
 
     let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
         .expect("the same artifact identity for a distinct workflow subject is independent");
@@ -1170,8 +1323,8 @@ fn server_intake_scopes_canonical_identity_to_workflow_subject() {
             .map(|artifact| artifact.workflow_subject_handle.as_deref())
             .collect::<Vec<_>>(),
         vec![
-            Some("synthetic:subject:dp-01"),
-            Some("synthetic:subject:dp-02"),
+            Some("synthetic:subject:sha256.v1:303b321cad551bed85d9b6d366165e1cb287c824090779eadea5673cbeeacf33"),
+            Some("synthetic:subject:sha256.v1:b7f6d3e42b018582c500e7f0abcbb3d976bc45df22eb889e14c5e8b58902a299"),
         ],
         "workflow-subject provenance orders otherwise-equal artifacts before caller ids",
     );
@@ -1194,7 +1347,7 @@ fn server_intake_scopes_canonical_identity_to_workflow_subject() {
 fn server_intake_coverage_binds_each_row_to_its_workflow_subject() {
     let (manifest_json, payloads) = load_bundle("complete-multi-role");
     let mut manifest = manifest_value(&manifest_json);
-    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-02", false);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:sha256.v1:b7f6d3e42b018582c500e7f0abcbb3d976bc45df22eb889e14c5e8b58902a299", false);
 
     let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
         .expect("the same source captured for distinct workflow subjects is assessed");
@@ -1204,37 +1357,37 @@ fn server_intake_coverage_binds_each_row_to_its_workflow_subject() {
         json!([
             {
                 "producerRole": "managementPoint",
-                "producerHostHandle": "synthetic:host:mp-01",
+                "producerHostHandle": "synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f",
                 "workflowSubjectRole": null,
                 "sourceId": "server-mp-policy",
                 "state": "captured",
-                "artifactIds": ["mp-policy-current"],
+                "artifactIds": ["synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53"],
             },
             {
                 "producerRole": "siteServer",
-                "producerHostHandle": "synthetic:host:site-01",
+                "producerHostHandle": "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339",
                 "workflowSubjectRole": "distributionPoint",
-                "workflowSubjectHandle": "synthetic:subject:dp-01",
+                "workflowSubjectHandle": "synthetic:subject:sha256.v1:303b321cad551bed85d9b6d366165e1cb287c824090779eadea5673cbeeacf33",
                 "sourceId": "server-dp-distribution",
                 "state": "captured",
-                "artifactIds": ["dp-dist-current"],
+                "artifactIds": ["synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6"],
             },
             {
                 "producerRole": "siteServer",
-                "producerHostHandle": "synthetic:host:site-01",
+                "producerHostHandle": "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339",
                 "workflowSubjectRole": "distributionPoint",
-                "workflowSubjectHandle": "synthetic:subject:dp-02",
+                "workflowSubjectHandle": "synthetic:subject:sha256.v1:b7f6d3e42b018582c500e7f0abcbb3d976bc45df22eb889e14c5e8b58902a299",
                 "sourceId": "server-dp-distribution",
                 "state": "captured",
-                "artifactIds": ["sup-sync-current"],
+                "artifactIds": ["synthetic:artifact:sha256.v1:3eab84121ff2ad1e7b4cb559bad24f451ab7c26fc4db657fadd3bc190f945e9d"],
             },
             {
                 "producerRole": "siteServer",
-                "producerHostHandle": "synthetic:host:site-01",
+                "producerHostHandle": "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339",
                 "workflowSubjectRole": null,
                 "sourceId": "server-sitecomp",
                 "state": "captured",
-                "artifactIds": ["sitecomp-current"],
+                "artifactIds": ["synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff"],
             },
         ]),
         "coverage membership must retain the exact workflow subject for each DP artifact",
@@ -1269,7 +1422,7 @@ fn server_intake_coverage_omits_absent_optional_topology_handles() {
 
     assert_eq!(
         management_point["producerHostHandle"],
-        Value::String("synthetic:host:mp-01".to_owned()),
+        Value::String("synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f".to_owned()),
         "present producer topology stays additive in coverage JSON",
     );
     assert!(
@@ -1282,7 +1435,7 @@ fn server_intake_coverage_omits_absent_optional_topology_handles() {
 fn server_intake_scopes_path_fingerprint_lineage_to_workflow_subject() {
     let (manifest_json, payloads) = load_bundle("complete-multi-role");
     let mut manifest = manifest_value(&manifest_json);
-    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-02", false);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:sha256.v1:b7f6d3e42b018582c500e7f0abcbb3d976bc45df22eb889e14c5e8b58902a299", false);
 
     let assessment = assess_server_intake(&serialize_manifest(&manifest), &payloads)
         .expect("path fingerprints are scoped to their workflow subject");
@@ -1293,7 +1446,7 @@ fn server_intake_scopes_path_fingerprint_lineage_to_workflow_subject() {
 fn server_intake_rejects_relabelled_duplicate_for_same_workflow_subject() {
     let (manifest_json, payloads) = load_bundle("complete-multi-role");
     let mut manifest = manifest_value(&manifest_json);
-    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:dp-01", true);
+    configure_second_artifact_as_dp_identity(&mut manifest, "synthetic:subject:sha256.v1:303b321cad551bed85d9b6d366165e1cb287c824090779eadea5673cbeeacf33", true);
 
     assert_eq!(
         assess_server_intake(&serialize_manifest(&manifest), &payloads),
@@ -1319,7 +1472,7 @@ fn server_intake_preserves_physical_parse_failure_provenance() {
     assert_eq!(assessment.next_artifact_requests.len(), 1);
 
     let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
-    let artifact = artifact_json(&serialized, "mp-policy-multiline");
+    let artifact = artifact_json(&serialized, "synthetic:artifact:sha256.v1:fab8972d821bbc3016ad15e49e13aeaf0559c7ef385bda8bc2b1158f085fb338");
     assert_eq!(artifact["bytesCopied"], 207);
     assert_eq!(artifact["captureProvenance"]["schemaVersion"], 1);
     assert_eq!(artifact["captureProvenance"]["encoding"], "utf-8");
@@ -1349,7 +1502,7 @@ fn server_intake_converts_malformed_captured_ccm_to_parse_failed() {
     assert_eq!(assessment.next_artifact_requests.len(), 1);
 
     let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
-    let artifact = artifact_json(&serialized, "mp-policy-multiline");
+    let artifact = artifact_json(&serialized, "synthetic:artifact:sha256.v1:fab8972d821bbc3016ad15e49e13aeaf0559c7ef385bda8bc2b1158f085fb338");
     assert_eq!(artifact["captureProvenance"]["encoding"], "utf-8");
     assert_eq!(artifact["captureProvenance"]["byteLimit"], 4096);
     assert_eq!(artifact["captureProvenance"]["limitApplied"], false);
@@ -1361,7 +1514,7 @@ fn server_intake_projects_versioned_capture_provenance() {
     let captured = assess_server_intake(&captured_manifest, &captured_payloads)
         .expect("captured bundle is assessed");
     let captured_json = serde_json::to_value(&captured).expect("assessment serializes");
-    let captured_artifact = artifact_json(&captured_json, "mp-policy-configured");
+    let captured_artifact = artifact_json(&captured_json, "synthetic:artifact:sha256.v1:a77e71c0b196187e25d552021e469b7441592a61640ee134aa45b3fc106860d0");
     assert_eq!(captured_artifact["captureProvenance"]["schemaVersion"], 1);
     assert_eq!(captured_artifact["captureProvenance"]["encoding"], "utf-8");
     assert_eq!(captured_artifact["captureProvenance"]["byteLimit"], 4096);
@@ -1374,7 +1527,7 @@ fn server_intake_projects_versioned_capture_provenance() {
     let capped = assess_server_intake(&capped_manifest, &capped_payloads)
         .expect("capped bundle is assessed");
     let capped_json = serde_json::to_value(&capped).expect("assessment serializes");
-    let capped_artifact = artifact_json(&capped_json, "sup-sync-capped");
+    let capped_artifact = artifact_json(&capped_json, "synthetic:artifact:sha256.v1:8ffd2bfbfcd641204b0108f4d880ef9aae8472e9cde9abc4da5207791e09f47a");
     assert_eq!(capped_artifact["captureProvenance"]["schemaVersion"], 1);
     assert_eq!(capped_artifact["captureProvenance"]["encoding"], "utf-8");
     assert_eq!(capped_artifact["captureProvenance"]["byteLimit"], 64);
@@ -1418,7 +1571,10 @@ fn server_intake_does_not_suppress_default_request_across_producer_hosts() {
     let mut combined = manifest_value(&configured_manifest);
     let (absent_manifest, _absent_payloads) = load_bundle("access-denied-mp");
     let mut absent = manifest_value(&absent_manifest)["artifacts"][0].clone();
-    absent["producerHostHandle"] = Value::String("synthetic:host:site-01".to_owned());
+    absent["producerHostHandle"] = Value::String(
+        "synthetic:host:sha256.v1:e0cf10135a28c8385b4e6f95278ec03069f0dd6a244575d9cac9d31c577ee339"
+            .to_owned(),
+    );
     absent["captureState"] = Value::String("absent".to_owned());
     absent["collectionDetail"] = Value::Null;
     absent["configuredPathProvenance"]["state"] = Value::String("defaultCandidate".to_owned());
@@ -1444,7 +1600,7 @@ fn server_intake_does_not_suppress_default_request_across_workflow_subjects() {
     let mut absent = manifest_value(&absent_manifest)["artifacts"][0].clone();
     absent["workflowSubject"] = json!({
         "role": "distributionPoint",
-        "instanceHandle": "synthetic:subject:dp-02",
+        "instanceHandle": "synthetic:subject:sha256.v1:b7f6d3e42b018582c500e7f0abcbb3d976bc45df22eb889e14c5e8b58902a299",
     });
     combined["artifacts"]
         .as_array_mut()
@@ -1470,12 +1626,6 @@ fn server_intake_exercises_role_state_rotation_and_privacy_matrix() {
         ("access-denied-mp", SccmCoverageState::AccessDenied, 0, 1),
         ("capped-sup", SccmCoverageState::Capped, 0, 1),
         ("skipped-iis", SccmCoverageState::Skipped, 0, 0),
-        (
-            "unsupported-db-supplement",
-            SccmCoverageState::Unsupported,
-            0,
-            0,
-        ),
     ];
     for (scenario, state, evidence_count, request_count) in cases {
         let (manifest, payloads) = load_bundle(scenario);
@@ -1683,44 +1833,12 @@ fn server_intake_keeps_unknown_encoding_as_unsupported_coverage() {
 }
 
 #[test]
-fn server_intake_retains_unsupported_source_provenance() {
-    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
-    let assessment = assess_server_intake(&manifest_json, &payloads)
-        .expect("unsupported source remains assessable");
-    let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
-    let artifact = artifact_json(&serialized, "unknown-db-export");
-
-    assert_eq!(artifact["sourceId"], "unknown-db-supplement");
-    assert_eq!(artifact["sourceKind"], "unknown");
-    assert_eq!(artifact["family"], "unknown-db-supplement");
-    assert_eq!(artifact["originalBasename"], "synthetic-db-export.txt");
-    assert_eq!(artifact["rotationLineageHandle"], "unknown-db-export");
-    assert_eq!(
-        serialized["coverage"][0]["sourceId"],
-        "unknown-db-supplement"
-    );
-}
-
-#[test]
-fn server_intake_rejects_unversioned_future_unsupported_source_labels() {
-    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
-    let mut manifest = manifest_value(&manifest_json);
-    manifest["artifacts"][0]["sourceId"] = Value::String("future-server-supplement".to_owned());
-    manifest["artifacts"][0]["sourceKind"] = Value::String("futureSupplement".to_owned());
-
-    assert!(
-        assess_server_intake(&serialize_manifest(&manifest), &payloads).is_err(),
-        "future provenance needs a versioned opaque handle, not an arbitrary public label"
-    );
-}
-
-#[test]
 fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() {
     let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
     let assessment = assess_server_intake(&manifest_json, &payloads)
         .expect("the catalogued optional WSUS supplement is assessable");
     let serialized = serde_json::to_value(&assessment).expect("assessment serializes");
-    let artifact = artifact_json(&serialized, "sup-wsus-health-skipped");
+    let artifact = artifact_json(&serialized, "synthetic:artifact:sha256.v1:2f21b2fe3c38a5162001ce80e0c2e88757dff11c261e8caa192693e500c3885a");
 
     let source = declared_server_source_catalog()
         .iter()
@@ -1745,9 +1863,9 @@ fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() 
     assert_eq!(artifact["sourceVersion"], "5.00.TEST");
     assert_eq!(
         artifact["pathFingerprint"],
-        "synthetic:path:sup-wsus-health"
+        "synthetic:path:sha256.v1:f7c7d7244f6e05a5e6d0ef2431abaf3123362d6bcfaed2d6b39008f69e541e7b"
     );
-    assert_eq!(artifact["rotationLineageHandle"], "sup-wsus-health");
+    assert_eq!(artifact["rotationLineageHandle"], "synthetic:lineage:sha256.v1:3850e8bdba95c779ae0dfe9df0ada110e81d5887594c0ce5a154a15d5e04ab2b");
     assert_eq!(artifact["state"], "skipped");
     assert_eq!(artifact["family"], "softwareUpdatePoint");
     assert!(!artifact["parserEligible"]
@@ -1762,8 +1880,14 @@ fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() 
         .expect("requests")
         .is_empty());
 
+    let mut manifest = manifest_value(&manifest_json);
+    let generic_artifact_id = synthetic_identity("artifact", 5);
+    manifest["artifacts"][0]["artifactId"] = Value::String(generic_artifact_id.clone());
+    let generic = assess_server_intake(&serialize_manifest(&manifest), &payloads)
+        .expect("a synthetic artifact ID is structural, not a catalog entry");
+    assert_eq!(generic.artifacts[0].artifact_id, generic_artifact_id);
+
     for (field, replacement) in [
-        ("artifactId", "free-form-wsus-artifact"),
         ("sourceId", "free-form-wsus-source"),
         ("sourceKind", "structuredSupplement"),
         ("originalBasename", "WSUSHealth.json"),
@@ -1773,7 +1897,7 @@ fn server_intake_admits_only_the_catalogued_optional_wsus_supplement_contract() 
         assert_eq!(
             assess_server_intake(&serialize_manifest(&manifest), &payloads),
             Err(SccmServerIntakeError::InvalidArtifact),
-            "{field} must remain in the frozen WSUS supplemental vocabulary"
+            "{field} must remain bound to the catalogued WSUS supplemental contract"
         );
     }
 
@@ -1816,7 +1940,7 @@ fn wsus_supplement_expected_coverage_uses_only_serialized_fields() {
 }
 
 #[test]
-fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
+fn server_intake_rejects_wsus_supplement_malformed_provenance() {
     type ManifestMutation = (&'static str, fn(&mut Value));
 
     let (manifest_json, payloads) = load_bundle("supplemental-wsus-skipped");
@@ -1834,13 +1958,13 @@ fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
             manifest["artifacts"][0]["workflowSubject"]["role"] =
                 Value::String("distributionPoint".to_owned());
         }),
-        ("producer host rebound", |manifest| {
+        ("producer host malformed", |manifest| {
             manifest["artifacts"][0]["producerHostHandle"] =
-                Value::String("synthetic:host:mp-01".to_owned());
+                Value::String("synthetic:host:wsus-x".to_owned());
         }),
-        ("subject handle rebound", |manifest| {
+        ("subject handle malformed", |manifest| {
             manifest["artifacts"][0]["workflowSubject"]["instanceHandle"] =
-                Value::String("synthetic:subject:dp-01".to_owned());
+                Value::String("synthetic:subject:sup-x".to_owned());
         }),
         ("source version omitted", |manifest| {
             manifest["artifacts"][0]
@@ -1848,13 +1972,12 @@ fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
                 .expect("artifact is an object")
                 .remove("sourceVersion");
         }),
-        ("path fingerprint substituted", |manifest| {
+        ("path fingerprint malformed", |manifest| {
             manifest["artifacts"][0]["configuredPathProvenance"]["pathFingerprint"] =
-                Value::String("synthetic:path:site-sup-control".to_owned());
+                Value::String("synthetic:path:sup".to_owned());
         }),
-        ("rotation lineage substituted", |manifest| {
-            manifest["artifacts"][0]["rotation"]["lineageId"] =
-                Value::String("sup-sync-lab".to_owned());
+        ("rotation lineage malformed", |manifest| {
+            manifest["artifacts"][0]["rotation"]["lineageId"] = Value::String("sup".to_owned());
         }),
     ];
 
@@ -1871,7 +1994,7 @@ fn server_intake_rejects_wsus_supplement_cross_tuple_mutations() {
 
     assert!(
         unexpected.is_empty(),
-        "WSUS supplemental tuple mutations must fail closed:\n{}",
+        "WSUS supplemental malformed provenance must fail closed:\n{}",
         unexpected.join("\n")
     );
 }
@@ -1945,33 +2068,6 @@ fn server_intake_accepts_profile_validated_production_wsus_tuple_with_opaque_pro
     assert_eq!(artifact["workflowSubjectRole"], "softwareUpdatePoint");
     assert_eq!(artifact["sourceVersion"], "5.00.9999.9999");
     assert_eq!(artifact["state"], "skipped");
-}
-
-#[test]
-fn server_intake_rejects_opaque_future_source_ids_in_synthetic_fixtures() {
-    let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
-    let mut manifest = manifest_value(&manifest_json);
-    manifest["artifacts"][0]["sourceId"] =
-        Value::String(opaque_handle("cmtraceopen.source.sha256.v1:", 77));
-
-    assert_eq!(
-        assess_server_intake(&serialize_manifest(&manifest), &payloads),
-        Err(SccmServerIntakeError::InvalidArtifact),
-        "synthetic fixtures must use the frozen public source vocabulary"
-    );
-}
-
-#[test]
-fn server_intake_rejects_identity_bearing_unsupported_public_provenance() {
-    for (field, marker) in [
-        ("sourceId", "realuser-example"),
-        ("sourceKind", "RealUser"),
-        ("originalBasename", "RealUser.log"),
-    ] {
-        assert_unsafe_mutation_is_rejected("unsupported-db-supplement", marker, |manifest, _| {
-            manifest["artifacts"][0][field] = Value::String(marker.to_owned());
-        });
-    }
 }
 
 #[test]
@@ -2352,7 +2448,7 @@ fn server_manifest_v1_retains_safe_nested_extensions_without_interpreting_them()
         "value": extension_value,
     }]);
     assert_eq!(public["privacyExtensions"], expected);
-    let artifact = artifact_json(&public, "dp-dist-current");
+    let artifact = artifact_json(&public, "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6");
     assert_eq!(artifact["workflowSubjectExtensions"], expected);
     assert_eq!(artifact["configuredPathProvenanceExtensions"], expected);
     assert_eq!(artifact["rotationExtensions"], expected);
@@ -2588,21 +2684,6 @@ fn server_intake_rejects_future_role_artifacts_missing_from_topology() {
 }
 
 #[test]
-fn server_intake_rejects_hashed_future_roles_in_synthetic_fixtures() {
-    let (manifest_json, _) = load_bundle("unsupported-db-supplement");
-    let mut manifest = manifest_value(&manifest_json);
-    let future_role = opaque_handle("cmtraceopen.role.sha256.v1:", 42);
-    manifest["topology"]["rolesObserved"] = json!(["managementPoint", future_role]);
-    manifest["artifacts"][0]["producerRole"] = Value::String(future_role);
-
-    assert_eq!(
-        assess_server_intake(&serialize_manifest(&manifest), &[]),
-        Err(SccmServerIntakeError::InvalidTopology),
-        "synthetic fixtures keep the finite committed role vocabulary"
-    );
-}
-
-#[test]
 fn server_intake_production_original_path_must_be_redacted_or_opaque() {
     let (manifest_json, payloads) = bounded_manifest(1, 4_096);
     let mut arbitrary = manifest_value(&manifest_json);
@@ -2637,10 +2718,8 @@ fn server_intake_expected_oracle_has_no_unhandled_contract_keys() {
         "configuredPathProvenance",
         "coverage",
         "crossBundleArtifactIdReuseAllowed",
-        "databaseOrRoleFinding",
         "defaultCandidateInterpretation",
         "deterministicEvidenceIds",
-        "eligibleForRoleReducer",
         "evidence",
         "forbiddenConclusion",
         "lineageId",
@@ -2653,7 +2732,6 @@ fn server_intake_expected_oracle_has_no_unhandled_contract_keys() {
         "privacy",
         "rawByteCountedBeforeDecoding",
         "requiredSourceFailure",
-        "retainedUnclassifiedArtifactIds",
         "roleHealthFinding",
         "roleInference",
         "rolesObserved",
@@ -2701,27 +2779,6 @@ fn server_intake_expected_oracles_do_not_claim_native_collection_acceptance() {
         assert!(
             forbidden_native_claims.is_disjoint(&asserted_collision_keys),
             "{scenario}: pure parser oracles cannot claim native collection acceptance"
-        );
-    }
-}
-
-#[test]
-fn server_intake_rejects_ambiguous_retained_unknown_rotations() {
-    for (kind, value) in [
-        ("future", Value::Null),
-        ("current", Value::String("unexpected".to_owned())),
-        ("none", Value::String("unexpected".to_owned())),
-        ("timestamped", Value::String("not-a-timestamp".to_owned())),
-    ] {
-        let (manifest_json, payloads) = load_bundle("unsupported-db-supplement");
-        let mut manifest = manifest_value(&manifest_json);
-        manifest["artifacts"][0]["rotation"]["kind"] = Value::String(kind.to_owned());
-        manifest["artifacts"][0]["rotation"]["value"] = value;
-
-        assert_eq!(
-            assess_server_intake(&serialize_manifest(&manifest), &payloads),
-            Err(SccmServerIntakeError::InvalidArtifact),
-            "retained unknown evidence needs an unambiguous rotation identity"
         );
     }
 }

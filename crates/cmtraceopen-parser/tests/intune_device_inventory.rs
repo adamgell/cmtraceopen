@@ -1,7 +1,7 @@
 use cmtraceopen_parser::{
     intune::device::windows::inventory::{
         detect_dialect, frame_logical_records, parse_content, parse_lines,
-        DeviceInventoryLogDialect,
+        DeviceInventoryLogDialect, LogicalRecordSegment, MAX_LOGICAL_RECORD_BYTES,
     },
     models::log_entry::{
         LogEntry, LogFormat, ParseQuality, ParserImplementation, ParserKind, ParserProvenance,
@@ -18,6 +18,12 @@ const HARVESTER: &str = "7/30/2026 6:00:53 AM [Information] Completed harvesting
 const ADAPTOR: &str = "[Thu Jul 30 13:05:01 2026][8604] - Adapter result:\n{\"Status\":200,\"HResult\":\"0x00000000\",\"Data\":{\"Example\":\"value\"}}\n[Thu Jul 30 13:05:03 2026][8604] - Completed action with HRESULT 0x0, MI_Result 0x0.";
 
 const ROTATION_FAILURE: &str = "2026-07-30T13:05:01.1234567-04:00 Failed to rotate Device Inventory log.\nSystem.IO.IOException: The process cannot access the file.\n   at Synthetic.Inventory.Rotate()";
+
+const PARTIAL_ROTATION_FAILURE_HEADERS: [&str; 3] = [
+    "2026-07-30T13:05:01.1234567-04:00 Failed to rollback transaction.",
+    "2026-07-30T13:05:01.1234567-04:00 Rotation failedover to backup.",
+    "2026-07-30T13:05:01.1234567-04:00 Failed to rotateCredentials.",
+];
 
 #[test]
 fn parses_harvester_headers_with_direct_severity_mapping() {
@@ -123,6 +129,59 @@ fn rejects_generic_iso_timestamp_content_as_rotation_failure() {
 }
 
 #[test]
+fn generic_failure_prefixes_do_not_identify_rotation_failures() {
+    let generic_failures = [
+        "2026-07-30T13:05:01.1234567-04:00 Failed to load configuration.",
+        "2026-07-30T13:05:01.1234567-04:00 Unhandled exception in service.",
+    ];
+
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in generic_failures {
+            assert_eq!(
+                detect_dialect(path, content),
+                None,
+                "generic failure prefix must not identify rotation for {path}: {content}"
+            );
+        }
+    }
+}
+
+#[test]
+fn partial_rotation_phrases_do_not_identify_rotation_failures() {
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in PARTIAL_ROTATION_FAILURE_HEADERS {
+            assert_eq!(
+                detect_dialect(path, content),
+                None,
+                "partial rotation phrase must not identify rotation for {path}: {content}"
+            );
+        }
+    }
+}
+
+#[test]
+fn registered_rotation_failure_phrases_remain_detectable() {
+    let registered_failures = [
+        "2026-07-30T13:05:01.1234567-04:00 Failed to rotate Device Inventory log.",
+        "2026-07-30T13:05:01.1234567-04:00 Device Inventory rotation failed.",
+        "2026-07-30T13:05:01.1234567-04:00 Failed to roll Device Inventory log.",
+        "2026-07-30T13:05:01.1234567-04:00 FAILED TO ROTATE",
+        "2026-07-30T13:05:01.1234567-04:00 Device Inventory RoTaTiOn FaIlEd   ",
+        "2026-07-30T13:05:01.1234567-04:00 FAILED TO ROLL\tbefore archive.",
+    ];
+
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in registered_failures {
+            assert_eq!(
+                detect_dialect(path, content),
+                Some(DeviceInventoryLogDialect::RotationFailure),
+                "registered rotation phrase must remain detectable for {path}: {content}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_device_inventory_selection_without_a_dialect_degrades_instead_of_panicking() {
     // A Device Inventory selection normally carries the dialect detection
     // resolved. One that does not is malformed, not impossible, and the
@@ -151,10 +210,21 @@ fn detects_rotation_failure_from_exception_evidence_without_the_literal_wording(
     // beneath an ISO-8601 header is sufficient evidence on its own.
     let other_wording = "2026-07-30T13:05:01.1234567-04:00 Could not roll the inventory log over.\nSystem.UnauthorizedAccessException: Access to the path is denied.\n   at Synthetic.Inventory.Rotate()";
 
-    assert_eq!(
-        detect_dialect("unrelated.log", other_wording),
-        Some(DeviceInventoryLogDialect::RotationFailure)
-    );
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        assert_eq!(
+            detect_dialect(path, other_wording),
+            Some(DeviceInventoryLogDialect::RotationFailure)
+        );
+
+        let (result, selection) =
+            parse_with_dispatcher(other_wording, path, other_wording.len() as u64);
+        assert_eq!(selection.parser, ParserKind::IntuneDeviceInventory);
+        assert_eq!(
+            selection.specialization,
+            Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure)
+        );
+        assert_eq!(result.entries[0].severity, Severity::Error);
+    }
 }
 
 #[test]
@@ -190,6 +260,44 @@ fn rotation_severity_ignores_a_generic_keyword_in_a_continuation() {
 
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].severity, Severity::Info);
+}
+
+#[test]
+fn generic_failure_prefixes_do_not_claim_rotation_severity() {
+    let generic_failures = [
+        "2026-07-30T13:05:01.1234567-04:00 Failed to load configuration.",
+        "2026-07-30T13:05:01.1234567-04:00 Unhandled exception in service.",
+    ];
+
+    for content in generic_failures {
+        let (entries, parse_errors) = parse_content(
+            "IntuneDeviceInventory.log",
+            content,
+            DeviceInventoryLogDialect::RotationFailure,
+        );
+
+        assert_eq!(parse_errors, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].severity, Severity::Info);
+    }
+}
+
+#[test]
+fn partial_rotation_phrases_do_not_claim_rotation_severity() {
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in PARTIAL_ROTATION_FAILURE_HEADERS {
+            let (entries, parse_errors) =
+                parse_content(path, content, DeviceInventoryLogDialect::RotationFailure);
+
+            assert_eq!(parse_errors, 0);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(
+                entries[0].severity,
+                Severity::Info,
+                "partial rotation phrase must stay informational for {path}: {content}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -286,7 +394,11 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
     let next_header = "7/30/2026 6:00:55 AM [Warning] Second record.";
     let whole_file_content = format!("{header}\n{continuation}\n{next_header}");
 
-    let first = frame_logical_records(DeviceInventoryLogDialect::Harvester, None, &[header], 1024);
+    let first = frame_logical_records(
+        DeviceInventoryLogDialect::Harvester,
+        None,
+        &[LogicalRecordSegment::LineStart(header)],
+    );
     assert!(
         first.completed_records.is_empty(),
         "a harvester header must stay pending until its continuations are known"
@@ -295,8 +407,10 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
     let second = frame_logical_records(
         DeviceInventoryLogDialect::Harvester,
         first.pending_record,
-        &[continuation, next_header],
-        1024,
+        &[
+            LogicalRecordSegment::LineStart(continuation),
+            LogicalRecordSegment::LineStart(next_header),
+        ],
     );
 
     // Each framed record is parsed on its own, exactly as tailing parses it.
@@ -333,6 +447,174 @@ fn harvester_continuations_frame_incrementally_the_way_they_parse() {
         incremental[0].1,
         "First recognized record.\ntrailing continuation"
     );
+}
+
+#[test]
+fn logical_record_limit_is_exact_and_lossless() {
+    let header = "7/30/2026 6:00:54 AM [Information] bounded:";
+    let exact_padding = "x".repeat(MAX_LOGICAL_RECORD_BYTES - header.len() - 1);
+    let exact_text = format!("{header}\n{exact_padding}");
+    let exact = frame_logical_records(
+        DeviceInventoryLogDialect::Harvester,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&exact_padding),
+        ],
+    );
+
+    assert!(exact.completed_records.is_empty());
+    assert_eq!(exact.pending_record.as_deref(), Some(exact_text.as_str()));
+    assert_eq!(
+        exact.pending_record.as_ref().unwrap().len(),
+        MAX_LOGICAL_RECORD_BYTES
+    );
+    assert_eq!(exact.overflow_count, 0);
+
+    let overflow_padding = format!("{exact_padding}Z");
+    let overflow_text = format!("{header}\n{overflow_padding}");
+    let overflow = frame_logical_records(
+        DeviceInventoryLogDialect::Harvester,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&overflow_padding),
+        ],
+    )
+    .flush_pending();
+    let chunks: Vec<&str> = overflow
+        .completed_records
+        .iter()
+        .map(|record| record.content.as_str())
+        .collect();
+
+    assert_eq!(overflow.overflow_count, 1);
+    assert!(chunks
+        .iter()
+        .all(|chunk| chunk.len() <= MAX_LOGICAL_RECORD_BYTES));
+    assert_eq!(chunks.concat(), overflow_text);
+    assert!(chunks.concat().ends_with('Z'));
+}
+
+#[test]
+fn logical_record_split_is_utf8_safe_and_preserves_every_byte() {
+    let header = "[Thu Jul 30 13:05:01 2026][8604] - UTF-8 boundary:";
+    let bytes_before_emoji = MAX_LOGICAL_RECORD_BYTES - 1;
+    let padding = "x".repeat(bytes_before_emoji - header.len() - 1);
+    let continuation = format!("{padding}🧪TAIL-SENTINEL");
+    let original = format!("{header}\n{continuation}");
+    let framed = frame_logical_records(
+        DeviceInventoryLogDialect::InventoryAdaptor,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&continuation),
+        ],
+    )
+    .flush_pending();
+    let chunks: Vec<&str> = framed
+        .completed_records
+        .iter()
+        .map(|record| record.content.as_str())
+        .collect();
+
+    assert_eq!(framed.overflow_count, 1);
+    assert!(chunks
+        .iter()
+        .all(|chunk| chunk.len() <= MAX_LOGICAL_RECORD_BYTES));
+    assert_eq!(chunks.concat().as_bytes(), original.as_bytes());
+    assert!(chunks.concat().ends_with("🧪TAIL-SENTINEL"));
+}
+
+#[test]
+fn every_dialect_bounds_oversized_single_lines_and_keeps_parse_entry_points_equal() {
+    let cases = [
+        (
+            DeviceInventoryLogDialect::Harvester,
+            "7/30/2026 6:00:54 AM [Error] HARVESTER-START",
+            Severity::Error,
+        ),
+        (
+            DeviceInventoryLogDialect::InventoryAdaptor,
+            "[Thu Jul 30 13:05:01 2026][8604] - ADAPTOR-START",
+            Severity::Info,
+        ),
+        (
+            DeviceInventoryLogDialect::RotationFailure,
+            "2026-07-30T13:05:01.1234567-04:00 Failed to rotate ROTATION-START",
+            Severity::Error,
+        ),
+    ];
+
+    for (dialect, header, expected_severity) in cases {
+        let oversized = format!(
+            "MULTILINE-START-{}🧪-{}-TAIL-SENTINEL",
+            "x".repeat(MAX_LOGICAL_RECORD_BYTES),
+            match dialect {
+                DeviceInventoryLogDialect::Harvester => "HARVESTER",
+                DeviceInventoryLogDialect::InventoryAdaptor => "ADAPTOR",
+                DeviceInventoryLogDialect::RotationFailure => "ROTATION",
+            }
+        );
+        let next_header = match dialect {
+            DeviceInventoryLogDialect::Harvester => "7/30/2026 6:00:55 AM [Warning] NEXT-RECORD",
+            DeviceInventoryLogDialect::InventoryAdaptor => {
+                "[Thu Jul 30 13:05:02 2026][8604] - NEXT-RECORD"
+            }
+            DeviceInventoryLogDialect::RotationFailure => {
+                "2026-07-30T13:05:02.1234567-04:00 NEXT-RECORD"
+            }
+        };
+        let content = format!("{header}\n{oversized}\n{next_header}");
+        let lines: Vec<&str> = content.lines().collect();
+        let (from_content, content_errors) = parse_content("Device.log", &content, dialect);
+        let (from_lines, line_errors) = parse_lines("Device.log", &lines, dialect);
+
+        assert_eq!(content_errors, 1, "unexpected error count for {dialect:?}");
+        assert_eq!(content_errors, line_errors);
+        assert_eq!(projection(&from_content), projection(&from_lines));
+        assert_eq!(from_content[0].line_number, 1);
+        assert_eq!(from_content[0].severity, expected_severity);
+        assert_eq!(from_content.last().unwrap().line_number, 3);
+        assert!(from_content
+            .iter()
+            .any(|entry| entry.message.contains("TAIL-SENTINEL")));
+        assert!(from_content
+            .iter()
+            .all(|entry| entry.message.len() <= MAX_LOGICAL_RECORD_BYTES));
+    }
+}
+
+#[test]
+fn framing_never_builds_an_oversized_pending_record_before_splitting() {
+    let header = "[Thu Jul 30 13:05:01 2026][8604] - PEAK-START";
+    let continuation = format!(
+        "HUGE-LINE-START-{}🧪-HUGE-LINE-TAIL",
+        "x".repeat(MAX_LOGICAL_RECORD_BYTES * 3)
+    );
+    let original = format!("{header}\n{continuation}");
+    let framed = frame_logical_records(
+        DeviceInventoryLogDialect::InventoryAdaptor,
+        None,
+        &[
+            LogicalRecordSegment::LineStart(header),
+            LogicalRecordSegment::LineStart(&continuation),
+        ],
+    )
+    .flush_pending();
+    let reconstructed = framed
+        .completed_records
+        .iter()
+        .map(|record| record.content.as_str())
+        .collect::<String>();
+
+    assert!(framed.max_pending_bytes_observed <= MAX_LOGICAL_RECORD_BYTES);
+    assert!(framed
+        .completed_records
+        .iter()
+        .all(|record| record.content.len() <= MAX_LOGICAL_RECORD_BYTES));
+    assert_eq!(reconstructed.as_bytes(), original.as_bytes());
+    assert!(reconstructed.ends_with("🧪-HUGE-LINE-TAIL"));
 }
 
 /// Compare entries by the fields the parse contract owns.
@@ -428,4 +710,48 @@ fn dispatcher_keeps_path_only_and_generic_timestamp_collisions_out_of_device_inv
         ParserImplementation::GenericTimestamped
     );
     assert_eq!(timestamped.parser_selection.specialization, None);
+}
+
+#[test]
+fn dispatcher_keeps_generic_failure_prefixes_out_of_device_inventory() {
+    let generic_failures = [
+        "2026-07-30T13:05:01.1234567-04:00 Failed to load configuration.\n2026-07-30T13:05:02.1234567-04:00 Completed an unrelated service operation.",
+        "2026-07-30T13:05:01.1234567-04:00 Unhandled exception in service.\n2026-07-30T13:05:02.1234567-04:00 Completed an unrelated service operation.",
+    ];
+
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for content in generic_failures {
+            let (result, selection) = parse_with_dispatcher(content, path, content.len() as u64);
+
+            assert_eq!(selection.parser, ParserKind::Timestamped);
+            assert_eq!(
+                selection.implementation,
+                ParserImplementation::GenericTimestamped
+            );
+            assert_eq!(selection.specialization, None);
+            assert_eq!(result.parser_selection.specialization, None);
+            assert_eq!(result.entries.len(), 2);
+        }
+    }
+}
+
+#[test]
+fn dispatcher_keeps_partial_rotation_phrases_out_of_device_inventory() {
+    for path in ["unrelated.log", "IntuneDeviceInventory.log"] {
+        for header in PARTIAL_ROTATION_FAILURE_HEADERS {
+            let content = format!(
+                "{header}\n2026-07-30T13:05:02.1234567-04:00 Completed an unrelated service operation."
+            );
+            let (result, selection) = parse_with_dispatcher(&content, path, content.len() as u64);
+
+            assert_eq!(selection.parser, ParserKind::Timestamped);
+            assert_eq!(
+                selection.implementation,
+                ParserImplementation::GenericTimestamped
+            );
+            assert_eq!(selection.specialization, None);
+            assert_eq!(result.parser_selection.specialization, None);
+            assert_eq!(result.entries.len(), 2);
+        }
+    }
 }

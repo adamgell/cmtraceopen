@@ -1,0 +1,71 @@
+{
+  "scenario": "incomplete-event-channel-coverage",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "available"
+    },
+    {
+      "artifactId": "store-agent",
+      "status": "permissionDenied"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "unknown",
+      "familyBasis": "unvalidated",
+      "state": "insufficientEvidence",
+      "action": "install",
+      "executionContext": "unknown",
+      "intent": "unknown",
+      "storeProductId": "9WZSYNTH0001",
+      "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+      "displayName": null,
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "lastConfirmedPhase": "staging",
+      "confidence": "low",
+      "errorHex": null,
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": "Collect the AppX deployment scope or package provisioning state to establish the installer family",
+      "evidence": [
+        "ime-log:2",
+        "appx-operational:1",
+        "appx-operational:2"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-installer-family-unknown",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [
+        "appx-operational:1",
+        "appx-operational:2",
+        "ime-log:2"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "store-evidence-coverage-gap",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "store-agent"
+      ]
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "a staged package with no scope evidence has an explicitly unknown installer family"
+  ]
+}

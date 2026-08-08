@@ -1,0 +1,40 @@
+{ "syntheticFixture": "SYNTHETIC FIXTURE - synthetic Intune compliance evidence, no real device data",
+  "complianceInputVersion": 1,
+  "kind": "deviceContext",
+  "records": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "ctx-1",
+          "sourceArtifactId": "device-context"
+        },
+        "provenance": {
+          "sourceKind": "suppliedFact",
+          "sourceArtifactId": "device-context",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T12:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T12:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T12:00:00Z",
+        "sensitivity": "sensitive",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "deviceKey": "synthetic-device-0001",
+      "tenantKey": "synthetic-tenant-0001",
+      "enrollmentId": "synthetic-enrollment-0001",
+      "windowsBuild": "10.0.26100.1742",
+      "activeUserKey": null,
+      "userSessionPresent": false,
+      "namedData": []
+    }
+  ]
+}

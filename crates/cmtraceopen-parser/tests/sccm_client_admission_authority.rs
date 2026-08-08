@@ -44,6 +44,7 @@ fn public_bytes_only_facade_uses_intake_bound_content_authority() {
             path_fingerprint: Some("synthetic-policy-approved".to_owned()),
             rotation_lineage: None,
             relative_path: Some("evidence/client-policy-agent/current/PolicyAgent.log".to_owned()),
+            task_sequence_provenance: None,
             fragment_complete: Some(true),
             declared_byte_length: Some(expected_length),
             content_sha256: Some(expected_digest.clone()),

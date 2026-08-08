@@ -2,13 +2,13 @@
   "artifactRequests": [],
   "coverage": [
     {
-      "artifactId": "contradictory-provider-current",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "producerRole": "provider",
       "sourceId": "server-provider",
       "sourceVersion": "5.00.TEST",
       "state": "captured",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "crossSideCausalClaims": [],
@@ -21,43 +21,43 @@
         "coverageGaps": [],
         "evidence": [
           {
-            "artifactId": "contradictory-provider-current",
-            "entryId": "contradictory-provider-current:1-1",
+            "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+            "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:1-1",
             "lineEnd": 1,
             "lineStart": 1
           },
           {
-            "artifactId": "contradictory-provider-current",
-            "entryId": "contradictory-provider-current:2-2",
+            "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+            "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:2-2",
             "lineEnd": 2,
             "lineStart": 2
           },
           {
-            "artifactId": "contradictory-provider-current",
-            "entryId": "contradictory-provider-current:3-3",
+            "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+            "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:3-3",
             "lineEnd": 3,
             "lineStart": 3
           },
           {
-            "artifactId": "contradictory-provider-current",
-            "entryId": "contradictory-provider-current:4-4",
+            "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+            "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:4-4",
             "lineEnd": 4,
             "lineStart": 4
           },
           {
-            "artifactId": "contradictory-provider-current",
-            "entryId": "contradictory-provider-current:5-5",
+            "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+            "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:5-5",
             "lineEnd": 5,
             "lineStart": 5
           },
           {
-            "artifactId": "contradictory-provider-current",
-            "entryId": "contradictory-provider-current:6-6",
+            "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+            "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:6-6",
             "lineEnd": 6,
             "lineStart": 6
           }
         ],
-        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:90053a39747d875b371d60ecddc5d814d7f83b83d8b2267db0229615824a50eb",
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:11a988d254baf823819e3b73d3acb72da59b700dabfad178a8e9801adcf90abe",
         "nextArtifacts": [],
         "phase": "providerAndAdminService",
         "role": "provider",
@@ -67,8 +67,8 @@
           {
             "kind": "observedFailure",
             "reference": {
-              "artifactId": "contradictory-provider-current",
-              "entryId": "contradictory-provider-current:6-6",
+              "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+              "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:6-6",
               "lineEnd": 6,
               "lineStart": 6
             }
@@ -78,11 +78,11 @@
       },
       "lastSuccessfulPhase": "recordOutcome",
       "layer": "provider",
-      "producerHostHandle": "synthetic:host:provider-01",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
       "sourceId": "server-provider",
       "sourceVersion": "5.00.TEST",
-      "subjectId": "provider:cmtraceopen.request.sha256.v1:e15a4cfebaf90cdd88c82b9b3aac5d8d046b083b42b751bbbad8aad4de4c0712:cmtraceopen.operation.sha256.v1:5c85529b2d5209d5fab67a4624f312b55977b53339770b99628ef6d00f339a3a:synthetic:host:provider-01:synthetic:subject:provider-01",
-      "workflowSubjectHandle": "synthetic:subject:provider-01"
+      "subjectId": "provider:cmtraceopen.request.sha256.v1:e15a4cfebaf90cdd88c82b9b3aac5d8d046b083b42b751bbbad8aad4de4c0712:cmtraceopen.operation.sha256.v1:5c85529b2d5209d5fab67a4624f312b55977b53339770b99628ef6d00f339a3a:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "profiles": [
@@ -114,7 +114,7 @@
       "coverageGapArtifactIds": [],
       "key": {
         "confidence": "low",
-        "endpointHandle": "synthetic:subject:provider-01",
+        "endpointHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
         "extractionProfile": {
           "configmgrVersionPrefixes": [
             "5.00.TEST"
@@ -127,7 +127,7 @@
           ]
         },
         "operationHandle": "cmtraceopen.operation.sha256.v1:5c85529b2d5209d5fab67a4624f312b55977b53339770b99628ef6d00f339a3a",
-        "producerHostHandle": "synthetic:host:provider-01",
+        "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
         "requestHandle": "cmtraceopen.request.sha256.v1:e15a4cfebaf90cdd88c82b9b3aac5d8d046b083b42b751bbbad8aad4de4c0712"
       },
       "lastSuccessfulPhase": "recordOutcome",
@@ -138,13 +138,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "contradictory-provider-current",
-              "entryId": "contradictory-provider-current:1-1",
+              "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+              "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:1-1",
               "lineEnd": 1,
               "lineStart": 1
             }
           ],
-          "observationId": "contradictory-provider-current:1-1-01",
+          "observationId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:1-1-01",
           "phase": "receive",
           "terminal": false
         },
@@ -152,13 +152,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "contradictory-provider-current",
-              "entryId": "contradictory-provider-current:2-2",
+              "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+              "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:2-2",
               "lineEnd": 2,
               "lineStart": 2
             }
           ],
-          "observationId": "contradictory-provider-current:2-2-02",
+          "observationId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:2-2-02",
           "phase": "authenticateOrAuthorize",
           "terminal": false
         },
@@ -166,13 +166,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "contradictory-provider-current",
-              "entryId": "contradictory-provider-current:3-3",
+              "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+              "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:3-3",
               "lineEnd": 3,
               "lineStart": 3
             }
           ],
-          "observationId": "contradictory-provider-current:3-3-03",
+          "observationId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:3-3-03",
           "phase": "executeProviderOperation",
           "terminal": false
         },
@@ -180,13 +180,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "contradictory-provider-current",
-              "entryId": "contradictory-provider-current:4-4",
+              "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+              "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:4-4",
               "lineEnd": 4,
               "lineStart": 4
             }
           ],
-          "observationId": "contradictory-provider-current:4-4-04",
+          "observationId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:4-4-04",
           "phase": "respond",
           "terminal": false
         },
@@ -194,13 +194,13 @@
           "disposition": "succeeded",
           "evidence": [
             {
-              "artifactId": "contradictory-provider-current",
-              "entryId": "contradictory-provider-current:5-5",
+              "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+              "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:5-5",
               "lineEnd": 5,
               "lineStart": 5
             }
           ],
-          "observationId": "contradictory-provider-current:5-5-05",
+          "observationId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:5-5-05",
           "phase": "recordOutcome",
           "terminal": true
         },
@@ -208,13 +208,13 @@
           "disposition": "failed",
           "evidence": [
             {
-              "artifactId": "contradictory-provider-current",
-              "entryId": "contradictory-provider-current:6-6",
+              "artifactId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905",
+              "entryId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:6-6",
               "lineEnd": 6,
               "lineStart": 6
             }
           ],
-          "observationId": "contradictory-provider-current:6-6-06",
+          "observationId": "synthetic:artifact:sha256.v1:45060921b9a4f6e6d7bbfa664ff90e86d93ca49b5d2ff13d7b34c90e567db905:6-6-06",
           "phase": "recordOutcome",
           "terminal": true
         }
@@ -226,7 +226,7 @@
       "terminalEvidence": true,
       "timestampOrdering": "usable",
       "topologyCompatibility": "exact",
-      "transactionId": "provider:cmtraceopen.request.sha256.v1:e15a4cfebaf90cdd88c82b9b3aac5d8d046b083b42b751bbbad8aad4de4c0712:cmtraceopen.operation.sha256.v1:5c85529b2d5209d5fab67a4624f312b55977b53339770b99628ef6d00f339a3a:synthetic:host:provider-01:synthetic:subject:provider-01"
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:e15a4cfebaf90cdd88c82b9b3aac5d8d046b083b42b751bbbad8aad4de4c0712:cmtraceopen.operation.sha256.v1:5c85529b2d5209d5fab67a4624f312b55977b53339770b99628ef6d00f339a3a:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
     }
   ],
   "workflow": "providerAndAdminService"

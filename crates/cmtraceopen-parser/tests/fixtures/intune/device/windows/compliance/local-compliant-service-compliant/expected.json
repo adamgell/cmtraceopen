@@ -1,0 +1,66 @@
+{
+  "scenario": "local-compliant-service-compliant",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "compliant",
+    "rationale": "allEvaluatedSettingsCompliant"
+  },
+  "reporting": {
+    "state": "submitted",
+    "serviceFreshness": "fresh",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/bitlockerstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-1"
+      ]
+    },
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/firewallstatus",
+      "scope": "device",
+      "state": "compliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-2"
+      ]
+    }
+  ],
+  "access": [],
+  "findings": [
+    {
+      "findingId": "compliance-device-compliant",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "evt-1",
+        "evt-2"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a fresh, agreeing service record adds confidence but is not the source of the local verdict"
+  ],
+  "coverage": [
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "service-facts",
+      "status": "available"
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "store-win32-handoff-success",
+  "workload": "apps/windows/microsoft-store",
+  "description": "A Store-delivered Win32 package. AppX deployment evidence is absent by design and its absence is a coverage gap, not a failure; the installer's own outcome settles it.",
+  "artifacts": [
+    {
+      "artifactId": "ime-log",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension.log",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/ime-log/current/IntuneManagementExtension.log",
+      "bytesCopied": 679
+    },
+    {
+      "artifactId": "installer-outcome",
+      "family": "installer",
+      "sourceKind": "suppliedFact",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "installer-outcome.json",
+      "sanitizedSourcePath": null,
+      "detail": null,
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/installer-outcome/current/installer-outcome.json",
+      "bytesCopied": 1348
+    },
+    {
+      "artifactId": "appx-operational",
+      "family": "appxDeployment",
+      "sourceKind": "eventLog",
+      "captureState": "absent",
+      "encoding": "utf-8",
+      "originalBasename": null,
+      "sanitizedSourcePath": null,
+      "detail": "No AppX deployment activity exists for a Store-delivered Win32 package",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}
