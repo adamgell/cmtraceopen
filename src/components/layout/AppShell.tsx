@@ -37,6 +37,7 @@ import { useFileWatcher } from "../../hooks/use-file-watcher";
 import { useIntuneAnalysisProgress } from "../../workspaces/intune/use-intune-analysis-progress";
 import { useSysmonAnalysisProgress } from "../../workspaces/sysmon/use-sysmon-analysis-progress";
 import { useKeyboard } from "../../hooks/use-keyboard";
+import { useClipboardHistoryMirror } from "../../hooks/use-clipboard-history-mirror";
 import { useDragDrop } from "../../hooks/use-drag-drop";
 import { useFileAssociation } from "../../hooks/use-file-association";
 import { useFileAssociationPrompt } from "../../hooks/use-file-association-prompt";
@@ -292,6 +293,9 @@ export function AppShell() {
   useIntuneAnalysisProgress();
   useSysmonAnalysisProgress();
   useKeyboard();
+  // Re-write native WebView copies through the clipboard plugin so they
+  // register in Windows clipboard history (#520)
+  useClipboardHistoryMirror();
   useDragDrop();
   // Handle file path passed via OS file association at startup
   useFileAssociation();
