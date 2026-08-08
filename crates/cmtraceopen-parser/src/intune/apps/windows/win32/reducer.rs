@@ -720,6 +720,34 @@ fn sequenced_after(later: &SequencePoint<'_>, earlier: &SequencePoint<'_>) -> bo
     )
 }
 
+/// Sequence points of one transaction's enforcement records, precomputed so a
+/// detection record can be placed by *linkage* instead of by fold order.
+///
+/// Fold order falls back to (artifact id, record number) when any record lacks
+/// a trusted timestamp, and the cross-artifact half of that order is arbitrary.
+/// Deciding pre- versus post-enforcement from it would let the caller's
+/// artifact naming pick the diagnosis. These points let the detection arms ask
+/// the only honest questions: is this detection explicitly ordered after an
+/// enforcement record (or after a proven-successful completion), or explicitly
+/// before every enforcement record? Anything unprovable stays cited evidence.
+struct EnforcementLinkage<'a> {
+    /// Every record proving enforcement ran or was attempted.
+    enforcement: Vec<SequencePoint<'a>>,
+    /// The completions whose return code the table classifies as success.
+    success: Vec<SequencePoint<'a>>,
+}
+
+fn record_sequence_point(record: &PendingRecord) -> SequencePoint<'_> {
+    SequencePoint {
+        artifact_id: &record.artifact_id,
+        record_number: record.record_number,
+        normalized_utc: record
+            .timestamp
+            .as_ref()
+            .and_then(|timestamp| timestamp.normalized_utc.as_deref()),
+    }
+}
+
 /// Everything the fold over one transaction's records accumulates.
 struct Fold {
     /// Furthest in-flight state, resolved by [`pending_rank`]. Used only when
@@ -738,8 +766,6 @@ struct Fold {
     return_code: Option<IntuneErrorCode>,
     return_code_kind: Option<Win32ReturnCodeKind>,
     reboot_required: bool,
-    seen_enforcement: bool,
-    installer_succeeded: bool,
     unresolved_dependencies: BTreeSet<String>,
     failed_requirements: BTreeSet<String>,
     unknown_vocabulary: bool,
@@ -758,8 +784,6 @@ impl Fold {
             return_code: None,
             return_code_kind: None,
             reboot_required: false,
-            seen_enforcement: false,
-            installer_succeeded: false,
             unresolved_dependencies: BTreeSet::new(),
             failed_requirements: BTreeSet::new(),
             unknown_vocabulary: false,
@@ -872,6 +896,20 @@ fn resolve_outcome(fold: &Fold) -> OutcomeResolution {
             .cmp(&(right.artifact_id.as_str(), right.record_number))
     });
 
+    // `sequenced_after` mixes two incomparable grammars (same-artifact record
+    // order, cross-artifact trusted timestamps) and is therefore not
+    // transitive: a cycle can eliminate every candidate. An empty survivor set
+    // proves nothing final, so the contradiction stays conservative — and no
+    // candidate is reported superseded, because supersession requires an
+    // eliminator that itself survived.
+    if surviving.is_empty() {
+        return OutcomeResolution {
+            outcome: Win32Outcome::Conflicting,
+            local_outcome: None,
+            superseded_failures: Vec::new(),
+        };
+    }
+
     let mut superseded_failures: Vec<Win32SupersededFailure> = Vec::new();
     for candidate in (0..cleared.len())
         .filter(|&index| cleared[index].outcome.is_failure() && !survives(index))
@@ -929,11 +967,45 @@ fn reduce_transaction(
     degraded_coverage: bool,
 ) -> Win32Transaction {
     let ordered = order_records(indices, records);
-    let mut fold = Fold::new();
 
+    // Precomputed so the detection arms judge pre/post-enforcement by explicit
+    // linkage rather than by fold position (see [`EnforcementLinkage`]).
+    let linkage = EnforcementLinkage {
+        enforcement: ordered
+            .iter()
+            .map(|&index| &records[index])
+            .filter(|record| {
+                matches!(
+                    record.classification.signal,
+                    Win32Signal::EnforcementStarted
+                        | Win32Signal::EnforcementCommandFailed
+                        | Win32Signal::InstallerCompleted
+                )
+            })
+            .map(record_sequence_point)
+            .collect(),
+        success: ordered
+            .iter()
+            .map(|&index| &records[index])
+            .filter(|record| {
+                record.classification.signal == Win32Signal::InstallerCompleted
+                    && record.classification.error_code.as_ref().is_some_and(|code| {
+                        matches!(
+                            classify_return_code(&key, code, &options.return_codes),
+                            Win32ReturnCodeKind::Success
+                                | Win32ReturnCodeKind::SoftReboot
+                                | Win32ReturnCodeKind::HardReboot
+                        )
+                    })
+            })
+            .map(record_sequence_point)
+            .collect(),
+    };
+
+    let mut fold = Fold::new();
     for &index in &ordered {
         let record = &records[index];
-        apply_record(&mut fold, record, &key, options);
+        apply_record(&mut fold, record, &key, options, &linkage);
     }
 
     let resolution = resolve_outcome(&fold);
@@ -1078,6 +1150,7 @@ fn apply_record(
     record: &PendingRecord,
     key: &Win32TransactionKey,
     options: &Win32AnalysisOptions,
+    linkage: &EnforcementLinkage<'_>,
 ) {
     let classification = &record.classification;
     if classification.enforcement_shaped_but_unmatched {
@@ -1114,24 +1187,67 @@ fn apply_record(
             }
             fold.push_terminal(record, Win32Outcome::DependencyUnresolved);
         }
+        // Whether a detection verdict is pre- or post-enforcement is decided by
+        // explicit linkage against the transaction's enforcement records (see
+        // [`EnforcementLinkage`]), never by fold position: the fallback fold
+        // order across artifacts is canonical but arbitrary, and letting it
+        // pick the diagnosis would let the caller's artifact ids pick it. An
+        // unprovable position mints nothing — the record stays cited evidence
+        // and the transaction stays at whatever the provable records say, with
+        // a next-evidence request naming what would resolve it.
         Win32Signal::DetectionSatisfied => {
-            if !fold.seen_enforcement {
+            let point = record_sequence_point(record);
+            if linkage.enforcement.is_empty() {
+                // No enforcement was evidenced at all: the detection alone is
+                // the answer, and it says the app was already present.
                 fold.advance(Win32Phase::PreEnforcementDetection);
                 fold.push_terminal(record, Win32Outcome::DetectedBeforeEnforcement);
-            } else if fold.installer_succeeded {
+            } else if linkage
+                .success
+                .iter()
+                .any(|success| sequenced_after(&point, success))
+            {
                 fold.advance(Win32Phase::PostEnforcementDetection);
                 fold.push_terminal(record, Win32Outcome::Succeeded);
+            } else if linkage
+                .enforcement
+                .iter()
+                .any(|enforcement| sequenced_after(&point, enforcement))
+            {
+                // Proven post-enforcement, but not after a proven success:
+                // detected after an installer failure is a contradiction the
+                // evidence does not resolve. The reported return code stays
+                // the stronger claim; `push_installer_failed_but_detected`
+                // surfaces the conflict instead of silently picking a side.
+            } else if linkage
+                .enforcement
+                .iter()
+                .all(|enforcement| sequenced_after(enforcement, &point))
+            {
+                // Every enforcement record is explicitly ordered after this
+                // detection, so it provably preceded enforcement. The later
+                // enforcement result supersedes this candidate by the same
+                // linkage at resolution time.
+                fold.advance(Win32Phase::PreEnforcementDetection);
+                fold.push_terminal(record, Win32Outcome::DetectedBeforeEnforcement);
             }
-            // Detected after an installer failure is a contradiction the
-            // evidence does not resolve. The reported return code stays the
-            // stronger claim; `push_installer_failed_but_detected` surfaces the
-            // conflict instead of silently picking a side.
         }
         Win32Signal::DetectionNotSatisfied => {
-            if !fold.seen_enforcement {
+            let point = record_sequence_point(record);
+            if linkage.enforcement.is_empty() {
                 fold.advance(Win32Phase::PreEnforcementDetection);
-            } else if fold.installer_succeeded {
+            } else if linkage
+                .success
+                .iter()
+                .any(|success| sequenced_after(&point, success))
+            {
                 fold.push_terminal(record, Win32Outcome::InstalledNotDetected);
+            } else if linkage
+                .enforcement
+                .iter()
+                .all(|enforcement| sequenced_after(enforcement, &point))
+            {
+                fold.advance(Win32Phase::PreEnforcementDetection);
             }
         }
         Win32Signal::ContentUnavailable => {
@@ -1147,15 +1263,12 @@ fn apply_record(
             fold.push_terminal(record, Win32Outcome::ContentDeliveryFailed);
         }
         Win32Signal::EnforcementStarted => {
-            fold.seen_enforcement = true;
             fold.set_pending(Win32Outcome::Enforcing);
         }
         Win32Signal::EnforcementCommandFailed => {
-            fold.seen_enforcement = true;
             fold.push_terminal(record, Win32Outcome::EnforcementCommandFailed);
         }
         Win32Signal::InstallerCompleted => {
-            fold.seen_enforcement = true;
             apply_installer_completion(fold, record, key, options);
         }
         Win32Signal::RetryScheduled => {
@@ -1208,13 +1321,11 @@ fn apply_installer_completion(
     match kind {
         Win32ReturnCodeKind::Success => {
             fold.advance(Win32Phase::Enforcement);
-            fold.installer_succeeded = true;
             fold.reboot_required = false;
             fold.push_terminal(record, Win32Outcome::Succeeded);
         }
         Win32ReturnCodeKind::SoftReboot | Win32ReturnCodeKind::HardReboot => {
             fold.advance(Win32Phase::Enforcement);
-            fold.installer_succeeded = true;
             fold.reboot_required = true;
             fold.push_terminal(record, Win32Outcome::Succeeded);
         }
@@ -1999,6 +2110,104 @@ mod tests {
                 Win32Outcome::InstallerReportedFailure
             );
         }
+    }
+
+    #[test]
+    fn a_sequencing_cycle_across_artifacts_stays_conservative_instead_of_panicking() {
+        // `sequenced_after` mixes two incomparable grammars -- same-artifact
+        // record order and cross-artifact trusted timestamps -- so it is not
+        // transitive. A clock rollback inside one artifact plus a third
+        // statement between the two times builds a 3-cycle in which every
+        // terminal candidate has another candidate explicitly ordered after
+        // it. Elimination must not empty the set and panic; per ADR-003 the
+        // unresolvable contradiction is reported as Conflicting.
+        let aw = Win32SourceInput::captured(
+            "aw",
+            "AppWorkload.log",
+            [
+                record_at("10:16:05.000+000", "7-31-2026", &format!("[Win32App] Installation is done for app with id: {APP}, deployment type id: {DT}, exit code: 0"), 5),
+                record_at("10:15:00.000+000", "7-31-2026", &format!("[Win32App] Installation is done for app with id: {APP}, deployment type id: {DT}, exit code: 1603"), 5),
+            ]
+            .concat(),
+        );
+        let ime = Win32SourceInput::captured(
+            "ime",
+            "IntuneManagementExtension.log",
+            record_at(
+                "10:15:30.000+000",
+                "7-31-2026",
+                &format!("[Win32App] Hash mismatch while downloading content for app with id: {APP}"),
+                5,
+            ),
+        );
+
+        for inputs in [vec![aw.clone(), ime.clone()], vec![ime, aw]] {
+            let analysis = analyze_win32_bundle(&inputs);
+            let transaction = only_transaction(&analysis);
+            assert_eq!(
+                transaction.outcome,
+                Win32Outcome::Conflicting,
+                "a cyclic contradiction must stay conservative, never panic"
+            );
+            assert_eq!(transaction.return_code, None);
+            assert!(
+                transaction.superseded_failures.is_empty(),
+                "nothing survives the cycle, so nothing was proven superseded"
+            );
+        }
+    }
+
+    #[test]
+    fn detection_diagnosis_is_decided_by_linkage_not_artifact_id_sort_order() {
+        // One offset-less record forces the canonical (artifact id, record
+        // number) fallback order, whose cross-artifact half is arbitrary.
+        // Renaming an artifact must not change the diagnosis, and
+        // DetectedBeforeEnforcement must never be minted without proof that
+        // the detection preceded every enforcement record.
+        let outcome_for = |detection_id: &str| {
+            let detection = Win32SourceInput::captured(
+                detection_id,
+                "AppActionProcessor.log",
+                record(&format!(
+                    "[Win32App] Detection state for app with id: {APP} = Detected"
+                )),
+            );
+            let enforcement = Win32SourceInput::captured(
+                "aw",
+                "AppWorkload.log",
+                [
+                    record(&format!(
+                        "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+                    )),
+                    // Offset-less: its UTC form would be the parsing machine's
+                    // opinion, so it cannot be sequenced against the detection.
+                    record_at(
+                        "10:05:00.000",
+                        "7-31-2026",
+                        &format!(
+                            "[Win32App] Install command line: setup.exe /quiet for app with id: {APP}"
+                        ),
+                        5,
+                    ),
+                ]
+                .concat(),
+            );
+            let analysis = analyze_win32_bundle(&[detection, enforcement]);
+            only_transaction(&analysis).outcome
+        };
+
+        // "aap" sorts before "aw"; "zz-aap" sorts after it.
+        let detection_folded_first = outcome_for("aap");
+        let detection_folded_last = outcome_for("zz-aap");
+        assert_eq!(
+            detection_folded_first, detection_folded_last,
+            "an artifact id is an acquisition detail and must not decide the diagnosis"
+        );
+        assert_ne!(
+            detection_folded_first,
+            Win32Outcome::DetectedBeforeEnforcement,
+            "without linkage proof the detection must stay phase evidence, not a verdict"
+        );
     }
 
     #[test]
