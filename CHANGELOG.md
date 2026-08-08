@@ -2,6 +2,44 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Administrator restart with source restoration (#384)**: Application-wide restart as administrator on supported Windows builds, restoring open sources after elevation.
+- **Company Portal macOS unified-log evidence (#390)**: Normalize Apple unified-log evidence for Company Portal on macOS so enrollment and portal diagnostics correlate without inventing outcomes.
+- **Intune Device Inventory Agent log family (#397 / #354)**: Discover and parse the full Microsoft Device Inventory Agent log set under Program Files (harvester, Inventory Adaptor, and rotation-failure dialects) with known-sources entry, folder aggregation for `.log` / rotations / `.log_`, and logical-record-aware real-time tailing.
+- **Company Portal iOS/iPadOS Console exports (#402)**: Parse imported Console plain-text diagnostics for Company Portal on iOS/iPadOS with fail-closed empty attribution cells and overflow-safe column handling.
+- **Windows device compliance analyzer (#364 / #495)**: Pure-parser four-phase compliance model (local evaluation → aggregate → reporting → access) with 16-scenario fixtures, privacy redaction, and conservative access-only findings that never promote Conditional Access denials into local setting verdicts.
+- **Native SCCM diagnostics path (#319, #490 and related)**: Native client evidence admission, discovery/normalization, and diagnostics workspace foundations for ConfigMgr client and server workflows—including site-core, management point, distribution point, software update point, hierarchy/replication, task-sequence provenance sealing, client health/policy/deployment/updates/inventory-compliance-metering analysis, and bounded database export coverage contracts (#493–#499, #443–#459, #494, #498, #499).
+- **Non-blocking Microsoft Graph WAM authentication (#441 / #512)**: Enable Graph without freezing the UI; explicit Sign in, host capability fast-fail (personal MSA / missing org account / provider unavailable), cancellable interactive auth, and retention of the Entra interactive path for real consent.
+
+### Changed
+
+- **Device Inventory framing (#511)**: Logical-record framing for Device Inventory is lossless and bounded so oversized or partial continuations cannot starve the open/tail paths or drop producer evidence.
+- **Intune inventory rotation detection (#509)**: Narrow rotation-failure detection so generic `Failed …` lines are not misclassified as Device Inventory rotation failures, and align open-path continuation bounds with the tail path.
+- **SCCM client log capture (#494)**: Capture client logs beside `CcmExec` so health and related workflows still see evidence when service naming alone would miss the client.
+- **SCCM intake authority (#508 and related)**: Remove fixture identity allowlists from production intake; bind client/server analysis to sealed intake, topology, chronology, and coverage-gap contracts rather than synthetic identity shortcuts.
+- **Agent / contributor docs (#448)**: Expand agent-facing repository guidance for multi-lane SCCM and Intune work.
+
+### Fixed
+
+- **Unicode decimal digit panics (#413 / #502)**: Reject non-ASCII Unicode decimal fields in CCM and related time grammars so multi-byte digits cannot panic the parser mid-slice.
+- **Signless CCM timestamp display (#410 / #504)**: Treat signless fractional tails as milliseconds (not fabricated timezone offsets); short fractions pad correctly for public `LogEntry` projection.
+- **IPv6 redaction residual (#416 / #503)**: Redact bare unspecified IPv6 forms in macOS export paths without destroying C++ `std::` symbols.
+- **Parser purity gate (#461)**: Restore the locked pure-module purity gate so free-text prose mentioning process APIs cannot trip wasm cleanliness false positives.
+- **SCCM server coverage topology (#455)**: Keep producer-host and workflow-subject handles on coverage rows so distinct physical producers do not collapse; reject incongruent topology instead of inventing results.
+- **Bounded discovery coverage (#454)**: Preserve correctness of bounded discovery coverage under partial native capture.
+- **Rust 1.97 hierarchy lint**: Satisfy newer compiler hierarchy lints in SCCM hierarchy modules.
+
+### Build & CI
+
+- **Scoop bucket (#446)**: Bump Scoop manifest packaging to 1.5.1.
+- **chrono floor (#501 / #417)**: Raise the `chrono` dependency floor to 0.4.35 so parser code that needs newer APIs is honest about the minimum version.
+- **GitHub Actions**: Updated `actions/checkout` 4 → 7, `actions/github-script` 7.1.0 → 9.0.0, and `taiki-e/install-action` 2.85.2 → 2.85.5.
+- **Rust crates**: Updated `libc` 0.2.185 → 0.2.189, `tokio` 1.52.1 → 1.53.1, `ureq` 3.2.0 → 3.3.0, and `zip` 4.2.0 → 8.6.0.
+- **JavaScript**: Updated `@tanstack/react-virtual` and grouped frontend dev-dependencies; bumped `postcss` in app and download-metrics tooling.
+
 ## [1.5.1] - 2026-08-02
 
 ### Added

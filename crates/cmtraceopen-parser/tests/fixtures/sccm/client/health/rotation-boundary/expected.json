@@ -1,0 +1,104 @@
+{
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [
+      {
+        "class": "insufficientEvidence",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [
+          {
+            "artifactId": "health-rotation-boundary-ccmsetup-current",
+            "coverage": "capped",
+            "role": "client"
+          },
+          {
+            "artifactId": "health-rotation-boundary-ccmsetup-lo",
+            "coverage": "capped",
+            "role": "client"
+          }
+        ],
+        "evidence": [],
+        "findingId": "client-health-install-stop",
+        "healthPhase": "install",
+        "lastConfirmedSuccessfulPhase": null,
+        "nextArtifacts": [
+          {
+            "logicalId": "ccmSetup",
+            "reason": "Confirm the root cause recorded by ccmsetup.",
+            "role": "client"
+          }
+        ],
+        "phase": "install",
+        "role": "client",
+        "severity": "Warning",
+        "summary": "The install phase cannot be evaluated because its exact source coverage is incomplete.",
+        "terminalEvidence": [],
+        "title": "Client health install evidence is incomplete"
+      }
+    ],
+    "hops": [],
+    "lastConfirmedSuccessfulPhase": null,
+    "lifecyclePhase": null,
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-rotation-boundary-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-rotation-boundary-ccmsetup-lo",
+        "coverage": "captured",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "loUnderscore"
+        }
+      },
+      {
+        "artifactId": "health-rotation-boundary-evaluation-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-evaluation",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-rotation-boundary-identity-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-identity",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-rotation-boundary-location-services-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-location",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "rotation-boundary"
+}

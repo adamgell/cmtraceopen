@@ -1,0 +1,35 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "deployment",
+  "scenario": "dp-content-missing",
+  "stateChain": ["intent","requirements","locateContent","transfer","cache","enforce","detect","report"],
+  "analysisContract": {"independentReducer":true,"consumesPolicyReducerOutput":false,"policyCoverageRequired":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selected","profileId":"deployment-client-5.00.test-v1","sourceVersionPrefix":"5.00.TEST.","contentVersionRequired":true,"keyKinds":["assignmentId","ciId","contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"validatedArtifactFamilies":["client-app-intent","client-content"]},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-app-intent","state":"captured"},{"logicalArtifactId":"client-content","state":"captured"}],
+  "artifactProvenance": [
+    {"artifactId":"deployment-dp-content-missing-content-current","bytesCopied":483,"encoding":"utf-8","byteLimit":4096,"limitApplied":false},
+    {"artifactId":"deployment-dp-content-missing-intent-current","bytesCopied":532,"encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "transactions": [{
+    "transactionId": "deployment:assignment:10000000-0000-0000-0000-000000000006",
+    "key": {"keyProfileKind":"assignmentCiContentTopology","assignmentId":"10000000-0000-0000-0000-000000000006","ciId":"20000000-0000-0000-0000-000000001006","packageId":"LAB00006","contentId":"30000000-0000-0000-0000-000000002006","contentVersion":6,"distributionPointHostHandle":"safe:dp:lab-dp-01","requestId":"40000000-0000-0000-0000-000000003006","confidence":"exact","extractionProfileId":"deployment-client-5.00.test-v1"},
+    "counterpartReadyFact": {"factKind":"clientContentRequest","phase":"locateContent","extractionProfileId":"deployment-client-5.00.test-v1","packageId":"LAB00006","contentId":"30000000-0000-0000-0000-000000002006","contentVersion":6,"distributionPointHostHandle":"safe:dp:lab-dp-01","requestId":"40000000-0000-0000-0000-000000003006","timestampProvenance":{"kind":"explicitOffset","offsetMinutes":0,"normalizedUtc":"2026-07-30T03:50:02Z"},"evidence":{"artifactId":"deployment-dp-content-missing-content-current","startLine":1,"endLine":1}},
+    "phase": "locateContent",
+    "state": "insufficientEvidence",
+    "lastSuccessfulPhase": "requirements",
+    "classification": "symptom",
+    "confidence": "low",
+    "confidenceCeiling": "low",
+    "coverageGapArtifactIds": [],
+    "nextArtifact": {"logicalArtifactId":"client-content","reason":"capture a complete terminal location response; a client request alone cannot prove DP content state"},
+    "evidence": [
+      {"artifactId":"deployment-dp-content-missing-content-current","startLine":1,"endLine":1},
+      {"artifactId":"deployment-dp-content-missing-intent-current","startLine":1,"endLine":2}
+    ]
+  }],
+  "sourceLocalObservations": [],
+  "findings": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"topologyCompatibilityEvaluated":false,"serverCauseClaimed":false,"counterpartReadyKeyKinds":["contentId","contentVersion","distributionPointHostHandle","packageId","requestId"],"emittedCounterpartReadyFact":true},
+  "prohibitedClaims": ["distribution point lacks content","distribution point or server root cause","time-only content-to-DP correlation"]
+}

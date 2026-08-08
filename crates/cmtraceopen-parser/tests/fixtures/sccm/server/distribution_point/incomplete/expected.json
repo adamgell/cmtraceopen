@@ -1,0 +1,131 @@
+{
+  "artifactRequests": [
+    {
+      "logicalId": "distmgr",
+      "reason": "Collect the complete distmgr.log file.",
+      "role": "siteServer"
+    },
+    {
+      "logicalId": "pkgXferMgr",
+      "reason": "Collect the complete PkgXferMgr.log file.",
+      "role": "siteServer"
+    },
+    {
+      "logicalId": "smsDpProv",
+      "reason": "Collect the complete SMSDPProv.log file.",
+      "role": "distributionPoint"
+    }
+  ],
+  "coverageGaps": [
+    {
+      "artifactIds": [
+        "synthetic:artifact:sha256.v1:fb7c7171033eb902da21c8381fd7e6194d9f45d05f3d3916ee4ea94d47e0f643"
+      ],
+      "producerRole": "distributionPoint",
+      "reason": "Distribution Point source coverage is absent; recollect the declared source without changing its state.",
+      "sourceId": "server-dp-distribution",
+      "state": "absent",
+      "workflowSubjectRole": null
+    },
+    {
+      "artifactIds": [
+        "synthetic:artifact:sha256.v1:726ac8490c014561cfb86db2cf953ca3abbb40c1850e7f77c3fef53f95a9aeec"
+      ],
+      "producerRole": "siteServer",
+      "reason": "Distribution Point source coverage is accessDenied; recollect the declared source without changing its state.",
+      "sourceId": "server-dp-distribution",
+      "state": "accessDenied",
+      "workflowSubjectRole": "distributionPoint"
+    }
+  ],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:1f70befc7be3ce7bd4126163b15e4d064c5d2b67c5789ce14d95b6d03d701030",
+          "entryId": "synthetic:artifact:sha256.v1:1f70befc7be3ce7bd4126163b15e4d064c5d2b67c5789ce14d95b6d03d701030:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:1f70befc7be3ce7bd4126163b15e4d064c5d2b67c5789ce14d95b6d03d701030",
+          "entryId": "synthetic:artifact:sha256.v1:1f70befc7be3ce7bd4126163b15e4d064c5d2b67c5789ce14d95b6d03d701030:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-eta",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00007",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "distribute",
+      "nextArtifact": {
+        "logicalId": "pkgXferMgr",
+        "reason": "Collect the complete PkgXferMgr.log file.",
+        "role": "siteServer"
+      },
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:1f70befc7be3ce7bd4126163b15e4d064c5d2b67c5789ce14d95b6d03d701030",
+            "entryId": "synthetic:artifact:sha256.v1:1f70befc7be3ce7bd4126163b15e4d064c5d2b67c5789ce14d95b6d03d701030:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:08:00.000",
+            "utcMillis": 1785413280000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:1f70befc7be3ce7bd4126163b15e4d064c5d2b67c5789ce14d95b6d03d701030",
+            "entryId": "synthetic:artifact:sha256.v1:1f70befc7be3ce7bd4126163b15e4d064c5d2b67c5789ce14d95b6d03d701030:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:08:01.000",
+            "utcMillis": 1785413281000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Warning",
+      "state": "incomplete",
+      "stopPhase": "transfer",
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00007:content=content-eta:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

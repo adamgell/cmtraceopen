@@ -1,0 +1,14 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "incomplete",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"synthetic:artifact:sha256.v1:4be424c1fb940199b920d681f5e0dccf3d5c08d8441af87a19d3caa0cd612973","state":"capped"}],
+  "transactions": [],
+  "sourceLocalObservations": [{"observationId":"incomplete-01-fragment","classification":"coverageOnly","confidence":"low","correlationEligible":false,"artifactIds":["synthetic:artifact:sha256.v1:4be424c1fb940199b920d681f5e0dccf3d5c08d8441af87a19d3caa0cd612973"],"evidence":[]}],
+  "artifactRequests": [{"sourceId":"server-hierarchy-control","producerRole":"siteServer","direction":"origin","targetSiteCode":"CHD","basenames":["replmgr.log"],"reasonCode":"coverageCapped"}],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

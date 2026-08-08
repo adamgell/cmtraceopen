@@ -1,0 +1,99 @@
+{
+  "findings": [
+    {
+      "class": "symptom",
+      "confidence": "low",
+      "correlationKeys": [],
+      "coverageGaps": [],
+      "evidence": [
+        {
+          "artifactId": "health-success-ccmsetup-current",
+          "entryId": "health-success-ccmsetup-current:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "findingId": "client-health-repair-stop",
+      "healthPhase": "repair",
+      "lastConfirmedSuccessfulPhase": null,
+      "nextArtifacts": [
+        {
+          "logicalId": "ccmSetup",
+          "reason": "Confirm the root cause recorded by ccmsetup.",
+          "role": "client"
+        }
+      ],
+      "phase": "repair",
+      "role": "client",
+      "severity": "Warning",
+      "summary": "The admitted repair source does not contain one unambiguous terminal outcome for the exact chain key.",
+      "terminalEvidence": [],
+      "title": "Client health repair outcome is not confirmed"
+    }
+  ],
+  "hops": [
+    {
+      "evidence": [
+        {
+          "artifactId": "health-success-ccmsetup-current",
+          "entryId": "health-success-ccmsetup-current:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "phase": "repair",
+      "state": "pending"
+    }
+  ],
+  "lastConfirmedSuccessfulPhase": null,
+  "lifecyclePhase": "repair",
+  "prohibitedClaims": [
+    "server root cause",
+    "isolated error proves terminal failure",
+    "missing source proves workflow failure",
+    "host path or raw sensitive text export"
+  ],
+  "schemaVersion": 1,
+  "sourceCoverage": [
+    {
+      "artifactId": "health-success-ccmsetup-current",
+      "coverage": "captured",
+      "fragmentComplete": true,
+      "logicalArtifactId": "client-ccmsetup",
+      "physical": true,
+      "rotation": {
+        "kind": "current"
+      }
+    },
+    {
+      "artifactId": "health-success-evaluation-current",
+      "coverage": "captured",
+      "fragmentComplete": true,
+      "logicalArtifactId": "client-evaluation",
+      "physical": true,
+      "rotation": {
+        "kind": "current"
+      }
+    },
+    {
+      "artifactId": "health-success-identity-current",
+      "coverage": "captured",
+      "fragmentComplete": true,
+      "logicalArtifactId": "client-identity",
+      "physical": true,
+      "rotation": {
+        "kind": "current"
+      }
+    },
+    {
+      "artifactId": "health-success-location-services-current",
+      "coverage": "captured",
+      "fragmentComplete": true,
+      "logicalArtifactId": "client-location",
+      "physical": true,
+      "rotation": {
+        "kind": "current"
+      }
+    }
+  ]
+}

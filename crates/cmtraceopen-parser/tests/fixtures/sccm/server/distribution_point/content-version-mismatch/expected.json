@@ -1,0 +1,420 @@
+{
+  "artifactRequests": [
+    {
+      "logicalId": "pkgXferMgr",
+      "reason": "Collect the complete PkgXferMgr.log file.",
+      "role": "siteServer"
+    }
+  ],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "success",
+      "confidence": "medium",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:aa40a5a4798fa109c3f9062023929b7155c4362082353caa0b74798d317572d8",
+          "entryId": "synthetic:artifact:sha256.v1:aa40a5a4798fa109c3f9062023929b7155c4362082353caa0b74798d317572d8:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:aa40a5a4798fa109c3f9062023929b7155c4362082353caa0b74798d317572d8",
+          "entryId": "synthetic:artifact:sha256.v1:aa40a5a4798fa109c3f9062023929b7155c4362082353caa0b74798d317572d8:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:c1f12e6949c17d283542bcc15069ecb3fc6609a47cbad17b3319712bdc1d513b",
+          "entryId": "synthetic:artifact:sha256.v1:c1f12e6949c17d283542bcc15069ecb3fc6609a47cbad17b3319712bdc1d513b:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:81a74fd31efa3b011d89ed221579cd2867d5b9b80253fee456ed6e9a3a81e654",
+          "entryId": "synthetic:artifact:sha256.v1:81a74fd31efa3b011d89ed221579cd2867d5b9b80253fee456ed6e9a3a81e654:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:81a74fd31efa3b011d89ed221579cd2867d5b9b80253fee456ed6e9a3a81e654",
+          "entryId": "synthetic:artifact:sha256.v1:81a74fd31efa3b011d89ed221579cd2867d5b9b80253fee456ed6e9a3a81e654:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-epsilon",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:sha256.v1:404acc0782eaaec91bb24fdc96507f876aead18fed7010ee1daf1a6f9e3db528",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00005",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "makeAvailable",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:aa40a5a4798fa109c3f9062023929b7155c4362082353caa0b74798d317572d8",
+            "entryId": "synthetic:artifact:sha256.v1:aa40a5a4798fa109c3f9062023929b7155c4362082353caa0b74798d317572d8:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:00.000",
+            "utcMillis": 1785413400000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:aa40a5a4798fa109c3f9062023929b7155c4362082353caa0b74798d317572d8",
+            "entryId": "synthetic:artifact:sha256.v1:aa40a5a4798fa109c3f9062023929b7155c4362082353caa0b74798d317572d8:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:01.000",
+            "utcMillis": 1785413401000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:c1f12e6949c17d283542bcc15069ecb3fc6609a47cbad17b3319712bdc1d513b",
+            "entryId": "synthetic:artifact:sha256.v1:c1f12e6949c17d283542bcc15069ecb3fc6609a47cbad17b3319712bdc1d513b:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:02.000",
+            "utcMillis": 1785413402000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:81a74fd31efa3b011d89ed221579cd2867d5b9b80253fee456ed6e9a3a81e654",
+            "entryId": "synthetic:artifact:sha256.v1:81a74fd31efa3b011d89ed221579cd2867d5b9b80253fee456ed6e9a3a81e654:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "validate",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:03.000",
+            "utcMillis": 1785413403000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:81a74fd31efa3b011d89ed221579cd2867d5b9b80253fee456ed6e9a3a81e654",
+            "entryId": "synthetic:artifact:sha256.v1:81a74fd31efa3b011d89ed221579cd2867d5b9b80253fee456ed6e9a3a81e654:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "makeAvailable",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:10:04.000",
+            "utcMillis": 1785413404000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Success",
+      "state": "succeeded",
+      "stopPhase": null,
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00005:content=content-epsilon:content-version=1:dp=synthetic:subject:sha256.v1:404acc0782eaaec91bb24fdc96507f876aead18fed7010ee1daf1a6f9e3db528:profile=dp-server-5.00.test-v1:profile-version=1"
+    },
+    {
+      "classification": "success",
+      "confidence": "medium",
+      "contentVersionMismatch": true,
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5",
+          "entryId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5",
+          "entryId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:09435feb3c4103f06c75e23b25288c4b31b6b6563cae013c8ac4a38d4681bdf1",
+          "entryId": "synthetic:artifact:sha256.v1:09435feb3c4103f06c75e23b25288c4b31b6b6563cae013c8ac4a38d4681bdf1:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:0b62a96e835cb37ffc95eac300752a21ada6a0399913bddbbc0d5673543e5d7c",
+          "entryId": "synthetic:artifact:sha256.v1:0b62a96e835cb37ffc95eac300752a21ada6a0399913bddbbc0d5673543e5d7c:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:0b62a96e835cb37ffc95eac300752a21ada6a0399913bddbbc0d5673543e5d7c",
+          "entryId": "synthetic:artifact:sha256.v1:0b62a96e835cb37ffc95eac300752a21ada6a0399913bddbbc0d5673543e5d7c:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-epsilon",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00005",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "makeAvailable",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5",
+            "entryId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:00.000",
+            "utcMillis": 1785413100000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5",
+            "entryId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:01.000",
+            "utcMillis": 1785413101000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:09435feb3c4103f06c75e23b25288c4b31b6b6563cae013c8ac4a38d4681bdf1",
+            "entryId": "synthetic:artifact:sha256.v1:09435feb3c4103f06c75e23b25288c4b31b6b6563cae013c8ac4a38d4681bdf1:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:02.000",
+            "utcMillis": 1785413102000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:0b62a96e835cb37ffc95eac300752a21ada6a0399913bddbbc0d5673543e5d7c",
+            "entryId": "synthetic:artifact:sha256.v1:0b62a96e835cb37ffc95eac300752a21ada6a0399913bddbbc0d5673543e5d7c:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "validate",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:03.000",
+            "utcMillis": 1785413103000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:0b62a96e835cb37ffc95eac300752a21ada6a0399913bddbbc0d5673543e5d7c",
+            "entryId": "synthetic:artifact:sha256.v1:0b62a96e835cb37ffc95eac300752a21ada6a0399913bddbbc0d5673543e5d7c:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "makeAvailable",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:05:04.000",
+            "utcMillis": 1785413104000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Success",
+      "state": "succeeded",
+      "stopPhase": null,
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00005:content=content-epsilon:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
+    },
+    {
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "contentVersionMismatch": true,
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5",
+          "entryId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5:3-3",
+          "lineEnd": 3,
+          "lineStart": 3
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5",
+          "entryId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5:4-4",
+          "lineEnd": 4,
+          "lineStart": 4
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:09435feb3c4103f06c75e23b25288c4b31b6b6563cae013c8ac4a38d4681bdf1",
+          "entryId": "synthetic:artifact:sha256.v1:09435feb3c4103f06c75e23b25288c4b31b6b6563cae013c8ac4a38d4681bdf1:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-epsilon",
+        "contentVersion": 2,
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00005",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "distribute",
+      "nextArtifact": {
+        "logicalId": "pkgXferMgr",
+        "reason": "Collect the complete PkgXferMgr.log file.",
+        "role": "siteServer"
+      },
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5",
+            "entryId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:15:00.000",
+            "utcMillis": 1785413700000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5",
+            "entryId": "synthetic:artifact:sha256.v1:7cc42853582107362794bb55a402e89e955cbbb023595206eb67d483496a48f5:4-4",
+            "lineEnd": 4,
+            "lineStart": 4
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:15:01.000",
+            "utcMillis": 1785413701000
+          }
+        },
+        {
+          "disposition": "retrying",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:09435feb3c4103f06c75e23b25288c4b31b6b6563cae013c8ac4a38d4681bdf1",
+            "entryId": "synthetic:artifact:sha256.v1:09435feb3c4103f06c75e23b25288c4b31b6b6563cae013c8ac4a38d4681bdf1:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:15:02.000",
+            "utcMillis": 1785413702000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Warning",
+      "state": "retrying",
+      "stopPhase": "transfer",
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00005:content=content-epsilon:content-version=2:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

@@ -12,7 +12,11 @@ use regex::Regex;
 
 use super::severity::detect_severity_from_text;
 use crate::models::log_entry::{LogEntry, LogFormat, ParserSpecialization, Severity};
+#[cfg(test)]
+use std::cell::RefCell;
 use std::sync::OnceLock;
+
+const CCM_RECORD_OPENER: &str = "<![LOG[";
 
 /// Compiled regex matching a complete CCM log line.
 ///
@@ -24,12 +28,12 @@ fn ccm_re() -> &'static Regex {
     CELL.get_or_init(|| {
         Regex::new(concat!(
             r#"<!\[LOG\[(?P<msg>[\s\S]*?)\]LOG\]!>"#,
-            r#"<time="(?P<h>\d{1,2}):(?P<m>\d{1,2}):(?P<s>\d{1,2})\.(?P<ms>\d+)(?P<tz>[+-]*\d+)""#,
-            r#"\s+date="(?P<mon>\d{1,2})-(?P<day>\d{1,2})-(?P<yr>\d{4})""#,
+            r#"<time="(?P<h>[0-9]{1,2}):(?P<m>[0-9]{1,2}):(?P<s>[0-9]{1,2})\.(?P<time_tail>[0-9]+(?:[+-][0-9]+)?)""#,
+            r#"\s+date="(?P<mon>[0-9]{1,2})-(?P<day>[0-9]{1,2})-(?P<yr>[0-9]{4})""#,
             r#"\s+component="(?P<comp>[^"]*)""#,
-            r#"\s+context="[^"]*""#,
-            r#"\s+type="(?P<typ>\d)?""#,
-            r#"\s+thread="(?P<thr>\d+)?""#,
+            r#"\s+context="(?P<context>[^"]*)""#,
+            r#"\s+type="(?P<typ>[0-9])?""#,
+            r#"\s+thread="(?P<thr>[0-9]+)?""#,
             r#"(?:\s+file="(?P<file>[^"]*)")?>"#,
         ))
         .expect("CCM regex must compile")
@@ -53,14 +57,139 @@ struct CcmParsed {
     thread_display: Option<String>,
     source_file: Option<String>,
     timezone_offset: i32,
+    context: Option<String>,
+    timestamp_parse: CcmTimestampParse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CcmTimestampParseState {
+    NormalizedUtc,
+    OffsetMissing,
+    OffsetInvalid,
+    TimestampMissing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CcmTimestampParse {
+    pub original_display: Option<String>,
+    pub offset_minutes: Option<i32>,
+    pub utc_millis: Option<i64>,
+    pub ordering_state: CcmTimestampParseState,
+}
+
+impl CcmTimestampParse {
+    fn missing() -> Self {
+        Self {
+            original_display: None,
+            offset_minutes: None,
+            utc_millis: None,
+            ordering_state: CcmTimestampParseState::TimestampMissing,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CcmLogicalRecord {
+    pub entry: LogEntry,
+    pub context: Option<String>,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub timestamp: CcmTimestampParse,
+}
+
+impl CcmParsed {
+    fn into_logical_record(
+        self,
+        id: u64,
+        line_start: u32,
+        line_end: u32,
+        file_path: &str,
+    ) -> CcmLogicalRecord {
+        CcmLogicalRecord {
+            entry: LogEntry {
+                id,
+                line_number: line_start,
+                message: self.message,
+                component: self.component,
+                timestamp: self.timestamp,
+                timestamp_display: self.timestamp_display,
+                severity: self.severity,
+                thread: Some(self.thread),
+                thread_display: self.thread_display,
+                source_file: self.source_file,
+                format: LogFormat::Ccm,
+                file_path: file_path.to_string(),
+                timezone_offset: Some(self.timezone_offset),
+                error_code_spans: Vec::new(),
+                ip_address: None,
+                host_name: None,
+                mac_address: None,
+                result_code: None,
+                gle_code: None,
+                setup_phase: None,
+                operation_name: None,
+                http_method: None,
+                uri_stem: None,
+                uri_query: None,
+                status_code: None,
+                sub_status: None,
+                time_taken_ms: None,
+                client_ip: None,
+                server_ip: None,
+                user_agent: None,
+                server_port: None,
+                username: None,
+                win32_status: None,
+                query_name: None,
+                query_type: None,
+                response_code: None,
+                dns_direction: None,
+                dns_protocol: None,
+                source_ip: None,
+                dns_flags: None,
+                dns_event_id: None,
+                zone_name: None,
+                entry_kind: None,
+                whatif: None,
+                section_name: None,
+                section_color: None,
+                iteration: None,
+                tags: None,
+            },
+            context: self.context,
+            line_start,
+            line_end,
+            timestamp: self.timestamp_parse,
+        }
+    }
 }
 
 pub(crate) fn truncate_subsecond_to_millis(value: &str) -> Option<u32> {
-    if value.len() > 3 {
-        value[..3].parse().ok()
-    } else {
-        value.parse().ok()
+    match value.len() {
+        1 => value.parse::<u32>().ok().map(|millis| millis * 100),
+        2 => value.parse::<u32>().ok().map(|millis| millis * 10),
+        _ => value.get(..3)?.parse().ok(),
     }
+}
+
+/// Split CCM's fractional-second field from its optional timezone offset.
+///
+/// A signed offset is self-delimiting and is always taken at face value: the
+/// sign is the source stating its own provenance, so an out-of-range signed
+/// offset is reported as invalid rather than reinterpreted.
+/// An unsigned run is fractional-second text. It has no grammar boundary that
+/// can establish a timezone, so it must never be split into a fabricated
+/// minute offset.
+fn split_ccm_time_tail(value: &str) -> (&str, Option<&str>) {
+    if let Some(index) = value
+        .as_bytes()
+        .iter()
+        .position(|byte| matches!(byte, b'+' | b'-'))
+    {
+        return (&value[..index], Some(&value[index..]));
+    }
+
+    (value, None)
 }
 
 /// Convert a naive local datetime + optional timezone offset (in minutes) to UTC epoch millis.
@@ -69,16 +198,17 @@ pub(crate) fn naive_to_utc_millis(
     naive: chrono::NaiveDateTime,
     offset_minutes: Option<i32>,
 ) -> i64 {
-    if let Some(offset_minutes) = offset_minutes {
-        offset_minutes
-            .checked_mul(60)
-            .and_then(FixedOffset::east_opt)
-            .and_then(|offset| offset.from_local_datetime(&naive).single())
-            .map(|dt| dt.timestamp_millis())
-            .unwrap_or_else(|| naive.and_utc().timestamp_millis())
-    } else {
-        naive.and_utc().timestamp_millis()
-    }
+    offset_minutes
+        .and_then(|offset| normalized_utc_millis(naive, offset))
+        .unwrap_or_else(|| naive.and_utc().timestamp_millis())
+}
+
+fn normalized_utc_millis(naive: chrono::NaiveDateTime, offset_minutes: i32) -> Option<i64> {
+    offset_minutes
+        .checked_mul(60)
+        .and_then(FixedOffset::east_opt)
+        .and_then(|offset| offset.from_local_datetime(&naive).single())
+        .map(|datetime| datetime.timestamp_millis())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -142,7 +272,12 @@ pub fn parse_content(
         Some(ParserSpecialization::Ime) => {
             crate::intune::ime_parser::parse_ime_entries(content, file_path)
         }
-        None => parse_content_multiline(content, file_path),
+        None
+        | Some(ParserSpecialization::IntuneDeviceInventoryHarvester)
+        | Some(ParserSpecialization::IntuneDeviceInventoryAdaptor)
+        | Some(ParserSpecialization::IntuneDeviceInventoryRotationFailure) => {
+            parse_content_multiline(content, file_path)
+        }
     }
 }
 
@@ -153,17 +288,206 @@ pub fn parse_content(
 /// matched as a single logical record.  Text between matched records is
 /// emitted as individual plain-text entries, preserving line numbers.
 fn parse_content_multiline(content: &str, file_path: &str) -> (Vec<LogEntry>, u32) {
+    let scan = scan_ccm_content(content, file_path, CcmScanMode::PublicProjection, None);
+    (
+        scan.records
+            .into_iter()
+            .map(|record| record.entry)
+            .collect(),
+        scan.errors,
+    )
+}
+
+pub(crate) fn scan_logical_records(content: &str, file_path: &str) -> Vec<CcmLogicalRecord> {
+    scan_ccm_content(content, file_path, CcmScanMode::SccmEvidence, None)
+        .records
+        .into_iter()
+        .filter(|record| record.entry.format == LogFormat::Ccm)
+        .collect()
+}
+
+/// Bounded SCCM evidence framing projection. This preserves the raw CCM
+/// grammar while exposing whether a complete claimed payload contained
+/// unmatched or ambiguous input that cannot be promoted to evidence.
+pub(crate) struct CcmLogicalRecordScan {
+    pub records: Vec<CcmLogicalRecord>,
+    pub complete: bool,
+    pub record_limit_exceeded: bool,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CcmBoundedScanObservation {
+    pub record_limit: usize,
+    pub retained_records: usize,
+    pub record_limit_exceeded: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static BOUNDED_SCAN_OBSERVATIONS: RefCell<Option<Vec<CcmBoundedScanObservation>>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct BoundedScanObservationGuard;
+
+#[cfg(test)]
+impl Drop for BoundedScanObservationGuard {
+    fn drop(&mut self) {
+        BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
+            observations.borrow_mut().take();
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn observe_bounded_scans<T>(
+    operation: impl FnOnce() -> T,
+) -> (T, Vec<CcmBoundedScanObservation>) {
+    BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
+        assert!(
+            observations.replace(Some(Vec::new())).is_none(),
+            "bounded scan observation cannot be nested"
+        );
+    });
+    let _cleanup = BoundedScanObservationGuard;
+    let output = operation();
+    let observations = BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
+        observations
+            .borrow_mut()
+            .take()
+            .expect("bounded scan observation was installed")
+    });
+    (output, observations)
+}
+
+pub(crate) fn scan_logical_records_bounded(
+    content: &str,
+    file_path: &str,
+    max_records: usize,
+) -> CcmLogicalRecordScan {
+    let scan = scan_ccm_content(
+        content,
+        file_path,
+        CcmScanMode::SccmEvidence,
+        Some(max_records),
+    );
+    let bounded = CcmLogicalRecordScan {
+        records: scan
+            .records
+            .into_iter()
+            .filter(|record| record.entry.format == LogFormat::Ccm)
+            .collect(),
+        complete: scan.errors == 0 && !scan.record_limit_exceeded,
+        record_limit_exceeded: scan.record_limit_exceeded,
+    };
+    #[cfg(test)]
+    BOUNDED_SCAN_OBSERVATIONS.with(|observations| {
+        if let Some(observations) = observations.borrow_mut().as_mut() {
+            observations.push(CcmBoundedScanObservation {
+                record_limit: max_records,
+                retained_records: bounded.records.len(),
+                record_limit_exceeded: bounded.record_limit_exceeded,
+            });
+        }
+    });
+    bounded
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CcmScanMode {
+    PublicProjection,
+    SccmEvidence,
+}
+
+struct CcmScan {
+    records: Vec<CcmLogicalRecord>,
+    errors: u32,
+    record_limit_exceeded: bool,
+}
+
+struct CcmScanBuild {
+    records: Vec<CcmLogicalRecord>,
+    errors: u32,
+    id_counter: u64,
+    record_limit: Option<usize>,
+    record_limit_exceeded: bool,
+}
+
+impl CcmScanBuild {
+    fn new(record_limit: Option<usize>) -> Self {
+        Self {
+            records: Vec::new(),
+            errors: 0,
+            id_counter: 0,
+            record_limit,
+            record_limit_exceeded: false,
+        }
+    }
+
+    fn record_limit_reached(&mut self) -> bool {
+        if self
+            .record_limit
+            .is_some_and(|limit| self.records.len() >= limit)
+        {
+            self.record_limit_exceeded = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn finish(self) -> CcmScan {
+        CcmScan {
+            records: self.records,
+            errors: self.errors,
+            record_limit_exceeded: self.record_limit_exceeded,
+        }
+    }
+}
+
+fn scan_ccm_content(
+    content: &str,
+    file_path: &str,
+    mode: CcmScanMode,
+    record_limit: Option<usize>,
+) -> CcmScan {
     let line_starts = build_line_starts(content);
-    let mut entries: Vec<LogEntry> = Vec::new();
-    let mut errors = 0u32;
-    let mut id_counter = 0u64;
+    let mut build = CcmScanBuild::new(record_limit);
     let mut cursor = 0usize;
+    let mut search_cursor = 0usize;
     let mut matched_any = false;
 
-    for caps in ccm_re().captures_iter(content) {
-        let Some(full_match) = caps.get(0) else {
+    while let Some(caps) = ccm_re().captures_at(content, search_cursor) {
+        let full_match = caps
+            .get(0)
+            .expect("CCM regex captures always include the full match");
+
+        let message_end = caps
+            .name("msg")
+            .expect("complete CCM matches always include the message capture")
+            .end();
+        if newest_nested_opener(content, full_match.start(), message_end).is_some()
+            && mode == CcmScanMode::SccmEvidence
+        {
+            // A line-start opener inside a complete-looking multiline record
+            // is byte-for-byte ambiguous: it can be a literal message token
+            // or a recovery boundary after partial input. SCCM evidence must
+            // not promote either interpretation. The public projection keeps
+            // the legacy full-match result to preserve LogEntry compatibility.
+            push_unmatched_plain(
+                &content[cursor..full_match.end()],
+                cursor,
+                &line_starts,
+                file_path,
+                &mut build,
+            );
+            cursor = full_match.end();
+            search_cursor = full_match.end();
+            matched_any = true;
             continue;
-        };
+        }
 
         // Emit unmatched text between the previous match and this one
         push_unmatched_plain(
@@ -171,78 +495,34 @@ fn parse_content_multiline(content: &str, file_path: &str) -> (Vec<LogEntry>, u3
             cursor,
             &line_starts,
             file_path,
-            &mut entries,
-            &mut id_counter,
-            &mut errors,
+            &mut build,
         );
 
-        // Parse the matched CCM record
-        let line_number = line_number_for_offset(&line_starts, full_match.start());
+        let line_start = line_number_for_offset(&line_starts, full_match.start());
+        let line_end = line_number_for_offset(&line_starts, full_match.end().saturating_sub(1));
         if let Some(parsed) = parse_captures(&caps) {
-            entries.push(LogEntry {
-                id: id_counter,
-                line_number,
-                message: parsed.message,
-                component: parsed.component,
-                timestamp: parsed.timestamp,
-                timestamp_display: parsed.timestamp_display,
-                severity: parsed.severity,
-                thread: Some(parsed.thread),
-                thread_display: parsed.thread_display,
-                source_file: parsed.source_file,
-                format: LogFormat::Ccm,
-                file_path: file_path.to_string(),
-                timezone_offset: Some(parsed.timezone_offset),
-                error_code_spans: Vec::new(),
-                ip_address: None,
-                host_name: None,
-                mac_address: None,
-                result_code: None,
-                gle_code: None,
-                setup_phase: None,
-                operation_name: None,
-                http_method: None,
-                uri_stem: None,
-                uri_query: None,
-                status_code: None,
-                sub_status: None,
-                time_taken_ms: None,
-                client_ip: None,
-                server_ip: None,
-                user_agent: None,
-                server_port: None,
-                username: None,
-                win32_status: None,
-                query_name: None,
-                query_type: None,
-                response_code: None,
-                dns_direction: None,
-                dns_protocol: None,
-                source_ip: None,
-                dns_flags: None,
-                dns_event_id: None,
-                zone_name: None,
-                entry_kind: None,
-                whatif: None,
-                section_name: None,
-                section_color: None,
-                iteration: None,
-                tags: None,
-            });
-            id_counter += 1;
+            if build.record_limit_reached() {
+                return build.finish();
+            }
+            build.records.push(parsed.into_logical_record(
+                build.id_counter,
+                line_start,
+                line_end,
+                file_path,
+            ));
+            build.id_counter += 1;
         } else {
             push_unmatched_plain(
                 full_match.as_str(),
                 full_match.start(),
                 &line_starts,
                 file_path,
-                &mut entries,
-                &mut id_counter,
-                &mut errors,
+                &mut build,
             );
         }
 
         cursor = full_match.end();
+        search_cursor = full_match.end();
         matched_any = true;
     }
 
@@ -252,33 +532,85 @@ fn parse_content_multiline(content: &str, file_path: &str) -> (Vec<LogEntry>, u3
         cursor,
         &line_starts,
         file_path,
-        &mut entries,
-        &mut id_counter,
-        &mut errors,
+        &mut build,
     );
 
-    if !matched_any {
-        // No CCM records found at all — fall back to line-by-line
-        let lines: Vec<&str> = content.lines().collect();
-        return parse_lines(&lines, file_path);
+    if !matched_any && record_limit.is_some() {
+        return build.finish();
     }
 
-    (entries, errors)
+    if !matched_any {
+        let lines: Vec<&str> = content.lines().collect();
+        let (entries, errors) = parse_lines(&lines, file_path);
+        let records = entries
+            .into_iter()
+            .map(|entry| {
+                let line = entry.line_number;
+                CcmLogicalRecord {
+                    entry,
+                    context: None,
+                    line_start: line,
+                    line_end: line,
+                    timestamp: CcmTimestampParse::missing(),
+                }
+            })
+            .collect();
+        return CcmScan {
+            records,
+            errors,
+            record_limit_exceeded: build.record_limit_exceeded,
+        };
+    }
+
+    build.finish()
+}
+
+fn newest_nested_opener(
+    content: &str,
+    full_match_start: usize,
+    message_end: usize,
+) -> Option<usize> {
+    // Only physical-line openers inside the message can delimit recovery
+    // records. Attribute values are outside the raw CCM payload and may
+    // contain literal opener text. Scan newest first so an adversarial run of
+    // partial message openers is discarded in one pass.
+    let nested_search_start = full_match_start.checked_add(CCM_RECORD_OPENER.len())?;
+    content
+        .get(nested_search_start..message_end)?
+        .rmatch_indices(CCM_RECORD_OPENER)
+        .find_map(|(offset, _)| {
+            let absolute = nested_search_start + offset;
+            let starts_logical_line = absolute == 0
+                || content
+                    .as_bytes()
+                    .get(absolute - 1)
+                    .is_some_and(|previous| matches!(previous, b'\n' | b'\r'));
+            starts_logical_line.then_some(absolute)
+        })
 }
 
 /// Parse named captures from a CCM regex match into a CcmParsed struct.
 fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
     let msg = caps.name("msg").map(|m| m.as_str().to_string())?;
-    let h: u32 = caps.name("h")?.as_str().parse().ok()?;
-    let m: u32 = caps.name("m")?.as_str().parse().ok()?;
-    let s: u32 = caps.name("s")?.as_str().parse().ok()?;
-    let ms_str = caps.name("ms")?.as_str();
+    let h_text = caps.name("h")?.as_str();
+    let m_text = caps.name("m")?.as_str();
+    let s_text = caps.name("s")?.as_str();
+    let h: u32 = h_text.parse().ok()?;
+    let m: u32 = m_text.parse().ok()?;
+    let s: u32 = s_text.parse().ok()?;
+    let time_tail = caps.name("time_tail")?.as_str();
+    let (ms_str, timezone_text) = split_ccm_time_tail(time_tail);
     let ms = truncate_subsecond_to_millis(ms_str)?;
-    let tz: i32 = caps.name("tz")?.as_str().parse().ok()?;
-    let mon: u32 = caps.name("mon")?.as_str().parse().ok()?;
-    let day: u32 = caps.name("day")?.as_str().parse().ok()?;
-    let yr: i32 = caps.name("yr")?.as_str().parse().ok()?;
+    let parsed_timezone = timezone_text.and_then(|value| value.parse::<i32>().ok());
+    let timezone_is_explicit = timezone_text.is_some();
+    let mon_text = caps.name("mon")?.as_str();
+    let day_text = caps.name("day")?.as_str();
+    let yr_text = caps.name("yr")?.as_str();
+    let mon: u32 = mon_text.parse().ok()?;
+    let day: u32 = day_text.parse().ok()?;
+    let yr: i32 = yr_text.parse().ok()?;
     let comp = caps.name("comp").map(|m| m.as_str().to_string());
+    let context = caps.name("context").map(|m| m.as_str().to_string());
     // Preserve absent/empty/unparseable type as `None` so it falls back to
     // text-based detection. Coercing to `Some(0)` would misclassify neutral
     // lines as Success now that type="0" maps to Severity::Success.
@@ -290,7 +622,35 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
     let file = caps.name("file").map(|m| m.as_str().to_string());
 
     let severity = severity_from_type_field(typ, &msg);
-    let (timestamp, timestamp_display) = build_timestamp(mon, day, yr, h, m, s, ms, Some(tz));
+    let (timestamp, timestamp_display) =
+        build_timestamp(mon, day, yr, h, m, s, ms, parsed_timezone);
+    let timezone_offset = parsed_timezone.unwrap_or_default();
+    let naive = chrono::NaiveDate::from_ymd_opt(yr, mon, day)
+        .and_then(|date| date.and_hms_milli_opt(h, m, s, ms));
+    let normalized_timestamp = if timezone_is_explicit {
+        naive.and_then(|value| {
+            parsed_timezone.and_then(|offset| normalized_utc_millis(value, offset))
+        })
+    } else {
+        None
+    };
+    let ordering_state = if naive.is_none() {
+        CcmTimestampParseState::TimestampMissing
+    } else if !timezone_is_explicit {
+        CcmTimestampParseState::OffsetMissing
+    } else if normalized_timestamp.is_some() {
+        CcmTimestampParseState::NormalizedUtc
+    } else {
+        CcmTimestampParseState::OffsetInvalid
+    };
+    let timestamp_parse = CcmTimestampParse {
+        original_display: Some(format!(
+            "{mon_text}-{day_text}-{yr_text} {h_text}:{m_text}:{s_text}.{ms_str}"
+        )),
+        offset_minutes: timezone_is_explicit.then_some(parsed_timezone).flatten(),
+        utc_millis: normalized_timestamp,
+        ordering_state,
+    };
     let thread_display = Some(format_thread_display(thr));
 
     Some(CcmParsed {
@@ -302,7 +662,9 @@ fn parse_captures(caps: &regex::Captures<'_>) -> Option<CcmParsed> {
         thread: thr,
         thread_display,
         source_file: file,
-        timezone_offset: tz,
+        timezone_offset,
+        context,
+        timestamp_parse,
     })
 }
 
@@ -323,24 +685,26 @@ fn line_number_for_offset(line_starts: &[usize], offset: usize) -> u32 {
     }
 }
 
-/// Emit each non-empty physical line in `segment` as a plain-text LogEntry.
+/// Emit each non-empty physical line in `segment` as a plain-text envelope.
 fn push_unmatched_plain(
     segment: &str,
     base_offset: usize,
     line_starts: &[usize],
     file_path: &str,
-    entries: &mut Vec<LogEntry>,
-    id_counter: &mut u64,
-    errors: &mut u32,
+    build: &mut CcmScanBuild,
 ) {
     let mut local_offset = 0usize;
     for piece in segment.split_inclusive('\n') {
         let line = piece.trim_end_matches(['\r', '\n']);
         let trimmed = line.trim();
         if !trimmed.is_empty() {
-            entries.push(LogEntry {
-                id: *id_counter,
-                line_number: line_number_for_offset(line_starts, base_offset + local_offset),
+            if build.record_limit_reached() {
+                return;
+            }
+            let line_number = line_number_for_offset(line_starts, base_offset + local_offset);
+            let entry = LogEntry {
+                id: build.id_counter,
+                line_number,
                 message: trimmed.to_string(),
                 component: None,
                 timestamp: None,
@@ -387,9 +751,16 @@ fn push_unmatched_plain(
                 section_color: None,
                 iteration: None,
                 tags: None,
+            };
+            build.records.push(CcmLogicalRecord {
+                entry,
+                context: None,
+                line_start: line_number,
+                line_end: line_number,
+                timestamp: CcmTimestampParse::missing(),
             });
-            *id_counter += 1;
-            *errors += 1;
+            build.id_counter += 1;
+            build.errors += 1;
         }
         local_offset += piece.len();
     }
@@ -418,56 +789,12 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
 
         match parse_line(line) {
             Some(parsed) => {
-                entries.push(LogEntry {
-                    id: id_counter,
-                    line_number: (i + 1) as u32,
-                    message: parsed.message,
-                    component: parsed.component,
-                    timestamp: parsed.timestamp,
-                    timestamp_display: parsed.timestamp_display,
-                    severity: parsed.severity,
-                    thread: Some(parsed.thread),
-                    thread_display: parsed.thread_display,
-                    source_file: parsed.source_file,
-                    format: LogFormat::Ccm,
-                    file_path: file_path.to_string(),
-                    timezone_offset: Some(parsed.timezone_offset),
-                    error_code_spans: Vec::new(),
-                    ip_address: None,
-                    host_name: None,
-                    mac_address: None,
-                    result_code: None,
-                    gle_code: None,
-                    setup_phase: None,
-                    operation_name: None,
-                    http_method: None,
-                    uri_stem: None,
-                    uri_query: None,
-                    status_code: None,
-                    sub_status: None,
-                    time_taken_ms: None,
-                    client_ip: None,
-                    server_ip: None,
-                    user_agent: None,
-                    server_port: None,
-                    username: None,
-                    win32_status: None,
-                    query_name: None,
-                    query_type: None,
-                    response_code: None,
-                    dns_direction: None,
-                    dns_protocol: None,
-                    source_ip: None,
-                    dns_flags: None,
-                    dns_event_id: None,
-                    zone_name: None,
-                    entry_kind: None,
-                    whatif: None,
-                    section_name: None,
-                    section_color: None,
-                    iteration: None,
-                    tags: None,
-                });
+                let line_number = (i + 1) as u32;
+                entries.push(
+                    parsed
+                        .into_logical_record(id_counter, line_number, line_number, file_path)
+                        .entry,
+                );
                 id_counter += 1;
             }
             None => {
@@ -535,6 +862,17 @@ pub fn parse_lines(lines: &[&str], file_path: &str) -> (Vec<LogEntry>, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_scan_observer_clears_after_a_panicking_operation() {
+        let panic = std::panic::catch_unwind(|| {
+            let _ = observe_bounded_scans(|| panic!("expected observer probe panic"));
+        });
+        assert!(panic.is_err());
+
+        let (_, observations) = observe_bounded_scans(|| ());
+        assert!(observations.is_empty());
+    }
 
     #[test]
     fn test_parse_ccm_line() {
@@ -765,5 +1103,272 @@ mod tests {
             "extreme offset should fall back to UTC"
         );
         assert!(display.is_some(), "display should always be present");
+    }
+
+    #[test]
+    fn logical_scanner_retains_multiline_metadata() {
+        let text = concat!(
+            "<![LOG[Policy request completed for assignment\n",
+            "{11111111-1111-1111-1111-111111111111}]LOG]!>",
+            "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+            "component=\"PolicyAgent\" context=\"NT AUTHORITY\\SYSTEM\" ",
+            "type=\"1\" thread=\"42\" file=\"policyagent.cpp\">"
+        );
+
+        let records = scan_logical_records(text, "PolicyAgent.log");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].line_start, 1);
+        assert_eq!(records[0].line_end, 2);
+        assert_eq!(records[0].context.as_deref(), Some(r"NT AUTHORITY\SYSTEM"));
+        assert_eq!(
+            records[0].timestamp.original_display.as_deref(),
+            Some("07-30-2026 10:00:00.000")
+        );
+        assert_eq!(records[0].timestamp.offset_minutes, Some(-240));
+        assert_eq!(
+            records[0].timestamp.ordering_state,
+            CcmTimestampParseState::NormalizedUtc
+        );
+        assert!(records[0].timestamp.utc_millis.is_some());
+    }
+
+    #[test]
+    fn logical_scanner_treats_line_start_opener_inside_multiline_message_as_ambiguous() {
+        for newline in ["\n", "\r\n"] {
+            let text = format!(
+                concat!(
+                    "<![LOG[first line{newline}",
+                    "<![LOG[literal at continuation start]LOG]!>",
+                    "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+                    "component=\"PolicyAgent\" context=\"\" type=\"1\" thread=\"42\">"
+                ),
+                newline = newline,
+            );
+
+            assert!(
+                scan_logical_records(&text, "PolicyAgent.log").is_empty(),
+                "{newline:?} physical-line ambiguity must remain coverage-only"
+            );
+        }
+    }
+
+    #[test]
+    fn public_projection_keeps_multiline_line_start_literal_opener_as_one_log_entry() {
+        for newline in ["\n", "\r\n"] {
+            let text = format!(
+                concat!(
+                    "<![LOG[first line{newline}",
+                    "<![LOG[literal at continuation start]LOG]!>",
+                    "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+                    "component=\"PolicyAgent\" context=\"\" type=\"1\" thread=\"42\">"
+                ),
+                newline = newline,
+            );
+
+            let (entries, errors) = parse_content(&text, "PolicyAgent.log", None);
+
+            assert_eq!(errors, 0, "{newline:?} public parse must remain compatible");
+            assert_eq!(entries.len(), 1, "{newline:?} must remain one LogEntry");
+            assert_eq!(entries[0].format, LogFormat::Ccm);
+            assert_eq!(
+                entries[0].message,
+                format!("first line{newline}<![LOG[literal at continuation start")
+            );
+        }
+    }
+
+    #[test]
+    fn logical_scanner_keeps_same_line_literal_opener_in_one_complete_record() {
+        let text = concat!(
+            "<![LOG[Diagnostic text retained a literal <![LOG[ token]LOG]!>",
+            "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+            "component=\"PolicyAgent\" context=\"\" type=\"1\" thread=\"42\">"
+        );
+
+        let records = scan_logical_records(text, "PolicyAgent.log");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].entry.message,
+            "Diagnostic text retained a literal <![LOG[ token"
+        );
+        assert_eq!(records[0].line_start, 1);
+        assert_eq!(records[0].line_end, 1);
+    }
+
+    #[test]
+    fn logical_scanner_ignores_line_start_opener_inside_attribute_value() {
+        let text = concat!(
+            "<![LOG[Policy request completed]LOG]!>",
+            "<time=\"10:00:00.000-240\" date=\"07-30-2026\" ",
+            "component=\"PolicyAgent\" context=\"diagnostic continuation\n",
+            "<![LOG[literal attribute token\" type=\"1\" thread=\"42\">"
+        );
+
+        let records = scan_logical_records(text, "PolicyAgent.log");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].entry.message, "Policy request completed");
+        assert_eq!(
+            records[0].context.as_deref(),
+            Some("diagnostic continuation\n<![LOG[literal attribute token")
+        );
+    }
+
+    #[test]
+    fn ambiguity_recovery_selects_the_newest_physical_line_opener() {
+        let partial_prefix = "<![LOG[partial\n".repeat(4_096);
+        let text = format!(
+            concat!(
+                "{partial_prefix}<![LOG[complete record]LOG]!><time=\"10:00:00.000-240\" ",
+                "date=\"07-30-2026\" component=\"PolicyAgent\" context=\"\" ",
+                "type=\"1\" thread=\"42\">"
+            ),
+            partial_prefix = partial_prefix,
+        );
+        let full_match = ccm_re()
+            .find(&text)
+            .expect("the partial prefix and terminal close form one complete-looking match");
+
+        assert_eq!(
+            newest_nested_opener(&text, full_match.start(), full_match.end()),
+            text.rfind("<![LOG["),
+            "recovery must jump to the newest nested opener in one scan"
+        );
+        assert!(
+            scan_logical_records(&text, "PolicyAgent.log").is_empty(),
+            "the adversarial ambiguous segment must remain coverage-only"
+        );
+    }
+
+    fn logical_record_for_time_tail(tail: &str) -> CcmLogicalRecord {
+        let text = format!(
+            concat!(
+                r#"<![LOG[Tail {tail}]LOG]!><time="10:00:00.{tail}" date="07-30-2026" "#,
+                r#"component="PolicyAgent" context="" type="1" thread="42" file="policyagent.cpp">"#
+            ),
+            tail = tail
+        );
+        let mut records = scan_logical_records(&text, "PolicyAgent.log");
+        assert_eq!(records.len(), 1, "tail {tail}: expected one logical record");
+        records.remove(0)
+    }
+
+    /// Frozen answers for every shape of CCM fractional-second tail.
+    ///
+    /// Unsigned tails have no offset boundary, so this table pins their
+    /// fraction-only interpretation. Signed tails retain their explicit
+    /// offsets. Change a row only with a documented grammar reason.
+    #[test]
+    fn ccm_time_tail_ambiguity_table_is_frozen() {
+        use CcmTimestampParseState::{NormalizedUtc, OffsetInvalid, OffsetMissing};
+
+        // (time tail, fractional text, milliseconds, source offset, ordering state)
+        let cases: [(&str, &str, u32, Option<i32>, CcmTimestampParseState); 26] = [
+            // One and two digits are tenths and hundredths of a second.
+            ("1", "1", 100, None, OffsetMissing),
+            ("12", "12", 120, None, OffsetMissing),
+            ("123", "123", 123, None, OffsetMissing),
+            ("1234", "1234", 123, None, OffsetMissing),
+            ("12345", "12345", 123, None, OffsetMissing),
+            ("123456", "123456", 123, None, OffsetMissing),
+            ("123045", "123045", 123, None, OffsetMissing),
+            ("123000", "123000", 123, None, OffsetMissing),
+            ("123481", "123481", 123, None, OffsetMissing),
+            ("123900", "123900", 123, None, OffsetMissing),
+            ("000240", "000240", 0, None, OffsetMissing),
+            ("123480", "123480", 123, None, OffsetMissing),
+            ("123840", "123840", 123, None, OffsetMissing),
+            ("123105", "123105", 123, None, OffsetMissing),
+            ("1234567", "1234567", 123, None, OffsetMissing),
+            ("12345678", "12345678", 123, None, OffsetMissing),
+            // Signed tails are self-delimiting: the sign is the source's own
+            // statement of provenance and is never screened for plausibility.
+            ("123+480", "123", 123, Some(480), NormalizedUtc),
+            ("123-240", "123", 123, Some(-240), NormalizedUtc),
+            ("000+000", "000", 0, Some(0), NormalizedUtc),
+            ("123+481", "123", 123, Some(481), NormalizedUtc),
+            ("123+0", "123", 123, Some(0), NormalizedUtc),
+            ("1+2", "1", 100, Some(2), NormalizedUtc),
+            ("123456+480", "123456", 123, Some(480), NormalizedUtc),
+            ("1234567-060", "1234567", 123, Some(-60), NormalizedUtc),
+            // Out-of-range signed offsets stay reported and stay uncomparable.
+            ("123+99999", "123", 123, Some(99999), OffsetInvalid),
+            ("123-99999", "123", 123, Some(-99999), OffsetInvalid),
+        ];
+
+        for (tail, fraction_text, millis, offset_minutes, ordering_state) in cases {
+            let (split_fraction, split_offset) = split_ccm_time_tail(tail);
+            assert_eq!(
+                split_fraction, fraction_text,
+                "tail {tail}: fractional text"
+            );
+            assert_eq!(
+                split_offset.is_some(),
+                offset_minutes.is_some(),
+                "tail {tail}: offset presence"
+            );
+            assert_eq!(
+                truncate_subsecond_to_millis(split_fraction),
+                Some(millis),
+                "tail {tail}: milliseconds"
+            );
+
+            let record = logical_record_for_time_tail(tail);
+            let timestamp = &record.timestamp;
+            assert_eq!(
+                timestamp.original_display,
+                Some(format!("07-30-2026 10:00:00.{fraction_text}")),
+                "tail {tail}: original display"
+            );
+            assert_eq!(
+                timestamp.offset_minutes, offset_minutes,
+                "tail {tail}: source offset"
+            );
+            assert_eq!(
+                timestamp.ordering_state, ordering_state,
+                "tail {tail}: ordering state"
+            );
+
+            let naive = chrono::NaiveDate::from_ymd_opt(2026, 7, 30)
+                .unwrap()
+                .and_hms_milli_opt(10, 0, 0, millis)
+                .unwrap();
+            let expected_utc =
+                offset_minutes.and_then(|minutes| normalized_utc_millis(naive, minutes));
+            assert_eq!(
+                timestamp.utc_millis, expected_utc,
+                "tail {tail}: normalized utc"
+            );
+            assert_eq!(
+                timestamp.utc_millis.is_some(),
+                ordering_state == NormalizedUtc,
+                "tail {tail}: utc millis must exist exactly when ordering is normalized"
+            );
+        }
+    }
+
+    /// Both shipped attempts fabricated an offset from a microsecond tail.
+    #[test]
+    fn ccm_time_tail_rejects_both_historical_offset_bugs() {
+        let timestamp = logical_record_for_time_tail("123456").timestamp;
+
+        assert_ne!(
+            timestamp.offset_minutes,
+            Some(6),
+            "greedy-regex attempt read the final digit as the offset"
+        );
+        assert_ne!(
+            timestamp.offset_minutes,
+            Some(456),
+            "digit-count attempt read the final three digits as the offset"
+        );
+        assert_eq!(timestamp.offset_minutes, None);
+        assert_eq!(
+            timestamp.ordering_state,
+            CcmTimestampParseState::OffsetMissing
+        );
+        assert_eq!(timestamp.utc_millis, None);
     }
 }

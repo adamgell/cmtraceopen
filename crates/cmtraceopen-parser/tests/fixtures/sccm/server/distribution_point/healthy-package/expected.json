@@ -1,0 +1,162 @@
+{
+  "artifactRequests": [],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "success",
+      "confidence": "medium",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:7d752d27851293831f0be0854c119a77a0315c5518e24396c9aff71aa602da2f",
+          "entryId": "synthetic:artifact:sha256.v1:7d752d27851293831f0be0854c119a77a0315c5518e24396c9aff71aa602da2f:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:7d752d27851293831f0be0854c119a77a0315c5518e24396c9aff71aa602da2f",
+          "entryId": "synthetic:artifact:sha256.v1:7d752d27851293831f0be0854c119a77a0315c5518e24396c9aff71aa602da2f:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:1e3e3170c66a1685e2c6bc567c3285d6e1588b7367e0e59d3f6f3843b50e3b0b",
+          "entryId": "synthetic:artifact:sha256.v1:1e3e3170c66a1685e2c6bc567c3285d6e1588b7367e0e59d3f6f3843b50e3b0b:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:272499e352cea0bb75ce2177210f3dfb97fd1d6a69b942e76645f73b8a915a0c",
+          "entryId": "synthetic:artifact:sha256.v1:272499e352cea0bb75ce2177210f3dfb97fd1d6a69b942e76645f73b8a915a0c:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:272499e352cea0bb75ce2177210f3dfb97fd1d6a69b942e76645f73b8a915a0c",
+          "entryId": "synthetic:artifact:sha256.v1:272499e352cea0bb75ce2177210f3dfb97fd1d6a69b942e76645f73b8a915a0c:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        }
+      ],
+      "key": {
+        "contentId": "content-alpha",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00001",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "makeAvailable",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:7d752d27851293831f0be0854c119a77a0315c5518e24396c9aff71aa602da2f",
+            "entryId": "synthetic:artifact:sha256.v1:7d752d27851293831f0be0854c119a77a0315c5518e24396c9aff71aa602da2f:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:00.000",
+            "utcMillis": 1785412800000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:7d752d27851293831f0be0854c119a77a0315c5518e24396c9aff71aa602da2f",
+            "entryId": "synthetic:artifact:sha256.v1:7d752d27851293831f0be0854c119a77a0315c5518e24396c9aff71aa602da2f:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:01.000",
+            "utcMillis": 1785412801000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:1e3e3170c66a1685e2c6bc567c3285d6e1588b7367e0e59d3f6f3843b50e3b0b",
+            "entryId": "synthetic:artifact:sha256.v1:1e3e3170c66a1685e2c6bc567c3285d6e1588b7367e0e59d3f6f3843b50e3b0b:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:02.000",
+            "utcMillis": 1785412802000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:272499e352cea0bb75ce2177210f3dfb97fd1d6a69b942e76645f73b8a915a0c",
+            "entryId": "synthetic:artifact:sha256.v1:272499e352cea0bb75ce2177210f3dfb97fd1d6a69b942e76645f73b8a915a0c:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "validate",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:03.000",
+            "utcMillis": 1785412803000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:272499e352cea0bb75ce2177210f3dfb97fd1d6a69b942e76645f73b8a915a0c",
+            "entryId": "synthetic:artifact:sha256.v1:272499e352cea0bb75ce2177210f3dfb97fd1d6a69b942e76645f73b8a915a0c:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "makeAvailable",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:00:04.000",
+            "utcMillis": 1785412804000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Success",
+      "state": "succeeded",
+      "stopPhase": null,
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00001:content=content-alpha:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

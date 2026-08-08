@@ -12,7 +12,11 @@ import { useLogStore } from "./log-store";
 import { clearAllTabSnapshots, clearCachedTabSnapshot } from "../lib/tab-snapshot-cache";
 import { useFilterStore } from "./filter-store";
 import type { ColumnId } from "../lib/column-config";
-import type { CollectionResult } from "../lib/commands";
+import type {
+  CollectionResult,
+  GraphAuthAttemptOutcome,
+  GraphHostCapability,
+} from "../lib/commands";
 import type { WorkspaceId } from "../types/log";
 import type { ElevationRequest } from "../types/elevation";
 import { getAvailableWorkspaces as getRegistryWorkspaces, getWorkspace } from "../workspaces/registry";
@@ -31,6 +35,19 @@ export interface ErrorLookupHistoryEntry {
   category: string;
   found: boolean;
   timestamp: number;
+}
+
+export type GraphApiPhase =
+  | "disconnected"
+  | "signingIn"
+  | "cancelling"
+  | "connected"
+  | "unsupported"
+  | "error";
+
+export interface GraphApiLastAttempt {
+  outcome: GraphAuthAttemptOutcome;
+  message: string | null;
 }
 
 export type IntuneWorkspaceId = "intune" | "new-intune";
@@ -165,7 +182,9 @@ interface UiState {
   showUpdateDialog: boolean;
   recentSessions: string[];
   graphApiEnabled: boolean;
-  graphApiStatus: "idle" | "connecting" | "connected" | "error";
+  graphApiStatus: GraphApiPhase;
+  graphApiCapability: GraphHostCapability | null;
+  graphApiLastAttempt: GraphApiLastAttempt | null;
 
   setActiveWorkspace: (workspace: WorkspaceId) => void;
   setCurrentPlatform: (platform: PlatformId) => void;
@@ -233,7 +252,9 @@ interface UiState {
   addRecentSession: (path: string) => void;
   clearRecentSessions: () => void;
   setGraphApiEnabled: (enabled: boolean) => void;
-  setGraphApiStatus: (status: "idle" | "connecting" | "connected" | "error") => void;
+  setGraphApiStatus: (status: GraphApiPhase) => void;
+  setGraphApiCapability: (capability: GraphHostCapability | null) => void;
+  setGraphApiLastAttempt: (attempt: GraphApiLastAttempt | null) => void;
 }
 
 const DEFAULT_WORKSPACE: WorkspaceId = "log";
@@ -242,6 +263,13 @@ const sanitizePersistedUiState = (
   state: Partial<UiState>
 ): Partial<UiState> => {
   const sanitized: Partial<UiState> = { ...state };
+
+  // Authentication lifecycle state is process-local. Ignore stale or
+  // externally injected values during rehydration even though current writes
+  // already omit them through `partialize`.
+  delete sanitized.graphApiStatus;
+  delete sanitized.graphApiCapability;
+  delete sanitized.graphApiLastAttempt;
 
   if (sanitized.logListFontSize !== undefined) {
     const raw = Number(sanitized.logListFontSize);
@@ -318,7 +346,9 @@ export const useUiStore = create<UiState>()(
       showUpdateDialog: false,
       recentSessions: [],
       graphApiEnabled: false,
-      graphApiStatus: "idle",
+      graphApiStatus: "disconnected",
+      graphApiCapability: null,
+      graphApiLastAttempt: null,
 
       setCurrentPlatform: (platform) => set({ currentPlatform: platform }),
       setAlwaysOnTop: (alwaysOnTop) => set({ alwaysOnTop }),
@@ -617,6 +647,8 @@ export const useUiStore = create<UiState>()(
       clearRecentSessions: () => set({ recentSessions: [] }),
       setGraphApiEnabled: (enabled) => set({ graphApiEnabled: enabled }),
       setGraphApiStatus: (status) => set({ graphApiStatus: status }),
+      setGraphApiCapability: (capability) => set({ graphApiCapability: capability }),
+      setGraphApiLastAttempt: (attempt) => set({ graphApiLastAttempt: attempt }),
     }),
     {
       name: "cmtraceopen-ui-preferences",

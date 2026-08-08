@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": { "captureHost": "LAB-MP01", "siteCode": "LAB", "rolesObserved": ["managementPoint"] },
+  "artifacts": [
+    { "artifactId": "synthetic:artifact:sha256.v1:a77e71c0b196187e25d552021e469b7441592a61640ee134aa45b3fc106860d0", "producerRole": "managementPoint", "producerHostHandle": "synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f", "sourceId": "server-mp-policy", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_CONFIGURED_NONDEFAULT_ROOT", "originalBasename": "MP_GetPolicy.log", "configuredPathProvenance": { "state": "configured", "pathClass": "nonDefault", "pathFingerprint": "synthetic:path:sha256.v1:b75a3632071cb269affe517c8d05f7a71fbe0d7e691ef489f4bb77717c6a6d32" }, "defaultCandidateState": "absentCandidateOnly", "rotation": { "kind": "current", "lineageId": "synthetic:lineage:sha256.v1:878487409fe658c72ede1deef1f02bc1fd414ff73035bfd54bd6dcb968cf18f5" }, "captureState": "captured", "encoding": "utf-8", "collectionLimit": { "byteLimit": 4096, "limitApplied": false }, "collectedUtc": "2026-07-30T00:01:00Z", "relativePath": "evidence/sccm/server/management-point/server-mp-policy/current/MP_GetPolicy.log", "bytesCopied": 183 }
+  ]
+}

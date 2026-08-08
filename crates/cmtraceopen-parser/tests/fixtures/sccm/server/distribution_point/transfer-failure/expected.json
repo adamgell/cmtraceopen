@@ -1,0 +1,121 @@
+{
+  "artifactRequests": [],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:a83be0e994ca01ceee22d935941de0e9b5fdc8d0b88ab31a29f6d4fef8f3c5c6",
+          "entryId": "synthetic:artifact:sha256.v1:a83be0e994ca01ceee22d935941de0e9b5fdc8d0b88ab31a29f6d4fef8f3c5c6:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:a83be0e994ca01ceee22d935941de0e9b5fdc8d0b88ab31a29f6d4fef8f3c5c6",
+          "entryId": "synthetic:artifact:sha256.v1:a83be0e994ca01ceee22d935941de0e9b5fdc8d0b88ab31a29f6d4fef8f3c5c6:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:0b9a2184933434a5c90970ceae8e32e7b03de7cf126ea33741c15cf0dd62bcc5",
+          "entryId": "synthetic:artifact:sha256.v1:0b9a2184933434a5c90970ceae8e32e7b03de7cf126ea33741c15cf0dd62bcc5:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        }
+      ],
+      "key": {
+        "contentId": "content-eta",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00007",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "distribute",
+      "nextArtifact": null,
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:a83be0e994ca01ceee22d935941de0e9b5fdc8d0b88ab31a29f6d4fef8f3c5c6",
+            "entryId": "synthetic:artifact:sha256.v1:a83be0e994ca01ceee22d935941de0e9b5fdc8d0b88ab31a29f6d4fef8f3c5c6:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:00.000",
+            "utcMillis": 1785412980000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:a83be0e994ca01ceee22d935941de0e9b5fdc8d0b88ab31a29f6d4fef8f3c5c6",
+            "entryId": "synthetic:artifact:sha256.v1:a83be0e994ca01ceee22d935941de0e9b5fdc8d0b88ab31a29f6d4fef8f3c5c6:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:01.000",
+            "utcMillis": 1785412981000
+          }
+        },
+        {
+          "disposition": "failed",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:0b9a2184933434a5c90970ceae8e32e7b03de7cf126ea33741c15cf0dd62bcc5",
+            "entryId": "synthetic:artifact:sha256.v1:0b9a2184933434a5c90970ceae8e32e7b03de7cf126ea33741c15cf0dd62bcc5:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": true,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:02.000",
+            "utcMillis": 1785412982000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Error",
+      "state": "failed",
+      "stopPhase": "transfer",
+      "terminalEvidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:0b9a2184933434a5c90970ceae8e32e7b03de7cf126ea33741c15cf0dd62bcc5",
+          "entryId": "synthetic:artifact:sha256.v1:0b9a2184933434a5c90970ceae8e32e7b03de7cf126ea33741c15cf0dd62bcc5:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        }
+      ],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00007:content=content-eta:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

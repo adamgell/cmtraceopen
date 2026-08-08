@@ -1,0 +1,162 @@
+{
+  "contractState": "proposedPending318",
+  "workflow": "updates",
+  "scenario": "invalid-offset",
+  "stateChain": [
+    "scan",
+    "evaluate",
+    "locateSup",
+    "download",
+    "maintenanceWindow",
+    "install",
+    "reboot",
+    "report"
+  ],
+  "analysisContract": {
+    "independentReducer": true,
+    "consumesOtherReducerOutput": false,
+    "policyOutputRequired": false,
+    "crossSideCorrelationPerformed": false
+  },
+  "extractionProfile": {
+    "selectionState": "selected",
+    "profileId": "updates-client-5.00.test-v1",
+    "sourceVersionPrefix": "5.00.TEST.",
+    "keyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "validatedArtifactFamilies": [
+      "client-updates"
+    ]
+  },
+  "reorderedInputDeterministic": true,
+  "coverage": [
+    {
+      "logicalArtifactId": "client-updates",
+      "state": "captured"
+    }
+  ],
+  "artifactProvenance": [
+    {
+      "artifactId": "updates-invalid-offset-01-scan",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    },
+    {
+      "artifactId": "updates-invalid-offset-02-evaluation",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "byteLimit": 4096,
+      "limitApplied": false
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "updates:update:32300000-0000-0000-0000-000000000014",
+      "key": {
+        "updateId": "32300000-0000-0000-0000-000000000014",
+        "ciId": "CI-UPDATE-14",
+        "contentId": "CONTENT-UPDATE-14",
+        "updateJobId": "JOB-UPDATE-14",
+        "clientHandle": "safe:client:updates-14",
+        "siteCode": "LAB",
+        "supHostHandle": null,
+        "confidence": "exact",
+        "extractionProfileId": "updates-client-5.00.test-v1"
+      },
+      "phase": "evaluate",
+      "state": "contradictory",
+      "lastSuccessfulPhase": "scan",
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "coverageGapArtifactIds": [
+        "client-updates"
+      ],
+      "nextArtifact": {
+        "logicalArtifactId": "client-updates",
+        "reason": "Collect the smallest bounded client-updates continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-invalid-offset-01-scan",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-invalid-offset-02-evaluation",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ],
+      "ordering": {
+        "crossArtifactComparable": false,
+        "reason": "invalidOffset",
+        "highConfidenceEligible": false
+      }
+    }
+  ],
+  "sourceLocalObservations": [],
+  "findings": [
+    {
+      "findingId": "finding:updates:invalid-offset",
+      "subjectId": "updates:update:32300000-0000-0000-0000-000000000014",
+      "class": "insufficientEvidence",
+      "phase": "evaluate",
+      "lastSuccessfulPhase": "scan",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "nextArtifact": {
+        "logicalArtifactId": "client-updates",
+        "reason": "Collect the smallest bounded client-updates continuation for this exact update subject."
+      },
+      "evidence": [
+        {
+          "artifactId": "updates-invalid-offset-01-scan",
+          "startLine": 1,
+          "endLine": 1
+        },
+        {
+          "artifactId": "updates-invalid-offset-02-evaluation",
+          "startLine": 1,
+          "endLine": 1
+        }
+      ]
+    }
+  ],
+  "correlationHandoff": {
+    "issue": "#333",
+    "serverPrerequisiteIssue": "#330",
+    "performed": false,
+    "timeOnlyEligible": false,
+    "topologyCompatibilityEvaluated": false,
+    "serverCauseClaimed": false,
+    "nativeAcceptanceClaimed": false,
+    "bundleCaptureHostUsedAsSupEvidence": false,
+    "counterpartReadyKeyKinds": [
+      "updateId",
+      "ciId",
+      "contentId",
+      "updateJobId",
+      "clientSafeHandle",
+      "siteCode",
+      "supHostHandle"
+    ],
+    "emittedCounterpartReadyFact": false,
+    "counterpartReadyFacts": []
+  },
+  "prohibitedClaims": [
+    "SUP or server root cause",
+    "time-only cross-artifact causality",
+    "policy reducer dependency",
+    "native Windows acceptance"
+  ]
+}

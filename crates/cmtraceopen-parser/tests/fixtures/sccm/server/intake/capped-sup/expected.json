@@ -1,0 +1,10 @@
+{
+  "pre318ExpectedVersion": 1,
+  "coverage": [{ "producerRole": "siteServer", "workflowSubjectRole": "softwareUpdatePoint", "sourceId": "server-sup-sync", "state": "capped", "truncated": true }],
+  "artifactProvenance": [{ "artifactId": "synthetic:artifact:sha256.v1:8ffd2bfbfcd641204b0108f4d880ef9aae8472e9cde9abc4da5207791e09f47a", "encoding": "utf-8", "byteLimit": 64, "limitApplied": true, "bytesCopied": 64, "fragmentComplete": false, "relativePath": "evidence/sccm/server/site-server/server-sup-sync/subject-software-update-point/instance-17eae15500d8968f/root-b11afca548220198/current/wsyncmgr.log", "sha256": "49e36353149bd66ac7a2946050836e00828de5cc47081a508888a5cea786cd16" }],
+  "rawByteCountedBeforeDecoding": true,
+  "completeCcmRecordCount": 0,
+  "logicalRecordParseable": false,
+  "terminalSoftwareUpdatePointHealth": false,
+  "nextArtifactRequest": "bounded recapture of server-sup-sync with a cap sufficient for complete logical records"
+}

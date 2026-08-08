@@ -1,0 +1,113 @@
+{
+  "productionAdmissionError": null,
+  "productionOutput": {
+    "findings": [
+      {
+        "class": "confirmedFailure",
+        "confidence": "high",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "health-setup-failure-ccmsetup-current",
+            "entryId": "health-setup-failure-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "findingId": "client-health-install-stop",
+        "healthPhase": "install",
+        "lastConfirmedSuccessfulPhase": null,
+        "nextArtifacts": [
+          {
+            "logicalId": "ccmSetup",
+            "reason": "Confirm the root cause recorded by ccmsetup.",
+            "role": "client"
+          }
+        ],
+        "phase": "install",
+        "role": "client",
+        "severity": "Error",
+        "summary": "Admitted client evidence recorded a terminal failure at the install phase.",
+        "terminalEvidence": [
+          {
+            "kind": "observedFailure",
+            "reference": {
+              "artifactId": "health-setup-failure-ccmsetup-current",
+              "entryId": "health-setup-failure-ccmsetup-current:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          }
+        ],
+        "title": "Client health install recorded a terminal failure"
+      }
+    ],
+    "hops": [
+      {
+        "evidence": [
+          {
+            "artifactId": "health-setup-failure-ccmsetup-current",
+            "entryId": "health-setup-failure-ccmsetup-current:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          }
+        ],
+        "phase": "install",
+        "state": "failed"
+      }
+    ],
+    "lastConfirmedSuccessfulPhase": null,
+    "lifecyclePhase": "install",
+    "prohibitedClaims": [
+      "server root cause",
+      "isolated error proves terminal failure",
+      "missing source proves workflow failure",
+      "host path or raw sensitive text export"
+    ],
+    "schemaVersion": 1,
+    "sourceCoverage": [
+      {
+        "artifactId": "health-setup-failure-ccmsetup-current",
+        "coverage": "captured",
+        "fragmentComplete": true,
+        "logicalArtifactId": "client-ccmsetup",
+        "physical": true,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-setup-failure-evaluation-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-evaluation",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-setup-failure-identity-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-identity",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      },
+      {
+        "artifactId": "health-setup-failure-location-services-absent",
+        "coverage": "absent",
+        "fragmentComplete": false,
+        "logicalArtifactId": "client-location",
+        "physical": false,
+        "rotation": {
+          "kind": "current"
+        }
+      }
+    ]
+  },
+  "scenario": "setup-failure"
+}

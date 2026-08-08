@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  captureSccmDiagnostics,
+  discoverSccmEnvironment,
   getSafeErrorMessage,
   graphGetAuthStatus,
+  graphAuthenticate,
+  graphCancelAuthentication,
+  graphReserveInteractiveOperation,
   graphRequestMissingPermissions,
   openLogFile,
+  revealInFileManager,
 } from "./commands";
 import { readAccessDenied } from "./source-error";
 
@@ -71,39 +77,183 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
 });
 
+function validGraphStatus() {
+  return {
+    isAuthenticated: true,
+    userPrincipalName: "admin@contoso.com",
+    objectId: "00000000-0000-0000-0000-0000000000a1",
+    tenantId: "tenant-1",
+    grantedScopes: ["DeviceManagementManagedDevices.Read.All"],
+    missingScopes: [],
+    expiresAt: 1_800_000_000,
+    capabilities: {
+      managedDevices: true,
+      serviceConfig: false,
+      apps: false,
+      configuration: false,
+      scripts: false,
+    },
+  };
+}
+
+describe("SCCM product-path IPC boundary", () => {
+  it("invokes discovery and capture without accepting frontend inputs", async () => {
+    const discovery = { supported: true, roles: [], sources: [], issues: [] };
+    const capture = {
+      bundleRoot: "C:\\capture",
+      capturedAtUtc: "2026-08-04T14:30:00Z",
+      roles: [],
+      sources: [],
+      artifactCount: 0,
+      retainedBytes: 0,
+    };
+    vi.mocked(invoke)
+      .mockResolvedValueOnce(discovery)
+      .mockResolvedValueOnce(capture)
+      .mockResolvedValueOnce(undefined);
+
+    await expect(discoverSccmEnvironment()).resolves.toBe(discovery);
+    await expect(captureSccmDiagnostics()).resolves.toBe(capture);
+    await expect(
+      revealInFileManager(capture.bundleRoot),
+    ).resolves.toBeUndefined();
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      "discover_sccm_environment",
+      undefined,
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      "capture_sccm_diagnostics",
+      undefined,
+    );
+    expect(invoke).toHaveBeenNthCalledWith(3, "reveal_in_file_manager", {
+      path: capture.bundleRoot,
+    });
+  });
+});
+
 describe("Graph permission upgrade IPC boundary", () => {
   it("invokes the zero-argument native permission upgrade command", async () => {
     const result = {
       outcome: "upgraded",
-      status: {
-        isAuthenticated: true,
-        userPrincipalName: "admin@contoso.com",
-        tenantId: "tenant-1",
-        grantedScopes: ["DeviceManagementManagedDevices.Read.All"],
-        missingScopes: [],
-        expiresAt: 1_800_000_000,
-        capabilities: {
-          managedDevices: true,
-          serviceConfig: false,
-          apps: false,
-          configuration: false,
-          scripts: false,
-        },
-        error: null,
-      },
+      status: validGraphStatus(),
       message: null,
     };
     vi.mocked(invoke).mockResolvedValueOnce(result);
 
-    await expect(graphRequestMissingPermissions()).resolves.toBe(result);
+    await expect(
+      graphRequestMissingPermissions("permission-request-1"),
+    ).resolves.toBe(result);
 
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "graph_request_missing_permissions",
-      undefined,
+      { attemptId: "permission-request-1" },
     );
   });
+});
+
+describe("Graph authentication IPC boundary", () => {
+  it("accepts only native-issued UUID-shaped operation tickets", async () => {
+    const ticket = {
+      attemptId: "22d12752-4b6e-45e0-aac4-0bc351e91118",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(ticket).mockResolvedValueOnce({
+      attemptId: "frontend-controlled",
+    });
+
+    await expect(
+      graphReserveInteractiveOperation("authentication"),
+    ).resolves.toBe(ticket);
+    await expect(
+      graphReserveInteractiveOperation("permissionConsent"),
+    ).rejects.toThrow(
+      "Command 'graph_reserve_interactive_operation' returned an invalid response.",
+    );
+
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
+      "graph_reserve_interactive_operation",
+      { kind: "authentication" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      "graph_reserve_interactive_operation",
+      { kind: "permissionConsent" },
+    );
+  });
+
+  it("passes request ownership through authenticate and cancellation", async () => {
+    const result = {
+      outcome: "cancelled",
+      status: validGraphStatus(),
+      capability: { kind: "available" },
+      message: "Microsoft Graph sign-in was cancelled.",
+    };
+    vi.mocked(invoke).mockResolvedValueOnce(result).mockResolvedValueOnce(true);
+
+    await expect(graphAuthenticate("auth-request-1")).resolves.toBe(result);
+    await expect(graphCancelAuthentication("auth-request-1")).resolves.toBe(
+      true,
+    );
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "graph_authenticate", {
+      attemptId: "auth-request-1",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "graph_cancel_authentication", {
+      attemptId: "auth-request-1",
+    });
+  });
+
+  it.each([
+    ["graph_authenticate", () => graphAuthenticate("auth-request-1"), null],
+    [
+      "graph_authenticate",
+      () => graphAuthenticate("auth-request-1"),
+      {
+        outcome: "connected",
+        status: { ...validGraphStatus(), capabilities: {} },
+        capability: { kind: "available" },
+        message: null,
+      },
+    ],
+    [
+      "graph_authenticate",
+      () => graphAuthenticate("auth-request-1"),
+      {
+        outcome: "other",
+        status: validGraphStatus(),
+        capability: { kind: "available" },
+        message: null,
+      },
+    ],
+    [
+      "graph_cancel_authentication",
+      () => graphCancelAuthentication("auth-request-1"),
+      "true",
+    ],
+    [
+      "graph_request_missing_permissions",
+      () => graphRequestMissingPermissions("permission-request-1"),
+      {
+        outcome: "other",
+        status: validGraphStatus(),
+        message: null,
+      },
+    ],
+  ] as const)(
+    "rejects malformed %s responses",
+    async (commandName, call, malformedResponse) => {
+      vi.mocked(invoke).mockResolvedValueOnce(malformedResponse);
+
+      await expect(call()).rejects.toThrow(
+        `Command '${commandName}' returned an invalid response.`,
+      );
+    },
+  );
 });
 
 describe("command rejection sanitization", () => {
@@ -335,7 +485,11 @@ describe("getSafeErrorMessage", () => {
   it("surfaces the message from a plain-data-object rejection", () => {
     expect(
       getSafeErrorMessage(
-        { kind: "sourceNotFound", path: "C:\\bundle", message: "manifest missing" },
+        {
+          kind: "sourceNotFound",
+          path: "C:\\bundle",
+          message: "manifest missing",
+        },
         "safe fallback",
       ),
     ).toBe("manifest missing");
@@ -398,7 +552,9 @@ describe("Access Denied classification", () => {
   it("records a well-formed verdict on the normalized error", async () => {
     invokeMock.mockRejectedValue(accessDeniedPayload());
 
-    const error = await captureRejection(openLogFile("C:\\Windows\\Logs\\CBS.log"));
+    const error = await captureRejection(
+      openLogFile("C:\\Windows\\Logs\\CBS.log"),
+    );
 
     expect(readAccessDenied(error)).toEqual({
       kind: "accessDenied",

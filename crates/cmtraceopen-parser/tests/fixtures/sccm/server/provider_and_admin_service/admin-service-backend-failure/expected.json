@@ -1,0 +1,213 @@
+{
+  "artifactRequests": [],
+  "coverage": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+      "producerRole": "adminService",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "confirmedFailure",
+        "confidence": "high",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:4-4",
+            "lineEnd": 4,
+            "lineStart": 4
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+            "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:5-5",
+            "lineEnd": 5,
+            "lineStart": 5
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:cd312ed5e01c11ec9b6dce620aa4f743f65576ea7ffd148e12008db9642f5c32",
+        "nextArtifacts": [],
+        "phase": "providerAndAdminService",
+        "role": "adminService",
+        "severity": "Error",
+        "summary": "Admin Service recorded an explicit terminal operation failure.",
+        "terminalEvidence": [
+          {
+            "kind": "observedFailure",
+            "reference": {
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:5-5",
+              "lineEnd": 5,
+              "lineStart": 5
+            }
+          }
+        ],
+        "title": "Admin Service confirmed failure"
+      },
+      "lastSuccessfulPhase": "route",
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "adminService:cmtraceopen.request.sha256.v1:c83b03e700efb70eeb3a27cf47f69f9e54e59375f79b1d8b2896f4d89cfc32ab:cmtraceopen.operation.sha256.v1:526ee4e602f7917ad02c5a48c2c4406d02a9f6a19d27173de039e74896de2ec2:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "admin-service-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "adminService"
+        ]
+      },
+      "layer": "adminService",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "admin-service-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "adminService"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:526ee4e602f7917ad02c5a48c2c4406d02a9f6a19d27173de039e74896de2ec2",
+        "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+        "requestHandle": "cmtraceopen.request.sha256.v1:c83b03e700efb70eeb3a27cf47f69f9e54e59375f79b1d8b2896f4d89cfc32ab"
+      },
+      "lastSuccessfulPhase": "route",
+      "layer": "adminService",
+      "nextArtifactRequests": [],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:3-3-03",
+          "phase": "route",
+          "terminal": false
+        },
+        {
+          "disposition": "failed",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:4-4",
+              "lineEnd": 4,
+              "lineStart": 4
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:4-4-04",
+          "phase": "executeBackendOperation",
+          "terminal": false
+        },
+        {
+          "disposition": "failed",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1",
+              "entryId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:5-5",
+              "lineEnd": 5,
+              "lineStart": 5
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:740d8904c9f08ce916ab359bf5fb81d54366036d5b32fec02b0355ccc68981b1:5-5-05",
+          "phase": "recordOutcome",
+          "terminal": true
+        }
+      ],
+      "producerRole": "adminService",
+      "publicSummary": "Admin Service recorded an explicit terminal operation failure.",
+      "sourceVersion": "5.00.TEST",
+      "state": "failed",
+      "terminalEvidence": true,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "adminService:cmtraceopen.request.sha256.v1:c83b03e700efb70eeb3a27cf47f69f9e54e59375f79b1d8b2896f4d89cfc32ab:cmtraceopen.operation.sha256.v1:526ee4e602f7917ad02c5a48c2c4406d02a9f6a19d27173de039e74896de2ec2:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

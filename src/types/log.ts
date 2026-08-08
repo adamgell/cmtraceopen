@@ -16,6 +16,7 @@ export type ParserKind =
   | "msi"
   | "psadtLegacy"
   | "intuneMacOs"
+  | "intuneDeviceInventory"
   | "dhcp"
   | "burn"
   | "patchMyPcDetection"
@@ -34,6 +35,7 @@ export type ParserImplementation =
   | "msi"
   | "psadtLegacy"
   | "intuneMacOs"
+  | "intuneDeviceInventory"
   | "dhcp"
   | "burn"
   | "patchMyPcDetection"
@@ -46,7 +48,11 @@ export type ParserProvenance = "dedicated" | "heuristic" | "fallback";
 export type ParseQuality = "structured" | "semiStructured" | "textFallback";
 export type RecordFraming = "physicalLine" | "logicalRecord";
 export type DateFieldOrder = "monthFirst" | "dayFirst";
-export type ParserSpecialization = "ime";
+export type ParserSpecialization =
+  | "ime"
+  | "intuneDeviceInventoryHarvester"
+  | "intuneDeviceInventoryAdaptor"
+  | "intuneDeviceInventoryRotationFailure";
 
 export type LogSourceKind = "file" | "folder" | "known";
 export type KnownSourcePathKind = "file" | "folder";
@@ -61,6 +67,7 @@ export type WorkspaceId =
   | "deployment"
   | "event-log"
   | "esp-diagnostics"
+  | "sccm"
   | "secureboot"
   | "sysmon"
   | "timeline"

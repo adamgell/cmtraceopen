@@ -1,0 +1,159 @@
+{
+  "artifactRequests": [],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "findings": [
+    {
+      "class": "confirmedFailure",
+      "confidence": "high",
+      "correlationKeys": [],
+      "coverageGaps": [],
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:4-4",
+          "lineEnd": 4,
+          "lineStart": 4
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:6-6",
+          "lineEnd": 6,
+          "lineStart": 6
+        }
+      ],
+      "findingId": "site-core:finding:v1:330125344900f74dc3879c7bccdc5ed2ab511e591750ed839b17d879a3726b96",
+      "lastSuccessfulPhase": "componentWork",
+      "nextArtifacts": [],
+      "phase": "componentWork",
+      "role": "siteServer",
+      "severity": "Error",
+      "subjectId": "site-core:result:v1:637fa91611388fc4a95ec886a6ea3b65f1c3030ff7bd9d96ff55bfbde0a1cb6f",
+      "summary": "The last confirmed successful phase is componentWork; later phases are bounded to cited evidence.",
+      "terminalEvidence": [
+        {
+          "kind": "observedFailure",
+          "reference": {
+            "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+            "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:6-6",
+            "lineEnd": 6,
+            "lineStart": 6
+          }
+        }
+      ],
+      "title": "Site component and status evidence"
+    }
+  ],
+  "profile": {
+    "id": "sccm-site-core",
+    "stability": "experimental",
+    "version": 1
+  },
+  "results": [
+    {
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:4-4",
+          "lineEnd": 4,
+          "lineStart": 4
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:6-6",
+          "lineEnd": 6,
+          "lineStart": 6,
+          "terminal": true
+        }
+      ],
+      "findingClass": "confirmedFailure",
+      "lastSuccessfulPhase": "componentWork",
+      "nextArtifacts": [],
+      "resultId": "site-core:result:v1:637fa91611388fc4a95ec886a6ea3b65f1c3030ff7bd9d96ff55bfbde0a1cb6f",
+      "state": "terminalFailure",
+      "transactionKey": {
+        "componentId": "SMS_EXECUTIVE",
+        "producerHostHandle": "synthetic:host:sha256.v1:4984d720bb6415f515b22c382e5199b0b407bc05246f4b89aff5f290bcd9f313",
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteHandle": "synthetic:site:lab",
+        "workItemId": "SC-CONTRA-EXEC-001"
+      }
+    },
+    {
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "coverageGapArtifactIds": [],
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c",
+          "entryId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c",
+          "entryId": "synthetic:artifact:sha256.v1:2eac73afbe5bb46eb865ba2d5fca3bc396708cdadfba9d1d125e9d406a78854c:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:3-3",
+          "lineEnd": 3,
+          "lineStart": 3
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "entryId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff:5-5",
+          "lineEnd": 5,
+          "lineStart": 5
+        }
+      ],
+      "findingClass": null,
+      "lastSuccessfulPhase": "healthyOrTerminal",
+      "nextArtifacts": [],
+      "resultId": "site-core:result:v1:fdc88da8788713de6fa2533ba107330b10240e087e91c767480bec24d90382af",
+      "state": "healthy",
+      "transactionKey": {
+        "componentId": "SMS_DISTRIBUTION_MANAGER",
+        "producerHostHandle": "synthetic:host:sha256.v1:4984d720bb6415f515b22c382e5199b0b407bc05246f4b89aff5f290bcd9f313",
+        "profileId": "sccm-site-core",
+        "profileVersion": 1,
+        "siteHandle": "synthetic:site:lab",
+        "workItemId": "SC-CONTRA-DIST-001"
+      }
+    }
+  ],
+  "schemaVersion": 1,
+  "stateChain": [
+    "componentStart",
+    "componentWork",
+    "inboxOrQueue",
+    "statusOrStateProcessing",
+    "healthyOrTerminal"
+  ],
+  "unlinkedObservations": [],
+  "workflow": "siteCore"
+}

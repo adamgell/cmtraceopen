@@ -1,0 +1,17 @@
+{
+  "pre318ExpectedVersion": 1,
+  "canonicalArtifactIds": ["synthetic:artifact:sha256.v1:721420190054ad85f091f558f77cd4e6e54b50da9426b7d979f7edcda7970b78", "synthetic:artifact:sha256.v1:b117cc48fba84a0cef85a662fdba0009e1d2723edc6b51af457d829cfa09e7c8"],
+  "coverage": [{ "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured", "configuredRootInstances": 2 }],
+  "collisionAssertions": {
+    "sameBasename": "MP_GetPolicy.log",
+    "distinctPathFingerprints": true,
+    "distinctOpaqueRootSegments": true,
+    "notMerged": true,
+    "normalizedArtifactCount": 2,
+    "exactReferencesResolve": true
+  },
+  "artifactProvenance": [
+    { "artifactId": "synthetic:artifact:sha256.v1:721420190054ad85f091f558f77cd4e6e54b50da9426b7d979f7edcda7970b78", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 173, "relativePath": "evidence/sccm/server/management-point/server-mp-policy/root-7d4a9c2e/current/MP_GetPolicy.log", "sha256": "021ea9b3a82c25f42095ee2fe460ed25718193b3798f624041a0621a62ed6cd0" },
+    { "artifactId": "synthetic:artifact:sha256.v1:b117cc48fba84a0cef85a662fdba0009e1d2723edc6b51af457d829cfa09e7c8", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false, "bytesCopied": 172, "relativePath": "evidence/sccm/server/management-point/server-mp-policy/root-b83f10d6/current/MP_GetPolicy.log", "sha256": "b95b8b26b4d87f9a6a9b708a8290a4ac9bb30b9c95849e20d6b434d14d91f909" }
+  ]
+}

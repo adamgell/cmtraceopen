@@ -1,0 +1,124 @@
+{
+  "artifactRequests": [
+    {
+      "logicalId": "pkgXferMgr",
+      "reason": "Collect the complete PkgXferMgr.log file.",
+      "role": "siteServer"
+    }
+  ],
+  "coverageGaps": [],
+  "crossSideCorrelationPerformed": false,
+  "profile": {
+    "id": "dp-server-5.00.test-v1",
+    "stability": "experimental",
+    "version": 1
+  },
+  "schemaVersion": 1,
+  "transactions": [
+    {
+      "classification": "blockedOrDeferred",
+      "confidence": "medium",
+      "contentVersionMismatch": false,
+      "evidence": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:69de6aa9ca426d7f8f3477b7ccc99b7223d982b0849cacd22c70c8f40a8f1840",
+          "entryId": "synthetic:artifact:sha256.v1:69de6aa9ca426d7f8f3477b7ccc99b7223d982b0849cacd22c70c8f40a8f1840:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:69de6aa9ca426d7f8f3477b7ccc99b7223d982b0849cacd22c70c8f40a8f1840",
+          "entryId": "synthetic:artifact:sha256.v1:69de6aa9ca426d7f8f3477b7ccc99b7223d982b0849cacd22c70c8f40a8f1840:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:d60c73e9ff1013dd437b14d18c061526dc81e5aa2bbfec8de537c2b13e40e1ae",
+          "entryId": "synthetic:artifact:sha256.v1:d60c73e9ff1013dd437b14d18c061526dc81e5aa2bbfec8de537c2b13e40e1ae:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        }
+      ],
+      "key": {
+        "contentId": "content-theta",
+        "contentVersion": 1,
+        "distributionPointHandle": "synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea",
+        "extractionProfileId": "dp-server-5.00.test-v1",
+        "extractionProfileVersion": 1,
+        "packageId": "LAB00008",
+        "siteCode": "LAB",
+        "topologySiteHandle": "synthetic:site:lab"
+      },
+      "lastProvenPhase": "distribute",
+      "nextArtifact": {
+        "logicalId": "pkgXferMgr",
+        "reason": "Collect the complete PkgXferMgr.log file.",
+        "role": "siteServer"
+      },
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:69de6aa9ca426d7f8f3477b7ccc99b7223d982b0849cacd22c70c8f40a8f1840",
+            "entryId": "synthetic:artifact:sha256.v1:69de6aa9ca426d7f8f3477b7ccc99b7223d982b0849cacd22c70c8f40a8f1840:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "receiveContent",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:00.000",
+            "utcMillis": 1785412980000
+          }
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:69de6aa9ca426d7f8f3477b7ccc99b7223d982b0849cacd22c70c8f40a8f1840",
+            "entryId": "synthetic:artifact:sha256.v1:69de6aa9ca426d7f8f3477b7ccc99b7223d982b0849cacd22c70c8f40a8f1840:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          "phase": "distribute",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:01.000",
+            "utcMillis": 1785412981000
+          }
+        },
+        {
+          "disposition": "blocked",
+          "evidence": {
+            "artifactId": "synthetic:artifact:sha256.v1:d60c73e9ff1013dd437b14d18c061526dc81e5aa2bbfec8de537c2b13e40e1ae",
+            "entryId": "synthetic:artifact:sha256.v1:d60c73e9ff1013dd437b14d18c061526dc81e5aa2bbfec8de537c2b13e40e1ae:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          "phase": "transfer",
+          "sourceId": "server-dp-distribution",
+          "terminal": false,
+          "timestamp": {
+            "offsetMinutes": 0,
+            "orderingState": "normalizedUtc",
+            "originalDisplay": "07-30-2026 12:03:02.000",
+            "utcMillis": 1785412982000
+          }
+        }
+      ],
+      "recovered": false,
+      "scope": "distributionPointContent",
+      "severity": "Warning",
+      "state": "blocked",
+      "stopPhase": "transfer",
+      "terminalEvidence": [],
+      "transactionId": "dp:topology-site=synthetic:site:lab:site=LAB:package=LAB00008:content=content-theta:content-version=1:dp=synthetic:subject:sha256.v1:7254d2b8e39da0f9e69d6af6e4d512ad3578a8f88e9a1d02b5c76037ce9f34ea:profile=dp-server-5.00.test-v1:profile-version=1"
+    }
+  ],
+  "workflow": "distributionPointContent"
+}

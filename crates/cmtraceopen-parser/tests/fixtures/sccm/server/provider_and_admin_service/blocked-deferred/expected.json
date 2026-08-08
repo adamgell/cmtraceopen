@@ -1,0 +1,195 @@
+{
+  "artifactRequests": [
+    {
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+      "producerRole": "adminService",
+      "request": {
+        "logicalId": "adminService",
+        "reason": "Collect the complete AdminService.log file.",
+        "role": "adminService"
+      },
+      "sourceVersion": "5.00.TEST",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+      "producerRole": "adminService",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "blockedOrDeferred",
+        "confidence": "moderate",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+            "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+            "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+            "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:47431b531453b9c7ade49fefd9a91a6248f67023bb08bca393e9c964335d483b",
+        "nextArtifacts": [
+          {
+            "logicalId": "adminService",
+            "reason": "Collect the complete AdminService.log file.",
+            "role": "adminService"
+          }
+        ],
+        "phase": "providerAndAdminService",
+        "role": "adminService",
+        "severity": "Warning",
+        "summary": "Admin Service evidence records a blocked or deferred request without a terminal outcome.",
+        "terminalEvidence": [],
+        "title": "Admin Service blocked or deferred"
+      },
+      "lastSuccessfulPhase": "authenticateOrAuthorize",
+      "layer": "adminService",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "adminService:cmtraceopen.request.sha256.v1:c90815886d04b162dd7a2e2393ee97fbbbc1c5ccb166116ec825e167f0bb094b:cmtraceopen.operation.sha256.v1:845ac95236bc882dceb085e4c8f22b2080fa2f1731b7e30e3a63a5c22627f305:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "admin-service-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "adminService"
+        ]
+      },
+      "layer": "adminService",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "blockedOrDeferred",
+      "confidence": "moderate",
+      "confidenceCeiling": "moderate",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "admin-service-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "adminService"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:845ac95236bc882dceb085e4c8f22b2080fa2f1731b7e30e3a63a5c22627f305",
+        "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+        "requestHandle": "cmtraceopen.request.sha256.v1:c90815886d04b162dd7a2e2393ee97fbbbc1c5ccb166116ec825e167f0bb094b"
+      },
+      "lastSuccessfulPhase": "authenticateOrAuthorize",
+      "layer": "adminService",
+      "nextArtifactRequests": [
+        {
+          "layer": "adminService",
+          "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+          "producerRole": "adminService",
+          "request": {
+            "logicalId": "adminService",
+            "reason": "Collect the complete AdminService.log file.",
+            "role": "adminService"
+          },
+          "sourceVersion": "5.00.TEST",
+          "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+        }
+      ],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+              "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+              "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "pending",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5",
+              "entryId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:38470155bbb82614e18867255fdb56d56038c9ce4cc4ffe39f55d5501ddc24e5:3-3-03",
+          "phase": "route",
+          "terminal": false
+        }
+      ],
+      "producerRole": "adminService",
+      "publicSummary": "Admin Service evidence records a blocked or deferred request without a terminal outcome.",
+      "sourceVersion": "5.00.TEST",
+      "state": "blockedOrDeferred",
+      "terminalEvidence": false,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "adminService:cmtraceopen.request.sha256.v1:c90815886d04b162dd7a2e2393ee97fbbbc1c5ccb166116ec825e167f0bb094b:cmtraceopen.operation.sha256.v1:845ac95236bc882dceb085e4c8f22b2080fa2f1731b7e30e3a63a5c22627f305:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

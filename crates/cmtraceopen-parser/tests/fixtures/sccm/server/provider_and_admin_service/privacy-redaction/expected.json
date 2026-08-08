@@ -1,0 +1,311 @@
+{
+  "artifactRequests": [],
+  "coverage": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d",
+      "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+      "producerRole": "adminService",
+      "sourceId": "server-admin-service",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    },
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "producerRole": "provider",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    },
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "admin-service-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "adminService"
+        ]
+      },
+      "layer": "adminService",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [
+    {
+      "artifactIds": [
+        "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d"
+      ],
+      "correlationEligible": false,
+      "kind": "privacyRedacted",
+      "observationId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d-privacy"
+    },
+    {
+      "artifactIds": [
+        "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a"
+      ],
+      "correlationEligible": false,
+      "kind": "privacyRedacted",
+      "observationId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a-privacy"
+    }
+  ],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "admin-service-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "adminService"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:cca09a76facbad65ba2d339785030164782e745b293c0ffd7ab3f3606398e849",
+        "producerHostHandle": "synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869",
+        "requestHandle": "cmtraceopen.request.sha256.v1:c1bf4eb3ae2066274cdc69dc3e504be5d662971573db81b8b1c49076c7c64070"
+      },
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "adminService",
+      "nextArtifactRequests": [],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d",
+              "entryId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d",
+              "entryId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d",
+              "entryId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:3-3-03",
+          "phase": "route",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d",
+              "entryId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:4-4",
+              "lineEnd": 4,
+              "lineStart": 4
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:4-4-04",
+          "phase": "executeBackendOperation",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d",
+              "entryId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:5-5",
+              "lineEnd": 5,
+              "lineStart": 5
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:5-5-05",
+          "phase": "respond",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d",
+              "entryId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:6-6",
+              "lineEnd": 6,
+              "lineStart": 6
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:9f98beb1b9e48db8ae02fe0ad0aebceeef5dbc901ff195226c952f1c2c4c391d:6-6-06",
+          "phase": "recordOutcome",
+          "terminal": true
+        }
+      ],
+      "producerRole": "adminService",
+      "publicSummary": "Admin Service operation completed with explicit terminal evidence.",
+      "sourceVersion": "5.00.TEST",
+      "state": "succeeded",
+      "terminalEvidence": true,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "adminService:cmtraceopen.request.sha256.v1:c1bf4eb3ae2066274cdc69dc3e504be5d662971573db81b8b1c49076c7c64070:cmtraceopen.operation.sha256.v1:cca09a76facbad65ba2d339785030164782e745b293c0ffd7ab3f3606398e849:synthetic:host:sha256.v1:a22cee83cad2c0c3caf233629d88256529ecfacad2ffd5dab098007b230bd869:synthetic:subject:sha256.v1:97c5ee816ecb52c212d362d881f4255e44e44c32db93952f9e5ef40a2a7dd92a"
+    },
+    {
+      "classification": "success",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "provider-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "provider"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:f7d06e2b60022b880d60cf2c32ed17af1c034dc976092b0974e746d30244fb82",
+        "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+        "requestHandle": "cmtraceopen.request.sha256.v1:c1bf4eb3ae2066274cdc69dc3e504be5d662971573db81b8b1c49076c7c64070"
+      },
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "provider",
+      "nextArtifactRequests": [],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a",
+              "entryId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a",
+              "entryId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a",
+              "entryId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:3-3-03",
+          "phase": "executeProviderOperation",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a",
+              "entryId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:4-4",
+              "lineEnd": 4,
+              "lineStart": 4
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:4-4-04",
+          "phase": "respond",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a",
+              "entryId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:5-5",
+              "lineEnd": 5,
+              "lineStart": 5
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f0b79ff4d5ef303d6509dc8f56b4ec7829090a795df23c8521eb20069b63b75a:5-5-05",
+          "phase": "recordOutcome",
+          "terminal": true
+        }
+      ],
+      "producerRole": "provider",
+      "publicSummary": "Provider operation completed with explicit terminal evidence.",
+      "sourceVersion": "5.00.TEST",
+      "state": "succeeded",
+      "terminalEvidence": true,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:c1bf4eb3ae2066274cdc69dc3e504be5d662971573db81b8b1c49076c7c64070:cmtraceopen.operation.sha256.v1:f7d06e2b60022b880d60cf2c32ed17af1c034dc976092b0974e746d30244fb82:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

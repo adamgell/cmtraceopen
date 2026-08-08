@@ -1,0 +1,44 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": {
+    "synthetic": true,
+    "rawPaths": "redacted"
+  },
+  "bundleRole": "server",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "siteCode": "LAB",
+    "rolesObserved": [
+      "provider"
+    ]
+  },
+  "artifacts": [
+    {
+      "artifactId": "coverage-provider-unsupported",
+      "producerRole": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "workflowSubject": {
+        "role": "provider",
+        "instanceHandle": "synthetic:subject:provider-01"
+      },
+      "sourceId": "server-provider",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED_PROVIDER_ROOT",
+      "originalBasename": "Smsprov.log",
+      "configuredPathProvenance": {
+        "state": "defaultCandidate",
+        "pathFingerprint": "synthetic:path:provider-primary"
+      },
+      "rotation": {
+        "kind": "current",
+        "lineageId": "provider-primary"
+      },
+      "captureState": "unsupported",
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 0,
+      "unsupportedReason": "no approved server source contract"
+    }
+  ]
+}

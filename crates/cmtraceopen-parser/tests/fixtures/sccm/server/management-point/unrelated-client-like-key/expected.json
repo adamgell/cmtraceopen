@@ -1,0 +1,35 @@
+{
+  "contractState": "proposedPending318And335",
+  "workflow": "managementPoint",
+  "scenario": "unrelated-client-like-key",
+  "stateChain": ["receiveRequest","authenticate","registerOrIdentify","resolveLocationOrPolicy","respond","recordOutcome"],
+  "analysisContract": {"independentReducer":true,"consumesClientOutput":false,"consumesSiteCoreOutput":false,"crossSideCorrelationPerformed":false},
+  "extractionProfile": {"selectionState":"selectedNoCompatibleTransaction","profileId":"mp-server-5.00.test-v1","sourceVersionPrefix":"5.00.TEST","validatedArtifactFamilies":["server-mp-auth","server-mp-policy"],"validatedRole":"managementPoint"},
+  "topology": {"role":"managementPoint","captureHostHandle":"safe:mp:lab-mp-01","siteCode":"LAB"},
+  "roleAssessment": {"roleObserved":true,"roleAbsentInferred":false,"missingDefaultPathInterpretation":"sourceCoverageOnly"},
+  "reorderedInputDeterministic": true,
+  "programGateCoverage": [],
+  "coverage": [
+    {"logicalArtifactId":"server-mp-auth","state":"absent","requiredness":"required"},
+    {"logicalArtifactId":"server-mp-policy","state":"captured","requiredness":"required"}
+  ],
+  "artifactProvenance": [
+    {"artifactId":"mp-unrelated-auth-absent","captureState":"absent","role":"managementPoint","producer":"MP_GetAuth","pathFingerprint":"synthetic:unrelated-auth-configured","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T08:00:05Z","encoding":null,"byteLimit":null,"limitApplied":null},
+    {"artifactId":"mp-unrelated-policy-current","captureState":"captured","role":"managementPoint","producer":"MP_GetPolicy","pathFingerprint":"synthetic:unrelated-policy","pathProvenance":"configuredSynthetic","sourceVersion":"5.00.TEST","collectedUtc":"2026-07-30T08:00:05Z","encoding":"utf-8","byteLimit":4096,"limitApplied":false}
+  ],
+  "primaryTransactionId": null,
+  "transactions": [],
+  "sourceLocalObservations": [
+    {"observationId":"observation:coverage:server-mp-auth","key":null,"keyConfidence":"none","classification":"insufficientEvidence","phase":"receiveRequest","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","correlationEligible":false,"borrowedKeys":false,"nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Capture bounded MP_GetAuth.log coverage before evaluating Management Point requests."},"evidence":[]},
+    {"observationId":"observation:unrelated-client-like-key:server-mp-policy","key":null,"keyConfidence":"none","classification":"incompatibleKey","phase":"resolveLocationOrPolicy","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","correlationEligible":false,"borrowedKeys":false,"nextArtifact":{"logicalArtifactId":"server-mp-policy","reason":"Capture a bounded policy-family source with the exact versioned request key."},"evidence":[{"artifactId":"mp-unrelated-policy-current","startLine":1,"endLine":1}]}
+  ],
+  "contextFacts": [],
+  "findings": [
+    {"findingId":"finding:mp-coverage:server-mp-auth","subjectId":"observation:coverage:server-mp-auth","class":"insufficientEvidence","phase":"receiveRequest","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","nextArtifact":{"logicalArtifactId":"server-mp-auth","reason":"Capture bounded MP_GetAuth.log coverage before evaluating Management Point requests."},"evidence":[]},
+    {"findingId":"finding:unrelated-client-like-key:server-mp-policy","subjectId":"observation:unrelated-client-like-key:server-mp-policy","class":"lowConfidenceSymptom","phase":"resolveLocationOrPolicy","lastSuccessfulPhase":null,"confidence":"low","confidenceCeiling":"low","nextArtifact":{"logicalArtifactId":"server-mp-policy","reason":"Capture a bounded policy-family source with the exact versioned request key."},"evidence":[{"artifactId":"mp-unrelated-policy-current","startLine":1,"endLine":1}]}
+  ],
+  "clientLikeTokensAttached": false,
+  "timeProximityUsed": false,
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false,"counterpartReadyKeyKinds":["requestId","policyId","clientSafeHandle","siteCode","managementPointHostHandle"]},
+  "prohibitedClaims": ["arbitrary IIS tree required for analysis","client-side root cause or impact","cross-side correlation or #333 conclusion","management-point role absence from a missing default path","time-only or proximity-only transaction joining"]
+}

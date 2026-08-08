@@ -1,0 +1,38 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "siteCode": "LAB",
+    "rolesObserved": ["softwareUpdatePoint", "wsUs"]
+  },
+  "artifacts": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:2f21b2fe3c38a5162001ce80e0c2e88757dff11c261e8caa192693e500c3885a",
+      "producerRole": "wsUs",
+      "producerHostHandle": "synthetic:host:sha256.v1:984a7c5273c97dbb410cdaffda740fc87a61975b3f76dfe37a19772327da0b20",
+      "workflowSubject": {
+        "role": "softwareUpdatePoint",
+        "instanceHandle": "synthetic:subject:sha256.v1:ca790a8bf688c51101b35dc762ac94f7dd1a576bda7a1d85773a52e546004722"
+      },
+      "sourceId": "server-sup-wsus",
+      "sourceKind": "profileDefined",
+      "sourceVersion": "5.00.TEST",
+      "originalPath": "REDACTED_WSUS_HEALTH_EXPORT",
+      "originalBasename": "WsusHealth.json",
+      "configuredPathProvenance": {
+        "state": "notRequested",
+        "pathFingerprint": "synthetic:path:sha256.v1:f7c7d7244f6e05a5e6d0ef2431abaf3123362d6bcfaed2d6b39008f69e541e7b"
+      },
+      "rotation": { "kind": "providerDefined", "lineageId": "synthetic:lineage:sha256.v1:3850e8bdba95c779ae0dfe9df0ada110e81d5887594c0ce5a154a15d5e04ab2b" },
+      "captureState": "skipped",
+      "skipReason": "optional supplemental source not requested",
+      "collectedUtc": "2026-07-30T00:08:00Z",
+      "relativePath": null,
+      "bytesCopied": 0
+    }
+  ]
+}

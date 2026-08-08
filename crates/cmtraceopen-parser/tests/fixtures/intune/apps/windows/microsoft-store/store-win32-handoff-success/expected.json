@@ -1,0 +1,72 @@
+{
+  "scenario": "store-win32-handoff-success",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "installer-outcome",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "missing"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "storeWin32",
+      "familyBasis": "declared",
+      "state": "installCompleted",
+      "action": "install",
+      "executionContext": "unknown",
+      "intent": "unknown",
+      "storeProductId": "9WZSYNTH0002",
+      "packageFamilyName": null,
+      "displayName": "Synthetic Viewer",
+      "appId": "22222222-3333-4444-8555-666666666666",
+      "lastConfirmedPhase": "reported",
+      "confidence": "high",
+      "errorHex": null,
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "ime-log:2",
+        "ime-log:3",
+        "installer-outcome:1"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-evidence-coverage-gap",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [],
+      "coverageGapIds": [
+        "appx-operational"
+      ]
+    },
+    {
+      "findingId": "store-install-completed",
+      "severity": "info",
+      "confidence": "high",
+      "evidence": [
+        "ime-log:2",
+        "ime-log:3",
+        "installer-outcome:1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "a Store Win32 package is never given AppX terminal semantics",
+    "an installer exit code of 0 stays on the observation and is not reported as a transaction error"
+  ]
+}

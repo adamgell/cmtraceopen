@@ -42,6 +42,10 @@ import type {
   EspRelaunchResult,
   EspSessionEnvelope,
 } from "../workspaces/esp-diagnostics/types";
+import type {
+  SccmCaptureResult,
+  SccmEnvironmentDiscovery,
+} from "../workspaces/sccm/types";
 
 export interface FileAssociationPromptStatus {
   supported: boolean;
@@ -511,6 +515,18 @@ export async function getAvailableWorkspaces(): Promise<WorkspaceId[]> {
   return invokeCommand<WorkspaceId[]>("get_available_workspaces");
 }
 
+export async function discoverSccmEnvironment(): Promise<SccmEnvironmentDiscovery> {
+  return invokeCommand<SccmEnvironmentDiscovery>("discover_sccm_environment");
+}
+
+export async function captureSccmDiagnostics(): Promise<SccmCaptureResult> {
+  return invokeCommand<SccmCaptureResult>("capture_sccm_diagnostics");
+}
+
+export async function revealInFileManager(path: string): Promise<void> {
+  return invokeCommand<void>("reveal_in_file_manager", { path });
+}
+
 export async function getUpdatePolicy(): Promise<UpdatePolicy> {
   return invokeCommand<UpdatePolicy>("get_update_policy");
 }
@@ -705,21 +721,197 @@ export interface GraphAuthCapabilities {
 export interface GraphAuthStatus {
   isAuthenticated: boolean;
   userPrincipalName: string | null;
+  objectId: string | null;
   tenantId: string | null;
   grantedScopes: string[];
   missingScopes: string[];
   expiresAt: number | null;
   capabilities: GraphAuthCapabilities;
-  error: string | null;
+}
+
+export type GraphHostCapabilityKind =
+  | "available"
+  | "personalAccountOnly"
+  | "noOrganizationalAccount"
+  | "providerUnavailable"
+  | "unknown";
+
+export interface GraphHostCapability {
+  kind: GraphHostCapabilityKind;
+}
+
+export type GraphAuthAttemptOutcome =
+  "connected" | "cancelled" | "timedOut" | "unavailable" | "failed" | "stale";
+
+export interface GraphAuthAttemptResult {
+  outcome: GraphAuthAttemptOutcome;
+  status: GraphAuthStatus;
+  capability: GraphHostCapability;
+  message: string | null;
 }
 
 export type GraphPermissionUpgradeOutcome =
-  "upgraded" | "unchanged" | "cancelled" | "denied" | "failed" | "stale";
+  | "upgraded"
+  | "unchanged"
+  | "cancelled"
+  | "timedOut"
+  | "denied"
+  | "failed"
+  | "stale";
 
 export interface GraphPermissionUpgradeResult {
   outcome: GraphPermissionUpgradeOutcome;
   status: GraphAuthStatus;
   message: string | null;
+}
+
+export type GraphInteractiveOperationKind =
+  "authentication" | "permissionConsent";
+
+export interface GraphInteractiveOperationTicket {
+  attemptId: string;
+}
+
+function isGraphRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+function isGraphAuthStatus(value: unknown): value is GraphAuthStatus {
+  if (!isGraphRecord(value) || !isGraphRecord(value.capabilities)) return false;
+  const capabilities = value.capabilities;
+  return (
+    typeof value.isAuthenticated === "boolean" &&
+    isNullableString(value.userPrincipalName) &&
+    isNullableString(value.objectId) &&
+    isNullableString(value.tenantId) &&
+    isStringArray(value.grantedScopes) &&
+    isStringArray(value.missingScopes) &&
+    (value.expiresAt === null ||
+      (typeof value.expiresAt === "number" &&
+        Number.isFinite(value.expiresAt))) &&
+    typeof capabilities.managedDevices === "boolean" &&
+    typeof capabilities.serviceConfig === "boolean" &&
+    typeof capabilities.apps === "boolean" &&
+    typeof capabilities.configuration === "boolean" &&
+    typeof capabilities.scripts === "boolean"
+  );
+}
+
+const GRAPH_HOST_CAPABILITY_KINDS = new Set<GraphHostCapabilityKind>([
+  "available",
+  "personalAccountOnly",
+  "noOrganizationalAccount",
+  "providerUnavailable",
+  "unknown",
+]);
+
+const GRAPH_AUTH_ATTEMPT_OUTCOMES = new Set<GraphAuthAttemptOutcome>([
+  "connected",
+  "cancelled",
+  "timedOut",
+  "unavailable",
+  "failed",
+  "stale",
+]);
+
+const GRAPH_PERMISSION_UPGRADE_OUTCOMES =
+  new Set<GraphPermissionUpgradeOutcome>([
+    "upgraded",
+    "unchanged",
+    "cancelled",
+    "timedOut",
+    "denied",
+    "failed",
+    "stale",
+  ]);
+
+function invalidGraphResponse(commandName: string): never {
+  throw new Error(`Command '${commandName}' returned an invalid response.`);
+}
+
+function decodeGraphHostCapability(
+  value: unknown,
+  commandName: string,
+): GraphHostCapability {
+  if (
+    !isGraphRecord(value) ||
+    typeof value.kind !== "string" ||
+    !GRAPH_HOST_CAPABILITY_KINDS.has(value.kind as GraphHostCapabilityKind)
+  ) {
+    return invalidGraphResponse(commandName);
+  }
+  return value as unknown as GraphHostCapability;
+}
+
+function decodeGraphAuthStatus(
+  value: unknown,
+  commandName: string,
+): GraphAuthStatus {
+  if (!isGraphAuthStatus(value)) return invalidGraphResponse(commandName);
+  return value;
+}
+
+function decodeGraphAuthAttemptResult(
+  value: unknown,
+  commandName: string,
+): GraphAuthAttemptResult {
+  if (
+    !isGraphRecord(value) ||
+    typeof value.outcome !== "string" ||
+    !GRAPH_AUTH_ATTEMPT_OUTCOMES.has(
+      value.outcome as GraphAuthAttemptOutcome,
+    ) ||
+    !isGraphAuthStatus(value.status) ||
+    !isNullableString(value.message)
+  ) {
+    return invalidGraphResponse(commandName);
+  }
+  decodeGraphHostCapability(value.capability, commandName);
+  return value as unknown as GraphAuthAttemptResult;
+}
+
+function decodeGraphPermissionUpgradeResult(
+  value: unknown,
+  commandName: string,
+): GraphPermissionUpgradeResult {
+  if (
+    !isGraphRecord(value) ||
+    typeof value.outcome !== "string" ||
+    !GRAPH_PERMISSION_UPGRADE_OUTCOMES.has(
+      value.outcome as GraphPermissionUpgradeOutcome,
+    ) ||
+    !isGraphAuthStatus(value.status) ||
+    !isNullableString(value.message)
+  ) {
+    return invalidGraphResponse(commandName);
+  }
+  return value as unknown as GraphPermissionUpgradeResult;
+}
+
+function decodeGraphInteractiveOperationTicket(
+  value: unknown,
+  commandName: string,
+): GraphInteractiveOperationTicket {
+  if (
+    !isGraphRecord(value) ||
+    typeof value.attemptId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value.attemptId,
+    )
+  ) {
+    return invalidGraphResponse(commandName);
+  }
+  return value as unknown as GraphInteractiveOperationTicket;
 }
 
 export interface GraphAppInfo {
@@ -735,18 +927,52 @@ export interface GraphResolutionResult {
   errors: string[];
 }
 
-export async function graphAuthenticate(): Promise<GraphAuthStatus> {
-  return invokeCommand<GraphAuthStatus>("graph_authenticate");
+export async function graphReserveInteractiveOperation(
+  kind: GraphInteractiveOperationKind,
+): Promise<GraphInteractiveOperationTicket> {
+  const commandName = "graph_reserve_interactive_operation";
+  return decodeGraphInteractiveOperationTicket(
+    await invokeCommand<unknown>(commandName, { kind }),
+    commandName,
+  );
 }
 
-export async function graphRequestMissingPermissions(): Promise<GraphPermissionUpgradeResult> {
-  return invokeCommand<GraphPermissionUpgradeResult>(
-    "graph_request_missing_permissions",
+export async function graphAuthenticate(
+  attemptId: string,
+): Promise<GraphAuthAttemptResult> {
+  const commandName = "graph_authenticate";
+  return decodeGraphAuthAttemptResult(
+    await invokeCommand<unknown>(commandName, { attemptId }),
+    commandName,
+  );
+}
+
+export async function graphCancelAuthentication(
+  attemptId: string,
+): Promise<boolean> {
+  const commandName = "graph_cancel_authentication";
+  const result = await invokeCommand<unknown>(commandName, { attemptId });
+  return typeof result === "boolean"
+    ? result
+    : invalidGraphResponse(commandName);
+}
+
+export async function graphRequestMissingPermissions(
+  attemptId: string,
+): Promise<GraphPermissionUpgradeResult> {
+  const commandName = "graph_request_missing_permissions";
+  return decodeGraphPermissionUpgradeResult(
+    await invokeCommand<unknown>(commandName, { attemptId }),
+    commandName,
   );
 }
 
 export async function graphGetAuthStatus(): Promise<GraphAuthStatus> {
-  return invokeCommand<GraphAuthStatus>("graph_get_auth_status");
+  const commandName = "graph_get_auth_status";
+  return decodeGraphAuthStatus(
+    await invokeCommand<unknown>(commandName),
+    commandName,
+  );
 }
 
 export async function graphSignOut(): Promise<void> {

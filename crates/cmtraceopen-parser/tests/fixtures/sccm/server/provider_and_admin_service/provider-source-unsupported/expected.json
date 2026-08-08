@@ -1,0 +1,88 @@
+{
+  "artifactRequests": [
+    {
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "producerRole": "provider",
+      "request": {
+        "logicalId": "smsprov",
+        "reason": "Collect the complete Smsprov.log file.",
+        "role": "provider"
+      },
+      "sourceVersion": null,
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:334946c879872ad1443f7620279390f4a3c34b591eeaa4072e433eb812c2e556",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "producerRole": "provider",
+      "sourceId": "server-provider",
+      "sourceVersion": null,
+      "state": "unsupported",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "insufficientEvidence",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:334946c879872ad1443f7620279390f4a3c34b591eeaa4072e433eb812c2e556",
+            "coverage": "unsupported",
+            "role": "provider"
+          }
+        ],
+        "evidence": [],
+        "findingId": "provider-admin-coverage:synthetic:artifact:sha256.v1:334946c879872ad1443f7620279390f4a3c34b591eeaa4072e433eb812c2e556",
+        "nextArtifacts": [
+          {
+            "logicalId": "smsprov",
+            "reason": "Collect the complete Smsprov.log file.",
+            "role": "provider"
+          }
+        ],
+        "phase": "providerAndAdminService",
+        "role": "provider",
+        "severity": "Warning",
+        "summary": "Provider cannot be evaluated because its scoped source is not a complete capture.",
+        "terminalEvidence": [],
+        "title": "Provider evidence unavailable"
+      },
+      "lastSuccessfulPhase": null,
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "sourceId": "server-provider",
+      "sourceVersion": null,
+      "subjectId": "synthetic:artifact:sha256.v1:334946c879872ad1443f7620279390f4a3c34b591eeaa4072e433eb812c2e556",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "unknownVersion"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [],
+  "workflow": "providerAndAdminService"
+}

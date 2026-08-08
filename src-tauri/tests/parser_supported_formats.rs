@@ -6,7 +6,7 @@ use app_lib::parser::ResolvedParser;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const DECLARED_PARSER_KINDS: [ParserKind; 20] = [
+const DECLARED_PARSER_KINDS: [ParserKind; 21] = [
     ParserKind::Ccm,
     ParserKind::Simple,
     ParserKind::Timestamped,
@@ -19,6 +19,7 @@ const DECLARED_PARSER_KINDS: [ParserKind; 20] = [
     ParserKind::Msi,
     ParserKind::PsadtLegacy,
     ParserKind::IntuneMacOs,
+    ParserKind::IntuneDeviceInventory,
     ParserKind::Dhcp,
     ParserKind::Burn,
     ParserKind::PatchMyPcDetection,
@@ -43,6 +44,7 @@ fn contract_name(kind: ParserKind) -> &'static str {
         ParserKind::Msi => "msi",
         ParserKind::PsadtLegacy => "psadt",
         ParserKind::IntuneMacOs => "intune_macos",
+        ParserKind::IntuneDeviceInventory => "intune_device_inventory",
         ParserKind::Dhcp => "dhcp",
         ParserKind::Burn => "burn",
         ParserKind::PatchMyPcDetection => "patchmypc_detection",
@@ -312,6 +314,49 @@ fn text_contract_intune_macos() {
         Some("SyncActivityTracer")
     );
     assert_eq!(result.entries[1].severity, Severity::Error);
+}
+
+#[test]
+fn text_contract_intune_device_inventory_harvester() {
+    let (result, selection) =
+        parse_fixture("intune_device_inventory/clean/IntuneInventoryHarvesterLog.log");
+    assert_selection(
+        &selection,
+        ParserKind::IntuneDeviceInventory,
+        ParserImplementation::IntuneDeviceInventory,
+        RecordFraming::LogicalRecord,
+    );
+    assert_eq!(
+        selection.specialization,
+        Some(ParserSpecialization::IntuneDeviceInventoryHarvester)
+    );
+    assert_eq!(result.format_detected, LogFormat::Timestamped);
+    assert_eq!(result.parse_errors, 0);
+    assert_eq!(result.entries.len(), 3);
+    assert_eq!(result.entries[1].severity, Severity::Warning);
+}
+
+#[test]
+fn text_contract_intune_device_inventory_adaptor() {
+    let (result, selection) = parse_fixture("intune_device_inventory/clean/InventoryAdaptor.log_");
+    assert_selection(
+        &selection,
+        ParserKind::IntuneDeviceInventory,
+        ParserImplementation::IntuneDeviceInventory,
+        RecordFraming::LogicalRecord,
+    );
+    assert_eq!(
+        selection.specialization,
+        Some(ParserSpecialization::IntuneDeviceInventoryAdaptor)
+    );
+    assert_eq!(result.format_detected, LogFormat::Timestamped);
+    assert_eq!(result.parse_errors, 0);
+    assert_eq!(result.entries.len(), 2);
+    assert_eq!(result.entries[0].thread, Some(8604));
+    assert_eq!(
+        result.entries[0].message,
+        "Adapter result:\n{\"Status\":200,\"HResult\":\"0x00000000\",\"Data\":{\"Example\":\"value\"}}"
+    );
 }
 
 #[test]

@@ -1,0 +1,18 @@
+{
+  "pre318ExpectedVersion": 1,
+  "privacy": "synthetic",
+  "canonicalArtifactIds": ["synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53", "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6", "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff", "synthetic:artifact:sha256.v1:3eab84121ff2ad1e7b4cb559bad24f451ab7c26fc4db657fadd3bc190f945e9d"],
+  "coverage": [
+    { "producerRole": "managementPoint", "sourceId": "server-mp-policy", "state": "captured" },
+    { "producerRole": "siteServer", "workflowSubjectRole": "distributionPoint", "sourceId": "server-dp-distribution", "state": "captured" },
+    { "producerRole": "siteServer", "sourceId": "server-sitecomp", "state": "captured" },
+    { "producerRole": "siteServer", "workflowSubjectRole": "softwareUpdatePoint", "sourceId": "server-sup-sync", "state": "captured" }
+  ],
+  "artifactProvenance": [
+    { "artifactId": "synthetic:artifact:sha256.v1:2e7fe4628b30ea7515a7e6709e5d17a432aed25ae279dccc61ff5ce04232db53", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "synthetic:artifact:sha256.v1:e645a0c6bff48956036c8f42ebeaf0684a7d24d3392a378d35fe3753402ae1f6", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false },
+    { "artifactId": "synthetic:artifact:sha256.v1:3eab84121ff2ad1e7b4cb559bad24f451ab7c26fc4db657fadd3bc190f945e9d", "encoding": "utf-8", "byteLimit": 4096, "limitApplied": false }
+  ],
+  "roleHealthFinding": "none"
+}

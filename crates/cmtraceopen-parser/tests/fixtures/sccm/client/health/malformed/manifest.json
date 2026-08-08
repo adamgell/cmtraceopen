@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "malformed",
+  "artifacts": [
+    {"artifactId":"health-malformed-ccmsetup-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ccmsetup.log","pathFingerprint":"synthetic-root-a-health-malformed-ccmsetup-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T02:10:00Z","bytesCopied":260,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"health-malformed-evaluation-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"CcmEval.log","pathFingerprint":"synthetic-root-a-health-malformed-evaluation-current","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T02:10:01Z","bytesCopied":137,"relativePath":"evidence/client-evaluation/current/CcmEval.log"},
+    {"artifactId":"health-malformed-identity-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"ClientIDManagerStartup.log","pathFingerprint":"synthetic-candidate-health-malformed-identity-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T02:10:02Z","bytesCopied":0,"relativePath":null},
+    {"artifactId":"health-malformed-location-services-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"LocationServices.log","pathFingerprint":"synthetic-candidate-health-malformed-location-services-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T02:10:03Z","bytesCopied":0,"relativePath":null}
+  ]
+}

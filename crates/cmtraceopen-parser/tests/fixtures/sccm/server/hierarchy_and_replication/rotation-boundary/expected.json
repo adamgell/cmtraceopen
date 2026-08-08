@@ -1,0 +1,14 @@
+{
+  "contractState": "proposedPendingReviewed318And335",
+  "workflow": "hierarchyAndReplication",
+  "scenario": "rotation-boundary",
+  "stateChain": ["initiate","queueOrSerialize","send","receive","process","acknowledge","healthyOrTerminal"],
+  "analysisContract": {"independentReducer":true,"crossSideCorrelationPerformed":false,"nativeCollectionPerformed":false},
+  "extractionProfile": {"selectionState":"selectedSynthetic","profileId":"hierarchy-server-5.00.test-v1","validatedRole":"siteServer"},
+  "coverage": [{"artifactId":"synthetic:artifact:sha256.v1:74c4dbd840d49599e5493974bb14d3ec6c1fa9a121cafab7acb68f27be982f66","state":"captured"},{"artifactId":"synthetic:artifact:sha256.v1:b755717f473fd02da03bfb215a0607120af5005a718980a342caaba72b7fab77","state":"captured"}],
+  "transactions": [],
+  "sourceLocalObservations": [{"observationId":"rotation-01-split","classification":"rotationSplit","confidence":"low","correlationEligible":false,"artifactIds":["synthetic:artifact:sha256.v1:74c4dbd840d49599e5493974bb14d3ec6c1fa9a121cafab7acb68f27be982f66","synthetic:artifact:sha256.v1:b755717f473fd02da03bfb215a0607120af5005a718980a342caaba72b7fab77"],"evidence":[]}],
+  "artifactRequests": [{"sourceId":"server-hierarchy-transfer","producerRole":"siteServer","direction":"origin","targetSiteCode":"CHD","basenames":["sender.lo_","sender.log"],"reasonCode":"coverageRotationSplit"}],
+  "crossSideCausalClaims": [],
+  "correlationHandoff": {"issue":"#333","performed":false,"timeOnlyEligible":false}
+}

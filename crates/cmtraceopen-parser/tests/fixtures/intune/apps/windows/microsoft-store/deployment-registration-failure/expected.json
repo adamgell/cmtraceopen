@@ -1,0 +1,58 @@
+{
+  "scenario": "deployment-registration-failure",
+  "workload": "apps/windows/microsoft-store",
+  "coverage": [
+    {
+      "artifactId": "ime-log",
+      "status": "available"
+    },
+    {
+      "artifactId": "appx-operational",
+      "status": "available"
+    }
+  ],
+  "transactions": [
+    {
+      "transactionId": "store-01",
+      "installerFamily": "uwpUserContext",
+      "familyBasis": "declared",
+      "state": "registrationFailure",
+      "action": "install",
+      "executionContext": "user",
+      "intent": "unknown",
+      "storeProductId": "9WZSYNTH0001",
+      "packageFamilyName": "Contoso.SynthStoreApp_9synth0abcd1h",
+      "displayName": "Synthetic Store App",
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "lastConfirmedPhase": "registration",
+      "confidence": "high",
+      "errorHex": "0x80073CF9",
+      "hasIntuneIntent": true,
+      "hasDeviceEvidence": true,
+      "unknownVersionObserved": false,
+      "nextEvidenceRequest": null,
+      "evidence": [
+        "ime-log:2",
+        "appx-operational:1",
+        "appx-operational:2"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "store-registration-failed",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "appx-operational:1",
+        "appx-operational:2",
+        "ime-log:2"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "unkeyedObservationCount": 0,
+  "assertions": [
+    "registration failure is distinct from provisioning failure"
+  ]
+}

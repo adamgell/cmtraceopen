@@ -1,0 +1,77 @@
+{
+  "scenario": "access-denied-with-matching-state",
+  "workload": "device/windows/compliance",
+  "userEvaluationContext": "userPresent",
+  "aggregate": {
+    "state": "noncompliant",
+    "rationale": "localSettingNoncompliant"
+  },
+  "reporting": {
+    "state": "unknown",
+    "serviceFreshness": "fresh",
+    "serviceDisagreesWithLocal": false
+  },
+  "settings": [
+    {
+      "groupingToken": "uri:./device/vendor/msft/policy/result/system/firewallstatus",
+      "scope": "device",
+      "state": "noncompliant",
+      "timeContradiction": false,
+      "identityContradiction": false,
+      "evidence": [
+        "evt-1"
+      ]
+    }
+  ],
+  "access": [
+    {
+      "decision": "denied",
+      "linkage": "matchedComplianceState",
+      "matchedEvidence": [
+        "svc-1"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "findingId": "compliance-local-setting-noncompliant",
+      "severity": "error",
+      "confidence": "high",
+      "evidence": [
+        "evt-1"
+      ],
+      "coverageGapIds": []
+    },
+    {
+      "findingId": "compliance-access-denied-correlated",
+      "severity": "warning",
+      "confidence": "medium",
+      "evidence": [
+        "acc-1",
+        "svc-1"
+      ],
+      "coverageGapIds": []
+    }
+  ],
+  "assertions": [
+    "a correlated denial never exceeds medium confidence and never becomes a local cause"
+  ],
+  "coverage": [
+    {
+      "artifactId": "access-facts",
+      "status": "available"
+    },
+    {
+      "artifactId": "device-context",
+      "status": "available"
+    },
+    {
+      "artifactId": "mdm-events",
+      "status": "available"
+    },
+    {
+      "artifactId": "service-facts",
+      "status": "available"
+    }
+  ]
+}

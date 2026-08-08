@@ -303,6 +303,12 @@ const WORKSPACE_DESCRIPTORS: &[WorkspaceDescriptor] = &[
         platform: WorkspacePlatform::All,
     },
     WorkspaceDescriptor {
+        id: "sccm",
+        label: "SCCM Diagnostics",
+        group: WorkspaceGroup::EndpointManagement,
+        platform: WorkspacePlatform::Windows,
+    },
+    WorkspaceDescriptor {
         id: "macos-jamf",
         label: "macOS JAMF",
         group: WorkspaceGroup::EndpointManagement,
@@ -1960,6 +1966,7 @@ mod tests {
                         "intune",
                         "new-intune",
                         "esp-diagnostics",
+                        "sccm",
                         "dsregcmd",
                         "deployment",
                     ],

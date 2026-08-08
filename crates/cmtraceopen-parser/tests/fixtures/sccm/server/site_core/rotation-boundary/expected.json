@@ -1,0 +1,186 @@
+{
+  "artifactRequests": [
+    {
+      "candidates": [
+        {
+          "basename": "sitecomp.log",
+          "rotation": "current"
+        }
+      ],
+      "logicalName": "server-sitecomp",
+      "maxArtifacts": 1,
+      "reasonCode": "required-source-parse-failed",
+      "role": "siteServer",
+      "scope": {
+        "producerHostHandle": "synthetic:host:sha256.v1:4984d720bb6415f515b22c382e5199b0b407bc05246f4b89aff5f290bcd9f313",
+        "rotationLineageHandle": "synthetic:lineage:sha256.v1:1cb1ba23d64805a34ef23b7b4561a7e7a60e74aed85185b4e2b8851a412e4d34"
+      }
+    },
+    {
+      "candidates": [
+        {
+          "basename": "sitecomp.lo_",
+          "rotation": "loUnderscore"
+        }
+      ],
+      "logicalName": "server-sitecomp",
+      "maxArtifacts": 1,
+      "reasonCode": "required-source-parse-failed",
+      "role": "siteServer",
+      "scope": {
+        "producerHostHandle": "synthetic:host:sha256.v1:4984d720bb6415f515b22c382e5199b0b407bc05246f4b89aff5f290bcd9f313",
+        "rotationLineageHandle": "synthetic:lineage:sha256.v1:1cb1ba23d64805a34ef23b7b4561a7e7a60e74aed85185b4e2b8851a412e4d34"
+      }
+    }
+  ],
+  "coverageGaps": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:930503e728322cd7bff72d0c239e9aa3db5178f8c77c3fa349fdeec1e3a7b96d",
+      "diagnosticMeaning": "coverageOnly",
+      "reasonCode": "required-source-parse-failed",
+      "sourceId": "server-sitecomp",
+      "state": "parseFailed"
+    },
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+      "diagnosticMeaning": "coverageOnly",
+      "reasonCode": "required-source-parse-failed",
+      "sourceId": "server-sitecomp",
+      "state": "parseFailed"
+    }
+  ],
+  "crossSideCorrelationPerformed": false,
+  "findings": [
+    {
+      "class": "insufficientEvidence",
+      "confidence": "none",
+      "correlationKeys": [],
+      "coverageGaps": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff",
+          "coverage": "parseFailed",
+          "role": "siteServer"
+        }
+      ],
+      "evidence": [],
+      "findingId": "site-core:finding:v1:ea00bbac66cadddb333b1e48976c4371032766adc144dc35783defbd02293e88",
+      "lastSuccessfulPhase": null,
+      "nextArtifacts": [
+        {
+          "logicalId": "sitecomp",
+          "reason": "Collect the complete sitecomp.log file.",
+          "role": "siteServer"
+        }
+      ],
+      "phase": "siteCoreCoverage",
+      "role": "siteServer",
+      "severity": "Warning",
+      "subjectId": "site-core:observation:v1:695cad0db1d7dd9d8ed9b5f32b8b4f90599e4a095b75a64ec3d09f1a4b737511",
+      "summary": "The source is incomplete and cannot establish a component outcome.",
+      "terminalEvidence": [],
+      "title": "Site core coverage gap"
+    },
+    {
+      "class": "insufficientEvidence",
+      "confidence": "none",
+      "correlationKeys": [],
+      "coverageGaps": [
+        {
+          "artifactId": "synthetic:artifact:sha256.v1:930503e728322cd7bff72d0c239e9aa3db5178f8c77c3fa349fdeec1e3a7b96d",
+          "coverage": "parseFailed",
+          "role": "siteServer"
+        }
+      ],
+      "evidence": [],
+      "findingId": "site-core:finding:v1:9ccd937176c833cbfad3685f827785de629884e1e7d7a302f2d9cb337cb9bf42",
+      "lastSuccessfulPhase": null,
+      "nextArtifacts": [
+        {
+          "logicalId": "sitecomp",
+          "reason": "Collect the complete sitecomp.log file.",
+          "role": "siteServer"
+        }
+      ],
+      "phase": "siteCoreCoverage",
+      "role": "siteServer",
+      "severity": "Warning",
+      "subjectId": "site-core:observation:v1:7f9d4edc325a5a39c272d645b7073c3d0733bc556ca194867d1415d7404ac0b9",
+      "summary": "The source is incomplete and cannot establish a component outcome.",
+      "terminalEvidence": [],
+      "title": "Site core coverage gap"
+    }
+  ],
+  "profile": {
+    "id": "sccm-site-core",
+    "stability": "experimental",
+    "version": 1
+  },
+  "results": [],
+  "schemaVersion": 1,
+  "stateChain": [
+    "componentStart",
+    "componentWork",
+    "inboxOrQueue",
+    "statusOrStateProcessing",
+    "healthyOrTerminal"
+  ],
+  "unlinkedObservations": [
+    {
+      "confidence": "none",
+      "coverageGapArtifactIds": [
+        "synthetic:artifact:sha256.v1:e09e2cedaca9f9d4058e0741b86cd9f09d471641051ec8c46f8dfefd26f09aff"
+      ],
+      "evidence": [],
+      "findingClass": "insufficientEvidence",
+      "nextArtifacts": [
+        {
+          "candidates": [
+            {
+              "basename": "sitecomp.log",
+              "rotation": "current"
+            }
+          ],
+          "logicalName": "server-sitecomp",
+          "maxArtifacts": 1,
+          "reasonCode": "required-source-parse-failed",
+          "role": "siteServer",
+          "scope": {
+            "producerHostHandle": "synthetic:host:sha256.v1:4984d720bb6415f515b22c382e5199b0b407bc05246f4b89aff5f290bcd9f313",
+            "rotationLineageHandle": "synthetic:lineage:sha256.v1:1cb1ba23d64805a34ef23b7b4561a7e7a60e74aed85185b4e2b8851a412e4d34"
+          }
+        }
+      ],
+      "observationId": "site-core:observation:v1:695cad0db1d7dd9d8ed9b5f32b8b4f90599e4a095b75a64ec3d09f1a4b737511",
+      "state": "parseGap"
+    },
+    {
+      "confidence": "none",
+      "coverageGapArtifactIds": [
+        "synthetic:artifact:sha256.v1:930503e728322cd7bff72d0c239e9aa3db5178f8c77c3fa349fdeec1e3a7b96d"
+      ],
+      "evidence": [],
+      "findingClass": "insufficientEvidence",
+      "nextArtifacts": [
+        {
+          "candidates": [
+            {
+              "basename": "sitecomp.lo_",
+              "rotation": "loUnderscore"
+            }
+          ],
+          "logicalName": "server-sitecomp",
+          "maxArtifacts": 1,
+          "reasonCode": "required-source-parse-failed",
+          "role": "siteServer",
+          "scope": {
+            "producerHostHandle": "synthetic:host:sha256.v1:4984d720bb6415f515b22c382e5199b0b407bc05246f4b89aff5f290bcd9f313",
+            "rotationLineageHandle": "synthetic:lineage:sha256.v1:1cb1ba23d64805a34ef23b7b4561a7e7a60e74aed85185b4e2b8851a412e4d34"
+          }
+        }
+      ],
+      "observationId": "site-core:observation:v1:7f9d4edc325a5a39c272d645b7073c3d0733bc556ca194867d1415d7404ac0b9",
+      "state": "parseGap"
+    }
+  ],
+  "workflow": "siteCore"
+}

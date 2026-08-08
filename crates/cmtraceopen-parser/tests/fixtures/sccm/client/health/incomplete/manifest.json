@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "incomplete",
+  "artifacts": [
+    {"artifactId":"health-incomplete-ccmsetup-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"ccmsetup.log","pathFingerprint":"synthetic-root-a-health-incomplete-ccmsetup-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T02:20:00Z","bytesCopied":260,"relativePath":"evidence/client-ccmsetup/current/ccmsetup.log"},
+    {"artifactId":"health-incomplete-evaluation-current","role":"client","captureState":"captured","encoding":"utf-8","originalBasename":"CcmEval.log","pathFingerprint":"synthetic-root-a-health-incomplete-evaluation-current","rotation":{"kind":"current","fragmentComplete":true},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T02:20:01Z","bytesCopied":742,"relativePath":"evidence/client-evaluation/current/CcmEval.log"},
+    {"artifactId":"health-incomplete-identity-access-denied","role":"client","captureState":"accessDenied","encoding":null,"originalBasename":"ClientIDManagerStartup.log","pathFingerprint":"synthetic-candidate-health-incomplete-identity-access-denied","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T02:20:02Z","bytesCopied":0,"relativePath":null},
+    {"artifactId":"health-incomplete-location-services-absent","role":"client","captureState":"absent","encoding":null,"originalBasename":"LocationServices.log","pathFingerprint":"synthetic-candidate-health-incomplete-location-services-absent","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.9128.1000","capturedUtc":"2026-07-30T02:20:03Z","bytesCopied":0,"relativePath":null}
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "sccmManifestVersion": 1,
+  "proposalOnly": true,
+  "syntheticFixture": true,
+  "bundle": {"role":"client","captureHost":"LAB-CLIENT-01","siteCode":"LAB","artifactOrder":"designOnlyCatalog.entryId,pathFingerprint,rotationRank,originalBasename,artifactId","rotationOrder":"current,lo,numeric-ascending,timestamp-ascending"},
+  "artifacts": [
+    {"artifactId":"fixture-capped-content-root-a-current","designOnlyCatalog":{"entryId":"client-content","groupMemberships":["client-content"]},"role":"client","kind":"ccmLog","captureState":"capped","encoding":"utf-8","collectionLimit":{"byteLimit":128,"limitApplied":true},"originalBasename":"DataTransferService.log","sanitizedSourcePath":"SYNTHETIC://root-a/CCM/Logs/DataTransferService.log","pathFingerprint":"synthetic-content-capped","rotation":{"kind":"current","fragmentComplete":false},"sourceVersion":"5.00.TEST.0000","capturedUtc":"2026-07-30T00:03:00Z","bytesCopied":128,"truncated":true,"relativePath":"evidence/client-content/current/DataTransferService.log"}
+  ]
+}

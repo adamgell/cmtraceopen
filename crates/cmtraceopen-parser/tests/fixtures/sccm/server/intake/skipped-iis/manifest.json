@@ -1,0 +1,11 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": { "captureHost": "LAB-MP01", "siteCode": "LAB", "rolesObserved": ["managementPoint"] },
+  "artifacts": [
+    { "artifactId": "synthetic:artifact:sha256.v1:34860def3e267a59a95606346ab9d6ef1fe7777505d662ece3ef674a0e617d9f", "producerRole": "managementPoint", "producerHostHandle": "synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f", "sourceId": "server-mp-iis", "sourceKind": "iisW3c", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_IIS_EXPORT", "originalBasename": "u_ex_synthetic.log", "configuredPathProvenance": { "state": "notRequested", "pathFingerprint": "synthetic:path:sha256.v1:3e891309d960cb72191b6a45bcfb690c145680068a8b298cd0b5c144f77142be" }, "rotation": { "kind": "providerDefined", "lineageId": "synthetic:lineage:sha256.v1:235ef78b53e533c0f69d85c9fa4911c1c701abb178c9f6bfb84eb9e9c8ee3439" }, "captureState": "skipped", "skipReason": "optional supplemental source not requested", "collectedUtc": "2026-07-30T00:07:00Z", "relativePath": null, "bytesCopied": 0 }
+  ]
+}

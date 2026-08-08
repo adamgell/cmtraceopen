@@ -1,0 +1,26 @@
+{
+  "contractState": "proposedPending318And319",
+  "workflow": "taskSequence",
+  "scenario": "rotation-boundary",
+  "stateChain": ["start","preflight","diskOrImage","setupWindows","installClient","installSoftware","postAction","complete"],
+  "analysisContract": {"independentReducer":true,"consumesAppOrPolicyReducerOutput":false,"crossSideCorrelationPerformed":false,"nativeAcceptanceClaimed":false},
+  "extractionProfile": {"id":"task-sequence-client-5.00.test-v1","status":"matchedAfterControlledJoinOnly"},
+  "reorderedInputDeterministic": true,
+  "coverage": [{"logicalArtifactId":"client-task-sequence-smsts","state":"partial","pathClasses":["client"],"artifactIds":["task-sequence-rotation-boundary-current","task-sequence-rotation-boundary-lo"]}],
+  "artifactProvenance": [
+    {"artifactId":"task-sequence-rotation-boundary-current","bytesCopied":141,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":null,"rotationKind":"current","fragmentComplete":false,"relocationOrdinal":0},
+    {"artifactId":"task-sequence-rotation-boundary-lo","bytesCopied":259,"pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.lo_","smstsLogPathEvidence":"SYNTHETIC://client/CCM/Logs/smsts.log","rotationKind":"lo","fragmentComplete":false,"relocationOrdinal":0}
+  ],
+  "logicalReconstructions": [
+    {"reconstructionId":"rotation-boundary-lo-current","logicalArtifactId":"client-task-sequence-smsts","orderedArtifactIds":["task-sequence-rotation-boundary-lo","task-sequence-rotation-boundary-current"],"pathFingerprint":"synthetic:rotation-boundary:client","pathClass":"client","sanitizedSourcePath":"SYNTHETIC://client/CCM/Logs/smsts.log","smstsLogPathEvidence":{"artifactId":"task-sequence-rotation-boundary-lo","startLine":1,"endLine":1},"coverageState":"partial","confidence":"low","correlationEligible":false}
+  ],
+  "transactions": [],
+  "sourceLocalObservations": [
+    {"observationId":"rotation-boundary-current-fragment","artifactId":"task-sequence-rotation-boundary-current","keyConfidence":"none","confidence":"low","confidenceCeiling":"low","correlationEligible":false,"evidence":{"artifactId":"task-sequence-rotation-boundary-current","startLine":1,"endLine":1},"reason":"A physical suffix fragment is not independently a complete CCM record."},
+    {"observationId":"rotation-boundary-lo-fragment","artifactId":"task-sequence-rotation-boundary-lo","keyConfidence":"candidate","confidence":"low","confidenceCeiling":"low","correlationEligible":false,"evidence":{"artifactId":"task-sequence-rotation-boundary-lo","startLine":1,"endLine":1},"reason":"A physical prefix fragment is not independently a complete CCM record."}
+  ],
+  "findings": [
+    {"findingId":"rotation-boundary-partial-record","classification":"insufficientEvidence","evidence":[{"artifactId":"task-sequence-rotation-boundary-current","startLine":1,"endLine":1},{"artifactId":"task-sequence-rotation-boundary-lo","startLine":1,"endLine":1}],"coverageGapArtifactIds":[],"serverCauseClaimed":false,"appOrPolicyCauseClaimed":false,"nativeAcceptanceClaimed":false,"boundedNextArtifact":{"logicalArtifactId":"client-task-sequence-smsts","pathClass":"client","reason":"Replay the controlled archived-to-current rotation join after final intake interfaces land."}}
+  ],
+  "correlationBoundary": {"scope":"sourceLocalOnly","joinFields":[],"forbiddenJoinFields":["filename","path","timestamp","displayName","component"],"rotationOrder":["lo","current"]}
+}

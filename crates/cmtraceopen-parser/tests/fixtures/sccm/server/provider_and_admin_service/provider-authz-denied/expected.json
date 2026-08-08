@@ -1,0 +1,173 @@
+{
+  "artifactRequests": [],
+  "coverage": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "producerRole": "provider",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "confirmedFailure",
+        "confidence": "high",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6",
+            "entryId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6",
+            "entryId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6",
+            "entryId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:d3faa64eb188ca2f25766bac96008197a912d062819891ccfecdbe1cf790f3cf",
+        "nextArtifacts": [],
+        "phase": "providerAndAdminService",
+        "role": "provider",
+        "severity": "Error",
+        "summary": "Provider recorded an explicit terminal operation failure.",
+        "terminalEvidence": [
+          {
+            "kind": "observedFailure",
+            "reference": {
+              "artifactId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6",
+              "entryId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          }
+        ],
+        "title": "Provider confirmed failure"
+      },
+      "lastSuccessfulPhase": "receive",
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "provider:cmtraceopen.request.sha256.v1:77c30000cce4b8fc20b350b127be93e98a151350148532a13a87be969f87cf41:cmtraceopen.operation.sha256.v1:fcdca2da9eaae5be46be853e5b18b78ce63bca3aea9f92597badfc3a2f8143b2:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "confirmedFailure",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "provider-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "provider"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:fcdca2da9eaae5be46be853e5b18b78ce63bca3aea9f92597badfc3a2f8143b2",
+        "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+        "requestHandle": "cmtraceopen.request.sha256.v1:77c30000cce4b8fc20b350b127be93e98a151350148532a13a87be969f87cf41"
+      },
+      "lastSuccessfulPhase": "receive",
+      "layer": "provider",
+      "nextArtifactRequests": [],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6",
+              "entryId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "failed",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6",
+              "entryId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "failed",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6",
+              "entryId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:5788904154df684d7053bd6b249947dc475cef981613e10942bf3151fb826ca6:3-3-03",
+          "phase": "recordOutcome",
+          "terminal": true
+        }
+      ],
+      "producerRole": "provider",
+      "publicSummary": "Provider recorded an explicit terminal operation failure.",
+      "sourceVersion": "5.00.TEST",
+      "state": "failed",
+      "terminalEvidence": true,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:77c30000cce4b8fc20b350b127be93e98a151350148532a13a87be969f87cf41:cmtraceopen.operation.sha256.v1:fcdca2da9eaae5be46be853e5b18b78ce63bca3aea9f92597badfc3a2f8143b2:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

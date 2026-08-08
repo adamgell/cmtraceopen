@@ -1,0 +1,81 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": {
+    "synthetic": true,
+    "rawPaths": "redacted"
+  },
+  "bundleRole": "server",
+  "topology": {
+    "captureHost": "LAB-CM01",
+    "siteCode": "LAB",
+    "rolesObserved": [
+      "provider"
+    ]
+  },
+  "artifacts": [
+    {
+      "artifactId": "rotation-01-current",
+      "producerRole": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "workflowSubject": {
+        "role": "provider",
+        "instanceHandle": "synthetic:subject:provider-01"
+      },
+      "sourceId": "server-provider",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED_PROVIDER_ROOT",
+      "originalBasename": "Smsprov.log",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:provider-primary"
+      },
+      "rotation": {
+        "kind": "current",
+        "lineageId": "provider-primary"
+      },
+      "captureState": "captured",
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 127,
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "fragmentComplete": false,
+      "relativePath": "evidence/sccm/server/provider/server-provider/subject-provider/current/Smsprov.log"
+    },
+    {
+      "artifactId": "rotation-02-lo",
+      "producerRole": "provider",
+      "producerHostHandle": "synthetic:host:provider-01",
+      "workflowSubject": {
+        "role": "provider",
+        "instanceHandle": "synthetic:subject:provider-01"
+      },
+      "sourceId": "server-provider",
+      "sourceKind": "ccmLog",
+      "originalPath": "REDACTED_PROVIDER_ROOT",
+      "originalBasename": "Smsprov.lo_",
+      "configuredPathProvenance": {
+        "state": "configured",
+        "pathFingerprint": "synthetic:path:provider-primary"
+      },
+      "rotation": {
+        "kind": "lo_",
+        "lineageId": "provider-primary"
+      },
+      "captureState": "captured",
+      "collectedUtc": "2026-08-01T00:00:00Z",
+      "bytesCopied": 295,
+      "encoding": "utf-8",
+      "collectionLimit": {
+        "byteLimit": 4096,
+        "limitApplied": false
+      },
+      "fragmentComplete": false,
+      "relativePath": "evidence/sccm/server/provider/server-provider/subject-provider/lo_/Smsprov.lo_"
+    }
+  ]
+}

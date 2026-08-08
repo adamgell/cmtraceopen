@@ -1,0 +1,12 @@
+{
+  "sccmManifestVersion": 1,
+  "syntheticFixture": true,
+  "proposalOnly": true,
+  "privacy": { "synthetic": true, "rawPaths": "redacted" },
+  "bundleRole": "server",
+  "topology": { "captureHost": "LAB-MP01", "siteCode": "LAB", "rolesObserved": ["managementPoint"] },
+  "artifacts": [
+    { "artifactId": "synthetic:artifact:sha256.v1:721420190054ad85f091f558f77cd4e6e54b50da9426b7d979f7edcda7970b78", "producerRole": "managementPoint", "producerHostHandle": "synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f", "sourceId": "server-mp-policy", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_CONFIGURED_MP_ROOT_A", "originalBasename": "MP_GetPolicy.log", "configuredPathProvenance": { "state": "configured", "pathClass": "nonDefault", "pathFingerprint": "synthetic:path:sha256.v1:726b792daf9cacdbe3cfb1db5040be98abff98294f960ca41dd151c1ed8c0e38" }, "rotation": { "kind": "current", "lineageId": "synthetic:lineage:sha256.v1:0a1ecb81641046880800d633ac232e5ff06ae8c60a0b2ee23914d6302801f00d" }, "captureState": "captured", "encoding": "utf-8", "collectionLimit": { "byteLimit": 4096, "limitApplied": false }, "collectedUtc": "2026-07-30T00:10:00Z", "relativePath": "evidence/sccm/server/management-point/server-mp-policy/root-7d4a9c2e/current/MP_GetPolicy.log", "bytesCopied": 173 },
+    { "artifactId": "synthetic:artifact:sha256.v1:b117cc48fba84a0cef85a662fdba0009e1d2723edc6b51af457d829cfa09e7c8", "producerRole": "managementPoint", "producerHostHandle": "synthetic:host:sha256.v1:3b4244b8d95c569d9d3435c3e8c8e3f0f4a9bd3115b4db9110845abcd32ee86f", "sourceId": "server-mp-policy", "sourceKind": "ccmLog", "sourceVersion": "5.00.TEST", "originalPath": "REDACTED_CONFIGURED_MP_ROOT_B", "originalBasename": "MP_GetPolicy.log", "configuredPathProvenance": { "state": "configured", "pathClass": "nonDefault", "pathFingerprint": "synthetic:path:sha256.v1:d35f1ee4d93ebae4a64a7ab9d7ef886a28f7cb01aca87ba52c9b3f9e2b2492cc" }, "rotation": { "kind": "current", "lineageId": "synthetic:lineage:sha256.v1:4b296015c846c68e4025a09a4d58eecf7668a68aa45e15d0b82b3b327e182ddc" }, "captureState": "captured", "encoding": "utf-8", "collectionLimit": { "byteLimit": 4096, "limitApplied": false }, "collectedUtc": "2026-07-30T00:10:00Z", "relativePath": "evidence/sccm/server/management-point/server-mp-policy/root-b83f10d6/current/MP_GetPolicy.log", "bytesCopied": 172 }
+  ]
+}

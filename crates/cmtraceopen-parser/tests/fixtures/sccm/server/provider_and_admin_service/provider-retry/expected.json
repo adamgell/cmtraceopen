@@ -1,0 +1,223 @@
+{
+  "artifactRequests": [],
+  "coverage": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "producerRole": "provider",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "recovered",
+        "confidence": "high",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+            "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+            "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+            "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+            "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:4-4",
+            "lineEnd": 4,
+            "lineStart": 4
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+            "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:5-5",
+            "lineEnd": 5,
+            "lineStart": 5
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+            "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:6-6",
+            "lineEnd": 6,
+            "lineStart": 6
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:5e62dfcf737ed3276a00f7f38f035d56ea34cb79dc841158c7b26957144ec5a2",
+        "nextArtifacts": [],
+        "phase": "providerAndAdminService",
+        "role": "provider",
+        "severity": "Success",
+        "summary": "Provider operation recovered after an explicit retryable failure.",
+        "terminalEvidence": [],
+        "title": "Provider recovered"
+      },
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "provider:cmtraceopen.request.sha256.v1:56eabbf71e1d01bf5bd805b2946dbf57d241c29f841155a98b372031c0778890:cmtraceopen.operation.sha256.v1:4a9ec7dbcf07d5b0bf06307983a0863ffaec89cd51e6d265342e9a733ccf28ef:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "recovered",
+      "confidence": "high",
+      "confidenceCeiling": "high",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "provider-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "provider"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:4a9ec7dbcf07d5b0bf06307983a0863ffaec89cd51e6d265342e9a733ccf28ef",
+        "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+        "requestHandle": "cmtraceopen.request.sha256.v1:56eabbf71e1d01bf5bd805b2946dbf57d241c29f841155a98b372031c0778890"
+      },
+      "lastSuccessfulPhase": "recordOutcome",
+      "layer": "provider",
+      "nextArtifactRequests": [],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+              "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+              "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "retryableFailure",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+              "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:3-3-03",
+          "phase": "executeProviderOperation",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+              "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:4-4",
+              "lineEnd": 4,
+              "lineStart": 4
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:4-4-04",
+          "phase": "executeProviderOperation",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+              "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:5-5",
+              "lineEnd": 5,
+              "lineStart": 5
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:5-5-05",
+          "phase": "respond",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2",
+              "entryId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:6-6",
+              "lineEnd": 6,
+              "lineStart": 6
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:f993cb0337ba653fb37dc9a54623915b53c46322de12ac192343e516e2ac82a2:6-6-06",
+          "phase": "recordOutcome",
+          "terminal": true
+        }
+      ],
+      "producerRole": "provider",
+      "publicSummary": "Provider operation recovered after an explicit retryable failure.",
+      "sourceVersion": "5.00.TEST",
+      "state": "recovered",
+      "terminalEvidence": true,
+      "timestampOrdering": "usable",
+      "topologyCompatibility": "exact",
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:56eabbf71e1d01bf5bd805b2946dbf57d241c29f841155a98b372031c0778890:cmtraceopen.operation.sha256.v1:4a9ec7dbcf07d5b0bf06307983a0863ffaec89cd51e6d265342e9a733ccf28ef:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

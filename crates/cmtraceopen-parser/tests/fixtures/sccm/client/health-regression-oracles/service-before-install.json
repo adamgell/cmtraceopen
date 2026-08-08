@@ -1,0 +1,111 @@
+{
+  "findings": [
+    {
+      "class": "symptom",
+      "confidence": "low",
+      "correlationKeys": [],
+      "coverageGaps": [],
+      "evidence": [
+        {
+          "artifactId": "health-success-evaluation-current",
+          "entryId": "health-success-evaluation-current:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        },
+        {
+          "artifactId": "health-success-evaluation-current",
+          "entryId": "health-success-evaluation-current:2-2",
+          "lineEnd": 2,
+          "lineStart": 2
+        },
+        {
+          "artifactId": "health-success-evaluation-current",
+          "entryId": "health-success-evaluation-current:3-3",
+          "lineEnd": 3,
+          "lineStart": 3
+        }
+      ],
+      "findingId": "client-health-service-stop",
+      "healthPhase": "service",
+      "lastConfirmedSuccessfulPhase": "install",
+      "nextArtifacts": [
+        {
+          "logicalId": "ccmEval",
+          "reason": "Confirm the root cause recorded by CcmEval.",
+          "role": "client"
+        }
+      ],
+      "phase": "service",
+      "role": "client",
+      "severity": "Warning",
+      "summary": "The admitted service source does not contain one unambiguous terminal outcome for the exact chain key.",
+      "terminalEvidence": [],
+      "title": "Client health service outcome is not confirmed"
+    }
+  ],
+  "hops": [
+    {
+      "evidence": [
+        {
+          "artifactId": "health-success-ccmsetup-current",
+          "entryId": "health-success-ccmsetup-current:1-1",
+          "lineEnd": 1,
+          "lineStart": 1
+        }
+      ],
+      "phase": "install",
+      "state": "succeeded"
+    }
+  ],
+  "lastConfirmedSuccessfulPhase": "install",
+  "lifecyclePhase": "install",
+  "prohibitedClaims": [
+    "server root cause",
+    "isolated error proves terminal failure",
+    "missing source proves workflow failure",
+    "host path or raw sensitive text export"
+  ],
+  "schemaVersion": 1,
+  "sourceCoverage": [
+    {
+      "artifactId": "health-success-ccmsetup-current",
+      "coverage": "captured",
+      "fragmentComplete": true,
+      "logicalArtifactId": "client-ccmsetup",
+      "physical": true,
+      "rotation": {
+        "kind": "current"
+      }
+    },
+    {
+      "artifactId": "health-success-evaluation-current",
+      "coverage": "captured",
+      "fragmentComplete": true,
+      "logicalArtifactId": "client-evaluation",
+      "physical": true,
+      "rotation": {
+        "kind": "current"
+      }
+    },
+    {
+      "artifactId": "health-success-identity-current",
+      "coverage": "captured",
+      "fragmentComplete": true,
+      "logicalArtifactId": "client-identity",
+      "physical": true,
+      "rotation": {
+        "kind": "current"
+      }
+    },
+    {
+      "artifactId": "health-success-location-services-current",
+      "coverage": "captured",
+      "fragmentComplete": true,
+      "logicalArtifactId": "client-location",
+      "physical": true,
+      "rotation": {
+        "kind": "current"
+      }
+    }
+  ]
+}

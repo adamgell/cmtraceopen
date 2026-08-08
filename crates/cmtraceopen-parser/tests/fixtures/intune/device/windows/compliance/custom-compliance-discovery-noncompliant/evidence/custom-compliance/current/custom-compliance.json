@@ -1,0 +1,40 @@
+{ "syntheticFixture": "SYNTHETIC FIXTURE - synthetic Intune compliance evidence, no real device data",
+  "complianceInputVersion": 1,
+  "kind": "customCompliance",
+  "records": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "cst-1",
+          "sourceArtifactId": "custom-compliance"
+        },
+        "provenance": {
+          "sourceKind": "imeLog",
+          "sourceArtifactId": "custom-compliance",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T10:00:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T10:00:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T12:00:00Z",
+        "sensitivity": "restricted",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "policyId": "synthetic-custom-policy-0001",
+      "runId": "synthetic-run-0001",
+      "settingName": "TpmPresent",
+      "outcome": "discoveryNoncompliant",
+      "error": null,
+      "rawOutput": "{\"TpmPresent\": false}",
+      "namedData": []
+    }
+  ]
+}

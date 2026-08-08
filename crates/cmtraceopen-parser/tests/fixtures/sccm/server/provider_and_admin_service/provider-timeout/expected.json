@@ -1,0 +1,195 @@
+{
+  "artifactRequests": [
+    {
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "producerRole": "provider",
+      "request": {
+        "logicalId": "smsprov",
+        "reason": "Collect the complete Smsprov.log file.",
+        "role": "provider"
+      },
+      "sourceVersion": "5.00.TEST",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "coverage": [
+    {
+      "artifactId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "producerRole": "provider",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "state": "captured",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "crossSideCausalClaims": [],
+  "findings": [
+    {
+      "finding": {
+        "class": "symptom",
+        "confidence": "low",
+        "correlationKeys": [],
+        "coverageGaps": [],
+        "evidence": [
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45",
+            "entryId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:1-1",
+            "lineEnd": 1,
+            "lineStart": 1
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45",
+            "entryId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:2-2",
+            "lineEnd": 2,
+            "lineStart": 2
+          },
+          {
+            "artifactId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45",
+            "entryId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:3-3",
+            "lineEnd": 3,
+            "lineStart": 3
+          }
+        ],
+        "findingId": "provider-admin-finding:cmtraceopen.finding.sha256.v1:64200bc7692b1112b73b8fdab1a81bad40ec802a9156e68e78c3b60d906f0f79",
+        "nextArtifacts": [
+          {
+            "logicalId": "smsprov",
+            "reason": "Collect the complete Smsprov.log file.",
+            "role": "provider"
+          }
+        ],
+        "phase": "providerAndAdminService",
+        "role": "provider",
+        "severity": "Warning",
+        "summary": "Provider evidence is incomplete, contradictory, or not comparably ordered.",
+        "terminalEvidence": [],
+        "title": "Provider insufficient evidence"
+      },
+      "lastSuccessfulPhase": null,
+      "layer": "provider",
+      "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+      "sourceId": "server-provider",
+      "sourceVersion": "5.00.TEST",
+      "subjectId": "provider:cmtraceopen.request.sha256.v1:0cc4a44c3fed5ad67d93ffcf74331cf00b27aead47742bdcc118c0a268e52388:cmtraceopen.operation.sha256.v1:81b06444c4b09f92d8fbcf959a2aa771feb38d74be73dec8a8a333797d515fa1:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+      "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "profiles": [
+    {
+      "extractionProfile": {
+        "configmgrVersionPrefixes": [
+          "5.00.TEST"
+        ],
+        "maturity": "experimental",
+        "profileId": "provider-server-5.00.test-v1",
+        "selectedConfigmgrVersion": "5.00.TEST",
+        "validatedArtifactFamilies": [
+          "provider"
+        ]
+      },
+      "layer": "provider",
+      "limitation": "Synthetic fixtures only; no reviewed real SCCM version or Windows lab validation.",
+      "selectionState": "selectedSynthetic"
+    }
+  ],
+  "sourceLocalObservations": [],
+  "supportState": "syntheticProfileOnly",
+  "transactions": [
+    {
+      "classification": "insufficientEvidence",
+      "confidence": "low",
+      "confidenceCeiling": "low",
+      "correlationEligible": false,
+      "coverageGapArtifactIds": [],
+      "key": {
+        "confidence": "low",
+        "endpointHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a",
+        "extractionProfile": {
+          "configmgrVersionPrefixes": [
+            "5.00.TEST"
+          ],
+          "maturity": "experimental",
+          "profileId": "provider-server-5.00.test-v1",
+          "selectedConfigmgrVersion": "5.00.TEST",
+          "validatedArtifactFamilies": [
+            "provider"
+          ]
+        },
+        "operationHandle": "cmtraceopen.operation.sha256.v1:81b06444c4b09f92d8fbcf959a2aa771feb38d74be73dec8a8a333797d515fa1",
+        "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+        "requestHandle": "cmtraceopen.request.sha256.v1:0cc4a44c3fed5ad67d93ffcf74331cf00b27aead47742bdcc118c0a268e52388"
+      },
+      "lastSuccessfulPhase": null,
+      "layer": "provider",
+      "nextArtifactRequests": [
+        {
+          "layer": "provider",
+          "producerHostHandle": "synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46",
+          "producerRole": "provider",
+          "request": {
+            "logicalId": "smsprov",
+            "reason": "Collect the complete Smsprov.log file.",
+            "role": "provider"
+          },
+          "sourceVersion": "5.00.TEST",
+          "workflowSubjectHandle": "synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+        }
+      ],
+      "observations": [
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45",
+              "entryId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:1-1",
+              "lineEnd": 1,
+              "lineStart": 1
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:1-1-01",
+          "phase": "receive",
+          "terminal": false
+        },
+        {
+          "disposition": "succeeded",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45",
+              "entryId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:2-2",
+              "lineEnd": 2,
+              "lineStart": 2
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:2-2-02",
+          "phase": "authenticateOrAuthorize",
+          "terminal": false
+        },
+        {
+          "disposition": "pending",
+          "evidence": [
+            {
+              "artifactId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45",
+              "entryId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:3-3",
+              "lineEnd": 3,
+              "lineStart": 3
+            }
+          ],
+          "observationId": "synthetic:artifact:sha256.v1:2f1e766cdaf40aebacef9e034b5b9327c0454fac8c472415cfb9d02603163f45:3-3-03",
+          "phase": "executeProviderOperation",
+          "terminal": false
+        }
+      ],
+      "producerRole": "provider",
+      "publicSummary": "Provider evidence is incomplete, contradictory, or not comparably ordered.",
+      "sourceVersion": "5.00.TEST",
+      "state": "incomplete",
+      "terminalEvidence": false,
+      "timestampOrdering": "unusable",
+      "topologyCompatibility": "exact",
+      "transactionId": "provider:cmtraceopen.request.sha256.v1:0cc4a44c3fed5ad67d93ffcf74331cf00b27aead47742bdcc118c0a268e52388:cmtraceopen.operation.sha256.v1:81b06444c4b09f92d8fbcf959a2aa771feb38d74be73dec8a8a333797d515fa1:synthetic:host:sha256.v1:4f6c00f9e19e174d139dcbaa26ba5fa995d9537ce2238e02b2f518bd55ebed46:synthetic:subject:sha256.v1:41cf7f39acc91e4fbb6bab3c5686739bc5829dc9c6812ec1eb5651c4bf94c98a"
+    }
+  ],
+  "workflow": "providerAndAdminService"
+}

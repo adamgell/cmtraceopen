@@ -1,0 +1,46 @@
+{ "syntheticFixture": "SYNTHETIC FIXTURE - synthetic Intune compliance evidence, no real device data",
+  "complianceInputVersion": 1,
+  "kind": "settingReports",
+  "records": [
+    {
+      "context": {
+        "evidenceRef": {
+          "evidenceId": "rpt-1",
+          "sourceArtifactId": "mdm-report"
+        },
+        "provenance": {
+          "sourceKind": "diagnosticReport",
+          "sourceArtifactId": "mdm-report",
+          "filePath": null,
+          "lineNumber": null,
+          "recordNumber": 1,
+          "registry": null,
+          "event": null
+        },
+        "sourceTimestamp": {
+          "rawText": "2026-07-31T10:02:00Z",
+          "originalOffset": null,
+          "normalizedUtc": "2026-07-31T10:02:00Z",
+          "kind": "utc"
+        },
+        "observedAtUtc": "2026-07-31T12:00:00Z",
+        "sensitivity": "public",
+        "parseState": "parsed",
+        "accessState": "available"
+      },
+      "settingUri": "./Device/Vendor/MSFT/Policy/Result/System/BitLockerStatus",
+      "settingId": null,
+      "policyId": "synthetic-policy-b",
+      "displayName": "BitLocker status",
+      "outcome": "failed",
+      "value": null,
+      "error": null,
+      "namedData": [
+        {
+          "name": "Scope",
+          "value": "device"
+        }
+      ]
+    }
+  ]
+}
