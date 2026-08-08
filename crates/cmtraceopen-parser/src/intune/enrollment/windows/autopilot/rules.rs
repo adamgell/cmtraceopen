@@ -10,8 +10,8 @@
 //! the whole MDM bundle" is not an answer when one event ID would do.
 
 use crate::intune::evidence::{
-    IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding, IntuneFindingConfidence,
-    IntuneFindingSeverity, IntuneParseState,
+    IntuneAccessState, IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding,
+    IntuneFindingConfidence, IntuneFindingSeverity, IntuneParseState,
 };
 
 use super::models::*;
@@ -43,6 +43,7 @@ pub fn derive_findings(snapshot: &AutopilotSnapshot) -> Vec<IntuneFinding> {
     push_esp_linked(snapshot, &mut findings);
     push_unreliable_timestamps(snapshot, &mut findings);
     push_coverage_gaps(snapshot, &mut findings);
+    push_non_assessable_failure_recorded(snapshot, &mut findings);
     push_unclassified_records(snapshot, &mut findings);
     push_completed(snapshot, &mut findings);
 
@@ -699,6 +700,74 @@ fn push_coverage_gaps(snapshot: &AutopilotSnapshot, findings: &mut Vec<IntuneFin
             gaps.iter()
                 .map(|entry| entry.artifact_id.clone())
                 .collect(),
+        ),
+    );
+}
+
+/// Surface a failure that is on the record but not assessable.
+///
+/// ADR-001's direction-aware gate: a capped or unparsed section can prove
+/// nothing -- so the reducer neither completes the enrollment over it nor
+/// turns it into a terminal failure outcome -- but a recorded failure must
+/// never be *silent*. This rule is the surface for that middle state: it names
+/// the section, says why the failure cannot be trusted yet, and asks for the
+/// one artifact that would settle it. Deliberately not gated by
+/// `terminal_semantics_withheld`: like coverage gaps, this describes the
+/// bundle, not a cause.
+fn push_non_assessable_failure_recorded(
+    snapshot: &AutopilotSnapshot,
+    findings: &mut Vec<IntuneFinding>,
+) {
+    let recorded = snapshot
+        .observations
+        .iter()
+        .filter(|observation| observation.signal == AutopilotSignal::ReportSection)
+        .filter(|observation| {
+            observation.context.access_state != IntuneAccessState::Available
+                || observation.context.parse_state != IntuneParseState::Parsed
+        })
+        .filter(|observation| {
+            matches!(
+                observation.section_outcome,
+                Some(AutopilotSectionOutcome::Failed) | Some(AutopilotSectionOutcome::Mismatch)
+            )
+        })
+        .collect::<Vec<_>>();
+    if recorded.is_empty() {
+        return;
+    }
+    push(
+        findings,
+        finding(
+            "autopilot-non-assessable-failure-recorded",
+            IntuneFindingSeverity::Warning,
+            // Low on purpose: non-assessable evidence cannot support a
+            // confident conclusion in either direction (ADR-001). The finding
+            // exists so the recorded failure blocks success visibly instead of
+            // silently.
+            IntuneFindingConfidence::Low,
+            "A section that could not be fully read recorded a failure",
+            &format!(
+                "{} report section(s) whose own capture or parse state is not assessable \
+                 explicitly recorded a failed or mismatched outcome. That record cannot prove the \
+                 failure, but it blocks any success conclusion until the section is re-collected \
+                 in a readable form.",
+                recorded.len()
+            ),
+            &[
+                "Re-collect the cited report section(s), complete and readable, before trusting \
+                 any success signal from this bundle."
+                    .to_owned(),
+                "Compare the re-collected section's outcome against the sibling event evidence."
+                    .to_owned(),
+            ],
+            normalized_evidence(
+                recorded
+                    .iter()
+                    .map(|observation| observation.evidence_ref())
+                    .collect(),
+            ),
+            Vec::new(),
         ),
     );
 }

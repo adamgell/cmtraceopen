@@ -625,6 +625,13 @@ fn has_signal(observations: &[AutopilotObservation], signal: AutopilotSignal) ->
 
 /// Iterate the assessable sections of one kind. The gate lives here so no
 /// individual caller can forget it.
+///
+/// This gate is deliberately direction-aware in combination with
+/// [`recorded_non_assessable_failure_sections`]: everything reached through
+/// *this* iterator may prove progress, success, or a terminal cause, so it
+/// admits assessable sections only. A non-assessable section that explicitly
+/// recorded a failure is not silently discarded with it -- see the companion
+/// iterator below.
 fn sections_of<'a>(
     sections: &'a [AutopilotReportSection],
     kind: &AutopilotSectionKind,
@@ -634,6 +641,37 @@ fn sections_of<'a>(
         .iter()
         .filter(|section| is_assessable_section(section))
         .filter(move |section| section.kind == kind)
+}
+
+/// Iterate the *non-assessable* sections that explicitly recorded a failure or
+/// mismatch.
+///
+/// ADR-001 cuts both ways. A capped or unparsed section cannot PROVE anything:
+/// not progress, not success, and not a terminal failure either -- which is why
+/// [`sections_of`] excludes it and why the reducer never turns one of these
+/// into `ProfileRetrievalFailure`/`ProfileApplicationFailure`. But `Capped`
+/// means "absence proves nothing", not "presence proves nothing": a failure
+/// that IS on the record must still BLOCK a success conclusion, or sibling
+/// assessable evidence would complete the enrollment at high confidence over a
+/// recorded failure. Consumers of this iterator may only move the result in
+/// the conservative direction.
+///
+/// `Failed` and `Mismatch` are the explicit negative recordings. `NotFound`
+/// and `Retrying` stay out on purpose: those are statements of absence or of a
+/// transient state, and an absence statement from a partially captured view
+/// proves nothing in either direction.
+fn recorded_non_assessable_failure_sections(
+    sections: &[AutopilotReportSection],
+) -> impl Iterator<Item = &AutopilotReportSection> {
+    sections
+        .iter()
+        .filter(|section| !is_assessable_section(section))
+        .filter(|section| {
+            matches!(
+                section.outcome,
+                AutopilotSectionOutcome::Failed | AutopilotSectionOutcome::Mismatch
+            )
+        })
 }
 
 /// Collect the distinct values a named key takes across every source.
@@ -1394,6 +1432,21 @@ fn reduce_outcome(
         return AutopilotOutcome::ProfileApplicationFailure;
     }
     if profile.applied && handoff.esp_observed {
+        // Direction-aware assessability gate (ADR-001). A non-assessable
+        // section that explicitly recorded a failure or mismatch can prove
+        // nothing -- including the failure itself, so the terminal failure
+        // outcomes above stay reserved for assessable records -- but it must
+        // still block a success claim. `InsufficientEvidence` is the honest
+        // reduction: the bundle cannot support success while a failure is on
+        // record, and cannot prove the failure while its record is
+        // non-assessable. The recorded failure is surfaced by its own finding
+        // rather than silently swallowed.
+        if recorded_non_assessable_failure_sections(sections)
+            .next()
+            .is_some()
+        {
+            return AutopilotOutcome::InsufficientEvidence;
+        }
         return match esp_linkage.state {
             AutopilotEspLinkState::EvidenceMissing => {
                 AutopilotOutcome::HandoffReachedEspEvidenceMissing
