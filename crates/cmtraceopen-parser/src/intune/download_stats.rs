@@ -93,7 +93,7 @@ pub(crate) fn download_failed_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r#"(?i)(?:download\s+(?:has\s+)?(?:failed|error)|download\s+(?:state|result)\s*[:=]\s*failed|failed\s+to\s+download|hash\s+validation\s+failed|hash\s+mismatch|staging\s+failed|content\s+not\s+found|unable\s+to\s+download|cancelled|aborted)"#,
+        r#"(?i)(?:download\s+(?:has\s+)?(?:failed|error)|download\s+(?:state|result)\s*[:=]\s*failed|failed\s+to\s+download|(?:fail(?:ed|ure)|unable)\s+to\s+start\s+(?:the\s+)?(?:content\s+)?download|hash\s+validation\s+failed|hash\s+mismatch|staging\s+failed|content\s+not\s+found|unable\s+to\s+download|cancelled|aborted)"#,
     )
     .unwrap()
 })
@@ -106,6 +106,32 @@ pub(crate) fn download_start_re() -> &'static Regex {
     )
     .unwrap()
     })
+}
+/// A start verb preceded by a failure verb (`failed to start download`).
+///
+/// The regex crate has no lookbehind, so the start vocabulary cannot exclude
+/// the negated forms itself; consumers of [`download_start_re`] check this
+/// second pattern in code and treat a match as *not* a start. The negated
+/// phrase is carried by [`download_failed_re`] instead, because a download the
+/// agent could not start is honestly a download failure.
+fn negated_start_re() -> &'static Regex {
+    static CELL: OnceLock<Regex> = OnceLock::new();
+    CELL.get_or_init(|| {
+        Regex::new(
+            r#"(?i)\b(?:fail(?:ed|ure)?\s+to|unable\s+to|couldn'?t|could\s+not|cannot|can'?t)\s+(?:start|begin|resume|queue|request)\b"#,
+        )
+        .unwrap()
+    })
+}
+
+/// Whether a line asserts a download start: the start vocabulary matched and
+/// no failure verb negates it.
+///
+/// `pub(crate)` for the same reason the vocabulary accessors are: the Win32
+/// transaction analyzer composes this predicate instead of keeping a parallel
+/// copy of the negation rule.
+pub(crate) fn is_download_start(msg: &str) -> bool {
+    download_start_re().is_match(msg) && !negated_start_re().is_match(msg)
 }
 fn download_progress_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
@@ -139,6 +165,27 @@ fn duration_re() -> &'static Regex {
     )
     .unwrap()
     })
+}
+
+/// Pre-consolidation IME phrasings the shared vocabulary must keep carrying.
+///
+/// These wordings were matched by the Win32 transaction analyzer's local rules
+/// before the vocabulary moved here. One table feeds both this module's tests
+/// and the win32 rules tests, so the two assertions can never drift apart.
+#[cfg(test)]
+pub(crate) mod test_vocabulary {
+    pub(crate) const PRE_CONSOLIDATION_FAILED: [&str; 3] = [
+        "Download has failed",
+        "Download state: Failed",
+        "Download result = Failed",
+    ];
+    pub(crate) const PRE_CONSOLIDATION_COMPLETE: [&str; 3] = [
+        "Download is complete",
+        "Download is completed",
+        "Download complete",
+    ];
+    pub(crate) const PRE_CONSOLIDATION_START: [&str; 2] =
+        ["Started the download", "Start content download"];
 }
 
 pub fn extract_downloads(
@@ -328,7 +375,7 @@ impl DownloadLineAnalysis {
             duration_secs,
             suppress_registry_enrichment: identity.suppress_registry_enrichment,
             is_retry: appworkload_retry_re().is_match(msg),
-            is_start: download_start_re().is_match(msg),
+            is_start: is_download_start(msg),
             is_progress: download_progress_re().is_match(msg),
             is_complete: download_complete_re().is_match(msg),
             is_failed: download_failed_re().is_match(msg),
@@ -737,6 +784,53 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_start_is_a_download_failure_never_a_start() {
+        // "Failed to start download" contains the start vocabulary, but the
+        // line states the opposite of a start: the analysis must not assert a
+        // start observation for it, and the honest classification is a
+        // download failure.
+        for message in [
+            "Failed to start download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "Failed to start the content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "Unable to start download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        ] {
+            let analysis = DownloadLineAnalysis::from_message(message)
+                .expect("a failed-start line is download-shaped");
+            assert!(
+                !analysis.is_start,
+                "a negated start must not assert a start: {message:?}"
+            );
+            assert!(
+                analysis.is_failed,
+                "a failed start is a download failure: {message:?}"
+            );
+        }
+
+        // End to end: a lone failed-start line yields one failed download
+        // instead of a dangling phantom start that reports nothing.
+        let downloads = extract_downloads(
+            &[test_line(
+                1,
+                "Failed to start download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            )],
+            "C:/Logs/AppWorkload.log",
+            &empty_registry(),
+        );
+        assert_eq!(downloads.len(), 1);
+        assert!(!downloads[0].success);
+    }
+
+    #[test]
+    fn an_ordinary_start_line_still_asserts_a_start() {
+        let analysis = DownloadLineAnalysis::from_message(
+            "Starting content download for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        )
+        .expect("a start line is download-shaped");
+        assert!(analysis.is_start);
+        assert!(!analysis.is_failed);
+    }
+
+    #[test]
     fn ime_transition_template_is_ignored() {
         let lines = vec![ImeLine {
             line_number: 1,
@@ -758,17 +852,16 @@ mod tests {
 
     #[test]
     fn the_shared_vocabulary_carries_the_pre_consolidation_ime_phrasings() {
-        // These wordings were matched by the Win32 transaction analyzer's
-        // local rules before the vocabulary was consolidated here; the owner
-        // regexes must carry them so every consumer keeps the recall.
-        for phrase in ["Download has failed", "Download state: Failed", "Download result = Failed"]
-        {
+        // One phrase table (test_vocabulary) feeds this test and the win32
+        // rules test, so the owner regexes and the consumer's recall
+        // assertions can never drift apart.
+        for phrase in test_vocabulary::PRE_CONSOLIDATION_FAILED {
             assert!(download_failed_re().is_match(phrase), "{phrase:?}");
         }
-        for phrase in ["Download is complete", "Download is completed", "Download complete"] {
+        for phrase in test_vocabulary::PRE_CONSOLIDATION_COMPLETE {
             assert!(download_complete_re().is_match(phrase), "{phrase:?}");
         }
-        for phrase in ["Started the download", "Start content download"] {
+        for phrase in test_vocabulary::PRE_CONSOLIDATION_START {
             assert!(download_start_re().is_match(phrase), "{phrase:?}");
         }
     }

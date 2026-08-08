@@ -26,7 +26,7 @@ use regex::Regex;
 // one-behavior-owner requirement).
 use crate::intune::download_stats::{
     download_complete_re, download_failed_re, download_re as download_vocabulary_re,
-    download_stall_re, download_start_re, is_state_transition_template,
+    download_stall_re, is_download_start, is_state_transition_template,
 };
 use crate::intune::evidence::{IntuneErrorCode, IntuneNamedValue};
 use crate::intune::guid_registry::GUID_PATTERN;
@@ -575,7 +575,7 @@ fn classify_signal(message: &str, result: &mut RecordClassification) -> Win32Sig
         return Win32Signal::DownloadStalled;
     }
     if download_statement
-        && (download_start_re().is_match(message) || download_started_local_re().is_match(message))
+        && (is_download_start(message) || download_started_local_re().is_match(message))
     {
         return Win32Signal::DownloadStarted;
     }
@@ -858,29 +858,48 @@ mod tests {
     fn every_pre_refactor_download_phrasing_still_classifies() {
         // These phrasings were matched by the win32-local rules before the
         // vocabulary moved to download_stats; the shared regexes now carry
-        // them so the consolidation is a widening, not a regression.
-        for phrase in ["Download has failed", "Download state: Failed", "Download result = Failed"]
-        {
+        // them so the consolidation is a widening, not a regression. The
+        // phrase table itself lives with the vocabulary's owner
+        // (download_stats::test_vocabulary) so the two test suites cannot
+        // drift apart.
+        use crate::intune::download_stats::test_vocabulary::{
+            PRE_CONSOLIDATION_COMPLETE, PRE_CONSOLIDATION_FAILED, PRE_CONSOLIDATION_START,
+        };
+        for phrase in PRE_CONSOLIDATION_FAILED {
             assert_eq!(
                 workload(&format!("[Win32App] {phrase} for app with id: {APP}")).signal,
                 Win32Signal::DownloadFailed,
                 "{phrase:?} must classify as a download failure"
             );
         }
-        for phrase in ["Download is complete", "Download is completed", "Download complete"] {
+        for phrase in PRE_CONSOLIDATION_COMPLETE {
             assert_eq!(
                 workload(&format!("[Win32App] {phrase} for app with id: {APP}")).signal,
                 Win32Signal::DownloadCompleted,
                 "{phrase:?} must classify as a download completion"
             );
         }
-        for phrase in ["Started the download", "Start content download"] {
+        for phrase in PRE_CONSOLIDATION_START {
             assert_eq!(
                 workload(&format!("[Win32App] {phrase} for app with id: {APP}")).signal,
                 Win32Signal::DownloadStarted,
                 "{phrase:?} must classify as a download start"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_download_start_classifies_as_a_failure_not_a_start() {
+        // The start vocabulary matches inside "failed to start download", but
+        // the line states the opposite of a start; the shared failure
+        // vocabulary carries the phrase and must win.
+        assert_eq!(
+            workload(&format!(
+                "[Win32App] Failed to start download for app with id: {APP}"
+            ))
+            .signal,
+            Win32Signal::DownloadFailed
+        );
     }
 
     #[test]
