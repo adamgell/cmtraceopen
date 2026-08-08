@@ -19,11 +19,21 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+// One grammar owns each shared vocabulary: the GUID shape belongs to
+// `guid_registry`, and the content-download phrases (started / completed /
+// failed / stalled) belong to `download_stats`. This module composes those
+// primitives instead of keeping parallel copies that can drift (issue #357's
+// one-behavior-owner requirement).
+use crate::intune::download_stats::{
+    download_complete_re, download_failed_re, download_re as download_vocabulary_re,
+    download_stall_re, download_start_re,
+};
 use crate::intune::evidence::{IntuneErrorCode, IntuneNamedValue};
+use crate::intune::guid_registry::GUID_PATTERN;
 
 use super::models::{Win32ExecutionContext, Win32Intent, Win32Signal, Win32SourceKind};
 
-const GUID: &str = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+const GUID: &str = GUID_PATTERN;
 
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pattern).expect("win32 regex must compile"))
@@ -153,18 +163,17 @@ win32_regex!(
     staging_failed_re,
     r"(?i)\b(?:staging|extraction|decryption)\s+(?:of\s+[^\r\n]*?)?failed\b|\bfailed\s+to\s+(?:stage|extract|decrypt|unzip)\b"
 );
+// The download started/completed/failed/stalled phrases are consumed from
+// `download_stats` (see the imports at the top). The completion phrase
+// `content downloaded successfully` is the one IME wording the shared
+// vocabulary does not carry, so it is kept as a local *addition*, not a copy.
 win32_regex!(
-    download_failed_re,
-    r"(?i)\bdownload\s+(?:has\s+)?failed\b|\bfailed\s+to\s+download\b|\bdownload\s+(?:state|result)\s*[:=]\s*failed\b"
+    download_completed_local_re,
+    r"(?i)\bcontent\s+downloaded\s+successfully\b"
 );
-win32_regex!(
-    download_completed_re,
-    r"(?i)\bdownload\s+(?:is\s+)?(?:complete|completed|succeeded|finished)\b|\bcontent\s+downloaded\s+successfully\b"
-);
-win32_regex!(
-    download_started_re,
-    r"(?i)\b(?:start(?:ing|ed)?|begin(?:ning)?)\s+(?:the\s+)?(?:content\s+)?download\b|\bdownloading\s+content\b"
-);
+// `Downloading content` is a progressive form the shared start vocabulary
+// (which anchors on starting/queued/resuming verbs) does not carry.
+win32_regex!(download_started_local_re, r"(?i)\bdownloading\s+content\b");
 win32_regex!(
     enforcement_command_failed_re,
     r"(?i)\bfail(?:ed|ure)\s+to\s+(?:create|start|launch|spawn)\s+(?:the\s+)?(?:process|installer|install\s+command)\b"
@@ -483,13 +492,21 @@ fn classify_signal(message: &str, result: &mut RecordClassification) -> Win32Sig
         result.error_code = extract_failure_code(message);
         return Win32Signal::StagingFailed;
     }
-    if download_failed_re().is_match(message) {
-        result.error_code = extract_failure_code(message);
-        return Win32Signal::DownloadFailed;
-    }
+    // Content-unavailable is checked before the shared download-failed
+    // vocabulary: the shared alternation includes `content not found`, and the
+    // more specific no-usable-content diagnosis must win over the generic
+    // delivery failure.
     if content_unavailable_re().is_match(message) {
         result.error_code = extract_failure_code(message);
         return Win32Signal::ContentUnavailable;
+    }
+    // The shared failure vocabulary carries bare words (`cancelled`,
+    // `aborted`) that are only download statements on a download-shaped line,
+    // so it is gated by the shared download vocabulary — the same composition
+    // `download_stats` itself uses.
+    if download_vocabulary_re().is_match(message) && download_failed_re().is_match(message) {
+        result.error_code = extract_failure_code(message);
+        return Win32Signal::DownloadFailed;
     }
     if enforcement_command_failed_re().is_match(message) {
         result.error_code = extract_failure_code(message);
@@ -528,15 +545,28 @@ fn classify_signal(message: &str, result: &mut RecordClassification) -> Win32Sig
     if dependency_resolved_re().is_match(message) {
         return Win32Signal::DependencyResolved;
     }
-    if download_completed_re().is_match(message) {
+    if (download_vocabulary_re().is_match(message) && download_complete_re().is_match(message))
+        || download_completed_local_re().is_match(message)
+    {
         return Win32Signal::DownloadCompleted;
     }
-    if download_started_re().is_match(message) {
+    if download_vocabulary_re().is_match(message) && download_stall_re().is_match(message) {
+        return Win32Signal::DownloadStalled;
+    }
+    if (download_vocabulary_re().is_match(message) && download_start_re().is_match(message))
+        || download_started_local_re().is_match(message)
+    {
         return Win32Signal::DownloadStarted;
     }
     if enforcement_started_re().is_match(message) {
         return Win32Signal::EnforcementStarted;
     }
+    // `download_stats::appworkload_retry_re` is deliberately NOT reused here:
+    // its alternation folds `retry exhausted` and `failed … retry` — statements
+    // about a retry *ending* — into the same bucket as a retry being scheduled.
+    // For statistics that conflation is harmless; for a transaction outcome,
+    // classifying an exhausted retry as `RetryScheduled` would report a
+    // deployment as deferred at the exact moment the agent gave up.
     if retry_re().is_match(message) {
         return Win32Signal::RetryScheduled;
     }
@@ -692,6 +722,42 @@ mod tests {
         let code = parse_code("-2147024891");
         assert_eq!(code.decimal, Some(-2_147_024_891));
         assert_eq!(code.raw, "-2147024891");
+    }
+
+    #[test]
+    fn the_shared_download_vocabulary_is_consumed_not_duplicated() {
+        // Stall/timeout phrasing comes straight from download_stats and is now
+        // recognized instead of falling into Unclassified (one-behavior-owner,
+        // issue #357). It is deliberately not a terminal statement.
+        assert_eq!(
+            workload(&format!(
+                "[Win32App] Content download timed out for app with id: {APP}"
+            ))
+            .signal,
+            Win32Signal::DownloadStalled
+        );
+        // The shared failure vocabulary's bare words only count on a
+        // download-shaped line.
+        assert_eq!(
+            workload(&format!(
+                "[Win32App] Content download cancelled for app with id: {APP}"
+            ))
+            .signal,
+            Win32Signal::DownloadFailed
+        );
+        assert_eq!(
+            workload("[Win32App] User cancelled the completion dialog").signal,
+            Win32Signal::Unclassified
+        );
+        // The more specific no-usable-content diagnosis wins over the generic
+        // delivery failure even though the shared alternation matches both.
+        assert_eq!(
+            workload(&format!(
+                "[Win32App] Content version 5 not found while starting the download for app with id: {APP}"
+            ))
+            .signal,
+            Win32Signal::ContentUnavailable
+        );
     }
 
     #[test]

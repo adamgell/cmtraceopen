@@ -1088,7 +1088,9 @@ fn apply_record(
         Win32Signal::ContentUnavailable => {
             fold.push_terminal(record, Win32Outcome::ContentUnavailable);
         }
-        Win32Signal::DownloadStarted => {}
+        // A stall is trouble in flight, not a proven outcome: the record stays
+        // cited evidence, and neither a phase nor a state is claimed from it.
+        Win32Signal::DownloadStarted | Win32Signal::DownloadStalled => {}
         Win32Signal::DownloadCompleted => fold.advance(Win32Phase::Content),
         Win32Signal::DownloadFailed
         | Win32Signal::HashValidationFailed

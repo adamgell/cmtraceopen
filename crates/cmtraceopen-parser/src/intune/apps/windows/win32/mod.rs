@@ -47,7 +47,11 @@
 //! keep their public APIs and their current behavior; nothing here changes what
 //! they return, and existing consumers are unaffected. This module is the
 //! canonical *transaction* view and owns that behavior alone. It adds no second
-//! raw CCM parser.
+//! raw CCM parser, and it does not keep parallel copies of shared vocabulary:
+//! the content-download phrases are consumed from `download_stats` and the GUID
+//! shape from `guid_registry`, so one grammar owns each set of words. Where a
+//! primitive is deliberately not reused (the retry vocabulary), the reason is
+//! documented at the call site in [`signals`].
 //!
 //! ```
 //! use cmtraceopen_parser::intune::apps::windows::win32::{

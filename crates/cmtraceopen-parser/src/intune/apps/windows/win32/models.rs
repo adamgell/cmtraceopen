@@ -122,6 +122,12 @@ pub enum Win32Signal {
     DownloadStarted,
     DownloadCompleted,
     DownloadFailed,
+    /// The download stalled, timed out, or exhausted its retries without a
+    /// completion or failure statement. Recognized through the shared
+    /// content-download vocabulary owned by [`crate::intune::download_stats`];
+    /// deliberately not a terminal statement, because a stall is trouble in
+    /// flight, not a proven outcome.
+    DownloadStalled,
     HashValidationFailed,
     StagingFailed,
     EnforcementStarted,

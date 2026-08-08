@@ -19,15 +19,18 @@ pub(crate) fn setup_file_json_re() -> &'static Regex {
     CELL.get_or_init(|| Regex::new(r#"\"SetUpFilePath\"\s*:\s*\"([^\"]+)\""#).unwrap())
 }
 
+/// The one textual GUID shape every Intune analyzer matches against.
+///
+/// Owned here so `event_tracker`, `download_stats`, and the Win32 transaction
+/// analyzer compose their identifier rules from a single grammar instead of
+/// each spelling its own copy that can drift.
+pub(crate) const GUID_PATTERN: &str =
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
 /// Generic GUID pattern for secondary extraction.
 pub(crate) fn guid_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
-    CELL.get_or_init(|| {
-        Regex::new(
-            r#"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#,
-        )
-        .unwrap()
-    })
+    CELL.get_or_init(|| Regex::new(&format!("({GUID_PATTERN})")).unwrap())
 }
 
 const MAX_JSON_CONTAINER_DEPTH: usize = 128;

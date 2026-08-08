@@ -1,3 +1,13 @@
+//! Download statistics over the shared IME logs.
+//!
+//! Ownership note: `intune::apps::windows::win32` is the canonical
+//! *transaction* view of Win32 app deployments and owns that behavior alone.
+//! This module keeps its statistics surface and public API unchanged, and it
+//! owns the *content-download vocabulary* — the phrases that say a download
+//! started, completed, failed, or stalled. The Win32 transaction analyzer
+//! consumes that vocabulary through the `pub(crate)` accessors below instead
+//! of keeping a parallel copy, so one grammar owns the words.
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -14,7 +24,7 @@ use super::models::DownloadStat;
 use super::timeline::parse_timestamp;
 use std::sync::OnceLock;
 
-fn download_re() -> &'static Regex {
+pub(crate) fn download_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
@@ -52,7 +62,7 @@ fn content_id_re() -> &'static Regex {
     Regex::new(r#"(?i)(?:content|app|application)\s*(?:id)?[:\s]+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#).unwrap()
 })
 }
-fn download_complete_re() -> &'static Regex {
+pub(crate) fn download_complete_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
@@ -61,7 +71,7 @@ fn download_complete_re() -> &'static Regex {
     .unwrap()
 })
 }
-fn download_failed_re() -> &'static Regex {
+pub(crate) fn download_failed_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
@@ -70,7 +80,7 @@ fn download_failed_re() -> &'static Regex {
     .unwrap()
 })
 }
-fn download_start_re() -> &'static Regex {
+pub(crate) fn download_start_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
@@ -88,7 +98,7 @@ fn download_progress_re() -> &'static Regex {
         .unwrap()
     })
 }
-fn download_stall_re() -> &'static Regex {
+pub(crate) fn download_stall_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
