@@ -1,4 +1,4 @@
-{"_comment": "SYNTHETIC FIXTURE: user-driven Autopilot channel, happy path",
+{"_comment": "SYNTHETIC FIXTURE: user-driven Autopilot channel reaching the handoff, with no ESP evidence captured",
   "autopilotDocument": "autopilot.events",
   "documentVersion": 1,
   "events": [

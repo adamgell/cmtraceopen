@@ -1,7 +1,8 @@
 {
   "assertions": [
     "evidence that would otherwise read as completed is refused a terminal outcome",
-    "the phase still reports how far the evidence got, because that is observed fact"
+    "the phase still reports how far the evidence got, because that is observed fact",
+    "expectation corrected post-merge: the prior summary named only the Windows build and omitted the unvalidated Autopilot schema version, leaving half of the withheld-semantics refusal unexplained"
   ],
   "confidence": "low",
   "conflictIds": [],
@@ -40,7 +41,7 @@
         "Re-collect on a build with validated rules, or upgrade CMTrace Open."
       ],
       "severity": "warning",
-      "summary": "Windows build 10.0.99999.1 has no validated Autopilot rules in this build, so terminal semantics are withheld and the evidence is retained raw.",
+      "summary": "This build has no validated Autopilot rules for Windows build 10.0.99999.1 or Autopilot schema version 3, so terminal semantics are withheld and the evidence is retained raw.",
       "title": "Autopilot evidence uses a schema or build this release cannot interpret"
     },
     {
