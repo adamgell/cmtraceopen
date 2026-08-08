@@ -335,6 +335,19 @@ pub fn open_log_folder_aggregate(
     path: String,
     state: State<'_, AppState>,
 ) -> Result<AggregateParseResult, crate::error::AppError> {
+    open_log_folder_aggregate_impl(path, &state)
+}
+
+/// Command body, split from the `#[tauri::command]` wrapper so unit tests can
+/// drive it with a plain `AppState`. Constructing a `tauri::State` in tests
+/// needs `tauri::test::mock_app()`, and on Windows that statically anchors the
+/// runtime's windowing stack (comctl32 v6's `TaskDialogIndirect`, menus, DWM)
+/// into the unit-test exe, which has no comctl32-v6 manifest and therefore
+/// fails to load with STATUS_ENTRYPOINT_NOT_FOUND before any test runs.
+fn open_log_folder_aggregate_impl(
+    path: String,
+    state: &AppState,
+) -> Result<AggregateParseResult, crate::error::AppError> {
     let listing = list_log_folder(path.clone())?;
     let file_entries: Vec<&FolderEntry> = listing
         .entries
@@ -728,12 +741,11 @@ fn index_aggregate_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::{index_aggregate_entries, list_log_folder, open_log_folder_aggregate};
+    use super::{index_aggregate_entries, list_log_folder, open_log_folder_aggregate_impl};
     use crate::state::app_state::AppState;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tauri::Manager;
 
     /// Proves the wiring, not just the classifier: an unreadable folder must
     /// reach the frontend as `AccessDenied` rather than as "folder does not
@@ -838,11 +850,12 @@ mod tests {
         )
         .expect("write earlier Company Portal log");
 
-        let app = tauri::test::mock_app();
-        assert!(app.manage(AppState::default()));
-        let result =
-            open_log_folder_aggregate(dir.to_string_lossy().to_string(), app.state::<AppState>())
-                .expect("open aggregate folder");
+        // A plain AppState, not tauri::test::mock_app(): building a mock app
+        // statically anchors the runtime's windowing stack into the unit-test
+        // exe, which cannot load on Windows (no comctl32-v6 manifest).
+        let state = AppState::default();
+        let result = open_log_folder_aggregate_impl(dir.to_string_lossy().to_string(), &state)
+            .expect("open aggregate folder");
         let later_path = later_path.to_string_lossy();
         let visible_entry_id = result
             .entries
@@ -850,8 +863,7 @@ mod tests {
             .find(|entry| entry.file_path == later_path)
             .expect("later aggregate entry")
             .id;
-        let stored_seed_id = app
-            .state::<AppState>()
+        let stored_seed_id = state
             .open_files
             .lock()
             .expect("open files lock")
