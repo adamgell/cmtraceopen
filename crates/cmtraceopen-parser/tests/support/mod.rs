@@ -246,7 +246,7 @@ pub fn validate_scenario(
     validate_evidence_closure(scenario, scenario_root, &referenced, &mut failures);
     validate_expected_coverage(scenario, manifest, expected, &mut failures);
     validate_findings_are_evidence_backed(scenario, expected, &mut failures);
-    validate_descriptor_privacy(scenario, scenario_root, &probes, &mut failures);
+    validate_descriptor_privacy(scenario, scenario_root, &mut failures);
 
     failures
 }
@@ -257,22 +257,41 @@ pub fn validate_scenario(
 /// redaction contract must catch impossible to put into a fixture, so the gap
 /// they exist to close was untestable. A manifest may declare exactly the
 /// probe strings it plants under `privacyProbes`; those exact substrings are
-/// exempt from the prohibition scan *in this scenario only*, and each one must
-/// be pinned by a `redactionMustNotContain` assertion so a probe can never be
-/// an unchecked leak.
+/// exempt from the prohibition scan over the *evidence files* only, and each
+/// one must be declared **verbatim** as a `redactionMustNotContain` needle:
+/// substring coverage would prove only a fragment of the sensitive payload
+/// redacted while the rest leaked unasserted.
 fn privacy_probes(
     scenario: &str,
     manifest: &Value,
     expected: &Value,
     failures: &mut Failures,
 ) -> Vec<String> {
-    let probes: Vec<String> = manifest["privacyProbes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|value| value.as_str())
-        .map(str::to_owned)
-        .collect();
+    // A declaration that is present but not an array of non-empty strings is
+    // a corrupt contract, never a silently empty one: ignoring it would leave
+    // sensitive-shaped material in the fixture with nothing proving it
+    // redacted.
+    let probes: Vec<String> = match &manifest["privacyProbes"] {
+        Value::Null => Vec::new(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|value| match value.as_str() {
+                Some(probe) if !probe.is_empty() => Some(probe.to_owned()),
+                _ => {
+                    failures.push(format!(
+                        "{scenario}: privacyProbes entries must be non-empty strings, got {value}"
+                    ));
+                    None
+                }
+            })
+            .collect(),
+        other => {
+            failures.push(format!(
+                "{scenario}: privacyProbes must be an array of strings, got {other}"
+            ));
+            Vec::new()
+        }
+    };
 
     let must_not_contain: Vec<&str> = expected["redactionMustNotContain"]
         .as_array()
@@ -282,13 +301,13 @@ fn privacy_probes(
         .collect();
     for probe in &probes {
         failures.require(
-            must_not_contain
-                .iter()
-                .any(|needle| probe.contains(needle)),
+            must_not_contain.iter().any(|needle| *needle == probe.as_str()),
             || {
                 format!(
                     "{scenario}: privacy probe {probe:?} is not covered by any \
-                     redactionMustNotContain assertion; a probe must be proven redacted"
+                     redactionMustNotContain assertion; the probe must be declared \
+                     verbatim as a needle so the whole sensitive payload is proven \
+                     redacted"
                 )
             },
         );
@@ -298,9 +317,9 @@ fn privacy_probes(
 
 /// Remove declared probe material before the prohibition scan.
 ///
-/// Both the raw form and the JSON-escaped form are stripped: the probes appear
-/// raw inside evidence files and escaped inside the descriptors that declare
-/// and assert them.
+/// Evidence files only: the probes appear raw inside the evidence, and the
+/// JSON-escaped form is stripped too for evidence that embeds JSON payloads.
+/// Descriptors are never stripped — see [`validate_descriptor_privacy`].
 fn strip_privacy_probes(contents: &str, probes: &[String]) -> String {
     let mut stripped = contents.to_owned();
     for probe in probes {
@@ -317,20 +336,41 @@ fn strip_privacy_probes(contents: &str, probes: &[String]) -> String {
 /// written and carry exactly the free-text fields where a real path or identity
 /// gets typed by mistake: `sanitizedSourcePath`, `displayName`, and finding
 /// summaries. Scanning only the evidence left the likeliest leak unchecked.
-pub fn validate_descriptor_privacy(
-    scenario: &str,
-    scenario_root: &Path,
-    probes: &[String],
-    failures: &mut Failures,
-) {
-    for descriptor in ["manifest.json", "expected.json"] {
+///
+/// Probe material is *not* stripped here: only the two declaration fields that
+/// exist to carry probe text (`privacyProbes` in the manifest,
+/// `redactionMustNotContain` in the expectations) are removed before the scan.
+/// A probe appearing in any other descriptor field — an expected output, an
+/// assertion, a sanitized path — is a leak in the asserted outputs and must
+/// stay detectable, which a whole-descriptor substring strip silently hid.
+pub fn validate_descriptor_privacy(scenario: &str, scenario_root: &Path, failures: &mut Failures) {
+    for (descriptor, declaration_field) in [
+        ("manifest.json", "privacyProbes"),
+        ("expected.json", "redactionMustNotContain"),
+    ] {
         let path = scenario_root.join(descriptor);
         match std::fs::read_to_string(&path) {
-            Ok(contents) => failures.absorb(privacy_problems(
-                &format!("{scenario}/{descriptor}"),
-                &strip_privacy_probes(&contents, probes),
-            )),
-            Err(error) => failures.push(format!("{scenario}: {descriptor} is not readable: {error}")),
+            Ok(contents) => {
+                let scanned = match serde_json::from_str::<Value>(&contents) {
+                    Ok(mut value) => {
+                        if let Some(object) = value.as_object_mut() {
+                            object.remove(declaration_field);
+                        }
+                        serde_json::to_string_pretty(&value)
+                            .expect("descriptor JSON reserializes")
+                    }
+                    // Unparseable descriptors are scanned raw; other checks
+                    // already report the parse failure itself.
+                    Err(_) => contents,
+                };
+                failures.absorb(privacy_problems(
+                    &format!("{scenario}/{descriptor}"),
+                    &scanned,
+                ));
+            }
+            Err(error) => {
+                failures.push(format!("{scenario}: {descriptor} is not readable: {error}"))
+            }
         }
     }
 }

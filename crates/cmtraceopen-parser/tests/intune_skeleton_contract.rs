@@ -401,7 +401,7 @@ fn descriptor_files_are_privacy_scanned() {
         .expect("expected is writable");
 
     let mut failures = Failures::new();
-    support::validate_descriptor_privacy("leaky", &scenario, &[], &mut failures);
+    support::validate_descriptor_privacy("leaky", &scenario, &mut failures);
     let leaked = failures
         .entries()
         .iter()

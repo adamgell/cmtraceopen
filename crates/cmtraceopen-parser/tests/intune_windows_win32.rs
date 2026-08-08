@@ -840,6 +840,110 @@ fn a_privacy_probe_without_a_redaction_assertion_is_rejected() {
     );
 }
 
+/// The tightened probe contract: substring coverage is not coverage. A probe
+/// must be declared verbatim as a needle, or the sensitive payload is only
+/// partially proven redacted.
+#[test]
+fn a_probe_covered_only_by_a_substring_needle_is_rejected() {
+    let root = corpus().join("privacy-redaction");
+    let manifest = load_json(&root.join("manifest.json"));
+    let expected = load_json(&root.join("expected.json"));
+    // Replace the exact-path needle with an unrelated one; the path probe is
+    // then only covered by the "Probe User" substring needle.
+    let needles = expected["redactionMustNotContain"]
+        .as_array()
+        .expect("needles");
+    let index = needles
+        .iter()
+        .position(|needle| {
+            needle
+                .as_str()
+                .is_some_and(|needle| needle.starts_with("C:\\Users\\Probe User"))
+        })
+        .expect("the fixture declares the full path probe as an exact needle");
+    let corrupted = mutated(
+        &expected,
+        &format!("/redactionMustNotContain/{index}"),
+        json!("unrelated"),
+    );
+    let failures = validate_scenario("privacy-redaction", &root, &manifest, &corrupted);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("not covered by any")),
+        "substring coverage must not satisfy the probe contract, got {:?}",
+        failures.entries()
+    );
+}
+
+/// privacyProbes carrying anything but an array of strings must fail loudly:
+/// a silently ignored declaration would leave sensitive-shaped material in
+/// the fixture with nothing proving it redacted.
+#[test]
+fn a_non_array_privacy_probes_declaration_is_rejected() {
+    let root = corpus().join("privacy-redaction");
+    let manifest = load_json(&root.join("manifest.json"));
+    let expected = load_json(&root.join("expected.json"));
+    let corrupted = mutated(
+        &manifest,
+        "/privacyProbes",
+        json!("S-1-5-21-397955417-626881126-188441444-1010"),
+    );
+    let failures = validate_scenario("privacy-redaction", &root, &corrupted, &expected);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("must be an array")),
+        "a non-array privacyProbes must be rejected loudly, got {:?}",
+        failures.entries()
+    );
+}
+
+/// Probe material may live in the declaration fields and the evidence files it
+/// annotates — nowhere else. A probe leaking into any other descriptor field
+/// (an expected output, an assertion, a sanitized path) must stay detectable,
+/// which the old whole-descriptor substring strip silently hid.
+#[test]
+fn a_probe_leaking_into_a_descriptor_output_field_is_detected() {
+    let root = corpus().join("privacy-redaction");
+    let manifest = load_json(&root.join("manifest.json"));
+    let expected = load_json(&root.join("expected.json"));
+    let corrupted = mutated(
+        &expected,
+        "/assertions/0",
+        json!("leaked S-1-5-21-397955417-626881126-188441444-1010 in an output field"),
+    );
+    // The corrupted descriptors are written to a scratch scenario so the
+    // on-disk descriptor scan sees the leak; only the two descriptor files
+    // matter to it.
+    let scratch = std::env::temp_dir().join(format!("win32-privacy-leak-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("scratch dir");
+    std::fs::write(
+        scratch.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest).expect("manifest serializes"),
+    )
+    .expect("write manifest");
+    std::fs::write(
+        scratch.join("expected.json"),
+        serde_json::to_string_pretty(&corrupted).expect("expected serializes"),
+    )
+    .expect("write expected");
+
+    let mut failures = Failures::new();
+    support::validate_descriptor_privacy("privacy-redaction", &scratch, &mut failures);
+    std::fs::remove_dir_all(&scratch).ok();
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("Windows SID")),
+        "a probe leaking outside the declaration fields must be flagged, got {:?}",
+        failures.entries()
+    );
+}
+
 #[test]
 fn a_coverage_status_contradicting_the_capture_state_is_rejected() {
     let root = corpus().join("incomplete-bundle-missing-appworkload");
