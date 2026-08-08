@@ -1,5 +1,6 @@
 # CMTrace Open — Workspace Library
 
+- IF loading the CMTrace Open specialist agent → read [[soul.md]] for identity/rules and [[memory.md]] for durable facts
 - IF integrating SCCM advanced capture PR #500 with current main → read [[docs/superpowers/plans/2026-08-05-sccm-advanced-capture-main-integration.md]]
 - IF reworking SCCM advanced capture PR #500 server-validation gates → read [[docs/superpowers/plans/2026-08-05-sccm-advanced-server-validation-rework.md]]
 - IF repairing SCCM advanced BGB configured-root provenance on PR #500 → read [[docs/superpowers/plans/2026-08-05-sccm-bgb-configured-root-provenance.md]]

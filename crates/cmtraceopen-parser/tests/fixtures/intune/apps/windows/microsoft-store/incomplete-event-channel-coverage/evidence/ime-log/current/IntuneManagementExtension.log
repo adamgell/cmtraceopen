@@ -1,0 +1,2 @@
+<![LOG[# SYNTHETIC FIXTURE: issue #358 microsoft-store corpus; synthetic data only]LOG]!><time="10:15:22.100+000" date="7-31-2026" component="IntuneManagementExtension" context="" type="1" thread="12" file="store.cs:1">
+<![LOG[Store app AppId=11111111-2222-4333-8444-555555555555 StoreProductId=9WZSYNTH0001 PackageFamilyName=Contoso.SynthStoreApp_9synth0abcd1h is targeted for this device]LOG]!><time="10:15:22.100+000" date="7-31-2026" component="Win32App" context="" type="1" thread="12" file="store.cs:1">

@@ -1,0 +1,43 @@
+{
+  "intuneManifestVersion": 1,
+  "syntheticFixture": true,
+  "scenario": "negative-store-looking-text",
+  "workload": "apps/windows/microsoft-store",
+  "description": "Text that mentions AppX deployment and an event from an unrelated provider on a Store channel. Neither is Store evidence, and neither may create a transaction.",
+  "artifacts": [
+    {
+      "artifactId": "ime-log",
+      "family": "ime",
+      "sourceKind": "imeLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "IntuneManagementExtension.log",
+      "sanitizedSourcePath": null,
+      "detail": "Plain text with no CCM framing and no confirming component",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/ime-log/current/IntuneManagementExtension.log",
+      "bytesCopied": 224
+    },
+    {
+      "artifactId": "store-agent",
+      "family": "store",
+      "sourceKind": "eventLog",
+      "captureState": "captured",
+      "encoding": "utf-8",
+      "originalBasename": "store-agent.json",
+      "sanitizedSourcePath": null,
+      "detail": "A synthetic third-party provider writing to a Store-looking channel",
+      "capturedUtc": "2026-07-31T10:00:00Z",
+      "rotation": {
+        "kind": "current",
+        "fragmentComplete": true
+      },
+      "relativePath": "evidence/store-agent/current/store-agent.json",
+      "bytesCopied": 1686
+    }
+  ]
+}
