@@ -57,9 +57,19 @@ const APPX_DEPLOYMENT_PROVIDERS: &[&str] = &[
 const APPX_PACKAGING_PROVIDERS: &[&str] = &["Microsoft-Windows-AppxPackagingOM"];
 const STORE_PROVIDERS: &[&str] = &["Microsoft-Windows-StoreAgent", "Microsoft-Windows-Store"];
 
-const APPX_DEPLOYMENT_CHANNEL_HINTS: &[&str] = &["AppXDeployment", "AppXDeploymentServer"];
-const APPX_PACKAGING_CHANNEL_HINTS: &[&str] = &["AppxPackaging"];
-const STORE_CHANNEL_HINTS: &[&str] = &["StoreAgent", "Store/"];
+/// Approved channel bases. A channel matches when it *is* the base or is the
+/// base followed by a `/` stream suffix (`.../Operational`, `.../Debug`).
+///
+/// Substring matching is deliberately not used: `Backup-AppXDeploymentServer`
+/// or `Contoso-StoreAgent-Archive/Old` contain the same words without being
+/// the OS channel, and an archive or unrelated channel that merely *mentions*
+/// a recognized name must classify as [`StoreEventSource::Unknown`].
+const APPX_DEPLOYMENT_CHANNELS: &[&str] = &[
+    "Microsoft-Windows-AppXDeploymentServer",
+    "Microsoft-Windows-AppXDeployment",
+];
+const APPX_PACKAGING_CHANNELS: &[&str] = &["Microsoft-Windows-AppxPackaging"];
+const STORE_CHANNELS: &[&str] = &["Microsoft-Windows-StoreAgent", "Microsoft-Windows-Store"];
 
 /// Strip a rotation suffix and the `.log` extension.
 ///
@@ -143,26 +153,33 @@ fn matches_any(value: &str, candidates: &[&str]) -> bool {
         .any(|candidate| candidate.eq_ignore_ascii_case(value))
 }
 
-fn contains_any(value: &str, hints: &[&str]) -> bool {
-    let lowered = value.to_ascii_lowercase();
-    hints
-        .iter()
-        .any(|hint| lowered.contains(&hint.to_ascii_lowercase()))
+/// Whether `channel` is one of the approved bases, exactly or with a `/`
+/// stream suffix. Anything else — a prefixed, suffixed, archive, or unrelated
+/// channel that merely contains an approved name — does not match.
+fn channel_matches(channel: &str, bases: &[&str]) -> bool {
+    let channel = channel.trim();
+    bases.iter().any(|base| {
+        channel
+            .split_at_checked(base.len())
+            .is_some_and(|(head, tail)| {
+                head.eq_ignore_ascii_case(base) && (tail.is_empty() || tail.starts_with('/'))
+            })
+    })
 }
 
 /// Classify one normalized event by its provider and channel together.
 pub fn classify_event_source(provider: &str, channel: &str) -> StoreEventSource {
     if matches_any(provider, APPX_DEPLOYMENT_PROVIDERS)
-        && contains_any(channel, APPX_DEPLOYMENT_CHANNEL_HINTS)
+        && channel_matches(channel, APPX_DEPLOYMENT_CHANNELS)
     {
         return StoreEventSource::AppxDeployment;
     }
     if matches_any(provider, APPX_PACKAGING_PROVIDERS)
-        && contains_any(channel, APPX_PACKAGING_CHANNEL_HINTS)
+        && channel_matches(channel, APPX_PACKAGING_CHANNELS)
     {
         return StoreEventSource::AppxPackaging;
     }
-    if matches_any(provider, STORE_PROVIDERS) && contains_any(channel, STORE_CHANNEL_HINTS) {
+    if matches_any(provider, STORE_PROVIDERS) && channel_matches(channel, STORE_CHANNELS) {
         return StoreEventSource::StoreAgent;
     }
     StoreEventSource::Unknown
@@ -251,6 +268,44 @@ mod tests {
                 "Microsoft-Windows-Store/Operational"
             ),
             StoreEventSource::Unknown
+        );
+    }
+
+    /// Only approved exact or `/`-suffixed channel forms match. A channel that
+    /// merely *contains* an approved name — prefixed, suffixed, or an archive
+    /// copy — is not the OS channel and stays Unknown.
+    #[test]
+    fn a_channel_that_merely_contains_an_approved_name_is_not_matched() {
+        for channel in [
+            "Backup-Microsoft-Windows-AppXDeploymentServer/Operational",
+            "Microsoft-Windows-AppXDeploymentServer-Archive/Operational",
+            "Microsoft-Windows-AppXDeploymentServerX/Operational",
+            "Contoso-StoreAgent-Archive/Old",
+            "Microsoft-Windows-StoreAgent.bak",
+        ] {
+            assert_eq!(
+                classify_event_source("Microsoft-Windows-AppXDeployment-Server", channel),
+                StoreEventSource::Unknown,
+                "{channel} must not classify"
+            );
+            assert_eq!(
+                classify_event_source("Microsoft-Windows-StoreAgent", channel),
+                StoreEventSource::Unknown,
+                "{channel} must not classify"
+            );
+        }
+    }
+
+    /// The exact base with no stream suffix still matches: some exports drop
+    /// the `/Operational` part while remaining the same channel.
+    #[test]
+    fn an_exact_channel_base_without_a_stream_suffix_matches() {
+        assert_eq!(
+            classify_event_source(
+                "Microsoft-Windows-AppXDeployment-Server",
+                "Microsoft-Windows-AppXDeploymentServer"
+            ),
+            StoreEventSource::AppxDeployment
         );
     }
 

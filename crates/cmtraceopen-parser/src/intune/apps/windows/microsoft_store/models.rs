@@ -434,10 +434,23 @@ pub struct StoreObservation {
     pub app_id: Option<String>,
     pub execution_context: StoreExecutionContext,
     pub action: StoreDeploymentAction,
+    /// Intune's typed assignment intent, present only when this observation is
+    /// a typed assignment. This is the authoritative statement of intent: the
+    /// reducer reads intent from here and never from caller-writable
+    /// `named_data` (ADR-001).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_intent: Option<StoreAssignmentIntent>,
     pub error: Option<IntuneErrorCode>,
     /// True when the record came from a recognized provider but an event id or
     /// schema version this build has no rule for.
     pub unknown_version: bool,
+    /// True when a *known* event's level contradicts the outcome its event id
+    /// states (a failure id logged at Information level). Deliberately a
+    /// separate flag from [`Self::unknown_version`]: an unrecognized dialect
+    /// and a self-contradictory known record degrade confidence for distinct
+    /// reasons, and conflating them would hide which one happened.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub level_mismatch: bool,
     #[serde(default)]
     pub named_data: Vec<IntuneNamedValue>,
     /// Verbatim record or rendered event text. Redacted by the export
