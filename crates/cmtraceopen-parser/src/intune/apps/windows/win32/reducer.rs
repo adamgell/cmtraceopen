@@ -1484,7 +1484,7 @@ fn apply_installer_completion(
         return;
     };
 
-    let kind = classify_return_code(key, &code, &options.return_codes);
+    let kind = classify_return_code(key, code, &options.return_codes);
 
     match kind {
         Win32ReturnCodeKind::Success => {

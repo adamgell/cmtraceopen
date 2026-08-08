@@ -301,7 +301,7 @@ fn privacy_probes(
         .collect();
     for probe in &probes {
         failures.require(
-            must_not_contain.iter().any(|needle| *needle == probe.as_str()),
+            must_not_contain.contains(&probe.as_str()),
             || {
                 format!(
                     "{scenario}: privacy probe {probe:?} is not covered by any \
