@@ -26,7 +26,7 @@ use regex::Regex;
 // one-behavior-owner requirement).
 use crate::intune::download_stats::{
     download_complete_re, download_failed_re, download_re as download_vocabulary_re,
-    download_stall_re, download_start_re,
+    download_stall_re, download_start_re, is_state_transition_template,
 };
 use crate::intune::evidence::{IntuneErrorCode, IntuneNamedValue};
 use crate::intune::guid_registry::GUID_PATTERN;
@@ -500,11 +500,18 @@ fn classify_signal(message: &str, result: &mut RecordClassification) -> Win32Sig
         result.error_code = extract_failure_code(message);
         return Win32Signal::ContentUnavailable;
     }
+    // The shared transition-template gate is checked before the download
+    // vocabulary, exactly as `download_stats` itself composes it: IME's
+    // state-machine bookkeeping quotes the download phrases (`… With Event:
+    // Download Failed.`) without being a download statement, and reading one
+    // as evidence minted terminal content failures out of template lines.
+    let download_statement =
+        !is_state_transition_template(message) && download_vocabulary_re().is_match(message);
     // The shared failure vocabulary carries bare words (`cancelled`,
     // `aborted`) that are only download statements on a download-shaped line,
     // so it is gated by the shared download vocabulary — the same composition
     // `download_stats` itself uses.
-    if download_vocabulary_re().is_match(message) && download_failed_re().is_match(message) {
+    if download_statement && download_failed_re().is_match(message) {
         result.error_code = extract_failure_code(message);
         return Win32Signal::DownloadFailed;
     }
@@ -545,16 +552,17 @@ fn classify_signal(message: &str, result: &mut RecordClassification) -> Win32Sig
     if dependency_resolved_re().is_match(message) {
         return Win32Signal::DependencyResolved;
     }
-    if (download_vocabulary_re().is_match(message) && download_complete_re().is_match(message))
-        || download_completed_local_re().is_match(message)
+    if download_statement
+        && (download_complete_re().is_match(message)
+            || download_completed_local_re().is_match(message))
     {
         return Win32Signal::DownloadCompleted;
     }
-    if download_vocabulary_re().is_match(message) && download_stall_re().is_match(message) {
+    if download_statement && download_stall_re().is_match(message) {
         return Win32Signal::DownloadStalled;
     }
-    if (download_vocabulary_re().is_match(message) && download_start_re().is_match(message))
-        || download_started_local_re().is_match(message)
+    if download_statement
+        && (download_start_re().is_match(message) || download_started_local_re().is_match(message))
     {
         return Win32Signal::DownloadStarted;
     }
@@ -758,6 +766,62 @@ mod tests {
             .signal,
             Win32Signal::ContentUnavailable
         );
+    }
+
+    #[test]
+    fn the_state_transition_template_never_mints_a_download_signal() {
+        // The exact template line download_stats pins in its own
+        // ime_transition_template_is_ignored test. The shared ignore gate is
+        // checked before the download vocabulary there, and must be here too:
+        // a state-machine transition line quotes the download phrases without
+        // being a download statement.
+        assert_eq!(
+            workload(
+                "Adding new state transition - From: Install In Progress To: \
+                 Download In Progress With Event: Download Started."
+            )
+            .signal,
+            Win32Signal::Unclassified
+        );
+        // The failure-event form is the one that minted a terminal
+        // ContentDeliveryFailed before the gate was applied here.
+        assert_eq!(
+            workload(&format!(
+                "Adding new state transition - From: Download In Progress To: \
+                 Download Failed With Event: Download Failed for app with id: {APP}."
+            ))
+            .signal,
+            Win32Signal::Unclassified
+        );
+    }
+
+    #[test]
+    fn every_pre_refactor_download_phrasing_still_classifies() {
+        // These phrasings were matched by the win32-local rules before the
+        // vocabulary moved to download_stats; the shared regexes now carry
+        // them so the consolidation is a widening, not a regression.
+        for phrase in ["Download has failed", "Download state: Failed", "Download result = Failed"]
+        {
+            assert_eq!(
+                workload(&format!("[Win32App] {phrase} for app with id: {APP}")).signal,
+                Win32Signal::DownloadFailed,
+                "{phrase:?} must classify as a download failure"
+            );
+        }
+        for phrase in ["Download is complete", "Download is completed", "Download complete"] {
+            assert_eq!(
+                workload(&format!("[Win32App] {phrase} for app with id: {APP}")).signal,
+                Win32Signal::DownloadCompleted,
+                "{phrase:?} must classify as a download completion"
+            );
+        }
+        for phrase in ["Started the download", "Start content download"] {
+            assert_eq!(
+                workload(&format!("[Win32App] {phrase} for app with id: {APP}")).signal,
+                Win32Signal::DownloadStarted,
+                "{phrase:?} must classify as a download start"
+            );
+        }
     }
 
     #[test]

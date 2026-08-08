@@ -37,6 +37,19 @@ fn download_ignore_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| Regex::new(r#"(?i)adding\s+new\s+state\s+transition\s*-\s*from:"#).unwrap())
 }
+
+/// The gate every consumer of the download vocabulary must check first.
+///
+/// IME's state-machine transition template (`Adding new state transition -
+/// From: … To: … With Event: Download Failed.`) quotes the download phrases
+/// without being a download statement, so matching the vocabulary against one
+/// of these lines reads the state machine's bookkeeping as evidence. This
+/// module checks the gate before its own vocabulary in `extract_downloads`;
+/// exposing it here keeps the gating grammar owned in one place instead of
+/// letting a consumer re-derive (or forget) it.
+pub(crate) fn is_state_transition_template(message: &str) -> bool {
+    download_ignore_re().is_match(message)
+}
 fn size_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -62,11 +75,16 @@ fn content_id_re() -> &'static Regex {
     Regex::new(r#"(?i)(?:content|app|application)\s*(?:id)?[:\s]+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#).unwrap()
 })
 }
+// The `is` / bare-adjective completion forms and the `has failed` /
+// `state: Failed` / `result = Failed` failure forms are genuine IME wordings:
+// they were carried by the Win32 transaction analyzer's local rules before the
+// vocabulary was consolidated here, so the shared regexes carry them for every
+// consumer rather than letting the consolidation lose recall.
 pub(crate) fn download_complete_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r#"(?i)(?:download\s+(?:completed|finished|succeeded|done)|content\s+cached|staging\s+completed|hash\s+validation\s+succeeded)"#,
+        r#"(?i)(?:download\s+(?:is\s+)?(?:complete|completed|finished|succeeded|done)|content\s+cached|staging\s+completed|hash\s+validation\s+succeeded)"#,
     )
     .unwrap()
 })
@@ -75,7 +93,7 @@ pub(crate) fn download_failed_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
     Regex::new(
-        r#"(?i)(?:download\s+(?:failed|error)|failed\s+to\s+download|hash\s+validation\s+failed|hash\s+mismatch|staging\s+failed|content\s+not\s+found|unable\s+to\s+download|cancelled|aborted)"#,
+        r#"(?i)(?:download\s+(?:has\s+)?(?:failed|error)|download\s+(?:state|result)\s*[:=]\s*failed|failed\s+to\s+download|hash\s+validation\s+failed|hash\s+mismatch|staging\s+failed|content\s+not\s+found|unable\s+to\s+download|cancelled|aborted)"#,
     )
     .unwrap()
 })
@@ -84,7 +102,7 @@ pub(crate) fn download_start_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-        r#"(?i)(?:starting|beginning|queued|requesting|resuming).*(?:download|content\s+download)"#,
+        r#"(?i)(?:(?:starting|beginning|queued|requesting|resuming).*(?:download|content\s+download)|\bstart(?:ed)?\s+(?:the\s+)?(?:content\s+)?download)"#,
     )
     .unwrap()
     })
@@ -736,6 +754,23 @@ mod tests {
             &empty_registry(),
         );
         assert!(downloads.is_empty());
+    }
+
+    #[test]
+    fn the_shared_vocabulary_carries_the_pre_consolidation_ime_phrasings() {
+        // These wordings were matched by the Win32 transaction analyzer's
+        // local rules before the vocabulary was consolidated here; the owner
+        // regexes must carry them so every consumer keeps the recall.
+        for phrase in ["Download has failed", "Download state: Failed", "Download result = Failed"]
+        {
+            assert!(download_failed_re().is_match(phrase), "{phrase:?}");
+        }
+        for phrase in ["Download is complete", "Download is completed", "Download complete"] {
+            assert!(download_complete_re().is_match(phrase), "{phrase:?}");
+        }
+        for phrase in ["Started the download", "Start content download"] {
+            assert!(download_start_re().is_match(phrase), "{phrase:?}");
+        }
     }
 
     #[test]
