@@ -21,7 +21,8 @@ BeforeAll {
         'Assert-ProfileRequiredArray',
         'Assert-CollectorProfileShape',
         'Join-RelativePath',
-        'Get-LocaleMetadataRelativePath'
+        'Get-LocaleMetadataRelativePath',
+        'Get-LocaleMetadataLcid'
     )
     foreach ($functionName in $functionNames) {
         $definition = $ast.FindAll(
@@ -163,6 +164,60 @@ Describe 'Get-LocaleMetadataRelativePath' {
     It 'does not depend on the file extension' {
         Get-LocaleMetadataRelativePath -EvtxRelativePath 'evidence/event-logs/no-extension' |
             Should -BeExactly 'evidence/event-logs/LocaleMetaData'
+    }
+}
+
+Describe 'Get-LocaleMetadataLcid' {
+    It 'reads the LCID wevtutil appends to the sidecar name' {
+        Get-LocaleMetadataLcid -MetadataFileName 'device-management-admin_1033.MTA' |
+            Should -BeExactly '1033'
+    }
+
+    It 'takes the final segment when the exported log name itself contains underscores' {
+        Get-LocaleMetadataLcid -MetadataFileName 'user_device_registration_2057.MTA' |
+            Should -BeExactly '2057'
+    }
+
+    It 'reports unknown rather than guessing when the suffix is not numeric' {
+        Get-LocaleMetadataLcid -MetadataFileName 'autopilot_enUS.MTA' | Should -BeExactly 'unknown'
+    }
+
+    It 'reports unknown when there is no suffix at all' {
+        Get-LocaleMetadataLcid -MetadataFileName 'autopilot.MTA' | Should -BeExactly 'unknown'
+        Get-LocaleMetadataLcid -MetadataFileName 'autopilot_.MTA' | Should -BeExactly 'unknown'
+    }
+}
+
+Describe 'Locale metadata artifact contract' {
+    It 'keeps the unresolved-outcome path file-shaped rather than pointing at the folder' {
+        # Bundle inspection treats relativePath as a file and tests it on disk. Pointing failure
+        # and missing records at the LocaleMetaData folder would read as present-on-disk whenever
+        # the folder exists, and would collide across channels.
+        $collectorText = Get-Content -LiteralPath $collectorPath -Raw
+
+        $collectorText | Should -Match 'unknown-lcid\.MTA'
+        $collectorText | Should -Not -Match "RelativePath \`$metadataRelativeFolder"
+    }
+
+    It 'treats a sidecar enumeration fault as failed rather than missing' {
+        $collectorText = Get-Content -LiteralPath $collectorPath -Raw
+
+        # -ErrorAction Stop inside try/catch, so an unreadable folder cannot masquerade as absent.
+        $collectorText | Should -Match "Get-ChildItem -LiteralPath \`$metadataFolder[^\r\n]*-ErrorAction Stop"
+        $collectorText | Should -Match 'Could not enumerate'
+    }
+
+    It 'exposes an opt-out switch for operators who need a smaller bundle' {
+        $collectorText = Get-Content -LiteralPath $collectorPath -Raw
+
+        $collectorText | Should -Match '\[switch\]\$SkipLocaleMetadata'
+        $collectorText | Should -Match '\$SkipLocaleMetadata\)\s*\{\s*continue'
+    }
+
+    It 'records the LCID in the collected artifact notes' {
+        $collectorText = Get-Content -LiteralPath $collectorPath -Raw
+
+        $collectorText | Should -Match 'Locale metadata \(LCID \{0\}\)'
     }
 }
 

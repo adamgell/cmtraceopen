@@ -139,6 +139,37 @@ function Get-LocaleMetadataRelativePath {
     return (Join-RelativePath -Left $normalizedPath.Substring(0, $lastSeparatorIndex) -Right 'LocaleMetaData')
 }
 
+function Get-LocaleMetadataLcid {
+    <#
+        .SYNOPSIS
+        Extracts the locale identifier wevtutil.exe encoded into an .MTA sidecar's file name.
+
+        .DESCRIPTION
+        Sidecars are named <exported-log>_<lcid>.MTA, for example device-management-admin_1033.MTA.
+        The LCID is read back from the name rather than predicted, because the collecting machine's
+        default locale decides it and the exported log's own base name may itself contain
+        underscores.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$MetadataFileName
+    )
+
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($MetadataFileName)
+    $lastSeparatorIndex = $baseName.LastIndexOf('_')
+
+    if ($lastSeparatorIndex -lt 0 -or $lastSeparatorIndex -eq ($baseName.Length - 1)) {
+        return 'unknown'
+    }
+
+    $candidate = $baseName.Substring($lastSeparatorIndex + 1)
+    if ($candidate -notmatch '^\d+$') {
+        return 'unknown'
+    }
+
+    return $candidate
+}
+
 function ConvertTo-PhysicalPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -778,31 +809,47 @@ function Export-EventChannelLocaleMetadata {
     $metadataFolder = Join-Path (Split-Path -Parent $EvtxPath) 'LocaleMetaData'
     $baseName = [System.IO.Path]::GetFileNameWithoutExtension($EvtxPath)
 
+    # Manifest consumers treat relativePath as a file and test it on disk, so an unresolved
+    # outcome still needs a file-shaped path. Using the LocaleMetaData folder would both look
+    # present-on-disk whenever the folder exists and collide across channels.
+    $unresolvedRelativePath = Join-RelativePath -Left $metadataRelativeFolder -Right ('{0}_unknown-lcid.MTA' -f $baseName)
+
     & wevtutil.exe al $EvtxPath | Out-Null
     $exitCode = $LASTEXITCODE
 
     if ($exitCode -ne 0) {
         $notes = 'wevtutil.exe al failed with exit code {0}. Event descriptions will not resolve away from this machine.' -f $exitCode
-        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $metadataRelativeFolder -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
         Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'failed' -Origin $Channel -Reason $notes
         return $records
     }
 
     $metadataFiles = @()
     if (Test-Path -LiteralPath $metadataFolder) {
-        $metadataFiles = @(Get-ChildItem -LiteralPath $metadataFolder -Filter ('{0}_*.MTA' -f $baseName) -File -ErrorAction SilentlyContinue)
+        try {
+            $metadataFiles = @(Get-ChildItem -LiteralPath $metadataFolder -Filter ('{0}_*.MTA' -f $baseName) -File -ErrorAction Stop)
+        }
+        catch {
+            # An access or I/O fault here is a failure, not an absence. Reporting it as 'missing'
+            # would claim the sidecar was never produced when it may simply be unreadable.
+            $notes = 'Could not enumerate {0}: {1}' -f $metadataFolder, (Protect-SecretText -Text $_.Exception.Message)
+            $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
+            Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'failed' -Origin $Channel -Reason $notes
+            return $records
+        }
     }
 
     if ($metadataFiles.Count -eq 0) {
         $notes = 'wevtutil.exe al reported success but produced no .MTA sidecar. Event descriptions will not resolve away from this machine.'
-        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $metadataRelativeFolder -OriginPath $Channel -Status 'missing' -ParseHints @('mta') -Notes $notes))
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'missing' -ParseHints @('mta') -Notes $notes))
         Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'missing' -Origin $Channel -Reason $notes
         return $records
     }
 
     foreach ($metadataFile in $metadataFiles) {
         $relativePath = Join-RelativePath -Left $metadataRelativeFolder -Right $metadataFile.Name
-        $notes = 'Locale metadata for {0}, enabling offline event description rendering.' -f $Channel
+        $localeId = Get-LocaleMetadataLcid -MetadataFileName $metadataFile.Name
+        $notes = 'Locale metadata (LCID {0}) for {1}, enabling offline event description rendering.' -f $localeId, $Channel
         $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $relativePath -OriginPath $Channel -Status 'collected' -ParseHints @('mta') -FilePath $metadataFile.FullName -Notes $notes))
     }
 
