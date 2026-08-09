@@ -39,6 +39,7 @@
     {
       "findingId": "win32-dependency-unresolved:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
       "severity": "error",
+      "confidence": "high",
       "evidence": [
         {
           "evidenceId": "app-workload-current:4",

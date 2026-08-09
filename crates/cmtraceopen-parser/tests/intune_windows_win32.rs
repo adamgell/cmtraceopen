@@ -21,6 +21,7 @@ use cmtraceopen_parser::intune::apps::windows::win32::{
     Win32SourceInput,
 };
 use cmtraceopen_parser::intune::evidence::IntuneAccessState;
+use cmtraceopen_parser::intune::ime_parser::parse_ime_content;
 use serde_json::{json, Value};
 use support::{load_json, mutated, scenario_names, validate_scenario, Failures};
 
@@ -124,6 +125,7 @@ fn assert_scenario(scenario: &str) -> Win32Analysis {
     let value = serde_json::to_value(&analysis).expect("analysis must serialize");
     let mut failures = Failures::new();
 
+    assert_fragment_declarations(scenario, &root, &manifest, &mut failures);
     assert_transactions(scenario, &value, &expected, &mut failures);
     assert_coverage(scenario, &analysis, &expected, &mut failures);
     assert_findings(scenario, &analysis, &expected, &mut failures);
@@ -131,6 +133,52 @@ fn assert_scenario(scenario: &str) -> Win32Analysis {
 
     failures.assert_empty(&format!("{scenario}: win32 contract"));
     analysis
+}
+
+/// Bind each captured IME artifact's declared `rotation.fragmentComplete` to
+/// the physical framing truth of its evidence file.
+///
+/// Nothing consumed this flag before, so a stale declaration was undetectable.
+/// The truth is what `parse_ime_content` reports: an entry with neither a CCM
+/// timestamp nor a component is a physical-line fragment or an unmatched
+/// rotation tail (the same rule the reducer's `is_fragment` applies), and a
+/// file containing one is not fragment-complete.
+fn assert_fragment_declarations(
+    scenario: &str,
+    scenario_root: &Path,
+    manifest: &Value,
+    failures: &mut Failures,
+) {
+    for artifact in manifest["artifacts"].as_array().into_iter().flatten() {
+        let id = artifact["artifactId"].as_str().unwrap_or_default();
+        if artifact["sourceKind"].as_str() != Some("imeLog")
+            || artifact["captureState"].as_str() != Some("captured")
+        {
+            continue;
+        }
+        let Some(relative) = artifact["relativePath"].as_str() else {
+            continue;
+        };
+        let Some(declared) = artifact["rotation"]["fragmentComplete"].as_bool() else {
+            failures.push(format!(
+                "{scenario}/{id}: rotation.fragmentComplete must be declared as a bool, got {}",
+                artifact["rotation"]["fragmentComplete"]
+            ));
+            continue;
+        };
+        let contents = std::fs::read_to_string(scenario_root.join(relative))
+            .unwrap_or_else(|error| panic!("{relative} is readable: {error}"));
+        let fragments = parse_ime_content(&contents)
+            .iter()
+            .filter(|line| line.timestamp.is_none() && line.component.is_none())
+            .count();
+        failures.require(declared == (fragments == 0), || {
+            format!(
+                "{scenario}/{id}: rotation.fragmentComplete is {declared} but {relative} \
+                 frames {fragments} physical fragment(s)"
+            )
+        });
+    }
 }
 
 fn assert_transactions(scenario: &str, value: &Value, expected: &Value, failures: &mut Failures) {
@@ -308,25 +356,37 @@ fn assert_coverage(
             u64::from(analysis.coverage.fragment_records),
         ),
     ];
+    // A missing or misspelled key must fail loudly, not default to 0/false:
+    // the corpus exists to pin these values, and a fixture that silently
+    // asserts nothing is worse than no fixture.
     for (field, actual) in counters {
-        let want = expected[field].as_u64().unwrap_or_default();
+        let Some(want) = expected[field].as_u64() else {
+            failures.push(format!(
+                "{scenario}: expected.{field} must be declared as a number, got {}",
+                expected[field]
+            ));
+            continue;
+        };
         failures.require(actual == want, || {
             format!("{scenario}: {field} is {actual}, expected {want}")
         });
     }
 
-    let want_unknown = expected["unknownVocabularyObserved"]
-        .as_bool()
-        .unwrap_or_default();
-    failures.require(
-        analysis.coverage.unknown_vocabulary_observed == want_unknown,
-        || {
-            format!(
-                "{scenario}: unknownVocabularyObserved is {}, expected {want_unknown}",
-                analysis.coverage.unknown_vocabulary_observed
-            )
-        },
-    );
+    match expected["unknownVocabularyObserved"].as_bool() {
+        Some(want_unknown) => failures.require(
+            analysis.coverage.unknown_vocabulary_observed == want_unknown,
+            || {
+                format!(
+                    "{scenario}: unknownVocabularyObserved is {}, expected {want_unknown}",
+                    analysis.coverage.unknown_vocabulary_observed
+                )
+            },
+        ),
+        None => failures.push(format!(
+            "{scenario}: expected.unknownVocabularyObserved must be declared as a bool, got {}",
+            expected["unknownVocabularyObserved"]
+        )),
+    }
 }
 
 fn assert_findings(
@@ -415,19 +475,36 @@ fn assert_findings(
     }
 }
 
+/// Whether any string in a JSON tree — leaf values and object keys alike —
+/// satisfies the predicate.
+///
+/// Needles are matched against *unescaped* strings. Scanning the serialized
+/// document instead re-escapes every backslash, so a needle carrying a Windows
+/// path (`C:\Users\…`) could never match and its assertion was vacuous: the
+/// raw path could leak in full and the scan still passed.
+fn any_string(value: &Value, predicate: &dyn Fn(&str) -> bool) -> bool {
+    match value {
+        Value::String(text) => predicate(text),
+        Value::Array(items) => items.iter().any(|item| any_string(item, predicate)),
+        Value::Object(entries) => entries
+            .iter()
+            .any(|(key, item)| predicate(key) || any_string(item, predicate)),
+        _ => false,
+    }
+}
+
 fn assert_redaction(
     scenario: &str,
     analysis: &Win32Analysis,
     expected: &Value,
     failures: &mut Failures,
 ) {
-    let redacted = redacted_export_projection(analysis);
-    let text = serde_json::to_string(&redacted).expect("redacted analysis serializes");
+    let redacted =
+        serde_json::to_value(redacted_export_projection(analysis)).expect("redacted serializes");
     // Findings are part of the exported surface and must be as clean as the
     // projection itself: rules splice log-derived free text into summaries,
     // so the scan covers them too (ADR-004).
-    let findings =
-        serde_json::to_string(&derive_findings(analysis)).expect("findings serialize");
+    let findings = serde_json::to_value(derive_findings(analysis)).expect("findings serialize");
 
     for needle in expected["redactionMustNotContain"]
         .as_array()
@@ -435,10 +512,11 @@ fn assert_redaction(
         .flatten()
     {
         let needle = needle.as_str().expect("needle");
-        failures.require(!text.contains(needle), || {
+        let leaks = |text: &str| text.contains(needle);
+        failures.require(!any_string(&redacted, &leaks), || {
             format!("{scenario}: redacted export still contains {needle:?}")
         });
-        failures.require(!findings.contains(needle), || {
+        failures.require(!any_string(&findings, &leaks), || {
             format!("{scenario}: derived findings still contain {needle:?}")
         });
     }
@@ -448,9 +526,10 @@ fn assert_redaction(
         .flatten()
     {
         let needle = needle.as_str().expect("needle");
-        failures.require(text.contains(needle), || {
-            format!("{scenario}: redacted export dropped correlation key {needle:?}")
-        });
+        failures.require(
+            any_string(&redacted, &|text: &str| text.contains(needle)),
+            || format!("{scenario}: redacted export dropped correlation key {needle:?}"),
+        );
     }
 }
 
@@ -811,6 +890,162 @@ fn the_serialized_analysis_is_camel_case_and_stable() {
             "missing observation context key {key}"
         );
     }
+}
+
+/// A redaction needle carrying backslashes could never match the serialized
+/// JSON document (serialization re-escapes every backslash), so the strongest
+/// privacy assertion in the corpus was vacuous. The scan now runs against the
+/// unescaped string leaves, where a leaked raw path is actually visible.
+#[test]
+fn redaction_needles_are_matched_against_unescaped_string_leaves() {
+    let leaked = json!({
+        "message": r"quoting C:\Users\alice\secret.txt in a record"
+    });
+    let needle = r"C:\Users\alice\secret.txt";
+    assert!(
+        any_string(&leaked, &|text: &str| text.contains(needle)),
+        "a raw-path needle must match the unescaped leaf"
+    );
+    assert!(
+        !serde_json::to_string(&leaked)
+            .expect("serializes")
+            .contains(needle),
+        "the serialized document can never contain the raw needle — \
+         scanning it was the vacuous assertion this pin exists to prevent"
+    );
+}
+
+/// The full corpus contract must actually fail when the redacted export leaks
+/// the path probe: prove it by asserting a needle the projection cannot
+/// satisfy and watching the leaf scan reject it.
+#[test]
+fn the_leaf_scan_rejects_a_needle_the_export_genuinely_contains() {
+    let (analysis, _, expected, _) = load("privacy-redaction");
+    // "AppData" survives redaction by design (path shape is kept), so a
+    // needle claiming it must NOT appear has to fail under a working scan.
+    let corrupted = {
+        let mut expected = expected.clone();
+        expected["redactionMustNotContain"]
+            .as_array_mut()
+            .expect("needles")
+            .push(json!("AppData"));
+        expected
+    };
+    let mut failures = Failures::new();
+    assert_redaction("privacy-redaction", &analysis, &corrupted, &mut failures);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("AppData")),
+        "a needle the export contains must fail the scan, got {:?}",
+        failures.entries()
+    );
+}
+
+/// A missing or mistyped counter key must fail loudly instead of defaulting to
+/// zero and asserting nothing.
+#[test]
+fn a_mistyped_counter_declaration_is_rejected() {
+    let (analysis, _, expected, _) = load("rotation-split-record");
+    let corrupted = mutated(&expected, "/fragmentRecords", json!("2"));
+    let mut failures = Failures::new();
+    assert_coverage("rotation-split-record", &analysis, &corrupted, &mut failures);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("must be declared as a number")),
+        "a string-typed counter must be rejected, got {:?}",
+        failures.entries()
+    );
+
+    let corrupted = mutated(&expected, "/unknownVocabularyObserved", json!("false"));
+    let mut failures = Failures::new();
+    assert_coverage("rotation-split-record", &analysis, &corrupted, &mut failures);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("must be declared as a bool")),
+        "a string-typed bool must be rejected, got {:?}",
+        failures.entries()
+    );
+}
+
+/// A stale `rotation.fragmentComplete` declaration must be caught: the flag is
+/// bound to the physical framing truth of the evidence file.
+#[test]
+fn a_stale_fragment_complete_declaration_is_rejected() {
+    let (_, manifest, _, root) = load("rotation-split-record");
+    // The split rotation file genuinely carries a fragment; declaring it
+    // complete is the stale flag this binding exists to catch.
+    let index = manifest["artifacts"]
+        .as_array()
+        .expect("artifacts")
+        .iter()
+        .position(|artifact| artifact["artifactId"] == "app-workload-rotation")
+        .expect("the rotation artifact exists");
+    let corrupted = mutated(
+        &manifest,
+        &format!("/artifacts/{index}/rotation/fragmentComplete"),
+        json!(true),
+    );
+    let mut failures = Failures::new();
+    assert_fragment_declarations("rotation-split-record", &root, &corrupted, &mut failures);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("fragmentComplete is true")),
+        "a stale fragmentComplete must be rejected, got {:?}",
+        failures.entries()
+    );
+}
+
+/// A bare-prefix probe must not exempt undeclared paths from the privacy scan.
+/// The old implementation deleted probe substrings from the evidence before
+/// scanning, so declaring `C:\Users\` hid every profile path in the file.
+#[test]
+fn a_bare_prefix_probe_cannot_hide_an_undeclared_profile_path() {
+    let probes = vec![r"C:\Users\".to_owned()];
+    let contents = r"the probe C:\Users\ is declared but C:\Users\alice\secret.txt is not";
+    let failures = support::privacy_problems_excluding_probes("evidence", contents, &probes);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("forbidden fixture material")),
+        "an undeclared profile path must stay detectable, got {:?}",
+        failures.entries()
+    );
+
+    // A full-value probe exempts exactly its own payload, raw and
+    // JSON-escaped.
+    let probe = r"C:\Users\Probe User\AppData\Local\Temp\contoso-setup.log";
+    let probes = vec![probe.to_owned()];
+    let raw = format!("quoting {probe} in evidence");
+    assert!(
+        support::privacy_problems_excluding_probes("evidence", &raw, &probes)
+            .entries()
+            .is_empty(),
+        "the declared probe itself is exempt"
+    );
+    let escaped = r#"{"path":"C:\\Users\\Probe User\\AppData\\Local\\Temp\\contoso-setup.log"}"#;
+    assert!(
+        support::privacy_problems_excluding_probes("evidence", escaped, &probes)
+            .entries()
+            .is_empty(),
+        "the JSON-escaped occurrence of the declared probe is exempt"
+    );
+    // And the same file with an undeclared path alongside still fails.
+    let with_leak = format!("{raw} plus C:\\Users\\mallory\\loot.txt");
+    assert!(
+        !support::privacy_problems_excluding_probes("evidence", &with_leak, &probes)
+            .entries()
+            .is_empty(),
+        "an undeclared path next to a declared probe must still fail"
+    );
 }
 
 /// The shared harness must reject a corpus that lies about itself, and this

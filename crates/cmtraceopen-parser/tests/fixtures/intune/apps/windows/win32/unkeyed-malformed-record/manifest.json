@@ -29,7 +29,7 @@
       "originalBasename": "AppWorkload.log",
       "rotation": {
         "kind": "current",
-        "fragmentComplete": true
+        "fragmentComplete": false
       },
       "capturedUtc": "2026-07-31T12:00:00Z",
       "encoding": "utf-8",

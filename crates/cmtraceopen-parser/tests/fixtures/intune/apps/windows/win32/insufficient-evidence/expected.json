@@ -49,7 +49,7 @@
   ],
   "assertions": [
     "identity alone never becomes a verdict",
-    "the unresolved finding names the smallest artifact that would advance the diagnosis"
+    "the unresolved finding names the minimum artifact set that would advance the diagnosis"
   ],
   "unkeyedObservationCount": 0,
   "fragmentRecords": 0,
