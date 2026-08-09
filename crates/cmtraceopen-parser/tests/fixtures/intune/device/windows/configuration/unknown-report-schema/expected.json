@@ -37,14 +37,17 @@
   ],
   "findingConfidence": {
     "configuration-uninterpretable-evidence": "high",
-    "configuration-unreadable-artifacts": "high"
+    "configuration-unreadable-artifacts": "high",
+    "configuration-artifact-without-usable-records": "high"
   },
   "findingIds": [
     "configuration-uninterpretable-evidence",
-    "configuration-unreadable-artifacts"
+    "configuration-unreadable-artifacts",
+    "configuration-artifact-without-usable-records"
   ],
   "assertions": [
     "an unrecognized event id names the resource without claiming an outcome",
-    "an unsupported schema is retained rather than discarded"
+    "an unsupported schema is retained rather than discarded",
+    "the event channel is reported as available-but-barren rather than left to read as clean"
   ]
 }

@@ -17,8 +17,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::intune::evidence::{
-    IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding, IntuneFindingConfidence,
-    IntuneFindingSeverity,
+    IntuneArtifactStatus, IntuneErrorCode, IntuneEvidenceRef, IntuneFinding,
+    IntuneFindingConfidence, IntuneFindingSeverity,
 };
 
 use super::identity::ConfigurationScope;
@@ -58,6 +58,7 @@ pub fn derive_findings(snapshot: &ConfigurationSnapshot) -> Vec<IntuneFinding> {
     push_uncollected_artifacts(snapshot, &mut findings);
     push_truncated_artifacts(snapshot, &mut findings);
     push_unreadable_artifacts(snapshot, &mut findings);
+    push_artifacts_without_usable_records(snapshot, &mut findings);
     push_applied(snapshot, &mut findings);
 
     findings
@@ -222,6 +223,36 @@ fn push_local_service_contradiction(
     } else {
         "At least one side has unusable time provenance, so the newer statement cannot be preferred."
     };
+    // `service_error` was populated and cited by no rule at all, so the code
+    // Intune reported never reached a reader. It belongs here: the whole point of
+    // the finding is to put the two statements side by side.
+    let codes = |pick: fn(&ConfigurationSetting) -> Option<&IntuneErrorCode>| {
+        settings
+            .iter()
+            .filter_map(|setting| pick(setting))
+            .map(|code| code.hex.clone().unwrap_or_else(|| code.raw.clone()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    let reported = |label: &str, codes: Vec<String>| {
+        if codes.is_empty() {
+            String::new()
+        } else {
+            format!(" {label} status: {}.", codes.join(", "))
+        }
+    };
+    let statuses = format!(
+        "{}{}",
+        reported(
+            "Device-reported",
+            codes(|setting| setting.local_error.as_ref())
+        ),
+        reported(
+            "Service-reported",
+            codes(|setting| setting.service_error.as_ref())
+        ),
+    );
     push_finding(
         findings,
         finding(
@@ -230,7 +261,7 @@ fn push_local_service_contradiction(
             IntuneFindingConfidence::High,
             "Device evidence and Intune reporting disagree",
             format!(
-                "The device and the imported Intune report state incompatible outcomes for {}. {recency} The device statement describes what the CSP did; the service statement describes what Intune was told.",
+                "The device and the imported Intune report state incompatible outcomes for {}.{statuses} {recency} The device statement describes what the CSP did; the service statement describes what Intune was told.",
                 join_labels(&settings)
             ),
             vec![
@@ -576,7 +607,7 @@ fn push_not_applicable(snapshot: &ConfigurationSnapshot, findings: &mut Vec<Intu
 
 /// The same CSP node observed under both device and user scope.
 fn push_scope_split(snapshot: &ConfigurationSnapshot, findings: &mut Vec<IntuneFinding>) {
-    let mut by_resource: BTreeMap<&str, Vec<&ConfigurationSetting>> = BTreeMap::new();
+    let mut by_resource: BTreeMap<String, Vec<&ConfigurationSetting>> = BTreeMap::new();
     for setting in &snapshot.settings {
         if matches!(setting.identity.scope, ConfigurationScope::Unspecified) {
             continue;
@@ -584,7 +615,15 @@ fn push_scope_split(snapshot: &ConfigurationSnapshot, findings: &mut Vec<IntuneF
         let Some(resource) = setting.identity.resource_path.as_deref() else {
             continue;
         };
-        by_resource.entry(resource).or_default().push(setting);
+        // Lowercased for the same reason the dedupe key is: CSP node names are
+        // documented with specific casing but are not case-sensitive, and grouping
+        // on the exact bytes meant a device `Start/…` and a user `start/…` were
+        // two separate transactions that never met, so the scope split they
+        // represent went unreported.
+        by_resource
+            .entry(resource.to_ascii_lowercase())
+            .or_default()
+            .push(setting);
     }
 
     let split: Vec<&ConfigurationSetting> = by_resource
@@ -950,6 +989,58 @@ fn coverage_gaps(snapshot: &ConfigurationSnapshot) -> Vec<String> {
             IntuneArtifactStatus::Unsupported,
         ],
     )
+}
+
+/// An artifact the collector read in full that nevertheless settled nothing.
+///
+/// `available` is easy to read as "we looked and there was nothing wrong". When
+/// every record an artifact contributed is unrecognized, unsupported, or states no
+/// outcome, the honest statement is that this artifact answered no question — the
+/// same class of admission as a coverage gap, reached from the other direction.
+fn push_artifacts_without_usable_records(
+    snapshot: &ConfigurationSnapshot,
+    findings: &mut Vec<IntuneFinding>,
+) {
+    let productive = snapshot
+        .settings
+        .iter()
+        .flat_map(|setting| setting.observations.iter())
+        .chain(snapshot.unattributed.iter())
+        .filter(|observation| !observation.is_uninterpretable)
+        .filter(|observation| observation.disposition.is_terminal())
+        .map(|observation| observation.evidence_ref.source_artifact_id.as_str())
+        .collect::<BTreeSet<_>>();
+
+    let barren = snapshot
+        .coverage
+        .iter()
+        .filter(|entry| entry.status == IntuneArtifactStatus::Available)
+        .filter(|entry| !productive.contains(entry.artifact_id.as_str()))
+        .map(|entry| entry.artifact_id.clone())
+        .collect::<Vec<_>>();
+    if barren.is_empty() {
+        return;
+    }
+
+    push_finding(
+        findings,
+        finding(
+            "configuration-artifact-without-usable-records",
+            IntuneFindingSeverity::Info,
+            IntuneFindingConfidence::High,
+            "An artifact was read in full but settled nothing",
+            format!(
+                "{} artifact(s) were collected successfully and produced no record this build could turn into an outcome. Their `available` status describes the collection, not the analysis: no setting is resolved by them, so their silence is not evidence that nothing happened.",
+                barren.len()
+            ),
+            vec![
+                "Check whether the artifact's record schema or event ids are newer than this build supports.".to_owned(),
+                "Collect the companion artifact for the same workload before concluding a setting was never delivered.".to_owned(),
+            ],
+            Vec::new(),
+            barren,
+        ),
+    );
 }
 
 fn push_applied(snapshot: &ConfigurationSnapshot, findings: &mut Vec<IntuneFinding>) {

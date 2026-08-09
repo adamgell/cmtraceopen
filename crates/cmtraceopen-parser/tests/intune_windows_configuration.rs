@@ -61,8 +61,9 @@ const SCENARIOS: [&str; 17] = [
 ///
 /// A rule that invents an identifier outside this list has escaped review, and a
 /// consumer keying on identifiers would break silently.
-const FINDING_VOCABULARY: [&str; 21] = [
+const FINDING_VOCABULARY: [&str; 22] = [
     "configuration-applied",
+    "configuration-artifact-without-usable-records",
     "configuration-conflict",
     "configuration-conflict-unsubstantiated",
     "configuration-contested-device-evidence",
@@ -1306,6 +1307,83 @@ fn one_policy_in_two_casings_is_not_a_conflict() {
     assert!(
         !ids.contains(&"configuration-conflict".to_owned()),
         "got {ids:?}"
+    );
+}
+
+/// `Json` describes the encoding, not the origin. A portal export is JSON and so
+/// is a device-side agent state file; granting the kind device authority let the
+/// former resolve a setting the CSP was never shown to have applied.
+#[test]
+fn a_json_source_does_not_carry_device_authority() {
+    let mut report = row(
+        "rpt-json-export",
+        Some(NODE),
+        Some(POLICY_A),
+        NormalizedSettingOutcome::Applied,
+        Vec::new(),
+    );
+    report.context.provenance.source_kind = IntuneSourceKind::Json;
+    let snapshot = analyze_configuration(&input_of(vec![report]));
+    let setting = snapshot.settings.first().expect("one transaction");
+    assert_eq!(wire(&setting.local), json!("noEvidence"));
+    assert_ne!(wire(&setting.resolution), json!("applied"));
+}
+
+/// CSP node names are documented with specific casing but are not case-sensitive.
+/// Grouping the scope-split rule on the exact bytes meant a device `Start/…` and a
+/// user `start/…` never met, so the split went unreported.
+#[test]
+fn the_scope_split_rule_survives_a_casing_difference_between_the_two_scopes() {
+    let snapshot = analyze_configuration(&input_of(vec![
+        row(
+            "rpt-device-scope",
+            Some("./Device/Vendor/MSFT/Policy/Config/Start/HideRecentlyAddedApps"),
+            Some(POLICY_A),
+            NormalizedSettingOutcome::Applied,
+            Vec::new(),
+        ),
+        row(
+            "rpt-user-scope",
+            Some("./User/Vendor/MSFT/Policy/Config/start/hiderecentlyaddedapps"),
+            Some(POLICY_A),
+            NormalizedSettingOutcome::Applied,
+            Vec::new(),
+        ),
+    ]));
+    assert_eq!(snapshot.settings.len(), 2, "the two scopes stay separate");
+    assert!(
+        finding_ids(&snapshot).contains(&"configuration-scope-split".to_owned()),
+        "got {:?}",
+        finding_ids(&snapshot)
+    );
+}
+
+/// The service's own status code was populated and cited by no rule, so the code
+/// Intune reported never reached a reader of the contradiction finding.
+#[test]
+fn the_contradiction_finding_quotes_both_sides_status_codes() {
+    let snapshot = analyze_configuration(&load_input("cloud-success-local-terminal-error"));
+    let contradiction = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "configuration-local-service-contradiction")
+        .expect("the contradiction finding is present");
+    assert!(
+        contradiction.summary.contains("0x82B00006"),
+        "got {}",
+        contradiction.summary
+    );
+
+    let both = analyze_configuration(&load_input("local-success-cloud-failure"));
+    let with_service_code = both
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "configuration-local-service-contradiction")
+        .expect("the contradiction finding is present");
+    assert!(
+        with_service_code.summary.contains("0x87D1FDE8"),
+        "the service-reported status must be quoted, got {}",
+        with_service_code.summary
     );
 }
 

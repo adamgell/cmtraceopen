@@ -66,12 +66,16 @@ pub fn evidence_side(kind: &IntuneSourceKind) -> ConfigurationEvidenceSide {
         | IntuneSourceKind::CcmLog
         | IntuneSourceKind::AgentLog
         | IntuneSourceKind::PlainTextLog
-        | IntuneSourceKind::UnifiedLog
-        | IntuneSourceKind::Json => ConfigurationEvidenceSide::Device,
+        | IntuneSourceKind::UnifiedLog => ConfigurationEvidenceSide::Device,
         IntuneSourceKind::Graph | IntuneSourceKind::SuppliedFact => {
             ConfigurationEvidenceSide::Service
         }
-        IntuneSourceKind::Coverage | IntuneSourceKind::Unknown(_) => {
+        // `Json` says how the bytes were encoded, not where they came from: a
+        // portal export and a device-side agent state file are both JSON. Granting
+        // it device authority let an exported portal view resolve a setting the
+        // CSP was never shown to have applied. An adapter that has a device-side
+        // JSON source should declare the source kind it actually is.
+        IntuneSourceKind::Json | IntuneSourceKind::Coverage | IntuneSourceKind::Unknown(_) => {
             ConfigurationEvidenceSide::Unclassified
         }
     }

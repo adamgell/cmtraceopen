@@ -542,13 +542,14 @@ fn resolve(
         | ConfigurationServiceState::ReportedPending => None,
     };
 
+    // A device removal beside a service success used to resolve to `Removed`, on
+    // the assumption that Intune reports a completed delete as a success. No
+    // documented contract says so, and ADR-003 is explicit that an unresolved
+    // authoritative contradiction becomes conflicting rather than an arbitrary
+    // winner. It is now treated like any other disagreement: both statements are
+    // kept and cited, and the reader decides. If Intune's reporting vocabulary is
+    // ever written down, this is the one line that changes.
     match (local_conclusion, service_conclusion) {
-        // A service-side removal is represented as reported success. When the
-        // device also says Removed, those statements agree on the lifecycle
-        // outcome rather than contradicting one another.
-        (Some(ConfigurationResolution::Removed), Some(ConfigurationResolution::Applied)) => {
-            ConfigurationResolution::Removed
-        }
         (Some(local), Some(service)) if local != service => ConfigurationResolution::Contradicted,
         (Some(local), _) => local,
         // Service-only evidence is supplemental. It cannot establish that the
@@ -750,13 +751,16 @@ mod tests {
     }
 
     #[test]
-    fn removed_local_and_reported_success_agree_on_removed_resolution() {
+    fn removed_local_and_reported_success_stay_a_contradiction() {
+        // Previously hard-coded to `Removed` on the assumption that Intune reports
+        // a completed delete as a success. Nothing documents that, and ADR-003
+        // requires an unresolved authoritative contradiction to stay conservative.
         assert_eq!(
             resolve(
                 ConfigurationLocalState::Removed,
                 ConfigurationServiceState::ReportedSuccess,
             ),
-            ConfigurationResolution::Removed
+            ConfigurationResolution::Contradicted
         );
     }
 

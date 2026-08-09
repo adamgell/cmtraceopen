@@ -27,8 +27,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
 pub enum ConfigurationScope {
+    /// The setting targets the machine: `./Device/Vendor/MSFT/…`.
     Device,
+    /// The setting targets a signed-in user: `./User/Vendor/MSFT/…`.
     User,
+    /// No source stated a scope. Never resolved to one of the others by
+    /// inference; see the type-level note above.
     Unspecified,
 }
 
@@ -64,9 +68,19 @@ pub struct ConfigurationSettingIdentity {
     /// The canonical URI with its leading scope segment removed, used to detect
     /// the same CSP node appearing under two scopes.
     pub resource_path: Option<String>,
+    /// Source-stated setting identifier, used as the resource key when no URI was
+    /// available. Never merged with a URI-keyed transaction.
     pub setting_id: Option<String>,
+    /// Configuration source / policy identifier, when a record stated one.
+    /// Descriptive only: it is deliberately not part of [`Self::key`], because two
+    /// policies arguing over one node must land in one transaction for the
+    /// conflict to be observable.
     pub policy_id: Option<String>,
+    /// Friendly name as the portal shows it. Never part of the key: two settings
+    /// can share a display name and resolve to different CSP nodes.
     pub display_name: Option<String>,
+    /// Whether this transaction is the device-scoped or user-scoped instance of
+    /// the node. Part of the key.
     pub scope: ConfigurationScope,
     /// CSP vendor node, e.g. `Policy` in `./Device/Vendor/MSFT/Policy/Config/...`.
     pub csp: Option<String>,
@@ -78,9 +92,13 @@ pub struct ConfigurationSettingIdentity {
 /// Everything an observation offered about which setting it is about.
 #[derive(Debug, Clone, Default)]
 pub struct IdentityHints<'a> {
+    /// OMA-URI exactly as the source wrote it, if it wrote one.
     pub uri: Option<&'a str>,
+    /// Source-stated setting identifier, used only when no URI is present.
     pub setting_id: Option<&'a str>,
+    /// Configuration source / policy identifier, recorded but never keyed on.
     pub policy_id: Option<&'a str>,
+    /// Friendly name, recorded but never keyed on.
     pub display_name: Option<&'a str>,
     /// Explicit scope token from a report column or named value, used only when
     /// the URI does not carry one.
@@ -204,7 +222,12 @@ fn csp_of_uri(canonical: &str) -> Option<String> {
 fn csp_uri_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\bCSP\s+URI:\s*\(?([^,()\r\n]+?)\)?\s*(?:,|\.\s|$)")
+        // The terminal alternation allows an optional sentence-ending period
+        // before the boundary. Without it, `CSP URI: ./Device/…/Node.` captured
+        // the period as part of the node path and `CSP URI: (./Device/…/Node).`
+        // did not match at all — one produced a URI that correlates with nothing,
+        // the other produced no identity.
+        Regex::new(r"(?i)\bCSP\s+URI:\s*\(?([^,()\r\n]+?)\)?\s*(?:,|\.?(?:\s|$))")
             .expect("CSP URI pattern is valid")
     })
 }
@@ -419,6 +442,23 @@ mod tests {
             policy_uri_from_message(message, ConfigurationScope::Device).as_deref(),
             Some("Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate")
         );
+    }
+
+    #[test]
+    fn a_sentence_ending_period_is_not_part_of_the_node_path() {
+        let node = "./Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate";
+        for message in [
+            format!("Command failure status. CSP URI: {node}."),
+            format!("Command failure status. CSP URI: ({node})."),
+            format!("Command failure status. CSP URI: ({node}), Result: (0x1)."),
+            format!("Command failure status. CSP URI: {node}"),
+        ] {
+            assert_eq!(
+                csp_uri_from_message(&message).as_deref(),
+                Some(node),
+                "got {message}"
+            );
+        }
     }
 
     #[test]
