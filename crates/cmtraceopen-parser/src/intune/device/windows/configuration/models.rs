@@ -30,7 +30,11 @@ pub const INTUNE_CONFIGURATION_SCHEMA_VERSION: u32 = 1;
 pub struct ConfigurationInput {
     /// UTC instant the bundle was assembled, used only for snapshot provenance.
     pub generated_at_utc: String,
+    /// Normalized MDM Admin-channel records the adapter decoded from EVTX.
     pub events: Vec<NormalizedWindowsEvent>,
+    /// Normalized per-setting rows from an MDM diagnostic report or imported
+    /// Intune reporting. The source kind on each row decides which side of the
+    /// device/service boundary it speaks for.
     pub reports: Vec<NormalizedSettingReport>,
     /// Coverage for every artifact that was expected, including the ones that
     /// were never read. A finding may cite one of these instead of evidence.
@@ -90,12 +94,19 @@ pub fn evidence_side(kind: &IntuneSourceKind) -> ConfigurationEvidenceSide {
 pub enum ConfigurationDisposition {
     /// The resource was named but no outcome was stated.
     Received,
+    /// The value was written.
     Applied,
+    /// The CSP returned a terminal error.
     Rejected,
+    /// Another configuration source claimed the same node.
     Conflict,
+    /// Another configuration source replaced this one.
     Superseded,
+    /// The CSP decided the node does not apply to this device.
     NotApplicable,
+    /// The value was deleted.
     Removed,
+    /// The service is still waiting for a result.
     Pending,
     /// The record named the resource but could not be interpreted.
     Indeterminate,
@@ -136,21 +147,32 @@ pub enum ConfigurationEventKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationObservation {
+    /// Back-reference to the record this statement was projected from.
     pub evidence_ref: IntuneEvidenceRef,
+    /// Which side of the device/service boundary the record speaks for.
     pub side: ConfigurationEvidenceSide,
+    /// The source kind `side` was derived from, retained so a reader can see why.
     pub source_kind: IntuneSourceKind,
     /// Privacy classification the adapter assigned to the originating record.
     pub sensitivity: IntuneSensitivity,
+    /// The canonical resource this record is about.
     pub identity: ConfigurationSettingIdentity,
+    /// What this one record says happened.
     pub disposition: ConfigurationDisposition,
+    /// The recognized event shape, for records projected from an event log.
     pub event_kind: Option<ConfigurationEventKind>,
+    /// The raw event id, retained even when unrecognized.
     pub event_id: Option<u32>,
     /// Configuration source / policy id that issued this statement, when stated.
     pub source_id: Option<String>,
+    /// Enrollment this record belongs to, when stated. Tokenized on export.
     pub enrollment_id: Option<String>,
+    /// The OMA-DM command verb as written. Evidence only: it never decides a
+    /// disposition, because a typed outcome outranks free text.
     pub command_type: Option<String>,
     /// The setting value, if one was stated. Classified by `sensitivity`.
     pub value: Option<String>,
+    /// Status code the record carried, in every form it could be written in.
     pub error: Option<IntuneErrorCode>,
     /// Source id that this statement says won a conflict, when stated.
     pub winning_source_id: Option<String>,
@@ -162,8 +184,10 @@ pub struct ConfigurationObservation {
     pub time_is_reliable: bool,
     /// Record ordinal within its channel, when the source carried one.
     pub record_id: Option<u64>,
-    /// True when the record itself was malformed or of an unsupported schema.
+    /// True when the record itself was malformed, of an unsupported schema, or
+    /// not fully read by the collector.
     pub is_uninterpretable: bool,
+    /// Everything the record carried that this build does not model, verbatim.
     pub named_data: Vec<IntuneNamedValue>,
 }
 
@@ -185,14 +209,22 @@ pub enum ConfigurationReceiptState {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ConfigurationLocalState {
+    /// No device-side record names this resource.
     NoEvidence,
+    /// The CSP wrote the value.
     Applied,
+    /// The CSP returned a terminal error.
     Rejected,
+    /// Another configuration source won the node.
     Conflicted,
+    /// Another configuration source replaced this one.
     Superseded,
+    /// The CSP decided the node does not apply here.
     NotApplicable,
+    /// The CSP deleted the value.
     Removed,
-    /// Device-side records disagree with one another.
+    /// Device-side records disagree with one another, including the case where a
+    /// success stands beside a failure record that could not be read.
     Contested,
     /// A record named the resource but nothing could be concluded.
     Indeterminate,
@@ -202,14 +234,21 @@ pub enum ConfigurationLocalState {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ConfigurationServiceState {
+    /// No Intune reporting was imported for this resource.
     NoEvidence,
     /// Assignment intent only; no per-setting status was imported.
     Assigned,
+    /// Intune was told the setting succeeded.
     ReportedSuccess,
+    /// Intune was told the setting failed.
     ReportedFailure,
+    /// Intune was told another source claimed the node.
     ReportedConflict,
+    /// Intune was told another source replaced this one.
     ReportedSuperseded,
+    /// Intune was told the node does not apply.
     ReportedNotApplicable,
+    /// Intune is still waiting for a result.
     ReportedPending,
     /// Service-side rows disagree with one another.
     Contested,
@@ -219,11 +258,17 @@ pub enum ConfigurationServiceState {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ConfigurationResolution {
+    /// Device evidence shows the value was written.
     Applied,
+    /// Device evidence shows a terminal error.
     Rejected,
+    /// Two configuration sources claimed the node and one lost.
     Conflicted,
+    /// Another configuration source replaced this one.
     Superseded,
+    /// The node does not apply to this device.
     NotApplicable,
+    /// The value was deleted.
     Removed,
     /// Device and service evidence state incompatible outcomes.
     Contradicted,
@@ -237,8 +282,11 @@ pub enum ConfigurationResolution {
 pub struct ConfigurationSourceStatement {
     /// Configuration source / policy id, or `null` when the record did not state one.
     pub source_id: Option<String>,
+    /// Which side of the boundary this source spoke from.
     pub side: ConfigurationEvidenceSide,
+    /// What this source said happened.
     pub disposition: ConfigurationDisposition,
+    /// Every record that carried this statement.
     pub evidence: Vec<IntuneEvidenceRef>,
 }
 
@@ -246,10 +294,15 @@ pub struct ConfigurationSourceStatement {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationSetting {
+    /// The canonical resource every observation here is about.
     pub identity: ConfigurationSettingIdentity,
+    /// What the device received.
     pub receipt: ConfigurationReceiptState,
+    /// What the CSP did.
     pub local: ConfigurationLocalState,
+    /// What Intune was told.
     pub service: ConfigurationServiceState,
+    /// The single conclusion drawn from the three tracks above.
     pub resolution: ConfigurationResolution,
     /// Distinct configuration sources seen for this resource, sorted.
     pub sources: Vec<ConfigurationSourceStatement>,
@@ -276,7 +329,11 @@ pub struct ConfigurationSetting {
     /// [`ConfigurationSetting::has_uninterpretable_evidence`]: that flag covers
     /// records whose direction is unknown as well.
     pub has_unassessable_failure: bool,
+    /// Every contributing record, in a canonical order that does not depend on
+    /// how the caller supplied them.
     pub observations: Vec<ConfigurationObservation>,
+    /// Back-references for every contributing record, for a caller that wants the
+    /// citations without the projections.
     pub evidence: Vec<IntuneEvidenceRef>,
 }
 
@@ -293,13 +350,17 @@ impl ConfigurationSetting {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationSnapshot {
+    /// [`INTUNE_CONFIGURATION_SCHEMA_VERSION`] at the time of reduction.
     pub schema_version: u32,
+    /// Copied from the input; also the scope every redaction token is bound to.
     pub generated_at_utc: String,
     /// Sorted by identity key so the serialized form is deterministic.
     pub settings: Vec<ConfigurationSetting>,
     /// Observations that named no resolvable resource at all.
     pub unattributed: Vec<ConfigurationObservation>,
+    /// Every expected artifact and what became of it, copied from the input.
     pub coverage: Vec<IntuneArtifactCoverage>,
+    /// Conclusions derived from this snapshot, in a fixed rule order.
     pub findings: Vec<IntuneFinding>,
     /// True when the values in this snapshot have been through
     /// [`redacted_configuration_snapshot`].
