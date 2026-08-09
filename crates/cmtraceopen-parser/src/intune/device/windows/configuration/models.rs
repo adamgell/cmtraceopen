@@ -37,9 +37,9 @@ pub struct ConfigurationInput {
     /// Caller-supplied identity of *this* analysis, and nothing else.
     ///
     /// It scopes the redaction token vocabulary (ADR-004): two analyses that
-    /// supply *different* values never mint the same `[redacted:…]` token for
-    /// the same input value, so an export cannot be joined to an unrelated one
-    /// by comparing tokens. Any opaque per-analysis value works — a capture
+    /// supply *different* values do not mint the same `[redacted:…]` token for
+    /// the same input value (barring hash collision), so an export cannot be
+    /// joined to an unrelated one by comparing tokens. Any opaque per-analysis value works — a capture
     /// GUID, a support-case id, a digest of the collected bundle.
     ///
     /// Uniqueness is the caller's obligation and cannot be checked here: this

@@ -42,9 +42,10 @@
 //! - Values equal within one scope produce equal tokens; values that differ
 //!   produce different tokens (barring hash collision). That is what makes a
 //!   conflict legible inside one export.
-//! - Two analyses that supply *different* scope values never produce the same
-//!   token for the same value, so their exports cannot be joined by comparing
-//!   tokens.
+//! - Two analyses that supply *different* scope values do not produce the same
+//!   token for the same value (barring hash collision, the same qualification
+//!   the differing-values guarantee above carries), so their exports cannot be
+//!   joined by comparing tokens.
 //!
 //! ## What it does not guarantee
 //!
