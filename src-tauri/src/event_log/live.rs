@@ -625,3 +625,138 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+mod live_service_tests {
+    //! Exercises the live path against the machine's own Event Log service.
+    //!
+    //! Ignored by default because it needs a real service with real events, which CI runners and
+    //! developer machines cannot be relied on to have. Run deliberately on a Windows host:
+    //!
+    //! ```text
+    //! cargo test --lib event_log::live::live_service_tests -- --ignored --nocapture
+    //! ```
+    //!
+    //! These exist because every assumption in this file that was checked only by reasoning turned
+    //! out to be wrong at least once. Compilation proves nothing about whether the service accepts
+    //! what we send it.
+
+    use super::*;
+    use cmtraceopen_parser::event_query::{EventQueryFilter, TimeWindow};
+
+    const CHANNEL: &str = "Application";
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn an_unfiltered_query_returns_records() {
+        let records = query_channel(CHANNEL, Some(50)).expect("query succeeds");
+        assert!(
+            !records.is_empty(),
+            "Application channel should have events"
+        );
+        let first = &records[0];
+        assert!(!first.provider.is_empty(), "provider should be populated");
+        assert_eq!(first.channel, CHANNEL);
+        assert!(first.event_id > 0);
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn a_time_filter_is_applied_by_the_service_and_narrows_the_result() {
+        let wide = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                time: Some(TimeWindow::Last {
+                    milliseconds: 30 * 24 * 60 * 60 * 1000,
+                }),
+                ..Default::default()
+            },
+            None,
+        )
+        .expect("30 day query succeeds");
+
+        let narrow = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                time: Some(TimeWindow::Last {
+                    milliseconds: 60 * 60 * 1000,
+                }),
+                ..Default::default()
+            },
+            None,
+        )
+        .expect("1 hour query succeeds");
+
+        assert!(
+            narrow.len() <= wide.len(),
+            "a narrower window cannot return more events: {} vs {}",
+            narrow.len(),
+            wide.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn a_level_filter_returns_only_that_level() {
+        // Level 2 is Error. If the predicate were dropped or malformed the service would either
+        // reject the query or return everything, and both show up here.
+        let records = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                levels: vec![2],
+                ..Default::default()
+            },
+            Some(200),
+        )
+        .expect("level query succeeds");
+
+        for record in &records {
+            assert_eq!(
+                record.level,
+                EvtxLevel::Error,
+                "level filter must be applied by the service, got {:?}",
+                record.level
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn an_impossible_filter_returns_nothing_rather_than_everything() {
+        // A malformed predicate that the service ignores would show up as a full result set.
+        let records = query_channel_filtered(
+            CHANNEL,
+            &EventQueryFilter {
+                event_ids: vec![cmtraceopen_parser::event_query::EventIdSelector::Single {
+                    id: 999_999,
+                }],
+                ..Default::default()
+            },
+            Some(50),
+        )
+        .expect("query succeeds");
+
+        assert!(
+            records.is_empty(),
+            "event id 999999 should match nothing, got {}",
+            records.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a live Windows Event Log service with events"]
+    fn system_fields_are_populated_from_real_events() {
+        let records = query_channel_filtered(CHANNEL, &EventQueryFilter::default(), Some(200))
+            .expect("query succeeds");
+
+        assert!(!records.is_empty());
+        assert!(
+            records.iter().any(|r| r.process_id.is_some()),
+            "at least one real event should carry Execution/@ProcessID"
+        );
+        assert!(
+            records.iter().any(|r| r.keywords.is_some()),
+            "at least one real event should carry Keywords"
+        );
+    }
+}
