@@ -366,4 +366,44 @@ mod description_tests {
         let data = fields(&[("X", "1")]);
         assert!(describe_event("Still-Not-Loaded", 999_999, &data).is_none());
     }
+
+    #[test]
+    #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
+    fn a_loaded_database_renders_a_real_provider_description() {
+        // The whole chain: SQLite on disk, gzip payload, provider metadata, insertion rendering.
+        let path = std::env::var("CMTRACEOPEN_PROVIDER_DB").expect("database path");
+        let directory = std::path::Path::new(&path)
+            .parent()
+            .expect("database has a parent directory");
+        super::super::provider_db::load_directory(directory).expect("databases load");
+
+        let data = fields(&[("HRESULT", "0x80180005")]);
+        let described = describe_event(
+            "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+            2,
+            &data,
+        )
+        .expect("the MDM provider defines event 2");
+
+        println!("rendered: {described}");
+        assert!(described.contains("0x80180005"), "{described}");
+        assert!(!described.contains("%1"), "{described}");
+        assert!(
+            described.len() > "0x80180005".len(),
+            "a description should be a sentence, not just the value: {described}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
+    fn an_event_the_database_does_not_cover_still_falls_back() {
+        let path = std::env::var("CMTRACEOPEN_PROVIDER_DB").expect("database path");
+        let directory = std::path::Path::new(&path).parent().expect("parent");
+        super::super::provider_db::load_directory(directory).expect("databases load");
+
+        // A provider that genuinely is not in a Windows capture.
+        assert!(
+            describe_event("Definitely-Not-A-Real-Provider", 1, &fields(&[("a", "b")])).is_none()
+        );
+    }
 }
