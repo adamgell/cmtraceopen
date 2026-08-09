@@ -1006,8 +1006,12 @@ fn reduce_profile(
     }
 }
 
-/// The `activityId` a report section carried in its values, lowercased so retry
-/// linkage compares case-insensitively like the ESP correlation keys.
+/// The `activityId` a report section carried in its values, verbatim.
+///
+/// The value name is matched case-insensitively; the value itself is returned
+/// unchanged. [`push_link`] owns the lowercasing that makes retry linkage
+/// compare case-insensitively like the ESP correlation keys, so every key
+/// reaches that one place in its original form.
 fn section_activity_id(section: &AutopilotReportSection) -> Option<&str> {
     section
         .values

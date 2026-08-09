@@ -1891,6 +1891,19 @@ fn a_base64_hash_in_an_observation_message_never_survives_the_export() {
             !text.contains(&blob),
             "the Base64 hash {blob:?} survived the exported projection: {text}"
         );
+        // The whole-blob check alone would pass while a masked body left its
+        // punctuation tail behind, which is the exact partial match the old
+        // word-boundary pattern produced. Assert the tail is gone too.
+        let body = &blob[..blob.len() - 1];
+        assert!(
+            !text.contains(body),
+            "the Base64 body {body:?} survived the exported projection: {text}"
+        );
+        let tail = &blob[blob.len() - 1..];
+        assert!(
+            !text.contains(&format!("] {tail}")) && !text.contains(&format!("]{tail}")),
+            "the Base64 tail {tail:?} dangled after the mask token: {text}"
+        );
     }
 }
 
