@@ -31,6 +31,22 @@
       "unresolvedDependencies": [],
       "failedRequirements": [],
       "corroboratingArtifacts": []
+    },
+    {
+      "appId": "11111111-2222-4333-8444-555555555555",
+      "deploymentTypeId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "executionContext": "unknown",
+      "outcome": "assigned",
+      "lastConfirmedPhase": "assignment",
+      "confidence": "low",
+      "returnCodeRaw": null,
+      "returnCodeKind": null,
+      "rebootRequired": false,
+      "localOutcome": null,
+      "nextEvidenceRequest": "AppWorkload.log covering the applicability and detection pass",
+      "unresolvedDependencies": [],
+      "failedRequirements": [],
+      "corroboratingArtifacts": []
     }
   ],
   "redactionMustNotContain": [
@@ -58,13 +74,26 @@
         }
       ],
       "coverageGapIds": []
+    },
+    {
+      "findingId": "win32-unresolved:11111111-2222-4333-8444-555555555555:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee:unknown",
+      "severity": "info",
+      "confidence": "low",
+      "evidence": [
+        {
+          "evidenceId": "ime-current:2",
+          "sourceArtifactId": "ime-current"
+        }
+      ],
+      "coverageGapIds": []
     }
   ],
   "assertions": [
     "raw user and execution context is redacted by default",
     "space-containing account names, MSI-property secrets, SIDs, device names, and profile paths are redacted",
     "derived findings are scanned with the same needles as the projection",
-    "the app and deployment-type ids survive redaction"
+    "the app and deployment-type ids survive redaction",
+    "the IME policy record states no execution context and is not in the AppWorkload records' execution block, so it keys its own unknown-context transaction instead of adopting the observed user context (ADR-002)"
   ],
   "unkeyedObservationCount": 0,
   "fragmentRecords": 0,

@@ -322,16 +322,29 @@ fn apply_block_key(records: &mut [PendingRecord], block: &[usize]) {
     }
 }
 
-/// Complete partial keys using *identity*, never time.
+/// Complete partial deployment-type keys using *identity*, never time.
 ///
 /// A record that named an app but no deployment type may adopt one when that app
-/// has exactly one deployment type in the supplied evidence: there is then no
-/// other deployment it could belong to. An app with two or more keeps its partial
-/// key, so an ambiguous record is reported as ambiguous instead of attached to a
-/// guess. The same reasoning widens an unknown execution context.
+/// has exactly one deployment type in the supplied evidence: a deployment type
+/// id is a stable configuration identity subordinate to the app id it was
+/// observed under, so under an exact app-id match the unique observed type is a
+/// moderate-strength completion (ADR-002), it is marked
+/// [`PendingRecord::deployment_type_inferred`], and it never counts toward
+/// confidence (ADR-001). An app with two or more keeps its partial key, so an
+/// ambiguous record is reported as ambiguous instead of attached to a guess.
+///
+/// Execution context is deliberately *not* reconciled this way. A context is a
+/// runtime property of one enforcement session, not app identity: the same app
+/// legitimately deploys in System and in User context as distinct transactions,
+/// and the bundle having observed only one of them proves nothing about a
+/// record that stated neither. Promoting an unknown context to the bundle's
+/// single observed one would merge unrelated transactions and let one inherit
+/// the other's terminal outcome and attribution — exactly the weak-identity
+/// promotion ADR-002 prohibits. A context stays [`Win32ExecutionContext::Unknown`]
+/// unless the record stated it or its own execution block established it
+/// ([`apply_block_key`]), and an unknown context keys its own transaction.
 fn reconcile_partial_keys(records: &mut [PendingRecord]) {
     let mut types_by_app: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut contexts_by_app: BTreeMap<String, BTreeSet<Win32ExecutionContext>> = BTreeMap::new();
 
     for record in records.iter() {
         let Some(app) = &record.resolved_app_id else {
@@ -342,12 +355,6 @@ fn reconcile_partial_keys(records: &mut [PendingRecord]) {
                 .entry(app.clone())
                 .or_default()
                 .insert(deployment_type.clone());
-        }
-        if record.resolved_context != Win32ExecutionContext::Unknown {
-            contexts_by_app
-                .entry(app.clone())
-                .or_default()
-                .insert(record.resolved_context);
         }
     }
 
@@ -360,13 +367,6 @@ fn reconcile_partial_keys(records: &mut [PendingRecord]) {
                 if types.len() == 1 {
                     record.resolved_deployment_type_id = types.iter().next().cloned();
                     record.deployment_type_inferred = true;
-                }
-            }
-        }
-        if record.resolved_context == Win32ExecutionContext::Unknown {
-            if let Some(contexts) = contexts_by_app.get(&app) {
-                if contexts.len() == 1 {
-                    record.resolved_context = *contexts.iter().next().expect("checked len");
                 }
             }
         }
@@ -2365,6 +2365,83 @@ mod tests {
             .expect("the user-context transaction exists");
         assert_eq!(observed.confidence, Win32Confidence::Low,
             "non-terminal outcome stays low regardless");
+    }
+
+    #[test]
+    fn a_context_less_record_never_adopts_the_bundles_observed_context() {
+        // Hermes charter review, finding 1 (ADR-002): execution context is a
+        // runtime session property, not app identity, so a record that stated
+        // no context must not be promoted to the bundle's single observed
+        // context for that app. Here one capture proves a System-context
+        // success; a separate capture carries a context-less failure of the
+        // same app. Promotion would merge them into one transaction and let
+        // the later trusted failure overwrite the System deployment's outcome,
+        // return-code attribution, and evidence — a false deployment story.
+        let system_success = Win32SourceInput::captured(
+            "aw-sys",
+            "AppWorkload.log",
+            [
+                record_at("10:00:00.000+000", "7-31-2026", &format!("[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT} in system context"), 5),
+                record_at("10:00:01.000+000", "7-31-2026", &format!("[Win32App] Installation is done for app with id: {APP}, exit code: 0 in system context"), 5),
+            ]
+            .concat(),
+        );
+        let contextless_failure = Win32SourceInput::captured(
+            "aw-old",
+            "AppWorkload-1.log",
+            record_at(
+                "11:00:00.000+000",
+                "7-31-2026",
+                &format!("[Win32App] Installation is done for app with id: {APP}, exit code: 1603"),
+                9,
+            ),
+        );
+
+        let analysis = analyze_win32_bundle(&[system_success, contextless_failure]);
+
+        assert_eq!(
+            analysis.transactions.len(),
+            2,
+            "a context-less record forms its own transaction instead of \
+             adopting the bundle's observed context; got {:?}",
+            analysis
+                .transactions
+                .iter()
+                .map(|transaction| &transaction.key)
+                .collect::<Vec<_>>()
+        );
+        let system = analysis
+            .transactions
+            .iter()
+            .find(|transaction| {
+                transaction.key.execution_context == Win32ExecutionContext::System
+            })
+            .expect("the system-context transaction exists");
+        assert_eq!(
+            system.outcome,
+            Win32Outcome::Succeeded,
+            "the unrelated context-less failure must not overwrite the \
+             System deployment's proven outcome"
+        );
+        assert_eq!(
+            system.return_code.as_ref().map(|code| code.raw.as_str()),
+            Some("0")
+        );
+        assert_eq!(system.observations, vec!["aw-sys:1", "aw-sys:2"]);
+
+        let unknown = analysis
+            .transactions
+            .iter()
+            .find(|transaction| {
+                transaction.key.execution_context == Win32ExecutionContext::Unknown
+            })
+            .expect("the context-less transaction exists");
+        assert_eq!(unknown.outcome, Win32Outcome::InstallerReportedFailure);
+        assert_eq!(
+            unknown.return_code.as_ref().map(|code| code.raw.as_str()),
+            Some("1603")
+        );
+        assert_eq!(unknown.observations, vec!["aw-old:1"]);
     }
 
     // ── Terminal precedence, retry linkage, and order independence ─────────
