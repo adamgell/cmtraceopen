@@ -1208,7 +1208,10 @@ fn extract_guid(msg: &str) -> Option<String> {
 fn extract_policy_id(msg: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(r#"(?i)"PolicyId"\s*:\s*\\?"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\?""#).unwrap()
+        Regex::new(&format!(
+            r#"(?i)"PolicyId"\s*:\s*\\?"({GUID_PATTERN})\\?""#
+        ))
+        .unwrap()
     });
     re.captures(msg)
         .and_then(|cap| cap.get(1))

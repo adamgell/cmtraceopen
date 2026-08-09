@@ -17,7 +17,7 @@ use regex::Regex;
 use super::guid_registry::explicit_app_identity_context;
 use super::guid_registry::{
     explicit_app_identity_context_with_named_guid_fallback, extract_app_name, is_fallback_name,
-    ExplicitAppIdentity, GuidRegistry,
+    ExplicitAppIdentity, GuidRegistry, GUID_PATTERN,
 };
 use super::ime_parser::ImeLine;
 use super::models::DownloadStat;
@@ -72,8 +72,11 @@ fn do_re() -> &'static Regex {
 fn content_id_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-    Regex::new(r#"(?i)(?:content|app|application)\s*(?:id)?[:\s]+([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"#).unwrap()
-})
+        Regex::new(&format!(
+            r"(?i)(?:content|app|application)\s*(?:id)?[:\s]+({GUID_PATTERN})"
+        ))
+        .unwrap()
+    })
 }
 // The `is` / bare-adjective completion forms and the `has failed` /
 // `state: Failed` / `result = Failed` failure forms are genuine IME wordings:
