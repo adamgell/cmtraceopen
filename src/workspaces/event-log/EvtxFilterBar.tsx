@@ -3,6 +3,8 @@ import { Button, Dropdown, Input, Option, tokens } from "@fluentui/react-compone
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
+import { useSavedFilterStore } from "./evtx-filter-store";
+import { sanitizeCriteria } from "./evtx-saved-filters";
 import {
   useEvtxStore,
   type EvtxSortField,
@@ -71,7 +73,49 @@ export function EvtxFilterBar() {
   const groupBy = useEvtxStore((s) => s.groupBy);
   const setGroupBy = useEvtxStore((s) => s.setGroupBy);
 
+  const setFilterLevels = useEvtxStore((s) => s.setFilterLevels);
+  const savedFilters = useSavedFilterStore((s) => s.savedFilters);
+  const saveFilter = useSavedFilterStore((s) => s.save);
+  const markFilterUsed = useSavedFilterStore((s) => s.markUsed);
+  const orderedFilters = useMemo(
+    () => [...savedFilters].sort((a, b) => (a.favorite === b.favorite ? a.name.localeCompare(b.name) : a.favorite ? -1 : 1)),
+    [savedFilters]
+  );
+
   const [exportState, setExportState] = useState<string | null>(null);
+
+  const saveCurrentFilter = () => {
+    const name = window.prompt("Save this filter as");
+    if (!name?.trim()) return;
+    const state = useEvtxStore.getState();
+    saveFilter(
+      name,
+      sanitizeCriteria({
+        levels: [...state.filterLevels],
+        eventIds: state.filterEventIds,
+        search: state.filterSearch,
+        timeWindow: state.timeWindow,
+        groupBy: state.groupBy,
+      })
+    );
+    setExportState(`Saved "${name.trim()}"`);
+  };
+
+  const applySavedFilter = (id: string) => {
+    const filter = savedFilters.find((candidate) => candidate.id === id);
+    if (!filter) return;
+    const { criteria } = filter;
+    setFilterLevels(new Set(criteria.levels));
+    setFilterEventIds(criteria.eventIds);
+    setFilterSearch(criteria.search);
+    setGroupBy(criteria.groupBy);
+    // The time window is a server-side predicate, so applying it has to refetch.
+    if (criteria.timeWindow !== useEvtxStore.getState().timeWindow) {
+      setTimeWindow(criteria.timeWindow);
+      if (sourceMode === "live") void refreshLoadedChannels();
+    }
+    markFilterUsed(id);
+  };
 
   // Exports what is on screen, using the same predicate the list uses, so the file cannot quietly
   // differ from the view.
@@ -185,6 +229,26 @@ export function EvtxFilterBar() {
         size="small"
         style={{ width: "160px" }}
       />
+
+      <Dropdown
+        size="small"
+        placeholder="Saved"
+        value=""
+        selectedOptions={[]}
+        style={{ minWidth: "104px" }}
+        title="Apply a saved filter"
+        onOptionSelect={(_, data) => {
+          if (data.optionValue === "__save__") saveCurrentFilter();
+          else if (data.optionValue) applySavedFilter(data.optionValue);
+        }}
+      >
+        <Option value="__save__">Save current...</Option>
+        {orderedFilters.map((filter) => (
+          <Option key={filter.id} value={filter.id}>
+            {filter.favorite ? `\u2605 ${filter.name}` : filter.name}
+          </Option>
+        ))}
+      </Dropdown>
 
       <Dropdown
         size="small"
