@@ -707,24 +707,49 @@ fn recorded_non_assessable_failure_observations(
         .filter(|observation| observation.signal.is_terminal_failure())
 }
 
+/// Named-value keys whose values are case-insensitive identities on Windows:
+/// serials, GUID-shaped identifiers, DNS domains, and host names. Only these
+/// group case-insensitively in [`distinct_values`]; every other key -- notably
+/// `hardwareHash`, whose Base64 payload is case-sensitive -- keeps its exact
+/// value, so two values differing only by case stay two distinct values (the
+/// conservative direction: `single_value` refuses to pick, it never merges).
+/// Every key exported through `detect_conflicts` must stay in this list so a
+/// redacted conflict cannot report "2 distinct values" over two identically
+/// masked tokens (ADR-004; the export masks the trimmed, lowercased value).
+const CASE_INSENSITIVE_VALUE_KEYS: [&str; 11] = [
+    "serialNumber",
+    "productKeyId",
+    "ztdRegistrationId",
+    "entraDeviceId",
+    "managedDeviceId",
+    "tenantId",
+    "tenantDomain",
+    "deviceName",
+    "profileId",
+    "enrollmentId",
+    "correlationId",
+];
+
 /// Collect the distinct values a named key takes across every source.
 ///
 /// Returned sorted and deduplicated so that "more than one value" is a
 /// reproducible fact rather than an artifact of iteration order.
 ///
-/// Distinctness is case-insensitive: the identifiers this feeds -- serials,
-/// GUIDs, tenant domains, device names -- are case-insensitive identities on
-/// Windows, and the redacted export masks the trimmed, lowercased value
-/// (see the redaction module contract). Treating two casings as two values
-/// produced a conflict whose export said "2 distinct values" over two
-/// identical tokens, changing the conclusion under redaction (ADR-004). Each
-/// group is keyed by a deterministic representative casing -- the
-/// lexicographically smallest sighting -- so permuting the input cannot change
-/// the result (ADR-003).
+/// Distinctness is case-insensitive only for the keys in
+/// [`CASE_INSENSITIVE_VALUE_KEYS`]. For those identities, treating two casings
+/// as two values produced a conflict whose export said "2 distinct values"
+/// over two identical tokens, changing the conclusion under redaction
+/// (ADR-004). Each case-folded group is keyed by a deterministic
+/// representative casing -- the lexicographically smallest sighting -- so
+/// permuting the input cannot change the result (ADR-003). Any other key
+/// compares exactly: folding a case-sensitive value such as a Base64 hardware
+/// hash would merge two genuinely different values into one corroborated
+/// identity.
 fn distinct_values(
     observations: &[AutopilotObservation],
     key: &str,
 ) -> BTreeMap<String, Vec<IntuneEvidenceRef>> {
+    let case_insensitive = CASE_INSENSITIVE_VALUE_KEYS.contains(&key);
     let mut groups: BTreeMap<String, (String, Vec<IntuneEvidenceRef>)> = BTreeMap::new();
     for observation in observations.iter().filter(|obs| is_assessable(obs)) {
         let Some(value) = observation.named(key) else {
@@ -734,8 +759,13 @@ fn distinct_values(
         if value.is_empty() {
             continue;
         }
+        let group_key = if case_insensitive {
+            value.to_ascii_lowercase()
+        } else {
+            value.to_owned()
+        };
         let group = groups
-            .entry(value.to_ascii_lowercase())
+            .entry(group_key)
             .or_insert_with(|| (value.to_owned(), Vec::new()));
         if value < group.0.as_str() {
             group.0 = value.to_owned();
@@ -1347,7 +1377,10 @@ fn reduce_esp_linkage(
         return AutopilotEspLinkage {
             state: AutopilotEspLinkState::Conflicting,
             confidence: IntuneFindingConfidence::High,
-            matched_keys: detected_keys.into_iter().collect(),
+            // Detection is not a match. `matched_keys` is documented empty for
+            // every non-`Linked` state, so the detecting keys stay internal: a
+            // consumer must not read ambiguity evidence as proof of a link.
+            matched_keys: Vec::new(),
             esp_session_ids: detected_sessions.into_iter().collect(),
             evidence: normalized_evidence(detection_evidence),
         };

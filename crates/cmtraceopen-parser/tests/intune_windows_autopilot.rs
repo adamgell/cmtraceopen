@@ -1253,6 +1253,113 @@ fn a_key_on_a_capped_observation_still_detects_a_second_esp_session() {
     assert!(snapshot.findings_are_evidence_backed());
 }
 
+/// `AutopilotEspLinkage` documents `matched_keys` as empty for every
+/// non-`Linked` state. The distinct-keys-to-distinct-sessions `Conflicting`
+/// path only DETECTED ambiguity; exporting its detecting keys as
+/// `matched_keys` would hand a consumer match-shaped proof from the one state
+/// whose meaning is that nothing was proven.
+#[test]
+fn a_conflicting_linkage_exports_no_matched_keys() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "nomk-e1", "nomk-channel", 1, 161, "available", "parsed",
+                json!([{ "name": "enrollmentId", "value": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" }]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "nomk-e2", "nomk-channel", 2, 153, "available", "parsed",
+                json!([{ "name": "correlationId", "value": "99999999-8888-7777-6666-555555555555" }]),
+                "AutopilotManager reported the state changed from ProfileState_Unknown to ProfileState_Available.",
+            ),
+        ]
+    });
+    let sessions = json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [
+            {
+                "sessionId": "esp-session-a",
+                "enrollmentId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "correlationId": null, "activityId": null,
+                "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "nomk-esp-a", "sourceArtifactId": "esp-session-facts" }
+            },
+            {
+                "sessionId": "esp-session-b",
+                "enrollmentId": null,
+                "correlationId": "99999999-8888-7777-6666-555555555555",
+                "activityId": null, "entraDeviceId": null, "managedDeviceId": null,
+                "startedAtUtc": "2026-07-31T09:00:25Z", "phase": "deviceSetup",
+                "evidence": { "evidenceId": "nomk-esp-b", "sourceArtifactId": "esp-session-facts" }
+            }
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("nomk-channel", "autopilotEvents", &events),
+        synthetic_source("nomk-report", "mdmReport", &esp_handoff_report("nomk-report")),
+        synthetic_source("esp-session-facts", "espSession", &sessions),
+    ]));
+
+    assert_eq!(snapshot.esp_linkage.state, AutopilotEspLinkState::Conflicting);
+    assert!(
+        snapshot.esp_linkage.matched_keys.is_empty(),
+        "matched_keys is documented empty for every non-Linked state, got {:?}",
+        snapshot.esp_linkage.matched_keys
+    );
+}
+
+/// `distinct_values` groups case-insensitively only for keys whose values are
+/// case-insensitive identities on Windows. `hardwareHash` is not one: its
+/// Base64 payload is case-sensitive, so two hashes differing only by case are
+/// two different hashes. Folding them into one group let `single_value`
+/// publish one of them as corroborated identity evidence.
+#[test]
+fn hardware_hashes_differing_only_by_case_stay_distinct() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [
+            synthetic_event(
+                "hash-e1", "hash-channel", 1, 161, "available", "parsed",
+                json!([
+                    { "name": "hardwareHash", "value": "AAECAwQFBgcICQ==" },
+                    { "name": "serialNumber", "value": "SER-0001" },
+                ]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+            synthetic_event(
+                "hash-e2", "hash-channel", 2, 161, "available", "parsed",
+                json!([
+                    { "name": "hardwareHash", "value": "aaecawqfbgcicq==" },
+                    { "name": "serialNumber", "value": "ser-0001" },
+                ]),
+                "AutopilotManager retrieve settings succeeded.",
+            ),
+        ]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "hash-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+
+    assert_eq!(
+        snapshot.identity.hardware_hash, None,
+        "two hardware hashes differing only by case are two distinct hashes; \
+         neither may be published as the single corroborated value"
+    );
+    // Control: serial numbers ARE case-insensitive identities on Windows, so
+    // the same bundle still collapses the two serial casings into one value.
+    assert!(
+        snapshot.identity.serial_number.is_some(),
+        "case-insensitive identity keys must keep collapsing casings"
+    );
+}
+
 /// The other half of the same rule: a linkage whose ONLY explicit key rides a
 /// non-assessable observation may not upgrade to a confident Linked. Detection
 /// may widen (conservative); proof may not.
