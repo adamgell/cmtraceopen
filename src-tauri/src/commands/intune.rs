@@ -1168,9 +1168,16 @@ fn merge_synthesized_downloads(
         }
     }
     if added > 0 {
-        // Keep the combined list in the same timestamp order the extractor
-        // and the synthesizer each guarantee on their own.
-        downloads.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+        // Keep the combined list chronological. The epoch is the ordering
+        // truth — the timestamp *text* is MM-DD-YYYY, which reverses across a
+        // year boundary — and text plus content id are deterministic
+        // tie-breakers for records without a parseable timestamp.
+        downloads.sort_by(|left, right| {
+            left.timestamp_epoch
+                .cmp(&right.timestamp_epoch)
+                .then_with(|| left.timestamp.cmp(&right.timestamp))
+                .then_with(|| left.content_id.cmp(&right.content_id))
+        });
     }
     added
 }
@@ -1657,6 +1664,53 @@ mod tests {
         assert_eq!(added, 1);
         assert_eq!(downloads.len(), 1);
         assert!(!downloads[0].success);
+    }
+
+    #[test]
+    fn merged_downloads_sort_chronologically_across_a_year_boundary() {
+        // The timestamp *text* is MM-DD-YYYY, so "12-31-2023 …" sorts after
+        // "01-01-2024 …" lexically and a text sort shows reverse chronology
+        // across years. The merge must order by the parsed epoch.
+        let mut downloads = vec![DownloadStat {
+            content_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            name: "Older download".to_string(),
+            size_bytes: 0,
+            speed_bps: 0.0,
+            do_percentage: 0.0,
+            duration_secs: 0.0,
+            success: true,
+            timestamp: Some("12-31-2023 23:59:59.000".to_string()),
+            timestamp_epoch: Some(1_704_067_199_000),
+        }];
+        let events = vec![IntuneEvent {
+            id: 1,
+            event_type: IntuneEventType::ContentDownload,
+            name: "Newer download".to_string(),
+            guid: Some("11111111-2222-3333-4444-555555555555".to_string()),
+            status: IntuneStatus::Success,
+            start_time: Some("01-01-2024 00:00:00.000".to_string()),
+            end_time: None,
+            duration_secs: None,
+            error_code: None,
+            detail: "Content download".to_string(),
+            source_file: "C:/Logs/AppWorkload.log".to_string(),
+            line_number: 1,
+            start_time_epoch: None,
+            end_time_epoch: None,
+            script_body: None,
+            parent_app_guid: None,
+        }];
+
+        let added = super::merge_synthesized_downloads(&mut downloads, &events);
+        assert_eq!(added, 1);
+        assert_eq!(
+            downloads
+                .iter()
+                .map(|download| download.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Older download", "Newer download"],
+            "the merged list must be chronological, not text-ordered"
+        );
     }
 
     fn create_temp_dir(prefix: &str) -> PathBuf {
