@@ -36,7 +36,10 @@ pub const JAMF_CONNECT_IDP_SOURCES: &[(&str, &str)] = &[
     ),
     ("/Library/Preferences/com.jamf.connect.plist", "Provider"),
     // Legacy: the key this module originally queried.
-    ("/Library/Preferences/com.jamf.connect.plist", "OIDCProvider"),
+    (
+        "/Library/Preferences/com.jamf.connect.plist",
+        "OIDCProvider",
+    ),
 ];
 
 /// Returns the installed JAMF Connect app bundle, preferring the modern name.

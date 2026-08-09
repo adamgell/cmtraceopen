@@ -153,7 +153,11 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
         let event_record_id = record.event_record_id;
 
         let event_data = extract_event_data(event_data_val);
-        let message = build_message(&event_data);
+        // A provider database, when one is loaded, turns raw field values into the sentence the
+        // provider intended. Without it the file path can only summarise EventData, which is what
+        // every other cross-platform reader shows and why they are hard to read.
+        let message = describe_event(&provider, event_id, &event_data)
+            .unwrap_or_else(|| build_message(&event_data));
 
         // Build raw XML placeholder from JSON (actual XML not available via json_value API)
         let raw_xml = serde_json::to_string_pretty(json).unwrap_or_default();
@@ -239,6 +243,29 @@ fn extract_event_data(event_data: &Value) -> Vec<EvtxField> {
     fields
 }
 
+/// Renders the provider's own description for this event, when metadata for it is loaded.
+///
+/// Returns `None` when no database is loaded, the provider is absent from it, or the provider does
+/// not define this event. Falling back to a field summary is right in all three cases: an absent
+/// description is a coverage gap, not a reason to show nothing.
+///
+/// A partially rendered description is rejected rather than shown. If the template references
+/// insertions the event did not supply, the metadata and the event disagree, and a sentence with
+/// `%4` embedded in it is less honest than the field summary it would replace.
+fn describe_event(provider: &str, event_id: u32, event_data: &[EvtxField]) -> Option<String> {
+    let metadata = super::provider_db::provider(provider)?;
+    let event = metadata.event(event_id, None)?;
+    let template = event.description.as_deref()?;
+
+    let insertions: Vec<String> = event_data.iter().map(|field| field.value.clone()).collect();
+    let rendered = cmtraceopen_parser::provider::render_description(template, &insertions);
+    if rendered.is_complete() {
+        Some(super::sanitize_control_chars(&rendered.text))
+    } else {
+        None
+    }
+}
+
 /// Build a human-readable message from the first few EventData fields.
 fn build_message(event_data: &[EvtxField]) -> String {
     event_data
@@ -310,5 +337,33 @@ mod tests {
         ];
         let msg = build_message(&fields);
         assert_eq!(msg, "Key1: Val1; Key2: Val2");
+    }
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+
+    fn fields(values: &[(&str, &str)]) -> Vec<EvtxField> {
+        values
+            .iter()
+            .map(|(name, value)| EvtxField {
+                name: name.to_string(),
+                value: value.to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn with_no_database_loaded_it_falls_back_to_the_field_summary() {
+        // The common case until an operator loads metadata. Must not fail or blank the message.
+        let data = fields(&[("HRESULT", "0x80180005")]);
+        assert!(describe_event("Nobody-Has-This-Provider", 1, &data).is_none());
+    }
+
+    #[test]
+    fn an_unknown_event_id_falls_back_rather_than_inventing_a_description() {
+        let data = fields(&[("X", "1")]);
+        assert!(describe_event("Still-Not-Loaded", 999_999, &data).is_none());
     }
 }

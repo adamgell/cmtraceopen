@@ -507,9 +507,10 @@ mod tests {
 
     #[test]
     fn a_camel_case_known_source_request_deserializes() {
-        let target: RestoreTarget =
-            serde_json::from_value(serde_json::json!({ "kind": "knownSource", "sourceId": "ccm-logs" }))
-                .expect("camelCase is the wire contract");
+        let target: RestoreTarget = serde_json::from_value(
+            serde_json::json!({ "kind": "knownSource", "sourceId": "ccm-logs" }),
+        )
+        .expect("camelCase is the wire contract");
 
         assert_eq!(
             target,
@@ -522,8 +523,9 @@ mod tests {
     #[test]
     fn the_snake_case_known_source_form_is_rejected_rather_than_tolerated() {
         // Accepting both would let the contract drift back without a test failing.
-        let result: Result<RestoreTarget, _> =
-            serde_json::from_value(serde_json::json!({ "kind": "knownSource", "source_id": "ccm-logs" }));
+        let result: Result<RestoreTarget, _> = serde_json::from_value(
+            serde_json::json!({ "kind": "knownSource", "source_id": "ccm-logs" }),
+        );
 
         assert!(result.is_err(), "snake_case must not be accepted");
     }

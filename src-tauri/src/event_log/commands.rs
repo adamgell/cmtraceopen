@@ -187,3 +187,23 @@ pub async fn evtx_load_event_maps(
 pub async fn evtx_loaded_map_count() -> u64 {
     super::maps::loaded_count() as u64
 }
+
+/// Registers every provider database in `directory` for description rendering.
+///
+/// Returns a summary per database so an operator can see what coverage was actually gained rather
+/// than assuming a directory full of files worked.
+#[tauri::command]
+pub async fn evtx_load_provider_databases(
+    directory: String,
+) -> Result<Vec<super::provider_db::ProviderDbInfo>, String> {
+    let path = std::path::PathBuf::from(&directory);
+    tokio::task::spawn_blocking(move || super::provider_db::load_directory(&path))
+        .await
+        .map_err(|error| format!("provider database load task failed: {error}"))?
+}
+
+/// Provider databases currently registered.
+#[tauri::command]
+pub async fn evtx_provider_databases() -> Vec<super::provider_db::ProviderDbInfo> {
+    super::provider_db::registered()
+}

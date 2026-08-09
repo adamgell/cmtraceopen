@@ -438,20 +438,19 @@ impl TailReader {
             }
 
             if !lines.is_empty() {
-                let remaining_start = if let Some(initial) =
-                    self.consume_initial_company_portal_lines(&lines, now)
-                {
-                    let remaining_start = initial.remaining_start;
-                    batch.append(initial.batch);
-                    if remaining_start.is_none() {
-                        batch.append(self.enforce_initial_fragment_bound(now));
-                        self.byte_offset = file_size;
-                        return Ok(batch);
-                    }
-                    remaining_start.unwrap_or_default()
-                } else {
-                    0
-                };
+                let remaining_start =
+                    if let Some(initial) = self.consume_initial_company_portal_lines(&lines, now) {
+                        let remaining_start = initial.remaining_start;
+                        batch.append(initial.batch);
+                        if remaining_start.is_none() {
+                            batch.append(self.enforce_initial_fragment_bound(now));
+                            self.byte_offset = file_size;
+                            return Ok(batch);
+                        }
+                        remaining_start.unwrap_or_default()
+                    } else {
+                        0
+                    };
 
                 let prior = self
                     .pending_logical_record
@@ -1100,7 +1099,11 @@ impl TailReader {
             self.pending_fragment_selection = Some((selection.clone(), now));
         }
 
-        self.parse_company_portal_records(framed.completed_records, selection, framed.overflow_count)
+        self.parse_company_portal_records(
+            framed.completed_records,
+            selection,
+            framed.overflow_count,
+        )
     }
 
     fn parse_company_portal_records(
