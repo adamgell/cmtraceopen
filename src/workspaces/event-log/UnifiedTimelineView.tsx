@@ -4,6 +4,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 
 import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
+import { formatEventTime } from "./evtx-time";
+import { useEvtxStore } from "./evtx-store";
 import {
   isEventOrigin,
   originDetail,
@@ -22,16 +24,6 @@ const SEVERITY_COLORS: Record<TimelineSeverity, string> = {
   verbose: tokens.colorNeutralForeground4,
 };
 
-function formatTimestamp(ms: number): string {
-  const date = new Date(ms);
-  const pad = (value: number, width = 2) => String(value).padStart(width, "0");
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.` +
-    `${pad(date.getMilliseconds(), 3)}`
-  );
-}
-
 export interface UnifiedTimelineViewProps {
   timeline: UnifiedTimeline;
 }
@@ -44,6 +36,7 @@ export interface UnifiedTimelineViewProps {
  * distinction that makes the correlation meaningful.
  */
 export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
+  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const logListFontSize = useUiStore((s) => s.logListFontSize);
   const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
 
@@ -176,7 +169,7 @@ export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
                       color: tokens.colorNeutralForeground3,
                     }}
                   >
-                    {formatTimestamp(item.timestampMs)}
+                    {formatEventTime(item.timestampMs, timeZoneMode)}
                   </span>
 
                   <span

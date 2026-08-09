@@ -12,6 +12,7 @@ import {
 } from "./evtx-store";
 import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import { EVTX_TIME_WINDOW_LABELS } from "./types";
+import { timeZoneLabel } from "./evtx-time";
 
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
 
@@ -64,6 +65,8 @@ export function EvtxFilterBar() {
   const sortDirection = useEvtxStore((s) => s.sortDirection);
   const setSortDirection = useEvtxStore((s) => s.setSortDirection);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
+  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const setTimeZoneMode = useEvtxStore((s) => s.setTimeZoneMode);
   const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
   const sourceMode = useEvtxStore((s) => s.sourceMode);
   const isLoading = useEvtxStore((s) => s.isLoading);
@@ -197,6 +200,28 @@ export function EvtxFilterBar() {
           />
         </>
       )}
+
+      <Button
+        size="small"
+        appearance="outline"
+        onClick={() => setTimeZoneMode(timeZoneMode === "local" ? "utc" : "local")}
+        style={{ minWidth: "auto", padding: "2px 8px", fontSize: "11px" }}
+        title={
+          timeZoneMode === "utc"
+            ? "Event times are shown in UTC, as Windows recorded them. Click for local time."
+            : "Event times are shown in this machine's local time. Click for UTC, which is what most other logs use."
+        }
+      >
+        {timeZoneLabel(timeZoneMode)}
+      </Button>
+
+      <div
+        style={{
+          width: "1px",
+          height: "20px",
+          backgroundColor: tokens.colorNeutralStroke2,
+        }}
+      />
 
       {LEVELS.map((level) => {
         const active = filterLevels.has(level);

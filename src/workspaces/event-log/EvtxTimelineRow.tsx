@@ -10,6 +10,7 @@ import {
   visibleColumns,
   type EvtxColumnConfig,
 } from "./evtx-columns";
+import type { EvtxTimeZoneMode } from "./evtx-time";
 
 const LEVEL_COLORS: Record<EvtxLevel, string> = {
   Critical: tokens.colorPaletteRedForeground1,
@@ -36,6 +37,8 @@ export interface EvtxTimelineRowProps {
   monoFontSize: number;
   lineHeight: string;
   columnConfig: EvtxColumnConfig;
+  /** Passed rather than read from the store, so a memoized row re-renders when the clock changes. */
+  timeZoneMode: EvtxTimeZoneMode;
   onSelect: (id: number | null) => void;
 }
 
@@ -50,6 +53,7 @@ export const EvtxTimelineRow = memo(
       monoFontSize,
       lineHeight,
       columnConfig,
+      timeZoneMode,
       onSelect,
     },
     ref
@@ -92,7 +96,7 @@ export const EvtxTimelineRow = memo(
       >
         {visibleColumns(columnConfig).map((column) => {
           const width = columnWidth(columnConfig, column);
-          const value = columnValue(record, column.id);
+          const value = columnValue(record, column.id, timeZoneMode);
 
           if (column.id === "level") {
             return (

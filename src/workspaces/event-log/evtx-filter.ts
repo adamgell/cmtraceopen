@@ -6,6 +6,7 @@
  * here where it can be imported without a Tauri runtime.
  */
 import type { EvtxLevel, EvtxRecord } from "./types";
+import { eventDateKey, type EvtxTimeZoneMode } from "./evtx-time";
 
 /**
  * Parses the Event ID filter box into a set, or null when it constrains nothing.
@@ -100,7 +101,11 @@ export interface EvtxRecordRow {
 
 export type EvtxRow = EvtxGroupRow | EvtxRecordRow;
 
-function groupValue(record: EvtxRecord, field: EvtxGroupField): string {
+function groupValue(
+  record: EvtxRecord,
+  field: EvtxGroupField,
+  timeZone: EvtxTimeZoneMode
+): string {
   switch (field) {
     case "level":
       return record.level;
@@ -111,8 +116,9 @@ function groupValue(record: EvtxRecord, field: EvtxGroupField): string {
     case "eventId":
       return String(record.eventId);
     case "day":
-      // Grouped by the operator's local day, because that is the day they mean when they say it.
-      return new Date(record.timestampEpoch).toLocaleDateString();
+      // The same zone the timestamps are displayed in, so an event never appears under a day that
+      // disagrees with the time printed beside it.
+      return eventDateKey(record.timestampEpoch, timeZone);
   }
 }
 
@@ -128,7 +134,8 @@ function groupValue(record: EvtxRecord, field: EvtxGroupField): string {
 export function buildGroupedRows(
   records: EvtxRecord[],
   groupBy: EvtxGroupField[],
-  collapsedKeys: ReadonlySet<string>
+  collapsedKeys: ReadonlySet<string>,
+  timeZone: EvtxTimeZoneMode = "local"
 ): EvtxRow[] {
   if (groupBy.length === 0) {
     return records.map((record) => ({ kind: "record", record, depth: 0 }));
@@ -149,7 +156,7 @@ export function buildGroupedRows(
     // which follows the caller's sort rather than imposing an alphabetical one.
     const buckets = new Map<string, EvtxRecord[]>();
     for (const record of subset) {
-      const value = groupValue(record, field);
+      const value = groupValue(record, field, timeZone);
       const bucket = buckets.get(value);
       if (bucket) bucket.push(record);
       else buckets.set(value, [record]);

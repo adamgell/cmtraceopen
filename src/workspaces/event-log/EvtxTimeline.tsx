@@ -60,6 +60,7 @@ export function EvtxTimeline() {
   const sortDirection = useEvtxStore((s) => s.sortDirection);
   const groupBy = useEvtxStore((s) => s.groupBy);
   const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
+  const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
   const toggleGroup = useEvtxStore((s) => s.toggleGroup);
   const columnConfig = useEvtxStore((s) => s.columnConfig);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
@@ -114,8 +115,8 @@ export function EvtxTimeline() {
   // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
   // than records. With no grouping the row list is the record list and nothing changes.
   const rows: EvtxRow[] = useMemo(
-    () => buildGroupedRows(sortedRecords, groupBy, collapsedGroups),
-    [sortedRecords, groupBy, collapsedGroups]
+    () => buildGroupedRows(sortedRecords, groupBy, collapsedGroups, timeZoneMode),
+    [sortedRecords, groupBy, collapsedGroups, timeZoneMode]
   );
 
   // Keyboard navigation moves between records, skipping headers, because a header is not a
@@ -303,6 +304,7 @@ export function EvtxTimeline() {
                 monoFontSize={monoFontSize}
                 lineHeight={lineHeight}
                 columnConfig={columnConfig}
+                timeZoneMode={timeZoneMode}
                 onSelect={setSelectedRecordId}
               />
             );

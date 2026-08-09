@@ -1,3 +1,4 @@
+import { eventDateKey, formatEventTime } from "./evtx-time";
 import { describe, expect, it } from "vitest";
 import {
   columnValue,
@@ -140,5 +141,33 @@ describe("columnValue", () => {
     for (const column of EVTX_COLUMNS) {
       expect(typeof columnValue(r, column.id)).toBe("string");
     }
+  });
+});
+
+describe("the timestamp column", () => {
+  it("agrees with the day the same record groups under", () => {
+    // The bug this replaced: the column printed the raw UTC string Windows wrote while grouping
+    // bucketed by local date, so an evening event could show a UTC time from the following day
+    // while sitting under today's group.
+    const evening = Date.UTC(2026, 1, 10, 23, 30, 0);
+    const r = record({ timestampEpoch: evening, timestamp: "2026-02-10T23:30:00.000Z" });
+    for (const zone of ["local", "utc"] as const) {
+      const shown = columnValue(r, "timestamp", zone);
+      expect(shown.slice(0, 10)).toBe(eventDateKey(evening, zone));
+    }
+  });
+
+  it("shows UTC when UTC is selected", () => {
+    const r = record({
+      timestampEpoch: Date.UTC(2026, 1, 10, 16, 36, 4, 390),
+      timestamp: "2026-02-10T16:36:04.390987Z",
+    });
+    expect(columnValue(r, "timestamp", "utc")).toBe("2026-02-10 16:36:04.390987");
+  });
+
+  it("defaults to local rather than to whatever the record string held", () => {
+    const epoch = Date.UTC(2026, 1, 10, 16, 36, 4, 390);
+    const r = record({ timestampEpoch: epoch, timestamp: "2026-02-10T16:36:04.390Z" });
+    expect(columnValue(r, "timestamp")).toBe(formatEventTime(epoch, "local", r.timestamp));
   });
 });

@@ -6,6 +6,7 @@
  * testable without a React or Tauri runtime.
  */
 import type { EvtxRecord } from "./types";
+import { formatEventTime, type EvtxTimeZoneMode } from "./evtx-time";
 
 export type EvtxColumnId =
   | "level"
@@ -145,13 +146,23 @@ export function toggleColumn(config: EvtxColumnConfig, id: EvtxColumnId): EvtxCo
   return { ...config, order: [...config.order, id] };
 }
 
-/** Renders a record's value for a column, as displayed text. */
-export function columnValue(record: EvtxRecord, id: EvtxColumnId): string {
+/**
+ * Renders a record's value for a column, as displayed text.
+ *
+ * The time zone is explicit rather than implied. This column previously printed the raw string
+ * Windows wrote, which is UTC, while the rest of the workspace showed local time, so the same
+ * event carried two different clocks depending on where it was read.
+ */
+export function columnValue(
+  record: EvtxRecord,
+  id: EvtxColumnId,
+  timeZone: EvtxTimeZoneMode = "local"
+): string {
   switch (id) {
     case "level":
       return record.level;
     case "timestamp":
-      return record.timestamp;
+      return formatEventTime(record.timestampEpoch, timeZone, record.timestamp);
     case "eventId":
       return String(record.eventId);
     case "recordId":

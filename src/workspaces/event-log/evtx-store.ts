@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { mergeCoverageGaps } from "./evtx-coverage";
+import type { EvtxTimeZoneMode } from "./evtx-time";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
@@ -66,6 +67,13 @@ interface EvtxState {
   filterEventIds: string;
   filterSearch: string;
   timeWindow: EvtxTimeWindow;
+  /**
+   * Which clock event times are shown in.
+   *
+   * Defaults to local, which is the clock an admin comparing against a user's report is thinking
+   * in. UTC is one click away because that is the clock every other log in an escalation is in.
+   */
+  timeZoneMode: EvtxTimeZoneMode;
   columnConfig: EvtxColumnConfig;
   groupBy: EvtxGroupField[];
   collapsedGroups: Set<string>;
@@ -78,6 +86,7 @@ interface EvtxState {
   queryChannels: (channels: string[], maxEvents?: number) => Promise<void>;
   loadSelectedChannels: () => Promise<void>;
   refreshLoadedChannels: () => Promise<void>;
+  setTimeZoneMode: (mode: EvtxTimeZoneMode) => void;
   setSelectedChannels: (channels: Set<string>) => void;
   toggleChannel: (channel: string) => void;
   selectAllChannels: () => void;
@@ -131,6 +140,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
   filterEventIds: "",
   filterSearch: "",
+  timeZoneMode: "local" as EvtxTimeZoneMode,
   timeWindow: "24h",
   columnConfig: defaultColumnConfig(),
   groupBy: [],
@@ -347,6 +357,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       loadElapsedMs: performance.now() - startTime,
     });
   },
+
+  setTimeZoneMode: (mode) => set({ timeZoneMode: mode }),
 
   setSelectedChannels: (channels) => set({ selectedChannels: channels }),
 
