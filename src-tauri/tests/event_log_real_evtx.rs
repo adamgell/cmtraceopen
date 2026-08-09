@@ -123,6 +123,19 @@ fn the_xml_export_emits_the_provider_representation() {
 }
 
 #[test]
+fn a_healthy_capture_reports_no_gaps() {
+    let Some(result) = parsed() else { return };
+    // The messages are a gap report. A clean file producing one would train an operator to ignore
+    // them, which is how a real gap goes unnoticed.
+    assert!(
+        result.error_messages.is_empty(),
+        "clean capture reported gaps: {:?}",
+        result.error_messages
+    );
+    assert_eq!(result.total_records, result.records.len() as u64);
+}
+
+#[test]
 fn records_are_ordered_by_time() {
     let Some(result) = parsed() else { return };
     let ordered = result

@@ -15,12 +15,15 @@ pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
     let mut all_records = Vec::new();
     let mut channels = Vec::new();
     let mut parse_errors = 0u32;
+    let mut error_messages = Vec::new();
 
     for path_str in paths {
         let path = Path::new(path_str);
         match parse_single_file(path) {
-            Ok((records, file_parse_errors)) => {
-                parse_errors += file_parse_errors;
+            Ok(file) => {
+                let records = file.records;
+                parse_errors += file.parse_errors;
+                error_messages.extend(file.messages);
                 let source_label = path
                     .file_name()
                     .map(|f| f.to_string_lossy().to_string())
@@ -65,6 +68,9 @@ pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
                     e
                 );
                 parse_errors += 1;
+                // A file that could not be opened at all is reported by name. Counting it without
+                // saying which file, or why, leaves an operator with a number and no next step.
+                error_messages.push(format!("{path_str}: {e}"));
             }
         }
     }
@@ -82,12 +88,27 @@ pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
         channels,
         total_records,
         parse_errors,
-        error_messages: vec![],
+        error_messages,
     })
 }
 
-/// Parse a single .evtx file into a Vec of EvtxRecord and a count of per-record parse errors.
-fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
+/// What one file yielded, including why anything was missing from it.
+struct ParsedFile {
+    records: Vec<EvtxRecord>,
+    /// Records that could not be read. Kept as a count because a damaged file can produce
+    /// thousands, and thousands of near-identical strings are not worth carrying.
+    parse_errors: u32,
+    /// Operator-facing explanations, already summarised.
+    messages: Vec<String>,
+}
+
+/// Parse a single .evtx file.
+///
+/// Anything missing from the result is explained rather than merely counted. A damaged file, a
+/// record whose XML will not parse, and a file so large it was truncated are all cases where the
+/// view is incomplete, and a view that is silently incomplete is worse than one that is empty:
+/// the absent events look like evidence that the thing being investigated did not happen.
+fn parse_single_file(path: &Path) -> Result<ParsedFile, String> {
     let mut parser = EvtxParser::from_path(path)
         .map_err(|e| format!("Failed to open EVTX file {}: {}", path.display(), e))?;
 
@@ -98,6 +119,8 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
 
     let mut records = Vec::new();
     let mut parse_errors = 0u32;
+    let mut messages = Vec::new();
+    let mut truncated = false;
 
     // XML rather than JSON. The JSON projection cannot be re-parsed into an event tree, which is
     // what the map engine, the System block, and the XML export all consume; reading XML here is
@@ -109,6 +132,7 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
                 path.display(),
                 MAX_ENTRIES_PER_FILE
             );
+            truncated = true;
             break;
         }
 
@@ -199,7 +223,26 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
         });
     }
 
-    Ok((records, parse_errors))
+    if truncated {
+        // Previously only logged. An operator saw exactly the cap as the event count with nothing
+        // saying the file held more, which reads as a complete picture of a file that was cut off.
+        messages.push(format!(
+            "{}: stopped at {} events, the most this reader loads from one file. The file holds more.",
+            source_label, MAX_ENTRIES_PER_FILE
+        ));
+    }
+    if parse_errors > 0 {
+        messages.push(format!(
+            "{source_label}: {parse_errors} of {} records could not be read and are missing from the view.",
+            parse_errors as usize + records.len()
+        ));
+    }
+
+    Ok(ParsedFile {
+        records,
+        parse_errors,
+        messages,
+    })
 }
 
 /// Extract event fields as name-value pairs.
@@ -307,6 +350,30 @@ mod tests {
 
     fn fields_of(xml: &str) -> Vec<EvtxField> {
         extract_event_data(&parse(xml))
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_opened_is_named_in_the_result() {
+        // A count with no file name and no reason leaves an operator with a number and no next
+        // step. The message is what makes a missing log actionable.
+        let result = parse_evtx_files(&["/no/such/file.evtx".to_string()]).expect("returns");
+        assert_eq!(result.parse_errors, 1);
+        assert_eq!(result.error_messages.len(), 1);
+        assert!(
+            result.error_messages[0].contains("/no/such/file.evtx"),
+            "{:?}",
+            result.error_messages
+        );
+        assert!(result.records.is_empty());
+    }
+
+    #[test]
+    fn a_clean_parse_reports_nothing() {
+        // The messages are a gap report, so an empty run must not manufacture one.
+        let result = parse_evtx_files(&[]).expect("returns");
+        assert_eq!(result.parse_errors, 0);
+        assert!(result.error_messages.is_empty());
+        assert_eq!(result.total_records, 0);
     }
 
     #[test]
