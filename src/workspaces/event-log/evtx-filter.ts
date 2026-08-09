@@ -65,3 +65,126 @@ export function selectVisibleRecords(input: VisibleRecordsInput): EvtxRecord[] {
     return true;
   });
 }
+
+/** A field the event list can group by. */
+export type EvtxGroupField = "level" | "provider" | "channel" | "eventId" | "day";
+
+export const EVTX_GROUP_LABELS: Record<EvtxGroupField, string> = {
+  level: "Level",
+  provider: "Provider",
+  channel: "Channel",
+  eventId: "Event ID",
+  day: "Day",
+};
+
+/** A group header row. */
+export interface EvtxGroupRow {
+  kind: "group";
+  /** Stable identity across renders, built from the whole ancestry so sibling groups never collide. */
+  key: string;
+  field: EvtxGroupField;
+  label: string;
+  /** Nesting level, zero for the outermost grouping. */
+  depth: number;
+  /** Records beneath this header, including those inside nested groups. */
+  count: number;
+  collapsed: boolean;
+}
+
+/** A record row. */
+export interface EvtxRecordRow {
+  kind: "record";
+  record: EvtxRecord;
+  depth: number;
+}
+
+export type EvtxRow = EvtxGroupRow | EvtxRecordRow;
+
+function groupValue(record: EvtxRecord, field: EvtxGroupField): string {
+  switch (field) {
+    case "level":
+      return record.level;
+    case "provider":
+      return record.provider || "(no provider)";
+    case "channel":
+      return record.channel || "(no channel)";
+    case "eventId":
+      return String(record.eventId);
+    case "day":
+      // Grouped by the operator's local day, because that is the day they mean when they say it.
+      return new Date(record.timestampEpoch).toLocaleDateString();
+  }
+}
+
+/**
+ * Flattens records into the row list a virtualized list renders.
+ *
+ * Returns a flat array rather than a tree because the list virtualizes on row index; a tree would
+ * have to be flattened on every render anyway.
+ *
+ * Group order follows `groupBy`, and within the deepest group the incoming record order is
+ * preserved, so whatever sort the operator chose still applies inside each group.
+ */
+export function buildGroupedRows(
+  records: EvtxRecord[],
+  groupBy: EvtxGroupField[],
+  collapsedKeys: ReadonlySet<string>
+): EvtxRow[] {
+  if (groupBy.length === 0) {
+    return records.map((record) => ({ kind: "record", record, depth: 0 }));
+  }
+
+  const rows: EvtxRow[] = [];
+
+  const walk = (subset: EvtxRecord[], depth: number, parentKey: string) => {
+    if (depth >= groupBy.length) {
+      for (const record of subset) {
+        rows.push({ kind: "record", record, depth });
+      }
+      return;
+    }
+
+    const field = groupBy[depth];
+    // Insertion order is preserved by Map, so groups appear in the order they are first seen,
+    // which follows the caller's sort rather than imposing an alphabetical one.
+    const buckets = new Map<string, EvtxRecord[]>();
+    for (const record of subset) {
+      const value = groupValue(record, field);
+      const bucket = buckets.get(value);
+      if (bucket) bucket.push(record);
+      else buckets.set(value, [record]);
+    }
+
+    for (const [value, bucket] of buckets) {
+      const key = `${parentKey}/${field}=${value}`;
+      const collapsed = collapsedKeys.has(key);
+      rows.push({
+        kind: "group",
+        key,
+        field,
+        label: value,
+        depth,
+        count: bucket.length,
+        collapsed,
+      });
+      if (!collapsed) {
+        walk(bucket, depth + 1, key);
+      }
+    }
+  };
+
+  walk(records, 0, "");
+  return rows;
+}
+
+/** Every group key present for `records` under `groupBy`, for expand-all and collapse-all. */
+export function allGroupKeys(
+  records: EvtxRecord[],
+  groupBy: EvtxGroupField[]
+): Set<string> {
+  const keys = new Set<string>();
+  for (const row of buildGroupedRows(records, groupBy, new Set())) {
+    if (row.kind === "group") keys.add(row.key);
+  }
+  return keys;
+}
