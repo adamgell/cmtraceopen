@@ -469,6 +469,7 @@ fn the_redaction_scenario_produces_the_pinned_tokens() {
         .map(|setting| {
             json!({
                 "key": setting.identity.key,
+                "canonicalUri": setting.identity.canonical_uri,
                 "appliedValue": setting.applied_value,
                 "namedData": setting
                     .observations
@@ -501,10 +502,31 @@ fn redaction_preserves_the_diagnosis_and_is_deterministic() {
     let second = redacted_configuration_snapshot(&snapshot);
 
     assert_eq!(wire(&first), wire(&second), "redaction is deterministic");
+
+    // ADR-004's invariant is that redaction does not alter a *conclusion*. The
+    // conclusion is the identifier, severity, confidence, and citation set — not
+    // the prose, which is built from setting labels and therefore carries node
+    // paths. The previous expectation here compared whole findings and so pinned
+    // the leak in place: a node path embedding a SID reached the export through
+    // the summary, and any fix to that would have failed this test.
+    let conclusion = |findings: &[cmtraceopen_parser::intune::evidence::IntuneFinding]| {
+        findings
+            .iter()
+            .map(|finding| {
+                json!({
+                    "id": finding.finding_id,
+                    "severity": wire(&finding.severity),
+                    "confidence": wire(&finding.confidence),
+                    "evidence": wire(&finding.evidence),
+                    "coverageGapIds": finding.coverage_gap_ids,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
-        wire(&first.findings),
-        wire(&snapshot.findings),
-        "redaction must not change the findings"
+        conclusion(&first.findings),
+        conclusion(&snapshot.findings),
+        "redaction must not change what a finding concludes or cites"
     );
     assert_eq!(
         first
@@ -519,6 +541,51 @@ fn redaction_preserves_the_diagnosis_and_is_deterministic() {
             .collect::<Vec<_>>(),
         "redaction must not change any resolution"
     );
+}
+
+#[test]
+fn no_finding_or_coverage_text_carries_an_identity_the_settings_redacted() {
+    // The settings and the prose that describes them are one export. A node path
+    // scrubbed in `canonicalUri` and quoted verbatim in a finding summary is the
+    // same disclosure, reached by a different field.
+    for scenario in SCENARIOS {
+        let redacted =
+            redacted_configuration_snapshot(&analyze_configuration(&load_input(scenario)));
+        let mut prose = Vec::new();
+        for finding in &redacted.findings {
+            prose.push(finding.title.clone());
+            prose.push(finding.summary.clone());
+            prose.extend(finding.recommended_checks.iter().cloned());
+        }
+        prose.extend(redacted.coverage.iter().filter_map(|e| e.detail.clone()));
+
+        for text in prose {
+            let lowercased = text.to_ascii_lowercase();
+            assert!(
+                !lowercased.contains("s-1-"),
+                "{scenario}: a SID reached exported prose: {text}"
+            );
+            assert!(
+                !lowercased.contains("@example.invalid"),
+                "{scenario}: a UPN reached exported prose: {text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn re_redacting_an_export_returns_it_unchanged() {
+    // Callers chain projections; a token that gets hashed a second time silently
+    // breaks the equality the first projection was there to preserve.
+    for scenario in SCENARIOS {
+        let once = redacted_configuration_snapshot(&analyze_configuration(&load_input(scenario)));
+        let twice = redacted_configuration_snapshot(&once);
+        assert_eq!(
+            wire(&once),
+            wire(&twice),
+            "{scenario}: redaction is idempotent"
+        );
+    }
 }
 
 #[test]

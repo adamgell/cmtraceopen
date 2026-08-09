@@ -9,6 +9,28 @@
   ],
   "settings": [
     {
+      "key": "device|uri:device/vendor/msft/accounts/synthetic.user@example.invalid/localusergroup",
+      "scope": "device",
+      "canonicalUri": "Device/Vendor/MSFT/Accounts/synthetic.user@example.invalid/LocalUserGroup",
+      "displayName": null,
+      "receipt": "cspProcessed",
+      "local": "applied",
+      "service": "noEvidence",
+      "resolution": "applied",
+      "sourceIds": [
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "localErrorHex": null,
+      "serviceErrorHex": null,
+      "appliedValue": "CONTOSO\\Helpdesk",
+      "timeIsReliable": true,
+      "orderingIsContradictory": false,
+      "hasUninterpretableEvidence": false,
+      "evidenceIds": [
+        "evt-identity-node"
+      ]
+    },
+    {
       "key": "device|uri:device/vendor/msft/personalization/desktopimageurl",
       "scope": "device",
       "canonicalUri": "Device/Vendor/MSFT/Personalization/DesktopImageUrl",
@@ -58,14 +80,36 @@
     "configuration-applied"
   ],
   "assertions": [
-    "every configuration value is tokenized in the default export",
+    "every configuration value is tokenized in the export projection",
     "the same underlying value produces the same token in two different settings",
+    "an identity segment inside a node path is tokenized while the path survives",
+    "the lowercased dedupe key reuses the token its mixed-case URI produced",
     "the configuration source id survives redaction so the policy stays identifiable"
   ],
   "redactedSettings": [
     {
+      "key": "device|uri:device/vendor/msft/accounts/[redacted:dcfe70dcbb35f268]/localusergroup",
+      "canonicalUri": "Device/Vendor/MSFT/Accounts/[redacted:dcfe70dcbb35f268]/LocalUserGroup",
+      "appliedValue": "[redacted:41c487e830eb6e34]",
+      "namedData": [
+        {
+          "name": "NodeUri",
+          "value": "./Device/Vendor/MSFT/Accounts/[redacted:dcfe70dcbb35f268]/LocalUserGroup"
+        },
+        {
+          "name": "Value",
+          "value": "[redacted:41c487e830eb6e34]"
+        },
+        {
+          "name": "ConfigurationSourceId",
+          "value": "11111111-1111-4111-8111-111111111111"
+        }
+      ]
+    },
+    {
       "key": "device|uri:device/vendor/msft/personalization/desktopimageurl",
-      "appliedValue": "[redacted:71d0311ead4fbe6a]",
+      "canonicalUri": "Device/Vendor/MSFT/Personalization/DesktopImageUrl",
+      "appliedValue": "[redacted:2db0cdb8f368add0]",
       "namedData": [
         {
           "name": "NodeUri",
@@ -73,7 +117,7 @@
         },
         {
           "name": "Value",
-          "value": "[redacted:71d0311ead4fbe6a]"
+          "value": "[redacted:2db0cdb8f368add0]"
         },
         {
           "name": "ConfigurationSourceId",
@@ -81,15 +125,15 @@
         },
         {
           "name": "EnrollmentId",
-          "value": "[redacted:ba71ea487f657435]"
+          "value": "[redacted:9f537c69f47aac4f]"
         },
         {
           "name": "TenantId",
-          "value": "[redacted:dd08d6c3590f892b]"
+          "value": "[redacted:18e8680b98fc84d5]"
         },
         {
           "name": "Upn",
-          "value": "[redacted:039bc27f8eb2856a]"
+          "value": "[redacted:dcfe70dcbb35f268]"
         },
         {
           "name": "Area",
@@ -99,7 +143,8 @@
     },
     {
       "key": "device|uri:device/vendor/msft/policy/config/update/allowautoupdate",
-      "appliedValue": "[redacted:af63ac4c86019afc]",
+      "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
+      "appliedValue": "[redacted:187c4fa5b79764ea]",
       "namedData": [
         {
           "name": "NodeUri",
@@ -107,7 +152,7 @@
         },
         {
           "name": "Value",
-          "value": "[redacted:af63ac4c86019afc]"
+          "value": "[redacted:187c4fa5b79764ea]"
         },
         {
           "name": "ConfigurationSourceId",
@@ -115,10 +160,10 @@
         },
         {
           "name": "PreviousValue",
-          "value": "[redacted:71d0311ead4fbe6a]"
+          "value": "[redacted:2db0cdb8f368add0]"
         }
       ]
     }
   ],
-  "redactedEnrollmentId": "[redacted:ba71ea487f657435]"
+  "redactedEnrollmentId": "[redacted:9f537c69f47aac4f]"
 }

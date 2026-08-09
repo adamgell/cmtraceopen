@@ -27,8 +27,17 @@
 //!     -> sources::observation_from_{event,report}   one typed statement per record
 //!     -> reduce_configuration                       one transaction per CSP identity
 //!     -> derive_findings                            evidence-backed conclusions
-//!     -> redacted_configuration_snapshot            default export
 //! ```
+//!
+//! [`analyze_configuration`] runs that pipeline and stops there. Its result is
+//! **not** redacted: [`ConfigurationSnapshot::redacted`] is `false` and the
+//! applied values, node paths, and finding prose are the raw ones. A caller that
+//! exports, persists, or transmits a snapshot must pass it through
+//! [`redacted_configuration_snapshot`] first; that function is the export
+//! projection, not something the analyzer applies on its own. Keeping the two
+//! apart is deliberate — a caller correlating two settings by value needs the raw
+//! reduction — but it means the redaction step is the caller's obligation and is
+//! stated here rather than left to be inferred.
 //!
 //! # Boundaries
 //!
@@ -46,27 +55,22 @@ mod reducer;
 mod rules;
 mod sources;
 
-pub use identity::{
-    canonicalize_uri, csp_uri_from_message, policy_uri_from_message, resolve_identity,
-    result_token_from_message, source_id_from_message, ConfigurationScope,
-    ConfigurationSettingIdentity, IdentityHints,
-};
+// The exported surface is the input contract, the snapshot's own type graph, and
+// the four entry points. Projection helpers (URI canonicalization, message
+// scraping, per-record classification, error-token parsing) stay internal: they
+// are how this module reaches its answer, not part of the answer, and exporting
+// them would commit the crate to their signatures with no caller asking for them.
+pub use identity::{ConfigurationScope, ConfigurationSettingIdentity};
 pub use models::{
-    evidence_side, ConfigurationDisposition, ConfigurationEventKind, ConfigurationEvidenceSide,
+    ConfigurationDisposition, ConfigurationEventKind, ConfigurationEvidenceSide,
     ConfigurationInput, ConfigurationLocalState, ConfigurationObservation,
     ConfigurationReceiptState, ConfigurationResolution, ConfigurationServiceState,
     ConfigurationSetting, ConfigurationSnapshot, ConfigurationSourceStatement,
     INTUNE_CONFIGURATION_SCHEMA_VERSION,
 };
-pub use redaction::{looks_like_identity, redacted_configuration_snapshot, redaction_token};
+pub use redaction::redacted_configuration_snapshot;
 pub use reducer::reduce_configuration;
 pub use rules::derive_findings;
-pub use sources::{
-    build_error_code, classify_event, is_device_side, is_failure, is_service_side,
-    observation_from_event, observation_from_report, timestamp_is_reliable,
-    EVENT_ID_COMMAND_FAILURE, EVENT_ID_DELETE_POLICY, EVENT_ID_SET_POLICY_INT,
-    EVENT_ID_SET_POLICY_STRING, MDM_DIAGNOSTICS_PROVIDER,
-};
 
 /// Reduce one evidence bundle and attach the findings derived from it.
 ///
