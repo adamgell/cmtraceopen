@@ -354,12 +354,24 @@ pub fn build_query(filter: &EventQueryFilter) -> Result<String, QueryBuildError>
     }
 
     let mut query = String::from("<QueryList>");
-    for chunk in chunk_by_expression_budget(&filter.event_ids, fixed_cost) {
+    for (id, chunk) in chunk_by_expression_budget(&filter.event_ids, fixed_cost)
+        .iter()
+        .enumerate()
+    {
+        // The schema documents Id as required once the list holds more than one Query. The service
+        // does not enforce it: a two-node list without Id was measured returning exactly the same
+        // events as the equivalent single expression. It is written anyway because it costs
+        // nothing and the same document shape is what a saved custom view is validated against.
+        //
+        // No Path is written. EvtQuery supplies the channel from its own argument when the
+        // document omits it, and the schema requires that if any node names a path they all do, so
+        // omitting it everywhere is the consistent choice.
+        //
         // The expression becomes XML text here, so it is escaped at exactly this boundary.
         let _ = write!(
             query,
-            "<Query><Select>{}</Select></Query>",
-            escape_for_xml(&select_body(filter, &chunk)?)
+            "<Query Id=\"{id}\"><Select>{}</Select></Query>",
+            escape_for_xml(&select_body(filter, chunk)?)
         );
     }
     query.push_str("</QueryList>");
@@ -982,5 +994,119 @@ mod expression_budget_tests {
         let query = build_query(&f).expect("builds");
         assert!(query.contains("<Select>"));
         assert_eq!(query.matches("<Select>").count(), 3, "one id per node");
+    }
+}
+
+#[cfg(test)]
+mod structured_query_service_tests {
+    //! Structured `<QueryList>` forms executed against a real Windows Event Log service.
+    //!
+    //! The bare XPath forms were pinned this way from the start; the structured form was not, and
+    //! it is the one that only appears once a filter outgrows the expression budget, so it would
+    //! have reached a user unverified.
+    //!
+    //! Run on Windows 11 build 26200 against `Application`, deliberately WITHOUT
+    //! `EvtQueryTolerateQueryErrors`. With that flag the service accepts a query whose nodes it
+    //! could not evaluate and quietly returns the rest, so "it worked" proves nothing. Every form
+    //! below was accepted under strict flags and returned a nonzero count, which rules out both a
+    //! rejected query and one that silently matches nothing.
+    //!
+    //! What this measured, against the documentation: the schema calls `Id` required once a list
+    //! holds more than one `Query`, but the service does not enforce it. A two-node list without
+    //! `Id` returned 5240 events, exactly matching the single expression covering the same IDs
+    //! (5180 + 60). `Id` is emitted regardless, because it costs nothing and a saved custom view
+    //! is validated against the same schema.
+
+    use super::*;
+
+    fn ids(count: u32) -> Vec<EventIdSelector> {
+        (1000..1000 + count)
+            .map(|id| EventIdSelector::Single { id })
+            .collect()
+    }
+
+    #[test]
+    fn a_split_id_set_matches_the_validated_form() {
+        let filter = EventQueryFilter {
+            event_ids: ids(31),
+            ..Default::default()
+        };
+        assert_eq!(
+            build_query(&filter).expect("builds"),
+            "<QueryList>\
+             <Query Id=\"0\"><Select>*[System[(EventID=1000 or EventID=1001 or EventID=1002 or \
+             EventID=1003 or EventID=1004 or EventID=1005 or EventID=1006 or EventID=1007 or \
+             EventID=1008 or EventID=1009 or EventID=1010 or EventID=1011 or EventID=1012 or \
+             EventID=1013 or EventID=1014 or EventID=1015 or EventID=1016 or EventID=1017 or \
+             EventID=1018 or EventID=1019)]]</Select></Query>\
+             <Query Id=\"1\"><Select>*[System[(EventID=1020 or EventID=1021 or EventID=1022 or \
+             EventID=1023 or EventID=1024 or EventID=1025 or EventID=1026 or EventID=1027 or \
+             EventID=1028 or EventID=1029 or EventID=1030)]]</Select></Query>\
+             </QueryList>"
+        );
+    }
+
+    #[test]
+    fn every_node_carries_a_unique_id() {
+        let filter = EventQueryFilter {
+            event_ids: ids(100),
+            ..Default::default()
+        };
+        let query = build_query(&filter).expect("builds");
+        let node_count = query.matches("<Query Id=").count();
+        assert!(node_count >= 5, "expected a real split, got {node_count}");
+        for id in 0..node_count {
+            assert_eq!(
+                query.matches(&format!("<Query Id=\"{id}\">")).count(),
+                1,
+                "id {id} is missing or repeated"
+            );
+        }
+    }
+
+    #[test]
+    fn no_node_names_a_channel_path() {
+        // EvtQuery supplies the channel from its own argument, and the schema requires that if any
+        // node names a path they all do. Omitting it everywhere is the consistent choice, and was
+        // accepted by the service.
+        let filter = EventQueryFilter {
+            event_ids: ids(31),
+            ..Default::default()
+        };
+        assert!(!build_query(&filter).expect("builds").contains("Path="));
+    }
+
+    #[test]
+    fn operators_inside_a_structured_query_are_xml_escaped() {
+        // The inverse of the bare-XPath rule. Raw operators here would not be well-formed XML, and
+        // escaped operators in a bare XPath are rejected outright.
+        let filter = EventQueryFilter {
+            event_ids: ids(31),
+            levels: vec![1, 2, 3, 4],
+            time: Some(TimeWindow::Last {
+                milliseconds: 2_592_000_000,
+            }),
+            ..Default::default()
+        };
+        let query = build_query(&filter).expect("builds");
+        assert!(query.contains("timediff(@SystemTime) &lt;= 2592000000"));
+        assert!(!query.contains("<= 2592000000"));
+    }
+
+    #[test]
+    fn the_other_predicates_repeat_in_every_node() {
+        // The service unions the nodes rather than intersecting them, so a predicate that appears
+        // in only one node would widen the result set instead of narrowing it.
+        let filter = EventQueryFilter {
+            event_ids: ids(31),
+            keywords: Some(0x8020_0000_0000_0000),
+            ..Default::default()
+        };
+        let query = build_query(&filter).expect("builds");
+        assert_eq!(
+            query.matches("band").count(),
+            query.matches("<Select>").count(),
+            "every node must repeat the keyword predicate"
+        );
     }
 }
