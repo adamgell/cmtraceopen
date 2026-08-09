@@ -1,8 +1,9 @@
 # EvtxECmd map fixtures
 
 These are unmodified EvtxECmd maps from [EricZimmerman/evtx](https://github.com/EricZimmerman/evtx)
-(MIT licensed), converted from YAML to JSON. Only the serialization format changed; keys, values,
-and structure are byte-faithful to the upstream corpus.
+(MIT licensed), converted from YAML to JSON. Only the serialization format changed; the keys,
+values, and structure are preserved exactly as upstream wrote them. The bytes necessarily differ,
+since that is what the conversion does.
 
 They are vendored so the map engine is tested against the real schema rather than invented
 examples, per the repository rule that fixtures must anchor to real corpus.
