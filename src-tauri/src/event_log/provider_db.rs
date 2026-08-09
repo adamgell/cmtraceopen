@@ -483,3 +483,116 @@ mod tests {
         assert_eq!(registered().len(), 2);
     }
 }
+
+#[cfg(test)]
+mod real_database_tests {
+    //! Exercises the reader against a provider database produced by EventLogExpert's own tool.
+    //!
+    //! Ignored by default: it needs a real `.db`, whose path comes from
+    //! `CMTRACEOPEN_PROVIDER_DB`. Synthetic fixtures prove the reader handles the schema as I
+    //! understand it; only a real file proves I understood it.
+    //!
+    //! ```text
+    //! CMTRACEOPEN_PROVIDER_DB=C:\path\to.db \
+    //!   cargo test --lib event_log::provider_db::real_database_tests -- --ignored --nocapture
+    //! ```
+
+    use super::*;
+
+    fn real_db() -> Option<ProviderDb> {
+        let path = std::env::var("CMTRACEOPEN_PROVIDER_DB").ok()?;
+        ProviderDb::open(Path::new(&path)).ok()
+    }
+
+    #[test]
+    #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
+    fn opens_a_real_database_and_reports_its_size() {
+        let database = real_db().expect("database opens");
+        let info = database.info();
+        println!(
+            "providers={} source_os_build={:?}",
+            info.provider_count, info.source_os_build
+        );
+        assert!(
+            info.provider_count > 100,
+            "a machine-wide capture should hold hundreds of providers, got {}",
+            info.provider_count
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
+    fn renders_a_real_mdm_description_end_to_end() {
+        use cmtraceopen_parser::provider::render_description;
+
+        let database = real_db().expect("database opens");
+        let metadata = database
+            .provider("Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider")
+            .expect("query succeeds")
+            .expect("the MDM provider is present on a Windows machine");
+
+        println!(
+            "MDM provider: {} events, {} tasks, {} keywords",
+            metadata.events.len(),
+            metadata.tasks.len(),
+            metadata.keywords.len()
+        );
+        assert!(
+            metadata.events.len() > 50,
+            "the MDM provider defines many events, got {}",
+            metadata.events.len()
+        );
+
+        let event = metadata.event(2, Some(0)).expect("event id 2 is defined");
+        let template = event
+            .description
+            .as_deref()
+            .expect("event 2 has a description");
+        println!("template: {template}");
+
+        let rendered = render_description(template, &["0x80180005".to_string()]);
+        println!("rendered: {}", rendered.text);
+        assert!(
+            !rendered.text.contains("%1"),
+            "the insertion should have been filled: {}",
+            rendered.text
+        );
+        assert!(rendered.is_complete());
+    }
+
+    #[test]
+    #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
+    fn every_payload_in_a_sample_of_providers_inflates() {
+        // A decompression or schema misunderstanding would show up here rather than as one
+        // provider quietly rendering nothing.
+        let database = real_db().expect("database opens");
+        let names: Vec<String> = {
+            let mut statement = database
+                .connection
+                .prepare("SELECT ProviderName FROM ProviderDetails LIMIT 200")
+                .expect("prepare");
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .expect("query");
+            rows.filter_map(Result::ok).collect()
+        };
+        assert!(!names.is_empty());
+
+        let mut with_events = 0usize;
+        for name in &names {
+            let metadata = database
+                .provider(name)
+                .unwrap_or_else(|error| panic!("provider {name} failed to inflate: {error}"))
+                .unwrap_or_else(|| panic!("provider {name} vanished between listing and reading"));
+            if !metadata.events.is_empty() {
+                with_events += 1;
+            }
+        }
+        println!(
+            "{}/{} sampled providers define events",
+            with_events,
+            names.len()
+        );
+        assert!(with_events > 0);
+    }
+}
