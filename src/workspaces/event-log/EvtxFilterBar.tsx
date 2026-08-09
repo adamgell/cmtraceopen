@@ -5,6 +5,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { sanitizeCriteria } from "./evtx-saved-filters";
+import { EVTX_COLUMNS, type EvtxColumnId } from "./evtx-columns";
 import {
   useEvtxStore,
   type EvtxSortField,
@@ -81,6 +82,11 @@ export function EvtxFilterBar() {
     () => [...savedFilters].sort((a, b) => (a.favorite === b.favorite ? a.name.localeCompare(b.name) : a.favorite ? -1 : 1)),
     [savedFilters]
   );
+
+  const columnConfig = useEvtxStore((s) => s.columnConfig);
+  const toggleColumnVisible = useEvtxStore((s) => s.toggleColumnVisible);
+  const moveColumnBy = useEvtxStore((s) => s.moveColumnBy);
+  const resetColumns = useEvtxStore((s) => s.resetColumns);
 
   const [exportState, setExportState] = useState<string | null>(null);
 
@@ -229,6 +235,66 @@ export function EvtxFilterBar() {
         size="small"
         style={{ width: "160px" }}
       />
+
+      <Dropdown
+        size="small"
+        multiselect
+        placeholder="Columns"
+        value={`${columnConfig.order.length} shown`}
+        selectedOptions={columnConfig.order}
+        style={{ minWidth: "104px" }}
+        title="Choose which columns the list shows. Use the arrows to reorder."
+        onOptionSelect={(_, data) => {
+          const id = data.optionValue as EvtxColumnId | "__reset__";
+          if (id === "__reset__") resetColumns();
+          else if (id) toggleColumnVisible(id);
+        }}
+      >
+        {EVTX_COLUMNS.map((column) => {
+          const position = columnConfig.order.indexOf(column.id);
+          return (
+            <Option key={column.id} value={column.id} text={column.label}>
+              <span
+                style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%" }}
+              >
+                <span style={{ flex: 1 }}>{column.label}</span>
+                {position >= 0 && (
+                  <>
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      disabled={position === 0}
+                      title="Move earlier"
+                      onClick={(event) => {
+                        // The option would otherwise toggle visibility as well as reorder.
+                        event.stopPropagation();
+                        moveColumnBy(column.id, -1);
+                      }}
+                    >
+                      {"\u2191"}
+                    </Button>
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      disabled={position === columnConfig.order.length - 1}
+                      title="Move later"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        moveColumnBy(column.id, 1);
+                      }}
+                    >
+                      {"\u2193"}
+                    </Button>
+                  </>
+                )}
+              </span>
+            </Option>
+          );
+        })}
+        <Option value="__reset__" text="Reset to defaults">
+          Reset to defaults
+        </Option>
+      </Dropdown>
 
       <Dropdown
         size="small"

@@ -14,6 +14,14 @@ import { EVTX_TIME_WINDOW_MS } from "./types";
 // Re-exported so callers have one import site; the implementations live in a Tauri-free module.
 export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
 import type { EvtxGroupField } from "./evtx-filter";
+import {
+  defaultColumnConfig,
+  moveColumn,
+  sanitizeColumnConfig,
+  toggleColumn,
+  type EvtxColumnConfig,
+  type EvtxColumnId,
+} from "./evtx-columns";
 
 /**
  * Builds the filter handed to the backend, which compiles it to XPath.
@@ -49,6 +57,7 @@ interface EvtxState {
   filterEventIds: string;
   filterSearch: string;
   timeWindow: EvtxTimeWindow;
+  columnConfig: EvtxColumnConfig;
   groupBy: EvtxGroupField[];
   collapsedGroups: Set<string>;
   sortField: EvtxSortField;
@@ -70,6 +79,9 @@ interface EvtxState {
   setFilterSearch: (search: string) => void;
   setTimeWindow: (window: EvtxTimeWindow) => void;
   setGroupBy: (fields: EvtxGroupField[]) => void;
+  toggleColumnVisible: (id: EvtxColumnId) => void;
+  moveColumnBy: (id: EvtxColumnId, direction: -1 | 1) => void;
+  resetColumns: () => void;
   toggleGroup: (key: string) => void;
   setSortField: (field: EvtxSortField) => void;
   setSortDirection: (direction: EvtxSortDirection) => void;
@@ -109,6 +121,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   filterEventIds: "",
   filterSearch: "",
   timeWindow: "24h",
+  columnConfig: defaultColumnConfig(),
   groupBy: [],
   collapsedGroups: new Set<string>(),
   sortField: "time",
@@ -358,6 +371,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   // Changing the grouping invalidates every collapse key, so the old set is discarded rather than
   // left to collapse unrelated groups that happen to share a key.
   setGroupBy: (fields) => set({ groupBy: fields, collapsedGroups: new Set<string>() }),
+  toggleColumnVisible: (id) =>
+    set({ columnConfig: sanitizeColumnConfig(toggleColumn(get().columnConfig, id)) }),
+  moveColumnBy: (id, direction) =>
+    set({ columnConfig: sanitizeColumnConfig(moveColumn(get().columnConfig, id, direction)) }),
+  resetColumns: () => set({ columnConfig: defaultColumnConfig() }),
   toggleGroup: (key) => {
     const next = new Set(get().collapsedGroups);
     if (next.has(key)) next.delete(key);
@@ -385,6 +403,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       filterEventIds: "",
       filterSearch: "",
       timeWindow: "24h",
+      columnConfig: defaultColumnConfig(),
       groupBy: [],
       collapsedGroups: new Set<string>(),
       sortField: "time",
