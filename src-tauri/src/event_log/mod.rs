@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod event_node;
 pub mod maps;
 pub mod models;
 pub mod parser;
