@@ -13,7 +13,7 @@ tone_instructions: >-
 reviews:
   profile: assertive
   # Keep reviews advisory: CI gates (cargo clippy, cargo test, tsc) decide mergeability.
-  request_changes_workflow: false
+  request_changes_workflow: true
   high_level_summary: true
   changed_files_summary: true
   sequence_diagrams: true
@@ -22,7 +22,7 @@ reviews:
   related_issues: true
   related_prs: true
   suggested_labels: true
-  auto_apply_labels: false
+  auto_apply_labels: true
   suggested_reviewers: false
   poem: false
   in_progress_fortune: false
@@ -33,7 +33,7 @@ reviews:
   auto_review:
     enabled: true
     auto_incremental_review: true
-    drafts: false
+    drafts: true
     base_branches:
       - main
     # Dependency bumps and release automation are machine-generated; skip them.
