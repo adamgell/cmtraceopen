@@ -85,7 +85,7 @@ fn push_text(stack: &mut [EventNode], value: &str) {
     }
 }
 
-fn close(stack: &mut Vec<EventNode>, root: &mut Option<EventNode>, mut node: EventNode) {
+fn close(stack: &mut [EventNode], root: &mut Option<EventNode>, mut node: EventNode) {
     // Pretty-printed XML puts newlines and indentation inside container elements. That is layout,
     // not content, so it is dropped once we know the element has children.
     if !node.children.is_empty()
