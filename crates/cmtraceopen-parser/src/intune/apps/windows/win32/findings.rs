@@ -169,14 +169,19 @@ fn evidence_for_signal(
     transaction: &Win32Transaction,
     predicate: impl Fn(Win32Signal) -> bool,
 ) -> Vec<IntuneEvidenceRef> {
+    // One membership set per call: the filter below runs over every snapshot
+    // observation, and a linear `Vec::contains` inside it made the scan
+    // quadratic on large bundles.
+    let member: std::collections::BTreeSet<&str> = transaction
+        .observations
+        .iter()
+        .map(String::as_str)
+        .collect();
     snapshot
         .observations
         .iter()
         .filter(|observation| {
-            transaction
-                .observations
-                .contains(&observation.observation_id)
-                && predicate(observation.signal)
+            member.contains(observation.observation_id.as_str()) && predicate(observation.signal)
         })
         .map(|observation| observation.context.evidence_ref.clone())
         .collect()
@@ -333,14 +338,15 @@ fn push_unkeyed_signals(snapshot: &Win32Analysis, findings: &mut Vec<IntuneFindi
     if snapshot.unkeyed_observations.is_empty() {
         return;
     }
+    let member: std::collections::BTreeSet<&str> = snapshot
+        .unkeyed_observations
+        .iter()
+        .map(String::as_str)
+        .collect();
     let evidence = snapshot
         .observations
         .iter()
-        .filter(|observation| {
-            snapshot
-                .unkeyed_observations
-                .contains(&observation.observation_id)
-        })
+        .filter(|observation| member.contains(observation.observation_id.as_str()))
         .map(|observation| observation.context.evidence_ref.clone())
         .collect::<Vec<_>>();
     push(
@@ -749,14 +755,15 @@ fn push_unlinked_detection_failure(
     if transaction.unlinked_detection_observations.is_empty() {
         return;
     }
+    let member: std::collections::BTreeSet<&str> = transaction
+        .unlinked_detection_observations
+        .iter()
+        .map(String::as_str)
+        .collect();
     let evidence = snapshot
         .observations
         .iter()
-        .filter(|observation| {
-            transaction
-                .unlinked_detection_observations
-                .contains(&observation.observation_id)
-        })
+        .filter(|observation| member.contains(observation.observation_id.as_str()))
         .map(|observation| observation.context.evidence_ref.clone())
         .collect::<Vec<_>>();
     push(

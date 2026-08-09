@@ -21,8 +21,12 @@ use crate::intune::evidence::{
 
 /// Schema version for the Win32 transaction surface.
 ///
-/// Bump only on a breaking change. Adding an optional field or a new enum
-/// variant at the end is additive and does not bump it.
+/// Bump only on a breaking change. Adding an optional field is additive and
+/// does not bump it: a bare `Option<T>` field deserializes as `None` when the
+/// key is absent. Adding a variant to any public enum here *is* breaking and
+/// requires a bump: older Serde consumers reject an unknown variant, and the
+/// enums are deliberately not `#[non_exhaustive]` (family convention), so a new
+/// variant also breaks exhaustive matches.
 pub const WIN32_SCHEMA_VERSION: u32 = 1;
 
 /// Which supplied artifact a record came from.
@@ -80,6 +84,13 @@ pub enum Win32Intent {
 /// [`Win32Transaction::last_confirmed_phase`] is the furthest phase the evidence
 /// proves *completed successfully*, not the furthest phase we assume was
 /// reached. A phase that was entered and failed does not advance it.
+///
+/// Variant order is a semantic contract, not just declaration order: the
+/// derived `Ord` and the `last_confirmed_phase` advancement both compare
+/// variants positionally, so a new phase may only be added where it truly
+/// falls in the lifecycle — and inserting one anywhere but the end reorders
+/// every later variant's comparisons without a compile error, which is a
+/// breaking change under the [`WIN32_SCHEMA_VERSION`] policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Win32Phase {
@@ -249,7 +260,14 @@ pub struct Win32TransactionKey {
 pub enum Win32Outcome {
     /// Nothing in the supplied evidence pins this deployment to a phase.
     InsufficientEvidence,
-    /// A policy arrived and nothing further was evidenced.
+    /// A policy arrived and neither an enforcement start nor any terminal
+    /// statement followed.
+    ///
+    /// Pre-enforcement progress (applicability, requirements, detection) may
+    /// still have been evidenced — it advances
+    /// [`Win32Transaction::last_confirmed_phase`] without changing this
+    /// in-flight outcome. Only [`Win32Signal::EnforcementStarted`] moves it to
+    /// [`Win32Outcome::Enforcing`].
     Assigned,
     NotTargeted,
     NotApplicable,

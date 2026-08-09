@@ -241,11 +241,14 @@ fn already_masked(value: &str) -> bool {
 /// the same trade the `-Command` rule makes. A remainder that is itself a
 /// token (a previous pass's tail mask) is left alone for idempotence.
 fn split_leading_token(value: &str) -> Option<(&str, &str)> {
-    if !starts_with_token(value) {
+    let rest = value.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    if !is_token_body(&rest[..end]) {
         return None;
     }
-    let end = value.find(']').expect("starts_with_token proved a closing bracket") + 1;
-    Some(value.split_at(end))
+    // `end` indexes into `rest`, which starts one byte after the `[`, so the
+    // closing bracket sits at `end + 1` in `value` and the split lands after it.
+    Some(value.split_at(end + 2))
 }
 
 /// The preserved-token projection of a field value: keep the leading token,
