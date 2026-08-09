@@ -1,6 +1,9 @@
 import { eventDateKey, formatEventTime } from "./evtx-time";
 import { describe, expect, it } from "vitest";
 import {
+  availableColumns,
+  discoverMappedProperties,
+  mappedColumnId,
   columnValue,
   columnWidth,
   defaultColumnConfig,
@@ -169,5 +172,68 @@ describe("the timestamp column", () => {
     const epoch = Date.UTC(2026, 1, 10, 16, 36, 4, 390);
     const r = record({ timestampEpoch: epoch, timestamp: "2026-02-10T16:36:04.390Z" });
     expect(columnValue(r, "timestamp")).toBe(formatEventTime(epoch, "local", r.timestamp));
+  });
+});
+
+describe("map columns", () => {
+  const mapped = (property: string, text: string, complete = true) =>
+    record({ mapped: [{ property, text, complete }] });
+
+  it("renders a map-produced value", () => {
+    // The whole point of the map engine: these have to be scannable as a column, not reachable
+    // only by clicking each row open.
+    const r = mapped("PayloadData1", "cmd.exe");
+    expect(columnValue(r, mappedColumnId("PayloadData1"))).toBe("cmd.exe");
+  });
+
+  it("renders empty for an event the map did not match", () => {
+    expect(columnValue(record({}), mappedColumnId("PayloadData1"))).toBe("");
+    expect(columnValue(mapped("UserName", "adam"), mappedColumnId("RemoteHost"))).toBe("");
+  });
+
+  it("renders empty rather than showing an unsubstituted template", () => {
+    // A partially applied map would otherwise put a literal %3 in a column being scanned.
+    const r = mapped("PayloadData1", "ran %3 as adam", false);
+    expect(columnValue(r, mappedColumnId("PayloadData1"))).toBe("");
+  });
+
+  it("offers only the properties the loaded records actually carry", () => {
+    // Offering everything every map could emit fills the chooser with columns that are empty for
+    // the log in front of the operator.
+    const properties = discoverMappedProperties([
+      mapped("PayloadData1", "a"),
+      mapped("UserName", "b"),
+      mapped("PayloadData1", "c"),
+      record({}),
+    ]);
+    expect(properties).toEqual(["PayloadData1", "UserName"]);
+  });
+
+  it("lists fixed columns before map columns", () => {
+    const columns = availableColumns(["PayloadData1"]);
+    expect(columns.slice(0, EVTX_COLUMNS.length)).toEqual(EVTX_COLUMNS);
+    expect(columns[columns.length - 1]).toMatchObject({
+      id: mappedColumnId("PayloadData1"),
+      label: "PayloadData1",
+    });
+  });
+
+  it("keeps a stored map column even when its map is not loaded", () => {
+    // The maps loaded now need not be the ones loaded when the layout was saved. Dropping the
+    // column would silently discard an arrangement the operator made; an unmatched map column
+    // renders empty, exactly as an unmatched event already does.
+    const config = sanitizeColumnConfig({
+      order: ["level", mappedColumnId("RemoteHost")],
+      widths: { [mappedColumnId("RemoteHost")]: 200 },
+    });
+    expect(config.order).toContain(mappedColumnId("RemoteHost"));
+    const visible = visibleColumns(config);
+    expect(visible.map((c) => c.id)).toEqual(["level", mappedColumnId("RemoteHost")]);
+    expect(columnWidth(config, visible[1])).toBe(200);
+  });
+
+  it("still rejects an id that is neither fixed nor a map column", () => {
+    const config = sanitizeColumnConfig({ order: ["level", "notAColumn", "mapped:"] });
+    expect(config.order).toEqual(["level"]);
   });
 });

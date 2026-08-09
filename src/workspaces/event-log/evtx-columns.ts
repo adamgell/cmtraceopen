@@ -8,7 +8,10 @@
 import type { EvtxRecord } from "./types";
 import { formatEventTime, type EvtxTimeZoneMode } from "./evtx-time";
 
-export type EvtxColumnId =
+/**
+ * A column whose meaning is fixed by the event schema.
+ */
+export type EvtxFixedColumnId =
   | "level"
   | "timestamp"
   | "eventId"
@@ -22,6 +25,70 @@ export type EvtxColumnId =
   | "threadId"
   | "keywords"
   | "message";
+
+/**
+ * A column produced by an event map, such as `PayloadData1` or `RemoteHost`.
+ *
+ * These cannot be a fixed list: which ones exist depends on which maps are loaded and which events
+ * they matched. Encoding the property in the id keeps the configuration a flat list of strings,
+ * which is what makes it survive being written to disk by one build and read by another.
+ */
+export type EvtxMappedColumnId = `mapped:${string}`;
+
+export type EvtxColumnId = EvtxFixedColumnId | EvtxMappedColumnId;
+
+const MAPPED_PREFIX = "mapped:";
+
+/** The column id carrying an event map's `property`. */
+export function mappedColumnId(property: string): EvtxMappedColumnId {
+  return `${MAPPED_PREFIX}${property}`;
+}
+
+/** The map property behind a column id, or null when the column is a fixed one. */
+export function mappedColumnProperty(id: EvtxColumnId): string | null {
+  return id.startsWith(MAPPED_PREFIX) ? id.slice(MAPPED_PREFIX.length) : null;
+}
+
+/**
+ * The map columns present in a set of records.
+ *
+ * Discovered from the data rather than declared, because a map only contributes a column to events
+ * it actually matched. Offering every property every map could ever emit would fill the chooser
+ * with columns that are empty for the log in front of the operator.
+ */
+export function discoverMappedProperties(
+  records: readonly EvtxRecord[]
+): string[] {
+  const seen = new Set<string>();
+  for (const record of records) {
+    for (const column of record.mapped ?? []) {
+      seen.add(column.property);
+    }
+  }
+  return [...seen].sort();
+}
+
+/** A renderable spec for a map column, derived from its id alone. */
+function mappedColumnSpec(id: EvtxMappedColumnId): EvtxColumnSpec {
+  return {
+    id,
+    label: mappedColumnProperty(id) ?? id,
+    defaultWidth: 140,
+    defaultVisible: false,
+  };
+}
+
+/**
+ * Every column offerable for the loaded records: the fixed ones, then whatever the maps produced.
+ */
+export function availableColumns(
+  mappedProperties: readonly string[]
+): EvtxColumnSpec[] {
+  return [
+    ...EVTX_COLUMNS,
+    ...mappedProperties.map((property) => mappedColumnSpec(mappedColumnId(property))),
+  ];
+}
 
 export interface EvtxColumnSpec {
   id: EvtxColumnId;
@@ -51,6 +118,20 @@ export const EVTX_COLUMNS: EvtxColumnSpec[] = [
 ];
 
 const COLUMN_IDS = new Set<string>(EVTX_COLUMNS.map((column) => column.id));
+
+/**
+ * Whether a stored id is one this build can render.
+ *
+ * A map column is accepted whatever its property, because the maps loaded at the time the
+ * configuration was written may not be loaded now. Dropping it would silently discard a column the
+ * operator arranged, and it costs nothing to keep: a map column with no matching value renders
+ * empty, exactly as an event that the map did not match already does.
+ */
+function isKnownColumnId(candidate: string): boolean {
+  if (COLUMN_IDS.has(candidate)) return true;
+  const property = mappedColumnProperty(candidate as EvtxColumnId);
+  return property !== null && property.length > 0;
+}
 
 export interface EvtxColumnConfig {
   /** Visible columns in display order. */
@@ -84,7 +165,7 @@ export function sanitizeColumnConfig(input: unknown): EvtxColumnConfig {
   const order: EvtxColumnId[] = [];
   if (Array.isArray(raw.order)) {
     for (const candidate of raw.order) {
-      if (typeof candidate !== "string" || !COLUMN_IDS.has(candidate)) continue;
+      if (typeof candidate !== "string" || !isKnownColumnId(candidate)) continue;
       const id = candidate as EvtxColumnId;
       if (seen.has(id)) continue;
       seen.add(id);
@@ -95,7 +176,7 @@ export function sanitizeColumnConfig(input: unknown): EvtxColumnConfig {
   const widths: Partial<Record<EvtxColumnId, number>> = {};
   if (typeof raw.widths === "object" && raw.widths !== null) {
     for (const [key, value] of Object.entries(raw.widths as Record<string, unknown>)) {
-      if (!COLUMN_IDS.has(key)) continue;
+      if (!isKnownColumnId(key)) continue;
       // A zero or negative width would hide a column the operator believes is shown.
       if (typeof value === "number" && Number.isFinite(value) && value >= 24) {
         widths[key as EvtxColumnId] = Math.round(value);
@@ -109,9 +190,17 @@ export function sanitizeColumnConfig(input: unknown): EvtxColumnConfig {
 
 /** Specs for the visible columns, in display order. */
 export function visibleColumns(config: EvtxColumnConfig): EvtxColumnSpec[] {
-  const byId = new Map(EVTX_COLUMNS.map((column) => [column.id, column]));
+  const byId = new Map<string, EvtxColumnSpec>(
+    EVTX_COLUMNS.map((column) => [column.id, column])
+  );
   return config.order
-    .map((id) => byId.get(id))
+    .map((id) => {
+      const fixed = byId.get(id);
+      if (fixed) return fixed;
+      // Synthesized from the id, so rendering a map column needs no knowledge of which maps are
+      // loaded. That keeps the row renderer independent of load order.
+      return mappedColumnProperty(id) ? mappedColumnSpec(id as EvtxMappedColumnId) : undefined;
+    })
     .filter((column): column is EvtxColumnSpec => column !== undefined);
 }
 
@@ -157,6 +246,28 @@ export function columnValue(
   record: EvtxRecord,
   id: EvtxColumnId,
   timeZone: EvtxTimeZoneMode = "local"
+): string {
+  const mappedProperty = mappedColumnProperty(id);
+  if (mappedProperty !== null) {
+    const column = record.mapped?.find((entry) => entry.property === mappedProperty);
+    // An event the map did not match, or matched incompletely, renders empty. Showing a partially
+    // substituted template would put a literal %3 in a column an operator is scanning.
+    return column && column.complete ? column.text : "";
+  }
+  return fixedColumnValue(record, id as EvtxFixedColumnId, timeZone);
+}
+
+/**
+ * Renders a fixed column.
+ *
+ * Split out so the switch stays exhaustive over `EvtxFixedColumnId`. Folding map columns into the
+ * same switch would widen it to a template literal type and lose the compile error that catches a
+ * newly added column nobody wrote a case for.
+ */
+function fixedColumnValue(
+  record: EvtxRecord,
+  id: EvtxFixedColumnId,
+  timeZone: EvtxTimeZoneMode
 ): string {
   switch (id) {
     case "level":

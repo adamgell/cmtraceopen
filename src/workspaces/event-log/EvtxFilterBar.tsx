@@ -5,7 +5,11 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
 import { sanitizeCriteria } from "./evtx-saved-filters";
-import { EVTX_COLUMNS, type EvtxColumnId } from "./evtx-columns";
+import {
+  availableColumns,
+  discoverMappedProperties,
+  type EvtxColumnId,
+} from "./evtx-columns";
 import {
   useEvtxStore,
   type EvtxSortField,
@@ -66,6 +70,13 @@ export function EvtxFilterBar() {
   const setSortDirection = useEvtxStore((s) => s.setSortDirection);
   const timeWindow = useEvtxStore((s) => s.timeWindow);
   const timeZoneMode = useEvtxStore((s) => s.timeZoneMode);
+  const records = useEvtxStore((s) => s.records);
+  // Map columns are offered only when a loaded map actually produced them, so the chooser does not
+  // fill with columns that are empty for the log in front of the operator.
+  const choosableColumns = useMemo(
+    () => availableColumns(discoverMappedProperties(records)),
+    [records]
+  );
   const setTimeZoneMode = useEvtxStore((s) => s.setTimeZoneMode);
   const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
   const sourceMode = useEvtxStore((s) => s.sourceMode);
@@ -275,7 +286,7 @@ export function EvtxFilterBar() {
           else if (id) toggleColumnVisible(id);
         }}
       >
-        {EVTX_COLUMNS.map((column) => {
+        {choosableColumns.map((column) => {
           const position = columnConfig.order.indexOf(column.id);
           return (
             <Option key={column.id} value={column.id} text={column.label}>
