@@ -368,6 +368,39 @@ fn cited_evidence_matches_the_expectation_where_a_scenario_pins_it() {
     assert!(checked >= 2, "expected several pinned citation sets");
 }
 
+/// `assertions` is prose, and prose is not a test.
+///
+/// Two of the flagship scenarios claimed "the conflict finding cites the
+/// competing rows" while emitting no such finding at all, because nothing ever
+/// compared the sentence with the output. A sentence that claims a citation must
+/// therefore be backed by a `findingEvidence` block, which
+/// `cited_evidence_matches_the_expectation_where_a_scenario_pins_it` does check.
+#[test]
+fn a_scenario_that_claims_a_citation_in_prose_must_pin_that_citation() {
+    for scenario in SCENARIOS {
+        let expected = load_json(&scenario_root(scenario).join("expected.json"));
+        let assertions = expected["assertions"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{scenario}: expected.json declares assertions"));
+        assert!(
+            !assertions.is_empty(),
+            "{scenario}: assertions must not be empty"
+        );
+
+        let claims_a_citation = assertions.iter().any(|assertion| {
+            let text = assertion.as_str().unwrap_or_default();
+            text.contains("cites") || text.contains("cited")
+        });
+        if claims_a_citation {
+            assert!(
+                expected["findingEvidence"].is_object(),
+                "{scenario}: an assertion claims a citation, so the scenario must pin \
+                 findingEvidence for it rather than leave the claim unchecked"
+            );
+        }
+    }
+}
+
 #[test]
 fn every_finding_cites_evidence_or_a_coverage_gap() {
     for scenario in SCENARIOS {
@@ -422,6 +455,61 @@ fn every_documented_finding_is_reachable_from_the_corpus_or_a_synthesized_case()
         .filter(|id| !seen.contains(**id))
         .collect::<Vec<_>>();
     assert!(missing.is_empty(), "unreachable finding rules: {missing:?}");
+}
+
+/// The record ordinals in a report snapshot describe the order rows were written
+/// into the file. They do not say which policy won an argument, and swapping them
+/// used to flip the two headline scenarios between `contested`/Error and
+/// `conflicted`/Warning.
+#[test]
+fn renumbering_the_rows_of_a_correlated_scenario_does_not_change_the_diagnosis() {
+    for scenario in [
+        "conflict-between-two-sources",
+        "superseded-by-replacement-source",
+    ] {
+        let baseline = analyze_configuration(&load_input(scenario));
+
+        // A consistent alternative history: the same rows, written to the report
+        // in the opposite order. Ordinals and timestamps move together, so the
+        // bundle stays internally coherent and the only thing that changed is
+        // which row the file happens to list first.
+        let mut swapped = load_input(scenario);
+        let positions = swapped
+            .reports
+            .iter()
+            .map(|report| {
+                (
+                    report.context.provenance.record_number,
+                    report.context.source_timestamp.clone(),
+                )
+            })
+            .rev()
+            .collect::<Vec<_>>();
+        for (report, (ordinal, timestamp)) in swapped.reports.iter_mut().zip(positions) {
+            report.context.provenance.record_number = ordinal;
+            report.context.source_timestamp = timestamp;
+        }
+
+        let renumbered = analyze_configuration(&swapped);
+        assert_eq!(
+            baseline
+                .settings
+                .iter()
+                .map(|setting| (wire(&setting.local), wire(&setting.resolution)))
+                .collect::<Vec<_>>(),
+            renumbered
+                .settings
+                .iter()
+                .map(|setting| (wire(&setting.local), wire(&setting.resolution)))
+                .collect::<Vec<_>>(),
+            "{scenario}: record numbers must not decide the outcome"
+        );
+        assert_eq!(
+            finding_ids(&baseline),
+            finding_ids(&renumbered),
+            "{scenario}: record numbers must not decide the findings"
+        );
+    }
 }
 
 #[test]

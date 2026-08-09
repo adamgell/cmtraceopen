@@ -341,6 +341,25 @@ pub fn observation_from_report(report: &NormalizedSettingReport) -> Configuratio
     }
 }
 
+/// Whether two configuration source identifiers name the same source.
+///
+/// A source id is a GUID that different artifacts write differently: the MDM
+/// report writes it bare and lowercase, the event provider writes it braced and
+/// upper. Comparing the bytes made one policy look like two competing ones, which
+/// is enough to raise a conflict finding on its own.
+pub fn same_source_id(left: &str, right: &str) -> bool {
+    normalize_source_id(left) == normalize_source_id(right)
+}
+
+/// The comparison form of a configuration source identifier.
+pub fn normalize_source_id(value: &str) -> String {
+    value
+        .trim()
+        .trim_matches(['{', '}'])
+        .trim()
+        .to_ascii_lowercase()
+}
+
 /// True when the observation was contributed by device-side evidence.
 pub fn is_device_side(observation: &ConfigurationObservation) -> bool {
     observation.side == ConfigurationEvidenceSide::Device

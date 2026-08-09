@@ -6,6 +6,7 @@
 //! contributing observation so a rule can cite the competing evidence rather than
 //! assert an outcome.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -21,6 +22,7 @@ use super::models::{
 };
 use super::sources::{
     is_device_side, is_service_side, observation_from_event, observation_from_report,
+    same_source_id,
 };
 
 /// Project every input record and fold it into per-setting transactions.
@@ -225,107 +227,181 @@ fn local_state(observations: &[ConfigurationObservation]) -> ConfigurationLocalS
 
 /// Several device-side terminal dispositions for one setting.
 ///
-/// A removal following an application is a lifecycle, not a disagreement: the
-/// setting was applied and then deleted, and `Removed` is the current fact.
-/// The same holds for a conflict or supersedence recorded alongside an
-/// application, where the losing write genuinely did happen first. Anything else
-/// is a real disagreement and stays `Contested` so a rule must cite both sides.
+/// Two mechanisms settle this, in order, and neither is caller order.
+///
+/// 1. **Explicit linkage.** A row that reports a conflict or a supersedence and
+///    *names the source that beat it*, with that source present in the same
+///    bundle, has stated the relationship outright. ADR-002 calls an explicit
+///    shared key strong correlation, and this is the shape real MDM report
+///    snapshots actually emit: the losing row carries `WinningPolicyId` or
+///    `SupersededBy` and the winning row is simply `Applied`. Requiring the
+///    *loser* to also emit an `Applied` row — which reports do not do — was what
+///    made both headline scenarios unreachable.
+/// 2. **Last terminal disposition.** Failing an explicit link, a lifecycle is
+///    read from a comparable record order, and the current fact is the *last*
+///    disposition in it. `[Applied, Removed, Applied]` is a re-application, not a
+///    removal, and `[Removed, Applied]` (unassign, then re-assign) is not a
+///    disagreement.
+///
+/// Only the lifecycle dispositions participate in step 2. A `Rejected` or
+/// `NotApplicable` mixed with anything else is a genuine disagreement about what
+/// the CSP did, and ADR-003 forbids letting a later-looking success quietly
+/// replace a failure without explicit retry linkage. Those stay `Contested` so a
+/// rule must cite both sides.
 fn reconcile_multiple_local(
     terminal: &[ConfigurationDisposition],
     observations: &[ConfigurationObservation],
 ) -> ConfigurationLocalState {
+    if let Some(state) = explicitly_linked_state(terminal, observations) {
+        return state;
+    }
+    if !terminal.iter().copied().all(is_lifecycle_disposition) {
+        return ConfigurationLocalState::Contested;
+    }
     let Some(ordered) = ordered_terminal_dispositions(observations) else {
         return ConfigurationLocalState::Contested;
     };
-    let has = |disposition: ConfigurationDisposition| terminal.contains(&disposition);
-    let applied_precedes = |disposition: ConfigurationDisposition| {
-        ordered
-            .iter()
-            .position(|candidate| *candidate == ConfigurationDisposition::Applied)
-            .zip(
-                ordered
-                    .iter()
-                    .position(|candidate| *candidate == disposition),
-            )
-            .is_some_and(|(applied, terminal)| applied < terminal)
-    };
+    match ordered.last() {
+        Some(ConfigurationDisposition::Applied) => ConfigurationLocalState::Applied,
+        Some(ConfigurationDisposition::Removed) => ConfigurationLocalState::Removed,
+        Some(ConfigurationDisposition::Superseded) => ConfigurationLocalState::Superseded,
+        Some(ConfigurationDisposition::Conflict) => ConfigurationLocalState::Conflicted,
+        _ => ConfigurationLocalState::Contested,
+    }
+}
 
-    if has(ConfigurationDisposition::Removed)
-        && terminal.iter().all(|d| {
-            matches!(
-                d,
-                ConfigurationDisposition::Removed | ConfigurationDisposition::Applied
-            )
-        })
-        && applied_precedes(ConfigurationDisposition::Removed)
-    {
-        return ConfigurationLocalState::Removed;
+/// Whether a disposition describes a stage of one setting's life rather than a
+/// verdict that contradicts another verdict.
+fn is_lifecycle_disposition(disposition: ConfigurationDisposition) -> bool {
+    matches!(
+        disposition,
+        ConfigurationDisposition::Applied
+            | ConfigurationDisposition::Removed
+            | ConfigurationDisposition::Superseded
+            | ConfigurationDisposition::Conflict
+    )
+}
+
+/// The state implied by a losing row that names its winner, when the winner is
+/// also in the bundle.
+///
+/// Returns `None` when no such link exists, when the terminal set contains
+/// something the link cannot explain, or when the only "link" is a row naming
+/// itself.
+fn explicitly_linked_state(
+    terminal: &[ConfigurationDisposition],
+    observations: &[ConfigurationObservation],
+) -> Option<ConfigurationLocalState> {
+    let explainable = terminal.iter().all(|disposition| {
+        matches!(
+            disposition,
+            ConfigurationDisposition::Applied
+                | ConfigurationDisposition::Conflict
+                | ConfigurationDisposition::Superseded
+        )
+    });
+    if !explainable {
+        return None;
     }
-    if has(ConfigurationDisposition::Superseded)
-        && terminal.iter().all(|d| {
-            matches!(
-                d,
-                ConfigurationDisposition::Superseded | ConfigurationDisposition::Applied
-            )
-        })
-        && applied_precedes(ConfigurationDisposition::Superseded)
-    {
-        return ConfigurationLocalState::Superseded;
+
+    if linked_source_is_observed(
+        observations,
+        ConfigurationDisposition::Conflict,
+        |observation| observation.winning_source_id.as_deref(),
+    ) {
+        return Some(ConfigurationLocalState::Conflicted);
     }
-    if has(ConfigurationDisposition::Conflict)
-        && terminal.iter().all(|d| {
-            matches!(
-                d,
-                ConfigurationDisposition::Conflict | ConfigurationDisposition::Applied
-            )
-        })
-        && applied_precedes(ConfigurationDisposition::Conflict)
-    {
-        return ConfigurationLocalState::Conflicted;
+    if linked_source_is_observed(
+        observations,
+        ConfigurationDisposition::Superseded,
+        |observation| observation.superseded_by_source_id.as_deref(),
+    ) {
+        return Some(ConfigurationLocalState::Superseded);
     }
-    ConfigurationLocalState::Contested
+    None
+}
+
+/// Whether some record with `disposition` names another source that the bundle
+/// actually contains.
+fn linked_source_is_observed(
+    observations: &[ConfigurationObservation],
+    disposition: ConfigurationDisposition,
+    named: fn(&ConfigurationObservation) -> Option<&str>,
+) -> bool {
+    observations
+        .iter()
+        .filter(|observation| is_device_side(observation) && observation.disposition == disposition)
+        .filter_map(|observation| named(observation).map(|link| (observation, link)))
+        .any(|(observation, link)| {
+            // A row naming itself as its own winner substantiates nothing.
+            let names_another = observation
+                .source_id
+                .as_deref()
+                .is_none_or(|own| !same_source_id(own, link));
+            names_another
+                && observations.iter().any(|candidate| {
+                    candidate
+                        .source_id
+                        .as_deref()
+                        .is_some_and(|source| same_source_id(source, link))
+                })
+        })
 }
 
 /// Return terminal dispositions in their evidence order, when that order is
-/// comparable. Record ordinals and reliable timestamps must describe one artifact;
-/// otherwise a lifecycle conclusion would be inferred from an unordered set.
+/// comparable.
+///
+/// Records are deduplicated by artifact and record ordinal *before* the
+/// comparability guard runs. Re-collecting the same channel, or collecting it
+/// twice under two artifact ids, previously made this refuse and degraded a clean
+/// `configuration-removed` into a contested-evidence error: duplication was
+/// making the diagnosis worse. Two artifacts are accepted only when they yield
+/// the identical sequence, which is what a duplicate collection looks like; two
+/// artifacts telling different stories stay incomparable.
 fn ordered_terminal_dispositions(
     observations: &[ConfigurationObservation],
 ) -> Option<Vec<ConfigurationDisposition>> {
-    let mut terminal = observations
+    let terminal = observations
         .iter()
         .filter(|observation| is_device_side(observation) && observation.disposition.is_terminal())
         .collect::<Vec<_>>();
     if terminal.len() < 2 || ordering_is_contradictory(observations) {
         return None;
     }
-    let artifact = terminal.first()?.evidence_ref.source_artifact_id.as_str();
-    if terminal
-        .iter()
-        .any(|observation| observation.evidence_ref.source_artifact_id != artifact)
-    {
+
+    let mut by_artifact: BTreeMap<&str, BTreeMap<u64, ConfigurationDisposition>> = BTreeMap::new();
+    for observation in &terminal {
+        let (Some(record_id), Some(_)) =
+            (observation.record_id, observation.occurred_at_utc.as_ref())
+        else {
+            return None;
+        };
+        if !observation.time_is_reliable {
+            return None;
+        }
+        match by_artifact
+            .entry(observation.evidence_ref.source_artifact_id.as_str())
+            .or_default()
+            .entry(record_id)
+        {
+            Entry::Vacant(slot) => {
+                slot.insert(observation.disposition);
+            }
+            // One ordinal in one artifact cannot have said two different things;
+            // that is a broken collection, not a lifecycle.
+            Entry::Occupied(slot) if *slot.get() != observation.disposition => return None,
+            Entry::Occupied(_) => {}
+        }
+    }
+
+    let mut sequences = by_artifact
+        .into_values()
+        .map(|records| records.into_values().collect::<Vec<_>>());
+    let first = sequences.next()?;
+    if sequences.any(|sequence| sequence != first) || first.len() < 2 {
         return None;
     }
-    if terminal.iter().any(|observation| {
-        observation.record_id.is_none()
-            || !observation.time_is_reliable
-            || observation.occurred_at_utc.is_none()
-    }) {
-        return None;
-    }
-    terminal.sort_by_key(|observation| observation.record_id);
-    if terminal
-        .windows(2)
-        .any(|pair| pair[0].record_id == pair[1].record_id)
-    {
-        return None;
-    }
-    Some(
-        terminal
-            .iter()
-            .map(|observation| observation.disposition)
-            .collect(),
-    )
+    Some(first)
 }
 
 fn service_state(observations: &[ConfigurationObservation]) -> ConfigurationServiceState {
@@ -607,6 +683,236 @@ mod tests {
                 ConfigurationServiceState::ReportedSuccess,
             ),
             ConfigurationResolution::Removed
+        );
+    }
+
+    /// `[Applied, Removed, Applied]` is a re-application. Reading the *first*
+    /// index of each disposition reported `Removed`, which is the opposite of
+    /// what the last record says happened.
+    #[test]
+    fn a_re_application_after_a_removal_is_applied() {
+        let observations = vec![
+            observation(
+                "apply",
+                ConfigurationDisposition::Applied,
+                Some(1),
+                Some("2026-07-31T09:00:00Z"),
+            ),
+            observation(
+                "remove",
+                ConfigurationDisposition::Removed,
+                Some(2),
+                Some("2026-07-31T10:00:00Z"),
+            ),
+            observation(
+                "reapply",
+                ConfigurationDisposition::Applied,
+                Some(3),
+                Some("2026-07-31T11:00:00Z"),
+            ),
+        ];
+        assert_eq!(local_state(&observations), ConfigurationLocalState::Applied);
+    }
+
+    /// Unassign, then re-assign. The old first-index comparison failed the guard
+    /// here and reported a disagreement at Error severity.
+    #[test]
+    fn a_removal_followed_by_an_application_is_applied_not_contested() {
+        let observations = vec![
+            observation(
+                "remove",
+                ConfigurationDisposition::Removed,
+                Some(1),
+                Some("2026-07-31T09:00:00Z"),
+            ),
+            observation(
+                "apply",
+                ConfigurationDisposition::Applied,
+                Some(2),
+                Some("2026-07-31T10:00:00Z"),
+            ),
+        ];
+        assert_eq!(local_state(&observations), ConfigurationLocalState::Applied);
+    }
+
+    #[test]
+    fn a_rejection_alongside_an_application_is_never_resolved_by_order() {
+        // ADR-003: a later-looking success may not replace a failure without
+        // explicit retry linkage, which no configuration source supplies.
+        let observations = vec![
+            observation(
+                "reject",
+                ConfigurationDisposition::Rejected,
+                Some(1),
+                Some("2026-07-31T09:00:00Z"),
+            ),
+            observation(
+                "apply",
+                ConfigurationDisposition::Applied,
+                Some(2),
+                Some("2026-07-31T10:00:00Z"),
+            ),
+        ];
+        assert_eq!(
+            local_state(&observations),
+            ConfigurationLocalState::Contested
+        );
+    }
+
+    #[test]
+    fn re_collecting_the_same_record_does_not_escalate_a_clean_lifecycle() {
+        let apply = observation(
+            "apply",
+            ConfigurationDisposition::Applied,
+            Some(1),
+            Some("2026-07-31T09:00:00Z"),
+        );
+        let remove = observation(
+            "remove",
+            ConfigurationDisposition::Removed,
+            Some(2),
+            Some("2026-07-31T10:00:00Z"),
+        );
+        let mut duplicate = remove.clone();
+        duplicate.evidence_ref.evidence_id = "remove-again".to_owned();
+        assert_eq!(
+            local_state(&[apply, remove, duplicate]),
+            ConfigurationLocalState::Removed,
+            "a duplicated record must not turn a removal into a disagreement"
+        );
+    }
+
+    #[test]
+    fn collecting_one_channel_under_two_artifact_ids_is_a_duplicate_not_a_disagreement() {
+        let apply = observation(
+            "apply",
+            ConfigurationDisposition::Applied,
+            Some(1),
+            Some("2026-07-31T09:00:00Z"),
+        );
+        let remove = observation(
+            "remove",
+            ConfigurationDisposition::Removed,
+            Some(2),
+            Some("2026-07-31T10:00:00Z"),
+        );
+        let second_copy = |observation: &ConfigurationObservation, id: &str| {
+            let mut copy = observation.clone();
+            copy.evidence_ref.evidence_id = id.to_owned();
+            copy.evidence_ref.source_artifact_id = "second-capture".to_owned();
+            copy
+        };
+        let observations = vec![
+            apply.clone(),
+            remove.clone(),
+            second_copy(&apply, "apply-again"),
+            second_copy(&remove, "remove-again"),
+        ];
+        assert_eq!(local_state(&observations), ConfigurationLocalState::Removed);
+    }
+
+    #[test]
+    fn two_artifacts_telling_different_stories_stay_incomparable() {
+        let apply = observation(
+            "apply",
+            ConfigurationDisposition::Applied,
+            Some(1),
+            Some("2026-07-31T09:00:00Z"),
+        );
+        let mut elsewhere = observation(
+            "remove",
+            ConfigurationDisposition::Removed,
+            Some(1),
+            Some("2026-07-31T10:00:00Z"),
+        );
+        elsewhere.evidence_ref.source_artifact_id = "other-artifact".to_owned();
+        assert_eq!(
+            local_state(&[apply, elsewhere]),
+            ConfigurationLocalState::Contested
+        );
+    }
+
+    /// The shape a real MDM report emits: the losing row names the winner and the
+    /// winner is simply `Applied`. No losing `Applied` row exists, and the record
+    /// numbers say nothing about which policy won.
+    #[test]
+    fn an_explicitly_named_winner_makes_the_node_conflicted_whatever_the_record_order() {
+        let winner = "22222222-2222-4222-8222-222222222222";
+        let build = |loser_record: u64, winner_record: u64| {
+            let mut loser = observation(
+                "loser",
+                ConfigurationDisposition::Conflict,
+                Some(loser_record),
+                Some("2026-07-31T09:00:00Z"),
+            );
+            loser.source_id = Some("11111111-1111-4111-8111-111111111111".to_owned());
+            loser.winning_source_id = Some(winner.to_ascii_uppercase());
+            let mut applied = observation(
+                "winner",
+                ConfigurationDisposition::Applied,
+                Some(winner_record),
+                Some("2026-07-31T09:00:00Z"),
+            );
+            applied.source_id = Some(format!("{{{winner}}}"));
+            vec![loser, applied]
+        };
+        assert_eq!(
+            local_state(&build(1, 2)),
+            ConfigurationLocalState::Conflicted
+        );
+        assert_eq!(
+            local_state(&build(2, 1)),
+            ConfigurationLocalState::Conflicted,
+            "swapping the record numbers must not change the diagnosis"
+        );
+    }
+
+    #[test]
+    fn an_explicitly_named_replacement_makes_the_node_superseded() {
+        let replacement = "22222222-2222-4222-8222-222222222222";
+        let mut superseded = observation(
+            "superseded",
+            ConfigurationDisposition::Superseded,
+            Some(1),
+            Some("2026-07-31T09:00:00Z"),
+        );
+        superseded.source_id = Some("11111111-1111-4111-8111-111111111111".to_owned());
+        superseded.superseded_by_source_id = Some(replacement.to_owned());
+        let mut applied = observation(
+            "replacement",
+            ConfigurationDisposition::Applied,
+            Some(2),
+            Some("2026-07-31T09:00:00Z"),
+        );
+        applied.source_id = Some(replacement.to_owned());
+        assert_eq!(
+            local_state(&[superseded, applied]),
+            ConfigurationLocalState::Superseded
+        );
+    }
+
+    #[test]
+    fn a_row_naming_itself_as_the_winner_links_nothing() {
+        let own = "11111111-1111-4111-8111-111111111111";
+        let mut loser = observation(
+            "self-referential",
+            ConfigurationDisposition::Conflict,
+            Some(1),
+            Some("2026-07-31T09:00:00Z"),
+        );
+        loser.source_id = Some(own.to_owned());
+        loser.winning_source_id = Some(own.to_ascii_uppercase());
+        let mut applied = observation(
+            "applied",
+            ConfigurationDisposition::Applied,
+            Some(2),
+            Some("2026-07-31T09:00:00Z"),
+        );
+        applied.source_id = Some(own.to_owned());
+        // Falls through to the ordered path, where the last record is the fact.
+        assert_eq!(
+            local_state(&[loser, applied]),
+            ConfigurationLocalState::Applied
         );
     }
 }

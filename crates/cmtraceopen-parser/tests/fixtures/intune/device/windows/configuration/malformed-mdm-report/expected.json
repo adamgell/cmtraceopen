@@ -33,6 +33,11 @@
     "configuration-uninterpretable-evidence",
     "configuration-unreadable-artifacts"
   ],
+  "findingEvidence": {
+    "configuration-uninterpretable-evidence": [
+      "rpt-malformed"
+    ]
+  },
   "assertions": [
     "a malformed row contributes no outcome but is still cited",
     "parseFailed coverage keeps the artifact distinct from a missing one"

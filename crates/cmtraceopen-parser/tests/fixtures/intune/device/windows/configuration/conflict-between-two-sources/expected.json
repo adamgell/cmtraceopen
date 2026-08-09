@@ -14,9 +14,9 @@
       "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
       "displayName": null,
       "receipt": "cspProcessed",
-      "local": "contested",
+      "local": "conflicted",
       "service": "noEvidence",
-      "resolution": "contradicted",
+      "resolution": "conflicted",
       "sourceIds": [
         "11111111-1111-4111-8111-111111111111",
         "22222222-2222-4222-8222-222222222222"
@@ -34,11 +34,18 @@
     }
   ],
   "findingIds": [
-    "configuration-contested-device-evidence",
+    "configuration-conflict",
     "configuration-device-only-evidence"
   ],
+  "findingEvidence": {
+    "configuration-conflict": [
+      "rpt-conflict-loser",
+      "rpt-conflict-winner"
+    ]
+  },
   "assertions": [
     "a conflict is only claimed when both competing sources are in the bundle",
-    "the conflict finding cites the competing rows rather than asserting the conflict"
+    "the conflict finding cites the competing rows rather than asserting the conflict",
+    "the losing row's explicit WinningPolicyId is what links the two, not the record order"
   ]
 }
