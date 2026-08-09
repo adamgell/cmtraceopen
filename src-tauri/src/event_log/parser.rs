@@ -1,12 +1,11 @@
 use std::path::Path;
 
 use evtx::EvtxParser;
-use serde_json::Value;
 
 use super::models::{
     ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxParseResult, EvtxRecord,
 };
-use super::sanitize_control_chars;
+use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 
 /// Maximum entries to parse from a single .evtx file to prevent memory issues.
 const MAX_ENTRIES_PER_FILE: usize = 100_000;
@@ -100,7 +99,10 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
     let mut records = Vec::new();
     let mut parse_errors = 0u32;
 
-    for record_result in parser.records_json_value() {
+    // XML rather than JSON. The JSON projection cannot be re-parsed into an event tree, which is
+    // what the map engine, the System block, and the XML export all consume; reading XML here is
+    // what makes those work on an opened file at all.
+    for record_result in parser.records() {
         if records.len() >= MAX_ENTRIES_PER_FILE {
             log::warn!(
                 "event=evtx_entry_cap_reached file=\"{}\" cap={}",
@@ -123,56 +125,56 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
             }
         };
 
-        let json = &record.data;
-        let system = &json["Event"]["System"];
-        let event_data_val = &json["Event"]["EventData"];
-
-        let provider = system["Provider"]["#attributes"]["Name"]
-            .as_str()
-            .unwrap_or("Unknown")
-            .to_string();
-
-        let channel = system["Channel"].as_str().unwrap_or("Unknown").to_string();
-
-        let event_id = extract_event_id(system);
-
-        let level = system["Level"].as_u64().unwrap_or(0) as u8;
-        let evtx_level = EvtxLevel::from_level_value(level);
-
-        let computer = system["Computer"].as_str().unwrap_or("Unknown").to_string();
-
-        let timestamp_str = system["TimeCreated"]["#attributes"]["SystemTime"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        let timestamp_epoch = chrono::DateTime::parse_from_rfc3339(&timestamp_str)
-            .map(|dt| dt.timestamp_millis())
-            .unwrap_or(0);
-
+        let raw_xml = record.data;
         let event_record_id = record.event_record_id;
 
-        let event_data = extract_event_data(event_data_val);
+        // Parsed once and used for identity, the System block, the decoded payload, and any
+        // registered map, so none of them costs an extra parse. A record whose XML will not parse
+        // is counted as an error rather than pushed with every field defaulted, which would show a
+        // row claiming provider "Unknown" at the epoch.
+        let parsed = match super::event_node::parse_event_xml(&raw_xml) {
+            Ok(root) => root,
+            Err(error) => {
+                log::warn!(
+                    "event=evtx_record_unparsable file=\"{}\" error=\"{}\"",
+                    path.display(),
+                    error
+                );
+                parse_errors += 1;
+                continue;
+            }
+        };
+
+        let system = super::event_node::extract_system_fields(&parsed);
+        let provider = system.provider.clone().unwrap_or_else(|| "Unknown".into());
+        let channel = system.channel.clone().unwrap_or_else(|| "Unknown".into());
+        let event_id = system.event_id.unwrap_or(0);
+        let evtx_level = EvtxLevel::from_level_value(system.level.unwrap_or(0));
+        let computer = system.computer.clone().unwrap_or_else(|| "Unknown".into());
+        let timestamp_str = system.time_created.clone().unwrap_or_default();
+        let timestamp_epoch = parse_timestamp_to_epoch_ms(&timestamp_str);
+
+        let mut event_data = extract_event_data(&parsed);
+
+        // Same treatment as the live path: a trace-backed event carries its message as hex, and
+        // without decoding it the row is a wall of digits.
+        let payload = cmtraceopen_parser::event_payload::decode_payload_in(&parsed)
+            .map(|decoded| sanitize_control_chars(&decoded.text));
+        if let Some(text) = &payload {
+            event_data.push(EvtxField {
+                name: "EventPayload".to_string(),
+                value: text.clone(),
+            });
+        }
+
         // A provider database, when one is loaded, turns raw field values into the sentence the
         // provider intended. Without it the file path can only summarise EventData, which is what
         // every other cross-platform reader shows and why they are hard to read.
         let message = describe_event(&provider, event_id, &event_data)
+            .or(payload)
             .unwrap_or_else(|| build_message(&event_data));
 
-        // Build raw XML placeholder from JSON (actual XML not available via json_value API)
-        let raw_xml = serde_json::to_string_pretty(json).unwrap_or_default();
-
-        // Parsed once from the raw XML so both the live and file paths read the System block the
-        // same way, and so any registered map is applied without a second parse.
-        let parsed = super::event_node::parse_event_xml(&raw_xml).ok();
-        let system = parsed
-            .as_ref()
-            .map(super::event_node::extract_system_fields)
-            .unwrap_or_default();
-        let mapped = parsed
-            .as_ref()
-            .map(|root| super::maps::apply_global(&channel, &provider, event_id, root))
-            .unwrap_or_default();
+        let mapped = super::maps::apply_global(&channel, &provider, event_id, &parsed);
         records.push(EvtxRecord {
             id: 0, // Will be reassigned after sorting
             event_record_id,
@@ -200,42 +202,50 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
     Ok((records, parse_errors))
 }
 
-/// Extract EventID which can appear as `{"#text": N}` or just `N`.
-fn extract_event_id(system: &Value) -> u32 {
-    if let Some(id) = system["EventID"].as_u64() {
-        return id as u32;
-    }
-    if let Some(id) = system["EventID"]["#text"].as_u64() {
-        return id as u32;
-    }
-    if let Some(s) = system["EventID"]["#text"].as_str() {
-        return s.parse().unwrap_or(0);
-    }
-    0
-}
-
-/// Extract EventData fields as key-value pairs.
+/// Extract event fields as name-value pairs.
 ///
-/// All values are sanitized to strip control characters (e.g. `\r`, `\0`) that
-/// would render as unexpected glyphs in the UI.
-fn extract_event_data(event_data: &Value) -> Vec<EvtxField> {
+/// Both `EventData` and `UserData` are read. Manifest providers use the former and classic or
+/// trace-backed providers the latter, and skipping `UserData` would leave those events with no
+/// fields at all.
+///
+/// A `Data` element with no `Name` attribute is numbered by its position, matching how the event
+/// message template refers to it. Values are sanitized to strip control characters that would
+/// render as unexpected glyphs.
+fn extract_event_data(root: &cmtraceopen_parser::eventmap::EventNode) -> Vec<EvtxField> {
     let mut fields = Vec::new();
+    let mut unnamed = 0usize;
 
-    if let Some(obj) = event_data.as_object() {
-        for (key, value) in obj {
-            if key == "#attributes" {
-                continue;
-            }
-            let val_str = match value {
-                Value::String(s) => sanitize_control_chars(s),
-                Value::Null => continue,
-                other => sanitize_control_chars(&other.to_string()),
-            };
-            if !val_str.is_empty() {
-                fields.push(EvtxField {
-                    name: key.clone(),
-                    value: val_str,
-                });
+    let containers = root
+        .children
+        .iter()
+        .filter(|child| child.name == "EventData" || child.name == "UserData");
+
+    for container in containers {
+        // UserData wraps its fields in a provider-named element, so descend through a single
+        // wrapper when the container holds no Data of its own.
+        let holders: Vec<_> = if container.children.iter().any(|c| c.name == "Data") {
+            vec![container]
+        } else {
+            container.children.iter().collect()
+        };
+
+        for holder in holders {
+            for child in &holder.children {
+                let value = sanitize_control_chars(child.text.as_deref().unwrap_or_default());
+                if value.is_empty() {
+                    continue;
+                }
+                let name = match child.attribute("Name") {
+                    Some(name) => name.to_string(),
+                    // A positional field. Named from one so it lines up with the `%1` style
+                    // insertion numbering that message templates use.
+                    None if child.name == "Data" => {
+                        unnamed += 1;
+                        format!("Data{unnamed}")
+                    }
+                    None => child.name.clone(),
+                };
+                fields.push(EvtxField { name, value });
             }
         }
     }
@@ -291,36 +301,109 @@ mod tests {
         assert_eq!(EvtxLevel::from_level_value(255), EvtxLevel::Information);
     }
 
-    #[test]
-    fn test_extract_event_id_numeric() {
-        let json: Value = serde_json::json!({"EventID": 4624});
-        assert_eq!(extract_event_id(&json), 4624);
+    fn parse(xml: &str) -> cmtraceopen_parser::eventmap::EventNode {
+        super::super::event_node::parse_event_xml(xml).expect("well formed")
+    }
+
+    fn fields_of(xml: &str) -> Vec<EvtxField> {
+        extract_event_data(&parse(xml))
     }
 
     #[test]
-    fn test_extract_event_id_text_object() {
-        let json: Value = serde_json::json!({"EventID": {"#text": 1001}});
-        assert_eq!(extract_event_id(&json), 1001);
-    }
-
-    #[test]
-    fn test_extract_event_id_text_string() {
-        let json: Value = serde_json::json!({"EventID": {"#text": "999"}});
-        assert_eq!(extract_event_id(&json), 999);
-    }
-
-    #[test]
-    fn test_extract_event_data() {
-        let json: Value = serde_json::json!({
-            "#attributes": {"Name": "test"},
-            "SubjectUserName": "SYSTEM",
-            "TargetLogonId": "0x3e7"
-        });
-        let fields = extract_event_data(&json);
+    fn named_event_data_becomes_named_fields() {
+        let fields = fields_of(
+            r#"<Event><EventData>
+                 <Data Name="SubjectUserName">SYSTEM</Data>
+                 <Data Name="TargetLogonId">0x3e7</Data>
+               </EventData></Event>"#,
+        );
         assert_eq!(fields.len(), 2);
-        assert!(fields
-            .iter()
-            .any(|f| f.name == "SubjectUserName" && f.value == "SYSTEM"));
+        assert_eq!(fields[0].name, "SubjectUserName");
+        assert_eq!(fields[0].value, "SYSTEM");
+        assert_eq!(fields[1].name, "TargetLogonId");
+    }
+
+    #[test]
+    fn an_empty_data_element_is_dropped_rather_than_shown_blank() {
+        let fields = fields_of(
+            r#"<Event><EventData>
+                 <Data Name="Present">yes</Data>
+                 <Data Name="Absent"></Data>
+               </EventData></Event>"#,
+        );
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "Present");
+    }
+
+    #[test]
+    fn unnamed_data_is_numbered_from_one_to_match_insertion_order() {
+        // Classic providers emit positional Data. Numbering from one lines the fields up with the
+        // %1 style references in the provider's message template.
+        let fields = fields_of(
+            r#"<Event><EventData>
+                 <Data>first</Data>
+                 <Data>second</Data>
+               </EventData></Event>"#,
+        );
+        assert_eq!(fields[0].name, "Data1");
+        assert_eq!(fields[0].value, "first");
+        assert_eq!(fields[1].name, "Data2");
+        assert_eq!(fields[1].value, "second");
+    }
+
+    #[test]
+    fn user_data_fields_are_read_through_the_provider_wrapper() {
+        // Skipping UserData would leave every classic and trace-backed event with no fields at all.
+        let fields = fields_of(
+            r#"<Event><UserData>
+                 <RuleAndFileData xmlns="http://example">
+                   <PolicyName>Enforce</PolicyName>
+                   <FilePath>C:\app.exe</FilePath>
+                 </RuleAndFileData>
+               </UserData></Event>"#,
+        );
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "PolicyName");
+        assert_eq!(fields[1].value, "C:\\app.exe");
+    }
+
+    #[test]
+    fn control_characters_in_a_value_are_stripped() {
+        let fields = fields_of(
+            "<Event><EventData><Data Name=\"Path\">C:\\app.exe\r</Data></EventData></Event>",
+        );
+        assert_eq!(fields[0].value, "C:\\app.exe");
+    }
+
+    #[test]
+    fn system_identity_comes_off_the_parsed_tree() {
+        // The file path used to re-parse a JSON projection as XML, which always failed, leaving
+        // every System-derived column empty on an opened file.
+        let system = super::super::event_node::extract_system_fields(&parse(
+            r#"<Event><System>
+                 <Provider Name="Microsoft-Windows-Kernel-General" />
+                 <EventID Qualifiers="49152">12</EventID>
+                 <Level>2</Level>
+                 <TimeCreated SystemTime="2026-08-09T12:00:00.000Z" />
+                 <Channel>System</Channel>
+                 <Computer>RING0IVY24-01</Computer>
+                 <Execution ProcessID="4" ThreadID="8" />
+               </System></Event>"#,
+        ));
+        assert_eq!(
+            system.provider.as_deref(),
+            Some("Microsoft-Windows-Kernel-General")
+        );
+        // The qualifier is a separate value; the id is still the element text.
+        assert_eq!(system.event_id, Some(12));
+        assert_eq!(system.level, Some(2));
+        assert_eq!(system.channel.as_deref(), Some("System"));
+        assert_eq!(system.computer.as_deref(), Some("RING0IVY24-01"));
+        assert_eq!(system.process_id, Some(4));
+        assert_eq!(
+            parse_timestamp_to_epoch_ms(system.time_created.as_deref().unwrap_or_default()),
+            1_786_276_800_000
+        );
     }
 
     #[test]

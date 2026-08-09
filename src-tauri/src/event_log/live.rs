@@ -419,17 +419,34 @@ fn parse_xml_to_record(
     let timestamp = extract_xml_attr(xml, "TimeCreated", "SystemTime").unwrap_or_default();
     let timestamp_epoch = parse_timestamp_to_epoch_ms(&timestamp);
 
-    let event_data = extract_xml_event_data(xml);
+    let mut event_data = extract_xml_event_data(xml);
 
-    // Use rendered message if available, otherwise build summary from EventData.
-    // Sanitize to strip control characters that would show as unexpected glyphs.
+    // Parsed once and used for the System block, the decoded payload, and any registered map, so
+    // none of them costs an extra parse.
+    let parsed = super::event_node::parse_event_xml(xml).ok();
+
+    // Trace-backed channels carry their message as a hex blob rather than as EventData, so without
+    // this the row reads as a wall of hex digits. Surfaced as a field of its own because the raw
+    // hex never appears in EventData.
+    let payload = parsed
+        .as_ref()
+        .and_then(cmtraceopen_parser::event_payload::decode_payload_in)
+        .map(|decoded| sanitize_control_chars(&decoded.text));
+    if let Some(text) = &payload {
+        event_data.push(EvtxField {
+            name: "EventPayload".to_string(),
+            value: text.clone(),
+        });
+    }
+
+    // The provider's own rendered message wins when there is one. A decoded payload comes next,
+    // used whole rather than through the summary, which would truncate the only text the event has
+    // at 80 characters. Sanitized to strip control characters that render as unexpected glyphs.
     let message = rendered_message
         .map(sanitize_control_chars)
+        .or(payload)
         .unwrap_or_else(|| build_event_data_summary(&event_data));
 
-    // Parsed once and used for both the System block and any registered map, so mapping costs no
-    // extra parse.
-    let parsed = super::event_node::parse_event_xml(xml).ok();
     let system = parsed
         .as_ref()
         .map(super::event_node::extract_system_fields)
@@ -547,18 +564,6 @@ fn build_event_data_summary(fields: &[EvtxField]) -> String {
         })
         .collect::<Vec<_>>()
         .join("; ")
-}
-
-/// Parse an ISO 8601 timestamp to epoch milliseconds.
-fn parse_timestamp_to_epoch_ms(timestamp: &str) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(timestamp)
-        .or_else(|_| {
-            // Windows timestamps may omit timezone, assume UTC
-            chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H:%M:%S%.f")
-                .map(|naive| naive.and_utc().fixed_offset())
-        })
-        .map(|dt| dt.timestamp_millis())
-        .unwrap_or(0)
 }
 
 // ── Error helpers ───────────────────────────────────────────────────────────

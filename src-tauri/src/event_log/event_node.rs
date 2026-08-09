@@ -137,6 +137,12 @@ fn local_name(raw: &[u8]) -> String {
 /// on every event, so they are extracted unconditionally.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SystemFields {
+    pub provider: Option<String>,
+    pub event_id: Option<u32>,
+    pub level: Option<u8>,
+    pub channel: Option<String>,
+    pub computer: Option<String>,
+    pub time_created: Option<String>,
     pub task: Option<u32>,
     pub opcode: Option<u32>,
     pub process_id: Option<u32>,
@@ -177,6 +183,14 @@ pub fn extract_system_fields(root: &EventNode) -> SystemFields {
     };
 
     SystemFields {
+        provider: attribute_of("Provider", "Name"),
+        // Classic providers write `<EventID Qualifiers="49152">1000</EventID>`. The id is the
+        // element text in both shapes; the qualifier is separate and not part of the id.
+        event_id: text_of("EventID").and_then(|value| value.parse().ok()),
+        level: text_of("Level").and_then(|value| value.parse().ok()),
+        channel: text_of("Channel").map(str::to_string),
+        computer: text_of("Computer").map(str::to_string),
+        time_created: attribute_of("TimeCreated", "SystemTime"),
         task: text_of("Task").and_then(|value| value.parse().ok()),
         opcode: text_of("Opcode").and_then(|value| value.parse().ok()),
         process_id: attribute_of("Execution", "ProcessID").and_then(|v| v.parse().ok()),
@@ -328,7 +342,13 @@ mod tests {
         // Claiming task 0 when the provider wrote no Task element would be inventing evidence.
         let xml = "<Event><System><EventID>1</EventID></System></Event>";
         let fields = extract_system_fields(&parse_event_xml(xml).expect("parses"));
-        assert_eq!(fields, SystemFields::default());
+        assert_eq!(
+            fields,
+            SystemFields {
+                event_id: Some(1),
+                ..SystemFields::default()
+            }
+        );
     }
 
     #[test]
