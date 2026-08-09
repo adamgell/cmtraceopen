@@ -801,8 +801,10 @@ pub fn privacy_problems_excluding_probes(
     {
         failures.push(format!("{context}: contains a Windows SID {sid:?}"));
     }
-    if let Some(email) = find_email(contents)
-        .filter(|email| !probes.iter().any(|probe| probe.contains(email.as_str())))
+    if let Some(email) = email_occurrences(contents)
+        .into_iter()
+        .find(|(start, email)| !covered(&exempt, (*start, start + email.len())))
+        .map(|(_, email)| email)
     {
         failures.push(format!("{context}: contains an email address {email:?}"));
     }
@@ -835,15 +837,39 @@ fn windows_sid_occurrences(contents: &str) -> Vec<(usize, String)> {
 /// skipped, so *both* real addresses slip through. Semicolon-joined recipient
 /// lists are exactly the shape a pasted mail header has, so this is the case the
 /// scanner most needs to catch.
-fn find_email(contents: &str) -> Option<String> {
-    for token in contents.split(|c: char| {
+fn email_occurrences(contents: &str) -> Vec<(usize, String)> {
+    fn is_delimiter(c: char) -> bool {
         c.is_whitespace()
             || matches!(
                 c,
                 '"' | '\'' | ',' | ';' | ':' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '='
                     | '|'
             )
-    }) {
+    }
+
+    let mut occurrences = Vec::new();
+    let mut last_token_end = 0usize;
+    for (at, _) in contents.match_indices('@') {
+        // A second `@` inside a token already examined stays with that token.
+        if at < last_token_end {
+            continue;
+        }
+        let start = match contents[..at].rfind(is_delimiter) {
+            Some(index) => {
+                index
+                    + contents[index..]
+                        .chars()
+                        .next()
+                        .expect("delimiter char exists at its own index")
+                        .len_utf8()
+            }
+            None => 0,
+        };
+        let end = contents[at..]
+            .find(is_delimiter)
+            .map_or(contents.len(), |offset| at + offset);
+        last_token_end = end;
+        let token = &contents[start..end];
         let Some((local, domain)) = token.split_once('@') else {
             continue;
         };
@@ -858,8 +884,8 @@ fn find_email(contents: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
         {
-            return Some(token.to_owned());
+            occurrences.push((start, token.to_owned()));
         }
     }
-    None
+    occurrences
 }

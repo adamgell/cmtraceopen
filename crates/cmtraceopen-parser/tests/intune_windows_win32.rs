@@ -1264,3 +1264,33 @@ fn a_coverage_status_contradicting_the_capture_state_is_rejected() {
         failures.entries()
     );
 }
+
+/// A probe exempts only its own occurrences: an email covered by a declared
+/// probe occurrence must not hide a second, undeclared email, and a probe
+/// that merely contains an email as a substring exempts nothing when the
+/// probe itself never occurs in the content.
+#[test]
+fn a_probe_covering_one_email_cannot_hide_another() {
+    let probes = vec!["mail user.probe@contoso.com sent".to_owned()];
+    let contents = "mail user.probe@contoso.com sent and mallory@contoso.com replied";
+    let failures = support::privacy_problems_excluding_probes("evidence", contents, &probes);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("email address")),
+        "an undeclared email next to a covered one must be detected, got {:?}",
+        failures.entries()
+    );
+
+    let contents = "standalone user.probe@contoso.com with no probe occurrence";
+    let failures = support::privacy_problems_excluding_probes("evidence", contents, &probes);
+    assert!(
+        failures
+            .entries()
+            .iter()
+            .any(|entry| entry.contains("email address")),
+        "a substring match without a probe occurrence must not exempt, got {:?}",
+        failures.entries()
+    );
+}
