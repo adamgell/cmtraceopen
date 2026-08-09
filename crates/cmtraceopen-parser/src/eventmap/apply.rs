@@ -4,6 +4,8 @@
 //! fields, so an individual event legitimately omits some of them. A missing field is a coverage
 //! state, reported on [`MappedValue::unresolved`], never an error and never silently blank.
 
+use std::collections::BTreeMap;
+
 use super::model::{EventMap, MapEntry, MapProperty};
 use super::node::EventNode;
 use super::path::ValuePath;
@@ -69,16 +71,16 @@ fn apply_entry(
     event: &EventNode,
     invalid_paths: &mut Vec<(String, String)>,
 ) -> MappedValue {
-    let mut text = entry.property_value.clone();
-    let mut unresolved = Vec::new();
+    let template = entry.property_value.as_str();
+    let mut resolved: BTreeMap<&str, String> = BTreeMap::new();
 
     for binding in &entry.values {
-        let placeholder = format!("%{}%", binding.name);
-        if !text.contains(&placeholder) {
+        // Checked against the original template, never against partially rendered output.
+        if !template.contains(&format!("%{}%", binding.name)) {
             continue;
         }
 
-        let resolved = match ValuePath::parse(&binding.value) {
+        let value = match ValuePath::parse(&binding.value) {
             Ok(path) => path.evaluate(event).map(|value| value.into_owned()),
             Err(_) => {
                 let defect = (binding.name.clone(), binding.value.clone());
@@ -89,24 +91,19 @@ fn apply_entry(
             }
         };
 
-        let translated = resolved.and_then(|raw| match map.lookup_for(&binding.name) {
+        let translated = value.and_then(|raw| match map.lookup_for(&binding.name) {
             Some(lookup) => lookup.translate(&raw),
             None => Some(raw),
         });
 
-        match translated {
-            Some(value) => text = text.replace(&placeholder, &value),
-            None => unresolved.push(binding.name.clone()),
+        if let Some(translated) = translated {
+            resolved.insert(binding.name.as_str(), translated);
         }
     }
 
-    // A template may reference a variable the map never binds. That is still an unresolved
-    // placeholder from the reader's point of view, so report it the same way.
-    for name in remaining_placeholders(&text) {
-        if !unresolved.contains(&name) {
-            unresolved.push(name);
-        }
-    }
+    // A binding that failed to resolve is simply absent from the map, so the renderer reports it
+    // alongside placeholders the map never bound at all. Both are the same thing to a reader.
+    let (text, unresolved) = render(template, &resolved);
 
     MappedValue {
         property: entry.property.clone(),
@@ -115,19 +112,53 @@ fn apply_entry(
     }
 }
 
-fn remaining_placeholders(text: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut rest = text;
+/// Renders `template` in one left-to-right pass, returning the text and any unfilled placeholders.
+///
+/// Single-pass matters for correctness, not just speed. Event field content is untrusted: a field
+/// whose value is literally `%user%` must not become a substitution target for a later binding,
+/// which is exactly what repeated `str::replace` over accumulating output would do.
+fn render(template: &str, values: &BTreeMap<&str, String>) -> (String, Vec<String>) {
+    let mut out = String::with_capacity(template.len());
+    let mut unresolved: Vec<String> = Vec::new();
+    let mut rest = template;
+
     while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
         let after = &rest[start + 1..];
-        let Some(end) = after.find('%') else { break };
+
+        let Some(end) = after.find('%') else {
+            // Unpaired '%': the remainder is literal text.
+            out.push_str(&rest[start..]);
+            return (out, unresolved);
+        };
+
         let name = &after[..end];
-        if !name.is_empty() && !name.contains(char::is_whitespace) {
-            names.push(name.to_string());
+        if name.is_empty() || name.contains(char::is_whitespace) {
+            // Not a placeholder. Emit the opening '%' and resume at the character after it, so the
+            // closing '%' stays available as the opening delimiter of a real placeholder that
+            // follows, as in "50% off %Cost%".
+            out.push('%');
+            rest = after;
+            continue;
+        }
+
+        match values.get(name) {
+            // The substituted value is appended to `out` and never revisited.
+            Some(value) => out.push_str(value),
+            None => {
+                out.push('%');
+                out.push_str(name);
+                out.push('%');
+                if !unresolved.iter().any(|existing| existing == name) {
+                    unresolved.push(name.to_string());
+                }
+            }
         }
         rest = &after[end + 1..];
     }
-    names
+
+    out.push_str(rest);
+    (out, unresolved)
 }
 
 #[cfg(test)]
@@ -311,6 +342,98 @@ mod tests {
             vec![("broken".to_string(), "EventData/Data".to_string())]
         );
         assert_eq!(mapped.values[0].unresolved, vec!["broken".to_string()]);
+    }
+
+    #[test]
+    fn a_field_value_containing_a_placeholder_is_not_re_substituted() {
+        // Event content is untrusted. If rendering re-scanned its own output, a field whose text
+        // happens to be "%user%" would be replaced by a later binding.
+        let event = EventNode::new("Event").with_child(
+            EventNode::new("EventData")
+                .with_child(
+                    EventNode::new("Data")
+                        .with_attribute("Name", "SubjectDomainName")
+                        .with_text("%user%"),
+                )
+                .with_child(
+                    EventNode::new("Data")
+                        .with_attribute("Name", "SubjectUserName")
+                        .with_text("adam"),
+                ),
+        );
+        let map = map_with(
+            vec![MapEntry {
+                property: MapProperty::UserName,
+                property_value: "%domain%\\%user%".to_string(),
+                values: vec![
+                    binding("domain", "SubjectDomainName"),
+                    binding("user", "SubjectUserName"),
+                ],
+            }],
+            vec![],
+        );
+
+        let mapped = apply_map(&map, &event);
+        assert_eq!(
+            mapped.value_for(&MapProperty::UserName),
+            Some("%user%\\adam")
+        );
+    }
+
+    #[test]
+    fn a_literal_percent_does_not_hide_the_placeholder_that_follows_it() {
+        let map = map_with(
+            vec![MapEntry {
+                property: MapProperty::PayloadData(1),
+                property_value: "50% off %Cost%".to_string(),
+                values: vec![],
+            }],
+            vec![],
+        );
+
+        let mapped = apply_map(&map, &event());
+        let value = &mapped.values[0];
+        assert_eq!(value.unresolved, vec!["Cost".to_string()]);
+        assert!(!value.is_complete());
+        assert_eq!(value.text, "50% off %Cost%");
+    }
+
+    #[test]
+    fn a_literal_percent_survives_when_a_later_placeholder_resolves() {
+        let map = map_with(
+            vec![MapEntry {
+                property: MapProperty::PayloadData(1),
+                property_value: "50% off for %user%".to_string(),
+                values: vec![binding("user", "SubjectUserName")],
+            }],
+            vec![],
+        );
+
+        let mapped = apply_map(&map, &event());
+        assert_eq!(
+            mapped.value_for(&MapProperty::PayloadData(1)),
+            Some("50% off for adam")
+        );
+        assert!(mapped.values[0].is_complete());
+    }
+
+    #[test]
+    fn an_unpaired_trailing_percent_is_preserved_verbatim() {
+        let map = map_with(
+            vec![MapEntry {
+                property: MapProperty::PayloadData(1),
+                property_value: "complete: 100%".to_string(),
+                values: vec![],
+            }],
+            vec![],
+        );
+
+        let mapped = apply_map(&map, &event());
+        assert_eq!(
+            mapped.value_for(&MapProperty::PayloadData(1)),
+            Some("complete: 100%")
+        );
+        assert!(mapped.values[0].is_complete());
     }
 
     #[test]

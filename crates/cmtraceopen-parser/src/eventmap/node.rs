@@ -60,7 +60,13 @@ impl EventNode {
     }
 
     /// Returns the child elements called `name`, in document order.
-    pub fn children_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a EventNode> {
+    ///
+    /// `name` carries its own lifetime so callers can pass a short-lived borrow, such as a field
+    /// of a path step being walked, without tying it to how long this node lives.
+    pub fn children_named<'a, 'n>(
+        &'a self,
+        name: &'n str,
+    ) -> impl Iterator<Item = &'a EventNode> + use<'a, 'n> {
         self.children.iter().filter(move |child| child.name == name)
     }
 }

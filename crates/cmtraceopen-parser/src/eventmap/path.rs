@@ -217,12 +217,7 @@ fn parse_step(segment: &str, expression: &str) -> Result<Step, PathError> {
 }
 
 fn select_one<'a>(parent: &'a EventNode, step: &Step) -> Option<&'a EventNode> {
-    // Filtered inline rather than through EventNode::children_named so the step's lifetime stays
-    // independent of the node's; the iterator does not outlive this call.
-    let mut candidates = parent
-        .children
-        .iter()
-        .filter(|child| child.name == step.name);
+    let mut candidates = parent.children_named(&step.name);
     match &step.predicate {
         None => candidates.next(),
         Some(Predicate::Index(index)) => candidates.nth(index - 1),
