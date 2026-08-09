@@ -197,9 +197,11 @@ pub(super) fn analysis_scope_digest(
     analysis_scope: Option<&str>,
     generated_at_utc: &str,
 ) -> Option<String> {
-    let scope = analysis_scope
-        .map(str::trim)
-        .filter(|scope| !scope.is_empty())?;
+    // Only a whitespace-only value means "no identity". Every other value is
+    // hashed verbatim: trimming first would make `"a"` and `" a "` the same
+    // analysis, and the crate cannot know which bytes a caller's identity
+    // scheme treats as significant.
+    let scope = analysis_scope.filter(|scope| !scope.trim().is_empty())?;
     let mut material = scope.as_bytes().to_vec();
     material.push(SCOPE_SEPARATOR);
     material.extend_from_slice(generated_at_utc.as_bytes());
@@ -653,6 +655,27 @@ mod tests {
         let first = scope_of(Some("analysis-a"), INSTANT);
         let second = scope_of(Some("analysis-b"), INSTANT);
         assert_ne!(first.token("secret"), second.token("secret"));
+    }
+
+    #[test]
+    fn scopes_differing_only_in_surrounding_whitespace_stay_distinct() {
+        // Trimming before hashing normalized two distinct caller identities
+        // into one digest, so `"analysis-a"` and `" analysis-a "` minted the
+        // same tokens and their exports could be joined. Only a whitespace-only
+        // scope means "no identity"; every other value is hashed verbatim,
+        // because the crate cannot know which bytes a caller considers
+        // significant.
+        let first = scope_of(Some("analysis-a"), INSTANT);
+        let second = scope_of(Some(" analysis-a "), INSTANT);
+        assert_ne!(first.token("secret"), second.token("secret"));
+    }
+
+    #[test]
+    fn a_whitespace_only_scope_is_no_scope_at_all() {
+        // The one normalization that survives: a blank string is an absent
+        // identity, not an identity made of spaces.
+        assert!(analysis_scope_digest(Some("   "), INSTANT).is_none());
+        assert!(analysis_scope_digest(Some(""), INSTANT).is_none());
     }
 
     #[test]

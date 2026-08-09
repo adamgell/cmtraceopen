@@ -42,6 +42,12 @@ pub struct ConfigurationInput {
     /// joined to an unrelated one by comparing tokens. Any opaque per-analysis value works — a capture
     /// GUID, a support-case id, a digest of the collected bundle.
     ///
+    /// The value is used verbatim: only a whitespace-only string counts as no
+    /// scope at all, so `"a"` and `" a "` are two different analyses. The crate
+    /// cannot know which bytes a caller's identity scheme treats as
+    /// significant, and normalizing them would silently join exports the caller
+    /// meant to keep apart.
+    ///
     /// Uniqueness is the caller's obligation and cannot be checked here: this
     /// crate is pure and `wasm32-unknown-unknown` clean, so it has no clock, no
     /// entropy source, and no process state that survives a restart from which

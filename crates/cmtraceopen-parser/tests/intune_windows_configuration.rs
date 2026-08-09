@@ -1670,6 +1670,16 @@ fn another_providers_message_text_never_joins_an_mdm_transaction() {
         coverage: Vec::new(),
     };
     let snapshot = analyze_configuration(&input);
+    assert_eq!(
+        snapshot.settings.len(),
+        1,
+        "the foreign record must not open a transaction of its own, got {:?}",
+        snapshot
+            .settings
+            .iter()
+            .map(|setting| setting.identity.key.clone())
+            .collect::<Vec<_>>()
+    );
     let setting = snapshot.settings.first().expect("one transaction");
     assert_eq!(
         setting.evidence.len(),
