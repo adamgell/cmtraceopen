@@ -16,5 +16,6 @@ pub mod eventmap;
 pub mod intune;
 pub mod models;
 pub mod parser;
+pub mod provider;
 pub mod sccm;
 pub(crate) mod wire;
