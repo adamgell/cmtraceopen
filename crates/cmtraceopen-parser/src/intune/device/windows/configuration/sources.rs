@@ -193,12 +193,12 @@ pub fn classify_event(event: &NormalizedWindowsEvent) -> ConfigurationEventKind 
     }
 }
 
-fn command_type_is_removal(command_type: Option<&str>) -> bool {
-    command_type.is_some_and(|value| {
-        let value = value.trim().trim_matches(['(', ')']);
-        value.eq_ignore_ascii_case("Delete") || value.eq_ignore_ascii_case("Remove")
-    })
-}
+// `CommandType` / `Command` is recorded on the observation as evidence but never
+// decides a disposition. ADR-002 forbids promoting an untyped local field into
+// shared semantic authority, and `Command: Delete` beside a typed `Applied`
+// outcome was doing exactly that: turning a stated application into a removal on
+// the strength of free text. The typed outcome — the report's `outcome`, or the
+// event id via `ConfigurationEventKind` — is the only thing that decides.
 
 /// Project one normalized event onto a configuration observation.
 ///
@@ -268,13 +268,7 @@ pub fn observation_from_event(event: &NormalizedWindowsEvent) -> Option<Configur
                 Some(code) if is_failure(code) => ConfigurationDisposition::Rejected,
                 _ => ConfigurationDisposition::Indeterminate,
             },
-            ConfigurationEventKind::PolicySet => {
-                if command_type_is_removal(command_type.as_deref()) {
-                    ConfigurationDisposition::Removed
-                } else {
-                    ConfigurationDisposition::Applied
-                }
-            }
+            ConfigurationEventKind::PolicySet => ConfigurationDisposition::Applied,
             ConfigurationEventKind::PolicyDeleted => ConfigurationDisposition::Removed,
             ConfigurationEventKind::Unrecognized => ConfigurationDisposition::Received,
         }
@@ -330,13 +324,7 @@ pub fn observation_from_report(report: &NormalizedSettingReport) -> Configuratio
         ConfigurationDisposition::Indeterminate
     } else {
         match report.outcome {
-            NormalizedSettingOutcome::Applied => {
-                if command_type_is_removal(command_type.as_deref()) {
-                    ConfigurationDisposition::Removed
-                } else {
-                    ConfigurationDisposition::Applied
-                }
-            }
+            NormalizedSettingOutcome::Applied => ConfigurationDisposition::Applied,
             NormalizedSettingOutcome::Pending => ConfigurationDisposition::Pending,
             NormalizedSettingOutcome::Failed => ConfigurationDisposition::Rejected,
             NormalizedSettingOutcome::Conflict => ConfigurationDisposition::Conflict,

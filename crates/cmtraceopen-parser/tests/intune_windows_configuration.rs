@@ -1030,6 +1030,103 @@ fn a_supersedence_whose_replacement_was_never_collected_is_not_claimed() {
     assert!(!ids.contains(&"configuration-superseded".to_owned()));
 }
 
+/// ADR-002: an untyped local field may not be promoted into shared semantic
+/// authority. `Command: Delete` beside a typed `Applied` outcome was turning a
+/// stated application into a removal.
+#[test]
+fn free_text_command_never_overrides_a_typed_outcome() {
+    let snapshot = analyze_configuration(&input_of(vec![row(
+        "rpt-applied-with-delete-command",
+        Some(NODE),
+        Some(POLICY_A),
+        NormalizedSettingOutcome::Applied,
+        vec![("Command", "Delete")],
+    )]));
+    let setting = snapshot.settings.first().expect("one transaction");
+    assert_eq!(wire(&setting.local), json!("applied"));
+    assert_eq!(
+        setting
+            .observations
+            .first()
+            .and_then(|observation| observation.command_type.clone()),
+        Some("Delete".to_owned()),
+        "the command verb is still retained as evidence"
+    );
+}
+
+/// A row naming a winner that is not in the bundle substantiates nothing. This
+/// used to produce `configuration-conflict` at Warning/High from one source.
+#[test]
+fn a_named_winner_that_was_never_collected_does_not_substantiate_a_conflict() {
+    let snapshot = analyze_configuration(&input_of(vec![row(
+        "rpt-names-an-absent-winner",
+        Some(NODE),
+        Some(POLICY_A),
+        NormalizedSettingOutcome::Conflict,
+        vec![("WinningProvider", "GPO")],
+    )]));
+    let ids = finding_ids(&snapshot);
+    assert!(
+        ids.contains(&"configuration-conflict-unsubstantiated".to_owned()),
+        "got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"configuration-conflict".to_owned()),
+        "got {ids:?}"
+    );
+}
+
+#[test]
+fn a_record_naming_itself_as_its_own_replacement_does_not_substantiate_supersedence() {
+    let snapshot = analyze_configuration(&input_of(vec![row(
+        "rpt-self-superseding",
+        Some(NODE),
+        Some(POLICY_A),
+        NormalizedSettingOutcome::Superseded,
+        vec![("SupersededBy", POLICY_A)],
+    )]));
+    let ids = finding_ids(&snapshot);
+    assert!(
+        ids.contains(&"configuration-superseded-unsubstantiated".to_owned()),
+        "got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"configuration-superseded".to_owned()),
+        "got {ids:?}"
+    );
+}
+
+/// One policy id written braced and upper by one artifact and bare and lower by
+/// another is one source, not two competing ones.
+#[test]
+fn one_policy_in_two_casings_is_not_a_conflict() {
+    let snapshot = analyze_configuration(&input_of(vec![
+        row(
+            "rpt-braced",
+            Some(NODE),
+            Some(&format!("{{{}}}", POLICY_A.to_ascii_uppercase())),
+            NormalizedSettingOutcome::Conflict,
+            Vec::new(),
+        ),
+        row(
+            "rpt-bare",
+            Some(NODE),
+            Some(POLICY_A),
+            NormalizedSettingOutcome::Conflict,
+            Vec::new(),
+        ),
+    ]));
+    let ids = finding_ids(&snapshot);
+    assert!(
+        ids.contains(&"configuration-conflict-unsubstantiated".to_owned()),
+        "one source in two spellings must not become two, got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"configuration-conflict".to_owned()),
+        "got {ids:?}"
+    );
+}
+
 #[test]
 fn records_with_no_identifier_are_never_merged_with_one_another() {
     let snapshot = analyze_configuration(&unattributed_input());

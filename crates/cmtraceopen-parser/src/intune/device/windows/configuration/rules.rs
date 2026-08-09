@@ -27,6 +27,7 @@ use super::models::{
     ConfigurationObservation, ConfigurationReceiptState, ConfigurationResolution,
     ConfigurationServiceState, ConfigurationSetting, ConfigurationSnapshot,
 };
+use super::sources::{normalize_source_id, same_source_id};
 
 /// Maximum number of setting labels quoted in a summary before it is truncated.
 const MAX_LABELS: usize = 6;
@@ -383,18 +384,31 @@ fn is_conflicted(setting: &ConfigurationSetting) -> bool {
         || setting.service == ConfigurationServiceState::ReportedConflict
 }
 
-/// Whether the bundle actually contains the second side of the argument.
+/// Every distinct configuration source that stated something about this node.
 ///
-/// Either two distinct configuration source identifiers stated something about
-/// the node, or a record explicitly named the winner. A lone row saying
-/// "conflict" is not itself evidence of a competing source.
-fn competing_sources_are_observed(setting: &ConfigurationSetting) -> bool {
-    let distinct = setting
+/// Normalized, because one policy GUID written braced by the event provider and
+/// bare by the report is one source, and comparing the bytes made it two
+/// competing ones — enough on its own to raise a conflict finding.
+fn observed_source_ids(setting: &ConfigurationSetting) -> BTreeSet<String> {
+    setting
         .sources
         .iter()
         .filter_map(|statement| statement.source_id.as_deref())
-        .collect::<BTreeSet<_>>();
-    if distinct.len() >= 2 {
+        .map(normalize_source_id)
+        .collect()
+}
+
+/// Whether the bundle actually contains the second side of the argument.
+///
+/// Either two distinct configuration sources stated something about the node, or
+/// a record named a winner *that is itself in the bundle*. Merely naming someone
+/// is not observing them: a single row carrying `WinningProvider: GPO` used to
+/// substantiate a conflict at Warning/High with one source present and the
+/// alleged winner nowhere in the evidence. Such a row now reaches the
+/// unsubstantiated variant, which asks for the missing artifact instead.
+fn competing_sources_are_observed(setting: &ConfigurationSetting) -> bool {
+    let observed = observed_source_ids(setting);
+    if observed.len() >= 2 {
         return true;
     }
     setting.observations.iter().any(|observation| {
@@ -402,10 +416,11 @@ fn competing_sources_are_observed(setting: &ConfigurationSetting) -> bool {
             .winning_source_id
             .as_deref()
             .is_some_and(|winner| {
-                observation
+                let names_another = observation
                     .source_id
                     .as_deref()
-                    .is_none_or(|source| !source.eq_ignore_ascii_case(winner))
+                    .is_none_or(|source| !same_source_id(source, winner));
+                names_another && observed.contains(&normalize_source_id(winner))
             })
     })
 }
@@ -478,21 +493,24 @@ fn is_superseded(setting: &ConfigurationSetting) -> bool {
         || setting.service == ConfigurationServiceState::ReportedSuperseded
 }
 
+/// Whether the replacing source named by a superseded record is in the bundle.
+///
+/// The self-reference guard mirrors the conflict rule's: a row naming *itself* as
+/// its own replacement matched the bundle trivially and produced
+/// `configuration-superseded` at High confidence with one source present.
 fn superseding_source_is_observed(setting: &ConfigurationSetting) -> bool {
-    let named_replacements = setting
-        .observations
-        .iter()
-        .filter_map(|observation| observation.superseded_by_source_id.as_deref())
-        .collect::<BTreeSet<_>>();
-    if named_replacements.is_empty() {
-        return false;
-    }
-    setting.sources.iter().any(|statement| {
-        statement.source_id.as_deref().is_some_and(|source| {
-            named_replacements
-                .iter()
-                .any(|replacement| replacement.eq_ignore_ascii_case(source))
-        })
+    let observed = observed_source_ids(setting);
+    setting.observations.iter().any(|observation| {
+        observation
+            .superseded_by_source_id
+            .as_deref()
+            .is_some_and(|replacement| {
+                let names_another = observation
+                    .source_id
+                    .as_deref()
+                    .is_none_or(|source| !same_source_id(source, replacement));
+                names_another && observed.contains(&normalize_source_id(replacement))
+            })
     })
 }
 
