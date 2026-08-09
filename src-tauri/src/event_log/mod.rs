@@ -4,6 +4,7 @@ pub mod export;
 pub mod maps;
 pub mod models;
 pub mod parser;
+pub mod provider_db;
 
 #[cfg(target_os = "windows")]
 pub mod live;

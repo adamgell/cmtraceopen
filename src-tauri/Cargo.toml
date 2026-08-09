@@ -76,6 +76,8 @@ cab = { version = "=0.6.0", optional = true }
 # tauri-plugin-log, tauri-plugin-updater) is held at or above the patched release.
 time = { version = "0.3.47", default-features = false, features = ["parsing"] }
 serde_norway = "0.9.42"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+flate2 = "1.1.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
