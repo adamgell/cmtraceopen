@@ -5,6 +5,7 @@ pub mod maps;
 pub mod models;
 pub mod parser;
 pub mod provider_db;
+pub mod timeline;
 
 #[cfg(target_os = "windows")]
 pub mod live;

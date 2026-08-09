@@ -363,6 +363,8 @@ pub fn run() {
             event_log::commands::evtx_load_provider_databases,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_provider_databases,
+            #[cfg(feature = "event-log")]
+            event_log::commands::evtx_build_unified_timeline,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]

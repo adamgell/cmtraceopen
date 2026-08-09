@@ -207,3 +207,24 @@ pub async fn evtx_load_provider_databases(
 pub async fn evtx_provider_databases() -> Vec<super::provider_db::ProviderDbInfo> {
     super::provider_db::registered()
 }
+
+/// Merges already-loaded log entries and event records into one chronological timeline.
+///
+/// Both sides arrive from the frontend rather than being re-read, so the timeline covers exactly
+/// what the operator has open. Re-reading would risk building a timeline from a different set than
+/// the one on screen.
+#[tauri::command]
+pub async fn evtx_build_unified_timeline(
+    entries: Vec<cmtraceopen_parser::models::log_entry::LogEntry>,
+    records: Vec<super::models::EvtxRecord>,
+) -> Result<cmtraceopen_parser::unified_timeline::UnifiedTimeline, String> {
+    let timeline = tokio::task::spawn_blocking(move || super::timeline::build(&entries, &records))
+        .await
+        .map_err(|error| format!("timeline build task failed: {error}"))?;
+    log::info!(
+        "event=unified_timeline items={} unplaced={}",
+        timeline.items.len(),
+        timeline.unplaced.len()
+    );
+    Ok(timeline)
+}
