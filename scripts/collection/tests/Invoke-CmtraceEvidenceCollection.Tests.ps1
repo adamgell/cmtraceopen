@@ -19,7 +19,9 @@ BeforeAll {
         'Test-ArrayValue',
         'Assert-ProfileRequiredString',
         'Assert-ProfileRequiredArray',
-        'Assert-CollectorProfileShape'
+        'Assert-CollectorProfileShape',
+        'Join-RelativePath',
+        'Get-LocaleMetadataRelativePath'
     )
     foreach ($functionName in $functionNames) {
         $definition = $ast.FindAll(
@@ -98,6 +100,69 @@ Describe 'Intune evidence profile contracts' {
         }
 
         Invoke-Expression $statusCommand[0].arguments[-1] | Should -BeExactly '[]'
+    }
+}
+
+Describe 'Optional array validation' {
+    It 'accepts a single-element optional array such as arguments: ["/status"]' {
+        $profile = New-TestCollectorProfile
+        $profile.commands[0].arguments = @('/status')
+
+        { Assert-CollectorProfileShape -CollectorProfile $profile -Path 'profile.json' } |
+            Should -Not -Throw
+    }
+
+    It 'still accepts an empty optional array' {
+        $profile = New-TestCollectorProfile
+        $profile.commands[0].arguments = @()
+
+        { Assert-CollectorProfileShape -CollectorProfile $profile -Path 'profile.json' } |
+            Should -Not -Throw
+    }
+
+    It 'still rejects a scalar where an array is required' {
+        $profile = New-TestCollectorProfile
+        $profile.commands[0].arguments = '/status'
+
+        { Assert-CollectorProfileShape -CollectorProfile $profile -Path 'profile.json' } |
+            Should -Throw -ExpectedMessage '*commands[[]0[]].arguments must be an array when present*'
+    }
+}
+
+Describe 'Read-CollectorProfile host compatibility' {
+    It 'does not pass -Depth to ConvertFrom-Json, which Windows PowerShell 5.1 rejects' {
+        $collectorText = Get-Content -LiteralPath $collectorPath -Raw
+
+        $collectorText | Should -Not -Match 'ConvertFrom-Json[^\r\n]*-Depth'
+    }
+
+    It 'accepts the shipped profile, including its single-element argument arrays' {
+        $shippedProfile = Get-Content -LiteralPath $stagedProfilePath -Raw | ConvertFrom-Json
+
+        { Assert-CollectorProfileShape -CollectorProfile $shippedProfile -Path $stagedProfilePath } |
+            Should -Not -Throw
+    }
+}
+
+Describe 'Get-LocaleMetadataRelativePath' {
+    It 'places LocaleMetaData beside the exported channel' {
+        Get-LocaleMetadataRelativePath -EvtxRelativePath 'evidence/event-logs/device-management-admin.evtx' |
+            Should -BeExactly 'evidence/event-logs/LocaleMetaData'
+    }
+
+    It 'handles a channel exported at the bundle root' {
+        Get-LocaleMetadataRelativePath -EvtxRelativePath 'autopilot.evtx' |
+            Should -BeExactly 'LocaleMetaData'
+    }
+
+    It 'normalizes backslash separators to the manifest convention' {
+        Get-LocaleMetadataRelativePath -EvtxRelativePath 'evidence\event-logs\aad-operational.evtx' |
+            Should -BeExactly 'evidence/event-logs/LocaleMetaData'
+    }
+
+    It 'does not depend on the file extension' {
+        Get-LocaleMetadataRelativePath -EvtxRelativePath 'evidence/event-logs/no-extension' |
+            Should -BeExactly 'evidence/event-logs/LocaleMetaData'
     }
 }
 
