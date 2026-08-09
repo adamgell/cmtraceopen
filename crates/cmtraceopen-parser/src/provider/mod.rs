@@ -15,7 +15,32 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Reinterprets a signed integer as unsigned, preserving the bit pattern.
+///
+/// The metadata is serialized by a .NET tool, which writes `long` and `int`. A keyword mask with
+/// the top bit set therefore appears as a negative number: the reserved keyword
+/// `0x8000000000000000` is written as `-9223372036854775808`. Deserializing straight into `u64`
+/// rejects those, which in practice meant the Microsoft-Windows-DeviceManagement provider, among
+/// many others, failed to load at all.
+fn signed_as_u64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    Ok(i64::deserialize(deserializer)? as u64)
+}
+
+fn signed_as_u64_vec<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
+    Ok(Vec::<i64>::deserialize(deserializer)?
+        .into_iter()
+        .map(|value| value as u64)
+        .collect())
+}
+
+/// Reinterprets a signed integer as an unsigned 32-bit value.
+///
+/// Message identifiers above `0x7FFFFFFF` are written negative for the same reason.
+fn signed_as_u32<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    Ok(i64::deserialize(deserializer)? as u32)
+}
 
 /// One event definition from a provider's manifest.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Default)]
@@ -42,7 +67,7 @@ pub struct ProviderEvent {
     #[serde(default)]
     pub opcode: Option<u32>,
     /// Keyword bitmask values.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "signed_as_u64_vec")]
     pub keywords: Vec<u64>,
     /// The manifest template, which declares each field's name and type.
     #[serde(default)]
@@ -54,10 +79,10 @@ pub struct ProviderEvent {
 #[serde(rename_all = "PascalCase")]
 pub struct ProviderMessage {
     /// Full message identifier as the provider declares it.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "signed_as_u64")]
     pub raw_id: u64,
     /// Low bits of `raw_id`, which is what most references use.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "signed_as_u32")]
     pub short_id: u32,
     /// The message text.
     #[serde(default)]
@@ -364,6 +389,41 @@ mod tests {
         // would make almost every event look anomalous.
         let meta = metadata();
         assert_eq!(meta.keyword_names(0x8000_0000_0000_0001), vec!["Error"]);
+    }
+
+    #[test]
+    fn a_high_bit_keyword_written_as_a_negative_number_round_trips() {
+        // The metadata is written by a .NET tool, so 0x8000000000000000 appears as
+        // -9223372036854775808. Rejecting that made whole providers fail to load.
+        let json = r#"{"Id":1,"Keywords":[-9223372036854775808,576460752303423488]}"#;
+        let event: ProviderEvent = serde_json::from_str(json).expect("deserializes");
+        assert_eq!(event.keywords[0], 0x8000_0000_0000_0000);
+        assert_eq!(event.keywords[1], 576_460_752_303_423_488);
+    }
+
+    #[test]
+    fn a_negative_message_id_is_reinterpreted_rather_than_rejected() {
+        let json = r#"{"RawId":-2147221478,"ShortId":-2147221478,"Text":"x"}"#;
+        let message: ProviderMessage = serde_json::from_str(json).expect("deserializes");
+        assert_eq!(message.raw_id, (-2_147_221_478_i64) as u64);
+        assert_eq!(message.short_id, (-2_147_221_478_i64) as u32);
+    }
+
+    #[test]
+    fn ordinary_positive_values_are_unaffected() {
+        let json = r#"{"RawId":1342177282,"ShortId":2,"Text":"Error"}"#;
+        let message: ProviderMessage = serde_json::from_str(json).expect("deserializes");
+        assert_eq!(message.raw_id, 1_342_177_282);
+        assert_eq!(message.short_id, 2);
+    }
+
+    #[test]
+    fn a_keyword_mask_with_the_reserved_high_bit_still_resolves_declared_names() {
+        let meta = metadata();
+        assert_eq!(
+            meta.keyword_names(0x8000_0000_0000_0000_u64 | 1),
+            vec!["Error"]
+        );
     }
 
     #[test]
