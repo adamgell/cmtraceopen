@@ -1,0 +1,218 @@
+import { useMemo, useRef } from "react";
+import { tokens } from "@fluentui/react-components";
+import { useVirtualizer } from "@tanstack/react-virtual";
+
+import { LOG_MONOSPACE_FONT_FAMILY, LOG_UI_FONT_FAMILY, getLogListMetrics } from "../../lib/log-accessibility";
+import { useUiStore } from "../../stores/ui-store";
+import {
+  isEventOrigin,
+  originDetail,
+  originLabel,
+  timelineCounts,
+  unplacedSummary,
+  type TimelineSeverity,
+  type UnifiedTimeline,
+} from "./unified-timeline";
+
+const SEVERITY_COLORS: Record<TimelineSeverity, string> = {
+  critical: tokens.colorPaletteRedForeground1,
+  error: tokens.colorPaletteRedForeground1,
+  warning: tokens.colorPaletteMarigoldForeground1,
+  info: tokens.colorBrandForeground1,
+  verbose: tokens.colorNeutralForeground4,
+};
+
+function formatTimestamp(ms: number): string {
+  const date = new Date(ms);
+  const pad = (value: number, width = 2) => String(value).padStart(width, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.` +
+    `${pad(date.getMilliseconds(), 3)}`
+  );
+}
+
+export interface UnifiedTimelineViewProps {
+  timeline: UnifiedTimeline;
+}
+
+/**
+ * The merged view of events and text logs.
+ *
+ * Rows carry a source badge because the whole value of the view is knowing, at a glance, which
+ * side of the merge a line came from. Without it the two blur together and the reader loses the
+ * distinction that makes the correlation meaningful.
+ */
+export function UnifiedTimelineView({ timeline }: UnifiedTimelineViewProps) {
+  const logListFontSize = useUiStore((s) => s.logListFontSize);
+  const metrics = useMemo(() => getLogListMetrics(logListFontSize), [logListFontSize]);
+
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: timeline.items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => metrics.rowHeight + 2,
+    overscan: 12,
+  });
+
+  const counts = useMemo(() => timelineCounts(timeline), [timeline]);
+  const dropped = useMemo(() => unplacedSummary(timeline), [timeline]);
+
+  const fontSize = metrics.fontSize;
+  const smallFontSize = Math.max(9, fontSize - 3);
+  const monoFontSize = Math.max(10, fontSize - 1);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "12px",
+          padding: "4px 12px",
+          borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+          backgroundColor: tokens.colorNeutralBackground2,
+          fontSize: `${smallFontSize}px`,
+          fontFamily: LOG_UI_FONT_FAMILY,
+          color: tokens.colorNeutralForeground3,
+          flexShrink: 0,
+        }}
+      >
+        <span>{counts.logs.toLocaleString()} log lines</span>
+        <span>{counts.events.toLocaleString()} events</span>
+        {/* Only shown when something was actually dropped; a "0 unplaced" badge would read as
+            reassurance and invite no attention. */}
+        {dropped && (
+          <span
+            style={{ color: tokens.colorPaletteMarigoldForeground1 }}
+            title="These carried no timestamp, so placing them would invent a sequence the evidence does not support"
+          >
+            {dropped}
+          </span>
+        )}
+      </div>
+
+      {timeline.items.length === 0 ? (
+        <div
+          style={{
+            padding: "24px",
+            textAlign: "center",
+            color: tokens.colorNeutralForeground3,
+            fontSize: `${fontSize}px`,
+            fontFamily: LOG_UI_FONT_FAMILY,
+          }}
+        >
+          Nothing to place on the timeline yet. Load a log file and an event source to correlate
+          them.
+        </div>
+      ) : (
+        <div
+          ref={parentRef}
+          style={{
+            overflowY: "auto",
+            flex: 1,
+            minHeight: 0,
+            backgroundColor: tokens.colorNeutralBackground1,
+            fontFamily: LOG_UI_FONT_FAMILY,
+          }}
+        >
+          <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const item = timeline.items[virtualRow.index];
+              if (!item) return null;
+              const color = SEVERITY_COLORS[item.severity];
+              const fromEvent = isEventOrigin(item.origin);
+
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "2px 12px",
+                    boxSizing: "border-box",
+                    borderLeft: `4px solid ${color}`,
+                    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+                    backgroundColor:
+                      virtualRow.index % 2 === 0
+                        ? tokens.colorNeutralBackground1
+                        : tokens.colorNeutralBackground2,
+                    fontSize: `${fontSize}px`,
+                    lineHeight: `${metrics.rowLineHeight}px`,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: "40px",
+                      flexShrink: 0,
+                      textAlign: "center",
+                      fontSize: `${smallFontSize}px`,
+                      fontWeight: 700,
+                      borderRadius: "4px",
+                      backgroundColor: fromEvent
+                        ? tokens.colorBrandBackground2
+                        : tokens.colorNeutralBackground4,
+                      color: tokens.colorNeutralForeground2,
+                    }}
+                    title={fromEvent ? "Windows event" : "Text log line"}
+                  >
+                    {fromEvent ? "EVT" : "LOG"}
+                  </span>
+
+                  <span
+                    style={{
+                      width: "175px",
+                      flexShrink: 0,
+                      fontFamily: LOG_MONOSPACE_FONT_FAMILY,
+                      fontSize: `${monoFontSize}px`,
+                      color: tokens.colorNeutralForeground3,
+                    }}
+                  >
+                    {formatTimestamp(item.timestampMs)}
+                  </span>
+
+                  <span
+                    style={{
+                      width: "220px",
+                      flexShrink: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: `${smallFontSize}px`,
+                      color: tokens.colorNeutralForeground3,
+                    }}
+                    title={originDetail(item.origin)}
+                  >
+                    {originLabel(item.origin)}
+                  </span>
+
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      color: tokens.colorNeutralForeground1,
+                    }}
+                    title={item.message}
+                  >
+                    {item.message}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
