@@ -79,7 +79,7 @@ fn apply_entry(
         }
 
         let resolved = match ValuePath::parse(&binding.value) {
-            Ok(path) => path.evaluate(event).map(str::to_string),
+            Ok(path) => path.evaluate(event).map(|value| value.into_owned()),
             Err(_) => {
                 let defect = (binding.name.clone(), binding.value.clone());
                 if !invalid_paths.contains(&defect) {

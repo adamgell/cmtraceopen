@@ -16,6 +16,8 @@
 //! 1-based index predicate, optionally ending in an attribute selector. A general XPath engine
 //! would be far more machinery than the grammar justifies.
 
+use std::borrow::Cow;
+
 use thiserror::Error;
 
 use super::node::EventNode;
@@ -97,22 +99,71 @@ impl ValuePath {
     /// Returns `None` when any step fails to match, which is the normal case for an optional
     /// field rather than an error: maps are written against a provider's superset of fields and
     /// individual events legitimately omit some of them.
-    pub fn evaluate<'a>(&self, root: &'a EventNode) -> Option<&'a str> {
-        let mut steps = self.steps.iter();
-        let first = steps.next()?;
+    pub fn evaluate<'a>(&self, root: &'a EventNode) -> Option<Cow<'a, str>> {
+        let first = self.steps.first()?;
         if first.name != root.name || first.predicate.is_some() {
             return None;
         }
 
+        // Every step but the last narrows to a single container. Only the final step can select
+        // a repeated set, because joining containers has no meaning.
         let mut current = root;
-        for step in steps {
-            current = select(current, step)?;
+        let mut remaining = &self.steps[1..];
+        while remaining.len() > 1 {
+            current = select_one(current, &remaining[0])?;
+            remaining = &remaining[1..];
         }
 
-        match &self.attribute {
-            Some(name) => current.attribute(name),
-            None => current.text.as_deref(),
+        match remaining.first() {
+            None => read(current, self.attribute.as_deref()),
+            Some(step) => read_final(current, step, self.attribute.as_deref()),
         }
+    }
+}
+
+/// Separator EvtxECmd uses when a bare step matches repeated elements.
+///
+/// Verified against EvtxECmd itself rather than assumed. A probe map binding
+/// `/Event/EventData/Data` was run over a real `ESENT` event ID 326 record carrying nine unnamed
+/// `<Data>` children: the emitted `PayloadData1` was 1,712 characters longer than the first
+/// element alone, and the bytes between elements were 44, 32.
+const REPEATED_ELEMENT_SEPARATOR: &str = ", ";
+
+fn read<'a>(node: &'a EventNode, attribute: Option<&str>) -> Option<Cow<'a, str>> {
+    match attribute {
+        Some(name) => node.attribute(name).map(Cow::Borrowed),
+        None => node.text.as_deref().map(Cow::Borrowed),
+    }
+}
+
+fn read_final<'a>(
+    parent: &'a EventNode,
+    step: &Step,
+    attribute: Option<&str>,
+) -> Option<Cow<'a, str>> {
+    if step.predicate.is_some() {
+        return read(select_one(parent, step)?, attribute);
+    }
+
+    let matches: Vec<&EventNode> = parent
+        .children
+        .iter()
+        .filter(|child| child.name == step.name)
+        .collect();
+
+    match matches.as_slice() {
+        [] => None,
+        [only] => read(only, attribute),
+        // An attribute selector still reads one element; only text content is joined.
+        many => match attribute {
+            Some(name) => many[0].attribute(name).map(Cow::Borrowed),
+            None => Some(Cow::Owned(
+                many.iter()
+                    .map(|node| node.text.as_deref().unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join(REPEATED_ELEMENT_SEPARATOR),
+            )),
+        },
     }
 }
 
@@ -165,7 +216,7 @@ fn parse_step(segment: &str, expression: &str) -> Result<Step, PathError> {
     })
 }
 
-fn select<'a>(parent: &'a EventNode, step: &Step) -> Option<&'a EventNode> {
+fn select_one<'a>(parent: &'a EventNode, step: &Step) -> Option<&'a EventNode> {
     // Filtered inline rather than through EventNode::children_named so the step's lifetime stays
     // independent of the node's; the iterator does not outlive this call.
     let mut candidates = parent
@@ -173,8 +224,6 @@ fn select<'a>(parent: &'a EventNode, step: &Step) -> Option<&'a EventNode> {
         .iter()
         .filter(|child| child.name == step.name);
     match &step.predicate {
-        // Bare step takes the first match. Whether EvtxECmd instead joins repeated unnamed
-        // <Data> elements is not yet confirmed against the tool; see issue #539.
         None => candidates.next(),
         Some(Predicate::Index(index)) => candidates.nth(index - 1),
         Some(Predicate::AttributeEquals { name, value }) => {
@@ -222,7 +271,7 @@ mod tests {
         ValuePath::parse(expression)
             .expect("path parses")
             .evaluate(&event())
-            .map(str::to_string)
+            .map(|value| value.into_owned())
     }
 
     #[test]
@@ -242,8 +291,30 @@ mod tests {
     }
 
     #[test]
-    fn bare_step_takes_the_first_match() {
-        assert_eq!(eval("/Event/EventData/Data").as_deref(), Some("adam"));
+    fn bare_step_joins_repeated_elements_as_evtxecmd_does() {
+        // Verified against EvtxECmd on a real ESENT 326 record; see REPEATED_ELEMENT_SEPARATOR.
+        assert_eq!(eval("/Event/EventData/Data").as_deref(), Some("adam, 10"));
+    }
+
+    #[test]
+    fn bare_step_with_a_single_match_returns_that_element_untouched() {
+        let single = EventNode::new("Event").with_child(
+            EventNode::new("EventData").with_child(EventNode::new("Data").with_text("RunOnceEx")),
+        );
+        let path = ValuePath::parse("/Event/EventData/Data").expect("parses");
+        assert_eq!(path.evaluate(&single).as_deref(), Some("RunOnceEx"));
+    }
+
+    #[test]
+    fn joining_preserves_position_for_an_element_with_no_text() {
+        let gapped = EventNode::new("Event").with_child(
+            EventNode::new("EventData")
+                .with_child(EventNode::new("Data").with_text("first"))
+                .with_child(EventNode::new("Data"))
+                .with_child(EventNode::new("Data").with_text("third")),
+        );
+        let path = ValuePath::parse("/Event/EventData/Data").expect("parses");
+        assert_eq!(path.evaluate(&gapped).as_deref(), Some("first, , third"));
     }
 
     #[test]
