@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxRecord};
-use super::sanitize_control_chars;
+use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
 
 #[cfg(target_os = "windows")]
