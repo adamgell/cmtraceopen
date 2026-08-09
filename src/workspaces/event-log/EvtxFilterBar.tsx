@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Button, Dropdown, Input, Option, tokens } from "@fluentui/react-components";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { selectVisibleRecords } from "./evtx-filter";
+import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
 import {
   useEvtxStore,
   type EvtxSortField,
@@ -18,6 +18,8 @@ const EXPORT_FORMATS = [
   { value: "json", label: "JSON", extension: "json" },
   { value: "xml", label: "Event XML", extension: "xml" },
 ] as const;
+
+const GROUP_FIELDS: EvtxGroupField[] = ["level", "provider", "channel", "eventId", "day"];
 
 const LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 
@@ -65,6 +67,9 @@ export function EvtxFilterBar() {
   const refreshLoadedChannels = useEvtxStore((s) => s.refreshLoadedChannels);
 
   const sortFieldLabel = useMemo(() => SORT_FIELD_LABELS[sortField], [sortField]);
+
+  const groupBy = useEvtxStore((s) => s.groupBy);
+  const setGroupBy = useEvtxStore((s) => s.setGroupBy);
 
   const [exportState, setExportState] = useState<string | null>(null);
 
@@ -180,6 +185,32 @@ export function EvtxFilterBar() {
         size="small"
         style={{ width: "160px" }}
       />
+
+      <Dropdown
+        size="small"
+        multiselect
+        placeholder="Group by"
+        value={groupBy.map((field) => EVTX_GROUP_LABELS[field]).join(" > ")}
+        selectedOptions={groupBy}
+        style={{ minWidth: "128px" }}
+        title="Group the list. Selecting several nests them in the order chosen."
+        onOptionSelect={(_, data) => {
+          const field = data.optionValue as EvtxGroupField;
+          if (!field) return;
+          // Appending rather than sorting keeps the nesting order under the operator's control.
+          setGroupBy(
+            groupBy.includes(field)
+              ? groupBy.filter((existing) => existing !== field)
+              : [...groupBy, field]
+          );
+        }}
+      >
+        {GROUP_FIELDS.map((field) => (
+          <Option key={field} value={field}>
+            {EVTX_GROUP_LABELS[field]}
+          </Option>
+        ))}
+      </Dropdown>
 
       <Dropdown
         size="small"

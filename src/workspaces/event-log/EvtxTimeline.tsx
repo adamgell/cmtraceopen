@@ -7,7 +7,11 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
-import { parseEventIdFilter } from "./evtx-filter";
+import {
+  parseEventIdFilter,
+  buildGroupedRows,
+  type EvtxRow,
+} from "./evtx-filter";
 import type { EvtxRecord, EvtxLevel } from "./types";
 import { EvtxTimelineRow } from "./EvtxTimelineRow";
 
@@ -54,6 +58,9 @@ export function EvtxTimeline() {
   const filterSearch = useEvtxStore((s) => s.filterSearch);
   const sortField = useEvtxStore((s) => s.sortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
+  const groupBy = useEvtxStore((s) => s.groupBy);
+  const collapsedGroups = useEvtxStore((s) => s.collapsedGroups);
+  const toggleGroup = useEvtxStore((s) => s.toggleGroup);
   const selectedRecordId = useEvtxStore((s) => s.selectedRecordId);
   const setSelectedRecordId = useEvtxStore((s) => s.setSelectedRecordId);
 
@@ -103,11 +110,32 @@ export function EvtxTimeline() {
 
   const parentRef = useRef<HTMLDivElement>(null);
 
+  // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
+  // than records. With no grouping the row list is the record list and nothing changes.
+  const rows: EvtxRow[] = useMemo(
+    () => buildGroupedRows(sortedRecords, groupBy, collapsedGroups),
+    [sortedRecords, groupBy, collapsedGroups]
+  );
+
+  // Keyboard navigation moves between records, skipping headers, because a header is not a
+  // selectable event.
+  const recordRowIndexes = useMemo(
+    () =>
+      rows.reduce<number[]>((indexes, row, index) => {
+        if (row.kind === "record") indexes.push(index);
+        return indexes;
+      }, []),
+    [rows]
+  );
+
   const virtualizer = useVirtualizer({
-    count: sortedRecords.length,
+    count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => rowEstimate,
-    getItemKey: (index) => sortedRecords[index]?.id ?? index,
+    getItemKey: (index) => {
+      const row = rows[index];
+      return row?.kind === "group" ? `group:${row.key}` : row?.record.id ?? index;
+    },
     overscan: 10,
   });
 
@@ -124,29 +152,37 @@ export function EvtxTimeline() {
       e.preventDefault();
       e.stopPropagation();
 
-      const currentIndex = selectedRecordId != null
-        ? sortedRecords.findIndex((r) => r.id === selectedRecordId)
+      if (recordRowIndexes.length === 0) return;
+
+      const currentPosition = selectedRecordId != null
+        ? recordRowIndexes.findIndex((rowIndex) => {
+            const row = rows[rowIndex];
+            return row.kind === "record" && row.record.id === selectedRecordId;
+          })
         : -1;
 
-      let nextIndex: number;
+      let nextPosition: number;
       if (e.key === "ArrowDown") {
-        nextIndex = currentIndex < sortedRecords.length - 1 ? currentIndex + 1 : currentIndex;
+        nextPosition = currentPosition < recordRowIndexes.length - 1 ? currentPosition + 1 : currentPosition;
       } else if (e.key === "ArrowUp") {
-        nextIndex = currentIndex > 0 ? currentIndex - 1 : 0;
+        nextPosition = currentPosition > 0 ? currentPosition - 1 : 0;
       } else if (e.key === "Home") {
-        nextIndex = 0;
+        nextPosition = 0;
       } else {
-        nextIndex = sortedRecords.length - 1;
+        nextPosition = recordRowIndexes.length - 1;
       }
 
-      if (nextIndex >= 0 && nextIndex < sortedRecords.length) {
-        setSelectedRecordId(sortedRecords[nextIndex].id);
-        virtualizer.scrollToIndex(nextIndex, { align: "auto" });
+      if (nextPosition < 0) nextPosition = 0;
+      const rowIndex = recordRowIndexes[nextPosition];
+      const row = rows[rowIndex];
+      if (row?.kind === "record") {
+        setSelectedRecordId(row.record.id);
+        virtualizer.scrollToIndex(rowIndex, { align: "auto" });
         // Keep focus on the container so subsequent arrow keys work
         parentRef.current?.focus();
       }
     },
-    [selectedRecordId, sortedRecords, setSelectedRecordId, virtualizer]
+    [selectedRecordId, rows, recordRowIndexes, setSelectedRecordId, virtualizer]
   );
 
   if (records.length === 0) {
@@ -214,7 +250,46 @@ export function EvtxTimeline() {
           }}
         >
           {virtualRows.map((virtualRow) => {
-            const record = sortedRecords[virtualRow.index];
+            const row = rows[virtualRow.index];
+            if (!row) return null;
+
+            if (row.kind === "group") {
+              return (
+                <div
+                  key={virtualRow.key}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  role="button"
+                  tabIndex={-1}
+                  onClick={() => toggleGroup(row.key)}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualRow.start}px)`,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    paddingLeft: `${8 + row.depth * 16}px`,
+                    height: `${metrics.rowHeight}px`,
+                    fontSize: `${smallFontSize}px`,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    backgroundColor: tokens.colorNeutralBackground3,
+                    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+                    color: tokens.colorNeutralForeground2,
+                  }}
+                  title={`${row.count} events`}
+                >
+                  <span style={{ width: "10px" }}>{row.collapsed ? "\u25B8" : "\u25BE"}</span>
+                  <span>{row.label}</span>
+                  <span style={{ color: tokens.colorNeutralForeground4 }}>({row.count})</span>
+                </div>
+              );
+            }
+
+            const record = row.record;
             return (
               <EvtxTimelineRow
                 key={virtualRow.key}

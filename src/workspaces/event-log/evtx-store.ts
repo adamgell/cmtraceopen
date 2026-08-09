@@ -13,6 +13,7 @@ import { EVTX_TIME_WINDOW_MS } from "./types";
 
 // Re-exported so callers have one import site; the implementations live in a Tauri-free module.
 export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
+import type { EvtxGroupField } from "./evtx-filter";
 
 /**
  * Builds the filter handed to the backend, which compiles it to XPath.
@@ -48,6 +49,8 @@ interface EvtxState {
   filterEventIds: string;
   filterSearch: string;
   timeWindow: EvtxTimeWindow;
+  groupBy: EvtxGroupField[];
+  collapsedGroups: Set<string>;
   sortField: EvtxSortField;
   sortDirection: EvtxSortDirection;
   selectedRecordId: number | null;
@@ -66,6 +69,8 @@ interface EvtxState {
   setFilterEventIds: (eventIds: string) => void;
   setFilterSearch: (search: string) => void;
   setTimeWindow: (window: EvtxTimeWindow) => void;
+  setGroupBy: (fields: EvtxGroupField[]) => void;
+  toggleGroup: (key: string) => void;
   setSortField: (field: EvtxSortField) => void;
   setSortDirection: (direction: EvtxSortDirection) => void;
   setSelectedRecordId: (id: number | null) => void;
@@ -104,6 +109,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   filterEventIds: "",
   filterSearch: "",
   timeWindow: "24h",
+  groupBy: [],
+  collapsedGroups: new Set<string>(),
   sortField: "time",
   sortDirection: "asc",
   selectedRecordId: null,
@@ -348,6 +355,15 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   setFilterEventIds: (eventIds) => set({ filterEventIds: eventIds }),
   setFilterSearch: (search) => set({ filterSearch: search }),
   setTimeWindow: (window) => set({ timeWindow: window }),
+  // Changing the grouping invalidates every collapse key, so the old set is discarded rather than
+  // left to collapse unrelated groups that happen to share a key.
+  setGroupBy: (fields) => set({ groupBy: fields, collapsedGroups: new Set<string>() }),
+  toggleGroup: (key) => {
+    const next = new Set(get().collapsedGroups);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    set({ collapsedGroups: next });
+  },
   setSortField: (field) => set({ sortField: field }),
   setSortDirection: (direction) => set({ sortDirection: direction }),
   setSelectedRecordId: (id) => set({ selectedRecordId: id }),
@@ -369,6 +385,8 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       filterEventIds: "",
       filterSearch: "",
       timeWindow: "24h",
+      groupBy: [],
+      collapsedGroups: new Set<string>(),
       sortField: "time",
       sortDirection: "asc",
       selectedRecordId: null,
