@@ -849,8 +849,7 @@ mod tests {
         // nothing and the download vanishes. Every suppressed phrasing must
         // classify as a failure.
         for phrase in test_vocabulary::NEGATED_START_FAILED {
-            let message =
-                format!("{phrase} for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+            let message = format!("{phrase} for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890");
             assert!(
                 !is_download_start(&message),
                 "the negation gate must suppress the start: {message:?}"

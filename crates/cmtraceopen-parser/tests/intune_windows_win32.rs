@@ -950,7 +950,12 @@ fn a_mistyped_counter_declaration_is_rejected() {
     let (analysis, _, expected, _) = load("rotation-split-record");
     let corrupted = mutated(&expected, "/fragmentRecords", json!("2"));
     let mut failures = Failures::new();
-    assert_coverage("rotation-split-record", &analysis, &corrupted, &mut failures);
+    assert_coverage(
+        "rotation-split-record",
+        &analysis,
+        &corrupted,
+        &mut failures,
+    );
     assert!(
         failures
             .entries()
@@ -962,7 +967,12 @@ fn a_mistyped_counter_declaration_is_rejected() {
 
     let corrupted = mutated(&expected, "/unknownVocabularyObserved", json!("false"));
     let mut failures = Failures::new();
-    assert_coverage("rotation-split-record", &analysis, &corrupted, &mut failures);
+    assert_coverage(
+        "rotation-split-record",
+        &analysis,
+        &corrupted,
+        &mut failures,
+    );
     assert!(
         failures
             .entries()

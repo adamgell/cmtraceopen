@@ -206,8 +206,9 @@ mod tests {
     fn a_transaction_masks_failed_requirements_but_keeps_its_keys() {
         let analysis = analysis();
         let mut transaction = analysis.transactions[0].clone();
-        transaction.failed_requirements =
-            vec![format!(r"User file C:\Users\jsmith\flag.txt exists for {UPN}")];
+        transaction.failed_requirements = vec![format!(
+            r"User file C:\Users\jsmith\flag.txt exists for {UPN}"
+        )];
 
         let redacted = redact_transaction(&transaction);
         assert_eq!(redacted.failed_requirements.len(), 1);
@@ -229,8 +230,9 @@ mod tests {
     fn the_export_projection_is_idempotent() {
         let mut analysis = analysis();
         analysis.observations[0] = dressed_sensitive_observation();
-        analysis.transactions[0].failed_requirements =
-            vec![format!(r"User file C:\Users\jsmith\flag.txt exists for {UPN}")];
+        analysis.transactions[0].failed_requirements = vec![format!(
+            r"User file C:\Users\jsmith\flag.txt exists for {UPN}"
+        )];
 
         let once = redacted_export_projection(&analysis);
         let twice = redacted_export_projection(&once);

@@ -350,7 +350,9 @@ fn covered(ranges: &[(usize, usize)], span: (usize, usize)) -> bool {
 fn extend_through_profile_segment(contents: &str, end: usize) -> usize {
     let tail = &contents[end..];
     let stop = tail
-        .find(['\\', '/', '"', '\'', ',', ';', '<', '>', '|', ' ', '\t', '\r', '\n'])
+        .find([
+            '\\', '/', '"', '\'', ',', ';', '<', '>', '|', ' ', '\t', '\r', '\n',
+        ])
         .unwrap_or(tail.len());
     end + stop
 }
@@ -775,15 +777,17 @@ pub fn privacy_problems_excluding_probes(
             needles.push(escaped);
         }
         let leaked = needles.iter().any(|needle| {
-            contents.match_indices(needle.as_str()).any(|(start, matched)| {
-                let end = start + matched.len();
-                let span_end = if is_profile_root {
-                    extend_through_profile_segment(contents, end)
-                } else {
-                    end
-                };
-                !covered(&exempt, (start, span_end))
-            })
+            contents
+                .match_indices(needle.as_str())
+                .any(|(start, matched)| {
+                    let end = start + matched.len();
+                    let span_end = if is_profile_root {
+                        extend_through_profile_segment(contents, end)
+                    } else {
+                        end
+                    };
+                    !covered(&exempt, (start, span_end))
+                })
         });
         failures.require(!leaked, || {
             format!("{context}: contains forbidden fixture material {forbidden:?}")
@@ -814,13 +818,13 @@ fn windows_sid_occurrences(contents: &str) -> Vec<(usize, String)> {
             .split(|c: char| !(c.is_ascii_digit() || c == '-' || c == 'S'))
             .next()
             .unwrap_or_default();
-        if candidate.matches('-').count() >= 4 && candidate.ends_with(|c: char| c.is_ascii_digit()) {
+        if candidate.matches('-').count() >= 4 && candidate.ends_with(|c: char| c.is_ascii_digit())
+        {
             occurrences.push((index, candidate.to_owned()));
         }
     }
     occurrences
 }
-
 
 /// Find an email address, ignoring the reserved `.invalid` and `.example` TLDs
 /// that fixtures are expected to use for synthetic identities.
