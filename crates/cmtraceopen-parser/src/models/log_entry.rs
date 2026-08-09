@@ -4,9 +4,12 @@ use serde::{Deserialize, Serialize};
 /// Maps directly to CMTrace's type field: 0=Success, 1=Info, 2=Warning, 3=Error.
 /// `Success` corresponds to CCM/PSADT `type="0"` — a completed operation that
 /// OneTrace renders with a green tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Severity {
     Success,
+    /// Default: an unclassified line is informational, which is how every parser already treats
+    /// one it cannot rank.
+    #[default]
     Info,
     Warning,
     Error,
@@ -24,13 +27,17 @@ pub enum EntryKind {
 }
 
 /// Which log format was detected/used to parse this entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogFormat {
     /// CCM/SCCM format: <![LOG[msg]LOG]!><time="..." date="..." ...>
     Ccm,
     /// Simple/legacy format: message$$<Component><timestamp><thread>
     Simple,
-    /// Plain text (no structured format detected)
+    /// Plain text (no structured format detected).
+    ///
+    /// Default, because claiming a structured format that was never detected would be a stronger
+    /// assertion than the evidence supports.
+    #[default]
     Plain,
     /// Generic timestamped format (ISO 8601, slash-dates, syslog, time-only)
     Timestamped,
@@ -154,7 +161,10 @@ pub struct ParserSelectionInfo {
 
 /// A single parsed log entry.
 /// Field names use camelCase for direct JSON serialization to TypeScript.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Default` exists so tests can construct one by naming only the fields under test; the struct
+/// carries far too many fields to spell out every time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     /// Sequential ID for stable row identity

@@ -18,4 +18,5 @@ pub mod models;
 pub mod parser;
 pub mod provider;
 pub mod sccm;
+pub mod unified_timeline;
 pub(crate) mod wire;
