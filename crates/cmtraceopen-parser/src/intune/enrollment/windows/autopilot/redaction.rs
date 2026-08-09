@@ -114,10 +114,20 @@ fn user_path_re() -> &'static Regex {
 /// Bounded at 40 characters so a GUID (32 hex digits plus dashes, matched in
 /// runs of at most 12) and an eight-digit HRESULT are both left readable; those
 /// are diagnostic grammar, not identity.
+///
+/// No `\b` anchors. The Base64 alphabet includes `=`, `+`, and `/`, none of
+/// which is a word character, so a trailing `\b` could not close a match on a
+/// padded or punctuation-terminated hash and left its tail exposed. The match
+/// is greedy and leftmost, so it consumes the whole contiguous Base64 run
+/// wherever a >=40 run exists -- exactly the whole hash -- while the >=40 bound
+/// still excludes the 36-char GUID (dashes break it into <=12-char runs) and
+/// the short HRESULT. The `[blob:…]` token this produces contains `[`, `:`, and
+/// `]`, which are outside the alphabet, so a token can never re-match: the
+/// projection stays idempotent.
 fn opaque_blob_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"\b[A-Za-z0-9+/=]{40,}\b").expect("opaque blob regex must compile")
+        Regex::new(r"[A-Za-z0-9+/=]{40,}").expect("opaque blob regex must compile")
     })
 }
 
@@ -302,6 +312,40 @@ mod tests {
         let hash = "A".repeat(64);
         let masked = redact_text(&format!("hardware hash {hash}"));
         assert!(!masked.contains(&hash), "got {masked}");
+    }
+
+    /// A Base64 hardware hash may end in `=`, `==`, `+`, or `/` -- none of which
+    /// is a word character, so a trailing `\b` cannot close the match at them.
+    /// Every one of these must be masked in full, or raw identity material rides
+    /// out in the padding after a partial match (ADR-004: restricted values are
+    /// absent from export).
+    #[test]
+    fn a_base64_blob_ending_in_punctuation_is_masked_in_full() {
+        // Each blob is a >=40 char Base64 run terminated by a non-word char.
+        for blob in [
+            format!("{}=", "A".repeat(43)),  // single pad
+            format!("{}==", "A".repeat(42)), // double pad
+            format!("{}+", "A".repeat(43)),  // plus terminal
+            format!("{}/", "A".repeat(43)),  // slash terminal
+        ] {
+            let masked = redact_text(&format!("hardware hash {blob} was reported"));
+            assert!(
+                !masked.contains(&blob),
+                "the whole blob must be masked, got {masked}"
+            );
+            // No fragment of the original run -- including the padding/punctuation
+            // tail -- may survive between the surrounding words.
+            assert!(
+                !masked.contains("AA"),
+                "no run of the blob may survive, got {masked}"
+            );
+            for tail in ['=', '+', '/'] {
+                assert!(
+                    !masked.contains(&format!("{tail} was")),
+                    "a punctuation tail must not dangle after masking, got {masked}"
+                );
+            }
+        }
     }
 
     #[test]

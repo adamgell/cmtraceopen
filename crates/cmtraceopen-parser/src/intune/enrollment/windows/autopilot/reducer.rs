@@ -602,8 +602,7 @@ fn sort_time(observation: &AutopilotObservation, basis: AutopilotTimeBasis) -> O
 /// conservative direction: a non-assessable record with an unnormalized
 /// timestamp downgrades the basis, and gating it would upgrade it.
 fn is_assessable(observation: &AutopilotObservation) -> bool {
-    observation.context.access_state == IntuneAccessState::Available
-        && observation.context.parse_state == IntuneParseState::Parsed
+    observation.is_assessable()
 }
 
 /// A report section is assessable under the same rule as an observation: its
@@ -877,7 +876,18 @@ fn reduce_profile(
     sections: &[AutopilotReportSection],
 ) -> AutopilotProfileState {
     let mut evidence = Vec::new();
-    let mut candidate = AutopilotProfileCandidateState::Unknown;
+    // `raised` is the candidate the positive evidence alone supports; it never
+    // encodes a negative, so it is a pure order-independent maximum. The
+    // explicit negatives are tracked apart and reconciled against it below,
+    // because whether a later success may erase an earlier negative is a
+    // linkage question, not an ordering one (ADR-003).
+    let mut raised = AutopilotProfileCandidateState::Unknown;
+    let mut negative: Option<AutopilotProfileCandidateState> = None;
+    // Activity ids (the module's retry/session key) carried by the explicit
+    // negatives and by the successes that reached `Available`. A negative may
+    // be erased only when it shares one with a success.
+    let mut negative_links: Vec<String> = Vec::new();
+    let mut available_success_links: Vec<String> = Vec::new();
     let mut retrieved = false;
     let mut applied = false;
     let mut error: Option<IntuneErrorCode> = None;
@@ -889,13 +899,14 @@ fn reduce_profile(
             | AutopilotSignal::ProfilePolicyNotFound
             | AutopilotSignal::NetworkAvailableForDownload => {
                 evidence.push(observation.evidence_ref());
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Pending);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Pending);
             }
             AutopilotSignal::ProfileRetrieveSucceeded
             | AutopilotSignal::ProfileSettingsRetrieved => {
                 evidence.push(observation.evidence_ref());
                 retrieved = true;
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Available);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
+                push_link(&mut available_success_links, observation.activity_id.as_deref());
             }
             AutopilotSignal::ProfileStateChanged => {
                 evidence.push(observation.evidence_ref());
@@ -912,8 +923,8 @@ fn reduce_profile(
                         | Some(AutopilotProfileStateToken::Provisioned)
                 ) {
                     applied = true;
-                    candidate =
-                        raise_candidate(candidate, AutopilotProfileCandidateState::Available);
+                    raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
+                    push_link(&mut available_success_links, observation.activity_id.as_deref());
                 }
                 if token.is_some() {
                     last_state_token = token;
@@ -922,15 +933,24 @@ fn reduce_profile(
             AutopilotSignal::DeviceAlreadyProvisioned => {
                 evidence.push(observation.evidence_ref());
                 applied = true;
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Available);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
+                push_link(&mut available_success_links, observation.activity_id.as_deref());
             }
             AutopilotSignal::NoAssignedProfile => {
                 evidence.push(observation.evidence_ref());
-                candidate = AutopilotProfileCandidateState::NoneAssigned;
+                negative = Some(merge_negative(
+                    negative,
+                    AutopilotProfileCandidateState::NoneAssigned,
+                ));
+                push_link(&mut negative_links, observation.activity_id.as_deref());
             }
             AutopilotSignal::AssignedProfileMissing => {
                 evidence.push(observation.evidence_ref());
-                candidate = AutopilotProfileCandidateState::AssignedButMissing;
+                negative = Some(merge_negative(
+                    negative,
+                    AutopilotProfileCandidateState::AssignedButMissing,
+                ));
+                push_link(&mut negative_links, observation.activity_id.as_deref());
             }
             AutopilotSignal::ProfileApplicationFailed => {
                 evidence.push(observation.evidence_ref());
@@ -945,13 +965,18 @@ fn reduce_profile(
         match section.outcome {
             AutopilotSectionOutcome::Succeeded => {
                 retrieved = true;
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Available);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
+                push_link(&mut available_success_links, section_activity_id(section));
             }
             AutopilotSectionOutcome::NotFound => {
-                candidate = AutopilotProfileCandidateState::NoneAssigned;
+                negative = Some(merge_negative(
+                    negative,
+                    AutopilotProfileCandidateState::NoneAssigned,
+                ));
+                push_link(&mut negative_links, section_activity_id(section));
             }
             AutopilotSectionOutcome::Retrying => {
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Pending);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Pending);
             }
             _ => {}
         }
@@ -965,6 +990,8 @@ fn reduce_profile(
         error = error.or_else(|| section.error.clone());
     }
 
+    let candidate = reconcile_candidate(raised, negative, &negative_links, &available_success_links);
+
     AutopilotProfileState {
         profile_id: single_value(observations, "profileId"),
         profile_name: single_value(observations, "profileName"),
@@ -977,6 +1004,74 @@ fn reduce_profile(
         error,
         evidence: normalized_evidence(evidence),
     }
+}
+
+/// The `activityId` a report section carried in its values, lowercased so retry
+/// linkage compares case-insensitively like the ESP correlation keys.
+fn section_activity_id(section: &AutopilotReportSection) -> Option<&str> {
+    section
+        .values
+        .iter()
+        .find(|value| value.name.eq_ignore_ascii_case("activityId"))
+        .map(|value| value.value.as_str())
+}
+
+/// Record one retry-linkage key, lowercased. Absent keys contribute nothing:
+/// a success with no activity id can never be *proven* to be the same attempt
+/// as an earlier negative, so it must not count as linkage.
+fn push_link(links: &mut Vec<String>, activity: Option<&str>) {
+    if let Some(activity) = activity {
+        links.push(activity.to_ascii_lowercase());
+    }
+}
+
+/// Combine two explicit negatives deterministically. Both rank equally and both
+/// reduce to [`AutopilotOutcome::NoProfileCandidate`]; `AssignedButMissing` is
+/// the more specific statement, so it wins when a bundle somehow carries both.
+/// The choice is permutation-invariant, unlike the old last-writer assignment.
+fn merge_negative(
+    current: Option<AutopilotProfileCandidateState>,
+    incoming: AutopilotProfileCandidateState,
+) -> AutopilotProfileCandidateState {
+    match current {
+        Some(AutopilotProfileCandidateState::AssignedButMissing) => {
+            AutopilotProfileCandidateState::AssignedButMissing
+        }
+        _ => incoming,
+    }
+}
+
+/// Reconcile the positive-evidence candidate against an explicit negative.
+///
+/// ADR-003: a later success may replace an earlier explicit negative only when
+/// retry linkage is explicit. Linkage here is a shared `activityId` between the
+/// negative and a success that reached `Available`. Without it the negative
+/// stands and the reducer stays conservative -- an unrelated success cannot
+/// silently complete an enrollment the service explicitly said had no profile.
+/// With it, the success is a proven retry of the same attempt and the candidate
+/// rises to `Available`. The decision reads only sets, never vector order, so
+/// permuting the input cannot change it.
+fn reconcile_candidate(
+    raised: AutopilotProfileCandidateState,
+    negative: Option<AutopilotProfileCandidateState>,
+    negative_links: &[String],
+    available_success_links: &[String],
+) -> AutopilotProfileCandidateState {
+    let Some(negative) = negative else {
+        return raised;
+    };
+    let raised_to_available = raised == AutopilotProfileCandidateState::Available;
+    let retry_linked = negative_links
+        .iter()
+        .any(|link| available_success_links.contains(link));
+    if raised_to_available && retry_linked {
+        // The success is a proven retry of the same attempt; it may erase the
+        // negative.
+        return raised;
+    }
+    // No proven retry link: the explicit negative wins over both an unlinked
+    // success and any weaker positive (Pending/Unknown).
+    negative
 }
 
 /// Raise a candidate state, never lowering one that was explicitly proven.

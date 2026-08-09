@@ -1631,6 +1631,269 @@ fn native_events_are_absorbed_with_their_provenance_artifact() {
     assert!(snapshot.profile.retrieved);
 }
 
+/// One profile-channel event with a caller-set `activityId`, the module's
+/// retry/session correlation key. `synthetic_event` hardcodes a null
+/// `activityId`, so the linkage cases override it here.
+fn profile_event(record: u64, event_id: u32, activity: Option<&str>, message: &str) -> Value {
+    let mut event = synthetic_event(
+        &format!("prof-{event_id}-{record}"),
+        "prof-channel",
+        record,
+        event_id,
+        "available",
+        "parsed",
+        json!([]),
+        message,
+    );
+    event["activityId"] = match activity {
+        Some(value) => json!(value),
+        None => Value::Null,
+    };
+    event
+}
+
+/// An ESP session fact keyed only on `activityId`, so it links to whichever
+/// profile events carry the same activity id.
+fn esp_session_on_activity(activity: &str) -> Value {
+    json!({
+        "autopilotDocument": "autopilot.espSession",
+        "documentVersion": 1,
+        "sessions": [{
+            "sessionId": "esp-session-1",
+            "enrollmentId": null, "correlationId": null,
+            "activityId": activity,
+            "entraDeviceId": null, "managedDeviceId": null,
+            "startedAtUtc": "2026-07-31T09:00:20Z", "phase": "deviceSetup",
+            "evidence": { "evidenceId": "esp-retry-1", "sourceArtifactId": "esp-facts" }
+        }]
+    })
+}
+
+/// Reduce a bundle whose profile events appear in `events_in_order`, paired
+/// with an observed ESP handoff and an ESP session on `success_activity`. Every
+/// completion gate except the profile candidate is left open, so the outcome
+/// turns solely on whether the later success is allowed to erase the earlier
+/// explicit negative.
+fn reduce_profile_retry(events_in_order: Vec<Value>, success_activity: &str) -> AutopilotSnapshot {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": events_in_order,
+    });
+    reduce_autopilot_bundle(&synthetic_bundle(vec![
+        synthetic_source("prof-channel", "autopilotEvents", &events),
+        synthetic_source("prof-report", "mdmReport", &esp_handoff_report("prof-report")),
+        synthetic_source("esp-facts", "espSession", &esp_session_on_activity(success_activity)),
+    ]))
+}
+
+const PROFILE_NEGATIVE_MESSAGE: &str =
+    "ZtdDeviceHasNoAssignedProfile - No profile assigned to the device and no default profile.";
+const PROFILE_RETRIEVE_MESSAGE: &str = "AutopilotManager retrieve settings succeeded.";
+const PROFILE_STATE_MESSAGE: &str =
+    "AutopilotManager reported the state changed from ProfileState_Available to ProfileState_Provisioned.";
+
+/// ADR-003: an explicit negative profile signal (815, NoAssignedProfile) must
+/// not be silently erased by a later success (161 + 153) that shares no retry
+/// linkage with it. Here the negative carries no activity id while the
+/// successes and the ESP session share `attempt-1`, so the ESP handoff links
+/// and every completion gate except the profile candidate is open. Without an
+/// explicit retry link the reducer must stay conservative: the recorded
+/// negative stands and the enrollment is not Completed.
+#[test]
+fn an_unlinked_success_cannot_erase_an_earlier_no_profile_negative() {
+    let snapshot = reduce_profile_retry(
+        vec![
+            profile_event(1, 815, None, PROFILE_NEGATIVE_MESSAGE),
+            profile_event(2, 161, Some("attempt-1"), PROFILE_RETRIEVE_MESSAGE),
+            profile_event(3, 153, Some("attempt-1"), PROFILE_STATE_MESSAGE),
+        ],
+        "attempt-1",
+    );
+
+    // Sanity: the ESP handoff path is genuinely open, so the only thing that can
+    // hold the outcome back from Completed is the unlinked profile negative.
+    assert_eq!(
+        snapshot.esp_linkage.state,
+        AutopilotEspLinkState::Linked,
+        "the ESP session must link so this test isolates the profile-linkage gate"
+    );
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "an unlinked later success must not complete over an explicit negative"
+    );
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::NoProfileCandidate,
+        "the conservative result is the explicit negative that was recorded, not success"
+    );
+}
+
+/// The linkage-permitted companion: when the negative and the successes share
+/// the same activity id, the success is a proven retry of the same attempt and
+/// may raise the candidate to Available, reaching Completed.
+#[test]
+fn a_retry_linked_success_completes_over_an_earlier_negative() {
+    let snapshot = reduce_profile_retry(
+        vec![
+            profile_event(1, 815, Some("attempt-1"), PROFILE_NEGATIVE_MESSAGE),
+            profile_event(2, 161, Some("attempt-1"), PROFILE_RETRIEVE_MESSAGE),
+            profile_event(3, 153, Some("attempt-1"), PROFILE_STATE_MESSAGE),
+        ],
+        "attempt-1",
+    );
+
+    assert_eq!(
+        snapshot.outcome,
+        AutopilotOutcome::Completed,
+        "a retry-linked success may replace the earlier negative and complete"
+    );
+}
+
+/// ADR-003: input vector order is not chronology. The unlinked negative-then-
+/// success verdict must not change when the events are permuted.
+#[test]
+fn the_profile_linkage_verdict_is_invariant_under_input_order() {
+    let forward = reduce_profile_retry(
+        vec![
+            profile_event(1, 815, None, PROFILE_NEGATIVE_MESSAGE),
+            profile_event(2, 161, Some("attempt-1"), PROFILE_RETRIEVE_MESSAGE),
+            profile_event(3, 153, Some("attempt-1"), PROFILE_STATE_MESSAGE),
+        ],
+        "attempt-1",
+    );
+    let reversed = reduce_profile_retry(
+        vec![
+            profile_event(3, 153, Some("attempt-1"), PROFILE_STATE_MESSAGE),
+            profile_event(2, 161, Some("attempt-1"), PROFILE_RETRIEVE_MESSAGE),
+            profile_event(1, 815, None, PROFILE_NEGATIVE_MESSAGE),
+        ],
+        "attempt-1",
+    );
+
+    assert_eq!(
+        forward.outcome, reversed.outcome,
+        "permuting non-ordered input must not change the outcome"
+    );
+    assert_eq!(forward.outcome, AutopilotOutcome::NoProfileCandidate);
+}
+
+/// ADR-001, finding side: a non-assessable failure event cannot produce a
+/// high-confidence terminal FINDING, exactly as it cannot produce a terminal
+/// OUTCOME. A capped event 171 (`TpmIdentityFailed`) with no assessable
+/// identity-mismatch evidence must not emit the `Blocker`/`High`
+/// `autopilot-identity-registration-mismatch` finding. The recorded failure is
+/// still surfaced -- by the low-confidence non-assessable finding -- so it is
+/// blocked visibly rather than silently.
+#[test]
+fn a_non_assessable_tpm_failure_cannot_emit_a_high_confidence_blocker() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "tpm-capped", "tpm-channel", 1, 171, "capped", "parsed",
+            json!([]),
+            "AutopilotManager failed to confirm the TPM identity for this device.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "tpm-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+
+    assert_ne!(
+        snapshot.outcome,
+        AutopilotOutcome::IdentityRegistrationMismatch,
+        "a capped 171 cannot prove the terminal outcome"
+    );
+    assert!(
+        !snapshot.findings.iter().any(|finding| {
+            finding.finding_id == "autopilot-identity-registration-mismatch"
+        }),
+        "a non-assessable 171 must not emit the high-confidence identity-mismatch blocker, got {:?}",
+        snapshot
+            .findings
+            .iter()
+            .map(|finding| &finding.finding_id)
+            .collect::<Vec<_>>()
+    );
+    // The recorded failure must still be visible, just not as a terminal claim.
+    assert!(
+        snapshot.findings.iter().any(|finding| {
+            finding.finding_id == "autopilot-non-assessable-failure-recorded"
+        }),
+        "the recorded failure must be surfaced by its own low-confidence finding"
+    );
+}
+
+/// The regression companion: an *assessable* event 171 must still emit the
+/// `autopilot-identity-registration-mismatch` blocker. The assessability
+/// boundary must gate non-assessable evidence without silencing the real
+/// terminal finding.
+#[test]
+fn an_assessable_tpm_failure_still_emits_the_identity_mismatch_blocker() {
+    let events = json!({
+        "autopilotDocument": "autopilot.events",
+        "documentVersion": 1,
+        "events": [synthetic_event(
+            "tpm-ok", "tpm-channel", 1, 171, "available", "parsed",
+            json!([]),
+            "AutopilotManager failed to confirm the TPM identity for this device.",
+        )]
+    });
+    let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+        "tpm-channel",
+        "autopilotEvents",
+        &events,
+    )]));
+
+    let finding = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "autopilot-identity-registration-mismatch")
+        .expect("an assessable 171 must still emit the identity-mismatch blocker");
+    assert_eq!(wire(&finding.severity), json!("blocker"));
+    assert_eq!(wire(&finding.confidence), json!("high"));
+}
+
+/// ADR-004: a Base64 hardware hash quoted in an observation message must be
+/// absent from the exported projection even when it ends in a non-word Base64
+/// character (`=`, `==`, `+`, `/`). Free-text redaction, not whole-value
+/// masking, owns this path, so the export is the honest place to pin it.
+#[test]
+fn a_base64_hash_in_an_observation_message_never_survives_the_export() {
+    for blob in [
+        format!("{}=", "Q".repeat(43)),
+        format!("{}==", "Q".repeat(42)),
+        format!("{}+", "Q".repeat(43)),
+        format!("{}/", "Q".repeat(43)),
+    ] {
+        let events = json!({
+            "autopilotDocument": "autopilot.events",
+            "documentVersion": 1,
+            "events": [synthetic_event(
+                "blob-e1", "blob-channel", 1, 161, "available", "parsed",
+                json!([]),
+                &format!("AutopilotManager reported hardware hash {blob} for this device."),
+            )]
+        });
+        let snapshot = reduce_autopilot_bundle(&synthetic_bundle(vec![synthetic_source(
+            "blob-channel",
+            "autopilotEvents",
+            &events,
+        )]));
+        let redacted = redacted_export_projection(&snapshot);
+        let text =
+            serde_json::to_string(&wire(&redacted)).expect("redacted export must serialize");
+        assert!(
+            !text.contains(&blob),
+            "the Base64 hash {blob:?} survived the exported projection: {text}"
+        );
+    }
+}
+
 // ── Golden maintenance ──────────────────────────────────────────────────────
 
 /// Rewrite every scenario's `findings` golden from the current reducer output.

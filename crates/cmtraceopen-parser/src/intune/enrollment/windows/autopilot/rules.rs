@@ -10,8 +10,8 @@
 //! the whole MDM bundle" is not an answer when one event ID would do.
 
 use crate::intune::evidence::{
-    IntuneAccessState, IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding,
-    IntuneFindingConfidence, IntuneFindingSeverity, IntuneParseState,
+    IntuneArtifactStatus, IntuneEvidenceRef, IntuneFinding, IntuneFindingConfidence,
+    IntuneFindingSeverity, IntuneParseState,
 };
 
 use super::models::*;
@@ -727,10 +727,7 @@ fn push_non_assessable_failure_recorded(
     let recorded = snapshot
         .observations
         .iter()
-        .filter(|observation| {
-            observation.context.access_state != IntuneAccessState::Available
-                || observation.context.parse_state != IntuneParseState::Parsed
-        })
+        .filter(|observation| !observation.is_assessable())
         .filter(|observation| {
             let failed_section = observation.signal == AutopilotSignal::ReportSection
                 && matches!(
@@ -854,6 +851,17 @@ fn terminal_semantics_withheld(snapshot: &AutopilotSnapshot) -> bool {
     snapshot.outcome == AutopilotOutcome::UnknownSchema
 }
 
+/// Evidence refs for every *assessable* observation carrying `signal`.
+///
+/// The `is_assessable` gate is the finding-side companion of the reducer's
+/// [`AutopilotOutcome`] gate (ADR-001). A capped, denied, or malformed failure
+/// event cannot produce a terminal outcome, and it must not be able to promote
+/// a rule into a high-confidence terminal FINDING either -- otherwise a
+/// non-assessable event 171 would emit an `autopilot-identity-registration-mismatch`
+/// blocker the outcome itself correctly withheld. A recorded failure on a
+/// non-assessable record is not silenced: it is surfaced by
+/// [`push_non_assessable_failure_recorded`] at low confidence, which is the
+/// honest strength for evidence that cannot prove its own claim.
 fn signal_evidence(
     snapshot: &AutopilotSnapshot,
     signal: AutopilotSignal,
@@ -861,7 +869,7 @@ fn signal_evidence(
     snapshot
         .observations
         .iter()
-        .filter(|observation| observation.signal == signal)
+        .filter(|observation| observation.is_assessable() && observation.signal == signal)
         .map(AutopilotObservation::evidence_ref)
         .collect()
 }
