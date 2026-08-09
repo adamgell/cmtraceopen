@@ -92,8 +92,11 @@ pub(crate) fn download_complete_re() -> &'static Regex {
 pub(crate) fn download_failed_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
+    // The negated-start alternation must carry every negation verb and start
+    // verb `negated_start_re` suppresses, or a suppressed line matches
+    // neither vocabulary and the download vanishes from the analysis.
     Regex::new(
-        r#"(?i)(?:download\s+(?:has\s+)?(?:failed|error)|download\s+(?:state|result)\s*[:=]\s*failed|failed\s+to\s+download|(?:fail(?:ed|ure)|unable)\s+to\s+start\s+(?:the\s+)?(?:content\s+)?download|hash\s+validation\s+failed|hash\s+mismatch|staging\s+failed|content\s+not\s+found|unable\s+to\s+download|cancelled|aborted)"#,
+        r#"(?i)(?:download\s+(?:has\s+)?(?:failed|error)|download\s+(?:state|result)\s*[:=]\s*failed|failed\s+to\s+download|(?:fail(?:ed|ure)?\s+to|unable\s+to|couldn'?t|could\s+not|cannot|can'?t)\s+(?:start|begin|resume|queue|request)\s+(?:the\s+)?(?:content\s+)?download|hash\s+validation\s+failed|hash\s+mismatch|staging\s+failed|content\s+not\s+found|unable\s+to\s+download|cancelled|aborted)"#,
     )
     .unwrap()
 })
@@ -111,9 +114,12 @@ pub(crate) fn download_start_re() -> &'static Regex {
 ///
 /// The regex crate has no lookbehind, so the start vocabulary cannot exclude
 /// the negated forms itself; consumers of [`download_start_re`] check this
-/// second pattern in code and treat a match as *not* a start. The negated
-/// phrase is carried by [`download_failed_re`] instead, because a download the
-/// agent could not start is honestly a download failure.
+/// second pattern in code and treat a match as *not* a start. Every phrasing
+/// this gate suppresses is carried by [`download_failed_re`]'s negated-start
+/// alternation — same negation verbs, same start verbs — because a download
+/// the agent could not start is honestly a download failure, and a suppressed
+/// line the failure vocabulary did not carry would vanish entirely
+/// (`test_vocabulary::NEGATED_START_FAILED` pins the pairing).
 fn negated_start_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
@@ -186,6 +192,19 @@ pub(crate) mod test_vocabulary {
     ];
     pub(crate) const PRE_CONSOLIDATION_START: [&str; 2] =
         ["Started the download", "Start content download"];
+    /// One phrase per negation verb × start verb the suppression gate knows.
+    ///
+    /// Every phrasing `negated_start_re` suppresses as a start must also be
+    /// carried by `download_failed_re`, or the line matches neither vocabulary
+    /// and the download vanishes from the analysis entirely.
+    pub(crate) const NEGATED_START_FAILED: [&str; 6] = [
+        "Could not start the content download",
+        "Couldn't start download",
+        "Cannot begin download",
+        "Can't resume the download",
+        "Failure to queue download",
+        "Unable to request the content download",
+    ];
 }
 
 pub fn extract_downloads(
@@ -818,6 +837,33 @@ mod tests {
         );
         assert_eq!(downloads.len(), 1);
         assert!(!downloads[0].success);
+    }
+
+    #[test]
+    fn every_negated_start_phrasing_is_carried_by_the_failure_vocabulary() {
+        // The negation gate suppresses more verbs than `failed to start`; a
+        // suppressed line the failure vocabulary does not carry matches
+        // nothing and the download vanishes. Every suppressed phrasing must
+        // classify as a failure.
+        for phrase in test_vocabulary::NEGATED_START_FAILED {
+            let message =
+                format!("{phrase} for app id: a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+            assert!(
+                !is_download_start(&message),
+                "the negation gate must suppress the start: {message:?}"
+            );
+            let analysis = DownloadLineAnalysis::from_message(&message)
+                .expect("a negated-start line is download-shaped");
+            assert!(
+                !analysis.is_start,
+                "a negated start must not assert a start: {message:?}"
+            );
+            assert!(
+                analysis.is_failed,
+                "a suppressed start the failure vocabulary does not carry \
+                 vanishes from the analysis: {message:?}"
+            );
+        }
     }
 
     #[test]

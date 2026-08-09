@@ -933,6 +933,16 @@ mod tests {
             .signal,
             Win32Signal::DownloadFailed
         );
+        // Every phrasing the shared negation gate suppresses must classify as
+        // a failure here too, or the suppressed line mints no signal at all
+        // and the download disappears from the transaction.
+        for phrase in crate::intune::download_stats::test_vocabulary::NEGATED_START_FAILED {
+            assert_eq!(
+                workload(&format!("[Win32App] {phrase} for app with id: {APP}")).signal,
+                Win32Signal::DownloadFailed,
+                "{phrase:?}"
+            );
+        }
     }
 
     #[test]
