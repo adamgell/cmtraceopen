@@ -1,7 +1,8 @@
 {
   "assertions": [
     "unreadable bytes are a coverage gap, never an unknown schema",
-    "a malformed section blocks a terminal claim rather than producing one"
+    "a malformed section blocks a terminal claim rather than producing one",
+    "expectation corrected post-merge: the prior golden pinned serde_json's error Display text, which is not stable across serde_json releases, and the prior fixture was raw XML, so the scenario exercised generic non-JSON rejection instead of the malformed report-payload contract it names"
   ],
   "confidence": "low",
   "conflictIds": [],
@@ -38,7 +39,7 @@
         "Confirm the export was not truncated in transit."
       ],
       "severity": "warning",
-      "summary": "1 supplied document(s) could not be interpreted, so any signal they carried is absent from this analysis rather than proven absent. content is not a JSON object: expected value at line 1 column 1",
+      "summary": "1 supplied document(s) could not be interpreted, so any signal they carried is absent from this analysis rather than proven absent. report payload could not be read",
       "title": "An Autopilot report section could not be parsed"
     }
   ],

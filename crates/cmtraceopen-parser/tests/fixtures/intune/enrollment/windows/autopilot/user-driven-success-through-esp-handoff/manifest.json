@@ -3,7 +3,7 @@
   "syntheticFixture": true,
   "scenario": "user-driven-success-through-esp-handoff",
   "workload": "enrollment/windows/autopilot",
-  "description": "A complete user-driven deployment: identity read, profile retrieved and applied, OOBE settings observed, and an explicit handoff into an ESP session that shares an enrollment identifier.",
+  "description": "The local Autopilot phase of a user-driven deployment completes: identity read, profile retrieved and applied, OOBE settings observed, and an explicit handoff into an ESP session that shares an enrollment identifier. Everything after the handoff belongs to the ESP analysis.",
   "generatedAtUtc": "2026-07-31T09:30:00Z",
   "capture": {
     "collectedAtUtc": "2026-07-31T09:30:00Z",

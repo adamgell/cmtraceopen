@@ -15,9 +15,9 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::intune::evidence::{
-    intune_raw_preserving_string_enum, IntuneArtifactCoverage, IntuneErrorCode, IntuneEvidenceRef,
-    IntuneFinding, IntuneFindingConfidence, IntuneNamedValue, IntuneObservationContext,
-    IntuneParseState,
+    intune_raw_preserving_string_enum, IntuneAccessState, IntuneArtifactCoverage, IntuneErrorCode,
+    IntuneEvidenceRef, IntuneFinding, IntuneFindingConfidence, IntuneNamedValue,
+    IntuneObservationContext, IntuneParseState,
 };
 
 /// Schema version of the Autopilot snapshot contract.
@@ -239,6 +239,20 @@ impl AutopilotObservation {
     /// The evidence pointer this observation is cited by.
     pub fn evidence_ref(&self) -> IntuneEvidenceRef {
         self.context.evidence_ref.clone()
+    }
+
+    /// Whether this observation may support a conclusion at all.
+    ///
+    /// A record is assessable only when its own declared context is fully
+    /// available and cleanly parsed. Non-assessable evidence (capped, denied,
+    /// malformed) can BLOCK a success conclusion but can never PROVE one, so no
+    /// terminal outcome and no high-confidence terminal finding may be sourced
+    /// from it (ADR-001). This is the single definition consulted by both the
+    /// reducer's semantic gates and the finding-side evidence helpers, so the
+    /// boundary cannot drift between them.
+    pub fn is_assessable(&self) -> bool {
+        self.context.access_state == IntuneAccessState::Available
+            && self.context.parse_state == IntuneParseState::Parsed
     }
 
     /// Look up one named-data value, case-insensitively.

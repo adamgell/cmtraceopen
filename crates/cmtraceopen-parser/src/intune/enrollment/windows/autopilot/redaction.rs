@@ -111,13 +111,23 @@ fn user_path_re() -> &'static Regex {
 
 /// A hardware hash or similar long opaque blob embedded in free text.
 ///
-/// Bounded at 32 characters so a GUID (32 hex digits plus dashes, matched in
+/// Bounded at 40 characters so a GUID (32 hex digits plus dashes, matched in
 /// runs of at most 12) and an eight-digit HRESULT are both left readable; those
 /// are diagnostic grammar, not identity.
+///
+/// No `\b` anchors. The Base64 alphabet includes `=`, `+`, and `/`, none of
+/// which is a word character, so a trailing `\b` could not close a match on a
+/// padded or punctuation-terminated hash and left its tail exposed. The match
+/// is greedy and leftmost, so it consumes the whole contiguous Base64 run
+/// wherever a >=40 run exists -- exactly the whole hash -- while the >=40 bound
+/// still excludes the 36-char GUID (dashes break it into <=12-char runs) and
+/// the short HRESULT. The `[blob:…]` token this produces contains `[`, `:`, and
+/// `]`, which are outside the alphabet, so a token can never re-match: the
+/// projection stays idempotent.
 fn opaque_blob_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
-        Regex::new(r"\b[A-Za-z0-9+/=]{40,}\b").expect("opaque blob regex must compile")
+        Regex::new(r"[A-Za-z0-9+/=]{40,}").expect("opaque blob regex must compile")
     })
 }
 
@@ -201,10 +211,11 @@ pub fn redacted_export_projection(snapshot: &AutopilotSnapshot) -> AutopilotSnap
             .collect();
     }
 
+    // `mask_value` everywhere a whole value is masked: it performs the
+    // trim/lowercase normalization the module contract promises, so the same
+    // identifier masks identically whatever field or casing it arrived in.
     for key in &mut projected.esp_linkage.matched_keys {
-        if !is_token(&key.value) {
-            key.value = stable_token(VALUE_KIND, &key.value);
-        }
+        key.value = mask_value(&key.value);
     }
 
     for entry in &mut projected.coverage {
@@ -230,9 +241,7 @@ fn redact_named_values(values: &mut [IntuneNamedValue]) {
             .iter()
             .any(|key| key.eq_ignore_ascii_case(&value.name))
         {
-            if !is_token(&value.value) {
-                value.value = stable_token(VALUE_KIND, &value.value);
-            }
+            value.value = mask_value(&value.value);
         } else {
             value.value = redact_text(&value.value);
         }
@@ -249,19 +258,9 @@ fn redact_conflict_value(value: &str) -> String {
                 .iter()
                 .any(|key| key.eq_ignore_ascii_case(name)) =>
         {
-            if is_token(raw) {
-                value.to_owned()
-            } else {
-                format!("{name}={}", stable_token(VALUE_KIND, raw))
-            }
+            format!("{name}={}", mask_value(raw))
         }
-        _ => {
-            if is_token(value) {
-                value.to_owned()
-            } else {
-                stable_token(VALUE_KIND, value)
-            }
-        }
+        _ => mask_value(value),
     }
 }
 
@@ -315,6 +314,40 @@ mod tests {
         assert!(!masked.contains(&hash), "got {masked}");
     }
 
+    /// A Base64 hardware hash may end in `=`, `==`, `+`, or `/` -- none of which
+    /// is a word character, so a trailing `\b` cannot close the match at them.
+    /// Every one of these must be masked in full, or raw identity material rides
+    /// out in the padding after a partial match (ADR-004: restricted values are
+    /// absent from export).
+    #[test]
+    fn a_base64_blob_ending_in_punctuation_is_masked_in_full() {
+        // Each blob is a >=40 char Base64 run terminated by a non-word char.
+        for blob in [
+            format!("{}=", "A".repeat(43)),  // single pad
+            format!("{}==", "A".repeat(42)), // double pad
+            format!("{}+", "A".repeat(43)),  // plus terminal
+            format!("{}/", "A".repeat(43)),  // slash terminal
+        ] {
+            let masked = redact_text(&format!("hardware hash {blob} was reported"));
+            assert!(
+                !masked.contains(&blob),
+                "the whole blob must be masked, got {masked}"
+            );
+            // No fragment of the original run -- including the padding/punctuation
+            // tail -- may survive between the surrounding words.
+            assert!(
+                !masked.contains("AA"),
+                "no run of the blob may survive, got {masked}"
+            );
+            for tail in ['=', '+', '/'] {
+                assert!(
+                    !masked.contains(&format!("{tail} was")),
+                    "a punctuation tail must not dangle after masking, got {masked}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn an_already_masked_whole_value_is_left_alone() {
         let token = stable_token(VALUE_KIND, "abc");
@@ -323,6 +356,40 @@ mod tests {
         assert_eq!(
             redact_conflict_value(&format!("serialNumber={token}")),
             format!("serialNumber={token}")
+        );
+    }
+
+    /// Every whole-value masking site must normalize case and surrounding
+    /// space before hashing, or the same identifier arriving in two casings
+    /// would mask to two different tokens and destroy the very correlation the
+    /// projection exists to preserve.
+    #[test]
+    fn whole_value_masking_normalizes_case_and_space_at_every_site() {
+        let canonical = mask_value("abcdabcd-1234-5678-9012-abcdabcdabcd");
+
+        // Named-data values with a sensitive key.
+        let mut values = vec![IntuneNamedValue {
+            name: "entraDeviceId".to_owned(),
+            value: "  ABCDABCD-1234-5678-9012-ABCDABCDABCD  ".to_owned(),
+        }];
+        redact_named_values(&mut values);
+        assert_eq!(values[0].value, canonical);
+
+        // Conflict values, both shapes.
+        assert_eq!(
+            redact_conflict_value("entraDeviceId= ABCDABCD-1234-5678-9012-ABCDABCDABCD "),
+            format!("entraDeviceId={canonical}")
+        );
+        assert_eq!(
+            redact_conflict_value(" ABCDABCD-1234-5678-9012-ABCDABCDABCD "),
+            canonical
+        );
+
+        // The identity-field path already goes through mask_value; the token
+        // must line up with all of the above.
+        assert_eq!(
+            redact_opt(&Some("Abcdabcd-1234-5678-9012-abcdabcdABCD".to_owned())),
+            Some(canonical)
         );
     }
 

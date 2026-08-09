@@ -37,7 +37,7 @@
       "originalBasename": "autopilot-report.json",
       "sanitizedSourcePath": "SYNTHETIC://autopilot/autopilot-report.json",
       "relativePath": "evidence/mdm-diagnostics-report/current/autopilot-report.json",
-      "bytesCopied": 183,
+      "bytesCopied": 376,
       "capturedUtc": "2026-07-31T09:30:00Z",
       "rotation": {
         "kind": "current",

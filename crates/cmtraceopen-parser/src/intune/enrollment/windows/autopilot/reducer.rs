@@ -108,7 +108,12 @@ pub fn reduce_autopilot_bundle(bundle: &AutopilotBundleInput) -> AutopilotSnapsh
         &ingest.sections,
     );
     let confidence = reduce_confidence(outcome, capture_validated, time_basis, &coverage);
-    let next_evidence_requests = next_evidence_requests(outcome, &esp_linkage, &coverage);
+    let next_evidence_requests = next_evidence_requests(
+        outcome,
+        &esp_linkage,
+        !ingest.esp_sessions.is_empty(),
+        &coverage,
+    );
 
     let unclassified_observation_ids = observations
         .iter()
@@ -257,7 +262,11 @@ impl Ingest {
     /// Parse a detected document's payload.
     ///
     /// `Err` carries why the payload could not be read, so the caller can
-    /// record a malformed document instead of an empty supported one.
+    /// record a malformed document instead of an empty supported one. The
+    /// detail is a stable reducer-authored sentence and deliberately excludes
+    /// `serde_json`'s error text: that text flows into golden-asserted finding
+    /// summaries, and serde_json does not guarantee its `Display` output
+    /// across releases.
     fn absorb_payload(
         &mut self,
         source: &AutopilotSourceInput,
@@ -268,7 +277,7 @@ impl Ingest {
         match kind {
             AutopilotDocumentKind::Events => {
                 let document = serde_json::from_str::<AutopilotEventsDocument>(content)
-                    .map_err(|error| format!("events payload could not be read: {error}"))?;
+                    .map_err(|_| "events payload could not be read".to_owned())?;
                 if document.channel_complete == Some(false) {
                     self.incomplete_artifacts.insert(source.artifact_id.clone());
                 }
@@ -283,7 +292,7 @@ impl Ingest {
             }
             AutopilotDocumentKind::DiagnosticsReport | AutopilotDocumentKind::IdentityFacts => {
                 let document = serde_json::from_str::<AutopilotReportDocument>(content)
-                    .map_err(|error| format!("report payload could not be read: {error}"))?;
+                    .map_err(|_| "report payload could not be read".to_owned())?;
                 for section in &document.sections {
                     let observation = observation_from_section(section);
                     ids.push(observation.observation_id.clone());
@@ -293,7 +302,7 @@ impl Ingest {
             }
             AutopilotDocumentKind::EspSession => {
                 let document = serde_json::from_str::<AutopilotEspSessionDocument>(content)
-                    .map_err(|error| format!("ESP session payload could not be read: {error}"))?;
+                    .map_err(|_| "ESP session payload could not be read".to_owned())?;
                 for session in &document.sessions {
                     let observation = observation_from_esp_session(session);
                     ids.push(observation.observation_id.clone());
@@ -585,9 +594,24 @@ fn sort_time(observation: &AutopilotObservation, basis: AutopilotTimeBasis) -> O
 
 /// An observation is assessable only when its record was fully available and
 /// parsed. Malformed or access-denied records carry no semantic signal.
+///
+/// Every reduction path that turns a record into state, evidence, a phase, a
+/// correlation key, or a time bound must pass through this gate (ADR-001:
+/// non-assessable evidence cannot produce a terminal conclusion). The one
+/// deliberate exception is [`time_basis`], where an *unfiltered* scan is the
+/// conservative direction: a non-assessable record with an unnormalized
+/// timestamp downgrades the basis, and gating it would upgrade it.
 fn is_assessable(observation: &AutopilotObservation) -> bool {
-    observation.context.access_state == IntuneAccessState::Available
-        && observation.context.parse_state == IntuneParseState::Parsed
+    observation.is_assessable()
+}
+
+/// A report section is assessable under the same rule as an observation: its
+/// own declared context must be fully available and parsed. Sections arrive
+/// inside a parsed document, but each one still carries a caller-declared
+/// context, and a section declared unreadable proves nothing.
+fn is_assessable_section(section: &AutopilotReportSection) -> bool {
+    section.context.access_state == IntuneAccessState::Available
+        && section.context.parse_state == IntuneParseState::Parsed
 }
 
 fn signal_observations(
@@ -603,23 +627,129 @@ fn has_signal(observations: &[AutopilotObservation], signal: AutopilotSignal) ->
     signal_observations(observations, signal).next().is_some()
 }
 
+/// Iterate the assessable sections of one kind. The gate lives here so no
+/// individual caller can forget it.
+///
+/// This gate is deliberately direction-aware in combination with
+/// [`recorded_non_assessable_failure_sections`]: everything reached through
+/// *this* iterator may prove progress, success, or a terminal cause, so it
+/// admits assessable sections only. A non-assessable section that explicitly
+/// recorded a failure is not silently discarded with it -- see the companion
+/// iterator below.
 fn sections_of<'a>(
     sections: &'a [AutopilotReportSection],
     kind: &AutopilotSectionKind,
 ) -> impl Iterator<Item = &'a AutopilotReportSection> {
     let kind = kind.clone();
-    sections.iter().filter(move |section| section.kind == kind)
+    sections
+        .iter()
+        .filter(|section| is_assessable_section(section))
+        .filter(move |section| section.kind == kind)
 }
+
+/// Iterate the *non-assessable* sections that explicitly recorded a failure or
+/// mismatch.
+///
+/// ADR-001 cuts both ways. A capped or unparsed section cannot PROVE anything:
+/// not progress, not success, and not a terminal failure either -- which is why
+/// [`sections_of`] excludes it and why the reducer never turns one of these
+/// into `ProfileRetrievalFailure`/`ProfileApplicationFailure`. But `Capped`
+/// means "absence proves nothing", not "presence proves nothing": a failure
+/// that IS on the record must still BLOCK a success conclusion, or sibling
+/// assessable evidence would complete the enrollment at high confidence over a
+/// recorded failure. Consumers of this iterator may only move the result in
+/// the conservative direction.
+///
+/// `Failed` and `Mismatch` are the explicit negative recordings. `NotFound`
+/// and `Retrying` stay out on purpose: those are statements of absence or of a
+/// transient state, and an absence statement from a partially captured view
+/// proves nothing in either direction.
+fn recorded_non_assessable_failure_sections(
+    sections: &[AutopilotReportSection],
+) -> impl Iterator<Item = &AutopilotReportSection> {
+    sections
+        .iter()
+        .filter(|section| !is_assessable_section(section))
+        .filter(|section| {
+            matches!(
+                section.outcome,
+                AutopilotSectionOutcome::Failed | AutopilotSectionOutcome::Mismatch
+            )
+        })
+}
+
+/// Iterate the *non-assessable* observations that explicitly recorded a
+/// documented failure signal.
+///
+/// The event-side companion of
+/// [`recorded_non_assessable_failure_sections`], with the same direction-aware
+/// contract: a capped or unparsed event cannot PROVE the failure -- which is
+/// why [`signal_observations`] and every other consumer stay gated on
+/// [`is_assessable`], and why none of these observations ever produce a
+/// terminal failure outcome -- but a failure that IS on the record must still
+/// BLOCK a success conclusion. Consumers may only move the result in the
+/// conservative direction.
+///
+/// The class is [`AutopilotSignal::is_terminal_failure`]: exactly the signals
+/// that would produce a terminal failure outcome if they were assessable
+/// (171, 172, 807, 809, 815, 908). That symmetry is the rule -- any record
+/// strong enough to fail the enrollment when readable is strong enough to
+/// block its success when unreadable. `ProfilePolicyNotFound` (100) stays out
+/// for the same reason the section iterator excludes `NotFound`/`Retrying`:
+/// it is documented as transient, not a recorded failure.
+fn recorded_non_assessable_failure_observations(
+    observations: &[AutopilotObservation],
+) -> impl Iterator<Item = &AutopilotObservation> {
+    observations
+        .iter()
+        .filter(|observation| !is_assessable(observation))
+        .filter(|observation| observation.signal.is_terminal_failure())
+}
+
+/// Named-value keys whose values are case-insensitive identities on Windows:
+/// serials, GUID-shaped identifiers, DNS domains, and host names. Only these
+/// group case-insensitively in [`distinct_values`]; every other key -- notably
+/// `hardwareHash`, whose Base64 payload is case-sensitive -- keeps its exact
+/// value, so two values differing only by case stay two distinct values (the
+/// conservative direction: `single_value` refuses to pick, it never merges).
+/// Every key exported through `detect_conflicts` must stay in this list so a
+/// redacted conflict cannot report "2 distinct values" over two identically
+/// masked tokens (ADR-004; the export masks the trimmed, lowercased value).
+const CASE_INSENSITIVE_VALUE_KEYS: [&str; 11] = [
+    "serialNumber",
+    "productKeyId",
+    "ztdRegistrationId",
+    "entraDeviceId",
+    "managedDeviceId",
+    "tenantId",
+    "tenantDomain",
+    "deviceName",
+    "profileId",
+    "enrollmentId",
+    "correlationId",
+];
 
 /// Collect the distinct values a named key takes across every source.
 ///
 /// Returned sorted and deduplicated so that "more than one value" is a
 /// reproducible fact rather than an artifact of iteration order.
+///
+/// Distinctness is case-insensitive only for the keys in
+/// [`CASE_INSENSITIVE_VALUE_KEYS`]. For those identities, treating two casings
+/// as two values produced a conflict whose export said "2 distinct values"
+/// over two identical tokens, changing the conclusion under redaction
+/// (ADR-004). Each case-folded group is keyed by a deterministic
+/// representative casing -- the lexicographically smallest sighting -- so
+/// permuting the input cannot change the result (ADR-003). Any other key
+/// compares exactly: folding a case-sensitive value such as a Base64 hardware
+/// hash would merge two genuinely different values into one corroborated
+/// identity.
 fn distinct_values(
     observations: &[AutopilotObservation],
     key: &str,
 ) -> BTreeMap<String, Vec<IntuneEvidenceRef>> {
-    let mut values: BTreeMap<String, Vec<IntuneEvidenceRef>> = BTreeMap::new();
+    let case_insensitive = CASE_INSENSITIVE_VALUE_KEYS.contains(&key);
+    let mut groups: BTreeMap<String, (String, Vec<IntuneEvidenceRef>)> = BTreeMap::new();
     for observation in observations.iter().filter(|obs| is_assessable(obs)) {
         let Some(value) = observation.named(key) else {
             continue;
@@ -628,20 +758,31 @@ fn distinct_values(
         if value.is_empty() {
             continue;
         }
-        values
-            .entry(value.to_owned())
-            .or_default()
-            .push(observation.evidence_ref());
+        let group_key = if case_insensitive {
+            value.to_ascii_lowercase()
+        } else {
+            value.to_owned()
+        };
+        let group = groups
+            .entry(group_key)
+            .or_insert_with(|| (value.to_owned(), Vec::new()));
+        if value < group.0.as_str() {
+            group.0 = value.to_owned();
+        }
+        group.1.push(observation.evidence_ref());
     }
-    values
+    groups.into_values().collect()
 }
 
 fn single_value(observations: &[AutopilotObservation], key: &str) -> Option<String> {
     let values = distinct_values(observations, key);
     let mut keys = values.into_keys();
     let first = keys.next()?;
-    // More than one distinct value is a conflict, reported separately. Picking
-    // one here would hide it.
+    // More than one distinct value never picks a winner. Only `profileId`,
+    // `serialNumber`, and `entraDeviceId` disagreements are additionally
+    // reported as conflicts by `detect_conflicts`; the remaining keys
+    // (`deviceName` legitimately changes mid-provisioning, and the rest lack a
+    // validated single-value contract) just collapse to `None` here.
     if keys.next().is_some() {
         return None;
     }
@@ -692,9 +833,10 @@ fn reduce_identity(
         state = merge_registration_state(state, AutopilotRegistrationState::Mismatch);
     }
     for observation in observations.iter().filter(|observation| {
-        IDENTITY_KEYS
-            .iter()
-            .any(|key| observation.named(key).is_some())
+        is_assessable(observation)
+            && IDENTITY_KEYS
+                .iter()
+                .any(|key| observation.named(key).is_some())
     }) {
         evidence.push(observation.evidence_ref());
     }
@@ -734,37 +876,55 @@ fn reduce_profile(
     sections: &[AutopilotReportSection],
 ) -> AutopilotProfileState {
     let mut evidence = Vec::new();
-    let mut candidate = AutopilotProfileCandidateState::Unknown;
+    // `raised` is the candidate the positive evidence alone supports; it never
+    // encodes a negative, so it is a pure order-independent maximum. The
+    // explicit negatives are tracked apart and reconciled against it below,
+    // because whether a later success may erase an earlier negative is a
+    // linkage question, not an ordering one (ADR-003).
+    let mut raised = AutopilotProfileCandidateState::Unknown;
+    let mut negative: Option<AutopilotProfileCandidateState> = None;
+    // Activity ids (the module's retry/session key) carried by the explicit
+    // negatives and by the successes that reached `Available`. A negative may
+    // be erased only when it shares one with a success.
+    let mut negative_links: Vec<String> = Vec::new();
+    let mut available_success_links: Vec<String> = Vec::new();
     let mut retrieved = false;
     let mut applied = false;
     let mut error: Option<IntuneErrorCode> = None;
     let mut last_state_token = None;
 
-    for observation in observations {
+    for observation in observations.iter().filter(|obs| is_assessable(obs)) {
         match observation.signal {
             AutopilotSignal::ProfileAcquisitionStarted
             | AutopilotSignal::ProfilePolicyNotFound
             | AutopilotSignal::NetworkAvailableForDownload => {
                 evidence.push(observation.evidence_ref());
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Pending);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Pending);
             }
             AutopilotSignal::ProfileRetrieveSucceeded
             | AutopilotSignal::ProfileSettingsRetrieved => {
                 evidence.push(observation.evidence_ref());
                 retrieved = true;
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Available);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
+                push_link(&mut available_success_links, observation.activity_id.as_deref());
             }
             AutopilotSignal::ProfileStateChanged => {
                 evidence.push(observation.evidence_ref());
                 let token = extract_profile_state(observation.message.as_deref());
+                // `ProfileState_Available` deliberately counts as application
+                // evidence, not merely retrieval. Event 172 -- the documented
+                // failure sibling of this transition -- reads "failed to set
+                // Autopilot profile as available": setting the profile
+                // available IS the application step, so the transition into
+                // `Available` is its explicit success record.
                 if matches!(
                     token,
                     Some(AutopilotProfileStateToken::Available)
                         | Some(AutopilotProfileStateToken::Provisioned)
                 ) {
                     applied = true;
-                    candidate =
-                        raise_candidate(candidate, AutopilotProfileCandidateState::Available);
+                    raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
+                    push_link(&mut available_success_links, observation.activity_id.as_deref());
                 }
                 if token.is_some() {
                     last_state_token = token;
@@ -773,15 +933,24 @@ fn reduce_profile(
             AutopilotSignal::DeviceAlreadyProvisioned => {
                 evidence.push(observation.evidence_ref());
                 applied = true;
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Available);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
+                push_link(&mut available_success_links, observation.activity_id.as_deref());
             }
             AutopilotSignal::NoAssignedProfile => {
                 evidence.push(observation.evidence_ref());
-                candidate = AutopilotProfileCandidateState::NoneAssigned;
+                negative = Some(merge_negative(
+                    negative,
+                    AutopilotProfileCandidateState::NoneAssigned,
+                ));
+                push_link(&mut negative_links, observation.activity_id.as_deref());
             }
             AutopilotSignal::AssignedProfileMissing => {
                 evidence.push(observation.evidence_ref());
-                candidate = AutopilotProfileCandidateState::AssignedButMissing;
+                negative = Some(merge_negative(
+                    negative,
+                    AutopilotProfileCandidateState::AssignedButMissing,
+                ));
+                push_link(&mut negative_links, observation.activity_id.as_deref());
             }
             AutopilotSignal::ProfileApplicationFailed => {
                 evidence.push(observation.evidence_ref());
@@ -796,13 +965,18 @@ fn reduce_profile(
         match section.outcome {
             AutopilotSectionOutcome::Succeeded => {
                 retrieved = true;
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Available);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Available);
+                push_link(&mut available_success_links, section_activity_id(section));
             }
             AutopilotSectionOutcome::NotFound => {
-                candidate = AutopilotProfileCandidateState::NoneAssigned;
+                negative = Some(merge_negative(
+                    negative,
+                    AutopilotProfileCandidateState::NoneAssigned,
+                ));
+                push_link(&mut negative_links, section_activity_id(section));
             }
             AutopilotSectionOutcome::Retrying => {
-                candidate = raise_candidate(candidate, AutopilotProfileCandidateState::Pending);
+                raised = raise_candidate(raised, AutopilotProfileCandidateState::Pending);
             }
             _ => {}
         }
@@ -816,6 +990,8 @@ fn reduce_profile(
         error = error.or_else(|| section.error.clone());
     }
 
+    let candidate = reconcile_candidate(raised, negative, &negative_links, &available_success_links);
+
     AutopilotProfileState {
         profile_id: single_value(observations, "profileId"),
         profile_name: single_value(observations, "profileName"),
@@ -828,6 +1004,78 @@ fn reduce_profile(
         error,
         evidence: normalized_evidence(evidence),
     }
+}
+
+/// The `activityId` a report section carried in its values, verbatim.
+///
+/// The value name is matched case-insensitively; the value itself is returned
+/// unchanged. [`push_link`] owns the lowercasing that makes retry linkage
+/// compare case-insensitively like the ESP correlation keys, so every key
+/// reaches that one place in its original form.
+fn section_activity_id(section: &AutopilotReportSection) -> Option<&str> {
+    section
+        .values
+        .iter()
+        .find(|value| value.name.eq_ignore_ascii_case("activityId"))
+        .map(|value| value.value.as_str())
+}
+
+/// Record one retry-linkage key, lowercased. Absent keys contribute nothing:
+/// a success with no activity id can never be *proven* to be the same attempt
+/// as an earlier negative, so it must not count as linkage.
+fn push_link(links: &mut Vec<String>, activity: Option<&str>) {
+    if let Some(activity) = activity {
+        links.push(activity.to_ascii_lowercase());
+    }
+}
+
+/// Combine two explicit negatives deterministically. Both rank equally and both
+/// reduce to [`AutopilotOutcome::NoProfileCandidate`]; `AssignedButMissing` is
+/// the more specific statement, so it wins when a bundle somehow carries both.
+/// The choice is permutation-invariant, unlike the old last-writer assignment.
+fn merge_negative(
+    current: Option<AutopilotProfileCandidateState>,
+    incoming: AutopilotProfileCandidateState,
+) -> AutopilotProfileCandidateState {
+    match current {
+        Some(AutopilotProfileCandidateState::AssignedButMissing) => {
+            AutopilotProfileCandidateState::AssignedButMissing
+        }
+        _ => incoming,
+    }
+}
+
+/// Reconcile the positive-evidence candidate against an explicit negative.
+///
+/// ADR-003: a later success may replace an earlier explicit negative only when
+/// retry linkage is explicit. Linkage here is a shared `activityId` between the
+/// negative and a success that reached `Available`. Without it the negative
+/// stands and the reducer stays conservative -- an unrelated success cannot
+/// silently complete an enrollment the service explicitly said had no profile.
+/// With it, the success is a proven retry of the same attempt and the candidate
+/// rises to `Available`. The decision reads only sets, never vector order, so
+/// permuting the input cannot change it.
+fn reconcile_candidate(
+    raised: AutopilotProfileCandidateState,
+    negative: Option<AutopilotProfileCandidateState>,
+    negative_links: &[String],
+    available_success_links: &[String],
+) -> AutopilotProfileCandidateState {
+    let Some(negative) = negative else {
+        return raised;
+    };
+    let raised_to_available = raised == AutopilotProfileCandidateState::Available;
+    let retry_linked = negative_links
+        .iter()
+        .any(|link| available_success_links.contains(link));
+    if raised_to_available && retry_linked {
+        // The success is a proven retry of the same attempt; it may erase the
+        // negative.
+        return raised;
+    }
+    // No proven retry link: the explicit negative wins over both an unlinked
+    // success and any weaker positive (Pending/Unknown).
+    negative
 }
 
 /// Raise a candidate state, never lowering one that was explicitly proven.
@@ -999,8 +1247,11 @@ fn detect_conflicts(
 
     // A report section that explicitly reports a mismatch is a conflict the
     // collector already detected; carrying it here keeps the two paths uniform.
+    // Gated like every other path: an unreadable section cannot assert a
+    // mismatch any more than it can assert a success.
     for section in sections
         .iter()
+        .filter(|section| is_assessable_section(section))
         .filter(|section| section.outcome == AutopilotSectionOutcome::Mismatch)
     {
         conflicts.push(AutopilotConflict {
@@ -1057,11 +1308,32 @@ fn session_keys(session: &AutopilotEspSessionFact) -> Vec<AutopilotCorrelationKe
     .collect()
 }
 
+/// Which observations may contribute correlation keys.
+///
+/// The distinction is ADR-001's direction-aware gate applied to session
+/// identity. Keys are the one input where *more* evidence is *more*
+/// conservative: every additional key can only ever widen the set of ESP
+/// sessions the bundle is entangled with, and a wider set means Conflicting,
+/// never a stronger Linked. So conflict DETECTION reads every observation,
+/// while PROOF of a link (the confident `Linked` state, and the `Completed`
+/// outcome behind it) stays restricted to assessable records.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AutopilotKeyGate {
+    /// Assessable observations only: these keys may prove a link.
+    Proving,
+    /// Every observation, assessable or not: these keys may only detect
+    /// conflicts and can never upgrade a linkage on their own.
+    Detecting,
+}
+
 /// The explicit keys the Autopilot side of the bundle can offer.
 ///
 /// Deliberately skips [`AutopilotSignal::EspSessionFact`] observations: an ESP
 /// fact matching its own key would be a tautology, not a correlation.
-fn autopilot_keys(observations: &[AutopilotObservation]) -> BTreeSet<AutopilotCorrelationKey> {
+fn autopilot_keys(
+    observations: &[AutopilotObservation],
+    gate: AutopilotKeyGate,
+) -> BTreeSet<AutopilotCorrelationKey> {
     const NAMED_KEYS: [(&str, AutopilotCorrelationKeyKind); 5] = [
         ("enrollmentId", AutopilotCorrelationKeyKind::EnrollmentId),
         ("correlationId", AutopilotCorrelationKeyKind::CorrelationId),
@@ -1074,10 +1346,10 @@ fn autopilot_keys(observations: &[AutopilotObservation]) -> BTreeSet<AutopilotCo
     ];
 
     let mut keys = BTreeSet::new();
-    for observation in observations
-        .iter()
-        .filter(|observation| observation.signal != AutopilotSignal::EspSessionFact)
-    {
+    for observation in observations.iter().filter(|observation| {
+        (gate == AutopilotKeyGate::Detecting || is_assessable(observation))
+            && observation.signal != AutopilotSignal::EspSessionFact
+    }) {
         for (name, kind) in NAMED_KEYS {
             let Some(value) = observation.named(name).map(str::trim) else {
                 continue;
@@ -1151,19 +1423,66 @@ fn reduce_esp_linkage(
         };
     }
 
-    let local_keys = autopilot_keys(observations);
+    let proving_keys = autopilot_keys(observations, AutopilotKeyGate::Proving);
+    let detecting_keys = autopilot_keys(observations, AutopilotKeyGate::Detecting);
 
+    // Two match passes over the same sessions. `detected_*` uses every key the
+    // bundle carries, assessable or not, because each extra key can only widen
+    // the entangled-session set (the conservative direction). `matched_*` is
+    // the assessable subset, the only one allowed to prove a link.
     let mut matched_keys = BTreeSet::new();
     let mut matched_sessions = BTreeSet::new();
     let mut evidence = Vec::new();
+    let mut detected_keys = BTreeSet::new();
+    let mut detected_sessions = BTreeSet::new();
+    let mut detection_evidence = Vec::new();
     for session in esp_sessions {
         for key in session_keys(session) {
-            if local_keys.contains(&key) {
-                matched_keys.insert(key);
-                matched_sessions.insert(session.session_id.clone());
-                evidence.push(session.evidence.clone());
+            if detecting_keys.contains(&key) {
+                detected_sessions.insert(session.session_id.clone());
+                detection_evidence.push(session.evidence.clone());
+                if proving_keys.contains(&key) {
+                    matched_keys.insert(key.clone());
+                    matched_sessions.insert(session.session_id.clone());
+                    evidence.push(session.evidence.clone());
+                }
+                detected_keys.insert(key);
             }
         }
+    }
+
+    // A single Autopilot phase can only have produced one ESP session, so keys
+    // resolving to more than one session mean the identity space is ambiguous:
+    // Conflicting, never a silent merge. This check runs on the *detecting*
+    // set on purpose. A key carried only by a capped observation cannot prove
+    // a link, but dropping it here would shrink the session set and collapse
+    // Conflicting into Linked into Completed -- a non-assessable record
+    // silently upgrading the conclusion, which is exactly what ADR-001
+    // forbids.
+    if detected_sessions.len() > 1 {
+        for observation in observations
+            .iter()
+            .filter(|observation| observation.signal != AutopilotSignal::EspSessionFact)
+        {
+            // Non-assessable carriers are cited too: a capped record is the
+            // very evidence of the entanglement this state reports. Citing is
+            // not proving; the state it supports is the conservative one.
+            if session_key_values(&detected_keys)
+                .any(|value| observation_mentions(observation, value))
+            {
+                detection_evidence.push(observation.evidence_ref());
+            }
+        }
+        return AutopilotEspLinkage {
+            state: AutopilotEspLinkState::Conflicting,
+            confidence: IntuneFindingConfidence::High,
+            // Detection is not a match. `matched_keys` is documented empty for
+            // every non-`Linked` state, so the detecting keys stay internal: a
+            // consumer must not read ambiguity evidence as proof of a link.
+            matched_keys: Vec::new(),
+            esp_session_ids: detected_sessions.into_iter().collect(),
+            evidence: normalized_evidence(detection_evidence),
+        };
     }
 
     if matched_keys.is_empty() {
@@ -1197,28 +1516,17 @@ fn reduce_esp_linkage(
         };
     }
 
-    for observation in observations
-        .iter()
-        .filter(|observation| observation.signal != AutopilotSignal::EspSessionFact)
-    {
+    for observation in observations.iter().filter(|observation| {
+        is_assessable(observation) && observation.signal != AutopilotSignal::EspSessionFact
+    }) {
         if session_key_values(&matched_keys).any(|value| observation_mentions(observation, value)) {
             evidence.push(observation.evidence_ref());
         }
     }
 
-    // A single Autopilot phase can only have produced one ESP session.
-    // If matched keys resolve to more than one session, the identity space
-    // is ambiguous; emit Conflicting rather than silently merging them.
-    if matched_sessions.len() > 1 {
-        return AutopilotEspLinkage {
-            state: AutopilotEspLinkState::Conflicting,
-            confidence: IntuneFindingConfidence::High,
-            matched_keys: matched_keys.into_iter().collect(),
-            esp_session_ids: matched_sessions.into_iter().collect(),
-            evidence: normalized_evidence(evidence),
-        };
-    }
-
+    // `matched_sessions` is a subset of `detected_sessions`, and the multi-
+    // session case already returned Conflicting above, so exactly one session
+    // remains here and it was matched by an assessable key.
     AutopilotEspLinkage {
         state: AutopilotEspLinkState::Linked,
         confidence: IntuneFindingConfidence::High,
@@ -1241,6 +1549,7 @@ fn has_time_overlap(
 ) -> bool {
     let ap_times: Vec<&str> = observations
         .iter()
+        .filter(|obs| is_assessable(obs))
         .filter_map(|obs| {
             obs.context
                 .source_timestamp
@@ -1357,10 +1666,36 @@ fn reduce_outcome(
         return AutopilotOutcome::ProfileApplicationFailure;
     }
     if profile.applied && handoff.esp_observed {
+        // Direction-aware assessability gate (ADR-001). A non-assessable
+        // section that explicitly recorded a failure or mismatch can prove
+        // nothing -- including the failure itself, so the terminal failure
+        // outcomes above stay reserved for assessable records -- but it must
+        // still block a success claim. `InsufficientEvidence` is the honest
+        // reduction: the bundle cannot support success while a failure is on
+        // record, and cannot prove the failure while its record is
+        // non-assessable. The recorded failure is surfaced by its own finding
+        // rather than silently swallowed. The gate is symmetric across both
+        // record shapes: a report section that recorded Failed/Mismatch, and
+        // an event carrying a documented failure signal.
+        if recorded_non_assessable_failure_sections(sections)
+            .next()
+            .is_some()
+            || recorded_non_assessable_failure_observations(observations)
+                .next()
+                .is_some()
+        {
+            return AutopilotOutcome::InsufficientEvidence;
+        }
         return match esp_linkage.state {
             AutopilotEspLinkState::EvidenceMissing => {
                 AutopilotOutcome::HandoffReachedEspEvidenceMissing
             }
+            // Matched explicitly rather than through `conflicts`: the
+            // multiple-matched-sessions path records no `AutopilotConflict`,
+            // so relying on the conflicts gate above would let an ambiguous
+            // session identity fall through to `Completed` (ADR-003:
+            // unresolved authoritative contradictions stay conservative).
+            AutopilotEspLinkState::Conflicting => AutopilotOutcome::ContradictoryEvidence,
             _ => AutopilotOutcome::Completed,
         };
     }
@@ -1410,6 +1745,7 @@ fn reduce_confidence(
 fn next_evidence_requests(
     outcome: AutopilotOutcome,
     esp_linkage: &AutopilotEspLinkage,
+    esp_sessions_supplied: bool,
     coverage: &[IntuneArtifactCoverage],
 ) -> Vec<String> {
     let mut requests: Vec<String> = match outcome {
@@ -1457,7 +1793,18 @@ fn next_evidence_requests(
         AutopilotOutcome::Completed => Vec::new(),
     };
 
-    if esp_linkage.state == AutopilotEspLinkState::TimeOnlyCandidate {
+    // ESP facts were supplied but no explicit key bound them. The request for
+    // a shared identifier is keyed on that situation, not on the linkage state
+    // alone: the time gate can narrow the overlap window and turn
+    // `TimeOnlyCandidate` into `NotObserved`, and the guidance -- go find the
+    // identifier the two sides share -- must survive that downgrade rather
+    // than vanish with it.
+    if esp_sessions_supplied
+        && matches!(
+            esp_linkage.state,
+            AutopilotEspLinkState::TimeOnlyCandidate | AutopilotEspLinkState::NotObserved
+        )
+    {
         requests.push(
             "An enrollment, correlation, or device identifier shared by the Autopilot and ESP evidence"
                 .to_owned(),

@@ -295,6 +295,28 @@ mod tests {
         assert_eq!(code.decimal, Some(-2_145_647_638));
     }
 
+    /// A 64-bit sign-extended HRESULT canonicalizes to its 32-bit form on
+    /// purpose. `0xFFFFFFFF80070002` is `0x80070002` printed through a 64-bit
+    /// register; the upper 32 bits are sign extension, not information. The
+    /// raw token always survives verbatim, and a genuinely 64-bit value that
+    /// is not a sign extension keeps its decimal and gains no fabricated
+    /// 32-bit hex.
+    #[test]
+    fn a_sign_extended_hresult_canonicalizes_to_its_32_bit_form() {
+        let code = error_code_from_token("0xFFFFFFFF80070002");
+        assert_eq!(code.raw, "0xFFFFFFFF80070002");
+        assert_eq!(code.decimal, Some(-2_147_024_894));
+        assert_eq!(code.hex.as_deref(), Some("0x80070002"));
+
+        let wide = error_code_from_token("0x1234567880070002");
+        assert_eq!(wide.raw, "0x1234567880070002");
+        assert_eq!(wide.decimal, Some(0x1234_5678_8007_0002));
+        assert_eq!(
+            wide.hex, None,
+            "a non-sign-extended 64-bit value must not gain an invented 32-bit hex form"
+        );
+    }
+
     #[test]
     fn a_message_without_an_hresult_yields_no_error_code() {
         assert!(extract_error_code(Some("AutopilotRetrieveSettings succeeded.")).is_none());

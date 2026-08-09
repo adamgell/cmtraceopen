@@ -21,7 +21,7 @@
       "originalBasename": "autopilot-events.json",
       "sanitizedSourcePath": "SYNTHETIC://autopilot/autopilot-events.json",
       "relativePath": "evidence/autopilot-channel/current/autopilot-events.json",
-      "bytesCopied": 10487,
+      "bytesCopied": 10527,
       "capturedUtc": "2026-07-31T09:30:00Z",
       "rotation": {
         "kind": "current",
