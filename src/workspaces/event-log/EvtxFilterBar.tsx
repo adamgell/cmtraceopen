@@ -1,5 +1,8 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Button, Dropdown, Input, Option, tokens } from "@fluentui/react-components";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
+import { selectVisibleRecords } from "./evtx-filter";
 import {
   useEvtxStore,
   type EvtxSortField,
@@ -8,6 +11,13 @@ import type { EvtxLevel, EvtxTimeWindow } from "./types";
 import { EVTX_TIME_WINDOW_LABELS } from "./types";
 
 const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
+
+const EXPORT_FORMATS = [
+  { value: "csv", label: "CSV", extension: "csv" },
+  { value: "tsv", label: "TSV", extension: "tsv" },
+  { value: "json", label: "JSON", extension: "json" },
+  { value: "xml", label: "Event XML", extension: "xml" },
+] as const;
 
 const LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 
@@ -55,6 +65,36 @@ export function EvtxFilterBar() {
   const refreshLoadedChannels = useEvtxStore((s) => s.refreshLoadedChannels);
 
   const sortFieldLabel = useMemo(() => SORT_FIELD_LABELS[sortField], [sortField]);
+
+  const [exportState, setExportState] = useState<string | null>(null);
+
+  // Exports what is on screen, using the same predicate the list uses, so the file cannot quietly
+  // differ from the view.
+  const exportVisible = async (format: (typeof EXPORT_FORMATS)[number]) => {
+    const records = selectVisibleRecords(useEvtxStore.getState());
+    if (records.length === 0) {
+      setExportState("Nothing to export");
+      return;
+    }
+    try {
+      const destination = await save({
+        defaultPath: `events.${format.extension}`,
+        filters: [{ name: format.label, extensions: [format.extension] }],
+      });
+      if (!destination) return;
+      setExportState("Exporting...");
+      const bytes = await invoke<number>("evtx_export_records", {
+        records,
+        format: format.value,
+        destination,
+      });
+      setExportState(`Exported ${records.length} events (${Math.round(bytes / 1024)} KB)`);
+    } catch (error) {
+      setExportState(
+        `Export failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
 
   return (
     <div
@@ -140,6 +180,31 @@ export function EvtxFilterBar() {
         size="small"
         style={{ width: "160px" }}
       />
+
+      <Dropdown
+        size="small"
+        placeholder="Export"
+        value=""
+        selectedOptions={[]}
+        style={{ minWidth: "96px" }}
+        title="Export the events currently shown, using the same filters as the list"
+        onOptionSelect={(_, data) => {
+          const format = EXPORT_FORMATS.find((f) => f.value === data.optionValue);
+          if (format) void exportVisible(format);
+        }}
+      >
+        {EXPORT_FORMATS.map((format) => (
+          <Option key={format.value} value={format.value}>
+            {format.label}
+          </Option>
+        ))}
+      </Dropdown>
+
+      {exportState && (
+        <span style={{ fontSize: "11px", color: tokens.colorNeutralForeground3 }}>
+          {exportState}
+        </span>
+      )}
 
       <Input
         value={filterSearch}

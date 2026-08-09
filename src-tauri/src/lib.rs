@@ -353,6 +353,7 @@ pub fn run() {
             event_log::commands::evtx_enumerate_channels,
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_channels,
+            event_log::commands::evtx_export_records,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]

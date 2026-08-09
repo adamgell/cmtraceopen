@@ -144,3 +144,26 @@ pub async fn evtx_query_channels(
         })
     }
 }
+
+/// Writes `records` to `destination` in `format`.
+///
+/// The records travel from the frontend rather than being re-queried, so what is exported is
+/// exactly what the operator was looking at, including any client-side filtering they had applied.
+/// Re-querying would risk exporting a different set than the one on screen.
+#[tauri::command]
+pub async fn evtx_export_records(
+    records: Vec<super::models::EvtxRecord>,
+    format: super::export::ExportFormat,
+    destination: String,
+) -> Result<u64, String> {
+    let rendered = super::export::export_records(&records, format)?;
+    let byte_count = rendered.len() as u64;
+    tokio::fs::write(&destination, rendered)
+        .await
+        .map_err(|error| format!("cannot write {destination}: {error}"))?;
+    log::info!(
+        "event=evtx_export destination=\"{destination}\" records={} bytes={byte_count}",
+        records.len()
+    );
+    Ok(byte_count)
+}

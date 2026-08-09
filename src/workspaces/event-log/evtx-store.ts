@@ -11,6 +11,9 @@ import type {
 } from "./types";
 import { EVTX_TIME_WINDOW_MS } from "./types";
 
+// Re-exported so callers have one import site; the implementations live in a Tauri-free module.
+export { parseEventIdFilter, selectVisibleRecords } from "./evtx-filter";
+
 /**
  * Builds the filter handed to the backend, which compiles it to XPath.
  *
@@ -379,3 +382,4 @@ listen<{ channel: string; fetched: number }>("evtx-query-progress", (event) => {
     loadingProgress: event.payload.fetched,
   });
 });
+

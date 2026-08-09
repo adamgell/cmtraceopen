@@ -7,6 +7,7 @@ import {
 } from "../../lib/log-accessibility";
 import { useUiStore } from "../../stores/ui-store";
 import { useEvtxStore, type EvtxSortField } from "./evtx-store";
+import { parseEventIdFilter } from "./evtx-filter";
 import type { EvtxRecord, EvtxLevel } from "./types";
 import { EvtxTimelineRow } from "./EvtxTimelineRow";
 
@@ -43,17 +44,6 @@ function compareRecords(
       break;
   }
   return direction === "asc" ? cmp : -cmp;
-}
-
-function parseEventIdFilter(raw: string): Set<number> | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const ids = new Set<number>();
-  for (const part of trimmed.split(",")) {
-    const n = parseInt(part.trim(), 10);
-    if (!isNaN(n)) ids.add(n);
-  }
-  return ids.size > 0 ? ids : null;
 }
 
 export function EvtxTimeline() {
