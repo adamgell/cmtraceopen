@@ -199,6 +199,14 @@ Describe 'Locale metadata artifact contract' {
         $collectorText | Should -Not -Match "RelativePath \`$metadataRelativeFolder"
     }
 
+    It 'probes the sidecar folder inside the try, so a fault cannot abort collection' {
+        # $ErrorActionPreference is 'Stop', so a Test-Path outside the try would take down the whole
+        # run instead of recording one failed artifact.
+        $collectorText = Get-Content -LiteralPath $collectorPath -Raw
+
+        $collectorText | Should -Match "try \{\s*\r?\n\s*if \(Test-Path -LiteralPath \`$metadataFolder -ErrorAction Stop\)"
+    }
+
     It 'treats a sidecar enumeration fault as failed rather than missing' {
         $collectorText = Get-Content -LiteralPath $collectorPath -Raw
 

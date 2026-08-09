@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$OutputRoot = (Join-Path $env:ProgramData 'CmtraceOpen\Evidence'),
     [string]$BundleLabel = 'intune-endpoint-evidence',
@@ -824,19 +824,22 @@ function Export-EventChannelLocaleMetadata {
         return $records
     }
 
+    # Test-Path is inside the try deliberately. $ErrorActionPreference is 'Stop' for this script, so
+    # a provider or I/O fault while probing the folder would otherwise abort the entire collection
+    # rather than recording a failed artifact for this one channel.
     $metadataFiles = @()
-    if (Test-Path -LiteralPath $metadataFolder) {
-        try {
+    try {
+        if (Test-Path -LiteralPath $metadataFolder -ErrorAction Stop) {
             $metadataFiles = @(Get-ChildItem -LiteralPath $metadataFolder -Filter ('{0}_*.MTA' -f $baseName) -File -ErrorAction Stop)
         }
-        catch {
-            # An access or I/O fault here is a failure, not an absence. Reporting it as 'missing'
-            # would claim the sidecar was never produced when it may simply be unreadable.
-            $notes = 'Could not enumerate {0}: {1}' -f $metadataFolder, (Protect-SecretText -Text $_.Exception.Message)
-            $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
-            Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'failed' -Origin $Channel -Reason $notes
-            return $records
-        }
+    }
+    catch {
+        # An access or I/O fault here is a failure, not an absence. Reporting it as 'missing' would
+        # claim the sidecar was never produced when it may simply be unreadable.
+        $notes = 'Could not enumerate {0}: {1}' -f $metadataFolder, (Protect-SecretText -Text $_.Exception.Message)
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
+        Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'failed' -Origin $Channel -Reason $notes
+        return $records
     }
 
     if ($metadataFiles.Count -eq 0) {
