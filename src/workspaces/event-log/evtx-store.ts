@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { mergeCoverageGaps } from "./evtx-coverage";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
@@ -51,6 +52,14 @@ interface EvtxState {
   loadStartTime: number | null;
   loadElapsedMs: number | null;
   loadError: string | null;
+  /**
+   * What is missing from the loaded set, and why.
+   *
+   * Separate from loadError because these are not failures: the events that did load are real and
+   * usable. They are gaps, and a gap that only reaches the console reads to an operator as a
+   * complete picture, which is how absent events get mistaken for evidence that nothing happened.
+   */
+  coverageGaps: string[];
   selectedChannels: Set<string>;
   loadedChannels: Set<string>;
   filterLevels: Set<EvtxLevel>;
@@ -100,6 +109,7 @@ function applyParseResult(
     sourceMode,
     isLoading: false,
     loadError: null,
+    coverageGaps: result.errorMessages,
     selectedChannels: channelNames,
     selectedRecordId: null,
   };
@@ -115,6 +125,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   loadStartTime: null,
   loadElapsedMs: null,
   loadError: null,
+  coverageGaps: [],
   selectedChannels: new Set<string>(),
   loadedChannels: new Set<string>(),
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
@@ -162,6 +173,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         sourceMode: "live",
         isLoading: true,
         loadError: null,
+        coverageGaps: [],
         loadStartTime: startTime,
         loadElapsedMs: null,
         selectedChannels: selectedNames,
@@ -172,7 +184,6 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 
       // Query all core channels in parallel (bypass queryChannels to avoid isLoading conflicts)
       const mergeResult = (ch: string, result: EvtxParseResult) => {
-        console.log(`[evtx] ${ch}: got ${result.records.length} records, ${result.parseErrors} errors`, result.errorMessages);
         const state = get();
         const merged = [...state.records, ...result.records];
         merged.sort((a, b) => a.timestampEpoch - b.timestampEpoch);
@@ -191,6 +202,13 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           channels: newChannels,
           loadedChannels: newLoaded,
           loadElapsedMs: performance.now() - startTime,
+          // Channels load one at a time and each may report its own gaps, so they accumulate
+          // rather than replace. Deduplicated because re-querying a channel would otherwise
+          // repeat the same line.
+          coverageGaps: mergeCoverageGaps(
+            state.coverageGaps,
+            result.errorMessages
+          ),
         });
       };
 
