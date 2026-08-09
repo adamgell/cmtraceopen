@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$OutputRoot = (Join-Path $env:ProgramData 'CmtraceOpen\Evidence'),
     [string]$BundleLabel = 'intune-endpoint-evidence',
