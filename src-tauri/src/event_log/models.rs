@@ -37,6 +37,9 @@ pub struct EvtxRecord {
     /// Keyword bitmask as written by the provider, for example `0x8020000000000000`.
     #[serde(default)]
     pub keywords: Option<String>,
+    /// Columns produced by an EvtxECmd map, empty when no map covers this event type.
+    #[serde(default)]
+    pub mapped: Vec<super::maps::MappedColumn>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

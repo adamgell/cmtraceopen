@@ -423,8 +423,16 @@ fn parse_xml_to_record(
         .map(sanitize_control_chars)
         .unwrap_or_else(|| build_event_data_summary(&event_data));
 
-    let system = super::event_node::parse_event_xml(xml)
-        .map(|root| super::event_node::extract_system_fields(&root))
+    // Parsed once and used for both the System block and any registered map, so mapping costs no
+    // extra parse.
+    let parsed = super::event_node::parse_event_xml(xml).ok();
+    let system = parsed
+        .as_ref()
+        .map(super::event_node::extract_system_fields)
+        .unwrap_or_default();
+    let mapped = parsed
+        .as_ref()
+        .map(|root| super::maps::apply_global(channel, &provider, event_id, root))
         .unwrap_or_default();
 
     Some(EvtxRecord {
@@ -447,6 +455,7 @@ fn parse_xml_to_record(
         thread_id: system.thread_id,
         user_sid: system.user_sid,
         keywords: system.keywords,
+        mapped,
     })
 }
 

@@ -167,3 +167,23 @@ pub async fn evtx_export_records(
     );
     Ok(byte_count)
 }
+
+/// Loads EvtxECmd `.map` files from `directory` into the process registry.
+///
+/// Returns what loaded, what was superseded, and what failed, so an operator can see why an event
+/// type is not being mapped rather than being left guessing.
+#[tauri::command]
+pub async fn evtx_load_event_maps(
+    directory: String,
+) -> Result<super::maps::MapLoadOutcome, String> {
+    let path = std::path::PathBuf::from(&directory);
+    tokio::task::spawn_blocking(move || super::maps::load_global(&path))
+        .await
+        .map_err(|error| format!("map load task failed: {error}"))?
+}
+
+/// Number of maps currently in effect.
+#[tauri::command]
+pub async fn evtx_loaded_map_count() -> u64 {
+    super::maps::loaded_count() as u64
+}

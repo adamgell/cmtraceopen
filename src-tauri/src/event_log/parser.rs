@@ -159,9 +159,15 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
         let raw_xml = serde_json::to_string_pretty(json).unwrap_or_default();
 
         // Parsed once from the raw XML so both the live and file paths read the System block the
-        // same way, rather than each growing its own extraction.
-        let system = super::event_node::parse_event_xml(&raw_xml)
-            .map(|root| super::event_node::extract_system_fields(&root))
+        // same way, and so any registered map is applied without a second parse.
+        let parsed = super::event_node::parse_event_xml(&raw_xml).ok();
+        let system = parsed
+            .as_ref()
+            .map(super::event_node::extract_system_fields)
+            .unwrap_or_default();
+        let mapped = parsed
+            .as_ref()
+            .map(|root| super::maps::apply_global(&channel, &provider, event_id, root))
             .unwrap_or_default();
         records.push(EvtxRecord {
             id: 0, // Will be reassigned after sorting
@@ -183,6 +189,7 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
             thread_id: system.thread_id,
             user_sid: system.user_sid,
             keywords: system.keywords,
+            mapped,
         });
     }
 

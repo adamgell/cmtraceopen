@@ -184,6 +184,7 @@ mod tests {
             thread_id: None,
             user_sid: Some("S-1-5-18".into()),
             keywords: Some("0x80".into()),
+            mapped: Vec::new(),
         }
     }
 

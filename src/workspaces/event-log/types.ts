@@ -24,6 +24,15 @@ export interface EvtxRecord {
   userSid?: string | null;
   /** Keyword bitmask as written by the provider. */
   keywords?: string | null;
+  /** Columns produced by an EvtxECmd map; empty when no map covers this event type. */
+  mapped?: EvtxMappedColumn[];
+}
+
+export interface EvtxMappedColumn {
+  property: string;
+  text: string;
+  /** False when the map referenced a field this event did not carry. */
+  complete: boolean;
 }
 
 export interface EvtxField {

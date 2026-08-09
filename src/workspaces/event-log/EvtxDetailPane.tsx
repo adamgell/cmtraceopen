@@ -232,6 +232,57 @@ export function EvtxDetailPane() {
         )}
       </div>
 
+      {/* Map-derived columns. Only present where a map covers this event type, so the section is
+          hidden entirely rather than showing an empty heading. */}
+      {record.mapped && record.mapped.length > 0 && (
+        <div style={{ marginTop: "10px" }}>
+          <div
+            style={{
+              fontSize: `${monoFontSize}px`,
+              fontWeight: 600,
+              marginBottom: "4px",
+              color: tokens.colorNeutralForeground2,
+            }}
+          >
+            Mapped fields
+          </div>
+          {record.mapped.map((column) => (
+            <div
+              key={column.property}
+              style={{
+                display: "flex",
+                gap: "8px",
+                fontSize: `${monoFontSize}px`,
+                fontFamily: "monospace",
+              }}
+            >
+              <span
+                style={{
+                  minWidth: "110px",
+                  color: tokens.colorNeutralForeground3,
+                }}
+              >
+                {column.property}
+              </span>
+              <span
+                title={
+                  column.complete
+                    ? undefined
+                    : "The map references a field this event did not carry; the unresolved placeholder is shown as-is"
+                }
+                style={{
+                  color: column.complete
+                    ? tokens.colorNeutralForeground1
+                    : tokens.colorPaletteMarigoldForeground1,
+                }}
+              >
+                {column.text}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Raw XML */}
       <div>
         <Button

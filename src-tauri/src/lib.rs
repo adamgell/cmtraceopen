@@ -354,6 +354,8 @@ pub fn run() {
             #[cfg(feature = "event-log")]
             event_log::commands::evtx_query_channels,
             event_log::commands::evtx_export_records,
+            event_log::commands::evtx_load_event_maps,
+            event_log::commands::evtx_loaded_map_count,
             #[cfg(target_os = "windows")]
             commands::graph_api::graph_authenticate,
             #[cfg(target_os = "windows")]
