@@ -262,6 +262,14 @@ pub fn source_id_from_message(message: &str) -> Option<String> {
 /// PolicyManager events name the area and policy rather than the node path, so
 /// without this the set-policy events and the CSP failure events would key on
 /// different resources and never correlate.
+///
+/// When the caller could not determine a scope, the rebuilt path carries **no**
+/// scope segment. Defaulting to `Device` synthesized a joinable device-scoped
+/// URI out of a record that never said it was device-scoped, which contradicts
+/// this module's own contract that an unknown scope must not merge with a known
+/// one. A scope-free path keys on `unspecified|…` and stays in its own
+/// transaction; it still shares a `resource_path` with the scoped instances, so
+/// nothing about the node is lost.
 pub fn policy_uri_from_message(message: &str, scope: ConfigurationScope) -> Option<String> {
     let captures = policy_area_regex().captures(message)?;
     let policy = captures[1].trim();
@@ -270,14 +278,12 @@ pub fn policy_uri_from_message(message: &str, scope: ConfigurationScope) -> Opti
         return None;
     }
     let scope_segment = match scope {
-        ConfigurationScope::User => "User",
-        // PolicyManager writes device policy under the device node; an
-        // unspecified scope is reported as device only when the caller already
-        // determined the record is device-scoped.
-        _ => "Device",
+        ConfigurationScope::User => "User/",
+        ConfigurationScope::Device => "Device/",
+        ConfigurationScope::Unspecified => "",
     };
     Some(format!(
-        "{scope_segment}/Vendor/MSFT/Policy/Config/{area}/{policy}"
+        "{scope_segment}Vendor/MSFT/Policy/Config/{area}/{policy}"
     ))
 }
 
@@ -412,6 +418,30 @@ mod tests {
         assert_eq!(
             policy_uri_from_message(message, ConfigurationScope::Device).as_deref(),
             Some("Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate")
+        );
+    }
+
+    #[test]
+    fn a_scopeless_policy_manager_message_does_not_become_device_scoped() {
+        let message = "MDM PolicyManager: Set policy int, Policy: (AllowAutoUpdate), \
+             Area: (Update), Value: (1)";
+        let rebuilt = policy_uri_from_message(message, ConfigurationScope::Unspecified)
+            .expect("the node path is still recoverable");
+        assert_eq!(rebuilt, "Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate");
+
+        let unspecified = resolve_identity(&hints(Some(&rebuilt), "e1"));
+        let device = resolve_identity(&hints(
+            Some("./Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate"),
+            "e2",
+        ));
+        assert_eq!(unspecified.scope, ConfigurationScope::Unspecified);
+        assert_ne!(
+            unspecified.key, device.key,
+            "an unknown scope must not join a device-scoped transaction"
+        );
+        assert_eq!(
+            unspecified.resource_path, device.resource_path,
+            "the node itself is still comparable across scopes"
         );
     }
 }

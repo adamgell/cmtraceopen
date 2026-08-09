@@ -1164,6 +1164,38 @@ fn an_event_naming_no_resource_contributes_nothing() {
     );
 }
 
+/// A record from another provider may legitimately name a CSP node in structured
+/// data, but its *rendered text* is its own vocabulary. Scraping `CSP URI: (…)`
+/// out of it let any component's log line join a real MDM transaction.
+#[test]
+fn another_providers_message_text_never_joins_an_mdm_transaction() {
+    let mut event = applied_event("evt-foreign", 1);
+    event.provider = "Contoso-Agent".to_owned();
+    event.named_data = Vec::new();
+    event.message = Some(format!(
+        "Contoso agent applied policy. CSP URI: ({NODE}), Result: (0)."
+    ));
+
+    let input = ConfigurationInput {
+        generated_at_utc: "2026-07-31T10:00:00Z".to_owned(),
+        events: vec![applied_event("evt-mdm", 2), event],
+        reports: Vec::new(),
+        coverage: Vec::new(),
+    };
+    let snapshot = analyze_configuration(&input);
+    let setting = snapshot.settings.first().expect("one transaction");
+    assert_eq!(
+        setting.evidence.len(),
+        1,
+        "only the MDM record may contribute, got {:?}",
+        setting.evidence
+    );
+    assert!(
+        snapshot.unattributed.is_empty(),
+        "a foreign record naming no resource is not configuration evidence at all"
+    );
+}
+
 #[test]
 fn expected_files_declare_the_workload_they_belong_to() {
     // Cheap guard against a scenario being copied into the wrong corpus.

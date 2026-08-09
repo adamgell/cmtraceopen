@@ -173,12 +173,16 @@ pub fn is_unassessable_failure(observation: &ConfigurationObservation) -> bool {
         && observation.event_kind == Some(ConfigurationEventKind::CommandFailure)
 }
 
-/// Classify a recognized MDM Admin-channel event ID.
-pub fn classify_event(event: &NormalizedWindowsEvent) -> ConfigurationEventKind {
-    if !event
+/// Whether the record came from the provider whose vocabulary this build knows.
+pub fn is_mdm_diagnostics_provider(event: &NormalizedWindowsEvent) -> bool {
+    event
         .provider
         .eq_ignore_ascii_case(MDM_DIAGNOSTICS_PROVIDER)
-    {
+}
+
+/// Classify a recognized MDM Admin-channel event ID.
+pub fn classify_event(event: &NormalizedWindowsEvent) -> ConfigurationEventKind {
+    if !is_mdm_diagnostics_provider(event) {
         return ConfigurationEventKind::Unrecognized;
     }
     match event.event_id {
@@ -204,16 +208,29 @@ fn command_type_is_removal(command_type: Option<&str>) -> bool {
 pub fn observation_from_event(event: &NormalizedWindowsEvent) -> Option<ConfigurationObservation> {
     let context = &event.context;
     let event_kind = classify_event(event);
-    let message = event.message.as_deref().unwrap_or_default();
+
+    // Message scraping is gated on the provider for the same reason event ids are
+    // (see `classify_event`): `CSP URI: (…)` in some other provider's rendered
+    // text is that provider's vocabulary, and reading it here let any component's
+    // log line join a real MDM transaction. Named data is structured and stays
+    // trusted whoever wrote it.
+    let message = if is_mdm_diagnostics_provider(event) {
+        event.message.as_deref().unwrap_or_default()
+    } else {
+        ""
+    };
 
     let uri = named(&event.named_data, &URI_KEYS)
         .map(str::to_owned)
         .or_else(|| csp_uri_from_message(message))
         .or_else(|| {
-            // PolicyManager events name Policy/Area rather than a node path.
+            // PolicyManager events name Policy/Area rather than a node path. A
+            // record that never stated a scope keeps an unspecified one: inventing
+            // `Device` here manufactured a joinable device-scoped URI and merged
+            // the record into a transaction it may not belong to.
             let scope = named(&event.named_data, &SCOPE_KEYS)
                 .map(ConfigurationScope::from_token)
-                .unwrap_or(ConfigurationScope::Device);
+                .unwrap_or(ConfigurationScope::Unspecified);
             policy_uri_from_message(message, scope)
         });
 
