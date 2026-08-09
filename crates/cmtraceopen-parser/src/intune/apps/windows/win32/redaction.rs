@@ -99,116 +99,147 @@ pub fn redacted_export_projection(analysis: &Win32Analysis) -> Win32Analysis {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::intune::apps::windows::win32::{analyze_win32_bundle, Win32SourceInput};
+    use crate::intune::evidence::IntuneNamedValue;
 
-    #[test]
-    fn upn_is_masked_deterministically() {
-        let first = redact_text("Enforcing for adele.vance@contoso.example");
-        let second = redact_text("Reported for adele.vance@contoso.example");
-        assert!(!first.contains("adele.vance"));
-        let token = first.split_whitespace().last().expect("token");
-        assert!(second.contains(token), "same UPN must yield the same token");
+    // The grammar itself — UPN determinism, path masking, credential flags,
+    // malformed token-lookalikes — is tested with its owner in
+    // `common::redaction`. This module owns only the projection: which Win32
+    // fields are classified sensitive, and that the classification is honored.
+
+    const APP: &str = "11111111-2222-4333-8444-555555555555";
+    const UPN: &str = "adele.vance@contoso.example";
+
+    /// One transaction whose observations quote a UPN, reduced for real so the
+    /// projection tests run over the same shapes the analyzer emits.
+    fn analysis() -> Win32Analysis {
+        let workload = format!(
+            concat!(
+                r#"<![LOG[[Win32App] Processing app policy for app with id: {app} for user {upn}]LOG]!>"#,
+                r#"<time="10:15:22.100+000" date="7-31-2026" component="Win32App" "#,
+                r#"context="" type="1" thread="12" file="">"#,
+                "\n",
+                r#"<![LOG[[Win32App] Installation is done for app with id: {app}, exit code: 0]LOG]!>"#,
+                r#"<time="10:16:04.900+000" date="7-31-2026" component="Win32App" "#,
+                r#"context="" type="1" thread="12" file="">"#,
+            ),
+            app = APP,
+            upn = UPN,
+        );
+        analyze_win32_bundle(&[Win32SourceInput::captured(
+            "app-workload",
+            "AppWorkload.log",
+            workload,
+        )])
+    }
+
+    /// A sensitive observation dressed with every free-text field the
+    /// projection must mask.
+    fn dressed_sensitive_observation() -> Win32Observation {
+        let analysis = analysis();
+        let mut observation = analysis.observations[0].clone();
+        assert_eq!(
+            observation.context.sensitivity,
+            IntuneSensitivity::Sensitive,
+            "win32 observations are sensitive by default"
+        );
+        observation.context.provenance.file_path =
+            Some(r"C:\Users\jsmith\AppData\Local\Temp\AppWorkload.log".to_owned());
+        observation.requirement_name = Some(r"File C:\Users\jsmith\flag.txt exists".to_owned());
+        observation.attributes = vec![IntuneNamedValue {
+            name: "InstallCommandLine".to_owned(),
+            value: "setup.exe -Password hunter2".to_owned(),
+        }];
+        observation
     }
 
     #[test]
-    fn different_users_get_different_tokens() {
-        assert_ne!(
-            redact_text("adele.vance@contoso.example"),
-            redact_text("alex.wilber@contoso.example")
+    fn a_sensitive_observation_is_masked_in_every_free_text_field() {
+        let observation = dressed_sensitive_observation();
+        let redacted = redact_observation(&observation);
+
+        assert!(!redacted.message.contains("adele.vance"), "message leaked");
+        assert!(
+            !redacted
+                .context
+                .provenance
+                .file_path
+                .as_deref()
+                .expect("path survives as a masked path")
+                .contains("jsmith"),
+            "provenance path leaked"
+        );
+        assert!(
+            !redacted
+                .requirement_name
+                .as_deref()
+                .expect("requirement name survives masked")
+                .contains("jsmith"),
+            "requirement name leaked"
+        );
+        assert_eq!(redacted.attributes.len(), 1);
+        assert_eq!(
+            redacted.attributes[0].name, "InstallCommandLine",
+            "the attribute name is the schema label and stays intact"
+        );
+        assert!(
+            !redacted.attributes[0].value.contains("hunter2"),
+            "attribute value leaked"
+        );
+        // Correlation keys are not free text and survive verbatim.
+        assert_eq!(redacted.observation_id, observation.observation_id);
+        assert_eq!(redacted.app_id.as_deref(), Some(APP));
+    }
+
+    #[test]
+    fn a_public_observation_is_exported_verbatim() {
+        let mut observation = dressed_sensitive_observation();
+        observation.context.sensitivity = IntuneSensitivity::Public;
+        assert_eq!(
+            redact_observation(&observation),
+            observation,
+            "a record the analyzer marked public must not be rewritten"
         );
     }
 
     #[test]
-    fn user_profile_segment_is_masked_but_the_path_shape_survives() {
-        let redacted = redact_text(r"C:\Users\adele.vance\AppData\Local\Temp\setup.log");
-        assert!(!redacted.contains("adele.vance"));
-        assert!(redacted.starts_with(r"C:\Users\"));
-        assert!(redacted.ends_with(r"\AppData\Local\Temp\setup.log"));
-    }
+    fn a_transaction_masks_failed_requirements_but_keeps_its_keys() {
+        let analysis = analysis();
+        let mut transaction = analysis.transactions[0].clone();
+        transaction.failed_requirements =
+            vec![format!(r"User file C:\Users\jsmith\flag.txt exists for {UPN}")];
 
-    #[test]
-    fn a_profile_name_containing_a_space_is_fully_masked() {
-        let redacted = redact_text(r"C:\Users\John Doe\AppData\Local\Temp\setup.log");
-        assert!(!redacted.contains("John"), "got {redacted:?}");
-        assert!(!redacted.contains("Doe"), "got {redacted:?}");
-    }
-
-    #[test]
-    fn a_json_escaped_profile_path_is_masked() {
-        // The local fork lacked the shared module's `[\\/]{1,2}` JSON-escape
-        // handling, so a path inside an embedded JSON payload leaked. Pinned
-        // here so the fork can never silently come back.
-        let redacted = redact_text(r#"{"LogPath":"C:\\Users\\John Doe\\AppData\\Local"}"#);
-        assert!(!redacted.contains("John"), "got {redacted:?}");
-        assert!(!redacted.contains("Doe"), "got {redacted:?}");
-    }
-
-    #[test]
-    fn an_account_field_is_masked_even_without_an_at_sign() {
-        let redacted = redact_text(r"RunAsUser = CONTOSO\jsmith");
-        assert!(!redacted.contains("jsmith"), "got {redacted:?}");
-        assert!(redacted.starts_with("RunAsUser = "));
-    }
-
-    #[test]
-    fn an_account_name_containing_a_space_is_fully_masked() {
-        let redacted = redact_text(r"RunAsUser = CONTOSO\John Doe, session 2");
-        assert!(!redacted.contains("John"), "got {redacted:?}");
-        assert!(!redacted.contains("Doe"), "got {redacted:?}");
-    }
-
-    #[test]
-    fn inline_credential_values_are_masked_for_every_flag_shape() {
-        for (flag, secret) in [
-            ("-Password", "hunter2"),
-            ("/Password", "hunter2"),
-            ("-ApiKey", "abc123def"),
-            ("-ClientSecret", "s3cr3tvalue"),
-        ] {
-            let redacted = redact_text(&format!("setup.exe {flag} {secret} /quiet"));
-            assert!(
-                !redacted.contains(secret),
-                "{flag} leaked its value: {redacted:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_msi_property_credential_is_masked_without_any_sigil() {
-        let redacted = redact_text("msiexec /i app.msi PASSWORD=hunter2 /qn");
-        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
-    }
-
-    #[test]
-    fn a_secret_inside_a_multiline_record_is_still_masked() {
-        let record = "Install command line: setup.exe -Password hunter2\nAt line:1 char:1";
-        let redacted = redact_text(record);
-        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
-        assert!(redacted.contains("At line:1 char:1"));
-    }
-
-    #[test]
-    fn correlation_keys_survive_redaction() {
-        let app = "11111111-2222-4333-8444-555555555555";
-        let redacted = redact_text(&format!(
-            "Installation is done for app with id: {app}, exit code: 1603"
-        ));
-        assert!(redacted.contains(app), "correlation keys must not be lost");
-        assert!(redacted.contains("1603"));
-    }
-
-    #[test]
-    fn malformed_mask_tokens_are_not_treated_as_already_masked() {
-        let redacted = redact_text("setup.exe -Command \"[command:0123456789abcdef] /quiet]\"");
-        assert!(!redacted.contains("/quiet"));
-        let redacted = redact_text("RunAsUser = [account:0123456789abcdef0]");
-        assert!(!redacted.contains("0123456789abcdef0"));
-    }
-
-    #[test]
-    fn the_projection_is_idempotent() {
-        let once = redact_text(
-            r"RunAsUser = CONTOSO\jsmith ran C:\Users\jsmith\setup.exe -Password hunter2 for adele.vance@contoso.example",
+        let redacted = redact_transaction(&transaction);
+        assert_eq!(redacted.failed_requirements.len(), 1);
+        assert!(
+            !redacted.failed_requirements[0].contains("jsmith")
+                && !redacted.failed_requirements[0].contains("adele.vance"),
+            "failed requirement leaked: {:?}",
+            redacted.failed_requirements[0]
         );
-        assert_eq!(once, redact_text(&once));
+        assert_eq!(redacted.key.app_id, transaction.key.app_id);
+        assert_eq!(
+            redacted.key.deployment_type_id,
+            transaction.key.deployment_type_id
+        );
+        assert_eq!(redacted.observations, transaction.observations);
+    }
+
+    #[test]
+    fn the_export_projection_is_idempotent() {
+        let mut analysis = analysis();
+        analysis.observations[0] = dressed_sensitive_observation();
+        analysis.transactions[0].failed_requirements =
+            vec![format!(r"User file C:\Users\jsmith\flag.txt exists for {UPN}")];
+
+        let once = redacted_export_projection(&analysis);
+        let twice = redacted_export_projection(&once);
+        assert_eq!(once, twice, "projecting a projection must change nothing");
+        assert!(
+            !serde_json::to_string(&once)
+                .expect("serializes")
+                .contains("hunter2"),
+            "the projected export must be clean end to end"
+        );
     }
 }

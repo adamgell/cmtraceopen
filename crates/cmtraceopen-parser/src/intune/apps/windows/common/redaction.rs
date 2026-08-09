@@ -539,6 +539,110 @@ mod tests {
         );
     }
 
+    // ── Grammar tests moved from `win32::redaction` ─────────────────────────
+    // That module owns only the projection; the grammar and its regression
+    // pins live here with their owner so a grammar change fails in one place.
+
+    #[test]
+    fn upn_is_masked_deterministically() {
+        let first = redact_text("Enforcing for adele.vance@contoso.example");
+        let second = redact_text("Reported for adele.vance@contoso.example");
+        assert!(!first.contains("adele.vance"));
+        let token = first.split_whitespace().last().expect("token");
+        assert!(second.contains(token), "same UPN must yield the same token");
+    }
+
+    #[test]
+    fn different_users_get_different_tokens() {
+        assert_ne!(
+            redact_text("adele.vance@contoso.example"),
+            redact_text("alex.wilber@contoso.example")
+        );
+    }
+
+    #[test]
+    fn user_profile_segment_is_masked_but_the_path_shape_survives() {
+        let redacted = redact_text(r"C:\Users\adele.vance\AppData\Local\Temp\setup.log");
+        assert!(!redacted.contains("adele.vance"));
+        assert!(redacted.starts_with(r"C:\Users\"));
+        assert!(redacted.ends_with(r"\AppData\Local\Temp\setup.log"));
+    }
+
+    #[test]
+    fn a_profile_name_containing_a_space_is_fully_masked() {
+        let redacted = redact_text(r"C:\Users\John Doe\AppData\Local\Temp\setup.log");
+        assert!(!redacted.contains("John"), "got {redacted:?}");
+        assert!(!redacted.contains("Doe"), "got {redacted:?}");
+    }
+
+    #[test]
+    fn an_account_field_is_masked_even_without_an_at_sign() {
+        let redacted = redact_text(r"RunAsUser = CONTOSO\jsmith");
+        assert!(!redacted.contains("jsmith"), "got {redacted:?}");
+        assert!(redacted.starts_with("RunAsUser = "));
+    }
+
+    #[test]
+    fn inline_credential_values_are_masked_for_every_flag_shape() {
+        for (flag, secret) in [
+            ("-Password", "hunter2"),
+            ("/Password", "hunter2"),
+            ("-ApiKey", "abc123def"),
+            ("-ClientSecret", "s3cr3tvalue"),
+        ] {
+            let redacted = redact_text(&format!("setup.exe {flag} {secret} /quiet"));
+            assert!(
+                !redacted.contains(secret),
+                "{flag} leaked its value: {redacted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_secret_inside_a_multiline_record_is_still_masked() {
+        let record = "Install command line: setup.exe -Password hunter2\nAt line:1 char:1";
+        let redacted = redact_text(record);
+        assert!(!redacted.contains("hunter2"), "got {redacted:?}");
+        assert!(redacted.contains("At line:1 char:1"));
+    }
+
+    #[test]
+    fn correlation_keys_survive_redaction() {
+        let app = "11111111-2222-4333-8444-555555555555";
+        let redacted = redact_text(&format!(
+            "Installation is done for app with id: {app}, exit code: 1603"
+        ));
+        assert!(redacted.contains(app), "correlation keys must not be lost");
+        assert!(redacted.contains("1603"));
+    }
+
+    #[test]
+    fn malformed_mask_tokens_are_not_treated_as_already_masked() {
+        let redacted = redact_text("setup.exe -Command \"[command:0123456789abcdef] /quiet]\"");
+        assert!(!redacted.contains("/quiet"));
+        let redacted = redact_text("RunAsUser = [account:0123456789abcdef0]");
+        assert!(!redacted.contains("0123456789abcdef0"));
+    }
+
+    #[test]
+    fn a_malformed_token_lookalike_is_masked_not_trusted() {
+        // The account regex accepts any `[Kind:hex…]` shape so the closure can
+        // decide; `is_token_body` then requires a lowercase kind and exactly
+        // 16 hex digits. This pins the gap between the two: a lookalike that
+        // fails the validator is hashed whole, never preserved as a token.
+        //
+        // Wrong hash length: 17 hex digits, not 16.
+        let redacted = redact_text("RunAsUser = [account:0123456789abcdef0]");
+        assert!(!redacted.contains("0123456789abcdef0"), "got {redacted:?}");
+        // Uppercase kind: `stable_token` never emits one.
+        let redacted = redact_text("RunAsUser = [ACCOUNT:0123456789abcdef]");
+        assert!(
+            !redacted.contains("ACCOUNT:0123456789abcdef"),
+            "got {redacted:?}"
+        );
+        assert_eq!(redacted, redact_text(&redacted), "and it stays idempotent");
+    }
+
     #[test]
     fn the_extended_projection_is_idempotent() {
         let once = redact_text(
