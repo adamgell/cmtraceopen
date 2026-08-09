@@ -268,41 +268,58 @@ fn resolve_blocks(records: &mut [PendingRecord]) {
     }
 }
 
+/// Spread a block's key components to the records that lack them — but a
+/// component the block's own records disagree on spreads to nobody.
+///
+/// The conflict rule is per component (ADR-002): a block whose records state
+/// two apps refuses to key at all, because the block boundary itself is then
+/// wrong for this IME version; a block whose records state two deployment
+/// types or two execution contexts cannot prove which one an unkeyed record
+/// belongs to, so that component is withheld — first-wins would attribute the
+/// unkeyed record's evidence to whichever value happened to be logged first.
+/// Records keep what they stated themselves; a withheld component leaves the
+/// key partial rather than guessed.
 fn apply_block_key(records: &mut [PendingRecord], block: &[usize]) {
     if block.is_empty() {
         return;
     }
 
     let mut app_id: Option<String> = None;
+    let mut app_conflict = false;
     let mut deployment_type_id: Option<String> = None;
+    let mut deployment_type_conflict = false;
     let mut context = Win32ExecutionContext::Unknown;
-    let mut conflicting = false;
+    let mut context_conflict = false;
 
     for &index in block {
         let classification = &records[index].classification;
         if let Some(candidate) = &classification.app_id {
             match &app_id {
-                Some(existing) if existing != candidate => conflicting = true,
+                Some(existing) if existing != candidate => app_conflict = true,
                 Some(_) => {}
                 None => app_id = Some(candidate.clone()),
             }
         }
         if let Some(candidate) = &classification.deployment_type_id {
-            if deployment_type_id.is_none() {
-                deployment_type_id = Some(candidate.clone());
+            match &deployment_type_id {
+                Some(existing) if existing != candidate => deployment_type_conflict = true,
+                Some(_) => {}
+                None => deployment_type_id = Some(candidate.clone()),
             }
         }
-        if classification.execution_context != Win32ExecutionContext::Unknown
-            && context == Win32ExecutionContext::Unknown
-        {
-            context = classification.execution_context;
+        if classification.execution_context != Win32ExecutionContext::Unknown {
+            if context == Win32ExecutionContext::Unknown {
+                context = classification.execution_context;
+            } else if context != classification.execution_context {
+                context_conflict = true;
+            }
         }
     }
 
     // Two apps inside one block means the boundary is wrong for this IME
-    // version. Refuse to spread a key rather than merge two deployments; each
-    // record that named its own app keeps it.
-    if conflicting {
+    // version. Refuse to spread any key component rather than merge two
+    // deployments; each record that named its own app keeps it.
+    if app_conflict {
         return;
     }
     let Some(app_id) = app_id else {
@@ -313,10 +330,10 @@ fn apply_block_key(records: &mut [PendingRecord], block: &[usize]) {
         if records[index].resolved_app_id.is_none() {
             records[index].resolved_app_id = Some(app_id.clone());
         }
-        if records[index].resolved_deployment_type_id.is_none() {
+        if !deployment_type_conflict && records[index].resolved_deployment_type_id.is_none() {
             records[index].resolved_deployment_type_id = deployment_type_id.clone();
         }
-        if records[index].resolved_context == Win32ExecutionContext::Unknown {
+        if !context_conflict && records[index].resolved_context == Win32ExecutionContext::Unknown {
             records[index].resolved_context = context;
         }
     }
@@ -1760,6 +1777,7 @@ mod tests {
     const APP: &str = "11111111-2222-4333-8444-555555555555";
     const OTHER: &str = "22222222-3333-4444-8555-666666666666";
     const DT: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const DT2: &str = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
 
     /// One framed CCM record. The explicit `+000` offset keeps ordering and the
     /// normalized UTC value independent of the machine running the test.
@@ -2365,6 +2383,105 @@ mod tests {
             .expect("the user-context transaction exists");
         assert_eq!(observed.confidence, Win32Confidence::Low,
             "non-terminal outcome stays low regardless");
+    }
+
+    #[test]
+    fn a_block_with_conflicting_deployment_types_refuses_to_spread_one() {
+        // Hermes charter review, finding 2 (ADR-002): one execution block
+        // holds a policy for deployment type DT, an explicit DT2 record, and
+        // an unkeyed completion. First-wins propagation would hand the
+        // completion DT merely because DT was encountered first, attributing
+        // its terminal evidence to the wrong deployment type. A block whose
+        // records state two deployment types must refuse to spread one; the
+        // unkeyed completion keeps the app id (uncontested) but no deployment
+        // type.
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT}"
+            )),
+            record(&format!(
+                "[Win32App] app with id: {APP}, deployment type id: {DT2} is applicable"
+            )),
+            record("[Win32App] Installation is done, exit code: 1603"),
+        ])]);
+
+        let failure_carriers: Vec<&Win32TransactionKey> = analysis
+            .transactions
+            .iter()
+            .filter(|transaction| {
+                transaction.outcome == Win32Outcome::InstallerReportedFailure
+            })
+            .map(|transaction| &transaction.key)
+            .collect();
+        assert_eq!(
+            failure_carriers,
+            vec![&Win32TransactionKey {
+                app_id: APP.to_owned(),
+                deployment_type_id: None,
+                execution_context: Win32ExecutionContext::Unknown,
+            }],
+            "the unkeyed completion must not adopt the first-seen deployment \
+             type; it keys partially and carries its own outcome"
+        );
+        let policy = analysis
+            .transactions
+            .iter()
+            .find(|transaction| transaction.key.deployment_type_id.as_deref() == Some(DT))
+            .expect("the DT policy transaction exists");
+        assert_eq!(
+            policy.outcome,
+            Win32Outcome::Assigned,
+            "the DT transaction keeps its own progress state, not the \
+             unkeyed completion's failure"
+        );
+    }
+
+    #[test]
+    fn a_block_with_conflicting_execution_contexts_refuses_to_spread_one() {
+        // Hermes charter review, finding 2 (ADR-002), context component: the
+        // block states both System and User context for the same app, so the
+        // block cannot prove which one a context-less record ran in.
+        // First-wins would hand the completion System; it must stay Unknown.
+        let analysis = analyze_win32_bundle(&[workload(&[
+            record(&format!(
+                "[Win32App] Processing app policy for app with id: {APP}, deployment type id: {DT} in system context"
+            )),
+            record(&format!(
+                "[Win32App] Enforcing app with id: {APP} in user context"
+            )),
+            record("[Win32App] Installation is done, exit code: 1603"),
+        ])]);
+
+        let failure_carriers: Vec<&Win32TransactionKey> = analysis
+            .transactions
+            .iter()
+            .filter(|transaction| {
+                transaction.outcome == Win32Outcome::InstallerReportedFailure
+            })
+            .map(|transaction| &transaction.key)
+            .collect();
+        assert_eq!(
+            failure_carriers,
+            vec![&Win32TransactionKey {
+                app_id: APP.to_owned(),
+                deployment_type_id: Some(DT.to_owned()),
+                execution_context: Win32ExecutionContext::Unknown,
+            }],
+            "the unkeyed completion must not adopt the first-seen execution \
+             context; the uncontested deployment type still spreads"
+        );
+        let system = analysis
+            .transactions
+            .iter()
+            .find(|transaction| {
+                transaction.key.execution_context == Win32ExecutionContext::System
+            })
+            .expect("the system-context policy transaction exists");
+        assert_ne!(
+            system.outcome,
+            Win32Outcome::InstallerReportedFailure,
+            "the System transaction must not inherit the unkeyed failure"
+        );
     }
 
     #[test]
