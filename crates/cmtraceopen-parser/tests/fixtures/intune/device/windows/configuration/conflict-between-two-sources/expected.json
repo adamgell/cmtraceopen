@@ -27,12 +27,17 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "rpt-conflict-loser",
         "rpt-conflict-winner"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-conflict": "high",
+    "configuration-device-only-evidence": "high"
+  },
   "findingIds": [
     "configuration-conflict",
     "configuration-device-only-evidence"

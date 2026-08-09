@@ -26,6 +26,7 @@
       "timeIsReliable": false,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-invalid-offset"
       ]
@@ -48,12 +49,18 @@
       "timeIsReliable": true,
       "orderingIsContradictory": true,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-earlier-record-later-time",
         "evt-later-record-earlier-time"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-device-only-evidence": "high",
+    "configuration-unusable-ordering": "high",
+    "configuration-applied": "high"
+  },
   "findingIds": [
     "configuration-device-only-evidence",
     "configuration-unusable-ordering",

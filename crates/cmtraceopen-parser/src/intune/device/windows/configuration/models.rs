@@ -262,6 +262,16 @@ pub struct ConfigurationSetting {
     pub ordering_is_contradictory: bool,
     /// True when at least one contributing record was malformed or unsupported.
     pub has_uninterpretable_evidence: bool,
+    /// True when a device record whose *direction* is known to be failure could
+    /// not be assessed — a command-failure event with an unreadable status, or one
+    /// the collector could not fully read.
+    ///
+    /// Direction survives even when detail does not. Such a record cannot state
+    /// which error occurred, but it does rule out reporting the node as a clean
+    /// success, which is why it is tracked separately from
+    /// [`ConfigurationSetting::has_uninterpretable_evidence`]: that flag covers
+    /// records whose direction is unknown as well.
+    pub has_unassessable_failure: bool,
     pub observations: Vec<ConfigurationObservation>,
     pub evidence: Vec<IntuneEvidenceRef>,
 }

@@ -30,11 +30,17 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-applied"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-device-only-evidence": "high",
+    "configuration-uncollected-artifacts": "high",
+    "configuration-applied": "medium"
+  },
   "findingIds": [
     "configuration-device-only-evidence",
     "configuration-uncollected-artifacts",

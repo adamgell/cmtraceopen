@@ -28,12 +28,17 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": true,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-unknown-id",
         "rpt-unsupported"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-uninterpretable-evidence": "high",
+    "configuration-unreadable-artifacts": "high"
+  },
   "findingIds": [
     "configuration-uninterpretable-evidence",
     "configuration-unreadable-artifacts"

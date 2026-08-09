@@ -30,12 +30,17 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-failure",
         "rpt-service-success"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-local-rejection": "high",
+    "configuration-local-service-contradiction": "high"
+  },
   "findingIds": [
     "configuration-local-rejection",
     "configuration-local-service-contradiction"

@@ -6,8 +6,8 @@
 //! projected last.
 
 use crate::intune::evidence::{
-    IntuneErrorCode, IntuneNamedValue, IntuneObservationContext, IntuneParseState, IntuneTimestamp,
-    IntuneTimestampKind,
+    IntuneAccessState, IntuneErrorCode, IntuneNamedValue, IntuneObservationContext,
+    IntuneParseState, IntuneTimestamp, IntuneTimestampKind,
 };
 use crate::intune::normalized::{
     NormalizedSettingOutcome, NormalizedSettingReport, NormalizedWindowsEvent,
@@ -147,7 +147,30 @@ fn is_uninterpretable(context: &IntuneObservationContext) -> bool {
     matches!(
         context.parse_state,
         IntuneParseState::Malformed | IntuneParseState::Unsupported
-    )
+    ) || !is_fully_read(context)
+}
+
+/// Whether the collector says it read the whole record.
+///
+/// A record extracted from a source that was capped, denied, or failed mid-read
+/// is not evidence of what it appears to say: the fields this analyzer keys on may
+/// simply be the ones that were never read. Treating it as interpretable would let
+/// a truncated capture assert an outcome.
+fn is_fully_read(context: &IntuneObservationContext) -> bool {
+    matches!(context.access_state, IntuneAccessState::Available)
+}
+
+/// Whether an observation is a failure whose detail could not be assessed.
+///
+/// A 404 command-failure event says a failure happened even when its `Result:`
+/// token is unreadable. The direction is evidence; the code is not. Such a record
+/// must not be silently dropped by a rule that only looks at terminal outcomes,
+/// which is how an 813-Applied plus an unreadable 404 for the same node reported
+/// a clean success with no mention of the failure at all.
+pub fn is_unassessable_failure(observation: &ConfigurationObservation) -> bool {
+    is_device_side(observation)
+        && !observation.disposition.is_terminal()
+        && observation.event_kind == Some(ConfigurationEventKind::CommandFailure)
 }
 
 /// Classify a recognized MDM Admin-channel event ID.

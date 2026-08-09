@@ -26,11 +26,16 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-applied"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-device-only-evidence": "high",
+    "configuration-applied": "high"
+  },
   "findingIds": [
     "configuration-device-only-evidence",
     "configuration-applied"

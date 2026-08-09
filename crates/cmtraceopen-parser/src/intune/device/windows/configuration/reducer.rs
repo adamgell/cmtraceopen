@@ -21,8 +21,8 @@ use super::models::{
     ConfigurationSnapshot, ConfigurationSourceStatement, INTUNE_CONFIGURATION_SCHEMA_VERSION,
 };
 use super::sources::{
-    is_device_side, is_service_side, observation_from_event, observation_from_report,
-    same_source_id,
+    is_device_side, is_service_side, is_unassessable_failure, observation_from_event,
+    observation_from_report, same_source_id,
 };
 
 /// Project every input record and fold it into per-setting transactions.
@@ -90,6 +90,7 @@ fn reduce_setting(observations: Vec<ConfigurationObservation>) -> ConfigurationS
     let has_uninterpretable_evidence = observations
         .iter()
         .any(|observation| observation.is_uninterpretable);
+    let has_unassessable_failure = observations.iter().any(is_unassessable_failure);
 
     let evidence = observations
         .iter()
@@ -109,6 +110,7 @@ fn reduce_setting(observations: Vec<ConfigurationObservation>) -> ConfigurationS
         time_is_reliable,
         ordering_is_contradictory,
         has_uninterpretable_evidence,
+        has_unassessable_failure,
         observations,
         evidence,
     }
@@ -192,6 +194,25 @@ fn terminal_dispositions(
 }
 
 fn local_state(observations: &[ConfigurationObservation]) -> ConfigurationLocalState {
+    let state = terminal_local_state(observations);
+
+    // ADR-001: non-assessable evidence cannot produce a terminal conclusion. A
+    // command-failure record whose status could not be read still establishes the
+    // *direction*, so a clean success alongside it is a disagreement, not a
+    // success with a footnote. Failure-shaped states are left alone: the node is
+    // already reported as trouble and the unreadable record is reported by its own
+    // rule.
+    let blocks_success = matches!(
+        state,
+        ConfigurationLocalState::Applied | ConfigurationLocalState::Removed
+    ) && observations.iter().any(is_unassessable_failure);
+    if blocks_success {
+        return ConfigurationLocalState::Contested;
+    }
+    state
+}
+
+fn terminal_local_state(observations: &[ConfigurationObservation]) -> ConfigurationLocalState {
     let terminal = terminal_dispositions(observations, is_device_side);
     match terminal.as_slice() {
         [] => {

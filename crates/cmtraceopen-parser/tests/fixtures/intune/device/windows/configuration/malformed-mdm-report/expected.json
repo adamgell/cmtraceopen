@@ -24,11 +24,16 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": true,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "rpt-malformed"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-uninterpretable-evidence": "high",
+    "configuration-unreadable-artifacts": "high"
+  },
   "findingIds": [
     "configuration-uninterpretable-evidence",
     "configuration-unreadable-artifacts"

@@ -26,6 +26,7 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-identity-node"
       ]
@@ -48,6 +49,7 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-wallpaper"
       ]
@@ -70,11 +72,16 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-update"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-device-only-evidence": "high",
+    "configuration-applied": "high"
+  },
   "findingIds": [
     "configuration-device-only-evidence",
     "configuration-applied"

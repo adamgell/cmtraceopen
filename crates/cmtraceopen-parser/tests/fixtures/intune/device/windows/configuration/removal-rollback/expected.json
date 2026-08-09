@@ -26,12 +26,17 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-applied",
         "evt-deleted"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-removed": "high",
+    "configuration-device-only-evidence": "high"
+  },
   "findingIds": [
     "configuration-removed",
     "configuration-device-only-evidence"

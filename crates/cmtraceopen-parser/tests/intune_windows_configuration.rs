@@ -61,7 +61,7 @@ const SCENARIOS: [&str; 17] = [
 ///
 /// A rule that invents an identifier outside this list has escaped review, and a
 /// consumer keying on identifiers would break silently.
-const FINDING_VOCABULARY: [&str; 20] = [
+const FINDING_VOCABULARY: [&str; 21] = [
     "configuration-applied",
     "configuration-conflict",
     "configuration-conflict-unsubstantiated",
@@ -77,6 +77,7 @@ const FINDING_VOCABULARY: [&str; 20] = [
     "configuration-superseded",
     "configuration-superseded-unsubstantiated",
     "configuration-truncated-artifacts",
+    "configuration-unassessable-failure",
     "configuration-unattributed-records",
     "configuration-uncollected-artifacts",
     "configuration-uninterpretable-evidence",
@@ -217,6 +218,7 @@ fn project(setting: &ConfigurationSetting) -> Value {
         "timeIsReliable": setting.time_is_reliable,
         "orderingIsContradictory": setting.ordering_is_contradictory,
         "hasUninterpretableEvidence": setting.has_uninterpretable_evidence,
+        "hasUnassessableFailure": setting.has_unassessable_failure,
         "evidenceIds": evidence_ids.into_iter().collect::<Vec<_>>(),
     })
 }
@@ -319,6 +321,21 @@ fn every_scenario_matches_its_expected_analysis() {
             json!(finding_ids(&snapshot)),
             expected["findingIds"],
             "{scenario}: finding identifiers, in rule order"
+        );
+
+        // Confidence is a claim about how far the evidence reaches, and ADR-001
+        // makes it a contract rather than a presentation detail. Pinning only the
+        // identifiers let a High-confidence success survive a bundle whose
+        // artifacts were capped, denied, and missing.
+        let actual_confidence = snapshot
+            .findings
+            .iter()
+            .map(|finding| (finding.finding_id.clone(), wire(&finding.confidence)))
+            .collect::<serde_json::Map<_, _>>();
+        assert_eq!(
+            Value::Object(actual_confidence),
+            expected["findingConfidence"],
+            "{scenario}: finding confidence"
         );
 
         let actual_coverage = snapshot
@@ -446,6 +463,7 @@ fn every_documented_finding_is_reachable_from_the_corpus_or_a_synthesized_case()
         analyze_configuration(&ordered_supersedence_input()),
         analyze_configuration(&unattributed_input()),
         analyze_configuration(&contested_device_input()),
+        analyze_configuration(&unassessable_failure_input()),
     ] {
         seen.extend(finding_ids(&snapshot));
     }
@@ -893,6 +911,81 @@ fn unattributed_input() -> ConfigurationInput {
     ])
 }
 
+/// A 404 command-failure event whose `Result:` token cannot be read.
+fn unreadable_failure_event(evidence_id: &str, record_id: u64) -> NormalizedWindowsEvent {
+    NormalizedWindowsEvent {
+        context: context(
+            evidence_id,
+            "mdm-admin-channel",
+            IntuneSourceKind::EventLog,
+            IntuneParseState::Parsed,
+        ),
+        channel: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+            .to_owned(),
+        provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider".to_owned(),
+        event_id: 404,
+        event_version: None,
+        level: NormalizedEventLevel::Error,
+        task: None,
+        keywords: None,
+        record_id: Some(record_id),
+        activity_id: None,
+        named_data: vec![IntuneNamedValue {
+            name: "NodeUri".to_owned(),
+            value: NODE.to_owned(),
+        }],
+        message: Some(
+            "MDM ConfigurationManager: Command failure status. CSP URI: (./Device/Vendor/MSFT/\
+             Policy/Config/Update/AllowAutoUpdate), Result: (unreadable)."
+                .to_owned(),
+        ),
+    }
+}
+
+fn applied_event(evidence_id: &str, record_id: u64) -> NormalizedWindowsEvent {
+    NormalizedWindowsEvent {
+        context: context(
+            evidence_id,
+            "mdm-admin-channel",
+            IntuneSourceKind::EventLog,
+            IntuneParseState::Parsed,
+        ),
+        channel: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin"
+            .to_owned(),
+        provider: "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider".to_owned(),
+        event_id: 813,
+        event_version: None,
+        level: NormalizedEventLevel::Information,
+        task: None,
+        keywords: None,
+        record_id: Some(record_id),
+        activity_id: None,
+        named_data: vec![
+            IntuneNamedValue {
+                name: "NodeUri".to_owned(),
+                value: NODE.to_owned(),
+            },
+            IntuneNamedValue {
+                name: "Value".to_owned(),
+                value: "1".to_owned(),
+            },
+        ],
+        message: None,
+    }
+}
+
+fn unassessable_failure_input() -> ConfigurationInput {
+    ConfigurationInput {
+        generated_at_utc: "2026-07-31T10:00:00Z".to_owned(),
+        events: vec![
+            applied_event("evt-applied", 1),
+            unreadable_failure_event("evt-unreadable-404", 2),
+        ],
+        reports: Vec::new(),
+        coverage: Vec::new(),
+    }
+}
+
 fn contested_device_input() -> ConfigurationInput {
     input_of(vec![
         row(
@@ -946,6 +1039,76 @@ fn records_with_no_identifier_are_never_merged_with_one_another() {
     );
     assert_eq!(snapshot.unattributed.len(), 2);
     assert!(finding_ids(&snapshot).contains(&"configuration-unattributed-records".to_owned()));
+}
+
+/// The Autopilot class: an 813 says the value was written and a 404 for the same
+/// node says a command failed, but its status is unreadable. Reporting a clean
+/// `configuration-applied` at High confidence with no mention of the failure is
+/// what this guards against.
+#[test]
+fn an_unreadable_failure_blocks_a_terminal_success_for_the_same_node() {
+    let snapshot = analyze_configuration(&unassessable_failure_input());
+    let setting = snapshot.settings.first().expect("one transaction");
+    assert!(
+        setting.has_unassessable_failure,
+        "the 404 must be recorded as a failure whose detail is unassessable"
+    );
+    assert_ne!(
+        wire(&setting.resolution),
+        json!("applied"),
+        "a success must not stand beside an unreadable failure for the same node"
+    );
+
+    let ids = finding_ids(&snapshot);
+    assert!(
+        ids.contains(&"configuration-unassessable-failure".to_owned()),
+        "the failure record must be reported, got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"configuration-applied".to_owned()),
+        "got {ids:?}"
+    );
+}
+
+#[test]
+fn a_record_the_collector_could_not_fully_read_states_no_outcome() {
+    // `access_state` is the collector telling us the fields this analyzer keys on
+    // may be the ones it never read.
+    let mut input = unassessable_failure_input();
+    input.events = vec![applied_event("evt-partial", 1)];
+    input.events[0].context.access_state =
+        cmtraceopen_parser::intune::evidence::IntuneAccessState::Capped;
+
+    let snapshot = analyze_configuration(&input);
+    let setting = snapshot.settings.first().expect("one transaction");
+    assert!(setting.has_uninterpretable_evidence);
+    assert_eq!(wire(&setting.local), json!("indeterminate"));
+    assert!(!finding_ids(&snapshot).contains(&"configuration-applied".to_owned()));
+}
+
+/// ADR-001: coverage gaps cannot raise confidence, and a success claim rests
+/// partly on not having seen a failure.
+#[test]
+fn coverage_gaps_stop_a_success_being_stated_at_high_confidence() {
+    let snapshot = analyze_configuration(&load_input("incomplete-channel-coverage"));
+    let applied = snapshot
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "configuration-applied")
+        .expect("the applied finding is present");
+    assert_eq!(wire(&applied.confidence), json!("medium"));
+    assert!(
+        !applied.coverage_gap_ids.is_empty(),
+        "the finding must name the gaps that cost it confidence"
+    );
+
+    let clean = analyze_configuration(&load_input("applied-from-csp-event"));
+    let clean_applied = clean
+        .findings
+        .iter()
+        .find(|finding| finding.finding_id == "configuration-applied")
+        .expect("the applied finding is present");
+    assert_eq!(wire(&clean_applied.confidence), json!("high"));
 }
 
 #[test]

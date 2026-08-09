@@ -40,6 +40,7 @@ pub fn derive_findings(snapshot: &ConfigurationSnapshot) -> Vec<IntuneFinding> {
     push_local_rejection(snapshot, &mut findings);
     push_local_service_contradiction(snapshot, &mut findings);
     push_contested_device_evidence(snapshot, &mut findings);
+    push_unassessable_failure(snapshot, &mut findings);
     push_substantiated_conflict(snapshot, &mut findings);
     push_unsubstantiated_conflict(snapshot, &mut findings);
     push_substantiated_supersedence(snapshot, &mut findings);
@@ -247,8 +248,12 @@ fn push_contested_device_evidence(
     snapshot: &ConfigurationSnapshot,
     findings: &mut Vec<IntuneFinding>,
 ) {
+    // A setting contested only because a failure record could not be read is
+    // reported by `push_unassessable_failure`, which can name the actual shape.
+    // Saying "records state a different terminal outcome" about it would be wrong:
+    // one of them states no outcome at all.
     let settings = select(snapshot, |setting| {
-        setting.local == ConfigurationLocalState::Contested
+        setting.local == ConfigurationLocalState::Contested && !setting.has_unassessable_failure
     });
     if settings.is_empty() {
         return;
@@ -271,6 +276,36 @@ fn push_contested_device_evidence(
             evidence_where(&settings, |observation| {
                 observation.side == ConfigurationEvidenceSide::Device
                     && observation.disposition.is_terminal()
+            }),
+            Vec::new(),
+        ),
+    );
+}
+
+/// A device record that reports a failure nobody can read the reason for.
+fn push_unassessable_failure(snapshot: &ConfigurationSnapshot, findings: &mut Vec<IntuneFinding>) {
+    let settings = select(snapshot, |setting| setting.has_unassessable_failure);
+    if settings.is_empty() {
+        return;
+    }
+    push_finding(
+        findings,
+        finding(
+            "configuration-unassessable-failure",
+            IntuneFindingSeverity::Warning,
+            IntuneFindingConfidence::High,
+            "A reported command failure could not be read",
+            format!(
+                "A device record reports a CSP command failure for {}, but its status could not be interpreted or the record was not fully read. The direction is still evidence: no success is claimed for these settings, even where another record says the value was written.",
+                join_labels(&settings)
+            ),
+            vec![
+                "Re-collect the event channel with the event XML preserved so the status reaches the analyzer.".to_owned(),
+                "Compare the cited failure record with any success record for the same node before acting on either.".to_owned(),
+            ],
+            evidence_where(&settings, |observation| {
+                observation.side == ConfigurationEvidenceSide::Device
+                    && !observation.disposition.is_terminal()
             }),
             Vec::new(),
         ),
@@ -884,23 +919,61 @@ fn push_unreadable_artifacts(snapshot: &ConfigurationSnapshot, findings: &mut Ve
     );
 }
 
+/// Every artifact this bundle expected but did not fully read.
+fn coverage_gaps(snapshot: &ConfigurationSnapshot) -> Vec<String> {
+    artifacts_with_status(
+        snapshot,
+        &[
+            IntuneArtifactStatus::Missing,
+            IntuneArtifactStatus::PermissionDenied,
+            IntuneArtifactStatus::Skipped,
+            IntuneArtifactStatus::Capped,
+            IntuneArtifactStatus::ParseFailed,
+            IntuneArtifactStatus::Unsupported,
+        ],
+    )
+}
+
 fn push_applied(snapshot: &ConfigurationSnapshot, findings: &mut Vec<IntuneFinding>) {
+    // A setting carrying an uninterpretable record is not a clean success: the
+    // unread record may be the one that mattered, and ADR-001 forbids a terminal
+    // success claim built on non-assessable evidence.
     let settings = select(snapshot, |setting| {
         setting.resolution == ConfigurationResolution::Applied
             && setting.local == ConfigurationLocalState::Applied
+            && !setting.has_uninterpretable_evidence
+            && !setting.has_unassessable_failure
     });
     if settings.is_empty() {
         return;
     }
+
+    // ADR-001: coverage gaps cannot raise confidence. Success is the claim a gap
+    // actually undermines — it rests partly on *not* having seen a failure, and a
+    // capped or unreadable artifact is exactly where an unseen failure would be.
+    // A rejection, by contrast, is directly evidenced and keeps its confidence.
+    let gaps = coverage_gaps(snapshot);
+    let (confidence, caveat) = if gaps.is_empty() {
+        (IntuneFindingConfidence::High, String::new())
+    } else {
+        (
+            IntuneFindingConfidence::Medium,
+            format!(
+                " {} expected artifact(s) were not fully read, so this bundle cannot show whether a later record changed any of them.",
+                gaps.len()
+            ),
+        )
+    };
+
     push_finding(
         findings,
         finding(
             "configuration-applied",
             IntuneFindingSeverity::Info,
-            IntuneFindingConfidence::High,
+            confidence,
             "Settings were applied by their CSP",
             format!(
-                "The device's own records show {} written by the responsible configuration service provider.",
+                "The device's own records show {} written by the responsible configuration service provider.{caveat}",
                 join_labels(&settings)
             ),
             Vec::new(),
@@ -908,7 +981,7 @@ fn push_applied(snapshot: &ConfigurationSnapshot, findings: &mut Vec<IntuneFindi
                 observation.side == ConfigurationEvidenceSide::Device
                     && observation.disposition == ConfigurationDisposition::Applied
             }),
-            Vec::new(),
+            gaps,
         ),
     );
 }

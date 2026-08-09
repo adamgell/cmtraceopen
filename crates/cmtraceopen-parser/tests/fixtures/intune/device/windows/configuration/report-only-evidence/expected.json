@@ -34,6 +34,7 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "rpt-service-only"
       ]
@@ -56,11 +57,18 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "rpt-local-applied"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-service-only-evidence": "medium",
+    "configuration-device-only-evidence": "high",
+    "configuration-uncollected-artifacts": "high",
+    "configuration-applied": "medium"
+  },
   "findingIds": [
     "configuration-service-only-evidence",
     "configuration-device-only-evidence",

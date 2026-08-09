@@ -26,6 +26,7 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-device-applied"
       ]
@@ -48,11 +49,18 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "evt-user-failed"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-local-rejection": "high",
+    "configuration-scope-split": "high",
+    "configuration-device-only-evidence": "high",
+    "configuration-applied": "high"
+  },
   "findingIds": [
     "configuration-local-rejection",
     "configuration-scope-split",

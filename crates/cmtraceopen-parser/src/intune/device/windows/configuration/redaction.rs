@@ -321,6 +321,7 @@ fn redact_setting(setting: &ConfigurationSetting, scope: &RedactionScope) -> Con
         time_is_reliable: setting.time_is_reliable,
         ordering_is_contradictory: setting.ordering_is_contradictory,
         has_uninterpretable_evidence: setting.has_uninterpretable_evidence,
+        has_unassessable_failure: setting.has_unassessable_failure,
         observations: setting
             .observations
             .iter()

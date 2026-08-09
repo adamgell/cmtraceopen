@@ -27,12 +27,17 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "rpt-replacement",
         "rpt-superseded"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-superseded": "high",
+    "configuration-device-only-evidence": "high"
+  },
   "findingIds": [
     "configuration-superseded",
     "configuration-device-only-evidence"

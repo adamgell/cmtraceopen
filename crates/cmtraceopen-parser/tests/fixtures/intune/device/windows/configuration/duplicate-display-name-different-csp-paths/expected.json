@@ -26,6 +26,7 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "rpt-passport"
       ]
@@ -48,11 +49,17 @@
       "timeIsReliable": true,
       "orderingIsContradictory": false,
       "hasUninterpretableEvidence": false,
+      "hasUnassessableFailure": false,
       "evidenceIds": [
         "rpt-devicelock"
       ]
     }
   ],
+  "findingConfidence": {
+    "configuration-duplicate-display-name": "high",
+    "configuration-device-only-evidence": "high",
+    "configuration-applied": "high"
+  },
   "findingIds": [
     "configuration-duplicate-display-name",
     "configuration-device-only-evidence",
