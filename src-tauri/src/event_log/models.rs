@@ -16,6 +16,27 @@ pub struct EvtxRecord {
     pub event_data: Vec<EvtxField>,
     pub raw_xml: String,
     pub source_label: String,
+    /// Provider-defined task grouping, when the event declares one.
+    #[serde(default)]
+    pub task: Option<u32>,
+    /// Operation within the task, when the event declares one.
+    #[serde(default)]
+    pub opcode: Option<u32>,
+    /// Emitting process, from `Execution/@ProcessID`.
+    #[serde(default)]
+    pub process_id: Option<u32>,
+    /// Emitting thread, from `Execution/@ThreadID`.
+    #[serde(default)]
+    pub thread_id: Option<u32>,
+    /// Security identifier from `Security/@UserID`.
+    ///
+    /// Kept as the raw SID. Resolving it to an account name needs `LookupAccountSidW` and a cache,
+    /// and is only meaningful on a machine that knows the domain, so it is a separate concern.
+    #[serde(default)]
+    pub user_sid: Option<String>,
+    /// Keyword bitmask as written by the provider, for example `0x8020000000000000`.
+    #[serde(default)]
+    pub keywords: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

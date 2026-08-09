@@ -12,6 +12,18 @@ export interface EvtxRecord {
   eventData: EvtxField[];
   rawXml: string;
   sourceLabel: string;
+  /** Provider-defined task grouping, absent when the event declares none. */
+  task?: number | null;
+  /** Operation within the task. */
+  opcode?: number | null;
+  /** Emitting process. */
+  processId?: number | null;
+  /** Emitting thread. */
+  threadId?: number | null;
+  /** Raw security identifier; not resolved to an account name. */
+  userSid?: string | null;
+  /** Keyword bitmask as written by the provider. */
+  keywords?: string | null;
 }
 
 export interface EvtxField {

@@ -131,6 +131,61 @@ fn local_name(raw: &[u8]) -> String {
     }
 }
 
+/// System-block fields that every event carries, regardless of provider.
+///
+/// Unlike map-derived columns, which only exist where someone has written a map, these are present
+/// on every event, so they are extracted unconditionally.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SystemFields {
+    pub task: Option<u32>,
+    pub opcode: Option<u32>,
+    pub process_id: Option<u32>,
+    pub thread_id: Option<u32>,
+    pub user_sid: Option<String>,
+    pub keywords: Option<String>,
+}
+
+/// Reads the `System` block of a parsed event.
+///
+/// Every field is optional because providers legitimately omit them: a task of zero is commonly
+/// written as no element at all, and `Security` carries no `UserID` for events raised outside a
+/// user context. An absent field stays `None` rather than defaulting to zero, which would claim
+/// the provider said something it did not.
+pub fn extract_system_fields(root: &EventNode) -> SystemFields {
+    let Some(system) = root.children.iter().find(|child| child.name == "System") else {
+        return SystemFields::default();
+    };
+
+    let text_of = |name: &str| -> Option<&str> {
+        system
+            .children
+            .iter()
+            .find(|child| child.name == name)
+            .and_then(|child| child.text.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let attribute_of = |element: &str, attribute: &str| -> Option<String> {
+        system
+            .children
+            .iter()
+            .find(|child| child.name == element)
+            .and_then(|child| child.attribute(attribute))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+
+    SystemFields {
+        task: text_of("Task").and_then(|value| value.parse().ok()),
+        opcode: text_of("Opcode").and_then(|value| value.parse().ok()),
+        process_id: attribute_of("Execution", "ProcessID").and_then(|v| v.parse().ok()),
+        thread_id: attribute_of("Execution", "ThreadID").and_then(|v| v.parse().ok()),
+        user_sid: attribute_of("Security", "UserID"),
+        keywords: text_of("Keywords").map(str::to_string),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +304,53 @@ mod tests {
         assert_eq!(
             resolve(xml, r#"/Event/EventData/Data[@Name="X"]"#).as_deref(),
             Some("raw <text>")
+        );
+    }
+
+    #[test]
+    fn system_fields_are_read_from_a_full_event() {
+        let xml = r#"<Event><System>
+            <Task>13312</Task><Opcode>11</Opcode><Keywords>0x8020000000000000</Keywords>
+            <Execution ProcessID="1234" ThreadID="5678" />
+            <Security UserID="S-1-5-18" />
+        </System></Event>"#;
+        let fields = extract_system_fields(&parse_event_xml(xml).expect("parses"));
+        assert_eq!(fields.task, Some(13312));
+        assert_eq!(fields.opcode, Some(11));
+        assert_eq!(fields.process_id, Some(1234));
+        assert_eq!(fields.thread_id, Some(5678));
+        assert_eq!(fields.user_sid.as_deref(), Some("S-1-5-18"));
+        assert_eq!(fields.keywords.as_deref(), Some("0x8020000000000000"));
+    }
+
+    #[test]
+    fn an_omitted_field_stays_none_rather_than_defaulting_to_zero() {
+        // Claiming task 0 when the provider wrote no Task element would be inventing evidence.
+        let xml = "<Event><System><EventID>1</EventID></System></Event>";
+        let fields = extract_system_fields(&parse_event_xml(xml).expect("parses"));
+        assert_eq!(fields, SystemFields::default());
+    }
+
+    #[test]
+    fn an_empty_security_element_yields_no_sid() {
+        let xml = r#"<Event><System><Security /></System></Event>"#;
+        let fields = extract_system_fields(&parse_event_xml(xml).expect("parses"));
+        assert_eq!(fields.user_sid, None);
+    }
+
+    #[test]
+    fn a_non_numeric_task_is_ignored_rather_than_failing_the_record() {
+        let xml = "<Event><System><Task>not-a-number</Task></System></Event>";
+        let fields = extract_system_fields(&parse_event_xml(xml).expect("parses"));
+        assert_eq!(fields.task, None);
+    }
+
+    #[test]
+    fn an_event_without_a_system_block_yields_defaults() {
+        let xml = "<Event><EventData><Data>x</Data></EventData></Event>";
+        assert_eq!(
+            extract_system_fields(&parse_event_xml(xml).expect("parses")),
+            SystemFields::default()
         );
     }
 

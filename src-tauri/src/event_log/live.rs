@@ -423,6 +423,10 @@ fn parse_xml_to_record(
         .map(sanitize_control_chars)
         .unwrap_or_else(|| build_event_data_summary(&event_data));
 
+    let system = super::event_node::parse_event_xml(xml)
+        .map(|root| super::event_node::extract_system_fields(&root))
+        .unwrap_or_default();
+
     Some(EvtxRecord {
         id: 0, // assigned by commands.rs after sorting
         event_record_id,
@@ -437,6 +441,12 @@ fn parse_xml_to_record(
         event_data,
         raw_xml: xml.to_string(),
         source_label: "Live".to_string(),
+        task: system.task,
+        opcode: system.opcode,
+        process_id: system.process_id,
+        thread_id: system.thread_id,
+        user_sid: system.user_sid,
+        keywords: system.keywords,
     })
 }
 

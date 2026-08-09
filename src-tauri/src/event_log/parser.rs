@@ -158,6 +158,11 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
         // Build raw XML placeholder from JSON (actual XML not available via json_value API)
         let raw_xml = serde_json::to_string_pretty(json).unwrap_or_default();
 
+        // Parsed once from the raw XML so both the live and file paths read the System block the
+        // same way, rather than each growing its own extraction.
+        let system = super::event_node::parse_event_xml(&raw_xml)
+            .map(|root| super::event_node::extract_system_fields(&root))
+            .unwrap_or_default();
         records.push(EvtxRecord {
             id: 0, // Will be reassigned after sorting
             event_record_id,
@@ -172,6 +177,12 @@ fn parse_single_file(path: &Path) -> Result<(Vec<EvtxRecord>, u32), String> {
             event_data,
             raw_xml,
             source_label: source_label.clone(),
+            task: system.task,
+            opcode: system.opcode,
+            process_id: system.process_id,
+            thread_id: system.thread_id,
+            user_sid: system.user_sid,
+            keywords: system.keywords,
         });
     }
 

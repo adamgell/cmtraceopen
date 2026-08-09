@@ -198,6 +198,38 @@ export function EvtxDetailPane() {
         <span>
           <strong>Source:</strong> {record.sourceLabel}
         </span>
+        {/* System-block fields. Rendered only when the provider actually wrote them, so an absent
+            value reads as absent rather than as a zero the provider never claimed. */}
+        {record.task != null && (
+          <span>
+            <strong>Task:</strong> {record.task}
+          </span>
+        )}
+        {record.opcode != null && (
+          <span>
+            <strong>Opcode:</strong> {record.opcode}
+          </span>
+        )}
+        {record.processId != null && (
+          <span>
+            <strong>PID:</strong> {record.processId}
+          </span>
+        )}
+        {record.threadId != null && (
+          <span>
+            <strong>TID:</strong> {record.threadId}
+          </span>
+        )}
+        {record.keywords && (
+          <span>
+            <strong>Keywords:</strong> {record.keywords}
+          </span>
+        )}
+        {record.userSid && (
+          <span title="Raw security identifier; not resolved to an account name">
+            <strong>User SID:</strong> {record.userSid}
+          </span>
+        )}
       </div>
 
       {/* Raw XML */}
