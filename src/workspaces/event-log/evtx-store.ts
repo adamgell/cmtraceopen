@@ -6,7 +6,22 @@ import type {
   EvtxChannelInfo,
   EvtxLevel,
   EvtxParseResult,
+  EvtxTimeWindow,
+  EventQueryFilter,
 } from "./types";
+import { EVTX_TIME_WINDOW_MS } from "./types";
+
+/**
+ * Builds the filter handed to the backend, which compiles it to XPath.
+ *
+ * Only the time window is pushed down today. Level and provider stay client-side because the
+ * existing controls filter records already in memory; moving them server-side changes what a
+ * reload fetches, which is a behavioural change worth making deliberately rather than implicitly.
+ */
+function buildServerFilter(timeWindow: EvtxTimeWindow): EventQueryFilter {
+  if (timeWindow === "all") return {};
+  return { time: { kind: "last", milliseconds: EVTX_TIME_WINDOW_MS[timeWindow] } };
+}
 
 export type EvtxSourceMode = "files" | "live" | null;
 export type EvtxSortField = "time" | "eventId" | "level" | "provider" | "channel";
@@ -29,6 +44,7 @@ interface EvtxState {
   filterLevels: Set<EvtxLevel>;
   filterEventIds: string;
   filterSearch: string;
+  timeWindow: EvtxTimeWindow;
   sortField: EvtxSortField;
   sortDirection: EvtxSortDirection;
   selectedRecordId: number | null;
@@ -46,6 +62,7 @@ interface EvtxState {
   toggleFilterLevel: (level: EvtxLevel) => void;
   setFilterEventIds: (eventIds: string) => void;
   setFilterSearch: (search: string) => void;
+  setTimeWindow: (window: EvtxTimeWindow) => void;
   setSortField: (field: EvtxSortField) => void;
   setSortDirection: (direction: EvtxSortDirection) => void;
   setSelectedRecordId: (id: number | null) => void;
@@ -83,6 +100,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
   filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
   filterEventIds: "",
   filterSearch: "",
+  timeWindow: "24h",
   sortField: "time",
   sortDirection: "asc",
   selectedRecordId: null,
@@ -158,6 +176,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           const result = await invoke<EvtxParseResult>("evtx_query_channels", {
             channels: [ch],
             maxEvents: null,
+            filter: buildServerFilter(get().timeWindow),
           });
           mergeResult(ch, result);
         } catch (e) {
@@ -188,6 +207,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       const result = await invoke<EvtxParseResult>("evtx_query_channels", {
         channels,
         maxEvents: maxEvents ?? null,
+        filter: buildServerFilter(get().timeWindow),
       });
 
       // Merge new records with existing ones (for incremental channel loading)
@@ -324,6 +344,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
 
   setFilterEventIds: (eventIds) => set({ filterEventIds: eventIds }),
   setFilterSearch: (search) => set({ filterSearch: search }),
+  setTimeWindow: (window) => set({ timeWindow: window }),
   setSortField: (field) => set({ sortField: field }),
   setSortDirection: (direction) => set({ sortDirection: direction }),
   setSelectedRecordId: (id) => set({ selectedRecordId: id }),
@@ -344,6 +365,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       filterLevels: new Set<EvtxLevel>(ALL_LEVELS),
       filterEventIds: "",
       filterSearch: "",
+      timeWindow: "24h",
       sortField: "time",
       sortDirection: "asc",
       selectedRecordId: null,

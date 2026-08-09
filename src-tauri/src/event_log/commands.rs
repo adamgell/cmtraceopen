@@ -40,12 +40,17 @@ pub async fn evtx_enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 pub async fn evtx_query_channels(
     channels: Vec<String>,
     max_events: Option<u64>,
+    filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
     app: AppHandle,
 ) -> Result<EvtxParseResult, String> {
     #[cfg(target_os = "windows")]
     {
         tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
+
+            // Absent means unfiltered, which keeps the query as "*" and preserves prior behaviour
+            // for callers that have not adopted server-side filtering yet.
+            let query_filter = filter.unwrap_or_default();
 
             // Channels are queried concurrently. Each one is an independent conversation with the
             // Event Log service that spends nearly all its time waiting on RPC, so serializing
@@ -57,8 +62,9 @@ pub async fn evtx_query_channels(
                     .map(|channel| {
                         let app_ref = &app;
                         let ch_name = channel.clone();
-                        let outcome = super::live::query_channel_with_progress(
+                        let outcome = super::live::query_channel_filtered_with_progress(
                             channel,
+                            &query_filter,
                             max_events,
                             |fetched, _| {
                                 let _ = app_ref.emit(
@@ -128,7 +134,7 @@ pub async fn evtx_query_channels(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (channels, max_events, app);
+        let _ = (channels, max_events, filter, app);
         Ok(EvtxParseResult {
             records: Vec::new(),
             channels: Vec::new(),

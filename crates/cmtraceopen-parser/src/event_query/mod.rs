@@ -20,8 +20,11 @@
 
 use std::fmt::Write as _;
 
+use serde::{Deserialize, Serialize};
+
 /// How a set of values narrows a result set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SelectorMode {
     /// Only events matching the set.
     #[default]
@@ -31,20 +34,21 @@ pub enum SelectorMode {
 }
 
 /// One Event ID, or an inclusive range of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
 pub enum EventIdSelector {
     /// A single ID.
-    Single(u32),
+    Single { id: u32 },
     /// An inclusive `low..=high` range.
-    Range(u32, u32),
+    Range { low: u32, high: u32 },
 }
 
 impl EventIdSelector {
     fn predicate(&self) -> String {
         match self {
-            Self::Single(id) => format!("EventID={id}"),
-            Self::Range(low, high) if low == high => format!("EventID={low}"),
-            Self::Range(low, high) => {
+            Self::Single { id } => format!("EventID={id}"),
+            Self::Range { low, high } if low == high => format!("EventID={low}"),
+            Self::Range { low, high } => {
                 let (low, high) = if low <= high {
                     (low, high)
                 } else {
@@ -57,7 +61,8 @@ impl EventIdSelector {
 }
 
 /// The time span an event must fall within.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
 pub enum TimeWindow {
     /// Everything newer than `milliseconds` ago, evaluated by the service against its own clock.
     ///
@@ -72,7 +77,8 @@ pub enum TimeWindow {
 }
 
 /// Everything that can be pushed into the service instead of filtered afterwards.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct EventQueryFilter {
     /// Time span, if any.
     pub time: Option<TimeWindow>,
@@ -318,8 +324,11 @@ mod tests {
     fn event_ids_support_single_values_and_ranges() {
         let mut f = filter();
         f.event_ids = vec![
-            EventIdSelector::Single(4624),
-            EventIdSelector::Range(5000, 5010),
+            EventIdSelector::Single { id: 4624 },
+            EventIdSelector::Range {
+                low: 5000,
+                high: 5010,
+            },
         ];
         assert_eq!(
             build_query(&f),
@@ -330,7 +339,7 @@ mod tests {
     #[test]
     fn a_reversed_range_is_normalized_rather_than_emitted_backwards() {
         let mut f = filter();
-        f.event_ids = vec![EventIdSelector::Range(9, 5)];
+        f.event_ids = vec![EventIdSelector::Range { low: 9, high: 5 }];
         assert_eq!(
             build_query(&f),
             "*[System[((EventID &gt;= 5 and EventID &lt;= 9))]]"
@@ -340,14 +349,14 @@ mod tests {
     #[test]
     fn a_degenerate_range_collapses_to_a_single_id() {
         let mut f = filter();
-        f.event_ids = vec![EventIdSelector::Range(7, 7)];
+        f.event_ids = vec![EventIdSelector::Range { low: 7, high: 7 }];
         assert_eq!(build_query(&f), "*[System[(EventID=7)]]");
     }
 
     #[test]
     fn exclusion_negates_the_whole_clause() {
         let mut f = filter();
-        f.event_ids = vec![EventIdSelector::Single(4688)];
+        f.event_ids = vec![EventIdSelector::Single { id: 4688 }];
         f.event_id_mode = SelectorMode::Exclude;
         assert_eq!(build_query(&f), "*[System[not (EventID=4688)]]");
     }
@@ -379,7 +388,7 @@ mod tests {
             milliseconds: 3_600_000,
         });
         f.levels = vec![2];
-        f.event_ids = vec![EventIdSelector::Single(1000)];
+        f.event_ids = vec![EventIdSelector::Single { id: 1000 }];
         f.providers = vec!["ESENT".into()];
         assert_eq!(
             build_query(&f),
@@ -390,7 +399,7 @@ mod tests {
     #[test]
     fn a_large_id_set_is_split_across_select_nodes_in_one_query_list() {
         let mut f = filter();
-        f.event_ids = (1..=25).map(EventIdSelector::Single).collect();
+        f.event_ids = (1..=25).map(|id| EventIdSelector::Single { id }).collect();
         let query = build_query(&f);
 
         assert!(query.starts_with("<QueryList>"));
@@ -410,7 +419,7 @@ mod tests {
         // would match every level and silently widen the result set.
         let mut f = filter();
         f.levels = vec![2];
-        f.event_ids = (1..=15).map(EventIdSelector::Single).collect();
+        f.event_ids = (1..=15).map(|id| EventIdSelector::Single { id }).collect();
         let query = build_query(&f);
 
         assert_eq!(query.matches("<Select>").count(), 2);
@@ -422,7 +431,7 @@ mod tests {
         // "not (a or b)" spread across unioned nodes becomes "not a or not b", which matches
         // almost everything. Excludes stay in one node even when large.
         let mut f = filter();
-        f.event_ids = (1..=25).map(EventIdSelector::Single).collect();
+        f.event_ids = (1..=25).map(|id| EventIdSelector::Single { id }).collect();
         f.event_id_mode = SelectorMode::Exclude;
         let query = build_query(&f);
 
@@ -434,7 +443,7 @@ mod tests {
     fn a_set_exactly_at_the_bound_is_not_split() {
         let mut f = filter();
         f.event_ids = (1..=EVENT_IDS_PER_SELECT as u32)
-            .map(EventIdSelector::Single)
+            .map(|id| EventIdSelector::Single { id })
             .collect();
         assert!(!build_query(&f).contains("<QueryList>"));
     }
@@ -471,5 +480,54 @@ mod tests {
             build_query(&f),
             "*[System[not Provider[@Name='Noisy-Provider']]]"
         );
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    #[test]
+    fn a_filter_round_trips_through_the_ipc_boundary() {
+        let filter = EventQueryFilter {
+            time: Some(TimeWindow::Last {
+                milliseconds: 3_600_000,
+            }),
+            levels: vec![2, 3],
+            event_ids: vec![
+                EventIdSelector::Single { id: 4624 },
+                EventIdSelector::Range { low: 1, high: 9 },
+            ],
+            event_id_mode: SelectorMode::Include,
+            providers: vec!["ESENT".into()],
+            provider_mode: SelectorMode::Exclude,
+            keywords: Some(42),
+        };
+
+        let json = serde_json::to_string(&filter).expect("serializes");
+        let restored: EventQueryFilter = serde_json::from_str(&json).expect("deserializes");
+
+        assert_eq!(restored, filter);
+        assert_eq!(build_query(&restored), build_query(&filter));
+    }
+
+    #[test]
+    fn an_absent_field_defaults_rather_than_failing() {
+        // The frontend sends only what the operator set, so every field must be optional.
+        let filter: EventQueryFilter = serde_json::from_str("{}").expect("empty object is valid");
+        assert!(filter.is_unfiltered());
+        assert_eq!(build_query(&filter), "*");
+    }
+
+    #[test]
+    fn the_wire_shape_is_camel_case_for_typescript() {
+        let filter = EventQueryFilter {
+            event_ids: vec![EventIdSelector::Single { id: 1 }],
+            ..EventQueryFilter::default()
+        };
+        let json = serde_json::to_string(&filter).expect("serializes");
+        assert!(json.contains("\"eventIds\""), "{json}");
+        assert!(json.contains("\"eventIdMode\""), "{json}");
+        assert!(json.contains("\"kind\":\"single\""), "{json}");
     }
 }

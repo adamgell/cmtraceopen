@@ -4,7 +4,10 @@ import {
   useEvtxStore,
   type EvtxSortField,
 } from "./evtx-store";
-import type { EvtxLevel } from "./types";
+import type { EvtxLevel, EvtxTimeWindow } from "./types";
+import { EVTX_TIME_WINDOW_LABELS } from "./types";
+
+const TIME_WINDOWS: EvtxTimeWindow[] = ["1h", "24h", "7d", "30d", "all"];
 
 const LEVELS: EvtxLevel[] = ["Critical", "Error", "Warning", "Information", "Verbose"];
 
@@ -45,6 +48,11 @@ export function EvtxFilterBar() {
   const setSortField = useEvtxStore((s) => s.setSortField);
   const sortDirection = useEvtxStore((s) => s.sortDirection);
   const setSortDirection = useEvtxStore((s) => s.setSortDirection);
+  const timeWindow = useEvtxStore((s) => s.timeWindow);
+  const setTimeWindow = useEvtxStore((s) => s.setTimeWindow);
+  const sourceMode = useEvtxStore((s) => s.sourceMode);
+  const isLoading = useEvtxStore((s) => s.isLoading);
+  const refreshLoadedChannels = useEvtxStore((s) => s.refreshLoadedChannels);
 
   const sortFieldLabel = useMemo(() => SORT_FIELD_LABELS[sortField], [sortField]);
 
@@ -61,6 +69,40 @@ export function EvtxFilterBar() {
         flexShrink: 0,
       }}
     >
+      {sourceMode === "live" && (
+        <>
+          <Dropdown
+            size="small"
+            value={EVTX_TIME_WINDOW_LABELS[timeWindow]}
+            selectedOptions={[timeWindow]}
+            disabled={isLoading}
+            style={{ minWidth: "132px" }}
+            title="How far back to query. Applied by the Event Log service, so events outside the window are never fetched."
+            onOptionSelect={(_, data) => {
+              const next = data.optionValue as EvtxTimeWindow;
+              if (!next || next === timeWindow) return;
+              setTimeWindow(next);
+              // The window is a server-side predicate, so it only takes effect on a refetch.
+              void refreshLoadedChannels();
+            }}
+          >
+            {TIME_WINDOWS.map((window) => (
+              <Option key={window} value={window}>
+                {EVTX_TIME_WINDOW_LABELS[window]}
+              </Option>
+            ))}
+          </Dropdown>
+
+          <div
+            style={{
+              width: "1px",
+              height: "20px",
+              backgroundColor: tokens.colorNeutralStroke2,
+            }}
+          />
+        </>
+      )}
+
       {LEVELS.map((level) => {
         const active = filterLevels.has(level);
         return (

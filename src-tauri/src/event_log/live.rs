@@ -157,6 +157,17 @@ pub fn query_channel_with_progress(
     )
 }
 
+/// Queries a channel with server-side filtering, reporting progress as events arrive.
+#[cfg(target_os = "windows")]
+pub fn query_channel_filtered_with_progress(
+    channel: &str,
+    filter: &EventQueryFilter,
+    max_events: Option<u64>,
+    on_progress: impl Fn(usize, Option<usize>),
+) -> Result<Vec<EvtxRecord>, String> {
+    query_channel_inner(channel, filter, max_events, on_progress)
+}
+
 #[cfg(target_os = "windows")]
 fn query_channel_inner(
     channel: &str,
@@ -280,6 +291,16 @@ pub fn query_channel_filtered(
     _channel: &str,
     _filter: &EventQueryFilter,
     _max_events: Option<u64>,
+) -> Result<Vec<EvtxRecord>, String> {
+    Err("Live event log queries are only available on Windows.".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn query_channel_filtered_with_progress(
+    _channel: &str,
+    _filter: &EventQueryFilter,
+    _max_events: Option<u64>,
+    _on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<Vec<EvtxRecord>, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
