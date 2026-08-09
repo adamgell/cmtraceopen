@@ -24,6 +24,37 @@ use super::models::{
 };
 
 /// Derive stable, read-only diagnostic findings from a reduced snapshot.
+///
+/// # Input
+///
+/// The [`Win32Analysis`] is an immutable snapshot produced by
+/// [`analyze_win32_bundle`](super::analyze_win32_bundle): every
+/// finding describes what that reduction concluded from the evidence it was
+/// given, never live device, service, or filesystem state. The snapshot is
+/// borrowed and left untouched; this function performs no I/O and calling it
+/// again on the same snapshot returns the same findings.
+///
+/// # Deterministic ordering
+///
+/// The returned vector is a pure function of the snapshot. Coverage-level
+/// rules run first in a fixed order (missing artifacts, unusable artifacts,
+/// unknown vocabulary, fragmented records, unkeyed signals, unlinked
+/// installer artifacts), then every transaction-level rule runs per
+/// transaction in the snapshot's canonical transaction order, which the
+/// reducer sorts by [`Win32TransactionKey`](super::Win32TransactionKey)
+/// independent of caller input order. Finding ids are stable across runs:
+/// the kebab-case rule name, scoped for transaction rules by the full
+/// transaction key.
+///
+/// # Evidence semantics
+///
+/// Every finding cites at least one [`IntuneEvidenceRef`] resolving into
+/// `snapshot.observations`, or at least one coverage-gap artifact id
+/// resolving into `snapshot.coverage`; [`IntuneFinding::is_evidence_backed`]
+/// is the invariant and the fixture corpus asserts it. Severity, confidence,
+/// and cause classification are independent axes (see the module
+/// documentation), and summaries pass log-derived free text through the
+/// shared redaction grammar before it is quoted.
 pub fn derive_findings(snapshot: &Win32Analysis) -> Vec<IntuneFinding> {
     let mut findings = Vec::new();
 
