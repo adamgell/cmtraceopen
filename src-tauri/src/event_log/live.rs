@@ -177,7 +177,11 @@ fn query_channel_inner(
 ) -> Result<Vec<EvtxRecord>, String> {
     let limit = max_events.map(|n| n as usize).unwrap_or(usize::MAX);
     let channel_hstring = HSTRING::from(channel);
-    let query_string = HSTRING::from(build_query(filter).as_str());
+    // A filter that cannot be expressed is refused here rather than silently degraded to "*",
+    // which would return everything and look like the filter simply matched a lot.
+    let compiled = build_query(filter)
+        .map_err(|error| format!("cannot compile event query for {channel}: {error}"))?;
+    let query_string = HSTRING::from(compiled.as_str());
 
     let query_handle = unsafe {
         EvtQuery(

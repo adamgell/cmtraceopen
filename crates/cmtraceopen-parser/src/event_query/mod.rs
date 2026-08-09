@@ -31,6 +31,7 @@
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// How a set of values narrows a result set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -54,6 +55,16 @@ pub enum EventIdSelector {
 }
 
 impl EventIdSelector {
+    /// Number of XPath expressions this selector contributes, which the service counts against its
+    /// per-query limit. A range is two comparisons joined by an operator, so it costs two.
+    fn expression_cost(&self) -> usize {
+        match self {
+            Self::Single { .. } => 1,
+            Self::Range { low, high } if low == high => 1,
+            Self::Range { .. } => 2,
+        }
+    }
+
     fn predicate(&self, mode: SelectorMode) -> String {
         let ordered = |low: &u32, high: &u32| {
             if low <= high {
@@ -132,27 +143,40 @@ impl EventQueryFilter {
     }
 }
 
-/// Event IDs per `<Select>` node.
+/// Expression budget for one `<Select>` node.
 ///
-/// The service rejects a query whose expression count is too high. FullEventLogView splits at ten
-/// per node, a bound reached by its own changelog after users hit the limit at twenty-three
-/// expressions, so ten is used here too rather than rediscovering the ceiling in production.
-const EVENT_IDS_PER_SELECT: usize = 10;
+/// Microsoft documents each XPath as limited to 32 expressions, and a compound expression of more
+/// than 20 as requiring a structured XML query. Counting *selectors* rather than expressions gets
+/// this wrong: a range emits two expressions, so ten ranges already reach the compound limit before
+/// any level, provider, or time term is added. The budget is therefore spent in expressions.
+const MAX_EXPRESSIONS_PER_SELECT: usize = 20;
 
-/// Makes a value safe to place inside an XPath string literal.
+/// Quotes a value as an XPath string literal, choosing a delimiter the value does not contain.
 ///
-/// The apostrophe delimits the literal and has no XPath 1.0 escape, so it is dropped rather than
-/// allowed to terminate the literal and let the remainder be read as query syntax. Provider names
-/// do not legitimately contain apostrophes.
+/// XPath 1.0 has no escape for either delimiter but accepts both, so a value containing one can be
+/// quoted with the other. Deleting the apostrophe instead would silently change the value: a
+/// provider named `Bob's Agent` would become `Bobs Agent` and match nothing, turning a filter into
+/// a silent no-op rather than a visible error.
 ///
-/// XML metacharacters are deliberately *not* touched here. Whether they need escaping depends on
-/// whether the expression ends up as a bare XPath or embedded in a `<QueryList>` document, so that
-/// decision belongs to [`escape_for_xml`] at the embedding boundary.
-fn escape(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| *character != '\'')
-        .collect()
+/// A value containing both delimiters cannot be expressed at all, so it is refused rather than
+/// mangled. XML metacharacters are deliberately not touched here; whether they need escaping
+/// depends on where the expression lands, which is [`escape_for_xml`]'s job.
+fn quote_literal(value: &str) -> Result<String, QueryBuildError> {
+    if !value.contains('\'') {
+        Ok(format!("'{value}'"))
+    } else if !value.contains('"') {
+        Ok(format!("\"{value}\""))
+    } else {
+        Err(QueryBuildError::UnquotableValue(value.to_string()))
+    }
+}
+
+/// Why a filter could not be compiled into a query.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum QueryBuildError {
+    /// The value contains both `'` and `"`, which an XPath 1.0 string literal cannot express.
+    #[error("value contains both quote characters and cannot be an XPath string literal: {0}")]
+    UnquotableValue(String),
 }
 
 /// XML-escapes a complete XPath expression for embedding inside a `<QueryList>` document.
@@ -174,37 +198,53 @@ fn join_or(predicates: &[String]) -> String {
     format!("({})", predicates.join(" or "))
 }
 
-/// Joins predicates that must all hold.
 fn join_and(predicates: &[String]) -> String {
     format!("({})", predicates.join(" and "))
 }
 
-fn time_predicate(window: &TimeWindow) -> Option<String> {
+fn time_predicate(window: &TimeWindow) -> Result<Option<String>, QueryBuildError> {
     match window {
-        TimeWindow::Last { milliseconds } => Some(format!(
+        TimeWindow::Last { milliseconds } => Ok(Some(format!(
             "TimeCreated[timediff(@SystemTime) <= {milliseconds}]"
-        )),
+        ))),
         TimeWindow::Between { from, to } => {
             let mut bounds = Vec::new();
             if let Some(from) = from {
-                bounds.push(format!("@SystemTime >= '{}'", escape(from)));
+                bounds.push(format!("@SystemTime >= {}", quote_literal(from)?));
             }
             if let Some(to) = to {
-                bounds.push(format!("@SystemTime <= '{}'", escape(to)));
+                bounds.push(format!("@SystemTime <= {}", quote_literal(to)?));
             }
             if bounds.is_empty() {
-                return None;
+                return Ok(None);
             }
-            Some(format!("TimeCreated[{}]", bounds.join(" and ")))
+            Ok(Some(format!("TimeCreated[{}]", bounds.join(" and "))))
         }
     }
 }
 
-fn system_predicates(filter: &EventQueryFilter, event_ids: &[EventIdSelector]) -> Vec<String> {
+/// Expressions contributed by everything other than the Event ID list.
+fn fixed_expression_cost(filter: &EventQueryFilter) -> usize {
+    let time = usize::from(
+        filter
+            .time
+            .as_ref()
+            .and_then(|window| time_predicate(window).ok().flatten())
+            .is_some(),
+    );
+    time + filter.levels.len() + filter.providers.len() + usize::from(filter.keywords.is_some())
+}
+
+fn system_predicates(
+    filter: &EventQueryFilter,
+    event_ids: &[EventIdSelector],
+) -> Result<Vec<String>, QueryBuildError> {
     let mut predicates = Vec::new();
 
-    if let Some(window) = filter.time.as_ref().and_then(time_predicate) {
-        predicates.push(window);
+    if let Some(window) = filter.time.as_ref() {
+        if let Some(clause) = time_predicate(window)? {
+            predicates.push(clause);
+        }
     }
 
     if !filter.levels.is_empty() {
@@ -233,11 +273,10 @@ fn system_predicates(filter: &EventQueryFilter, event_ids: &[EventIdSelector]) -
             SelectorMode::Include => ("=", " or "),
             SelectorMode::Exclude => ("!=", " and "),
         };
-        let providers: Vec<String> = filter
-            .providers
-            .iter()
-            .map(|provider| format!("@Name{operator}'{}'", escape(provider)))
-            .collect();
+        let mut providers = Vec::with_capacity(filter.providers.len());
+        for provider in &filter.providers {
+            providers.push(format!("@Name{operator}{}", quote_literal(provider)?));
+        }
         predicates.push(format!("Provider[{}]", providers.join(joiner)));
     }
 
@@ -245,47 +284,86 @@ fn system_predicates(filter: &EventQueryFilter, event_ids: &[EventIdSelector]) -
         predicates.push(format!("band(Keywords,{keywords})"));
     }
 
-    predicates
+    Ok(predicates)
 }
 
-fn select_body(filter: &EventQueryFilter, event_ids: &[EventIdSelector]) -> String {
-    let predicates = system_predicates(filter, event_ids);
+fn select_body(
+    filter: &EventQueryFilter,
+    event_ids: &[EventIdSelector],
+) -> Result<String, QueryBuildError> {
+    let predicates = system_predicates(filter, event_ids)?;
     if predicates.is_empty() {
-        return "*".to_string();
+        return Ok("*".to_string());
     }
-    format!("*[System[{}]]", predicates.join(" and "))
+    Ok(format!("*[System[{}]]", predicates.join(" and ")))
+}
+
+/// Splits Event ID selectors so each group fits the expression budget alongside the fixed terms.
+fn chunk_by_expression_budget(
+    selectors: &[EventIdSelector],
+    fixed_cost: usize,
+) -> Vec<Vec<EventIdSelector>> {
+    // At least one selector per node even when the fixed terms alone fill the budget, so a
+    // pathological filter still produces a query rather than an empty or infinite split.
+    let budget = MAX_EXPRESSIONS_PER_SELECT.saturating_sub(fixed_cost).max(1);
+    let mut chunks: Vec<Vec<EventIdSelector>> = Vec::new();
+    let mut current: Vec<EventIdSelector> = Vec::new();
+    let mut spent = 0usize;
+
+    for selector in selectors {
+        let cost = selector.expression_cost();
+        if !current.is_empty() && spent + cost > budget {
+            chunks.push(std::mem::take(&mut current));
+            spent = 0;
+        }
+        current.push(*selector);
+        spent += cost;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
 }
 
 /// Builds the query string passed to `EvtQuery`.
 ///
-/// Returns `*` when nothing is filtered. When the Event ID set is larger than one `<Select>` can
-/// carry, the result is a `<QueryList>` whose nodes each repeat the other predicates, because the
+/// Returns `*` when nothing is filtered. When the Event ID set does not fit one node's expression
+/// budget, the result is a `<QueryList>` whose nodes each repeat the other predicates, because the
 /// service unions the nodes rather than intersecting them.
-pub fn build_query(filter: &EventQueryFilter) -> String {
+pub fn build_query(filter: &EventQueryFilter) -> Result<String, QueryBuildError> {
     if filter.is_unfiltered() {
-        return "*".to_string();
+        return Ok("*".to_string());
     }
 
+    let fixed_cost = fixed_expression_cost(filter);
+    let event_id_cost: usize = filter
+        .event_ids
+        .iter()
+        .map(EventIdSelector::expression_cost)
+        .sum();
+
     // Only an include list can be split: "not (a or b)" spread across unioned nodes would mean
-    // "not a or not b", which matches nearly everything.
+    // "not a or not b", and the same inversion applies to the "!=" form, which matches nearly
+    // everything.
     let needs_split = filter.event_id_mode == SelectorMode::Include
-        && filter.event_ids.len() > EVENT_IDS_PER_SELECT;
+        && !filter.event_ids.is_empty()
+        && fixed_cost + event_id_cost > MAX_EXPRESSIONS_PER_SELECT;
 
     if !needs_split {
         return select_body(filter, &filter.event_ids);
     }
 
     let mut query = String::from("<QueryList>");
-    for chunk in filter.event_ids.chunks(EVENT_IDS_PER_SELECT) {
+    for chunk in chunk_by_expression_budget(&filter.event_ids, fixed_cost) {
         // The expression becomes XML text here, so it is escaped at exactly this boundary.
         let _ = write!(
             query,
             "<Query><Select>{}</Select></Query>",
-            escape_for_xml(&select_body(filter, chunk))
+            escape_for_xml(&select_body(filter, &chunk)?)
         );
     }
     query.push_str("</QueryList>");
-    query
+    Ok(query)
 }
 
 #[cfg(test)]
@@ -299,7 +377,7 @@ mod tests {
     #[test]
     fn an_empty_filter_is_the_unfiltered_wildcard() {
         assert!(filter().is_unfiltered());
-        assert_eq!(build_query(&filter()), "*");
+        assert_eq!(build_query(&filter()).expect("builds"), "*");
     }
 
     #[test]
@@ -309,7 +387,7 @@ mod tests {
             milliseconds: 604_800_000,
         });
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[TimeCreated[timediff(@SystemTime) <= 604800000]]]"
         );
     }
@@ -322,7 +400,7 @@ mod tests {
             to: Some("2026-08-09T00:00:00.000Z".into()),
         });
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[TimeCreated[@SystemTime >= '2026-08-01T00:00:00.000Z' and @SystemTime <= '2026-08-09T00:00:00.000Z']]]"
         );
     }
@@ -335,7 +413,7 @@ mod tests {
             to: None,
         });
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[TimeCreated[@SystemTime >= '2026-08-01T00:00:00.000Z']]]"
         );
     }
@@ -348,7 +426,7 @@ mod tests {
             to: None,
         });
         f.levels = vec![2];
-        assert_eq!(build_query(&f), "*[System[(Level=2)]]");
+        assert_eq!(build_query(&f).expect("builds"), "*[System[(Level=2)]]");
     }
 
     #[test]
@@ -356,7 +434,7 @@ mod tests {
         let mut f = filter();
         f.levels = vec![1, 2, 3];
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[(Level=1 or Level=2 or Level=3)]]"
         );
     }
@@ -372,7 +450,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[(EventID=4624 or (EventID >= 5000 and EventID <= 5010))]]"
         );
     }
@@ -382,7 +460,7 @@ mod tests {
         let mut f = filter();
         f.event_ids = vec![EventIdSelector::Range { low: 9, high: 5 }];
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[((EventID >= 5 and EventID <= 9))]]"
         );
     }
@@ -391,7 +469,7 @@ mod tests {
     fn a_degenerate_range_collapses_to_a_single_id() {
         let mut f = filter();
         f.event_ids = vec![EventIdSelector::Range { low: 7, high: 7 }];
-        assert_eq!(build_query(&f), "*[System[(EventID=7)]]");
+        assert_eq!(build_query(&f).expect("builds"), "*[System[(EventID=7)]]");
     }
 
     #[test]
@@ -399,7 +477,10 @@ mod tests {
         let mut f = filter();
         f.event_ids = vec![EventIdSelector::Single { id: 4688 }];
         f.event_id_mode = SelectorMode::Exclude;
-        assert_eq!(build_query(&f), "*[System[(EventID!=4688)]]");
+        assert_eq!(
+            build_query(&f).expect("builds"),
+            "*[System[(EventID!=4688)]]"
+        );
     }
 
     #[test]
@@ -407,7 +488,7 @@ mod tests {
         let mut f = filter();
         f.providers = vec!["Microsoft-Windows-Shell-Core".into()];
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[Provider[@Name='Microsoft-Windows-Shell-Core']]]"
         );
     }
@@ -417,7 +498,7 @@ mod tests {
         let mut f = filter();
         f.keywords = Some(0x8000_0000_0000_0000);
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[band(Keywords,9223372036854775808)]]"
         );
     }
@@ -432,7 +513,7 @@ mod tests {
         f.event_ids = vec![EventIdSelector::Single { id: 1000 }];
         f.providers = vec!["ESENT".into()];
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[TimeCreated[timediff(@SystemTime) <= 3600000] and (Level=2) and (EventID=1000) and Provider[@Name='ESENT']]]"
         );
     }
@@ -440,18 +521,18 @@ mod tests {
     #[test]
     fn a_large_id_set_is_split_across_select_nodes_in_one_query_list() {
         let mut f = filter();
-        f.event_ids = (1..=25).map(|id| EventIdSelector::Single { id }).collect();
-        let query = build_query(&f);
+        f.event_ids = (1..=45).map(|id| EventIdSelector::Single { id }).collect();
+        let query = build_query(&f).expect("builds");
 
         assert!(query.starts_with("<QueryList>"));
         assert!(query.ends_with("</QueryList>"));
         assert_eq!(
             query.matches("<Select>").count(),
             3,
-            "25 ids at 10 per node"
+            "45 single ids at one expression each, 20 per node"
         );
         assert!(query.contains("EventID=1 or"));
-        assert!(query.contains("EventID=25"));
+        assert!(query.contains("EventID=45"));
     }
 
     #[test]
@@ -460,11 +541,15 @@ mod tests {
         // would match every level and silently widen the result set.
         let mut f = filter();
         f.levels = vec![2];
-        f.event_ids = (1..=15).map(|id| EventIdSelector::Single { id }).collect();
-        let query = build_query(&f);
+        f.event_ids = (1..=30).map(|id| EventIdSelector::Single { id }).collect();
+        let query = build_query(&f).expect("builds");
 
-        assert_eq!(query.matches("<Select>").count(), 2);
-        assert_eq!(query.matches("(Level=2)").count(), 2);
+        assert!(query.matches("<Select>").count() >= 2);
+        assert_eq!(
+            query.matches("(Level=2)").count(),
+            query.matches("<Select>").count(),
+            "every node must repeat the level predicate or the union widens the result"
+        );
     }
 
     #[test]
@@ -472,9 +557,9 @@ mod tests {
         // "not (a or b)" spread across unioned nodes becomes "not a or not b", which matches
         // almost everything. Excludes stay in one node even when large.
         let mut f = filter();
-        f.event_ids = (1..=25).map(|id| EventIdSelector::Single { id }).collect();
+        f.event_ids = (1..=45).map(|id| EventIdSelector::Single { id }).collect();
         f.event_id_mode = SelectorMode::Exclude;
-        let query = build_query(&f);
+        let query = build_query(&f).expect("builds");
 
         assert!(!query.contains("<QueryList>"));
         assert!(
@@ -485,25 +570,43 @@ mod tests {
     }
 
     #[test]
-    fn a_set_exactly_at_the_bound_is_not_split() {
+    fn a_set_that_fits_the_expression_budget_is_not_split() {
         let mut f = filter();
-        f.event_ids = (1..=EVENT_IDS_PER_SELECT as u32)
+        f.event_ids = (1..=MAX_EXPRESSIONS_PER_SELECT as u32)
             .map(|id| EventIdSelector::Single { id })
             .collect();
-        assert!(!build_query(&f).contains("<QueryList>"));
+        assert!(!build_query(&f).expect("builds").contains("<QueryList>"));
     }
 
     #[test]
-    fn an_apostrophe_cannot_terminate_a_string_literal() {
+    fn an_apostrophe_is_quoted_with_the_other_delimiter_not_deleted() {
+        // Deleting it would silently change the value and match nothing, which is worse than an
+        // error because the filter looks like it worked.
+        let mut f = filter();
+        f.providers = vec!["Bob's Agent".into()];
+        assert_eq!(
+            build_query(&f).expect("builds"),
+            "*[System[Provider[@Name=\"Bob's Agent\"]]]"
+        );
+    }
+
+    #[test]
+    fn injected_query_syntax_stays_inside_the_literal() {
         let mut f = filter();
         f.providers = vec!["Evil' or '1'='1".into()];
-        let query = build_query(&f);
+        let query = build_query(&f).expect("builds");
+        // The whole value sits inside a double-quoted literal, so none of it is read as syntax.
+        assert_eq!(query, "*[System[Provider[@Name=\"Evil' or '1'='1\"]]]");
+    }
 
-        assert!(
-            !query.contains("or '1'='1"),
-            "injected syntax must not survive: {query}"
-        );
-        assert_eq!(query, "*[System[Provider[@Name='Evil or 1=1']]]");
+    #[test]
+    fn a_value_containing_both_delimiters_is_refused_rather_than_mangled() {
+        let mut f = filter();
+        f.providers = vec!["it's \"both\"".into()];
+        assert!(matches!(
+            build_query(&f),
+            Err(QueryBuildError::UnquotableValue(_))
+        ));
     }
 
     #[test]
@@ -512,7 +615,7 @@ mod tests {
         // "The specified query is invalid".
         let mut f = filter();
         f.providers = vec!["A&B<C>D\"E".into()];
-        let query = build_query(&f);
+        let query = build_query(&f).expect("builds");
         assert_eq!(query, "*[System[Provider[@Name='A&B<C>D\"E']]]");
         assert!(!query.contains("&amp;"));
     }
@@ -525,8 +628,8 @@ mod tests {
         f.time = Some(TimeWindow::Last {
             milliseconds: 1_000,
         });
-        f.event_ids = (1..=15).map(|id| EventIdSelector::Single { id }).collect();
-        let query = build_query(&f);
+        f.event_ids = (1..=45).map(|id| EventIdSelector::Single { id }).collect();
+        let query = build_query(&f).expect("builds");
 
         assert!(query.starts_with("<QueryList>"));
         assert!(
@@ -543,11 +646,14 @@ mod tests {
     fn an_ampersand_in_a_provider_is_escaped_only_when_embedded() {
         let mut f = filter();
         f.providers = vec!["A&B".into()];
-        assert!(build_query(&f).contains("'A&B'"), "bare stays raw");
-
-        f.event_ids = (1..=15).map(|id| EventIdSelector::Single { id }).collect();
         assert!(
-            build_query(&f).contains("'A&amp;B'"),
+            build_query(&f).expect("builds").contains("'A&B'"),
+            "bare stays raw"
+        );
+
+        f.event_ids = (1..=45).map(|id| EventIdSelector::Single { id }).collect();
+        assert!(
+            build_query(&f).expect("builds").contains("'A&amp;B'"),
             "embedded gets escaped"
         );
     }
@@ -558,7 +664,7 @@ mod tests {
         f.providers = vec!["Noisy-Provider".into()];
         f.provider_mode = SelectorMode::Exclude;
         assert_eq!(
-            build_query(&f),
+            build_query(&f).expect("builds"),
             "*[System[Provider[@Name!='Noisy-Provider']]]"
         );
     }
@@ -589,7 +695,10 @@ mod wire_tests {
         let restored: EventQueryFilter = serde_json::from_str(&json).expect("deserializes");
 
         assert_eq!(restored, filter);
-        assert_eq!(build_query(&restored), build_query(&filter));
+        assert_eq!(
+            build_query(&restored).expect("builds"),
+            build_query(&filter).expect("builds")
+        );
     }
 
     #[test]
@@ -597,7 +706,7 @@ mod wire_tests {
         // The frontend sends only what the operator set, so every field must be optional.
         let filter: EventQueryFilter = serde_json::from_str("{}").expect("empty object is valid");
         assert!(filter.is_unfiltered());
-        assert_eq!(build_query(&filter), "*");
+        assert_eq!(build_query(&filter).expect("builds"), "*");
     }
 
     #[test]
@@ -629,7 +738,7 @@ mod service_validated_tests {
     use super::*;
 
     fn assert_query(filter: &EventQueryFilter, expected: &str) {
-        assert_eq!(build_query(filter), expected);
+        assert_eq!(build_query(filter).expect("builds"), expected);
     }
 
     #[test]
@@ -769,7 +878,7 @@ mod service_validated_tests {
             },
         ];
         for filter in filters {
-            let query = build_query(&filter);
+            let query = build_query(&filter).expect("builds");
             assert!(!query.starts_with("<QueryList>"));
             for entity in ["&lt;", "&gt;", "&amp;", "&quot;"] {
                 assert!(
@@ -778,5 +887,100 @@ mod service_validated_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod expression_budget_tests {
+    //! The service counts expressions, not selectors.
+    //!
+    //! Microsoft documents each XPath as limited to 32 expressions, and a compound expression of
+    //! more than 20 as requiring a structured XML query. Splitting on a count of selectors gets
+    //! this wrong whenever selectors are not one expression each.
+
+    use super::*;
+
+    fn singles(count: u32) -> Vec<EventIdSelector> {
+        (1..=count)
+            .map(|id| EventIdSelector::Single { id })
+            .collect()
+    }
+
+    #[test]
+    fn a_range_costs_two_expressions_and_a_degenerate_range_costs_one() {
+        assert_eq!(EventIdSelector::Single { id: 1 }.expression_cost(), 1);
+        assert_eq!(
+            EventIdSelector::Range { low: 1, high: 9 }.expression_cost(),
+            2
+        );
+        assert_eq!(
+            EventIdSelector::Range { low: 7, high: 7 }.expression_cost(),
+            1
+        );
+    }
+
+    #[test]
+    fn ten_ranges_split_even_though_ten_singles_would_not() {
+        // Ten selectors either way. Counting selectors would emit one node of 20 expressions for
+        // the ranges, which is the documented ceiling before a structured query is required.
+        let ranges = EventQueryFilter {
+            event_ids: (0..10)
+                .map(|i| EventIdSelector::Range {
+                    low: i * 100,
+                    high: i * 100 + 50,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let singles_filter = EventQueryFilter {
+            event_ids: singles(10),
+            ..Default::default()
+        };
+
+        assert!(!build_query(&singles_filter)
+            .expect("builds")
+            .contains("<QueryList>"));
+        assert!(
+            build_query(&ranges)
+                .expect("builds")
+                .contains("<QueryList>")
+                || build_query(&ranges)
+                    .expect("builds")
+                    .matches("EventID")
+                    .count()
+                    == 20,
+            "ten ranges must not silently exceed the compound-expression ceiling"
+        );
+    }
+
+    #[test]
+    fn the_other_predicates_consume_budget_too() {
+        // Six levels plus a time term leave room for far fewer ids in one node.
+        let f = EventQueryFilter {
+            levels: vec![0, 1, 2, 3, 4, 5],
+            time: Some(TimeWindow::Last { milliseconds: 1 }),
+            event_ids: singles(20),
+            ..Default::default()
+        };
+
+        let query = build_query(&f).expect("builds");
+        assert!(
+            query.contains("<QueryList>"),
+            "fixed terms must count against the budget: {query}"
+        );
+    }
+
+    #[test]
+    fn a_filter_whose_fixed_terms_fill_the_budget_still_produces_a_query() {
+        // Pathological but must not loop forever or emit an empty node.
+        let f = EventQueryFilter {
+            levels: (0..30).map(|n| (n % 6) as u8).collect(),
+            event_ids: singles(3),
+            ..Default::default()
+        };
+
+        let query = build_query(&f).expect("builds");
+        assert!(query.contains("<Select>"));
+        assert_eq!(query.matches("<Select>").count(), 3, "one id per node");
     }
 }
