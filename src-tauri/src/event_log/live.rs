@@ -6,14 +6,24 @@ use regex::Regex;
 
 use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxRecord};
 use super::sanitize_control_chars;
+use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
 
 #[cfg(target_os = "windows")]
 use windows::core::{Error, HSTRING, PCWSTR};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::EventLog::{
     EvtClose, EvtFormatMessage, EvtFormatMessageEvent, EvtNext, EvtOpenPublisherMetadata, EvtQuery,
-    EvtQueryChannelPath, EvtQueryReverseDirection, EvtRender, EvtRenderEventXml, EVT_HANDLE,
+    EvtQueryChannelPath, EvtQueryReverseDirection, EvtQueryTolerateQueryErrors, EvtRender,
+    EvtRenderEventXml, EVT_HANDLE,
 };
+
+/// Event handles fetched per `EvtNext` call.
+///
+/// Each call is a round trip to the Event Log service, so this is the dominant cost of a scan.
+/// FullEventLogView hardcodes 1, paying one round trip per event. The API accepts up to 1024;
+/// 256 keeps the per-call array modest while cutting round trips by that factor.
+#[cfg(target_os = "windows")]
+const EVENT_FETCH_BATCH: usize = 256;
 
 // ── RAII handle wrapper ─────────────────────────────────────────────────────
 
@@ -119,6 +129,19 @@ pub fn query_channel(channel: &str, max_events: Option<u64>) -> Result<Vec<EvtxR
     query_channel_with_progress(channel, max_events, |_, _| {})
 }
 
+/// Queries a channel with server-side filtering.
+///
+/// The filter is compiled to XPath and evaluated by the service, so events that do not match are
+/// never fetched, rendered, or transferred.
+#[cfg(target_os = "windows")]
+pub fn query_channel_filtered(
+    channel: &str,
+    filter: &EventQueryFilter,
+    max_events: Option<u64>,
+) -> Result<Vec<EvtxRecord>, String> {
+    query_channel_inner(channel, filter, max_events, |_, _| {})
+}
+
 /// Query with a progress callback: `on_progress(fetched_so_far, total_estimate)`.
 #[cfg(target_os = "windows")]
 pub fn query_channel_with_progress(
@@ -126,16 +149,34 @@ pub fn query_channel_with_progress(
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<Vec<EvtxRecord>, String> {
+    query_channel_inner(
+        channel,
+        &EventQueryFilter::default(),
+        max_events,
+        on_progress,
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn query_channel_inner(
+    channel: &str,
+    filter: &EventQueryFilter,
+    max_events: Option<u64>,
+    on_progress: impl Fn(usize, Option<usize>),
+) -> Result<Vec<EvtxRecord>, String> {
     let limit = max_events.map(|n| n as usize).unwrap_or(usize::MAX);
     let channel_hstring = HSTRING::from(channel);
-    let query_string = HSTRING::from("*");
+    let query_string = HSTRING::from(build_query(filter).as_str());
 
     let query_handle = unsafe {
         EvtQuery(
             None,
             &channel_hstring,
             &query_string,
-            EvtQueryChannelPath.0 | EvtQueryReverseDirection.0,
+            // TolerateQueryErrors keeps a scan alive when one part of a query cannot be evaluated,
+            // for example a provider that is not registered on this machine. Without it a single
+            // bad element aborts the whole channel and the result silently looks empty.
+            EvtQueryChannelPath.0 | EvtQueryReverseDirection.0 | EvtQueryTolerateQueryErrors.0,
         )
     }
     .map_err(|e| format_error(&format!("EvtQuery({channel})"), &e))?;
@@ -146,7 +187,7 @@ pub fn query_channel_with_progress(
     let mut publisher_metadata = HashMap::<String, Option<OwnedEvtHandle>>::new();
 
     while records.len() < limit {
-        let mut raw_handles = [0isize; 16];
+        let mut raw_handles = [0isize; EVENT_FETCH_BATCH];
         let mut returned = 0u32;
 
         match unsafe { EvtNext(query_handle.raw(), &mut raw_handles, 0, 0, &mut returned) } {
@@ -231,6 +272,15 @@ pub fn query_channel_with_progress(
 
 #[cfg(not(target_os = "windows"))]
 pub fn query_channel(_channel: &str, _max_events: Option<u64>) -> Result<Vec<EvtxRecord>, String> {
+    Err("Live event log queries are only available on Windows.".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn query_channel_filtered(
+    _channel: &str,
+    _filter: &EventQueryFilter,
+    _max_events: Option<u64>,
+) -> Result<Vec<EvtxRecord>, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 

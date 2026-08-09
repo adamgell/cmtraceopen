@@ -45,23 +45,42 @@ pub async fn evtx_query_channels(
     #[cfg(target_os = "windows")]
     {
         tokio::task::spawn_blocking(move || {
+            use rayon::prelude::*;
+
+            // Channels are queried concurrently. Each one is an independent conversation with the
+            // Event Log service that spends nearly all its time waiting on RPC, so serializing
+            // them leaves the machine idle. Results are collected per channel and ordered
+            // afterwards, so concurrency cannot affect the output.
+            let per_channel: Vec<(String, Result<Vec<super::models::EvtxRecord>, String>)> =
+                channels
+                    .par_iter()
+                    .map(|channel| {
+                        let app_ref = &app;
+                        let ch_name = channel.clone();
+                        let outcome = super::live::query_channel_with_progress(
+                            channel,
+                            max_events,
+                            |fetched, _| {
+                                let _ = app_ref.emit(
+                                    "evtx-query-progress",
+                                    EvtxQueryProgress {
+                                        channel: ch_name.clone(),
+                                        fetched,
+                                    },
+                                );
+                            },
+                        );
+                        (channel.clone(), outcome)
+                    })
+                    .collect();
+
             let mut all_records = Vec::new();
             let mut channel_infos = Vec::new();
             let mut parse_errors = 0u32;
             let mut error_messages = Vec::new();
 
-            for channel in &channels {
-                let app_ref = &app;
-                let ch_name = channel.clone();
-                match super::live::query_channel_with_progress(channel, max_events, |fetched, _| {
-                    let _ = app_ref.emit(
-                        "evtx-query-progress",
-                        EvtxQueryProgress {
-                            channel: ch_name.clone(),
-                            fetched,
-                        },
-                    );
-                }) {
+            for (channel, outcome) in per_channel {
+                match outcome {
                     Ok(records) => {
                         channel_infos.push(super::models::EvtxChannelInfo {
                             name: channel.clone(),
@@ -77,7 +96,8 @@ pub async fn evtx_query_channels(
                             e
                         );
                         error_messages.push(format!("{}: {}", channel, e));
-                        // Still include channel in results with 0 events so frontend knows it was attempted
+                        // A failed channel is still reported with 0 events so the gap stays visible
+                        // rather than looking like a channel that simply had nothing in it.
                         channel_infos.push(super::models::EvtxChannelInfo {
                             name: channel.clone(),
                             event_count: 0,
