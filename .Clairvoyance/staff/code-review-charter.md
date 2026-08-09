@@ -51,12 +51,12 @@ rejected review feedback with reasoning; and a closing line that states what the
 review covered and what it did not. Merge readiness is reported to Adam as gate
 states; merging is Adam's action and is not part of any review.
 
-Hermes and CodeRabbit are both merge gates (Adam, 2026-08-08): a PR is not
-merge-ready until CodeRabbit is APPROVED at head AND a Hermes charter review has
-been posted with its blocking findings resolved. Charter reviews of substantial PRs
-run as Hermes sessions by default (see the operator skill's delegation runbook);
-the operator's own layer agents are the fallback when Hermes is unavailable, and a
-fallback review must say so in its report.
+Hermes and CodeRabbit are both merge gates for ALL fixes (Adam, 2026-08-08): no
+fix PR of any size is merge-ready until CodeRabbit is APPROVED at head AND a
+Hermes charter review has been posted with its blocking findings resolved. Charter
+reviews run as Hermes sessions by default (see the operator skill's delegation
+runbook); the operator's own layer agents are the fallback when Hermes is
+unavailable, and a fallback review must say so in its report.
 
 ## You do not
 
