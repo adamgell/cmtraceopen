@@ -301,11 +301,21 @@ pub(super) fn parse_code(raw: &str) -> IntuneErrorCode {
         .strip_prefix("0x")
         .or_else(|| digits.strip_prefix("0X"))
     {
-        let value = i64::from_str_radix(hex, 16).ok();
-        (
-            value.map(|v| if negative { -v } else { v }),
-            Some(format!("0x{}", hex.to_ascii_uppercase())),
-        )
+        let value = i64::from_str_radix(hex, 16)
+            .ok()
+            .map(|v| if negative { -v } else { v });
+        // A negative token's hex view must state the same number as the
+        // decimal view, so it goes through the same signed-to-u32 rendering
+        // as the decimal branch (`-0x5` is `0xFFFFFFFB`, not `0x5`). A
+        // positive token echoes the digits it was written with.
+        let rendered = if negative {
+            value
+                .and_then(|v| i32::try_from(v).ok())
+                .map(|v| format!("0x{:08X}", v as u32))
+        } else {
+            Some(format!("0x{}", hex.to_ascii_uppercase()))
+        };
+        (value, rendered)
     } else {
         let value = digits
             .parse::<i64>()
@@ -743,6 +753,29 @@ mod tests {
         let code = parse_code("-2147024891");
         assert_eq!(code.decimal, Some(-2_147_024_891));
         assert_eq!(code.raw, "-2147024891");
+    }
+
+    #[test]
+    fn a_negative_hex_token_renders_the_same_number_in_both_views() {
+        // `-0x5` is -5; rendering the hex view as `0x5` stated a different
+        // number than the decimal view. The two branches share the
+        // signed-to-u32 rendering, so the hex view is the two's-complement
+        // form of the same value.
+        let code = parse_code("-0x5");
+        assert_eq!(code.decimal, Some(-5));
+        assert_eq!(code.hex.as_deref(), Some("0xFFFFFFFB"));
+
+        // Consistency with the decimal branch on the canonical HRESULT shape.
+        let hex = parse_code("-0x7FF8FF85");
+        let dec = parse_code("-2147024773");
+        assert_eq!(hex.decimal, dec.decimal);
+        assert_eq!(hex.hex, dec.hex);
+
+        // A negative value outside the i32 window has no honest 32-bit hex
+        // form, exactly like the positive out-of-range case.
+        let out_of_range = parse_code("-0x100000000");
+        assert_eq!(out_of_range.decimal, Some(-4_294_967_296));
+        assert_eq!(out_of_range.hex, None);
     }
 
     #[test]
