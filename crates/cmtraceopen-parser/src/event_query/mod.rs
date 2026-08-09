@@ -15,8 +15,18 @@
 //!   large Event ID sets are split across several `<Select>` nodes inside one `<QueryList>`.
 //!   FullEventLogView batches at ten per node; the same bound is used here.
 //! - **Values are attacker-influenced.** Provider names reach this from user input and from event
-//!   data, so every interpolated value is escaped. An unescaped apostrophe would otherwise
-//!   terminate the literal and let the rest of the string be read as query syntax.
+//!   data, so an apostrophe is stripped. It delimits XPath string literals and has no XPath 1.0
+//!   escape, so leaving it in would terminate the literal and let the rest be read as syntax.
+//! - **Escaping depends on context, and getting it backwards fails closed.** A bare XPath must use
+//!   raw `<=` and `>=`; the same operators inside a `<QueryList>` document must be XML-escaped.
+//!   Verified against the service on Windows 11: escaped operators in a bare XPath are rejected
+//!   with "The specified query is invalid", and raw operators inside a QueryList are not
+//!   well-formed XML. So predicates are built raw and the whole expression is XML-escaped only
+//!   when it is embedded.
+//! - **There is no negation.** The Event Log XPath subset rejects `not(...)` outright, so exclusion
+//!   is expressed with `!=` joined by `and`, and an excluded range becomes its complement. Verified
+//!   against the service: the `!=` form and the documented `<Suppress>` element return identical
+//!   result sets.
 
 use std::fmt::Write as _;
 
@@ -44,17 +54,29 @@ pub enum EventIdSelector {
 }
 
 impl EventIdSelector {
-    fn predicate(&self) -> String {
-        match self {
-            Self::Single { id } => format!("EventID={id}"),
-            Self::Range { low, high } if low == high => format!("EventID={low}"),
-            Self::Range { low, high } => {
-                let (low, high) = if low <= high {
-                    (low, high)
-                } else {
-                    (high, low)
-                };
-                format!("(EventID &gt;= {low} and EventID &lt;= {high})")
+    fn predicate(&self, mode: SelectorMode) -> String {
+        let ordered = |low: &u32, high: &u32| {
+            if low <= high {
+                (*low, *high)
+            } else {
+                (*high, *low)
+            }
+        };
+        match (self, mode) {
+            (Self::Single { id }, SelectorMode::Include) => format!("EventID={id}"),
+            (Self::Single { id }, SelectorMode::Exclude) => format!("EventID!={id}"),
+            (Self::Range { low, high }, mode) if low == high => match mode {
+                SelectorMode::Include => format!("EventID={low}"),
+                SelectorMode::Exclude => format!("EventID!={low}"),
+            },
+            (Self::Range { low, high }, SelectorMode::Include) => {
+                let (low, high) = ordered(low, high);
+                format!("(EventID >= {low} and EventID <= {high})")
+            }
+            (Self::Range { low, high }, SelectorMode::Exclude) => {
+                let (low, high) = ordered(low, high);
+                // The complement of a range, since the subset offers no negation to wrap it in.
+                format!("(EventID < {low} or EventID > {high})")
             }
         }
     }
@@ -117,21 +139,31 @@ impl EventQueryFilter {
 /// expressions, so ten is used here too rather than rediscovering the ceiling in production.
 const EVENT_IDS_PER_SELECT: usize = 10;
 
-/// Escapes a value for inclusion inside an XPath string literal within XML.
+/// Makes a value safe to place inside an XPath string literal.
 ///
-/// Both layers matter. The XML layer would otherwise break on `&` or `<`, and the XPath layer
-/// would break on the apostrophe that delimits the literal.
+/// The apostrophe delimits the literal and has no XPath 1.0 escape, so it is dropped rather than
+/// allowed to terminate the literal and let the remainder be read as query syntax. Provider names
+/// do not legitimately contain apostrophes.
+///
+/// XML metacharacters are deliberately *not* touched here. Whether they need escaping depends on
+/// whether the expression ends up as a bare XPath or embedded in a `<QueryList>` document, so that
+/// decision belongs to [`escape_for_xml`] at the embedding boundary.
 fn escape(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
+    value
+        .chars()
+        .filter(|character| *character != '\'')
+        .collect()
+}
+
+/// XML-escapes a complete XPath expression for embedding inside a `<QueryList>` document.
+fn escape_for_xml(expression: &str) -> String {
+    let mut escaped = String::with_capacity(expression.len());
+    for character in expression.chars() {
         match character {
             '&' => escaped.push_str("&amp;"),
             '<' => escaped.push_str("&lt;"),
             '>' => escaped.push_str("&gt;"),
             '"' => escaped.push_str("&quot;"),
-            // No XPath 1.0 escape exists for the delimiter, so it is dropped rather than allowed
-            // to terminate the literal. Provider names do not legitimately contain apostrophes.
-            '\'' => {}
             _ => escaped.push(character),
         }
     }
@@ -142,18 +174,23 @@ fn join_or(predicates: &[String]) -> String {
     format!("({})", predicates.join(" or "))
 }
 
+/// Joins predicates that must all hold.
+fn join_and(predicates: &[String]) -> String {
+    format!("({})", predicates.join(" and "))
+}
+
 fn time_predicate(window: &TimeWindow) -> Option<String> {
     match window {
         TimeWindow::Last { milliseconds } => Some(format!(
-            "TimeCreated[timediff(@SystemTime) &lt;= {milliseconds}]"
+            "TimeCreated[timediff(@SystemTime) <= {milliseconds}]"
         )),
         TimeWindow::Between { from, to } => {
             let mut bounds = Vec::new();
             if let Some(from) = from {
-                bounds.push(format!("@SystemTime &gt;= '{}'", escape(from)));
+                bounds.push(format!("@SystemTime >= '{}'", escape(from)));
             }
             if let Some(to) = to {
-                bounds.push(format!("@SystemTime &lt;= '{}'", escape(to)));
+                bounds.push(format!("@SystemTime <= '{}'", escape(to)));
             }
             if bounds.is_empty() {
                 return None;
@@ -180,25 +217,28 @@ fn system_predicates(filter: &EventQueryFilter, event_ids: &[EventIdSelector]) -
     }
 
     if !event_ids.is_empty() {
-        let ids: Vec<String> = event_ids.iter().map(EventIdSelector::predicate).collect();
-        let clause = join_or(&ids);
+        let ids: Vec<String> = event_ids
+            .iter()
+            .map(|selector| selector.predicate(filter.event_id_mode))
+            .collect();
+        // Include is a union of alternatives; exclude must hold for every listed id at once.
         predicates.push(match filter.event_id_mode {
-            SelectorMode::Include => clause,
-            SelectorMode::Exclude => format!("not {clause}"),
+            SelectorMode::Include => join_or(&ids),
+            SelectorMode::Exclude => join_and(&ids),
         });
     }
 
     if !filter.providers.is_empty() {
+        let (operator, joiner) = match filter.provider_mode {
+            SelectorMode::Include => ("=", " or "),
+            SelectorMode::Exclude => ("!=", " and "),
+        };
         let providers: Vec<String> = filter
             .providers
             .iter()
-            .map(|provider| format!("@Name='{}'", escape(provider)))
+            .map(|provider| format!("@Name{operator}'{}'", escape(provider)))
             .collect();
-        let clause = format!("Provider[{}]", providers.join(" or "));
-        predicates.push(match filter.provider_mode {
-            SelectorMode::Include => clause,
-            SelectorMode::Exclude => format!("not {clause}"),
-        });
+        predicates.push(format!("Provider[{}]", providers.join(joiner)));
     }
 
     if let Some(keywords) = filter.keywords {
@@ -237,10 +277,11 @@ pub fn build_query(filter: &EventQueryFilter) -> String {
 
     let mut query = String::from("<QueryList>");
     for chunk in filter.event_ids.chunks(EVENT_IDS_PER_SELECT) {
+        // The expression becomes XML text here, so it is escaped at exactly this boundary.
         let _ = write!(
             query,
             "<Query><Select>{}</Select></Query>",
-            select_body(filter, chunk)
+            escape_for_xml(&select_body(filter, chunk))
         );
     }
     query.push_str("</QueryList>");
@@ -269,7 +310,7 @@ mod tests {
         });
         assert_eq!(
             build_query(&f),
-            "*[System[TimeCreated[timediff(@SystemTime) &lt;= 604800000]]]"
+            "*[System[TimeCreated[timediff(@SystemTime) <= 604800000]]]"
         );
     }
 
@@ -282,7 +323,7 @@ mod tests {
         });
         assert_eq!(
             build_query(&f),
-            "*[System[TimeCreated[@SystemTime &gt;= '2026-08-01T00:00:00.000Z' and @SystemTime &lt;= '2026-08-09T00:00:00.000Z']]]"
+            "*[System[TimeCreated[@SystemTime >= '2026-08-01T00:00:00.000Z' and @SystemTime <= '2026-08-09T00:00:00.000Z']]]"
         );
     }
 
@@ -295,7 +336,7 @@ mod tests {
         });
         assert_eq!(
             build_query(&f),
-            "*[System[TimeCreated[@SystemTime &gt;= '2026-08-01T00:00:00.000Z']]]"
+            "*[System[TimeCreated[@SystemTime >= '2026-08-01T00:00:00.000Z']]]"
         );
     }
 
@@ -332,7 +373,7 @@ mod tests {
         ];
         assert_eq!(
             build_query(&f),
-            "*[System[(EventID=4624 or (EventID &gt;= 5000 and EventID &lt;= 5010))]]"
+            "*[System[(EventID=4624 or (EventID >= 5000 and EventID <= 5010))]]"
         );
     }
 
@@ -342,7 +383,7 @@ mod tests {
         f.event_ids = vec![EventIdSelector::Range { low: 9, high: 5 }];
         assert_eq!(
             build_query(&f),
-            "*[System[((EventID &gt;= 5 and EventID &lt;= 9))]]"
+            "*[System[((EventID >= 5 and EventID <= 9))]]"
         );
     }
 
@@ -358,7 +399,7 @@ mod tests {
         let mut f = filter();
         f.event_ids = vec![EventIdSelector::Single { id: 4688 }];
         f.event_id_mode = SelectorMode::Exclude;
-        assert_eq!(build_query(&f), "*[System[not (EventID=4688)]]");
+        assert_eq!(build_query(&f), "*[System[(EventID!=4688)]]");
     }
 
     #[test]
@@ -392,7 +433,7 @@ mod tests {
         f.providers = vec!["ESENT".into()];
         assert_eq!(
             build_query(&f),
-            "*[System[TimeCreated[timediff(@SystemTime) &lt;= 3600000] and (Level=2) and (EventID=1000) and Provider[@Name='ESENT']]]"
+            "*[System[TimeCreated[timediff(@SystemTime) <= 3600000] and (Level=2) and (EventID=1000) and Provider[@Name='ESENT']]]"
         );
     }
 
@@ -436,7 +477,11 @@ mod tests {
         let query = build_query(&f);
 
         assert!(!query.contains("<QueryList>"));
-        assert!(query.starts_with("*[System[not ("));
+        assert!(
+            !query.contains("not("),
+            "the subset has no negation: {query}"
+        );
+        assert!(query.contains("EventID!=1 and EventID!=2"), "{query}");
     }
 
     #[test]
@@ -462,12 +507,48 @@ mod tests {
     }
 
     #[test]
-    fn xml_metacharacters_in_a_provider_are_escaped() {
+    fn a_bare_xpath_keeps_operators_and_metacharacters_raw() {
+        // Verified against the service: escaped operators in a bare XPath are rejected with
+        // "The specified query is invalid".
         let mut f = filter();
         f.providers = vec!["A&B<C>D\"E".into()];
-        assert_eq!(
-            build_query(&f),
-            "*[System[Provider[@Name='A&amp;B&lt;C&gt;D&quot;E']]]"
+        let query = build_query(&f);
+        assert_eq!(query, "*[System[Provider[@Name='A&B<C>D\"E']]]");
+        assert!(!query.contains("&amp;"));
+    }
+
+    #[test]
+    fn embedding_in_a_query_list_escapes_the_whole_expression() {
+        // The same operators inside a QueryList must be escaped, or the document is not
+        // well-formed XML and the service rejects it before parsing the XPath.
+        let mut f = filter();
+        f.time = Some(TimeWindow::Last {
+            milliseconds: 1_000,
+        });
+        f.event_ids = (1..=15).map(|id| EventIdSelector::Single { id }).collect();
+        let query = build_query(&f);
+
+        assert!(query.starts_with("<QueryList>"));
+        assert!(
+            query.contains("timediff(@SystemTime) &lt;= 1000"),
+            "operators must be escaped once embedded: {query}"
+        );
+        assert!(
+            !query.contains("timediff(@SystemTime) <= 1000"),
+            "a raw operator inside XML would be malformed: {query}"
+        );
+    }
+
+    #[test]
+    fn an_ampersand_in_a_provider_is_escaped_only_when_embedded() {
+        let mut f = filter();
+        f.providers = vec!["A&B".into()];
+        assert!(build_query(&f).contains("'A&B'"), "bare stays raw");
+
+        f.event_ids = (1..=15).map(|id| EventIdSelector::Single { id }).collect();
+        assert!(
+            build_query(&f).contains("'A&amp;B'"),
+            "embedded gets escaped"
         );
     }
 
@@ -478,7 +559,7 @@ mod tests {
         f.provider_mode = SelectorMode::Exclude;
         assert_eq!(
             build_query(&f),
-            "*[System[not Provider[@Name='Noisy-Provider']]]"
+            "*[System[Provider[@Name!='Noisy-Provider']]]"
         );
     }
 }
@@ -529,5 +610,173 @@ mod wire_tests {
         assert!(json.contains("\"eventIds\""), "{json}");
         assert!(json.contains("\"eventIdMode\""), "{json}");
         assert!(json.contains("\"kind\":\"single\""), "{json}");
+    }
+}
+
+#[cfg(test)]
+mod service_validated_tests {
+    //! Golden strings that were executed against a real Windows Event Log service.
+    //!
+    //! Every expression below was run on Windows 11 build 26200 against the `Application` channel
+    //! and accepted. Unit tests can only assert the shape of a string; these pin that shape to
+    //! forms the service actually parses, so a future change that looks reasonable but is rejected
+    //! at runtime fails here instead of in front of a user.
+    //!
+    //! Three real defects were found this way, none of which any shape-only test could have caught:
+    //! XML-escaped operators are rejected in a bare XPath, `not(...)` is not in the supported
+    //! subset at all, and `not Provider[...]` was never valid syntax to begin with.
+
+    use super::*;
+
+    fn assert_query(filter: &EventQueryFilter, expected: &str) {
+        assert_eq!(build_query(filter), expected);
+    }
+
+    #[test]
+    fn relative_time_matches_the_validated_form() {
+        assert_query(
+            &EventQueryFilter {
+                time: Some(TimeWindow::Last {
+                    milliseconds: 86_400_000,
+                }),
+                ..Default::default()
+            },
+            "*[System[TimeCreated[timediff(@SystemTime) <= 86400000]]]",
+        );
+    }
+
+    #[test]
+    fn absolute_time_matches_the_validated_form() {
+        assert_query(
+            &EventQueryFilter {
+                time: Some(TimeWindow::Between {
+                    from: Some("2026-08-01T00:00:00.000Z".into()),
+                    to: Some("2026-08-10T00:00:00.000Z".into()),
+                }),
+                ..Default::default()
+            },
+            "*[System[TimeCreated[@SystemTime >= '2026-08-01T00:00:00.000Z' and @SystemTime <= '2026-08-10T00:00:00.000Z']]]",
+        );
+    }
+
+    #[test]
+    fn event_id_include_matches_the_validated_form() {
+        assert_query(
+            &EventQueryFilter {
+                event_ids: vec![
+                    EventIdSelector::Single { id: 1000 },
+                    EventIdSelector::Range {
+                        low: 300,
+                        high: 330,
+                    },
+                ],
+                ..Default::default()
+            },
+            "*[System[(EventID=1000 or (EventID >= 300 and EventID <= 330))]]",
+        );
+    }
+
+    #[test]
+    fn event_id_exclude_matches_the_validated_form() {
+        assert_query(
+            &EventQueryFilter {
+                event_ids: vec![EventIdSelector::Single { id: 4688 }],
+                event_id_mode: SelectorMode::Exclude,
+                ..Default::default()
+            },
+            "*[System[(EventID!=4688)]]",
+        );
+    }
+
+    #[test]
+    fn excluding_a_range_uses_its_complement() {
+        // The subset has no negation to wrap a range in, so the complement is emitted directly.
+        assert_query(
+            &EventQueryFilter {
+                event_ids: vec![EventIdSelector::Range {
+                    low: 300,
+                    high: 330,
+                }],
+                event_id_mode: SelectorMode::Exclude,
+                ..Default::default()
+            },
+            "*[System[((EventID < 300 or EventID > 330))]]",
+        );
+    }
+
+    #[test]
+    fn excluding_several_ids_requires_all_of_them_to_hold() {
+        // Joined with "and", not "or": "EventID!=1 or EventID!=2" is true for every event.
+        assert_query(
+            &EventQueryFilter {
+                event_ids: vec![
+                    EventIdSelector::Single { id: 1 },
+                    EventIdSelector::Single { id: 2 },
+                ],
+                event_id_mode: SelectorMode::Exclude,
+                ..Default::default()
+            },
+            "*[System[(EventID!=1 and EventID!=2)]]",
+        );
+    }
+
+    #[test]
+    fn provider_forms_match_the_validated_forms() {
+        assert_query(
+            &EventQueryFilter {
+                providers: vec!["ESENT".into()],
+                ..Default::default()
+            },
+            "*[System[Provider[@Name='ESENT']]]",
+        );
+        assert_query(
+            &EventQueryFilter {
+                providers: vec!["A".into(), "B".into()],
+                provider_mode: SelectorMode::Exclude,
+                ..Default::default()
+            },
+            "*[System[Provider[@Name!='A' and @Name!='B']]]",
+        );
+    }
+
+    #[test]
+    fn keywords_match_the_validated_form() {
+        assert_query(
+            &EventQueryFilter {
+                keywords: Some(9_223_372_036_854_775_808),
+                ..Default::default()
+            },
+            "*[System[band(Keywords,9223372036854775808)]]",
+        );
+    }
+
+    #[test]
+    fn no_emitted_bare_query_contains_an_xml_entity() {
+        // A bare XPath carrying "&lt;" is rejected by the service. This catches a regression that
+        // would otherwise only show up as an empty result set on Windows.
+        let filters = [
+            EventQueryFilter {
+                time: Some(TimeWindow::Last { milliseconds: 1 }),
+                ..Default::default()
+            },
+            EventQueryFilter {
+                event_ids: vec![EventIdSelector::Range { low: 1, high: 9 }],
+                ..Default::default()
+            },
+            EventQueryFilter {
+                providers: vec!["A&B".into()],
+                ..Default::default()
+            },
+        ];
+        for filter in filters {
+            let query = build_query(&filter);
+            assert!(!query.starts_with("<QueryList>"));
+            for entity in ["&lt;", "&gt;", "&amp;", "&quot;"] {
+                assert!(
+                    !query.contains(entity),
+                    "bare XPath must not contain {entity}: {query}"
+                );
+            }
+        }
     }
 }
