@@ -29,7 +29,34 @@ pub const INTUNE_CONFIGURATION_SCHEMA_VERSION: u32 = 1;
 #[serde(rename_all = "camelCase")]
 pub struct ConfigurationInput {
     /// UTC instant the bundle was assembled, used only for snapshot provenance.
+    ///
+    /// It is deliberately *not* the redaction token scope: a second-resolution
+    /// timestamp is not an identifier, and two unrelated analyses can carry the
+    /// same one. See [`ConfigurationInput::analysis_scope`].
     pub generated_at_utc: String,
+    /// Caller-supplied identity of *this* analysis, and nothing else.
+    ///
+    /// It scopes the redaction token vocabulary (ADR-004): two analyses that
+    /// supply *different* values never mint the same `[redacted:…]` token for
+    /// the same input value, so an export cannot be joined to an unrelated one
+    /// by comparing tokens. Any opaque per-analysis value works — a capture
+    /// GUID, a support-case id, a digest of the collected bundle.
+    ///
+    /// Uniqueness is the caller's obligation and cannot be checked here: this
+    /// crate is pure and `wasm32-unknown-unknown` clean, so it has no clock, no
+    /// entropy source, and no process state that survives a restart from which
+    /// it could mint an identifier of its own. Two analyses that supply the
+    /// *same* value are deliberately joinable, because that is what "one
+    /// analysis" means.
+    ///
+    /// `None` means the caller declines the boundary: the token scope then
+    /// falls back to [`ConfigurationInput::generated_at_utc`] alone, which
+    /// preserves equality inside the one export and provides **no** isolation
+    /// from any other export that shares that timestamp. The resulting snapshot
+    /// says so — [`ConfigurationSnapshot::analysis_scope`] is `None`.
+    ///
+    /// The value never reaches the export verbatim; only a digest of it does.
+    pub analysis_scope: Option<String>,
     /// Normalized MDM Admin-channel records the adapter decoded from EVTX.
     pub events: Vec<NormalizedWindowsEvent>,
     /// Normalized per-setting rows from an MDM diagnostic report or imported
@@ -352,8 +379,26 @@ impl ConfigurationSetting {
 pub struct ConfigurationSnapshot {
     /// [`INTUNE_CONFIGURATION_SCHEMA_VERSION`] at the time of reduction.
     pub schema_version: u32,
-    /// Copied from the input; also the scope every redaction token is bound to.
+    /// Copied from the input, for provenance only.
     pub generated_at_utc: String,
+    /// Opaque digest of the analysis scope every redaction token is bound to.
+    ///
+    /// `Some` when the caller supplied [`ConfigurationInput::analysis_scope`].
+    /// Two snapshots carrying *different* digests share no token vocabulary: a
+    /// token in one says nothing about a token in the other. Two carrying the
+    /// *same* digest were declared by the caller to be one analysis and their
+    /// tokens do compare.
+    ///
+    /// `None` says the caller supplied no scope, so the tokens in this snapshot
+    /// are bound to [`ConfigurationSnapshot::generated_at_utc`] alone and make
+    /// **no** cross-export isolation claim at all.
+    ///
+    /// It is a digest, not a secret and not a key: it exists so an export can
+    /// name its own token scope without republishing the caller's identifier.
+    /// Anyone who already knows the scope material can recompute it, and the
+    /// tokens themselves remain unkeyed (ADR-004 leaves keying to the Store
+    /// pilot).
+    pub analysis_scope: Option<String>,
     /// Sorted by identity key so the serialized form is deterministic.
     pub settings: Vec<ConfigurationSetting>,
     /// Observations that named no resolvable resource at all.

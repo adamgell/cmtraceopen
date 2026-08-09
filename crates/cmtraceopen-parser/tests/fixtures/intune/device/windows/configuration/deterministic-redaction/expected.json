@@ -95,17 +95,17 @@
   ],
   "redactedSettings": [
     {
-      "key": "device|uri:device/vendor/msft/accounts/[redacted:dcfe70dcbb35f268]/localusergroup",
-      "canonicalUri": "Device/Vendor/MSFT/Accounts/[redacted:dcfe70dcbb35f268]/LocalUserGroup",
-      "appliedValue": "[redacted:41c487e830eb6e34]",
+      "key": "device|uri:device/vendor/msft/accounts/[redacted:f7f12a6f659e1763]/localusergroup",
+      "canonicalUri": "Device/Vendor/MSFT/Accounts/[redacted:f7f12a6f659e1763]/LocalUserGroup",
+      "appliedValue": "[redacted:2a0b12d04bdd8d1b]",
       "namedData": [
         {
           "name": "NodeUri",
-          "value": "./Device/Vendor/MSFT/Accounts/[redacted:dcfe70dcbb35f268]/LocalUserGroup"
+          "value": "./Device/Vendor/MSFT/Accounts/[redacted:f7f12a6f659e1763]/LocalUserGroup"
         },
         {
           "name": "Value",
-          "value": "[redacted:41c487e830eb6e34]"
+          "value": "[redacted:2a0b12d04bdd8d1b]"
         },
         {
           "name": "ConfigurationSourceId",
@@ -116,7 +116,7 @@
     {
       "key": "device|uri:device/vendor/msft/personalization/desktopimageurl",
       "canonicalUri": "Device/Vendor/MSFT/Personalization/DesktopImageUrl",
-      "appliedValue": "[redacted:2db0cdb8f368add0]",
+      "appliedValue": "[redacted:e8d980ac53a3acc5]",
       "namedData": [
         {
           "name": "NodeUri",
@@ -124,7 +124,7 @@
         },
         {
           "name": "Value",
-          "value": "[redacted:2db0cdb8f368add0]"
+          "value": "[redacted:e8d980ac53a3acc5]"
         },
         {
           "name": "ConfigurationSourceId",
@@ -132,15 +132,15 @@
         },
         {
           "name": "EnrollmentId",
-          "value": "[redacted:9f537c69f47aac4f]"
+          "value": "[redacted:e056b9b044086234]"
         },
         {
           "name": "TenantId",
-          "value": "[redacted:18e8680b98fc84d5]"
+          "value": "[redacted:b908e25de120e3ce]"
         },
         {
           "name": "Upn",
-          "value": "[redacted:dcfe70dcbb35f268]"
+          "value": "[redacted:f7f12a6f659e1763]"
         },
         {
           "name": "Area",
@@ -151,7 +151,7 @@
     {
       "key": "device|uri:device/vendor/msft/policy/config/update/allowautoupdate",
       "canonicalUri": "Device/Vendor/MSFT/Policy/Config/Update/AllowAutoUpdate",
-      "appliedValue": "[redacted:187c4fa5b79764ea]",
+      "appliedValue": "[redacted:3e88aebf97f1124f]",
       "namedData": [
         {
           "name": "NodeUri",
@@ -159,7 +159,7 @@
         },
         {
           "name": "Value",
-          "value": "[redacted:187c4fa5b79764ea]"
+          "value": "[redacted:3e88aebf97f1124f]"
         },
         {
           "name": "ConfigurationSourceId",
@@ -167,10 +167,10 @@
         },
         {
           "name": "PreviousValue",
-          "value": "[redacted:2db0cdb8f368add0]"
+          "value": "[redacted:e8d980ac53a3acc5]"
         }
       ]
     }
   ],
-  "redactedEnrollmentId": "[redacted:9f537c69f47aac4f]"
+  "redactedEnrollmentId": "[redacted:e056b9b044086234]"
 }

@@ -39,6 +39,16 @@
 //! reduction — but it means the redaction step is the caller's obligation and is
 //! stated here rather than left to be inferred.
 //!
+//! The caller owns one more thing: [`ConfigurationInput::analysis_scope`], the
+//! identity of this analysis. It is what the redaction tokens are scoped to, so a
+//! caller that supplies a per-analysis unique value gets exports that cannot be
+//! joined to one another by comparing tokens, and a caller that omits it gets no
+//! such boundary. This crate cannot supply it: it is pure and has no clock,
+//! entropy, or surviving process state from which to mint an identifier. What the
+//! scope does and does not guarantee is stated in full on
+//! [`ConfigurationInput::analysis_scope`] and
+//! [`ConfigurationSnapshot::analysis_scope`].
+//!
 //! # Boundaries
 //!
 //! Nothing here reads EVTX, HTML reports, the registry, or Graph. The native

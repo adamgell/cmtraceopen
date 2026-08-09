@@ -20,6 +20,7 @@ use super::models::{
     ConfigurationResolution, ConfigurationServiceState, ConfigurationSetting,
     ConfigurationSnapshot, ConfigurationSourceStatement, INTUNE_CONFIGURATION_SCHEMA_VERSION,
 };
+use super::redaction::analysis_scope_digest;
 use super::sources::{
     is_device_side, is_service_side, is_unassessable_failure, observation_from_event,
     observation_from_report, same_source_id,
@@ -62,6 +63,13 @@ pub fn reduce_configuration(input: &ConfigurationInput) -> ConfigurationSnapshot
     ConfigurationSnapshot {
         schema_version: INTUNE_CONFIGURATION_SCHEMA_VERSION,
         generated_at_utc: input.generated_at_utc.clone(),
+        // Resolved once, here, so every projection of this snapshot — including a
+        // redaction of a redaction — mints tokens in the same scope. The caller's
+        // own scope value is reduced to a digest and does not travel further.
+        analysis_scope: analysis_scope_digest(
+            input.analysis_scope.as_deref(),
+            &input.generated_at_utc,
+        ),
         settings,
         unattributed,
         coverage: input.coverage.clone(),

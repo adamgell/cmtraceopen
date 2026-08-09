@@ -25,19 +25,49 @@
 //! caller-supplied key, and equality scope as **provisional**, and forbids a new
 //! reducer from introducing a stable identifier token intended for cross-artifact,
 //! cross-session, or cross-export correlation. This module therefore scopes token
-//! equality to **one analysis**: the hash is salted with the snapshot's
-//! `generatedAtUtc`, so two settings inside one export that carry the same value
-//! still show the same token — which is the equality the conflict diagnosis needs
-//! — while two separate exports of the same device produce different tokens and
-//! cannot be joined.
+//! equality to **one analysis**, and takes the identity of that analysis from the
+//! caller: [`ConfigurationInput::analysis_scope`]. Every token in one export is
+//! salted with it, so two settings carrying the same value still show the same
+//! token — the equality the conflict diagnosis needs — while an export made under
+//! a different scope shares no token vocabulary with it.
 //!
-//! No keyed-token API is invented here. Defining one (a caller-supplied secret,
-//! a documented equality scope, and the tests that pin it) is the Store pilot's
-//! decision under ADR-004, and this module adopts it when it lands. Until then
-//! the honest statement of what the token defends is: it prevents casual
-//! disclosure and cross-export correlation. It is not a defense against an
-//! attacker who can enumerate candidate values and confirm a match *within a
-//! single export*, because the salt travels with the export.
+//! An earlier revision salted with the snapshot's `generatedAtUtc` and claimed
+//! that no two exports could share it. That claim was false. A second-resolution
+//! UTC timestamp is not a nonce: two independent analyses can legitimately carry
+//! the same instant, and when they did they minted identical tokens for identical
+//! values, so the cross-export join ADR-004 forbids still worked.
+//!
+//! ## What the scope guarantees
+//!
+//! - Values equal within one scope produce equal tokens; values that differ
+//!   produce different tokens (barring hash collision). That is what makes a
+//!   conflict legible inside one export.
+//! - Two analyses that supply *different* scope values never produce the same
+//!   token for the same value, so their exports cannot be joined by comparing
+//!   tokens.
+//!
+//! ## What it does not guarantee
+//!
+//! - **It does not make uniqueness true; it only consumes it.** The caller owns
+//!   analysis identity. Nothing in a pure, `wasm32-unknown-unknown`-clean crate
+//!   with no clock, no entropy source, and no state surviving a restart can mint
+//!   a unique identifier, and this module does not pretend otherwise. Two
+//!   analyses that supply the same scope value are joinable — deliberately, since
+//!   that is the caller declaring them one analysis.
+//! - **Omitting the scope buys no isolation.** With `analysis_scope: None` the
+//!   salt falls back to `generatedAtUtc` alone, which is precisely the defective
+//!   arrangement above; it is retained only so equality still holds inside the
+//!   one export. Such a snapshot reports [`ConfigurationSnapshot::analysis_scope`]
+//!   as `None`, which is the export saying it makes no cross-export claim.
+//! - **The token is not keyed.** The salt is derived from material that travels
+//!   with the export, so it is no defense against an attacker who can enumerate
+//!   candidate values and confirm a match *within a single export*. Defining a
+//!   keyed-token API — a caller-supplied secret, a documented equality scope, and
+//!   the tests that pin it — is the Store pilot's decision under ADR-004, and
+//!   this module adopts it when it lands rather than inventing a local one.
+//!
+//! [`ConfigurationInput::analysis_scope`]: super::models::ConfigurationInput::analysis_scope
+//! [`ConfigurationSnapshot::analysis_scope`]: ConfigurationSnapshot::analysis_scope
 //!
 //! Free-text spans are masked by the family-owned
 //! [`crate::intune::apps::windows::common::redact_text`], which is where
@@ -142,19 +172,60 @@ const DIAGNOSTIC_NAMES: [&str; 15] = [
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
+/// Separator between the caller's scope value and the generation instant.
+///
+/// ASCII unit separator, chosen because it cannot occur in a well-formed
+/// ISO-8601 instant: that keeps the two components unambiguous however odd a
+/// scope value the caller picks. It is not claimed to be injection-proof against
+/// a caller that puts a unit separator in *both* fields — such a caller has
+/// composed its own ambiguity, and the scope it gets is the scope it described.
+const SCOPE_SEPARATOR: u8 = 0x1f;
+
+/// Digest of one analysis's redaction scope, or `None` when the caller declined
+/// to supply one.
+///
+/// This is what [`ConfigurationSnapshot::analysis_scope`] carries: the caller's
+/// own identifier never reaches the export, because a caller is free to use a
+/// serial number or a case title as its scope and this module exists to keep
+/// exactly that kind of string out of an exported artifact.
+///
+/// A caller-supplied value that is blank or only whitespace is treated as absent
+/// rather than as the scope `""`, so an empty configuration field cannot look
+/// like a boundary that was never established.
+pub(super) fn analysis_scope_digest(
+    analysis_scope: Option<&str>,
+    generated_at_utc: &str,
+) -> Option<String> {
+    let scope = analysis_scope
+        .map(str::trim)
+        .filter(|scope| !scope.is_empty())?;
+    let mut material = scope.as_bytes().to_vec();
+    material.push(SCOPE_SEPARATOR);
+    material.extend_from_slice(generated_at_utc.as_bytes());
+    Some(format!("{:016x}", fnv1a64(FNV_OFFSET_BASIS, &material)))
+}
+
 /// The redaction scope of one analysis.
 ///
-/// Constructed from the snapshot's own `generatedAtUtc`, which is the only
-/// identifier of "this analysis" the pure crate is given. Every token in one
-/// export shares this scope; no two exports share it.
+/// Built from the snapshot's scope digest when it has one, and from its
+/// `generatedAtUtc` when it does not. Every token in one export shares this
+/// scope. Two exports share it exactly when the caller gave them the same
+/// analysis identity — or when neither was given one and both were generated at
+/// the same instant, which is the case the module docs decline to call
+/// isolation.
 struct RedactionScope {
     salt: u64,
 }
 
 impl RedactionScope {
-    fn new(analysis_id: &str) -> Self {
+    /// `scope_digest` is [`analysis_scope_digest`]'s output, not the caller's
+    /// raw scope value: the snapshot only ever carries the digest, and taking
+    /// the salt from anything else would make an export's tokens depend on
+    /// material the export does not carry.
+    fn new(scope_digest: Option<&str>, generated_at_utc: &str) -> Self {
+        let material = scope_digest.unwrap_or(generated_at_utc);
         Self {
-            salt: fnv1a64(FNV_OFFSET_BASIS, analysis_id.as_bytes()),
+            salt: fnv1a64(FNV_OFFSET_BASIS, material.as_bytes()),
         }
     }
 
@@ -272,13 +343,20 @@ fn upn_regex() -> &'static Regex {
 /// diagnosis, and ADR-004 requires redaction to leave non-sensitive conclusions
 /// alone. Only free text is replaced.
 pub fn redacted_configuration_snapshot(snapshot: &ConfigurationSnapshot) -> ConfigurationSnapshot {
-    let scope = RedactionScope::new(&snapshot.generated_at_utc);
+    let scope = RedactionScope::new(
+        snapshot.analysis_scope.as_deref(),
+        &snapshot.generated_at_utc,
+    );
 
     // Written as a struct literal on purpose: adding a field to the snapshot must
     // not silently inherit an un-redacted value from a `clone()`.
     ConfigurationSnapshot {
         schema_version: snapshot.schema_version,
         generated_at_utc: snapshot.generated_at_utc.clone(),
+        // Carried through unchanged: it is already a digest, and it is what lets
+        // a consumer tell that this export's tokens are not comparable with
+        // another's. Re-tokenizing it would destroy that statement.
+        analysis_scope: snapshot.analysis_scope.clone(),
         settings: snapshot
             .settings
             .iter()
@@ -530,8 +608,20 @@ fn is_mail_like(value: &str) -> bool {
 mod tests {
     use super::*;
 
+    const INSTANT: &str = "2026-07-31T10:00:00Z";
+
+    /// Resolve a scope exactly the way the pipeline does: the reducer digests the
+    /// caller's value onto the snapshot, and the export salts from that digest.
+    /// A test that skipped either step could pass while the pipeline collided.
+    fn scope_of(analysis_scope: Option<&str>, generated_at_utc: &str) -> RedactionScope {
+        RedactionScope::new(
+            analysis_scope_digest(analysis_scope, generated_at_utc).as_deref(),
+            generated_at_utc,
+        )
+    }
+
     fn scope() -> RedactionScope {
-        RedactionScope::new("2026-07-31T10:00:00Z")
+        scope_of(Some("test-analysis"), INSTANT)
     }
 
     #[test]
@@ -546,9 +636,56 @@ mod tests {
         // ADR-004: a new reducer must not introduce a token that joins two
         // exports. Pinning the *inequality* is what stops a future refactor from
         // quietly restoring a globally stable dictionary of low-entropy values.
-        let first = RedactionScope::new("2026-07-31T10:00:00Z");
-        let second = RedactionScope::new("2026-08-01T10:00:00Z");
+        let first = scope_of(Some("analysis-a"), INSTANT);
+        let second = scope_of(Some("analysis-b"), "2026-08-01T10:00:00Z");
         assert_ne!(first.token("1"), second.token("1"));
+    }
+
+    #[test]
+    fn two_analyses_that_share_a_generated_at_utc_do_not_share_a_token() {
+        // The defect this pins: `generatedAtUtc` is a timestamp, not a nonce.
+        // Two independent analyses can legitimately carry the same
+        // second-resolution instant, and when the scope was nothing but that
+        // instant they minted identical tokens for identical values — exactly
+        // the cross-export join ADR-004 forbids. The scope is now the caller's
+        // analysis identity, so the shared instant no longer joins them.
+        let first = scope_of(Some("analysis-a"), INSTANT);
+        let second = scope_of(Some("analysis-b"), INSTANT);
+        assert_ne!(first.token("secret"), second.token("secret"));
+    }
+
+    #[test]
+    fn one_analysis_split_across_two_projections_keeps_its_tokens() {
+        // The other half of the boundary: the same analysis identity must still
+        // mint the same token, or a conflict stops being legible the moment a
+        // caller projects the snapshot twice.
+        let first = scope_of(Some("analysis-a"), INSTANT);
+        let second = scope_of(Some("analysis-a"), INSTANT);
+        assert_eq!(first.token("secret"), second.token("secret"));
+    }
+
+    #[test]
+    fn an_omitted_scope_is_documented_as_no_boundary_at_all() {
+        // Not an endorsement: this pins the disclaimer so it cannot quietly
+        // become a claim. With no caller scope the salt is the timestamp alone,
+        // two analyses sharing an instant do collide, and the snapshot says so
+        // by carrying no scope digest.
+        assert_eq!(analysis_scope_digest(None, INSTANT), None);
+        assert_eq!(analysis_scope_digest(Some("   "), INSTANT), None);
+        assert_eq!(
+            scope_of(None, INSTANT).token("secret"),
+            scope_of(None, INSTANT).token("secret")
+        );
+    }
+
+    #[test]
+    fn the_scope_digest_does_not_republish_the_callers_scope_value() {
+        let digest =
+            analysis_scope_digest(Some("case-4711/DESKTOP-ABC123"), INSTANT).expect("a digest");
+        assert_eq!(digest.len(), 16);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(!digest.contains("case-4711"));
+        assert!(!digest.contains("DESKTOP"));
     }
 
     #[test]
@@ -556,7 +693,7 @@ mod tests {
         // Pinned so a change to the hashing scheme cannot pass unnoticed. The
         // scope is named explicitly: the value alone no longer determines the
         // token, which is the point.
-        assert_eq!(scope().token("1"), "[redacted:187c4fa5b79764ea]");
+        assert_eq!(scope().token("1"), "[redacted:68b803c6400ef40f]");
     }
 
     #[test]

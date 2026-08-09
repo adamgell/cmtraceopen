@@ -110,6 +110,13 @@ fn load_input(scenario: &str) -> ConfigurationInput {
             .as_str()
             .expect("manifest declares generatedAtUtc")
             .to_owned(),
+        // The harness is the caller, so the harness owns analysis identity. The
+        // scenario name is this corpus's unique-per-analysis value, and naming it
+        // here rather than in the manifest keeps it what it is: a caller's
+        // contract input, not a property of the collected evidence. Most
+        // scenarios share `generatedAtUtc`, so the pinned tokens are proof the
+        // scope, not the timestamp, is what separates them.
+        analysis_scope: Some(format!("fixture:{scenario}")),
         ..ConfigurationInput::default()
     };
 
@@ -583,6 +590,7 @@ fn permutations_of(input: ConfigurationInput) -> Vec<ConfigurationInput> {
         for reports in orderings(&input.reports) {
             permutations.push(ConfigurationInput {
                 generated_at_utc: input.generated_at_utc.clone(),
+                analysis_scope: input.analysis_scope.clone(),
                 events: events.clone(),
                 reports,
                 coverage: input.coverage.clone(),
@@ -782,6 +790,124 @@ fn the_redaction_scenario_produces_the_pinned_tokens() {
         expected["redactedEnrollmentId"],
         "an enrollment id is tokenized rather than dropped"
     );
+}
+
+/// Two analyses that share a `generatedAtUtc` must not share a token.
+///
+/// The defect this pins reached the export, not just the hash helper: the token
+/// scope used to be the snapshot's `generatedAtUtc`, and the docs claimed no two
+/// exports could share it. A timestamp is not a nonce — these two bundles are
+/// byte-identical evidence captured under two different analyses at the same
+/// second, which is ordinary at second resolution — so every token matched and
+/// the cross-export join ADR-004 forbids worked exactly as before.
+#[test]
+fn two_analyses_with_the_same_generated_at_utc_export_no_shared_token() {
+    let mut first = load_input("deterministic-redaction");
+    let mut second = load_input("deterministic-redaction");
+    first.analysis_scope = Some("analysis-a".to_owned());
+    second.analysis_scope = Some("analysis-b".to_owned());
+    assert_eq!(
+        first.generated_at_utc, second.generated_at_utc,
+        "the whole point is that the instant is shared"
+    );
+
+    let tokens = |input: &ConfigurationInput| {
+        exported_tokens(&redacted_configuration_snapshot(&analyze_configuration(
+            input,
+        )))
+    };
+    let first_tokens = tokens(&first);
+    let second_tokens = tokens(&second);
+
+    assert!(
+        !first_tokens.is_empty(),
+        "the scenario must actually produce tokens or this proves nothing"
+    );
+    assert_eq!(
+        first_tokens.len(),
+        second_tokens.len(),
+        "the same evidence must still redact to the same *number* of tokens"
+    );
+    let shared = first_tokens
+        .intersection(&second_tokens)
+        .collect::<Vec<_>>();
+    assert!(
+        shared.is_empty(),
+        "two analyses sharing an instant must share no token, got {shared:?}"
+    );
+}
+
+/// One analysis keeps one token vocabulary, however many times it is projected.
+///
+/// The other half of the boundary: isolating exports is worthless if it also
+/// breaks the equality a conflict diagnosis is read from.
+#[test]
+fn one_analysis_scope_keeps_its_tokens_across_separate_runs() {
+    let input = load_input("deterministic-redaction");
+    let first = redacted_configuration_snapshot(&analyze_configuration(&input));
+    let second = redacted_configuration_snapshot(&analyze_configuration(&input));
+    assert_eq!(
+        wire(&first),
+        wire(&second),
+        "one analysis scope is one export vocabulary"
+    );
+    assert_eq!(
+        first.analysis_scope, second.analysis_scope,
+        "the scope digest is derived, not invented per run"
+    );
+    assert!(
+        first
+            .analysis_scope
+            .as_ref()
+            .is_some_and(|digest| !digest.contains("deterministic-redaction")),
+        "the caller's scope value must not be republished, got {:?}",
+        first.analysis_scope
+    );
+}
+
+/// An omitted scope is a declined boundary, and the export says so.
+///
+/// Pinned as a *disclaimer*, not a feature: with no caller-supplied scope the
+/// tokens fall back to `generatedAtUtc` alone and two analyses sharing that
+/// instant do collide. The snapshot reports `analysisScope: null` so a consumer
+/// can tell the difference between "isolated from other exports" and "no claim".
+#[test]
+fn an_omitted_analysis_scope_makes_no_isolation_claim() {
+    let mut input = load_input("deterministic-redaction");
+    input.analysis_scope = None;
+    let scopeless = redacted_configuration_snapshot(&analyze_configuration(&input));
+    assert_eq!(scopeless.analysis_scope, None);
+
+    let scoped = redacted_configuration_snapshot(&analyze_configuration(&load_input(
+        "deterministic-redaction",
+    )));
+    assert!(scoped.analysis_scope.is_some());
+    assert!(
+        exported_tokens(&scopeless).is_disjoint(&exported_tokens(&scoped)),
+        "declining the boundary must not silently join the export to a scoped one"
+    );
+}
+
+/// Every `[redacted:…]` token anywhere in an export.
+fn exported_tokens(snapshot: &ConfigurationSnapshot) -> BTreeSet<String> {
+    fn collect(value: &Value, into: &mut BTreeSet<String>) {
+        match value {
+            Value::String(text) => {
+                for candidate in text.split_inclusive(']') {
+                    if let Some(start) = candidate.find("[redacted:") {
+                        into.insert(candidate[start..].to_owned());
+                    }
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|item| collect(item, into)),
+            Value::Object(fields) => fields.values().for_each(|field| collect(field, into)),
+            _ => {}
+        }
+    }
+
+    let mut tokens = BTreeSet::new();
+    collect(&wire(snapshot), &mut tokens);
+    tokens
 }
 
 #[test]
@@ -997,6 +1123,7 @@ fn row(
 fn input_of(reports: Vec<NormalizedSettingReport>) -> ConfigurationInput {
     ConfigurationInput {
         generated_at_utc: "2026-07-31T10:00:00Z".to_owned(),
+        analysis_scope: Some("synthesized".to_owned()),
         events: Vec::new(),
         reports,
         coverage: Vec::new(),
@@ -1160,6 +1287,7 @@ fn applied_event(evidence_id: &str, record_id: u64) -> NormalizedWindowsEvent {
 fn unassessable_failure_input() -> ConfigurationInput {
     ConfigurationInput {
         generated_at_utc: "2026-07-31T10:00:00Z".to_owned(),
+        analysis_scope: Some("synthesized".to_owned()),
         events: vec![
             applied_event("evt-applied", 1),
             unreadable_failure_event("evt-unreadable-404", 2),
@@ -1489,6 +1617,7 @@ fn the_shared_normalized_contract_is_the_one_this_leaf_was_built_against() {
 fn an_event_naming_no_resource_contributes_nothing() {
     let input = ConfigurationInput {
         generated_at_utc: "2026-07-31T10:00:00Z".to_owned(),
+        analysis_scope: Some("synthesized".to_owned()),
         events: vec![NormalizedWindowsEvent {
             context: context(
                 "evt-unrelated",
@@ -1535,6 +1664,7 @@ fn another_providers_message_text_never_joins_an_mdm_transaction() {
 
     let input = ConfigurationInput {
         generated_at_utc: "2026-07-31T10:00:00Z".to_owned(),
+        analysis_scope: Some("synthesized".to_owned()),
         events: vec![applied_event("evt-mdm", 2), event],
         reports: Vec::new(),
         coverage: Vec::new(),
