@@ -54,6 +54,10 @@ pub fn reduce_configuration(input: &ConfigurationInput) -> ConfigurationSnapshot
     }
 
     let settings = grouped.into_values().map(reduce_setting).collect();
+    // ADR-003: the caller's vector order is an acquisition detail, not chronology.
+    // Sorting the unattributed records by their evidence reference means the
+    // export never carries it.
+    unattributed.sort_by(|left, right| left.evidence_ref.cmp(&right.evidence_ref));
 
     ConfigurationSnapshot {
         schema_version: INTUNE_CONFIGURATION_SCHEMA_VERSION,
@@ -66,7 +70,14 @@ pub fn reduce_configuration(input: &ConfigurationInput) -> ConfigurationSnapshot
     }
 }
 
-fn reduce_setting(observations: Vec<ConfigurationObservation>) -> ConfigurationSetting {
+fn reduce_setting(mut observations: Vec<ConfigurationObservation>) -> ConfigurationSetting {
+    // Canonical order first, so nothing downstream — nor the exported vector —
+    // can depend on how the caller happened to hand the records over. ADR-003
+    // permits caller order as chronology only where the source contract defines
+    // it, and no configuration source defines it. Where real order exists it is
+    // read from record ordinals, not from this vector.
+    observations.sort_by(|left, right| left.evidence_ref.cmp(&right.evidence_ref));
+
     let identity = merge_identity(&observations);
 
     let receipt = receipt_state(&observations);
@@ -77,11 +88,7 @@ fn reduce_setting(observations: Vec<ConfigurationObservation>) -> ConfigurationS
     let local_error = terminal_error(&observations, is_device_side);
     let service_error = terminal_error(&observations, is_service_side);
 
-    let applied_value = observations
-        .iter()
-        .filter(|observation| is_device_side(observation))
-        .filter(|observation| observation.disposition == ConfigurationDisposition::Applied)
-        .find_map(|observation| observation.value.clone());
+    let applied_value = agreed_applied_value(&observations);
 
     let time_is_reliable = observations
         .iter()
@@ -116,41 +123,76 @@ fn reduce_setting(observations: Vec<ConfigurationObservation>) -> ConfigurationS
     }
 }
 
+/// The value the device reported writing, when its records agree on one.
+///
+/// Two sources applying *different* values to one node do not entitle the export
+/// to name whichever arrived first — that made the exported value a function of
+/// the caller's vector. A disagreement is reported as no stated value; the
+/// conflict rules already name the sources that are arguing.
+fn agreed_applied_value(observations: &[ConfigurationObservation]) -> Option<String> {
+    let mut agreed: Option<&str> = None;
+    for value in observations
+        .iter()
+        .filter(|observation| is_device_side(observation))
+        .filter(|observation| observation.disposition == ConfigurationDisposition::Applied)
+        .filter_map(|observation| observation.value.as_deref())
+    {
+        match agreed {
+            None => agreed = Some(value),
+            Some(existing) if existing == value => {}
+            Some(_) => return None,
+        }
+    }
+    agreed.map(str::to_owned)
+}
+
 /// Fill in the identity fields that only some records carried.
 ///
 /// Every observation in the group already shares a key, so this widens the
-/// description without changing which transaction it is. The first non-empty
-/// value wins, and observations arrive in input order, so the result is
-/// deterministic.
+/// description without changing which transaction it is. Where records offer
+/// different values for one field, the smallest is taken rather than the first:
+/// "first" meant the serializer's order, and it could flip
+/// `configuration-duplicate-display-name` on and off between two runs over the
+/// same evidence.
 fn merge_identity(observations: &[ConfigurationObservation]) -> ConfigurationSettingIdentity {
-    let mut identity = observations
+    let base = &observations
         .first()
         .expect("a group always has at least one observation")
-        .identity
-        .clone();
+        .identity;
 
-    for observation in observations.iter().skip(1) {
-        let other = &observation.identity;
-        if identity.canonical_uri.is_none() {
-            identity.canonical_uri.clone_from(&other.canonical_uri);
-            identity.raw_uri.clone_from(&other.raw_uri);
-            identity.resource_path.clone_from(&other.resource_path);
-        }
-        if identity.setting_id.is_none() {
-            identity.setting_id.clone_from(&other.setting_id);
-        }
-        if identity.policy_id.is_none() {
-            identity.policy_id.clone_from(&other.policy_id);
-        }
-        if identity.display_name.is_none() {
-            identity.display_name.clone_from(&other.display_name);
-        }
-        if identity.csp.is_none() {
-            identity.csp.clone_from(&other.csp);
-        }
+    // The three URI views are derived from one string and must move as a unit; a
+    // canonical URI from one record beside a raw URI from another would describe
+    // no record at all.
+    let uri_source = observations
+        .iter()
+        .map(|observation| &observation.identity)
+        .filter(|identity| identity.canonical_uri.is_some())
+        .min_by(|left, right| left.canonical_uri.cmp(&right.canonical_uri));
+
+    ConfigurationSettingIdentity {
+        // Shared by construction: it is the grouping key.
+        key: base.key.clone(),
+        canonical_uri: uri_source.and_then(|identity| identity.canonical_uri.clone()),
+        raw_uri: uri_source.and_then(|identity| identity.raw_uri.clone()),
+        resource_path: uri_source.and_then(|identity| identity.resource_path.clone()),
+        setting_id: smallest_stated(observations, |identity| identity.setting_id.as_ref()),
+        policy_id: smallest_stated(observations, |identity| identity.policy_id.as_ref()),
+        display_name: smallest_stated(observations, |identity| identity.display_name.as_ref()),
+        scope: base.scope,
+        csp: smallest_stated(observations, |identity| identity.csp.as_ref()),
+        is_unidentified: base.is_unidentified,
     }
+}
 
-    identity
+fn smallest_stated(
+    observations: &[ConfigurationObservation],
+    pick: fn(&ConfigurationSettingIdentity) -> Option<&String>,
+) -> Option<String> {
+    observations
+        .iter()
+        .filter_map(|observation| pick(&observation.identity))
+        .min()
+        .cloned()
 }
 
 fn receipt_state(observations: &[ConfigurationObservation]) -> ConfigurationReceiptState {
@@ -515,6 +557,13 @@ fn resolve(
     }
 }
 
+/// The terminal status one side reported.
+///
+/// When two records of one side report *different* codes, the smallest by
+/// canonical ordering is named rather than whichever arrived first: two 404s used
+/// to flip which HRESULT the rejection finding quoted depending on the caller's
+/// vector order. Both records stay cited either way, so nothing is hidden — only
+/// the choice of which code to lead with is made stable.
 fn terminal_error(
     observations: &[ConfigurationObservation],
     side: fn(&ConfigurationObservation) -> bool,
@@ -523,7 +572,11 @@ fn terminal_error(
         .iter()
         .filter(|observation| side(observation))
         .filter(|observation| observation.disposition == ConfigurationDisposition::Rejected)
-        .find_map(|observation| observation.error.clone())
+        .filter_map(|observation| observation.error.as_ref())
+        .min_by(|left, right| {
+            (&left.decimal, &left.hex, &left.raw).cmp(&(&right.decimal, &right.hex, &right.raw))
+        })
+        .cloned()
 }
 
 /// One entry per distinct configuration source that stated something.

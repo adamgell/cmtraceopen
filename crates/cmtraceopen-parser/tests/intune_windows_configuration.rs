@@ -530,6 +530,188 @@ fn renumbering_the_rows_of_a_correlated_scenario_does_not_change_the_diagnosis()
     }
 }
 
+/// Every ordering of one bundle's sibling records must produce the same snapshot,
+/// byte for byte.
+///
+/// ADR-003's invariant: permuting non-ordered input does not change a result. The
+/// previous determinism test re-ran the *same* vector, which cannot see a
+/// first-wins field. `applied_value`, `terminal_error`, and the merged identity
+/// fields were all first-wins over the caller's vector, so two sources applying
+/// different values exported whichever the serializer emitted first.
+#[test]
+fn permuting_sibling_records_does_not_change_the_analysis() {
+    for scenario in SCENARIOS {
+        let baseline = wire(&analyze_configuration(&load_input(scenario)));
+
+        for permutation in permutations_of(load_input(scenario)) {
+            assert_eq!(
+                wire(&analyze_configuration(&permutation)),
+                baseline,
+                "{scenario}: input order must not change the analysis"
+            );
+        }
+    }
+}
+
+/// Every ordering of the events and reports, capped so a large bundle stays a
+/// test rather than a benchmark.
+fn permutations_of(input: ConfigurationInput) -> Vec<ConfigurationInput> {
+    fn orderings<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+        if items.len() <= 1 {
+            return vec![items.to_vec()];
+        }
+        if items.len() > 4 {
+            let mut reversed = items.to_vec();
+            reversed.reverse();
+            return vec![items.to_vec(), reversed];
+        }
+        let mut result = Vec::new();
+        for index in 0..items.len() {
+            let mut rest = items.to_vec();
+            let head = rest.remove(index);
+            for mut tail in orderings(&rest) {
+                tail.insert(0, head.clone());
+                result.push(tail);
+            }
+        }
+        result
+    }
+
+    let mut permutations = Vec::new();
+    for events in orderings(&input.events) {
+        for reports in orderings(&input.reports) {
+            permutations.push(ConfigurationInput {
+                generated_at_utc: input.generated_at_utc.clone(),
+                events: events.clone(),
+                reports,
+                coverage: input.coverage.clone(),
+            });
+        }
+    }
+    permutations
+}
+
+/// Two sources writing different values to one node. Exporting one of them would
+/// be a coin flip on the caller's vector order.
+#[test]
+fn two_sources_applying_different_values_export_neither() {
+    let mut applied_one = row(
+        "rpt-value-one",
+        Some(NODE),
+        Some(POLICY_A),
+        NormalizedSettingOutcome::Applied,
+        Vec::new(),
+    );
+    applied_one.value = Some("1".to_owned());
+    let mut applied_two = row(
+        "rpt-value-two",
+        Some(NODE),
+        Some(POLICY_B),
+        NormalizedSettingOutcome::Applied,
+        Vec::new(),
+    );
+    applied_two.value = Some("2".to_owned());
+
+    let forward = analyze_configuration(&input_of(vec![applied_one.clone(), applied_two.clone()]));
+    let reverse = analyze_configuration(&input_of(vec![applied_two, applied_one]));
+
+    assert_eq!(
+        forward.settings[0].applied_value, None,
+        "a disagreement is not a value"
+    );
+    assert_eq!(wire(&forward), wire(&reverse));
+}
+
+/// A setting whose display name is stated by one record and not another must not
+/// depend on which record the caller listed first: the duplicate-display-name
+/// rule keys on it.
+#[test]
+fn a_merged_identity_field_does_not_follow_caller_order() {
+    let mut named = row(
+        "rpt-named",
+        Some(NODE),
+        Some(POLICY_A),
+        NormalizedSettingOutcome::Applied,
+        Vec::new(),
+    );
+    named.display_name = Some("Zebra policy".to_owned());
+    let mut also_named = row(
+        "rpt-also-named",
+        Some(NODE),
+        Some(POLICY_A),
+        NormalizedSettingOutcome::Applied,
+        Vec::new(),
+    );
+    also_named.display_name = Some("Alpha policy".to_owned());
+
+    let forward = analyze_configuration(&input_of(vec![named.clone(), also_named.clone()]));
+    let reverse = analyze_configuration(&input_of(vec![also_named, named]));
+    assert_eq!(
+        forward.settings[0].identity.display_name,
+        reverse.settings[0].identity.display_name
+    );
+}
+
+/// Two records reporting different terminal codes must not flip which HRESULT the
+/// rejection finding quotes.
+#[test]
+fn two_terminal_codes_do_not_flip_with_caller_order() {
+    let failure = |evidence_id: &str, raw: &str, decimal: i64, hex: &str| {
+        let mut report = row(
+            evidence_id,
+            Some(NODE),
+            Some(POLICY_A),
+            NormalizedSettingOutcome::Failed,
+            Vec::new(),
+        );
+        report.error = Some(cmtraceopen_parser::intune::evidence::IntuneErrorCode {
+            raw: raw.to_owned(),
+            decimal: Some(decimal),
+            hex: Some(hex.to_owned()),
+        });
+        report
+    };
+    let first = failure("rpt-first-code", "0x82B00006", -2102394874, "0x82B00006");
+    let second = failure("rpt-second-code", "0x87D1FDE8", -2016281112, "0x87D1FDE8");
+
+    let forward = analyze_configuration(&input_of(vec![first.clone(), second.clone()]));
+    let reverse = analyze_configuration(&input_of(vec![second, first]));
+    assert_eq!(
+        forward.settings[0].local_error,
+        reverse.settings[0].local_error
+    );
+    assert_eq!(wire(&forward), wire(&reverse));
+}
+
+/// The same record collected twice must not change the analysis either.
+#[test]
+fn a_duplicated_record_does_not_change_the_analysis() {
+    let once = analyze_configuration(&load_input("removal-rollback"));
+
+    let mut doubled = load_input("removal-rollback");
+    let mut copies = doubled.events.clone();
+    for (index, event) in copies.iter_mut().enumerate() {
+        event.context.evidence_ref.evidence_id =
+            format!("{}-again-{index}", event.context.evidence_ref.evidence_id);
+    }
+    doubled.events.extend(copies);
+
+    let twice = analyze_configuration(&doubled);
+    assert_eq!(
+        once.settings
+            .iter()
+            .map(|setting| (wire(&setting.local), wire(&setting.resolution)))
+            .collect::<Vec<_>>(),
+        twice
+            .settings
+            .iter()
+            .map(|setting| (wire(&setting.local), wire(&setting.resolution)))
+            .collect::<Vec<_>>(),
+        "re-collecting the same records must not change the diagnosis"
+    );
+    assert_eq!(finding_ids(&once), finding_ids(&twice));
+}
+
 #[test]
 fn analysis_is_deterministic_across_repeated_runs() {
     for scenario in SCENARIOS {
