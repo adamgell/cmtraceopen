@@ -81,6 +81,44 @@ pub fn parse_map(contents: &str) -> Result<EventMap, String> {
     serde_norway::from_str::<EventMap>(without_bom).map_err(|error| error.to_string())
 }
 
+/// Reads a map file as text, falling back to Windows-1252 when it is not UTF-8.
+///
+/// The upstream corpus is UTF-8, but a map written by hand on a Windows machine often is not, and
+/// `read_to_string` would reject it with "stream did not contain valid UTF-8". That reads as a
+/// corrupt file when it is really an encoding the rest of this codebase already handles, so the
+/// same UTF-8 then Windows-1252 fallback used for log files applies here.
+fn read_map_file(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| error.to_string())?;
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(text),
+        Err(error) => {
+            let (text, _, _) = encoding_rs::WINDOWS_1252.decode(error.as_bytes());
+            Ok(text.into_owned())
+        }
+    }
+}
+
+/// Load order for two map files.
+///
+/// Case-insensitive first, so a `1_`-prefixed copy wins regardless of case, which is what makes
+/// the documented override work. The exact name breaks ties: without it `Map.map` and `map.map`
+/// compare equal, and on a case-sensitive filesystem which one claims the identity would depend on
+/// the unspecified order `read_dir` happened to return them in. Since load order decides which map
+/// wins, that would make the registry differ between machines holding identical directories.
+fn map_file_order(left: &Path, right: &Path) -> std::cmp::Ordering {
+    let name_of = |path: &Path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let (left_name, right_name) = (name_of(left), name_of(right));
+    left_name
+        .to_ascii_lowercase()
+        .cmp(&right_name.to_ascii_lowercase())
+        .then_with(|| left_name.cmp(&right_name))
+}
+
 fn identity_of(map: &EventMap) -> String {
     format!("{}/{}/{}", map.channel, map.provider, map.event_id)
 }
@@ -93,32 +131,36 @@ pub fn load_maps_from_dir(directory: &Path) -> Result<(MapRegistry, MapLoadOutco
     let entries = fs::read_dir(directory)
         .map_err(|error| format!("cannot read map directory {}: {error}", directory.display()))?;
 
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("map"))
-        })
-        .collect();
-    files.sort_by_key(|path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-    });
-
     let mut registry = MapRegistry::new();
     let mut outcome = MapLoadOutcome::default();
+
+    let mut files: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        // An enumeration error after the directory itself opened is recorded rather than skipped.
+        // Dropping it would let a partial registry come back with is_clean() true, which reads as
+        // "every map loaded" when a map is in fact missing and its columns are silently absent.
+        match entry {
+            Ok(entry) => files.push(entry.path()),
+            Err(error) => outcome.failures.push(MapLoadFailure {
+                path: directory.display().to_string(),
+                reason: format!("cannot read directory entry: {error}"),
+            }),
+        }
+    }
+    files.retain(|path| {
+        path.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("map"))
+    });
+    files.sort_by(|left, right| map_file_order(left, right));
     // identity (lowercased, matching MapRegistry's comparison) -> the file that claimed it
     let mut owners: HashMap<String, String> = HashMap::new();
 
     for path in files {
         let display = path.display().to_string();
-        let contents = match fs::read_to_string(&path) {
+        let contents = match read_map_file(&path) {
             Ok(contents) => contents,
             Err(error) => {
                 outcome.failures.push(MapLoadFailure {
@@ -259,6 +301,78 @@ Maps:
             Some("CUSTOM cmd.exe"),
             "the 1_-prefixed file loads first and must win"
         );
+    }
+
+    #[test]
+    fn a_numeric_prefix_sorts_first_regardless_of_case() {
+        use std::cmp::Ordering;
+        assert_eq!(
+            map_file_order(Path::new("/m/1_Shell.map"), Path::new("/m/Shell.map")),
+            Ordering::Less
+        );
+        assert_eq!(
+            map_file_order(Path::new("/m/1_shell.map"), Path::new("/m/Shell.map")),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn names_differing_only_in_case_have_a_defined_order() {
+        use std::cmp::Ordering;
+        // Tested directly rather than through a directory, because the filesystem this runs on may
+        // be case-insensitive and would collapse the two names into one file. The ordering is what
+        // matters: load order decides which map wins, so leaving these equal would let identical
+        // directories produce different registries on different machines.
+        assert_eq!(
+            map_file_order(Path::new("/m/Shell.map"), Path::new("/m/shell.map")),
+            Ordering::Less,
+            "uppercase must sort before lowercase, not compare equal"
+        );
+        assert_eq!(
+            map_file_order(Path::new("/m/shell.map"), Path::new("/m/Shell.map")),
+            Ordering::Greater,
+            "the order must be antisymmetric"
+        );
+        assert_eq!(
+            map_file_order(Path::new("/m/Shell.map"), Path::new("/m/Shell.map")),
+            Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn case_insensitive_ordering_still_decides_unrelated_names() {
+        use std::cmp::Ordering;
+        assert_eq!(
+            map_file_order(Path::new("/m/Apple.map"), Path::new("/m/banana.map")),
+            Ordering::Less,
+            "case must not dominate the alphabetical comparison"
+        );
+    }
+
+    #[test]
+    fn a_windows_1252_map_is_read_rather_than_rejected() {
+        // read_to_string would reject this as invalid UTF-8, which reads as a corrupt file when it
+        // is really an encoding this codebase already handles everywhere else.
+        let dir = temp_dir("cp1252");
+        let text = SHELL_CORE_9701.replace("Shell-Core 9701", "Shell-Core 9701 caf\u{e9}");
+        let mut bytes: Vec<u8> = Vec::new();
+        for ch in text.chars() {
+            if ch == '\u{e9}' {
+                bytes.push(0xE9); // Windows-1252 e-acute, which is not valid UTF-8 on its own
+            } else {
+                let mut buffer = [0u8; 4];
+                bytes.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+            }
+        }
+        fs::write(dir.join("Shell-Core_9701.map"), &bytes).expect("writes");
+
+        let (registry, outcome) = load_maps_from_dir(&dir).expect("directory reads");
+        assert!(
+            outcome.is_clean(),
+            "expected a clean load, got {:?}",
+            outcome.failures
+        );
+        assert_eq!(registry.len(), 1);
     }
 
     #[test]
