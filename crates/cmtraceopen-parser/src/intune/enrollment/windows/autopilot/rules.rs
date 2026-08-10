@@ -879,6 +879,12 @@ fn signal_evidence(
 /// This is the single enforcement point for the invariant
 /// [`IntuneFinding::is_evidence_backed`] describes. Keeping it here means no
 /// individual rule can forget it.
+///
+/// The verdict is delegated to the owning predicate rather than restated. The
+/// normalization above it is this lane's own contract and stays local; sorting
+/// and de-duplication cannot turn a non-empty citation set empty, so the
+/// candidate is asked the question after normalization exactly as it was
+/// before.
 #[allow(clippy::too_many_arguments)]
 fn finding(
     id: &str,
@@ -890,23 +896,20 @@ fn finding(
     evidence: Vec<IntuneEvidenceRef>,
     coverage_gap_ids: Vec<String>,
 ) -> Option<IntuneFinding> {
-    let evidence = normalized_evidence(evidence);
     let mut coverage_gap_ids = coverage_gap_ids;
     coverage_gap_ids.sort();
     coverage_gap_ids.dedup();
-    if evidence.is_empty() && coverage_gap_ids.is_empty() {
-        return None;
-    }
-    Some(IntuneFinding {
+    let candidate = IntuneFinding {
         finding_id: id.to_owned(),
         severity,
         confidence,
         title: title.to_owned(),
         summary: summary.to_owned(),
         recommended_checks: recommended_checks.to_vec(),
-        evidence,
+        evidence: normalized_evidence(evidence),
         coverage_gap_ids,
-    })
+    };
+    candidate.is_evidence_backed().then_some(candidate)
 }
 
 fn push(findings: &mut Vec<IntuneFinding>, finding: Option<IntuneFinding>) {

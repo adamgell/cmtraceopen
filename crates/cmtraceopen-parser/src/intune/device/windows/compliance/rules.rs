@@ -681,11 +681,10 @@ fn finding(
     coverage_gap_ids: Vec<String>,
 ) -> Option<IntuneFinding> {
     // The invariant from `intune::evidence`: a finding backed by neither
-    // evidence nor a coverage gap is an assertion, so it is never emitted.
-    if evidence.is_empty() && coverage_gap_ids.is_empty() {
-        return None;
-    }
-    Some(IntuneFinding {
+    // evidence nor a coverage gap is an assertion, so it is never emitted. The
+    // verdict is asked of the owning predicate rather than restated here, so
+    // this lane cannot drift from the definition it cites.
+    let candidate = IntuneFinding {
         finding_id: id.to_owned(),
         severity,
         confidence,
@@ -694,7 +693,8 @@ fn finding(
         recommended_checks: vec![check.to_owned()],
         evidence,
         coverage_gap_ids,
-    })
+    };
+    candidate.is_evidence_backed().then_some(candidate)
 }
 
 fn push(findings: &mut Vec<IntuneFinding>, finding: Option<IntuneFinding>) {
