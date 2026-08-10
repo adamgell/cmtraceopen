@@ -436,11 +436,34 @@ fn merge_setting(
 /// The smallest value stated by any observation in the group.
 ///
 /// "Smallest" is arbitrary but *content-determined*, which "first" was not.
+///
+/// A present-but-blank value states nothing and is skipped, so it can never win
+/// the `min` and be exported as this group's identifier or display name. Every
+/// other reader of these fields already agrees: [`ComplianceSettingKey::is_identified`]
+/// and [`ComplianceSettingKey::grouping_token`] both drop a blank before deciding,
+/// and [`contradicts`] reads one through [`usable_identifier`]. Only this function
+/// took `Some("")` at face value, which let a group merged on its URI export
+/// `settingId: ""` while `contradicts` had already ruled the same value out.
+///
+/// The gap is reachable through the report path but not the event path:
+/// `sources::classify_setting_report` copies `policy_id`, `setting_id`, and
+/// `setting_uri` verbatim from a `NormalizedSettingReport` deserialized straight
+/// out of the `settingReports` envelope, where `"settingId": ""` is valid JSON,
+/// whereas `sources::event_setting_key` reads every field through `named_any`,
+/// which trims and rejects a blank before it becomes a key at all.
+///
+/// The winning value is still exported verbatim; only the decision about whether
+/// a value was stated is normalized.
 fn smallest_stated(
     observations: &[SettingObservation],
     pick: fn(&SettingObservation) -> Option<&String>,
 ) -> Option<String> {
-    observations.iter().filter_map(pick).min().cloned()
+    observations
+        .iter()
+        .filter_map(pick)
+        .filter(|value| usable_identifier(value).is_some())
+        .min()
+        .cloned()
 }
 
 /// The terminal code this setting reported.
@@ -482,6 +505,10 @@ fn contradicts(
 }
 
 /// An identifier reduced to its comparable form, or `None` when it states nothing.
+///
+/// [`smallest_stated`] reuses the `None` half as the module's single test for
+/// "this string states nothing", including for the display name, which is not an
+/// identifier but is just as meaningless when blank.
 fn usable_identifier(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_ascii_lowercase())
@@ -1074,7 +1101,10 @@ mod tests {
         IntuneAccessState, IntuneEvidenceRef, IntuneObservationContext, IntuneParseState,
         IntuneProvenance, IntuneSensitivity, IntuneSourceKind, IntuneTimestampKind,
     };
-    use crate::intune::normalized::{NormalizedEventLevel, NormalizedWindowsEvent};
+    use crate::intune::normalized::{
+        NormalizedEventLevel, NormalizedSettingOutcome, NormalizedSettingReport,
+        NormalizedWindowsEvent,
+    };
 
     fn context(evidence_id: &str, artifact: &str) -> IntuneObservationContext {
         IntuneObservationContext {
@@ -1361,6 +1391,53 @@ mod tests {
         );
     }
 
+    /// A report row may carry a present-but-blank identifier, because
+    /// `classify_setting_report` copies the key verbatim from JSON while the
+    /// event path filters every field through `named_any`. A blank states
+    /// nothing, so it must not be exported as this setting's id.
+    #[test]
+    fn a_blank_identifier_is_not_exported_as_an_identifier() {
+        let report = NormalizedSettingReport {
+            context: context("r1", "report"),
+            setting_uri: Some("./Device/X".to_owned()),
+            setting_id: Some(String::new()),
+            policy_id: Some("   ".to_owned()),
+            display_name: Some(String::new()),
+            outcome: NormalizedSettingOutcome::Applied,
+            value: None,
+            error: None,
+            named_data: Vec::new(),
+        };
+        let snapshot = analyze_compliance(&ComplianceInput {
+            generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+            setting_reports: vec![report],
+            ..ComplianceInput::default()
+        });
+
+        let setting = &snapshot.local_evaluation.settings[0];
+        assert_eq!(
+            setting.key.setting_uri.as_deref(),
+            Some("./Device/X"),
+            "the one identifier the row actually states must survive"
+        );
+        assert_eq!(
+            setting.key.setting_id, None,
+            "an empty setting id states nothing and must not be exported as one"
+        );
+        assert_eq!(
+            setting.key.policy_id, None,
+            "a whitespace-only policy id states nothing and must not be exported as one"
+        );
+        assert_eq!(
+            setting.display_name, None,
+            "an empty display name must not be quoted by a finding as this setting's name"
+        );
+        assert!(
+            !setting.identity_contradiction,
+            "a blank alongside a stated id is not two records disagreeing"
+        );
+    }
+
     #[test]
     fn a_timestamp_with_no_known_zone_cannot_order_anything() {
         let unusable = IntuneTimestamp {
@@ -1560,6 +1637,23 @@ mod tests {
         assert_eq!(
             forward.local_evaluation.policies[0].scope, reverse.local_evaluation.policies[0].scope,
             "the exported policy scope must not depend on the caller's vector"
+        );
+        // Symmetry alone is too weak an assertion to protect the rule. Replacing
+        // the ADR-003 conservative merge with any fixed rank over the variants
+        // (Received over NotReceived, Device over User, or the reverse) would be
+        // just as symmetric and would still pass the two assertions above. These
+        // two pin what the rows must actually resolve to: two equally
+        // authoritative sources that disagree name no state and no scope, and
+        // both rows stay cited so neither claim is hidden.
+        assert_eq!(
+            forward.local_evaluation.policies[0].state,
+            CompliancePolicyState::Unknown,
+            "received and missing are equally authoritative, so the merge names no state (ADR-003)"
+        );
+        assert_eq!(
+            forward.local_evaluation.policies[0].scope,
+            ComplianceScope::Unknown,
+            "device and user are equally authoritative, so the merge names no scope (ADR-003)"
         );
     }
 }
