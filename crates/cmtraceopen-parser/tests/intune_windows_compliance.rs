@@ -16,8 +16,10 @@ mod support;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use cmtraceopen_parser::intune::apps::windows::common::redact_text as shared_redact_text;
 use cmtraceopen_parser::intune::device::windows::compliance::{
-    analyze_compliance, analyze_compliance_bundle, decode_bundle, redacted_export_projection,
+    analyze_compliance, analyze_compliance_bundle, decode_bundle, redact_text,
+    redacted_export_projection,
     ComplianceAccessDecision, ComplianceAccessFact, ComplianceCustomFact, ComplianceCustomState,
     ComplianceInput, ComplianceServiceFact, ComplianceServiceState, ComplianceSnapshot,
     ComplianceSourceInput,
@@ -1029,6 +1031,124 @@ fn redaction_preserves_states_coverage_and_evidence() {
             "{scenario}: redaction must not change which evidence a finding cites"
         );
     }
+}
+
+// ── Redaction grammar parity ────────────────────────────────────────────────
+//
+// `docs/architecture/shared-vs-workload-invariants.md` divergence 7 states the
+// arrangement these tests enforce: the masking *grammar* has exactly one owner
+// (`intune/apps/windows/common/redaction.rs::redact_text`), and each lane owns
+// only its *projection* -- which of its own fields are classified sensitive.
+// The compliance lane carried a private copy of the grammar instead, and a copy
+// drifts in whichever direction nobody tested. The same file records the
+// precedent: a Win32 fork previously reintroduced an already-fixed
+// JSON-escaped-path bug.
+
+/// Spans the shared grammar masks: `(concern, input, the span that must not survive)`.
+///
+/// Every entry is a real identity or secret shape. Masking is the conservative
+/// direction, so the compliance lane must mask at least as much as the owner.
+const SHARED_GRAMMAR_SPANS: [(&str, &str, &str); 9] = [
+    // A SID with the minimum identifying sub-authority count. The fork required
+    // one more group than the owner, so exactly this shape was exported raw.
+    ("short SID", "owner S-1-5-21-1010 evaluated", "S-1-5-21-1010"),
+    // The legacy profile root. The fork matched only `Users`.
+    (
+        "legacy profile root",
+        r"C:\Documents and Settings\Jane Roe\policy.json",
+        "Jane Roe",
+    ),
+    // Custom-compliance output is JSON, and a Windows path inside JSON arrives
+    // with doubled separators. The fork required a single separator.
+    (
+        "JSON-escaped profile path",
+        r#"{"Path":"C:\\Users\\Jane Roe\\policy.json"}"#,
+        "Jane Roe",
+    ),
+    (
+        "device name field",
+        "ComputerName: DESKTOP-AB12CD",
+        "DESKTOP-AB12CD",
+    ),
+    (
+        "UNC server segment",
+        r"reading \\FILESRV01\share\baseline.json",
+        "FILESRV01",
+    ),
+    (
+        "account field",
+        r"RunAsUser = CONTOSO\jsmith",
+        "jsmith",
+    ),
+    (
+        "tenant id field",
+        "TenantId: 99999999-8888-4777-8666-555555555555",
+        "99999999-8888-4777-8666-555555555555",
+    ),
+    (
+        "inline credential flag",
+        "remediate.exe -Password hunter2 /quiet",
+        "hunter2",
+    ),
+    (
+        "MSI property credential",
+        "msiexec /i app.msi LICENSEKEY=ABCD-1234-EFGH /qn",
+        "ABCD-1234-EFGH",
+    ),
+];
+
+/// Every span the owner masks must also be masked here.
+///
+/// Accumulated rather than short-circuited: one `assert!` per case would report
+/// only the first divergence and hide the rest of the class.
+#[test]
+fn the_compliance_lane_masks_every_span_the_shared_grammar_masks() {
+    let mut failures = Failures::new();
+    for (concern, input, sensitive) in SHARED_GRAMMAR_SPANS {
+        let shared = shared_redact_text(input);
+        failures.require(!shared.contains(sensitive), || {
+            format!("{concern}: the shared grammar itself leaked {sensitive:?} from {input:?}")
+        });
+        let lane = redact_text(input);
+        failures.require(!lane.contains(sensitive), || {
+            format!("{concern}: compliance exported {sensitive:?} verbatim: {lane:?}")
+        });
+    }
+    failures.assert_empty("compliance redaction grammar");
+}
+
+/// The stronger statement: there is one grammar, not two that happen to agree.
+///
+/// Equal *outputs* rather than merely equal masking decisions, because the
+/// token is a stable hash used to correlate records. Two lanes that mask the
+/// same span into different tokens have already diverged.
+#[test]
+fn the_compliance_lane_and_the_shared_grammar_agree_byte_for_byte() {
+    let mut failures = Failures::new();
+    for (concern, input, _) in SHARED_GRAMMAR_SPANS {
+        let shared = shared_redact_text(input);
+        let lane = redact_text(input);
+        failures.require(shared == lane, || {
+            format!("{concern}: shared grammar produced {shared:?} but compliance produced {lane:?}")
+        });
+    }
+    failures.assert_empty("compliance redaction grammar parity");
+}
+
+/// The projection is the surface that actually leaves the process, so the leak
+/// is pinned there too and not only on the helper.
+#[test]
+fn a_short_sid_does_not_reach_the_redacted_export() {
+    let loaded = load("deterministic-privacy-redaction");
+    let mut snapshot = loaded.snapshot.clone();
+    snapshot.local_evaluation.settings[0].display_name =
+        Some("BitLocker status for owner S-1-5-21-1010".to_owned());
+    let projected = redacted_export_projection(&snapshot);
+    let exported = serde_json::to_string(&projected).expect("projection serializes");
+    assert!(
+        !exported.contains("S-1-5-21-1010"),
+        "a Windows SID reached the redacted export verbatim: {exported}"
+    );
 }
 
 // ── Adversarial corpus mutations ────────────────────────────────────────────
