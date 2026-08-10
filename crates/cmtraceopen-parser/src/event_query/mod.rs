@@ -289,7 +289,6 @@ fn time_predicate(window: &TimeWindow) -> Result<Option<Predicate>, QueryBuildEr
     }
 }
 
-/// Expressions contributed by everything other than the Event ID list.
 /// Levels with duplicates removed, preserving the order they were given in.
 ///
 /// A caller can legitimately hand the same level twice. Emitting `Level=2 or Level=2` costs two
@@ -319,6 +318,10 @@ fn distinct_providers(filter: &EventQueryFilter) -> Vec<String> {
     seen
 }
 
+/// Expressions contributed by everything other than the Event ID list.
+///
+/// These repeat in every node, so they are what decides whether chunking the Event IDs can bring a
+/// query under the limit at all.
 fn fixed_expression_cost(filter: &EventQueryFilter) -> usize {
     let time = filter
         .time
