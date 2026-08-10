@@ -27,9 +27,9 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@fluentui/react-charts": "^9.3.22",
-    "@fluentui/react-components": "^9.74.4",
-    "@fluentui/react-icons": "^2.0.334",
+    "@fluentui/react-charts": "^9.3.23",
+    "@fluentui/react-components": "^9.74.5",
+    "@fluentui/react-icons": "^2.0.335",
     "@tanstack/react-virtual": "^3.14.9",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
