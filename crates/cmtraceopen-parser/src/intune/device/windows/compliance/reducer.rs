@@ -1206,14 +1206,13 @@ mod tests {
     use super::*;
     use crate::intune::evidence::IntuneNamedValue;
 
-    /// `structural_key` orders observations by their `Debug` rendering, so every
-    /// field must reach that rendering. A hand-written or lossy `Debug` on
-    /// `SettingObservation`, or on any type it nests, would silently drop a field
-    /// from the key and hand the export order back to the caller's vector.
+    /// A fully populated observation, so every field has a stated value to lose.
     ///
-    /// This pins each field individually rather than the struct as a whole, so a
-    /// field that stops participating fails here and names itself.
-    /// A fully populated observation, so every field has something to lose.
+    /// Every `Option` is `Some` and the collection is non-empty on purpose. A
+    /// mutation from `None` to `Some(_)` changes the `Debug` rendering even if
+    /// the inner value never reaches it, so it would pass against exactly the
+    /// lossy `Debug` this test exists to catch. Each mutation below changes a
+    /// stated value into a different stated value instead.
     fn observation_for_key_coverage() -> SettingObservation {
         SettingObservation {
             key: ComplianceSettingKey {
@@ -1225,26 +1224,187 @@ mod tests {
             scope: ComplianceScope::Device,
             state: ComplianceSettingState::Compliant,
             display_name: Some("a name".to_owned()),
-            error: None,
-            evaluated_at: None,
-            named_data: Vec::new(),
+            error: Some(IntuneErrorCode {
+                raw: "0x80070005".to_owned(),
+                decimal: Some(-2147024891),
+                hex: Some("0x80070005".to_owned()),
+            }),
+            evaluated_at: Some(timestamp("2026-07-31T10:00:00Z")),
+            named_data: vec![IntuneNamedValue {
+                name: "probe".to_owned(),
+                value: "a value".to_owned(),
+            }],
             context: context("obs-1", "mdm-report"),
         }
     }
 
+    /// Every field of `SettingObservation`, paired with an observation that
+    /// differs from [`observation_for_key_coverage`] in that field alone.
+    ///
+    /// The table is self-maintaining, which is the point of writing it this way
+    /// rather than as a literal list:
+    ///
+    /// - the destructuring carries no `..`, so a field added to
+    ///   `SettingObservation` later stops this function compiling until it is
+    ///   named here;
+    /// - every binding the destructuring introduces is consumed by the
+    ///   `assert_ne!` guarding its mutation, and `unused_variables` is denied
+    ///   below rather than left as a warning, so naming a field without
+    ///   mutating it is a compile error too;
+    /// - those same assertions prove each mutation is a real change rather than
+    ///   a restatement of the base, so no row can pass vacuously.
+    ///
+    /// A field cannot reach the export order without passing through here.
+    #[deny(unused_variables)]
+    fn single_field_mutations() -> Vec<(&'static str, SettingObservation)> {
+        let SettingObservation {
+            key,
+            grouping_token,
+            scope,
+            state,
+            display_name,
+            error,
+            evaluated_at,
+            named_data,
+            context: base_context,
+        } = observation_for_key_coverage();
+
+        let mutated_key = ComplianceSettingKey {
+            policy_id: Some("other-policy".to_owned()),
+            ..key.clone()
+        };
+        let mutated_grouping_token = "uri:./device/vendor/msft/policy/result/other".to_owned();
+        let mutated_scope = ComplianceScope::User;
+        let mutated_state = ComplianceSettingState::Noncompliant;
+        let mutated_display_name = Some("another name".to_owned());
+        let mutated_error = Some(IntuneErrorCode {
+            raw: "0x80070002".to_owned(),
+            decimal: Some(-2147024894),
+            hex: Some("0x80070002".to_owned()),
+        });
+        let mutated_evaluated_at = Some(timestamp("2026-07-31T11:00:00Z"));
+        let mutated_named_data = vec![IntuneNamedValue {
+            name: "probe".to_owned(),
+            value: "another value".to_owned(),
+        }];
+        let mutated_context = context("obs-2", "mdm-report");
+
+        assert_ne!(mutated_key, key, "the `key` mutation must change `key`");
+        assert_ne!(
+            mutated_grouping_token, grouping_token,
+            "the `grouping_token` mutation must change `grouping_token`"
+        );
+        assert_ne!(
+            mutated_scope, scope,
+            "the `scope` mutation must change `scope`"
+        );
+        assert_ne!(
+            mutated_state, state,
+            "the `state` mutation must change `state`"
+        );
+        assert_ne!(
+            mutated_display_name, display_name,
+            "the `display_name` mutation must change `display_name`"
+        );
+        assert_ne!(
+            mutated_error, error,
+            "the `error` mutation must change `error`"
+        );
+        assert_ne!(
+            mutated_evaluated_at, evaluated_at,
+            "the `evaluated_at` mutation must change `evaluated_at`"
+        );
+        assert_ne!(
+            mutated_named_data, named_data,
+            "the `named_data` mutation must change `named_data`"
+        );
+        assert_ne!(
+            mutated_context, base_context,
+            "the `context` mutation must change `context`"
+        );
+
+        vec![
+            (
+                "key",
+                SettingObservation {
+                    key: mutated_key,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "grouping_token",
+                SettingObservation {
+                    grouping_token: mutated_grouping_token,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "scope",
+                SettingObservation {
+                    scope: mutated_scope,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "state",
+                SettingObservation {
+                    state: mutated_state,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "display_name",
+                SettingObservation {
+                    display_name: mutated_display_name,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "error",
+                SettingObservation {
+                    error: mutated_error,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "evaluated_at",
+                SettingObservation {
+                    evaluated_at: mutated_evaluated_at,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "named_data",
+                SettingObservation {
+                    named_data: mutated_named_data,
+                    ..observation_for_key_coverage()
+                },
+            ),
+            (
+                "context",
+                SettingObservation {
+                    context: mutated_context,
+                    ..observation_for_key_coverage()
+                },
+            ),
+        ]
+    }
+
+    /// `structural_key` orders observations by their `Debug` rendering, so every
+    /// field must reach that rendering. A hand-written or lossy `Debug` on
+    /// `SettingObservation`, or on any type it nests, would silently drop a field
+    /// from the key: `merge_setting` chains `structural_key` after the evidence
+    /// ref and `slice::sort_by` is stable, so a pair the key stops separating
+    /// falls back to the caller's vector order.
+    ///
+    /// This pins each field individually rather than the struct as a whole, so a
+    /// field that stops participating fails here and names itself.
+    /// [`single_field_mutations`] is what makes "each field" true, and what keeps
+    /// it true as the struct grows.
     #[test]
     fn structural_key_separates_observations_differing_in_any_single_field() {
         let base = observation_for_key_coverage();
-        let mutations: Vec<(&str, SettingObservation)> = vec![
-            ("grouping_token", SettingObservation { grouping_token: "other-token".to_owned(), ..observation_for_key_coverage() }),
-            ("scope", SettingObservation { scope: ComplianceScope::User, ..observation_for_key_coverage() }),
-            ("state", SettingObservation { state: ComplianceSettingState::Noncompliant, ..observation_for_key_coverage() }),
-            ("display_name", SettingObservation { display_name: Some("other name".to_owned()), ..observation_for_key_coverage() }),
-            ("error", SettingObservation { error: Some(IntuneErrorCode { raw: "0x1".to_owned(), decimal: None, hex: None }), ..observation_for_key_coverage() }),
-            ("named_data", SettingObservation { named_data: vec![IntuneNamedValue { name: "n".to_owned(), value: "v".to_owned() }], ..observation_for_key_coverage() }),
-        ];
-
-        for (field, mutated) in mutations {
+        for (field, mutated) in single_field_mutations() {
             assert_ne!(
                 structural_key(&base),
                 structural_key(&mutated),
@@ -1626,11 +1786,7 @@ mod tests {
             "a-unplaceable".to_owned(),
         ];
         assert_eq!(
-            order(vec![
-                earlier.clone(),
-                later.clone(),
-                unplaceable.clone()
-            ]),
+            order(vec![earlier.clone(), later.clone(), unplaceable.clone()]),
             expected,
             "the decision array must read as a sequence of attempts in time, with \
              a decision whose zone is unknown after every decision that can be \

@@ -800,12 +800,20 @@ fn contended_access_decisions_export_in_chronological_order() {
 ///   `state`, `error`, `rawOutput`, and `namedData`.
 /// - serviceResults chains policyId, settingId, reportedAt; the pair differs in
 ///   `state`, `deviceKey`, and `userKey`.
-/// - accessDecisions chains occurredAt, deviceKey, userKey, resource; the pair
-///   differs in `decision` and `failureCode`.
+/// - accessDecisions chains occurredAt (its normalized instant, then its raw
+///   text), deviceKey, userKey, resource; the pair differs in `decision` and
+///   `failureCode`.
+///
+/// Every twin pair shares its evidence ref as well, so the `evidence` link
+/// decides nothing here either.
 ///
 /// Naming more fields would only move the boundary again: the property under
 /// test is that a field the ordering does not name cannot decide the exported
 /// order, and that has to hold for fields nobody has written yet.
+///
+/// The equivalent coverage for `SettingObservation` lives in `reducer.rs`'s unit
+/// tests, not here: that type is `pub(super)`, so an integration test cannot name
+/// it. See `single_field_mutations` there.
 fn facts_agreeing_on_every_named_key() -> ComplianceInput {
     ComplianceInput {
         generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
