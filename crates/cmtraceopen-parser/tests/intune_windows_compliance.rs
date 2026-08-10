@@ -643,6 +643,56 @@ fn permutations_of(input: ComplianceInput) -> Vec<ComplianceInput> {
     permutations
 }
 
+/// Facts sharing one evidence ref must not be ordered by the caller's vector.
+///
+/// The three exported fact arrays are canonicalized by sorting on the `evidence`
+/// vector, and each of those vectors holds exactly the one ref its fact was
+/// decoded with. `slice::sort_by` is stable, so two facts stamped with the same
+/// ref compare equal and keep the order the caller handed them over in. That is
+/// the defect the sorts were added to close, still open for this shape.
+///
+/// The shape is reachable, not hypothetical. `custom_compliance`,
+/// `service_results`, and `access_decisions` are deserialized straight out of the
+/// collector's envelope by `sources::stage_record`, which reads
+/// `context.evidenceRef` verbatim and asserts nothing about uniqueness; a
+/// collector that stamps one artifact-level ref on every row it emits produces
+/// exactly this. `analyze_compliance` is public and takes the fact vectors
+/// directly besides.
+fn facts_sharing_one_evidence_ref() -> ComplianceInput {
+    ComplianceInput {
+        generated_at_utc: "2026-07-31T12:00:00Z".to_owned(),
+        custom_compliance: vec![
+            custom_fact("shared-custom", "ZebraCheck"),
+            custom_fact("shared-custom", "AlphaCheck"),
+        ],
+        service_results: vec![
+            service_fact("shared-service", "2026-07-31T11:30:00Z"),
+            service_fact("shared-service", "2026-07-31T11:40:00Z"),
+        ],
+        access_decisions: vec![
+            access_fact("shared-access", "2026-07-31T11:50:00Z"),
+            access_fact("shared-access", "2026-07-31T11:55:00Z"),
+        ],
+        ..ComplianceInput::default()
+    }
+}
+
+#[test]
+fn facts_sharing_an_evidence_ref_do_not_follow_caller_order() {
+    let forward = facts_sharing_one_evidence_ref();
+    let mut reverse = facts_sharing_one_evidence_ref();
+    reverse.custom_compliance.reverse();
+    reverse.service_results.reverse();
+    reverse.access_decisions.reverse();
+
+    assert_eq!(
+        wire(&analyze_compliance(&forward)),
+        wire(&analyze_compliance(&reverse)),
+        "facts that share an evidence ref must be ordered by their own content, \
+         not by the vector the collector serialized them into"
+    );
+}
+
 /// Re-collecting the same records must not change the analysis.
 ///
 /// A collector that reads an event log twice, or a rotation that overlaps, hands
