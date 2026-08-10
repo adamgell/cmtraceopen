@@ -75,8 +75,11 @@ pub enum TimelineOrigin {
     },
     /// A Windows event.
     Event {
+        /// Channel the event was read from, for example `Microsoft-Windows-DNSServer/Audit`.
         channel: String,
+        /// Publisher that raised it, as the event's own `System` block names it.
         provider: String,
+        /// Event ID, which identifies the event only in combination with the provider.
         event_id: u32,
         /// Record identifier within its channel.
         record_id: u64,
@@ -89,8 +92,11 @@ pub enum TimelineOrigin {
 pub struct TimelineItem {
     /// Milliseconds since the Unix epoch.
     pub timestamp_ms: i64,
+    /// How serious the source said this was, normalized across event levels and log levels.
     pub severity: TimelineSeverity,
+    /// The rendered text, already whatever the source's own formatting produced.
     pub message: String,
+    /// Which file or channel this came from, so a row on a merged timeline stays attributable.
     pub origin: TimelineOrigin,
 }
 
@@ -134,10 +140,17 @@ impl UnifiedTimeline {
     }
 
     /// Inclusive time span covered, or `None` when nothing was placed.
+    ///
+    /// The bounds are computed rather than read off the ends. `merge` sorts, so reading the ends
+    /// would be correct on that path, but `items` is a public field and a value built directly can
+    /// hold items in any order. Reporting a span narrower than the data would understate what a
+    /// timeline actually covers.
     pub fn span_ms(&self) -> Option<(i64, i64)> {
-        let first = self.items.first()?.timestamp_ms;
-        let last = self.items.last()?.timestamp_ms;
-        Some((first, last))
+        let mut stamps = self.items.iter().map(|item| item.timestamp_ms);
+        let first = stamps.next()?;
+        Some(stamps.fold((first, first), |(low, high), stamp| {
+            (low.min(stamp), high.max(stamp))
+        }))
     }
 }
 

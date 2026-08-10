@@ -9,14 +9,16 @@
 //! This module builds the query so the service does the work. It is pure string construction with
 //! no Windows dependency, which keeps it inside the parser crate and unit-testable off Windows.
 //!
-//! Two constraints come from the service rather than from taste:
+//! Four constraints come from the service rather than from taste:
 //!
 //! - **Expression count is capped.** A query with too many `or` terms is rejected outright, so
 //!   large Event ID sets are split across several `<Select>` nodes inside one `<QueryList>`.
 //!   FullEventLogView batches at ten per node; the same bound is used here.
 //! - **Values are attacker-influenced.** Provider names reach this from user input and from event
-//!   data, so an apostrophe is stripped. It delimits XPath string literals and has no XPath 1.0
-//!   escape, so leaving it in would terminate the literal and let the rest be read as syntax.
+//!   data, and an apostrophe delimits XPath string literals with no escape available. Rather than
+//!   strip it, which would silently turn `Bob's Agent` into a filter that matches nothing, the
+//!   value is quoted with whichever delimiter it does not contain. A value holding both is refused
+//!   as `UnquotableValue`, because there is no correct way to express it.
 //! - **Escaping depends on context, and getting it backwards fails closed.** A bare XPath must use
 //!   raw `<=` and `>=`; the same operators inside a `<QueryList>` document must be XML-escaped.
 //!   Verified against the service on Windows 11: escaped operators in a bare XPath are rejected
@@ -145,11 +147,28 @@ impl EventQueryFilter {
 
 /// Expression budget for one `<Select>` node.
 ///
-/// Microsoft documents each XPath as limited to 32 expressions, and a compound expression of more
-/// than 20 as requiring a structured XML query. Counting *selectors* rather than expressions gets
-/// this wrong: a range emits two expressions, so ten ranges already reach the compound limit before
-/// any level, provider, or time term is added. The budget is therefore spent in expressions.
+/// Counting *selectors* rather than expressions gets this wrong: a range emits two comparisons, so
+/// ten ranges already exhaust the budget before any level, provider, or time term is added. The
+/// budget is therefore spent in expressions.
+///
+/// The limit is measured, not taken from the documentation. Microsoft documents 32 expressions per
+/// XPath, but the service on Windows 11 build 26200 accepts 23 and rejects 24 with
+/// `ERROR_EVT_INVALID_QUERY` (15001), so the documented figure would have produced queries that
+/// fail outright. Twenty leaves three expressions of headroom for a miscount, which is exactly what
+/// absorbed the two-bounded time window being costed as one expression rather than two.
 const MAX_EXPRESSIONS_PER_SELECT: usize = 20;
+
+/// The expression count at which the service starts refusing a query.
+///
+/// Measured on Windows 11 build 26200 against `Application` with strict flags: 23 `or`-joined
+/// comparisons are accepted, 24 and every count tried up to 50 are rejected with
+/// `ERROR_EVT_INVALID_QUERY` (15001). Recorded as a constant so the budget above is visibly
+/// derived from a measurement rather than from the documented figure of 32, which is wrong here.
+const MEASURED_REJECTION_POINT: usize = 24;
+
+// The budget must leave room, not merely differ. Checked at compile time so raising it past what
+// the service accepts cannot reach a user.
+const _: () = assert!(MAX_EXPRESSIONS_PER_SELECT < MEASURED_REJECTION_POINT);
 
 /// Quotes a value as an XPath string literal, choosing a delimiter the value does not contain.
 ///
@@ -202,11 +221,24 @@ fn join_and(predicates: &[String]) -> String {
     format!("({})", predicates.join(" and "))
 }
 
-fn time_predicate(window: &TimeWindow) -> Result<Option<String>, QueryBuildError> {
+/// A predicate and the number of expressions the service will count it as.
+///
+/// Returned together on purpose. The cost was previously computed by a separate function that
+/// assumed one expression per predicate, which is wrong for a two-bounded window: it emits two
+/// comparisons joined by `and`. Deriving both from the same code is what stops them drifting
+/// apart again, and drift here is expensive because the result is a query the service rejects
+/// outright rather than a slightly wrong one.
+struct Predicate {
+    clause: String,
+    expressions: usize,
+}
+
+fn time_predicate(window: &TimeWindow) -> Result<Option<Predicate>, QueryBuildError> {
     match window {
-        TimeWindow::Last { milliseconds } => Ok(Some(format!(
-            "TimeCreated[timediff(@SystemTime) <= {milliseconds}]"
-        ))),
+        TimeWindow::Last { milliseconds } => Ok(Some(Predicate {
+            clause: format!("TimeCreated[timediff(@SystemTime) <= {milliseconds}]"),
+            expressions: 1,
+        })),
         TimeWindow::Between { from, to } => {
             let mut bounds = Vec::new();
             if let Some(from) = from {
@@ -218,20 +250,22 @@ fn time_predicate(window: &TimeWindow) -> Result<Option<String>, QueryBuildError
             if bounds.is_empty() {
                 return Ok(None);
             }
-            Ok(Some(format!("TimeCreated[{}]", bounds.join(" and "))))
+            Ok(Some(Predicate {
+                expressions: bounds.len(),
+                clause: format!("TimeCreated[{}]", bounds.join(" and ")),
+            }))
         }
     }
 }
 
 /// Expressions contributed by everything other than the Event ID list.
 fn fixed_expression_cost(filter: &EventQueryFilter) -> usize {
-    let time = usize::from(
-        filter
-            .time
-            .as_ref()
-            .and_then(|window| time_predicate(window).ok().flatten())
-            .is_some(),
-    );
+    let time = filter
+        .time
+        .as_ref()
+        .and_then(|window| time_predicate(window).ok().flatten())
+        .map(|predicate| predicate.expressions)
+        .unwrap_or(0);
     time + filter.levels.len() + filter.providers.len() + usize::from(filter.keywords.is_some())
 }
 
@@ -242,8 +276,8 @@ fn system_predicates(
     let mut predicates = Vec::new();
 
     if let Some(window) = filter.time.as_ref() {
-        if let Some(clause) = time_predicate(window)? {
-            predicates.push(clause);
+        if let Some(predicate) = time_predicate(window)? {
+            predicates.push(predicate.clause);
         }
     }
 
@@ -1108,5 +1142,125 @@ mod structured_query_service_tests {
             query.matches("<Select>").count(),
             "every node must repeat the keyword predicate"
         );
+    }
+}
+
+#[cfg(test)]
+mod expression_budget_service_tests {
+    //! The expression limit as the service actually enforces it.
+    //!
+    //! Measured on Windows 11 build 26200 against `Application` with strict flags: a bare XPath of
+    //! 23 `or`-joined comparisons is accepted, and 24 is rejected with `ERROR_EVT_INVALID_QUERY`
+    //! (15001). Every count from 24 to 50 was rejected, so 24 is a cliff rather than a fluke.
+    //!
+    //! That contradicts the documented figure of 32, which is why the budget is not set from the
+    //! documentation. These tests pin the arithmetic that keeps emitted queries below the real
+    //! limit, so a future change that looks reasonable fails here rather than at a user.
+
+    use super::*;
+
+    #[test]
+    fn a_two_bounded_window_costs_two_expressions() {
+        // It emits two comparisons joined by `and`. Costing it as one silently spent a third of
+        // the headroom the budget was chosen to provide.
+        let filter = EventQueryFilter {
+            time: Some(TimeWindow::Between {
+                from: Some("2020-01-01T00:00:00.000Z".into()),
+                to: Some("2030-01-01T00:00:00.000Z".into()),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(fixed_expression_cost(&filter), 2);
+    }
+
+    #[test]
+    fn a_one_bounded_window_costs_one() {
+        for (from, to) in [
+            (Some("2020-01-01T00:00:00.000Z".to_string()), None),
+            (None, Some("2030-01-01T00:00:00.000Z".to_string())),
+        ] {
+            let filter = EventQueryFilter {
+                time: Some(TimeWindow::Between { from, to }),
+                ..Default::default()
+            };
+            assert_eq!(fixed_expression_cost(&filter), 1);
+        }
+    }
+
+    #[test]
+    fn a_window_with_no_bounds_costs_nothing() {
+        let filter = EventQueryFilter {
+            time: Some(TimeWindow::Between {
+                from: None,
+                to: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(fixed_expression_cost(&filter), 0);
+    }
+
+    #[test]
+    fn a_relative_window_costs_one() {
+        let filter = EventQueryFilter {
+            time: Some(TimeWindow::Last {
+                milliseconds: 3_600_000,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(fixed_expression_cost(&filter), 1);
+    }
+
+    #[test]
+    fn a_two_bounded_window_plus_nineteen_ids_now_splits() {
+        // 21 expressions against a budget of 20. Before the time cost was corrected this computed
+        // 20 and stayed in one node.
+        let filter = EventQueryFilter {
+            time: Some(TimeWindow::Between {
+                from: Some("2020-01-01T00:00:00.000Z".into()),
+                to: Some("2030-01-01T00:00:00.000Z".into()),
+            }),
+            event_ids: (1000..1019)
+                .map(|id| EventIdSelector::Single { id })
+                .collect(),
+            ..Default::default()
+        };
+        let query = build_query(&filter).expect("builds");
+        assert!(query.starts_with("<QueryList>"), "{query}");
+    }
+
+    #[test]
+    fn no_emitted_node_can_exceed_the_budget() {
+        // The property that matters, checked across shapes rather than for one case: whatever the
+        // filter, every node the builder emits stays inside the budget.
+        for id_count in [1usize, 5, 19, 20, 21, 40, 100] {
+            for levels in [vec![], vec![1, 2], vec![1, 2, 3, 4, 5]] {
+                let filter = EventQueryFilter {
+                    time: Some(TimeWindow::Between {
+                        from: Some("2020-01-01T00:00:00.000Z".into()),
+                        to: Some("2030-01-01T00:00:00.000Z".into()),
+                    }),
+                    levels: levels.clone(),
+                    event_ids: (0..id_count as u32)
+                        .map(|id| EventIdSelector::Single { id: 1000 + id })
+                        .collect(),
+                    keywords: Some(0x8020_0000_0000_0000),
+                    ..Default::default()
+                };
+                let query = build_query(&filter).expect("builds");
+                for node in query.split("<Select>").skip(1) {
+                    let body = node.split("</Select>").next().unwrap_or_default();
+                    // Each comparison is one expression; they are joined by `and` or `or`.
+                    let comparisons = body.matches("EventID").count()
+                        + body.matches("Level=").count()
+                        + body.matches("@SystemTime").count()
+                        + body.matches("timediff").count()
+                        + body.matches("band").count();
+                    assert!(
+                        comparisons <= MAX_EXPRESSIONS_PER_SELECT,
+                        "{comparisons} expressions in one node for {id_count} ids, {levels:?} levels"
+                    );
+                }
+            }
+        }
     }
 }

@@ -27,7 +27,15 @@ pub enum PayloadEncoding {
 /// A decoded payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedPayload {
+    /// The decoded message, with any trailing NUL padding already removed.
+    ///
+    /// Never empty: a payload that decodes to nothing is refused rather than returned, since empty
+    /// text would read as an event that said nothing rather than one that was not understood.
     pub text: String,
+    /// Which reading of the bytes produced [`text`](Self::text).
+    ///
+    /// Reported rather than hidden because it is a decision made by inspection, and an operator
+    /// looking at a suspicious message needs to know the encoding was inferred.
     pub encoding: PayloadEncoding,
 }
 
