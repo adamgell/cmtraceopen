@@ -173,7 +173,7 @@ mod tests {
             channel: "Application".into(),
             event_id: 326,
             level: EvtxLevel::Error,
-            computer: "RING0IVY24-01".into(),
+            computer: "TESTHOST-01".into(),
             message: message.into(),
             event_data: Vec::new(),
             raw_xml: "<Event><System /></Event>".into(),

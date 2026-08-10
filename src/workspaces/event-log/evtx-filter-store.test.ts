@@ -43,11 +43,17 @@ describe("useSavedFilterStore", () => {
   });
 
   it("orders favorites first", () => {
+    // Favourite the one that loses on every other rule. Favouriting "Alpha" proved nothing: both
+    // saves stamp lastUsed from the same clock tick, so the ordering fell through to the name
+    // comparison and "Alpha" came first whether or not toggleFavorite did anything at all.
     const store = useSavedFilterStore.getState();
-    store.save("Zulu", criteria());
-    const alpha = useSavedFilterStore.getState().save("Alpha", criteria());
-    useSavedFilterStore.getState().toggleFavorite(alpha.id);
+    const zulu = store.save("Zulu", criteria());
+    useSavedFilterStore.getState().save("Alpha", criteria());
+
     expect(useSavedFilterStore.getState().ordered()[0].name).toBe("Alpha");
+
+    useSavedFilterStore.getState().toggleFavorite(zulu.id);
+    expect(useSavedFilterStore.getState().ordered()[0].name).toBe("Zulu");
   });
 
   it("drops persisted entries that no longer validate rather than repairing them", () => {

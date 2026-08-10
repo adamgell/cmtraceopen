@@ -96,7 +96,7 @@ mod tests {
                 .to_string(),
             event_id: 76,
             level,
-            computer: "RING0IVY24-01".to_string(),
+            computer: "TESTHOST-01".to_string(),
             message: message.to_string(),
             event_data: Vec::new(),
             raw_xml: String::new(),

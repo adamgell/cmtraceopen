@@ -62,7 +62,14 @@ impl TimelineSeverity {
 
 /// Where a timeline item came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+// rename_all covers the variant names; rename_all_fields is what camel-cases the fields inside a
+// struct variant. Without the second one, event_id went over the wire as "event_id" while the
+// timeline view reads origin.eventId, so every event row rendered undefined.
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum TimelineOrigin {
     /// A line from a parsed text log.
     Log {
@@ -405,5 +412,38 @@ mod tests {
             TimelineOrigin::Log { file, .. } => assert!(file.contains("IntuneManagementExtension")),
             other => panic!("expected a log origin, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_event_origin_serializes_with_the_keys_the_frontend_reads() {
+        // rename_all on an enum renames the variants, not the fields inside a struct variant, so
+        // this needs rename_all_fields. Without it event_id went over the wire as "event_id" while
+        // the timeline view reads origin.eventId, and every event row showed undefined.
+        let origin = TimelineOrigin::Event {
+            channel: "Application".into(),
+            provider: "ESENT".into(),
+            event_id: 326,
+            record_id: 42,
+        };
+        let json = serde_json::to_value(&origin).expect("serializes");
+
+        assert_eq!(json["kind"], "event");
+        assert_eq!(json["eventId"], 326);
+        assert_eq!(json["recordId"], 42);
+        assert!(json.get("event_id").is_none(), "{json}");
+        assert!(json.get("record_id").is_none(), "{json}");
+    }
+
+    #[test]
+    fn a_log_origin_keeps_its_wire_keys() {
+        let origin = TimelineOrigin::Log {
+            file: "cmt.log".into(),
+            component: Some("Agent".into()),
+            line: 7,
+        };
+        let json = serde_json::to_value(&origin).expect("serializes");
+        assert_eq!(json["kind"], "log");
+        assert_eq!(json["file"], "cmt.log");
+        assert_eq!(json["line"], 7);
     }
 }

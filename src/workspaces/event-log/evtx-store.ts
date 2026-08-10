@@ -440,6 +440,11 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
       filterEventIds: "",
       filterSearch: "",
       timeWindow: "24h",
+      // Reset with everything else. Gaps describe records that are gone, so surviving a reset
+      // would report a hole in a set no longer on screen, and a zone left over from a previous
+      // session would silently reinterpret the next one's timestamps.
+      coverageGaps: [],
+      timeZoneMode: "local",
       columnConfig: defaultColumnConfig(),
       groupBy: [],
       collapsedGroups: new Set<string>(),

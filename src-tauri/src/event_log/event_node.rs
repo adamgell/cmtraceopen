@@ -214,7 +214,7 @@ mod tests {
     <TimeCreated SystemTime="2026-08-09T12:00:00.000000000Z" />
     <Correlation ActivityID="{2f8b0c1e-0000-0000-0000-000000000000}" />
     <Channel>Security</Channel>
-    <Computer>RING0IVY24-01</Computer>
+    <Computer>TESTHOST-01</Computer>
   </System>
   <EventData>
     <Data Name="SubjectUserName">adam</Data>
@@ -262,7 +262,7 @@ mod tests {
     fn element_text_resolves() {
         assert_eq!(
             resolve(RENDERED, "/Event/System/Computer").as_deref(),
-            Some("RING0IVY24-01")
+            Some("TESTHOST-01")
         );
     }
 

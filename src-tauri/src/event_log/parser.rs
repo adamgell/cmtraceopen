@@ -634,7 +634,7 @@ mod tests {
                  <Level>2</Level>
                  <TimeCreated SystemTime="2026-08-09T12:00:00.000Z" />
                  <Channel>System</Channel>
-                 <Computer>RING0IVY24-01</Computer>
+                 <Computer>TESTHOST-01</Computer>
                  <Execution ProcessID="4" ThreadID="8" />
                </System></Event>"#,
         ));
@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(system.event_id, Some(12));
         assert_eq!(system.level, Some(2));
         assert_eq!(system.channel.as_deref(), Some("System"));
-        assert_eq!(system.computer.as_deref(), Some("RING0IVY24-01"));
+        assert_eq!(system.computer.as_deref(), Some("TESTHOST-01"));
         assert_eq!(system.process_id, Some(4));
         assert_eq!(
             parse_timestamp_to_epoch_ms(system.time_created.as_deref().unwrap_or_default()),
