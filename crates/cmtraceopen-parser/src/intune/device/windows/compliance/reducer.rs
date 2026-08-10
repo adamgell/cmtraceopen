@@ -201,9 +201,20 @@ fn reduce_local(
     // The exported array is a set of results, not a sequence: no custom-compliance
     // source states a run order, so leaving it in the caller's vector order made
     // the serialized snapshot a function of the collector.
-    phase
-        .custom_compliance
-        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
+    //
+    // Evidence first, because a ref is the one identifier every fact is
+    // guaranteed to carry, then the record's own identity from broadest to
+    // narrowest: the policy the run belonged to, the run within it, the setting
+    // the run reported on. Nothing dedupes or renumbers evidence ids, so two
+    // facts sharing one ref are reachable, and a sort on the ref alone left them
+    // in the caller's order because `sort_by` is stable.
+    phase.custom_compliance.sort_by(|left, right| {
+        left.evidence
+            .cmp(&right.evidence)
+            .then_with(|| left.policy_id.cmp(&right.policy_id))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+            .then_with(|| left.setting_name.cmp(&right.setting_name))
+    });
 
     phase.latest_evaluation_at_utc = latest_evaluation(&phase.settings).map(format_utc);
     normalize_evidence(&mut phase.unkeyed_observations);
@@ -809,9 +820,25 @@ fn reduce_reporting(
     // As with the custom-compliance results: a set of service records, not a
     // sequence. Nothing downstream reads their position, and leaving them in the
     // caller's order put it in the serialized snapshot.
-    phase
-        .service_results
-        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
+    //
+    // Evidence first, then what the record is about (the policy, then the setting
+    // within it), then when the service reported it. The instant is last because
+    // it is the weakest of the three: two service rows for one setting differ by
+    // time, but two rows for different settings should not be interleaved by it.
+    // `timestamp_content_key` is reused rather than the normalized instant, so a
+    // zone-less stamp still orders by content instead of collapsing to `None`.
+    phase.service_results.sort_by(|left, right| {
+        left.evidence
+            .cmp(&right.evidence)
+            .then_with(|| left.policy_id.cmp(&right.policy_id))
+            .then_with(|| left.setting_id.cmp(&right.setting_id))
+            .then_with(|| {
+                left.reported_at
+                    .as_ref()
+                    .map(timestamp_content_key)
+                    .cmp(&right.reported_at.as_ref().map(timestamp_content_key))
+            })
+    });
 
     phase.service_freshness = fold_freshness(&phase.service_results);
     phase.service_disagrees_with_local = phase
@@ -963,9 +990,26 @@ fn reduce_access(
 
     // Access decisions are correlated by identity and time, never by position, so
     // the exported order is a set order like the two above.
-    phase
-        .decisions
-        .sort_by(|left, right| left.evidence.cmp(&right.evidence));
+    //
+    // Evidence first, then the instant, then the subject, then the resource. Time
+    // leads the record fields here where it trailed them for service results:
+    // a denial *is* an event, and a reader scanning the array reads it as a
+    // sequence of attempts, so ordering two denials by when they happened is the
+    // reading that matches the data. Subject and resource then separate two
+    // attempts that share an instant.
+    phase.decisions.sort_by(|left, right| {
+        left.evidence
+            .cmp(&right.evidence)
+            .then_with(|| {
+                left.occurred_at
+                    .as_ref()
+                    .map(timestamp_content_key)
+                    .cmp(&right.occurred_at.as_ref().map(timestamp_content_key))
+            })
+            .then_with(|| left.device_key.cmp(&right.device_key))
+            .then_with(|| left.user_key.cmp(&right.user_key))
+            .then_with(|| left.resource.cmp(&right.resource))
+    });
 
     normalize_evidence(&mut evidence);
     phase.evidence = evidence;
