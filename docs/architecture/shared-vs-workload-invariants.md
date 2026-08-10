@@ -160,9 +160,9 @@ sub-authority count, the legacy `Documents and Settings` profile root,
 JSON-escaped profile paths, and the device-name, UNC-server, account, tenant,
 inline-credential and MSI-property rules were all absent or weaker, so each was
 exported verbatim. A fork does not announce itself; it simply stops receiving
-the owner's fixes. `intune/device/windows/compliance/redaction.rs` now
+the owner's fixes. `crates/cmtraceopen-parser/src/intune/device/windows/compliance/redaction.rs` now
 re-exports the owner, and
-`tests/intune_windows_compliance.rs::the_compliance_lane_and_the_shared_grammar_agree_byte_for_byte`
+`crates/cmtraceopen-parser/tests/intune_windows_compliance.rs::the_compliance_lane_and_the_shared_grammar_agree_byte_for_byte`
 asserts equal *output*, not merely equal masking decisions, so a future fork
 fails rather than drifts.
 
@@ -196,11 +196,11 @@ constructors.
 
 | Lane | Shape | Where the verdict is asked | What else the constructor owns |
 |---|---|---|---|
-| Autopilot | `fn finding(...) -> Option<IntuneFinding>` | `.../autopilot/rules.rs` line 912 | Sorts and de-duplicates **both** citation sets first (`normalized_evidence` plus `sort`/`dedup` on the gap ids); takes `recommended_checks: &[String]` |
-| Compliance | `fn finding(...) -> Option<IntuneFinding>` | `.../compliance/rules.rs` line 697 | Keeps citations verbatim; takes a single `check: &str` and wraps it |
-| Win32 | build always, gate in `push` | `.../win32/findings.rs` line 191 | Runs the shared redaction grammar over `summary` **after** the gate, so an uncited finding is never redacted-and-dropped |
-| Microsoft Store | build inside `push_finding`, gate there | `.../microsoft_store/findings.rs` line 187 | Takes `recommended_checks: &[&str]` |
-| Configuration | build always, gate in `push_finding` | `.../configuration/rules.rs` line 152 | Nothing beyond the gate |
+| Autopilot | `fn finding(...) -> Option<IntuneFinding>` | `crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/rules.rs:912` | Sorts and de-duplicates **both** citation sets first (`normalized_evidence` plus `sort`/`dedup` on the gap ids); takes `recommended_checks: &[String]` |
+| Compliance | `fn finding(...) -> Option<IntuneFinding>` | `crates/cmtraceopen-parser/src/intune/device/windows/compliance/rules.rs:697` | Keeps citations verbatim; takes a single `check: &str` and wraps it |
+| Win32 | build always, gate in `push` | `crates/cmtraceopen-parser/src/intune/apps/windows/win32/findings.rs:191` | Runs the shared redaction grammar over `summary` **after** the gate, so an uncited finding is never redacted-and-dropped |
+| Microsoft Store | build inside `push_finding`, gate there | `crates/cmtraceopen-parser/src/intune/apps/windows/microsoft_store/findings.rs:187` | Takes `recommended_checks: &[&str]` |
+| Configuration | build always, gate in `push_finding` | `crates/cmtraceopen-parser/src/intune/device/windows/configuration/rules.rs:152` | Nothing beyond the gate |
 
 **Why the verdict could be shared:** every lane's own doc comment already named
 `IntuneFinding::is_evidence_backed` as the invariant it was enforcing, so the
@@ -219,11 +219,11 @@ rather than lucky: `sort` never changes a vector's length and `dedup` never
 empties a non-empty one, so normalization preserves both emptiness bits and
 cannot move the answer. Pinned by
 `the_constructor_sorts_and_dedupes_both_citation_sets`
-(`.../autopilot/rules.rs` line 983) against
+(`crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/rules.rs:983`) against
 `the_constructor_preserves_citation_order_and_duplicates_verbatim`
-(`.../compliance/rules.rs` line 835), with the four-cell input space asserted
+(`crates/cmtraceopen-parser/src/intune/device/windows/compliance/rules.rs:835`), with the four-cell input space asserted
 in both lanes by `the_citation_guard_agrees_with_the_shared_invariant_on_every_input`
-(`.../autopilot/rules.rs` line 956, `.../compliance/rules.rs` line 803).
+(`crates/cmtraceopen-parser/src/intune/enrollment/windows/autopilot/rules.rs:956`, `crates/cmtraceopen-parser/src/intune/device/windows/compliance/rules.rs:803`).
 
 The ESP lane carries the same constructor shape at `crates/cmtraceopen-parser/src/esp/rules.rs:669`
 over `EspDiagnosticFinding` and `EspEvidenceRef`, a separate type family that
