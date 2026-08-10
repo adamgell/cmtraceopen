@@ -814,8 +814,21 @@ function Export-EventChannelLocaleMetadata {
     # present-on-disk whenever the folder exists and collide across channels.
     $unresolvedRelativePath = Join-RelativePath -Left $metadataRelativeFolder -Right ('{0}_unknown-lcid.MTA' -f $baseName)
 
-    & wevtutil.exe al $EvtxPath | Out-Null
-    $exitCode = $LASTEXITCODE
+    # Invoking wevtutil.exe is inside the try for the same reason Test-Path below is:
+    # $ErrorActionPreference is 'Stop' for this script, so the command being absent from PATH, or
+    # failing to launch at all, would abort the entire collection instead of recording one failed
+    # channel. A missing wevtutil.exe is not far-fetched on a locked-down or constrained host, and
+    # losing every other artifact over it is the worst possible outcome.
+    try {
+        & wevtutil.exe al $EvtxPath | Out-Null
+        $exitCode = $LASTEXITCODE
+    }
+    catch {
+        $notes = 'Could not run wevtutil.exe al: {0}. Event descriptions will not resolve away from this machine.' -f (Protect-SecretText -Text $_.Exception.Message)
+        $records.Add((New-ArtifactRecord -Category 'event-log-metadata' -Family $Family -RelativePath $unresolvedRelativePath -OriginPath $Channel -Status 'failed' -ParseHints @('mta') -Notes $notes))
+        Add-ObservedGap -ObservedGaps $ObservedGaps -Status 'failed' -Origin $Channel -Reason $notes
+        return $records
+    }
 
     if ($exitCode -ne 0) {
         $notes = 'wevtutil.exe al failed with exit code {0}. Event descriptions will not resolve away from this machine.' -f $exitCode
