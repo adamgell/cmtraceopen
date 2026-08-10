@@ -174,14 +174,20 @@ pub async fn evtx_export_records(
     format: super::export::ExportFormat,
     destination: String,
 ) -> Result<u64, String> {
-    let rendered = super::export::export_records(&records, format)?;
+    let record_count = records.len();
+    // Rendered on a blocking thread, like every other heavy command here. The XML format
+    // concatenates raw_xml for up to a hundred thousand records into one String, which can occupy
+    // a runtime worker for seconds and stall unrelated IPC.
+    let rendered =
+        tokio::task::spawn_blocking(move || super::export::export_records(&records, format))
+            .await
+            .map_err(|error| format!("export task failed: {error}"))??;
     let byte_count = rendered.len() as u64;
     tokio::fs::write(&destination, rendered)
         .await
         .map_err(|error| format!("cannot write {destination}: {error}"))?;
     log::info!(
-        "event=evtx_export destination=\"{destination}\" records={} bytes={byte_count}",
-        records.len()
+        "event=evtx_export destination=\"{destination}\" records={record_count} bytes={byte_count}"
     );
     Ok(byte_count)
 }

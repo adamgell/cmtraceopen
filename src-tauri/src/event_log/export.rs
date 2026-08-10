@@ -45,7 +45,11 @@ impl ExportFormat {
     }
 }
 
-const COLUMNS: [&str; 13] = [
+/// Columns every delimited export carries, in order.
+///
+/// `User SID` is here because it is a primary pivot for event triage; leaving it out meant an
+/// analyst who exported the grid got fewer columns than the grid had shown them.
+const COLUMNS: [&str; 14] = [
     "Event Time",
     "Record ID",
     "Event ID",
@@ -57,9 +61,27 @@ const COLUMNS: [&str; 13] = [
     "Opcode",
     "Process ID",
     "Thread ID",
+    "User SID",
     "Keywords",
     "Description",
 ];
+
+/// Map-derived column names present across `records`, in first-seen order.
+///
+/// Appended after the fixed columns so a delimited export carries the same map values the grid
+/// renders. Discovered from the records rather than declared, because which properties exist
+/// depends on which maps matched.
+fn mapped_columns(records: &[EvtxRecord]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for record in records {
+        for column in &record.mapped {
+            if !names.iter().any(|existing| existing == &column.property) {
+                names.push(column.property.clone());
+            }
+        }
+    }
+    names
+}
 
 /// Neutralizes a value that a spreadsheet would otherwise execute as a formula.
 ///
@@ -113,8 +135,8 @@ fn optional(value: Option<impl ToString>) -> String {
     value.map(|v| v.to_string()).unwrap_or_default()
 }
 
-fn row_of(record: &EvtxRecord) -> [String; 13] {
-    [
+fn row_of(record: &EvtxRecord, mapped: &[String]) -> Vec<String> {
+    let mut row: Vec<String> = vec![
         record.timestamp.clone(),
         record.event_record_id.to_string(),
         record.event_id.to_string(),
@@ -126,9 +148,23 @@ fn row_of(record: &EvtxRecord) -> [String; 13] {
         optional(record.opcode),
         optional(record.process_id),
         optional(record.thread_id),
+        record.user_sid.clone().unwrap_or_default(),
         record.keywords.clone().unwrap_or_default(),
         record.message.clone(),
-    ]
+    ];
+    for property in mapped {
+        // An incomplete mapping renders empty here for the same reason it does in the grid: a
+        // half-substituted template would put a literal %3 into an exported cell.
+        let value = record
+            .mapped
+            .iter()
+            .find(|column| &column.property == property)
+            .filter(|column| column.complete)
+            .map(|column| column.text.clone())
+            .unwrap_or_default();
+        row.push(value);
+    }
+    row
 }
 
 /// Renders records in `format`.
@@ -136,17 +172,20 @@ pub fn export_records(records: &[EvtxRecord], format: ExportFormat) -> Result<St
     match format {
         ExportFormat::Csv | ExportFormat::Tsv => {
             let delimiter = format.delimiter();
+            let mapped = mapped_columns(records);
             let mut out = String::new();
             out.push_str(
                 &COLUMNS
                     .iter()
-                    .map(|column| escape_delimited(column, delimiter))
+                    .map(|column| column.to_string())
+                    .chain(mapped.iter().cloned())
+                    .map(|column| escape_delimited(&column, delimiter))
                     .collect::<Vec<_>>()
                     .join(&delimiter.to_string()),
             );
             out.push('\n');
             for record in records {
-                let row = row_of(record);
+                let row = row_of(record, &mapped);
                 out.push_str(
                     &row.iter()
                         .map(|value| escape_delimited(value, delimiter))
@@ -267,6 +306,67 @@ mod tests {
         assert_eq!(fields[7], "13312", "task present");
         assert_eq!(fields[8], "", "opcode absent");
         assert_eq!(fields[10], "", "thread id absent");
+    }
+
+    #[test]
+    fn the_user_sid_reaches_the_export() {
+        // A primary pivot for triage. Leaving it out gave an analyst fewer columns than the grid
+        // had shown them.
+        let out = export_records(&[record("x")], ExportFormat::Csv).expect("exports");
+        assert!(out.lines().next().expect("header").contains("User SID"));
+        assert!(out.lines().nth(1).expect("row").contains("S-1-5-18"));
+    }
+
+    #[test]
+    fn map_derived_columns_are_appended_after_the_fixed_ones() {
+        let mut mapped = record("x");
+        mapped.mapped = vec![crate::event_log::maps::MappedColumn {
+            property: "PayloadData1".into(),
+            text: "cmd.exe".into(),
+            complete: true,
+        }];
+
+        let out = export_records(&[mapped], ExportFormat::Csv).expect("exports");
+        let header = out.lines().next().expect("header");
+        assert!(header.ends_with("PayloadData1"), "{header}");
+        assert!(out.lines().nth(1).expect("row").ends_with("cmd.exe"));
+    }
+
+    #[test]
+    fn a_record_without_a_mapped_value_leaves_the_cell_empty() {
+        // The union of properties is the header, so a record the map did not match still has to
+        // line up with it.
+        let mut mapped = record("has one");
+        mapped.mapped = vec![crate::event_log::maps::MappedColumn {
+            property: "PayloadData1".into(),
+            text: "cmd.exe".into(),
+            complete: true,
+        }];
+        let plain = record("has none");
+
+        let out = export_records(&[mapped, plain], ExportFormat::Csv).expect("exports");
+        let rows: Vec<&str> = out.lines().collect();
+        let columns = |line: &str| line.split(',').count();
+        assert_eq!(columns(rows[0]), columns(rows[1]));
+        assert_eq!(columns(rows[0]), columns(rows[2]));
+        assert!(
+            rows[2].ends_with(','),
+            "the unmatched cell is empty: {}",
+            rows[2]
+        );
+    }
+
+    #[test]
+    fn an_incomplete_mapping_exports_empty_rather_than_a_raw_template() {
+        let mut mapped = record("x");
+        mapped.mapped = vec![crate::event_log::maps::MappedColumn {
+            property: "PayloadData1".into(),
+            text: "ran %3 as adam".into(),
+            complete: false,
+        }];
+
+        let out = export_records(&[mapped], ExportFormat::Csv).expect("exports");
+        assert!(!out.contains("%3"), "{out}");
     }
 
     #[test]

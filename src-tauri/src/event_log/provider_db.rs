@@ -210,7 +210,6 @@ impl ProviderDb {
 /// outlived any workspace the operator closed, with no way to reset it.
 #[derive(Default)]
 pub struct ProviderStore {
-    databases: Vec<PathBuf>,
     /// Lowercased provider name to metadata, including negative results so a provider absent from
     /// every database is not looked up again for every event that mentions it.
     ///
@@ -221,6 +220,8 @@ pub struct ProviderStore {
     /// hold a write guard on the whole store for the length of a file, blocking every other reader
     /// just to populate a cache.
     cache: Mutex<HashMap<String, Option<Arc<ProviderMetadata>>>>,
+    /// The registered databases, opened once at registration and reused for every lookup.
+    open_databases: Mutex<Vec<ProviderDb>>,
     info: Vec<ProviderDbInfo>,
 }
 
@@ -234,7 +235,7 @@ impl ProviderStore {
             )
         })?;
 
-        let mut databases = Vec::new();
+        let mut databases: Vec<ProviderDb> = Vec::new();
         let mut info = Vec::new();
         let mut failures: Vec<String> = Vec::new();
 
@@ -263,7 +264,9 @@ impl ProviderStore {
             match ProviderDb::open(&path) {
                 Ok(database) => {
                     info.push(database.info().clone());
-                    databases.push(path);
+                    // Kept open. Reopening per lookup also re-ran the schema probe inside open(),
+                    // once per registered database for every distinct provider name in a file.
+                    databases.push(database);
                 }
                 // A file that is not a provider database is reported, not fatal: the directory is
                 // user-supplied and may hold anything.
@@ -271,7 +274,9 @@ impl ProviderStore {
             }
         }
 
-        self.databases = databases;
+        if let Ok(mut open) = self.open_databases.lock() {
+            *open = databases;
+        }
         self.info = info.clone();
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
@@ -293,9 +298,9 @@ impl ProviderStore {
 
     /// Metadata for `provider_name`, consulting registered databases in order and caching it.
     ///
-    /// Takes `&mut self` because a lookup populates the cache, including the negative result. That
-    /// is what stops a provider absent from every database being searched again for every event
-    /// that names it.
+    /// The cache is behind its own lock, so this needs only `&self`; a lookup still populates it,
+    /// including the negative result, which is what stops a provider absent from every database
+    /// being searched again for every event that names it.
     pub fn provider(&self, provider_name: &str) -> Option<Arc<ProviderMetadata>> {
         let key = provider_name.to_ascii_lowercase();
         if let Ok(cache) = self.cache.lock() {
@@ -304,9 +309,12 @@ impl ProviderStore {
             }
         }
 
+        // Databases are opened once and held, not reopened per lookup. Opening also runs a schema
+        // probe, so a miss used to pay an open plus that probe for every registered database, for
+        // every distinct provider name in the file.
         let mut found = None;
-        for path in &self.databases {
-            if let Ok(database) = ProviderDb::open(path) {
+        if let Ok(open) = self.open_databases.lock() {
+            for database in open.iter() {
                 if let Ok(Some(metadata)) = database.provider(provider_name) {
                     found = Some(metadata);
                     break;
