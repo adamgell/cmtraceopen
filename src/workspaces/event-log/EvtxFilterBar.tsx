@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { selectVisibleRecords, EVTX_GROUP_LABELS, type EvtxGroupField } from "./evtx-filter";
 import { useSavedFilterStore } from "./evtx-filter-store";
-import { sanitizeCriteria } from "./evtx-saved-filters";
+import { orderFilters, sanitizeCriteria } from "./evtx-saved-filters";
 import {
   availableColumns,
   discoverMappedProperties,
@@ -92,10 +92,10 @@ export function EvtxFilterBar() {
   const savedFilters = useSavedFilterStore((s) => s.savedFilters);
   const saveFilter = useSavedFilterStore((s) => s.save);
   const markFilterUsed = useSavedFilterStore((s) => s.markUsed);
-  const orderedFilters = useMemo(
-    () => [...savedFilters].sort((a, b) => (a.favorite === b.favorite ? a.name.localeCompare(b.name) : a.favorite ? -1 : 1)),
-    [savedFilters]
-  );
+  // The one ordering, not a second one. This re-implemented it and dropped the lastUsed
+  // tiebreak, so marking a filter used changed the stored order and never changed what the
+  // operator saw.
+  const orderedFilters = useMemo(() => orderFilters(savedFilters), [savedFilters]);
 
   const columnConfig = useEvtxStore((s) => s.columnConfig);
   const toggleColumnVisible = useEvtxStore((s) => s.toggleColumnVisible);

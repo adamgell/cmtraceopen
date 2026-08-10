@@ -310,18 +310,24 @@ fn extract_event_data(root: &cmtraceopen_parser::eventmap::EventNode) -> EventFi
         // so skipping one here shifts every later %N and renders the description with the wrong
         // values substituted into it, which reads as fact.
         insertions.push(value.clone());
+
+        // Counted before the emptiness check, for the same reason. The label is what an operator
+        // uses to match a field against the provider's template, so skipping the count for a blank
+        // slot would label the second field Data1 while the template calls it %2.
+        let position = if child.attribute("Name").is_none() && child.name == "Data" {
+            *unnamed += 1;
+            Some(*unnamed)
+        } else {
+            None
+        };
+
         if value.is_empty() {
             return;
         }
-        let name = match child.attribute("Name") {
-            Some(name) => name.to_string(),
-            // A positional field. Numbered from one so it lines up with the `%1` style insertion
-            // numbering that message templates use.
-            None if child.name == "Data" => {
-                *unnamed += 1;
-                format!("Data{unnamed}")
-            }
-            None => child.name.clone(),
+        let name = match (child.attribute("Name"), position) {
+            (Some(name), _) => name.to_string(),
+            (None, Some(position)) => format!("Data{position}"),
+            (None, None) => child.name.clone(),
         };
         fields.push(EvtxField { name, value });
     };
@@ -536,6 +542,17 @@ mod tests {
     fn a_leading_empty_field_does_not_shift_the_rest() {
         let xml = "<Event><EventData><Data></Data><Data>second</Data></EventData></Event>";
         assert_eq!(insertions_of(xml), vec!["", "second"]);
+    }
+
+    #[test]
+    fn a_positional_label_matches_the_slot_the_template_addresses() {
+        // The label is how an operator matches a field against the provider's template. Skipping
+        // the count for a blank slot labelled the survivor Data1 while the template calls it %2.
+        let xml = "<Event><EventData><Data></Data><Data>second</Data></EventData></Event>";
+        let fields = fields_of(xml);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "Data2");
+        assert_eq!(fields[0].value, "second");
     }
 
     #[test]
