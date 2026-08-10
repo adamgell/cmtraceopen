@@ -628,6 +628,22 @@ fn latest_submission_at<'a>(
     }
 }
 
+/// Where a record sits on the timeline, or that it cannot be placed on one.
+///
+/// [`normalized_timestamp`] declines a stamp whose zone is unknown, so `None`
+/// here means "not placeable", never "earliest". The leading flag says so in the
+/// ordering: `false < true`, so every placeable record sorts before every
+/// unplaceable one and the dated run stays contiguous instead of being prefixed
+/// by a block whose position would read as "before everything".
+///
+/// This key is deliberately *not* total. It answers only "when", and a caller
+/// that needs a total order must chain something after it — the raw stamp for
+/// records that share an instant or have none, and eventually [`content_key`].
+fn chronological_key(timestamp: Option<&IntuneTimestamp>) -> (bool, Option<DateTime<Utc>>) {
+    let instant = timestamp.and_then(normalized_timestamp);
+    (instant.is_none(), instant)
+}
+
 /// A total, content-derived ordering key, used only to settle ties deterministically.
 fn timestamp_content_key(timestamp: &IntuneTimestamp) -> (&str, Option<&str>, Option<&str>, u8) {
     let kind = match timestamp.kind {
@@ -1087,25 +1103,42 @@ fn reduce_access(
     // Access decisions are correlated by identity and time, never by position, so
     // the exported order is a set order like the two above.
     //
-    // Evidence first, then the instant, then the subject, then the resource. Time
-    // leads the record fields here where it trailed them for service results:
-    // a denial *is* an event, and a reader scanning the array reads it as a
-    // sequence of attempts, so ordering two denials by when they happened is the
-    // reading that matches the data. Subject and resource then separate two
-    // attempts that share an instant.
+    // Time leads here where it trailed the record fields for service results: a
+    // denial *is* an event, and a reader scans the array as a sequence of
+    // attempts, so ordering two denials by when they happened is the reading
+    // that matches the data.
+    //
+    // The leading key is [`chronological_key`], the *normalized instant*, not
+    // `timestamp_content_key`. That key compares `raw_text` first, so leading
+    // with it would order by how the source spelled the time rather than by when
+    // it happened: "07/31/2026 11:50:00" sorts before "2026-07-30T00:00:00Z"
+    // because '0' < '2', and an `Offset` stamp reading 13:50+02:00 sorts after a
+    // `Utc` stamp reading 12:00Z though it is the earlier instant. The corpus
+    // hides this because every stamp in it is one shape, and same-shape RFC 3339
+    // happens to sort chronologically as text.
+    //
+    // A decision whose zone is unknown has no instant `normalized_timestamp`
+    // will vouch for, so it cannot be placed on that timeline at all.
+    // `chronological_key` sorts those after every dated decision instead of
+    // interleaving them on a guess, and `timestamp_content_key` follows so they
+    // still separate from each other by their raw stamps rather than collapsing.
+    // That link also settles two dated decisions whose instants are equal but
+    // whose stamps are spelled differently. Evidence, subject and resource then
+    // separate attempts that agree on all of it.
     //
     // `content_key` closes the comparison over `decision`, `linkage`,
     // `failure_code` and `matched_evidence`, none of which are named above, and
     // over every field added after this was written.
     phase.decisions.sort_by(|left, right| {
-        left.evidence
-            .cmp(&right.evidence)
+        chronological_key(left.occurred_at.as_ref())
+            .cmp(&chronological_key(right.occurred_at.as_ref()))
             .then_with(|| {
                 left.occurred_at
                     .as_ref()
                     .map(timestamp_content_key)
                     .cmp(&right.occurred_at.as_ref().map(timestamp_content_key))
             })
+            .then_with(|| left.evidence.cmp(&right.evidence))
             .then_with(|| left.device_key.cmp(&right.device_key))
             .then_with(|| left.user_key.cmp(&right.user_key))
             .then_with(|| left.resource.cmp(&right.resource))
