@@ -588,7 +588,7 @@ dependencies = [
  "encoding_rs",
  "evtx",
  "font-kit",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "glob",
  "libc",
  "log",
