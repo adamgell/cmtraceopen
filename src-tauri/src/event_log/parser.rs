@@ -1,6 +1,10 @@
 use std::path::Path;
+use std::sync::RwLock;
 
+use cmtraceopen_parser::eventmap::MapRegistry;
 use evtx::EvtxParser;
+
+use super::provider_db::ProviderStore;
 
 use super::models::{
     ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxParseResult, EvtxRecord,
@@ -11,7 +15,15 @@ use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 const MAX_ENTRIES_PER_FILE: usize = 100_000;
 
 /// Parse one or more .evtx files and return a unified result.
-pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
+///
+/// The map registry and provider store are passed in rather than reached for. They belong to the
+/// application state, so the caller decides which set is in effect; that is also what lets a test
+/// use its own without another test on a parallel thread replacing it.
+pub fn parse_evtx_files(
+    paths: &[String],
+    maps: &RwLock<MapRegistry>,
+    providers: &RwLock<ProviderStore>,
+) -> Result<EvtxParseResult, String> {
     let mut all_records = Vec::new();
     let mut channels = Vec::new();
     let mut parse_errors = 0u32;
@@ -19,7 +31,7 @@ pub fn parse_evtx_files(paths: &[String]) -> Result<EvtxParseResult, String> {
 
     for path_str in paths {
         let path = Path::new(path_str);
-        match parse_single_file(path) {
+        match parse_single_file(path, maps, providers) {
             Ok(file) => {
                 let records = file.records;
                 parse_errors += file.parse_errors;
@@ -108,7 +120,11 @@ struct ParsedFile {
 /// record whose XML will not parse, and a file so large it was truncated are all cases where the
 /// view is incomplete, and a view that is silently incomplete is worse than one that is empty:
 /// the absent events look like evidence that the thing being investigated did not happen.
-fn parse_single_file(path: &Path) -> Result<ParsedFile, String> {
+fn parse_single_file(
+    path: &Path,
+    maps: &RwLock<MapRegistry>,
+    providers: &RwLock<ProviderStore>,
+) -> Result<ParsedFile, String> {
     let mut parser = EvtxParser::from_path(path)
         .map_err(|e| format!("Failed to open EVTX file {}: {}", path.display(), e))?;
 
@@ -121,6 +137,15 @@ fn parse_single_file(path: &Path) -> Result<ParsedFile, String> {
     let mut parse_errors = 0u32;
     let mut messages = Vec::new();
     let mut truncated = false;
+
+    // Locked once for the whole file rather than per record. A hundred thousand lock round trips
+    // would cost more than the parsing does.
+    let maps = maps
+        .read()
+        .map_err(|_| "map registry lock was poisoned".to_string())?;
+    let mut providers = providers
+        .write()
+        .map_err(|_| "provider store lock was poisoned".to_string())?;
 
     // XML rather than JSON. The JSON projection cannot be re-parsed into an event tree, which is
     // what the map engine, the System block, and the XML export all consume; reading XML here is
@@ -198,11 +223,11 @@ fn parse_single_file(path: &Path) -> Result<ParsedFile, String> {
         // A provider database, when one is loaded, turns raw field values into the sentence the
         // provider intended. Without it the file path can only summarise EventData, which is what
         // every other cross-platform reader shows and why they are hard to read.
-        let message = describe_event(&provider, event_id, &insertions)
+        let message = describe_event(&mut providers, &provider, event_id, &insertions)
             .or(payload)
             .unwrap_or_else(|| build_message(&fields));
 
-        let mapped = super::maps::apply_global(&channel, &provider, event_id, &parsed);
+        let mapped = super::maps::apply_registered(&maps, &channel, &provider, event_id, &parsed);
         records.push(EvtxRecord {
             id: 0, // Will be reassigned after sorting
             event_record_id,
@@ -333,8 +358,13 @@ struct EventFields {
 /// A partially rendered description is rejected rather than shown. If the template references
 /// insertions the event did not supply, the metadata and the event disagree, and a sentence with
 /// `%4` embedded in it is less honest than the field summary it would replace.
-fn describe_event(provider: &str, event_id: u32, insertions: &[String]) -> Option<String> {
-    let metadata = super::provider_db::provider(provider)?;
+fn describe_event(
+    store: &mut ProviderStore,
+    provider: &str,
+    event_id: u32,
+    insertions: &[String],
+) -> Option<String> {
+    let metadata = store.provider(provider)?;
     let event = metadata.event(event_id, None)?;
     let template = event.description.as_deref()?;
 
@@ -371,6 +401,17 @@ mod tests {
         assert_eq!(EvtxLevel::from_level_value(255), EvtxLevel::Information);
     }
 
+    /// Empty registries, for tests that only care about parsing.
+    ///
+    /// Each test gets its own, so nothing here can be perturbed by another test on a parallel
+    /// thread loading a different set.
+    fn empty_state() -> (RwLock<MapRegistry>, RwLock<ProviderStore>) {
+        (
+            RwLock::new(MapRegistry::new()),
+            RwLock::new(ProviderStore::default()),
+        )
+    }
+
     fn parse(xml: &str) -> cmtraceopen_parser::eventmap::EventNode {
         super::super::event_node::parse_event_xml(xml).expect("well formed")
     }
@@ -387,7 +428,9 @@ mod tests {
     fn a_file_that_cannot_be_opened_is_named_in_the_result() {
         // A count with no file name and no reason leaves an operator with a number and no next
         // step. The message is what makes a missing log actionable.
-        let result = parse_evtx_files(&["/no/such/file.evtx".to_string()]).expect("returns");
+        let (maps, providers) = empty_state();
+        let result = parse_evtx_files(&["/no/such/file.evtx".to_string()], &maps, &providers)
+            .expect("returns");
         assert_eq!(result.parse_errors, 1);
         assert_eq!(result.error_messages.len(), 1);
         assert!(
@@ -401,7 +444,8 @@ mod tests {
     #[test]
     fn a_clean_parse_reports_nothing() {
         // The messages are a gap report, so an empty run must not manufacture one.
-        let result = parse_evtx_files(&[]).expect("returns");
+        let (maps, providers) = empty_state();
+        let result = parse_evtx_files(&[], &maps, &providers).expect("returns");
         assert_eq!(result.parse_errors, 0);
         assert!(result.error_messages.is_empty());
         assert_eq!(result.total_records, 0);
@@ -623,31 +667,47 @@ mod description_tests {
             .collect()
     }
 
+    /// A store with nothing registered, which is the state until an operator loads a database.
+    fn empty_store() -> ProviderStore {
+        ProviderStore::default()
+    }
+
+    /// A store with the databases beside `CMTRACEOPEN_PROVIDER_DB` registered.
+    ///
+    /// Built per test. A shared one would let these interfere with each other, since registering a
+    /// directory replaces whatever was there.
+    fn loaded_store() -> ProviderStore {
+        let path = std::env::var("CMTRACEOPEN_PROVIDER_DB").expect("database path");
+        let directory = std::path::Path::new(&path)
+            .parent()
+            .expect("database has a parent directory");
+        let mut store = ProviderStore::default();
+        store.load_directory(directory).expect("databases load");
+        store
+    }
+
     #[test]
     fn with_no_database_loaded_it_falls_back_to_the_field_summary() {
         // The common case until an operator loads metadata. Must not fail or blank the message.
         let data = insertions(&[("HRESULT", "0x80180005")]);
-        assert!(describe_event("Nobody-Has-This-Provider", 1, &data).is_none());
+        assert!(describe_event(&mut empty_store(), "Nobody-Has-This-Provider", 1, &data).is_none());
     }
 
     #[test]
     fn an_unknown_event_id_falls_back_rather_than_inventing_a_description() {
         let data = insertions(&[("X", "1")]);
-        assert!(describe_event("Still-Not-Loaded", 999_999, &data).is_none());
+        assert!(describe_event(&mut empty_store(), "Still-Not-Loaded", 999_999, &data).is_none());
     }
 
     #[test]
     #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
     fn a_loaded_database_renders_a_real_provider_description() {
         // The whole chain: SQLite on disk, gzip payload, provider metadata, insertion rendering.
-        let path = std::env::var("CMTRACEOPEN_PROVIDER_DB").expect("database path");
-        let directory = std::path::Path::new(&path)
-            .parent()
-            .expect("database has a parent directory");
-        super::super::provider_db::load_directory(directory).expect("databases load");
+        let mut store = loaded_store();
 
         let data = insertions(&[("HRESULT", "0x80180005")]);
         let described = describe_event(
+            &mut store,
             "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
             2,
             &data,
@@ -666,12 +726,11 @@ mod description_tests {
     #[test]
     #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
     fn an_event_the_database_does_not_cover_still_falls_back() {
-        let path = std::env::var("CMTRACEOPEN_PROVIDER_DB").expect("database path");
-        let directory = std::path::Path::new(&path).parent().expect("parent");
-        super::super::provider_db::load_directory(directory).expect("databases load");
+        let mut store = loaded_store();
 
         // A provider that genuinely is not in a Windows capture.
         assert!(describe_event(
+            &mut store,
             "Definitely-Not-A-Real-Provider",
             1,
             &insertions(&[("a", "b")])

@@ -152,11 +152,18 @@ export function EvtxFilterBar() {
       });
       if (!destination) return;
       setExportState("Exporting...");
-      const bytes = await invoke<number>("evtx_export_records", {
+      const bytes = await invoke<unknown>("evtx_export_records", {
         records,
         format: format.value,
         destination,
       });
+      // The IPC boundary is typed by assertion, not by the compiler. A malformed reply would
+      // otherwise render as "Exported ... (NaN KB)", which still reads as success, and an operator
+      // would believe a file was written.
+      if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) {
+        setExportState("Export failed: the writer did not report how much it wrote");
+        return;
+      }
       setExportState(`Exported ${records.length} events (${Math.round(bytes / 1024)} KB)`);
     } catch (error) {
       setExportState(

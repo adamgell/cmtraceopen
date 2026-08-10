@@ -7,6 +7,7 @@ use regex::Regex;
 use super::models::{ChannelSourceType, EvtxChannelInfo, EvtxField, EvtxLevel, EvtxRecord};
 use super::{parse_timestamp_to_epoch_ms, sanitize_control_chars};
 use cmtraceopen_parser::event_query::{build_query, EventQueryFilter};
+use cmtraceopen_parser::eventmap::MapRegistry;
 
 #[cfg(target_os = "windows")]
 use windows::core::{Error, HSTRING, PCWSTR};
@@ -125,8 +126,12 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 ///
 /// Returns newest events first, capped at `max_events` (default 1000).
 #[cfg(target_os = "windows")]
-pub fn query_channel(channel: &str, max_events: Option<u64>) -> Result<Vec<EvtxRecord>, String> {
-    query_channel_with_progress(channel, max_events, |_, _| {})
+pub fn query_channel(
+    channel: &str,
+    maps: &MapRegistry,
+    max_events: Option<u64>,
+) -> Result<Vec<EvtxRecord>, String> {
+    query_channel_with_progress(channel, maps, max_events, |_, _| {})
 }
 
 /// Queries a channel with server-side filtering.
@@ -137,21 +142,24 @@ pub fn query_channel(channel: &str, max_events: Option<u64>) -> Result<Vec<EvtxR
 pub fn query_channel_filtered(
     channel: &str,
     filter: &EventQueryFilter,
+    maps: &MapRegistry,
     max_events: Option<u64>,
 ) -> Result<Vec<EvtxRecord>, String> {
-    query_channel_inner(channel, filter, max_events, |_, _| {})
+    query_channel_inner(channel, filter, maps, max_events, |_, _| {})
 }
 
 /// Query with a progress callback: `on_progress(fetched_so_far, total_estimate)`.
 #[cfg(target_os = "windows")]
 pub fn query_channel_with_progress(
     channel: &str,
+    maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<Vec<EvtxRecord>, String> {
     query_channel_inner(
         channel,
         &EventQueryFilter::default(),
+        maps,
         max_events,
         on_progress,
     )
@@ -162,16 +170,18 @@ pub fn query_channel_with_progress(
 pub fn query_channel_filtered_with_progress(
     channel: &str,
     filter: &EventQueryFilter,
+    maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<Vec<EvtxRecord>, String> {
-    query_channel_inner(channel, filter, max_events, on_progress)
+    query_channel_inner(channel, filter, maps, max_events, on_progress)
 }
 
 #[cfg(target_os = "windows")]
 fn query_channel_inner(
     channel: &str,
     filter: &EventQueryFilter,
+    maps: &MapRegistry,
     max_events: Option<u64>,
     on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<Vec<EvtxRecord>, String> {
@@ -246,7 +256,9 @@ fn query_channel_inner(
                     .flatten()
             });
 
-            if let Some(record) = parse_xml_to_record(&xml, channel, rendered_message.as_deref()) {
+            if let Some(record) =
+                parse_xml_to_record(&xml, channel, maps, rendered_message.as_deref())
+            {
                 records.push(record);
                 // Report progress every 100 records
                 if records.len() % 100 == 0 {
@@ -279,6 +291,7 @@ pub fn enumerate_channels() -> Result<Vec<EvtxChannelInfo>, String> {
 #[cfg(not(target_os = "windows"))]
 pub fn query_channel_with_progress(
     _channel: &str,
+    _maps: &MapRegistry,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<Vec<EvtxRecord>, String> {
@@ -286,7 +299,11 @@ pub fn query_channel_with_progress(
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn query_channel(_channel: &str, _max_events: Option<u64>) -> Result<Vec<EvtxRecord>, String> {
+pub fn query_channel(
+    _channel: &str,
+    _maps: &MapRegistry,
+    _max_events: Option<u64>,
+) -> Result<Vec<EvtxRecord>, String> {
     Err("Live event log queries are only available on Windows.".to_string())
 }
 
@@ -294,6 +311,7 @@ pub fn query_channel(_channel: &str, _max_events: Option<u64>) -> Result<Vec<Evt
 pub fn query_channel_filtered(
     _channel: &str,
     _filter: &EventQueryFilter,
+    _maps: &MapRegistry,
     _max_events: Option<u64>,
 ) -> Result<Vec<EvtxRecord>, String> {
     Err("Live event log queries are only available on Windows.".to_string())
@@ -303,6 +321,7 @@ pub fn query_channel_filtered(
 pub fn query_channel_filtered_with_progress(
     _channel: &str,
     _filter: &EventQueryFilter,
+    _maps: &MapRegistry,
     _max_events: Option<u64>,
     _on_progress: impl Fn(usize, Option<usize>),
 ) -> Result<Vec<EvtxRecord>, String> {
@@ -401,6 +420,7 @@ fn format_event_message(
 fn parse_xml_to_record(
     xml: &str,
     channel: &str,
+    maps: &MapRegistry,
     rendered_message: Option<&str>,
 ) -> Option<EvtxRecord> {
     let event_id_str = extract_xml_text(xml, "EventID").unwrap_or_default();
@@ -453,7 +473,7 @@ fn parse_xml_to_record(
         .unwrap_or_default();
     let mapped = parsed
         .as_ref()
-        .map(|root| super::maps::apply_global(channel, &provider, event_id, root))
+        .map(|root| super::maps::apply_registered(maps, channel, &provider, event_id, root))
         .unwrap_or_default();
 
     Some(EvtxRecord {

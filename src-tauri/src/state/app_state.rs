@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-#[cfg(feature = "esp-diagnostics")]
+#[cfg(any(feature = "esp-diagnostics", feature = "event-log"))]
 use std::sync::Arc;
 use std::sync::Mutex;
+#[cfg(feature = "event-log")]
+use std::sync::RwLock;
 
 #[cfg(feature = "esp-diagnostics")]
 use crate::esp::session::{EspSessionError, EspSessionManager};
+#[cfg(feature = "event-log")]
+use crate::event_log::provider_db::ProviderStore;
 use crate::parser::ResolvedParser;
 #[cfg(feature = "sccm-diagnostics")]
 use crate::sccm::collector::SccmAdvancedCapabilityStore;
@@ -46,6 +50,18 @@ pub struct AppState {
     /// its worker and AppHandle-backed event sink cannot outlive the runtime.
     #[cfg(feature = "esp-diagnostics")]
     esp_session_manager: Mutex<Option<Arc<EspSessionManager>>>,
+    /// Event maps loaded from disk, applied while rendering event rows.
+    ///
+    /// Behind an `Arc<RwLock<..>>` rather than a `Mutex` on the state itself so a command can take
+    /// a cheap handle and carry it into `spawn_blocking`. Parsing a hundred thousand records is
+    /// exactly the blocking work that must not run while the application state lock is held.
+    #[cfg(feature = "event-log")]
+    pub event_maps: Arc<RwLock<cmtraceopen_parser::eventmap::MapRegistry>>,
+    /// Provider metadata databases, read to render an event's own description.
+    ///
+    /// Held the same way and for the same reason as [`event_maps`](Self::event_maps).
+    #[cfg(feature = "event-log")]
+    pub provider_store: Arc<RwLock<ProviderStore>>,
 }
 
 impl AppState {
@@ -69,6 +85,10 @@ impl AppState {
             sccm_advanced_capabilities: Mutex::new(SccmAdvancedCapabilityStore::default()),
             #[cfg(feature = "esp-diagnostics")]
             esp_session_manager: Mutex::new(None),
+            #[cfg(feature = "event-log")]
+            event_maps: Arc::new(RwLock::new(Default::default())),
+            #[cfg(feature = "event-log")]
+            provider_store: Arc::new(RwLock::new(ProviderStore::default())),
         }
     }
 

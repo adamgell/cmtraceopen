@@ -22,7 +22,6 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, RwLock};
 
 use cmtraceopen_parser::provider::ProviderMetadata;
 use flate2::read::GzDecoder;
@@ -186,10 +185,16 @@ impl ProviderDb {
     }
 }
 
-// ── Process-wide store ──────────────────────────────────────────────────────
+// ── Store ───────────────────────────────────────────────────────────────────
 
+/// Registered provider databases and the metadata read from them.
+///
+/// Owned by `AppState` rather than held as a process global. A global made every test share one
+/// set: `load_directory` clears and replaces it, and cargo runs tests on parallel threads in one
+/// process, so two tests registering databases would interfere. It also meant the registration
+/// outlived any workspace the operator closed, with no way to reset it.
 #[derive(Default)]
-struct ProviderStore {
+pub struct ProviderStore {
     databases: Vec<PathBuf>,
     /// Lowercased provider name to metadata, including negative results so a provider absent from
     /// every database is not looked up again for every event that mentions it.
@@ -197,101 +202,84 @@ struct ProviderStore {
     info: Vec<ProviderDbInfo>,
 }
 
-fn store() -> &'static RwLock<ProviderStore> {
-    static STORE: OnceLock<RwLock<ProviderStore>> = OnceLock::new();
-    STORE.get_or_init(|| RwLock::new(ProviderStore::default()))
-}
+impl ProviderStore {
+    /// Registers every `.db` in `directory`, replacing any previously registered set.
+    pub fn load_directory(&mut self, directory: &Path) -> Result<Vec<ProviderDbInfo>, String> {
+        let entries = std::fs::read_dir(directory).map_err(|error| {
+            format!(
+                "cannot read provider database directory {}: {error}",
+                directory.display()
+            )
+        })?;
 
-/// Registers every `.db` in `directory`, replacing any previously registered set.
-pub fn load_directory(directory: &Path) -> Result<Vec<ProviderDbInfo>, String> {
-    let entries = std::fs::read_dir(directory).map_err(|error| {
-        format!(
-            "cannot read provider database directory {}: {error}",
-            directory.display()
-        )
-    })?;
+        let mut databases = Vec::new();
+        let mut info = Vec::new();
+        let mut failures = Vec::new();
 
-    let mut databases = Vec::new();
-    let mut info = Vec::new();
-    let mut failures = Vec::new();
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
+            })
+            .collect();
+        paths.sort();
 
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file()
-                && path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("db"))
-        })
-        .collect();
-    paths.sort();
-
-    for path in paths {
-        match ProviderDb::open(&path) {
-            Ok(database) => {
-                info.push(database.info().clone());
-                databases.push(path);
+        for path in paths {
+            match ProviderDb::open(&path) {
+                Ok(database) => {
+                    info.push(database.info().clone());
+                    databases.push(path);
+                }
+                // A file that is not a provider database is reported, not fatal: the directory is
+                // user-supplied and may hold anything.
+                Err(reason) => failures.push(reason),
             }
-            // A file that is not a provider database is reported, not fatal: the directory is
-            // user-supplied and may hold anything.
-            Err(reason) => failures.push(reason),
         }
+
+        self.databases = databases;
+        self.info = info.clone();
+        self.cache.clear();
+
+        if info.is_empty() && !failures.is_empty() {
+            return Err(failures.join("; "));
+        }
+        Ok(info)
     }
 
-    {
-        let mut guard = store()
-            .write()
-            .map_err(|_| "provider store lock was poisoned".to_string())?;
-        guard.databases = databases;
-        guard.info = info.clone();
-        guard.cache.clear();
-    }
-
-    if info.is_empty() && !failures.is_empty() {
-        return Err(failures.join("; "));
-    }
-    Ok(info)
-}
-
-/// Metadata for `provider_name`, consulting registered databases in order and caching the result.
-pub fn provider(provider_name: &str) -> Option<ProviderMetadata> {
-    let key = provider_name.to_ascii_lowercase();
-
-    if let Ok(guard) = store().read() {
-        if let Some(cached) = guard.cache.get(&key) {
+    /// Metadata for `provider_name`, consulting registered databases in order and caching it.
+    ///
+    /// Takes `&mut self` because a lookup populates the cache, including the negative result. That
+    /// is what stops a provider absent from every database being searched again for every event
+    /// that names it.
+    pub fn provider(&mut self, provider_name: &str) -> Option<ProviderMetadata> {
+        let key = provider_name.to_ascii_lowercase();
+        if let Some(cached) = self.cache.get(&key) {
             return cached.clone();
         }
-    }
 
-    let paths = match store().read() {
-        Ok(guard) => guard.databases.clone(),
-        Err(_) => return None,
-    };
-
-    let mut found = None;
-    for path in paths {
-        if let Ok(database) = ProviderDb::open(&path) {
-            if let Ok(Some(metadata)) = database.provider(provider_name) {
-                found = Some(metadata);
-                break;
+        let mut found = None;
+        for path in &self.databases {
+            if let Ok(database) = ProviderDb::open(path) {
+                if let Ok(Some(metadata)) = database.provider(provider_name) {
+                    found = Some(metadata);
+                    break;
+                }
             }
         }
+
+        self.cache.insert(key, found.clone());
+        found
     }
 
-    if let Ok(mut guard) = store().write() {
-        guard.cache.insert(key, found.clone());
+    /// Summary of every registered database.
+    pub fn registered(&self) -> Vec<ProviderDbInfo> {
+        self.info.clone()
     }
-    found
-}
-
-/// Summary of every registered database.
-pub fn registered() -> Vec<ProviderDbInfo> {
-    store()
-        .read()
-        .map(|guard| guard.info.clone())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -479,12 +467,15 @@ mod tests {
         build_db(&dir.join("b.db"), &[("B", 26200, EVENTS)]);
         std::fs::write(dir.join("notes.txt"), b"ignore me").expect("write");
 
-        let info = load_directory(&dir).expect("loads");
+        // A store local to this test. The old process global meant a parallel test registering a
+        // different directory replaced this one's set mid-run.
+        let mut store = ProviderStore::default();
+        let info = store.load_directory(&dir).expect("loads");
         assert_eq!(info.len(), 2);
-        assert!(provider("A").is_some());
-        assert!(provider("B").is_some());
-        assert!(provider("Nobody").is_none());
-        assert_eq!(registered().len(), 2);
+        assert!(store.provider("A").is_some());
+        assert!(store.provider("B").is_some());
+        assert!(store.provider("Nobody").is_none());
+        assert_eq!(store.registered().len(), 2);
     }
 }
 

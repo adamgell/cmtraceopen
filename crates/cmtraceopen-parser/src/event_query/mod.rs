@@ -51,9 +51,17 @@ pub enum SelectorMode {
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum EventIdSelector {
     /// A single ID.
-    Single { id: u32 },
+    Single {
+        /// The Event ID, which identifies an event only together with its provider.
+        id: u32,
+    },
     /// An inclusive `low..=high` range.
-    Range { low: u32, high: u32 },
+    Range {
+        /// Lower bound, inclusive. Swapped with `high` if the two arrive reversed.
+        low: u32,
+        /// Upper bound, inclusive.
+        high: u32,
+    },
 }
 
 impl EventIdSelector {
@@ -106,7 +114,9 @@ pub enum TimeWindow {
     Last { milliseconds: u64 },
     /// An explicit range. Bounds are ISO 8601 UTC, for example `2026-08-09T00:00:00.000Z`.
     Between {
+        /// Inclusive lower bound. `None` leaves the range open at the start.
         from: Option<String>,
+        /// Inclusive upper bound. `None` leaves it open at the end.
         to: Option<String>,
     },
 }

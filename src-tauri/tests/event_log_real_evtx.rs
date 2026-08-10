@@ -22,6 +22,9 @@ use std::path::PathBuf;
 use app_lib::event_log::export::{export_records, ExportFormat};
 use app_lib::event_log::models::EvtxParseResult;
 use app_lib::event_log::parser::parse_evtx_files;
+use app_lib::event_log::provider_db::ProviderStore;
+use cmtraceopen_parser::eventmap::MapRegistry;
+use std::sync::RwLock;
 
 fn fixture() -> Option<PathBuf> {
     let Some(raw) = std::env::var_os("CMTRACE_EVTX_FIXTURE") else {
@@ -45,7 +48,12 @@ fn fixture() -> Option<PathBuf> {
 
 fn parsed() -> Option<EvtxParseResult> {
     let path = fixture()?;
-    let result = parse_evtx_files(&[path.to_string_lossy().into_owned()]).expect("the file parses");
+    // Registries local to this call. The parse path takes them explicitly, so nothing here can be
+    // perturbed by another test loading a different set on a parallel thread.
+    let maps = RwLock::new(MapRegistry::new());
+    let providers = RwLock::new(ProviderStore::default());
+    let result = parse_evtx_files(&[path.to_string_lossy().into_owned()], &maps, &providers)
+        .expect("the file parses");
     assert!(
         !result.records.is_empty(),
         "fixture produced no records at all"

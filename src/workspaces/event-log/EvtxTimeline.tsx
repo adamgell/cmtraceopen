@@ -265,11 +265,11 @@ export function EvtxTimeline() {
                   tabIndex={-1}
                   onClick={() => toggleGroup(row.key)}
                   style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
+                    // Normal flow, matching the record rows. The wrapper above is already
+                    // translated to the first visible row's offset and its children stack inside
+                    // it, so positioning a header absolutely applied that offset a second time and
+                    // took it out of flow, letting the rows beneath slide up into its place.
                     width: "100%",
-                    transform: `translateY(${virtualRow.start}px)`,
                     display: "flex",
                     alignItems: "center",
                     gap: "6px",

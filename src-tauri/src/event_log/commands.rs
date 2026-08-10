@@ -6,6 +6,7 @@ use tauri::Emitter;
 
 use super::models::{EvtxChannelInfo, EvtxParseResult};
 use super::parser;
+use crate::state::app_state::AppState;
 
 #[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
@@ -16,8 +17,16 @@ struct EvtxQueryProgress {
 }
 
 #[tauri::command]
-pub async fn evtx_parse_files(paths: Vec<String>) -> Result<EvtxParseResult, String> {
-    tokio::task::spawn_blocking(move || parser::parse_evtx_files(&paths))
+pub async fn evtx_parse_files(
+    paths: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<EvtxParseResult, String> {
+    // Handles are cloned out before the blocking work starts. Parsing can run for a long time over
+    // a hundred thousand records, and holding a state lock across it would stall every other
+    // command.
+    let maps = state.event_maps.clone();
+    let providers = state.provider_store.clone();
+    tokio::task::spawn_blocking(move || parser::parse_evtx_files(&paths, &maps, &providers))
         .await
         .map_err(|e| format!("Task join error: {}", e))?
 }
@@ -42,11 +51,19 @@ pub async fn evtx_query_channels(
     max_events: Option<u64>,
     filter: Option<cmtraceopen_parser::event_query::EventQueryFilter>,
     app: AppHandle,
+    state: tauri::State<'_, AppState>,
 ) -> Result<EvtxParseResult, String> {
     #[cfg(target_os = "windows")]
     {
+        // Cloned before the blocking work, so a long channel scan never runs with a state lock
+        // held. Channels are then read under one shared guard rather than locking per record.
+        let registry = state.event_maps.clone();
         tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
+
+            let maps = registry
+                .read()
+                .map_err(|_| "map registry lock was poisoned".to_string())?;
 
             // Absent means unfiltered, which keeps the query as "*" and preserves prior behaviour
             // for callers that have not adopted server-side filtering yet.
@@ -65,6 +82,7 @@ pub async fn evtx_query_channels(
                         let outcome = super::live::query_channel_filtered_with_progress(
                             channel,
                             &query_filter,
+                            &maps,
                             max_events,
                             |fetched, _| {
                                 let _ = app_ref.emit(
@@ -134,7 +152,7 @@ pub async fn evtx_query_channels(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (channels, max_events, filter, app);
+        let _ = (channels, max_events, filter, app, state);
         Ok(EvtxParseResult {
             records: Vec::new(),
             channels: Vec::new(),
@@ -168,24 +186,38 @@ pub async fn evtx_export_records(
     Ok(byte_count)
 }
 
-/// Loads EvtxECmd `.map` files from `directory` into the process registry.
+/// Loads EvtxECmd `.map` files from `directory` into the application's registry.
 ///
 /// Returns what loaded, what was superseded, and what failed, so an operator can see why an event
 /// type is not being mapped rather than being left guessing.
 #[tauri::command]
 pub async fn evtx_load_event_maps(
     directory: String,
+    state: tauri::State<'_, AppState>,
 ) -> Result<super::maps::MapLoadOutcome, String> {
     let path = std::path::PathBuf::from(&directory);
-    tokio::task::spawn_blocking(move || super::maps::load_global(&path))
-        .await
-        .map_err(|error| format!("map load task failed: {error}"))?
+    let maps = state.event_maps.clone();
+    tokio::task::spawn_blocking(move || {
+        // Read from disk first, then swap. Holding the write lock across the read would block
+        // every in-flight parse for as long as the directory takes to load.
+        let (registry, outcome) = super::maps::load_maps_from_dir(&path)?;
+        *maps
+            .write()
+            .map_err(|_| "map registry lock was poisoned".to_string())? = registry;
+        Ok(outcome)
+    })
+    .await
+    .map_err(|error| format!("map load task failed: {error}"))?
 }
 
 /// Number of maps currently in effect.
 #[tauri::command]
-pub async fn evtx_loaded_map_count() -> u64 {
-    super::maps::loaded_count() as u64
+pub async fn evtx_loaded_map_count(state: tauri::State<'_, AppState>) -> Result<u64, String> {
+    Ok(state
+        .event_maps
+        .read()
+        .map_err(|_| "map registry lock was poisoned".to_string())?
+        .len() as u64)
 }
 
 /// Registers every provider database in `directory` for description rendering.
@@ -195,17 +227,32 @@ pub async fn evtx_loaded_map_count() -> u64 {
 #[tauri::command]
 pub async fn evtx_load_provider_databases(
     directory: String,
+    state: tauri::State<'_, AppState>,
 ) -> Result<Vec<super::provider_db::ProviderDbInfo>, String> {
     let path = std::path::PathBuf::from(&directory);
-    tokio::task::spawn_blocking(move || super::provider_db::load_directory(&path))
-        .await
-        .map_err(|error| format!("provider database load task failed: {error}"))?
+    let providers = state.provider_store.clone();
+    tokio::task::spawn_blocking(
+        move || -> Result<Vec<super::provider_db::ProviderDbInfo>, String> {
+            providers
+                .write()
+                .map_err(|_| "provider store lock was poisoned".to_string())?
+                .load_directory(&path)
+        },
+    )
+    .await
+    .map_err(|error| format!("provider database load task failed: {error}"))?
 }
 
 /// Provider databases currently registered.
 #[tauri::command]
-pub async fn evtx_provider_databases() -> Vec<super::provider_db::ProviderDbInfo> {
-    super::provider_db::registered()
+pub async fn evtx_provider_databases(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<super::provider_db::ProviderDbInfo>, String> {
+    Ok(state
+        .provider_store
+        .read()
+        .map_err(|_| "provider store lock was poisoned".to_string())?
+        .registered())
 }
 
 /// Merges already-loaded log entries and event records into one chronological timeline.

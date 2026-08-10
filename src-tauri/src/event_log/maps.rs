@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, RwLock};
 
 use cmtraceopen_parser::eventmap::{apply_map, EventMap, EventNode, MapProperty, MapRegistry};
 use serde::{Deserialize, Serialize};
@@ -414,18 +413,6 @@ Maps:
     }
 }
 
-// ── Process-wide registry ───────────────────────────────────────────────────
-
-/// The maps in effect for this process.
-///
-/// Held globally rather than threaded through every call site because both the live and file
-/// record paths already parse the event once and applying maps there avoids a second parse. An
-/// empty registry is the normal state until maps are loaded, and it simply yields no columns.
-fn global() -> &'static RwLock<MapRegistry> {
-    static REGISTRY: OnceLock<RwLock<MapRegistry>> = OnceLock::new();
-    REGISTRY.get_or_init(|| RwLock::new(MapRegistry::new()))
-}
-
 /// One normalized column produced by a map.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -449,33 +436,21 @@ fn property_name(property: &MapProperty) -> String {
     }
 }
 
-/// Replaces the process registry with the maps in `directory`.
-pub fn load_global(directory: &Path) -> Result<MapLoadOutcome, String> {
-    let (registry, outcome) = load_maps_from_dir(directory)?;
-    *global()
-        .write()
-        .map_err(|_| "map registry lock was poisoned".to_string())? = registry;
-    Ok(outcome)
-}
-
-/// Number of maps currently loaded.
-pub fn loaded_count() -> usize {
-    global().read().map(|registry| registry.len()).unwrap_or(0)
-}
-
 /// Applies the registered map for this event, if one exists.
 ///
 /// Returns an empty vector when no map matches, which is the common case: the upstream corpus
 /// covers a few hundred event types out of many thousands.
-pub fn apply_global(
+///
+/// The registry is passed in rather than reached for. Both record paths already parse the event
+/// once and apply maps there, so whoever owns the registry hands it down; there is no process
+/// global to make two tests, or two windows, share one set of maps.
+pub fn apply_registered(
+    registry: &MapRegistry,
     channel: &str,
     provider: &str,
     event_id: u32,
     event: &EventNode,
 ) -> Vec<MappedColumn> {
-    let Ok(registry) = global().read() else {
-        return Vec::new();
-    };
     let Some(map) = registry.find(channel, provider, event_id) else {
         return Vec::new();
     };
@@ -499,28 +474,37 @@ mod global_tests {
     fn an_unloaded_registry_yields_no_columns_rather_than_failing() {
         let event = EventNode::new("Event");
         // Whatever other tests have loaded, an event with no matching map must map to nothing.
-        assert!(apply_global("No-Such-Channel", "No-Such-Provider", 1, &event).is_empty());
+        assert!(apply_registered(
+            &MapRegistry::new(),
+            "No-Such-Channel",
+            "No-Such-Provider",
+            1,
+            &event
+        )
+        .is_empty());
     }
 
     #[test]
     fn a_loaded_map_produces_columns_for_a_matching_event_end_to_end() {
-        // Proves the whole chain: YAML on disk, into the process registry, applied to XML parsed
-        // by the host adapter, out as columns the UI can render.
+        // Proves the whole chain: YAML on disk, into a registry, applied to XML parsed by the
+        // host adapter, out as columns the UI can render. The registry is local to this test, so
+        // it cannot be disturbed by another test loading a different set on a parallel thread.
         let dir = std::env::temp_dir().join("cmtraceopen-maps-global-e2e");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("temp dir");
         fs::write(dir.join("shell-core-9701.map"), SHELL_CORE_9701).expect("write map");
 
-        let outcome = load_global(&dir).expect("loads");
+        let (registry, outcome) = load_maps_from_dir(&dir).expect("loads");
         assert_eq!(outcome.loaded_count(), 1);
-        assert!(loaded_count() >= 1);
+        assert_eq!(registry.len(), 1);
 
         let event = crate::event_log::event_node::parse_event_xml(
             "<Event><EventData><Data>RunOnceEx started</Data></EventData></Event>",
         )
         .expect("parses");
 
-        let columns = apply_global(
+        let columns = apply_registered(
+            &registry,
             "Microsoft-Windows-Shell-Core/Operational",
             "Microsoft-Windows-Shell-Core",
             9701,
@@ -532,7 +516,8 @@ mod global_tests {
         assert!(columns[0].complete);
 
         // A different event id on the same channel has no map and must map to nothing.
-        assert!(apply_global(
+        assert!(apply_registered(
+            &registry,
             "Microsoft-Windows-Shell-Core/Operational",
             "Microsoft-Windows-Shell-Core",
             9702,
