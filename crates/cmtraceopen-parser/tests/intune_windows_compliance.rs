@@ -20,9 +20,11 @@ use cmtraceopen_parser::intune::device::windows::compliance::{
     analyze_compliance_bundle, redacted_export_projection, ComplianceSnapshot,
     ComplianceSourceInput,
 };
-use cmtraceopen_parser::intune::evidence::IntuneArtifactStatus;
 use serde_json::{json, Value};
-use support::{corpus_root, load_json, mutated, scenario_names, validate_scenario, Failures};
+use support::{
+    artifact_status_for_capture_state, corpus_root, load_json, mutated, scenario_names,
+    sorted_evidence_ids, validate_scenario, Failures,
+};
 
 const CORPUS: &str = "device/windows/compliance";
 
@@ -64,20 +66,7 @@ const LOCAL_CLAIM_FINDINGS: [&str; 5] = [
 // ── Loading ─────────────────────────────────────────────────────────────────
 
 fn scenario_root(scenario: &str) -> PathBuf {
-    corpus_root(CORPUS).join(scenario)
-}
-
-fn capture_status(capture_state: &str) -> IntuneArtifactStatus {
-    match capture_state {
-        "captured" => IntuneArtifactStatus::Available,
-        "capped" => IntuneArtifactStatus::Capped,
-        "absent" => IntuneArtifactStatus::Missing,
-        "accessDenied" => IntuneArtifactStatus::PermissionDenied,
-        "skipped" => IntuneArtifactStatus::Skipped,
-        "unsupported" => IntuneArtifactStatus::Unsupported,
-        "parseFailed" => IntuneArtifactStatus::ParseFailed,
-        other => panic!("unknown captureState {other:?}"),
-    }
+    support::scenario_root(CORPUS, scenario)
 }
 
 /// Build the analyzer input exactly as a native collector would report it.
@@ -97,7 +86,9 @@ fn sources(root: &Path, manifest: &Value) -> Vec<ComplianceSourceInput> {
                     .expect("artifactId")
                     .to_string(),
                 family: artifact["family"].as_str().expect("family").to_string(),
-                status: capture_status(artifact["captureState"].as_str().expect("captureState")),
+                status: artifact_status_for_capture_state(
+                    artifact["captureState"].as_str().expect("captureState"),
+                ),
                 captured_at_utc: artifact["capturedUtc"]
                     .as_str()
                     .expect("capturedUtc")
@@ -145,20 +136,6 @@ fn families(manifest: &Value) -> BTreeMap<String, String> {
             )
         })
         .collect()
-}
-
-fn evidence_ids(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            let mut ids = items
-                .iter()
-                .map(|item| item["evidenceId"].as_str().unwrap_or_default().to_string())
-                .collect::<Vec<_>>();
-            ids.sort();
-            ids
-        })
-        .unwrap_or_default()
 }
 
 fn artifact_ids(value: &Value) -> Vec<String> {
@@ -277,7 +254,7 @@ fn assert_settings(scenario: &str, actual: &Value, expected: &Value) {
             );
         }
         assert_eq!(
-            evidence_ids(&got["evidence"]),
+            sorted_evidence_ids(&got["evidence"]),
             strings(&want["evidence"]),
             "{scenario}: settings[{index}].evidence"
         );
@@ -302,7 +279,7 @@ fn assert_access(scenario: &str, actual: &Value, expected: &Value) {
             );
         }
         assert_eq!(
-            evidence_ids(&got["matchedEvidence"]),
+            sorted_evidence_ids(&got["matchedEvidence"]),
             strings(&want["matchedEvidence"]),
             "{scenario}: access[{index}].matchedEvidence"
         );
@@ -347,7 +324,7 @@ fn assert_findings(scenario: &str, actual: &Value, expected: &Value) {
             );
         }
         assert_eq!(
-            evidence_ids(&got["evidence"]),
+            sorted_evidence_ids(&got["evidence"]),
             strings(&want["evidence"]),
             "{scenario}: findings[{index}].evidence"
         );

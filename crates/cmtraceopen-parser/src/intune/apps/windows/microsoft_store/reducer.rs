@@ -24,7 +24,7 @@
 //! somebody else's transaction.
 
 use crate::intune::evidence::{
-    IntuneAccessState, IntuneArtifactCoverage, IntuneArtifactStatus, IntuneErrorCode,
+    access_state_for_artifact_status, IntuneAccessState, IntuneArtifactCoverage, IntuneErrorCode,
     IntuneEvidenceRef, IntuneFindingConfidence, IntuneNamedValue, IntuneObservationContext,
     IntuneParseState, IntuneProvenance, IntuneSensitivity, IntuneTimestamp, IntuneTimestampKind,
 };
@@ -91,18 +91,6 @@ pub fn analyze_store_bundle(artifacts: &[StoreSourceArtifact]) -> StoreAnalysis 
 }
 
 // ── Observation extraction ──────────────────────────────────────────────────
-
-fn access_state_for(status: &IntuneArtifactStatus) -> IntuneAccessState {
-    match status {
-        IntuneArtifactStatus::Available => IntuneAccessState::Available,
-        IntuneArtifactStatus::Missing => IntuneAccessState::Missing,
-        IntuneArtifactStatus::PermissionDenied => IntuneAccessState::PermissionDenied,
-        IntuneArtifactStatus::Capped => IntuneAccessState::Capped,
-        IntuneArtifactStatus::Skipped => IntuneAccessState::Skipped,
-        IntuneArtifactStatus::ParseFailed => IntuneAccessState::Failed,
-        IntuneArtifactStatus::Unsupported => IntuneAccessState::Unsupported,
-    }
-}
 
 fn collect_from_artifact(artifact: &StoreSourceArtifact, observations: &mut Vec<StoreObservation>) {
     let Some(payload) = &artifact.payload else {
@@ -189,7 +177,7 @@ fn ime_context(
         // IME records quote package paths and app display names.
         sensitivity: IntuneSensitivity::Sensitive,
         parse_state,
-        access_state: access_state_for(&artifact.status),
+        access_state: access_state_for_artifact_status(&artifact.status),
     }
 }
 
@@ -1046,7 +1034,7 @@ fn build_coverage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::intune::evidence::IntuneSourceKind;
+    use crate::intune::evidence::{IntuneArtifactStatus, IntuneSourceKind};
     use crate::intune::normalized::{NormalizedEventLevel, NormalizedWindowsEvent};
 
     fn context(artifact: &str, record: u64, kind: IntuneSourceKind) -> IntuneObservationContext {
