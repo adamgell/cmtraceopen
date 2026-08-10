@@ -86,7 +86,7 @@ impl AppState {
             #[cfg(feature = "esp-diagnostics")]
             esp_session_manager: Mutex::new(None),
             #[cfg(feature = "event-log")]
-            event_maps: Arc::new(RwLock::new(Default::default())),
+            event_maps: Arc::new(RwLock::new(cmtraceopen_parser::eventmap::MapRegistry::new())),
             #[cfg(feature = "event-log")]
             provider_store: Arc::new(RwLock::new(ProviderStore::default())),
         }

@@ -253,7 +253,7 @@ export function EvtxDetailPane() {
                 display: "flex",
                 gap: "8px",
                 fontSize: `${monoFontSize}px`,
-                fontFamily: "monospace",
+                fontFamily: LOG_MONOSPACE_FONT_FAMILY,
               }}
             >
               <span

@@ -204,3 +204,36 @@ describe("group key encoding", () => {
     expect(visible[0].record.id).toBe(1);
   });
 });
+
+describe("day grouping honours the time zone", () => {
+  it("buckets by UTC date when asked for UTC", () => {
+    // Every other test here relies on the default, so a regression that ignored the argument and
+    // always bucketed by local date would pass the whole file. This instant sits on either side of
+    // midnight depending on the zone.
+    const lateUtc = Date.UTC(2026, 1, 10, 23, 30, 0);
+    const rows = buildGroupedRows(
+      [record({ id: 1, timestampEpoch: lateUtc })],
+      ["day"],
+      new Set(),
+      "utc"
+    );
+    const header = rows.find((r) => r.kind === "group");
+    expect(header && header.kind === "group" ? header.label : "").toBe("2026-02-10");
+  });
+
+  it("buckets by the machine's own date when asked for local", () => {
+    const lateUtc = Date.UTC(2026, 1, 10, 23, 30, 0);
+    const local = new Date(lateUtc);
+    const expected =
+      `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-` +
+      `${String(local.getDate()).padStart(2, "0")}`;
+    const rows = buildGroupedRows(
+      [record({ id: 1, timestampEpoch: lateUtc })],
+      ["day"],
+      new Set(),
+      "local"
+    );
+    const header = rows.find((r) => r.kind === "group");
+    expect(header && header.kind === "group" ? header.label : "").toBe(expected);
+  });
+});

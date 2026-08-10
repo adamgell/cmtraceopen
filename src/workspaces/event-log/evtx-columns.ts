@@ -45,7 +45,7 @@ export function mappedColumnId(property: string): EvtxMappedColumnId {
 }
 
 /** The map property behind a column id, or null when the column is a fixed one. */
-export function mappedColumnProperty(id: EvtxColumnId): string | null {
+export function mappedColumnProperty(id: string): string | null {
   return id.startsWith(MAPPED_PREFIX) ? id.slice(MAPPED_PREFIX.length) : null;
 }
 
@@ -120,6 +120,16 @@ export const EVTX_COLUMNS: EvtxColumnSpec[] = [
 const COLUMN_IDS = new Set<string>(EVTX_COLUMNS.map((column) => column.id));
 
 /**
+ * Fixed columns keyed by id.
+ *
+ * Module scope because EVTX_COLUMNS never changes and the row renderer calls visibleColumns once
+ * per rendered row; rebuilding the map there allocated one per row per render.
+ */
+const FIXED_COLUMNS_BY_ID = new Map<string, EvtxColumnSpec>(
+  EVTX_COLUMNS.map((column) => [column.id, column])
+);
+
+/**
  * Whether a stored id is one this build can render.
  *
  * A map column is accepted whatever its property, because the maps loaded at the time the
@@ -129,7 +139,7 @@ const COLUMN_IDS = new Set<string>(EVTX_COLUMNS.map((column) => column.id));
  */
 function isKnownColumnId(candidate: string): boolean {
   if (COLUMN_IDS.has(candidate)) return true;
-  const property = mappedColumnProperty(candidate as EvtxColumnId);
+  const property = mappedColumnProperty(candidate);
   return property !== null && property.length > 0;
 }
 
@@ -190,12 +200,9 @@ export function sanitizeColumnConfig(input: unknown): EvtxColumnConfig {
 
 /** Specs for the visible columns, in display order. */
 export function visibleColumns(config: EvtxColumnConfig): EvtxColumnSpec[] {
-  const byId = new Map<string, EvtxColumnSpec>(
-    EVTX_COLUMNS.map((column) => [column.id, column])
-  );
   return config.order
     .map((id) => {
-      const fixed = byId.get(id);
+      const fixed = FIXED_COLUMNS_BY_ID.get(id);
       if (fixed) return fixed;
       // Synthesized from the id, so rendering a map column needs no knowledge of which maps are
       // loaded. That keeps the row renderer independent of load order.

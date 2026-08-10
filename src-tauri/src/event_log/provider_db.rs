@@ -120,24 +120,18 @@ impl ProviderDb {
             })?;
 
         // Only meaningful when the whole database came from one capture, which is the normal case;
-        // a merged database reports nothing rather than an arbitrary one of several builds.
+        // a merged database reports nothing rather than an arbitrary one of several builds. One
+        // query answers both halves: MIN and MAX agree exactly when there is a single build.
         let source_os_build: Option<u32> = connection
             .query_row(
-                "SELECT SourceOsBuild FROM ProviderDetails \
-                 GROUP BY SourceOsBuild HAVING COUNT(DISTINCT SourceOsBuild) >= 0 LIMIT 2",
+                "SELECT MIN(SourceOsBuild), MAX(SourceOsBuild) FROM ProviderDetails",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get::<_, Option<u32>>(0)?, row.get::<_, Option<u32>>(1)?)),
             )
             .ok()
-            .filter(|_| {
-                connection
-                    .query_row(
-                        "SELECT COUNT(DISTINCT SourceOsBuild) FROM ProviderDetails",
-                        [],
-                        |row| row.get::<_, u32>(0),
-                    )
-                    .map(|distinct| distinct == 1)
-                    .unwrap_or(false)
+            .and_then(|(low, high)| match (low, high) {
+                (Some(low), Some(high)) if low == high => Some(low),
+                _ => None,
             });
 
         Ok(Self {

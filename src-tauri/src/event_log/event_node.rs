@@ -381,8 +381,15 @@ mod tests {
 
     #[test]
     fn malformed_xml_is_an_error_rather_than_a_partial_tree() {
-        assert!(parse_event_xml("<Event><System>").is_err() || parse_event_xml("<Event").is_err());
-        assert!(parse_event_xml("").is_err());
+        // Asserted separately. Joined with `||` the test passed on either input, so it never
+        // established that an unclosed element is rejected; if that started being accepted the
+        // second disjunct kept it green.
+        assert!(
+            parse_event_xml("<Event><System>").is_err(),
+            "an unclosed element must not yield a partial tree"
+        );
+        assert!(parse_event_xml("<Event").is_err(), "an unclosed tag");
+        assert!(parse_event_xml("").is_err(), "an empty document");
     }
 
     #[test]

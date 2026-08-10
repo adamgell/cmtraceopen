@@ -5,6 +5,7 @@ import {
   orderFilters,
   parseFilterExport,
   SAVED_FILTER_SCHEMA,
+  ALL_LEVELS,
   sanitizeCriteria,
   sanitizeSavedFilter,
   type EvtxSavedFilter,
@@ -48,7 +49,9 @@ describe("sanitizeCriteria", () => {
 
   it("falls back to every level when none survive, rather than matching nothing", () => {
     const criteria = sanitizeCriteria({ levels: ["Bogus"] });
-    expect(criteria.levels).toHaveLength(5);
+    // Compared against the constant rather than its current size, so adding a level does not
+    // report a length mismatch that says nothing about the cause.
+    expect([...criteria.levels].sort()).toEqual([...ALL_LEVELS].sort());
   });
 
   it("falls back to a known time window", () => {

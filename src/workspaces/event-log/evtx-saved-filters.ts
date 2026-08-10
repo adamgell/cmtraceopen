@@ -27,7 +27,8 @@ export interface EvtxSavedFilter {
   lastUsed: number | null;
 }
 
-const ALL_LEVELS: EvtxLevel[] = [
+/** Every level, and the fallback when a stored filter names none this build recognizes. */
+export const ALL_LEVELS: EvtxLevel[] = [
   "Critical",
   "Error",
   "Warning",

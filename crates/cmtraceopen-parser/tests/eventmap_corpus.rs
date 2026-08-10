@@ -137,28 +137,48 @@ fn ntfs_146_applies_its_lookup_table_and_default() {
     let lookup = map.lookup_for("BusType").expect("BusType lookup present");
     assert_eq!(lookup.default.as_deref(), Some("Unknown code"));
 
+    // Asserted on the column the binding targets, not on "some column somewhere". `any` over every
+    // value passed if the string turned up anywhere, so it did not establish that the BusType
+    // binding itself was translated, and "does not contain : 7" was only an indirect proxy for
+    // the raw code having been replaced.
     let usb = apply_map(
         &map,
         &event_with_named_data(&[("VolumeName", "C:"), ("BusType", "7")]),
     );
+    let translated = usb
+        .values
+        .iter()
+        .find(|value| value.text.contains("USB"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no value rendered the BusType translation: {:?}",
+                usb.values.iter().map(|v| &v.text).collect::<Vec<_>>()
+            )
+        });
     assert!(
-        usb.values
-            .iter()
-            .any(|value| value.text.contains("USB") && !value.text.contains(": 7")),
-        "raw BusType 7 should render as USB: {:?}",
-        usb.values.iter().map(|v| &v.text).collect::<Vec<_>>()
+        !translated.text.contains('7'),
+        "the raw code should be gone once translated: {}",
+        translated.text
     );
 
     let unknown = apply_map(
         &map,
         &event_with_named_data(&[("VolumeName", "C:"), ("BusType", "255")]),
     );
+    let defaulted = unknown
+        .values
+        .iter()
+        .find(|value| value.text.contains("Unknown code"))
+        .unwrap_or_else(|| {
+            panic!(
+                "an out-of-table code should fall back to the lookup default: {:?}",
+                unknown.values.iter().map(|v| &v.text).collect::<Vec<_>>()
+            )
+        });
     assert!(
-        unknown
-            .values
-            .iter()
-            .any(|value| value.text.contains("Unknown code")),
-        "an out-of-table code should fall back to the lookup default"
+        !defaulted.text.contains("255"),
+        "the default replaces the code rather than appending to it: {}",
+        defaulted.text
     );
 }
 

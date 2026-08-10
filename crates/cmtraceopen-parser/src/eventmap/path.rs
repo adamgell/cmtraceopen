@@ -37,7 +37,12 @@ pub enum PathError {
     Empty(String),
     /// A predicate was opened but not closed, or was not understood.
     #[error("value path has a malformed predicate in step '{step}': {path}")]
-    MalformedPredicate { path: String, step: String },
+    MalformedPredicate {
+        /// The whole expression, so the map entry it came from can be identified.
+        path: String,
+        /// The single step that would not parse, which is the part to correct.
+        step: String,
+    },
     /// An attribute selector appeared somewhere other than the final step.
     #[error("value path may only select an attribute in its final step: {0}")]
     MisplacedAttribute(String),
