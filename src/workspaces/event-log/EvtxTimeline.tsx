@@ -103,14 +103,6 @@ export function EvtxTimeline() {
     );
   }, [filteredRecords, sortField, sortDirection]);
 
-  useEffect(() => {
-    if (selectedRecordId == null) return;
-    const stillVisible = sortedRecords.some((r) => r.id === selectedRecordId);
-    if (!stillVisible) {
-      setSelectedRecordId(null);
-    }
-  }, [sortedRecords, setSelectedRecordId, selectedRecordId]);
-
   const parentRef = useRef<HTMLDivElement>(null);
 
   // Grouping produces header rows interleaved with records, so the virtualizer indexes rows rather
@@ -135,6 +127,18 @@ export function EvtxTimeline() {
       }, []),
     [rows]
   );
+
+  // Checked against the rendered rows, not the filtered records. Filtering already dropped a
+  // hidden selection, but collapsing a group leaves the record in sortedRecords while taking its
+  // row out of the list, so keyboard navigation could not find the current position and the
+  // detail pane showed a record that was not on screen. Rows covers both.
+  useEffect(() => {
+    if (selectedRecordId === null) return;
+    const stillVisible = rows.some(
+      (row) => row.kind === "record" && row.record.id === selectedRecordId
+    );
+    if (!stillVisible) setSelectedRecordId(null);
+  }, [rows, selectedRecordId, setSelectedRecordId]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,

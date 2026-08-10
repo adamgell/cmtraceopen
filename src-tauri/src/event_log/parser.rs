@@ -713,9 +713,23 @@ mod description_tests {
     }
 
     #[test]
+    #[ignore = "requires a real provider database via CMTRACEOPEN_PROVIDER_DB"]
     fn an_unknown_event_id_falls_back_rather_than_inventing_a_description() {
+        // Needs a store that actually holds the provider. Against an empty one the lookup returns
+        // None on the provider itself and the event-id branch is never reached, so this only
+        // repeated the no-database case while claiming to cover something else.
+        let store = loaded_store();
         let data = insertions(&[("X", "1")]);
-        assert!(describe_event(&empty_store(), "Still-Not-Loaded", 999_999, &data).is_none());
+        assert!(
+            describe_event(
+                &store,
+                "Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider",
+                999_999,
+                &data
+            )
+            .is_none(),
+            "a provider that is loaded but does not define this id must fall back"
+        );
     }
 
     #[test]

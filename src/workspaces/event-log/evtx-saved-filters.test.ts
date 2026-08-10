@@ -153,8 +153,10 @@ describe("hostile stored values", () => {
   it("rejects a non-finite lastUsed", () => {
     // JSON admits 1e309, which parses to Infinity and would reach the ordering comparator as a
     // non-finite operand.
+    // Literal JSON text, not JSON.stringify: stringify writes 1e309 as null, so the assertion
+    // held whether or not the sanitizer rejected Infinity. JSON.parse produces Infinity.
     const parsed = parseFilterExport(
-      JSON.stringify({ schema: 1, filters: [{ id: "a", name: "A", lastUsed: 1e309 }] })
+      '{"schema":1,"filters":[{"id":"a","name":"A","lastUsed":1e309}]}'
     );
     expect(parsed.filters).toHaveLength(1);
     expect(parsed.filters[0].lastUsed).toBeNull();
