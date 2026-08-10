@@ -18,7 +18,8 @@ import {
 
 interface SavedFilterState {
   savedFilters: EvtxSavedFilter[];
-  save: (name: string, criteria: EvtxFilterCriteria) => EvtxSavedFilter;
+  /** Returns the stored filter, or null when the name is empty once trimmed. */
+  save: (name: string, criteria: EvtxFilterCriteria) => EvtxSavedFilter | null;
   remove: (id: string) => void;
   toggleFavorite: (id: string) => void;
   markUsed: (id: string) => void;
@@ -41,6 +42,10 @@ export const useSavedFilterStore = create<SavedFilterState>()(
 
       save: (name, criteria) => {
         const trimmed = name.trim();
+        // A whitespace-only name is refused rather than stored. sanitizeSavedFilter drops it on
+        // rehydration, so it would save, appear in the list, and then vanish on restart, which
+        // reads as the app losing the operator's filter.
+        if (!trimmed) return null;
         const existing = get().savedFilters.find(
           (filter) => filter.name.toLowerCase() === trimmed.toLowerCase()
         );

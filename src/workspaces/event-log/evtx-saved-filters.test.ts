@@ -4,6 +4,7 @@ import {
   mergeFilters,
   orderFilters,
   parseFilterExport,
+  SAVED_FILTER_SCHEMA,
   sanitizeCriteria,
   sanitizeSavedFilter,
   type EvtxSavedFilter,
@@ -142,5 +143,42 @@ describe("orderFilters", () => {
     const input = [filter({ name: "B" }), filter({ name: "A" })];
     orderFilters(input);
     expect(input.map((f) => f.name)).toEqual(["B", "A"]);
+  });
+});
+
+describe("hostile stored values", () => {
+  it("rejects a non-finite lastUsed", () => {
+    // JSON admits 1e309, which parses to Infinity and would reach the ordering comparator as a
+    // non-finite operand.
+    const parsed = parseFilterExport(
+      JSON.stringify({ schema: 1, filters: [{ id: "a", name: "A", lastUsed: 1e309 }] })
+    );
+    expect(parsed.filters).toHaveLength(1);
+    expect(parsed.filters[0].lastUsed).toBeNull();
+  });
+
+  it("keeps a finite lastUsed", () => {
+    const parsed = parseFilterExport(
+      JSON.stringify({ schema: 1, filters: [{ id: "a", name: "A", lastUsed: 1700000000000 }] })
+    );
+    expect(parsed.filters[0].lastUsed).toBe(1700000000000);
+  });
+
+  it("refuses an export written by a newer schema", () => {
+    // Sanitizing it into whatever this build understands would import silently and quietly change
+    // the operator's criteria rather than saying the file is from a later version.
+    const parsed = parseFilterExport(
+      JSON.stringify({ schema: 99, filters: [{ id: "a", name: "A" }] })
+    );
+    expect(parsed.filters).toHaveLength(0);
+    expect(parsed.unsupportedSchema).toBe(true);
+  });
+
+  it("still accepts the current schema", () => {
+    const parsed = parseFilterExport(
+      JSON.stringify({ schema: SAVED_FILTER_SCHEMA, filters: [{ id: "a", name: "A" }] })
+    );
+    expect(parsed.filters).toHaveLength(1);
+    expect(parsed.unsupportedSchema).toBeUndefined();
   });
 });

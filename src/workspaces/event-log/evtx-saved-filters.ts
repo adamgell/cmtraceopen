@@ -111,7 +111,11 @@ export function sanitizeSavedFilter(input: unknown, fallbackId: string): EvtxSav
         )
       : [],
     criteria: sanitizeCriteria(input.criteria),
-    lastUsed: typeof input.lastUsed === "number" ? input.lastUsed : null,
+    // Finite only. JSON admits 1e309, which parses to Infinity and would reach the ordering
+    // comparator as a non-finite operand.
+    lastUsed: typeof input.lastUsed === "number" && Number.isFinite(input.lastUsed)
+      ? input.lastUsed
+      : null,
   };
 }
 
@@ -124,12 +128,21 @@ export function sanitizeSavedFilter(input: unknown, fallbackId: string): EvtxSav
 export function parseFilterExport(text: string): {
   filters: EvtxSavedFilter[];
   skipped: number;
+  /** True when the file was written by a build using a schema this one does not know. */
+  unsupportedSchema?: boolean;
 } {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     return { filters: [], skipped: 0 };
+  }
+
+  // The schema is written on export and must be checked on import. A newer file would otherwise be
+  // sanitized into whatever this build understands and imported silently, quietly changing the
+  // operator's criteria rather than telling them the file is from a later version.
+  if (isRecord(parsed) && parsed.schema !== undefined && parsed.schema !== SAVED_FILTER_SCHEMA) {
+    return { filters: [], skipped: 0, unsupportedSchema: true };
   }
 
   const list = isRecord(parsed) && Array.isArray(parsed.filters) ? parsed.filters : [];

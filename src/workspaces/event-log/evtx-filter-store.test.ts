@@ -4,6 +4,13 @@ import { sanitizeCriteria } from "./evtx-saved-filters";
 
 const criteria = () => sanitizeCriteria({ levels: ["Error"], search: "boot" });
 
+/** save() returns null for an empty name; every call here uses a real one, so assert that. */
+function saveNamed(name: string) {
+  const saved = useSavedFilterStore.getState().save(name, criteria());
+  if (!saved) throw new Error(`save refused the name ${JSON.stringify(name)}`);
+  return saved;
+}
+
 beforeEach(() => {
   useSavedFilterStore.setState({ savedFilters: [] });
   localStorage.clear();
@@ -11,18 +18,18 @@ beforeEach(() => {
 
 describe("useSavedFilterStore", () => {
   it("saves a filter and stamps it as used", () => {
-    const saved = useSavedFilterStore.getState().save("Boot errors", criteria());
+    const saved = saveNamed("Boot errors");
     expect(saved.name).toBe("Boot errors");
     expect(saved.lastUsed).not.toBeNull();
     expect(useSavedFilterStore.getState().savedFilters).toHaveLength(1);
   });
 
   it("saving under an existing name updates rather than duplicating", () => {
-    const store = useSavedFilterStore.getState();
-    const first = store.save("Boot", criteria());
+    const first = saveNamed("Boot");
     const second = useSavedFilterStore
       .getState()
       .save("boot", sanitizeCriteria({ search: "changed" }));
+    if (!second) throw new Error("save refused a valid name");
 
     expect(useSavedFilterStore.getState().savedFilters).toHaveLength(1);
     expect(second.id).toBe(first.id);
@@ -30,14 +37,14 @@ describe("useSavedFilterStore", () => {
   });
 
   it("preserves the favorite flag when re-saving", () => {
-    const saved = useSavedFilterStore.getState().save("Boot", criteria());
+    const saved = saveNamed("Boot");
     useSavedFilterStore.getState().toggleFavorite(saved.id);
     useSavedFilterStore.getState().save("Boot", sanitizeCriteria({ search: "again" }));
     expect(useSavedFilterStore.getState().savedFilters[0].favorite).toBe(true);
   });
 
   it("removes by id", () => {
-    const saved = useSavedFilterStore.getState().save("Boot", criteria());
+    const saved = saveNamed("Boot");
     useSavedFilterStore.getState().remove(saved.id);
     expect(useSavedFilterStore.getState().savedFilters).toEqual([]);
   });
@@ -46,9 +53,8 @@ describe("useSavedFilterStore", () => {
     // Favourite the one that loses on every other rule. Favouriting "Alpha" proved nothing: both
     // saves stamp lastUsed from the same clock tick, so the ordering fell through to the name
     // comparison and "Alpha" came first whether or not toggleFavorite did anything at all.
-    const store = useSavedFilterStore.getState();
-    const zulu = store.save("Zulu", criteria());
-    useSavedFilterStore.getState().save("Alpha", criteria());
+    const zulu = saveNamed("Zulu");
+    saveNamed("Alpha");
 
     expect(useSavedFilterStore.getState().ordered()[0].name).toBe("Alpha");
 
@@ -69,5 +75,12 @@ describe("useSavedFilterStore", () => {
       { savedFilters: [] }
     );
     expect(merged.savedFilters).toHaveLength(1);
+  });
+
+  it("refuses a whitespace-only name instead of storing one that vanishes", () => {
+    // sanitizeSavedFilter drops an empty name on rehydration, so storing it would show the filter
+    // in the list and then lose it on restart, which reads as the app losing the operator's work.
+    expect(useSavedFilterStore.getState().save("   ", criteria())).toBeNull();
+    expect(useSavedFilterStore.getState().savedFilters).toHaveLength(0);
   });
 });

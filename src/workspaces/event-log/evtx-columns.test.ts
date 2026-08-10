@@ -10,11 +10,25 @@ import {
   EVTX_COLUMNS,
   moveColumn,
   sanitizeColumnConfig,
+  type EvtxColumnId,
+  type EvtxColumnSpec,
   toggleColumn,
   visibleColumns,
   type EvtxColumnConfig,
 } from "./evtx-columns";
 import type { EvtxRecord } from "./types";
+
+/**
+ * The spec for `id`, failing with the id when it is absent.
+ *
+ * A non-null assertion would hide a removed column behind a confusing undefined access; this says
+ * which column went missing.
+ */
+function columnSpec(id: EvtxColumnId): EvtxColumnSpec {
+  const found = EVTX_COLUMNS.find((column) => column.id === id);
+  if (!found) throw new Error(`no column spec for ${id}`);
+  return found;
+}
 
 const config = (order: string[], widths = {}): EvtxColumnConfig =>
   sanitizeColumnConfig({ order, widths });
@@ -77,13 +91,13 @@ describe("visibleColumns", () => {
 
 describe("columnWidth", () => {
   it("prefers an override over the default", () => {
-    const level = EVTX_COLUMNS.find((c) => c.id === "level")!;
+    const level = columnSpec("level");
     expect(columnWidth(config(["level"], { level: 88 }), level)).toBe(88);
     expect(columnWidth(config(["level"]), level)).toBe(level.defaultWidth);
   });
 
   it("keeps the description column unbounded", () => {
-    const message = EVTX_COLUMNS.find((c) => c.id === "message")!;
+    const message = columnSpec("message");
     expect(columnWidth(config(["message"]), message)).toBeNull();
   });
 });
