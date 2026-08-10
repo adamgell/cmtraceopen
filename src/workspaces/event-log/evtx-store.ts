@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { mergeCoverageGaps } from "./evtx-coverage";
+import { assertParseResultShape, mergeCoverageGaps } from "./evtx-coverage";
 import type { EvtxTimeZoneMode } from "./evtx-time";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -153,6 +153,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
     set({ isLoading: true, loadError: null });
     try {
       const result = await invoke<EvtxParseResult>("evtx_parse_files", { paths });
+      assertParseResultShape(result);
       set(applyParseResult(result, "files"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -229,6 +230,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
             maxEvents: null,
             filter: buildServerFilter(get().timeWindow),
           });
+          assertParseResultShape(result);
           mergeResult(ch, result);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -260,6 +262,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
         maxEvents: maxEvents ?? null,
         filter: buildServerFilter(get().timeWindow),
       });
+      assertParseResultShape(result);
 
       // Merge new records with existing ones (for incremental channel loading)
       const state = get();
@@ -335,6 +338,7 @@ export const useEvtxStore = create<EvtxState>()((set, get) => ({
           // outside the window the toolbar was still showing as selected.
           filter: buildServerFilter(get().timeWindow),
         });
+        assertParseResultShape(result);
 
         const s = get();
         const merged = [...s.records, ...result.records];

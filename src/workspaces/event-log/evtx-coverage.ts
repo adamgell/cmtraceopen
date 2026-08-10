@@ -27,3 +27,33 @@ export function mergeCoverageGaps(
 export function summarizeCoverageGaps(gaps: readonly string[]): string {
   return gaps.length === 1 ? "1 gap in this view" : `${gaps.length} gaps in this view`;
 }
+
+/**
+ * The parts of an event-log IPC reply the store reads, verified once.
+ *
+ * Not a schema validator, and deliberately not per-handler checks: it guards the three fields the
+ * store destructures and iterates. If a future backend change dropped `errorMessages`, spreading
+ * it would throw somewhere unrelated and surface as a confusing load error; this fails at the
+ * boundary with a message that names the contract.
+ *
+ * Throws rather than returning a default, because a reply the store cannot read is not a reply
+ * with no events, and quietly showing an empty list is the failure this workspace exists to avoid.
+ */
+export function assertParseResultShape(value: unknown): {
+  records: unknown[];
+  channels: unknown[];
+  errorMessages: string[];
+} {
+  const reply = value as { records?: unknown; channels?: unknown; errorMessages?: unknown };
+  if (!Array.isArray(reply?.records) || !Array.isArray(reply?.channels)) {
+    throw new Error("the event log reader returned a reply this build cannot read");
+  }
+  return {
+    records: reply.records,
+    channels: reply.channels,
+    // Absent means the reader reported no gaps, which is different from a malformed reply.
+    errorMessages: Array.isArray(reply.errorMessages)
+      ? reply.errorMessages.filter((entry): entry is string => typeof entry === "string")
+      : [],
+  };
+}

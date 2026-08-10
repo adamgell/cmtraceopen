@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mergeCoverageGaps, summarizeCoverageGaps } from "./evtx-coverage";
+import {
+  assertParseResultShape,
+  mergeCoverageGaps,
+  summarizeCoverageGaps,
+} from "./evtx-coverage";
 
 describe("mergeCoverageGaps", () => {
   it("accumulates gaps across channels", () => {
@@ -57,5 +61,39 @@ describe("gaps across load paths", () => {
     const first = mergeCoverageGaps([], ["Application: 3 records unreadable"]);
     const second = mergeCoverageGaps(first, ["Security: 1 record unreadable"]);
     expect(second).toHaveLength(2);
+  });
+});
+
+describe("assertParseResultShape", () => {
+  it("accepts a well formed reply", () => {
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      errorMessages: ["Application: 3 records unreadable"],
+    });
+    expect(shape.errorMessages).toEqual(["Application: 3 records unreadable"]);
+  });
+
+  it("treats absent errorMessages as no gaps rather than a malformed reply", () => {
+    // An older reader that reports nothing is not the same as one this build cannot read.
+    expect(assertParseResultShape({ records: [], channels: [] }).errorMessages).toEqual([]);
+  });
+
+  it("rejects a reply whose records are not a list", () => {
+    // Spreading this would throw somewhere unrelated and surface as a confusing load error.
+    expect(() => assertParseResultShape({ records: null, channels: [] })).toThrow(
+      /cannot read/
+    );
+    expect(() => assertParseResultShape({ channels: [] })).toThrow(/cannot read/);
+    expect(() => assertParseResultShape(undefined)).toThrow(/cannot read/);
+  });
+
+  it("drops non-string gap entries rather than rendering them", () => {
+    const shape = assertParseResultShape({
+      records: [],
+      channels: [],
+      errorMessages: ["real", 42, null],
+    });
+    expect(shape.errorMessages).toEqual(["real"]);
   });
 });
