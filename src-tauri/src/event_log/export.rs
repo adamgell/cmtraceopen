@@ -173,26 +173,33 @@ pub fn export_records(records: &[EvtxRecord], format: ExportFormat) -> Result<St
         ExportFormat::Csv | ExportFormat::Tsv => {
             let delimiter = format.delimiter();
             let mapped = mapped_columns(records);
+
+            // Written straight into the output. Collecting each row into a Vec and joining it
+            // allocated a vector and a fresh separator String per record, on an export that can
+            // run to a hundred thousand of them.
             let mut out = String::new();
-            out.push_str(
-                &COLUMNS
+            let write_row = |out: &mut String, cells: &mut dyn Iterator<Item = &str>| {
+                let mut first = true;
+                for cell in cells {
+                    if !first {
+                        out.push(delimiter);
+                    }
+                    first = false;
+                    out.push_str(&escape_delimited(cell, delimiter));
+                }
+                out.push('\n');
+            };
+
+            write_row(
+                &mut out,
+                &mut COLUMNS
                     .iter()
-                    .map(|column| column.to_string())
-                    .chain(mapped.iter().cloned())
-                    .map(|column| escape_delimited(&column, delimiter))
-                    .collect::<Vec<_>>()
-                    .join(&delimiter.to_string()),
+                    .copied()
+                    .chain(mapped.iter().map(String::as_str)),
             );
-            out.push('\n');
             for record in records {
                 let row = row_of(record, &mapped);
-                out.push_str(
-                    &row.iter()
-                        .map(|value| escape_delimited(value, delimiter))
-                        .collect::<Vec<_>>()
-                        .join(&delimiter.to_string()),
-                );
-                out.push('\n');
+                write_row(&mut out, &mut row.iter().map(String::as_str));
             }
             Ok(out)
         }
@@ -374,6 +381,52 @@ mod tests {
         let out = export_records(&[record("a\tb")], ExportFormat::Tsv).expect("exports");
         assert!(out.starts_with("Event Time\tRecord ID"));
         assert!(out.contains("\"a\tb\""));
+    }
+
+    #[test]
+    fn json_carries_the_metadata_fields_with_the_wire_names_the_frontend_reads() {
+        // The TypeScript EvtxRecord declares these in camelCase. Nothing on either side compares
+        // the two, so a rename or a missed serde attribute would surface only as undefined in the
+        // detail pane.
+        let mut r = record("x");
+        r.mapped = vec![crate::event_log::maps::MappedColumn {
+            property: "PayloadData1".into(),
+            text: "cmd.exe".into(),
+            complete: true,
+        }];
+        let json: serde_json::Value =
+            serde_json::from_str(&export_records(&[r], ExportFormat::Json).expect("exports"))
+                .expect("valid JSON");
+        let first = &json[0];
+
+        // Presence, not value: the fixture leaves some of these unset on purpose, and an absent
+        // optional legitimately serializes as null. What matters is that the key is there and
+        // spelled the way the frontend reads it.
+        for key in [
+            "eventRecordId",
+            "timestampEpoch",
+            "sourceLabel",
+            "processId",
+            "threadId",
+            "userSid",
+            "eventData",
+            "rawXml",
+            "mapped",
+        ] {
+            assert!(first.get(key).is_some(), "{key} missing: {first}");
+        }
+        assert_eq!(first["eventRecordId"], 42);
+        assert_eq!(first["processId"], 1234);
+        assert_eq!(first["userSid"], "S-1-5-18");
+        assert_eq!(first["mapped"][0]["property"], "PayloadData1");
+        for snake in [
+            "event_record_id",
+            "timestamp_epoch",
+            "source_label",
+            "user_sid",
+        ] {
+            assert!(first.get(snake).is_none(), "{snake} leaked in snake_case");
+        }
     }
 
     #[test]

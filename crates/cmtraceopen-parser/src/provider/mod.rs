@@ -15,7 +15,8 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Reinterprets a signed integer as unsigned, preserving the bit pattern.
 ///
@@ -33,6 +34,28 @@ fn signed_as_u64_vec<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u
         .into_iter()
         .map(|value| value as u64)
         .collect())
+}
+
+/// Writes an unsigned value back in the signed form the source used.
+///
+/// Needed because these types are public and derive `Serialize`. Without it a value round-trips
+/// asymmetrically: `-9223372036854775808` deserializes to `0x8000000000000000`, serializes as
+/// `9223372036854775808`, and then fails to deserialize again because the reader expects `i64`.
+/// Anything that persisted or forwarded this metadata could not read its own output back.
+fn u64_as_signed<S: Serializer>(value: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_i64(*value as i64)
+}
+
+fn u64_vec_as_signed<S: Serializer>(values: &[u64], serializer: S) -> Result<S::Ok, S::Error> {
+    let mut sequence = serializer.serialize_seq(Some(values.len()))?;
+    for value in values {
+        sequence.serialize_element(&(*value as i64))?;
+    }
+    sequence.end()
+}
+
+fn u32_as_signed<S: Serializer>(value: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_i64(*value as i32 as i64)
 }
 
 /// Reinterprets a signed integer as an unsigned 32-bit value.
@@ -67,7 +90,11 @@ pub struct ProviderEvent {
     #[serde(default)]
     pub opcode: Option<u32>,
     /// Keyword bitmask values.
-    #[serde(default, deserialize_with = "signed_as_u64_vec")]
+    #[serde(
+        default,
+        deserialize_with = "signed_as_u64_vec",
+        serialize_with = "u64_vec_as_signed"
+    )]
     pub keywords: Vec<u64>,
     /// The manifest template, which declares each field's name and type.
     #[serde(default)]
@@ -79,10 +106,18 @@ pub struct ProviderEvent {
 #[serde(rename_all = "PascalCase")]
 pub struct ProviderMessage {
     /// Full message identifier as the provider declares it.
-    #[serde(default, deserialize_with = "signed_as_u64")]
+    #[serde(
+        default,
+        deserialize_with = "signed_as_u64",
+        serialize_with = "u64_as_signed"
+    )]
     pub raw_id: u64,
     /// Low bits of `raw_id`, which is what most references use.
-    #[serde(default, deserialize_with = "signed_as_u32")]
+    #[serde(
+        default,
+        deserialize_with = "signed_as_u32",
+        serialize_with = "u32_as_signed"
+    )]
     pub short_id: u32,
     /// The message text.
     #[serde(default)]
@@ -493,5 +528,34 @@ mod tests {
 
         assert_eq!(metadata.keyword_names(0b10_0001), vec!["Startup", "Memory"]);
         assert!(metadata.keyword_names(0).is_empty());
+    }
+
+    #[test]
+    fn a_top_bit_keyword_survives_a_serialization_round_trip() {
+        // The .NET source writes these signed. Deserializing accepted that and serializing wrote
+        // the unsigned form, so the type could not read its own output back: anything that
+        // persisted or forwarded provider metadata broke on the reserved keyword alone.
+        let json = r#"{"Id":1,"Version":0,"Keywords":[-9223372036854775808]}"#;
+        let event: ProviderEvent = serde_json::from_str(json).expect("deserializes");
+        assert_eq!(event.keywords, vec![0x8000_0000_0000_0000]);
+
+        let written = serde_json::to_string(&event).expect("serializes");
+        assert!(
+            written.contains("-9223372036854775808"),
+            "the signed form the source used must be preserved: {written}"
+        );
+
+        let again: ProviderEvent = serde_json::from_str(&written).expect("re-reads its own output");
+        assert_eq!(again, event);
+    }
+
+    #[test]
+    fn an_ordinary_keyword_is_unchanged_by_the_round_trip() {
+        let json = r#"{"Id":1,"Version":0,"Keywords":[16]}"#;
+        let event: ProviderEvent = serde_json::from_str(json).expect("deserializes");
+        let written = serde_json::to_string(&event).expect("serializes");
+        assert!(written.contains("[16]"), "{written}");
+        let again: ProviderEvent = serde_json::from_str(&written).expect("re-reads");
+        assert_eq!(again.keywords, vec![16]);
     }
 }
